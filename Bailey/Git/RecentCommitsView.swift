@@ -137,7 +137,7 @@ struct RecentCommitsView: View {
 
     let commits: [Commit]
     let remotes: [String]
-    let remoteLocations: [GitStatusModel.RemoteLocation]
+    let remoteURLs: [String: String]
     let knownRemotesByCommit: [String: Set<String>]
     let hostProviders: [String: GitHostedRemoteURL.Provider]
     let openHosted: (String, String) -> Void
@@ -178,7 +178,7 @@ struct RecentCommitsView: View {
     init(
         commits: [Commit],
         remotes: [String] = [],
-        remoteLocations: [GitStatusModel.RemoteLocation] = [],
+        remoteURLs: [String: String] = [:],
         knownRemotesByCommit: [String: Set<String>] = [:],
         hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
         openHosted: @escaping (String, String) -> Void = { _, _ in },
@@ -225,7 +225,7 @@ struct RecentCommitsView: View {
     ) {
         self.commits = commits
         self.remotes = remotes
-        self.remoteLocations = remoteLocations
+        self.remoteURLs = remoteURLs
         self.knownRemotesByCommit = knownRemotesByCommit
         self.hostProviders = hostProviders
         self.openHosted = openHosted
@@ -926,12 +926,12 @@ struct RecentCommitsView: View {
     @ViewBuilder
     private func hostedCommitMenu(_ commit: Commit) -> some View {
         let containing = knownRemotesByCommit[commit.hash] ?? []
-        let available = remoteLocations.compactMap { location -> (String, String)? in
-            guard containing.contains(location.name), remotes.contains(location.name),
+        let available = remotes.compactMap { remote -> (String, String)? in
+            guard containing.contains(remote), let url = remoteURLs[remote],
                   let link = GitHostedRemoteURL(
-                      remoteURL: location.fetchURL, hostProviders: hostProviders
+                      remoteURL: url, hostProviders: hostProviders
                   ), link.commitURL(commit.hash) != nil else { return nil }
-            return (location.name, link.provider.title)
+            return (remote, link.provider.title)
         }
         if available.count == 1, let (remote, provider) = available.first {
             Button(String(localized: "Open on \(provider)", table: "Git")) {

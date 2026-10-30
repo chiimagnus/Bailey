@@ -544,7 +544,6 @@ final class GitStatusModel {
     ) -> [String: Set<String>] {
         let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
         let names = remotes.sorted { $0.count > $1.count }
-        var seen: [String: Set<String>] = [:]
         var containing: [String: Set<String>] = [:]
         for (name, ref) in refsByName where name.hasPrefix("refs/remotes/")
             && ref.symbolic == nil && ref.objectType == "commit" {
@@ -553,8 +552,7 @@ final class GitStatusModel {
             var stack = [ref.oid]
             while let oid = stack.popLast() {
                 guard let ancestors = parents[oid],
-                      seen[remote, default: []].insert(oid).inserted else { continue }
-                containing[oid, default: []].insert(remote)
+                      containing[oid, default: []].insert(remote).inserted else { continue }
                 stack.append(contentsOf: ancestors)
             }
         }
@@ -591,43 +589,26 @@ final class GitStatusModel {
     private(set) var defaultBranch: String?
     private(set) var remotes: [String] = []
 
-    nonisolated struct RemoteLocation: Identifiable, Equatable, Sendable {
-        let name: String
-        let fetchURL: String
-        let pushURL: String?
-        var id: String { name }
-    }
-
-    /// Git's remote -v is a local configuration query (also over SSH).
-    nonisolated static func parseRemoteLocations(_ output: String) -> [RemoteLocation] {
-        var entries: [String: (fetch: String?, push: String?)] = [:]
+    /// Only fetch URLs are needed to open hosted repositories.
+    nonisolated static func parseRemoteURLs(_ output: String) -> [String: String] {
+        var urls: [String: String] = [:]
         for line in output.split(whereSeparator: \.isNewline) {
             let fields = line.split(separator: "\t", maxSplits: 1)
-            guard fields.count == 2, !fields[0].isEmpty else { continue }
-            let name = String(fields[0])
-            let detail = String(fields[1]).trimmingCharacters(in: .newlines)
-            if detail.hasSuffix(" (fetch)") {
-                entries[name, default: (nil, nil)].fetch =
-                    String(detail.dropLast(" (fetch)".count))
-            } else if detail.hasSuffix(" (push)") {
-                entries[name, default: (nil, nil)].push =
-                    String(detail.dropLast(" (push)".count))
-            }
+            guard fields.count == 2, !fields[0].isEmpty,
+                  fields[1].hasSuffix(" (fetch)") else { continue }
+            urls[String(fields[0])] = String(fields[1].dropLast(" (fetch)".count))
         }
-        return entries.compactMap { name, value -> RemoteLocation? in
-            guard let fetch = value.fetch else { return nil }
-            return RemoteLocation(name: name, fetchURL: fetch, pushURL: value.push)
-        }.sorted { $0.name < $1.name }
+        return urls
     }
 
-    func remoteLocations() async -> [RemoteLocation] {
+    func remoteURLs() async -> [String: String] {
         let target = actionTarget()
-        guard canBrowse(target), canUseCurrentReferences else { return [] }
+        guard canBrowse(target), canUseCurrentReferences else { return [:] }
         let result = await GitCommandExecution.run(
             ["remote", "-v"], in: repoRoot, backend: backend
         )
-        guard canBrowse(target), result.status == 0 else { return [] }
-        return Self.parseRemoteLocations(result.stdout)
+        guard canBrowse(target), result.status == 0 else { return [:] }
+        return Self.parseRemoteURLs(result.stdout)
     }
 
     func openInBrowser(

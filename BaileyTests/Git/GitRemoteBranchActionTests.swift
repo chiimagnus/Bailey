@@ -60,20 +60,21 @@ final class GitRemoteBranchActionTests: XCTestCase {
         try await settle()
     }
 
-    func testRemoteLocationParserDistinguishesFetchAndPushURL() {
+    func testRemoteURLParserUsesFetchAddressesAndSupportsCRLF() {
         let output = """
         origin\thttps://github.com/team/repo.git (fetch)
         origin\tgit@github.com:team/repo.git (push)
         mirror\tgit@gitee.com:team/repo.git (fetch)
         mirror\tgit@gitee.com:team/repo.git (push)
         """
-        let locations = GitStatusModel.parseRemoteLocations(output)
-        XCTAssertEqual(locations.map(\.name), ["mirror", "origin"])
-        XCTAssertEqual(locations.last?.fetchURL, "https://github.com/team/repo.git")
-        XCTAssertEqual(locations.last?.pushURL, "git@github.com:team/repo.git")
-        XCTAssertEqual(GitStatusModel.parseRemoteLocations(output.replacingOccurrences(
-            of: "\n", with: "\r\n"
-        )).map(\.name), ["mirror", "origin"])
+        let expected = [
+            "origin": "https://github.com/team/repo.git",
+            "mirror": "git@gitee.com:team/repo.git"
+        ]
+        XCTAssertEqual(GitStatusModel.parseRemoteURLs(output), expected)
+        XCTAssertEqual(GitStatusModel.parseRemoteURLs(
+            output.replacingOccurrences(of: "\n", with: "\r\n")
+        ), expected)
     }
 
     func testCheckoutRemoteCreatesTrackingBranchAtSelectedRemoteOID() async throws {

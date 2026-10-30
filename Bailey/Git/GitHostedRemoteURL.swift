@@ -1,8 +1,8 @@
 import Foundation
 
 /// Builds browser links from Git transport addresses without contacting the remote.
-nonisolated struct GitHostedRemoteURL: Equatable, Sendable {
-    enum Provider: String, CaseIterable, Sendable {
+nonisolated struct GitHostedRemoteURL: Sendable {
+    enum Provider: String, Sendable {
         case github, gitlab, bitbucket, gitea, forgejo, gitee, gitcode, codeup, azure, sourcehut, gogs, generic
 
         var title: String {
@@ -66,17 +66,16 @@ nonisolated struct GitHostedRemoteURL: Equatable, Sendable {
         guard parts.count >= (detected == .generic ? 1 : 2),
               !parts.contains(where: { $0 == "." || $0 == ".." || $0.contains("\\") }),
               !host.contains(" "), !host.isEmpty else { return nil }
-        var normalized = parts
-        guard let last = normalized.last, !last.lowercased().hasSuffix(".bundle") else { return nil }
-        if last.lowercased().hasSuffix(".git") {
-            normalized[normalized.count - 1] = String(last.dropLast(4))
+        if let last = parts.last, last.lowercased().hasSuffix(".git") {
+            let repository = String(last.dropLast(4))
+            guard !repository.isEmpty else { return nil }
+            parts[parts.count - 1] = repository
         }
-        guard !normalized.last!.isEmpty else { return nil }
         var components = URLComponents()
         components.scheme = webScheme
         components.host = browserHost
         components.port = port
-        components.path = "/" + normalized.joined(separator: "/")
+        components.path = "/" + parts.joined(separator: "/")
         guard let webURL = components.url else { return nil }
         repositoryURL = webURL
         provider = detected

@@ -98,6 +98,12 @@ final class GitHostedRemoteURLTests: XCTestCase {
         }
         XCTAssertNil(link.commitURL("abc"))
         XCTAssertNil(link.commitURL(String(repeating: "z", count: 40)))
+        XCTAssertNil(GitHostedRemoteURL(remoteURL: "https://github.com/org/.git"))
+        XCTAssertEqual(
+            GitHostedRemoteURL(remoteURL: "https://github.com/org/repo.bundle")?
+                .repositoryURL.absoluteString,
+            "https://github.com/org/repo.bundle"
+        )
     }
 
     func testHostOverrideValidationRejectsUnknownAndConflictingProviders() throws {

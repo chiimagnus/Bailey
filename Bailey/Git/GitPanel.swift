@@ -70,7 +70,7 @@ struct GitPanel: View {
         )
     }
     @State private var historyCollapsed = false
-    @State private var hostedRemotes: [GitStatusModel.RemoteLocation] = []
+    @State private var remoteURLs: [String: String] = [:]
     private var remoteLookupID: String {
         [model.currentScope, model.repoRoot, model.remotes.joined(separator: ","),
          String(model.canUseCurrentReferences)].joined(separator: "\u{0}")
@@ -241,8 +241,8 @@ struct GitPanel: View {
             if !model.isBusy { operationTrigger = nil }
         }
         .task(id: remoteLookupID) {
-            hostedRemotes = []
-            hostedRemotes = await model.remoteLocations()
+            remoteURLs = [:]
+            remoteURLs = await model.remoteURLs()
         }
         .tint(themeAccent)
     }
@@ -397,9 +397,8 @@ struct GitPanel: View {
             if !model.remotes.isEmpty {
                 Menu(String(localized: "Open Remote in Browser", table: "Git")) {
                     ForEach(model.remotes, id: \.self) { remote in
-                        let location = hostedRemotes.first { $0.name == remote }
-                        let link = location.flatMap {
-                            GitHostedRemoteURL(remoteURL: $0.fetchURL,
+                        let link = remoteURLs[remote].flatMap {
+                            GitHostedRemoteURL(remoteURL: $0,
                                                hostProviders: settings.gitHostProviders)
                         }
                         Button(link.map { "\($0.provider.title) · \(remote)" } ?? remote) {
@@ -1797,7 +1796,7 @@ struct GitPanel: View {
                         RecentCommitsView(
                             commits: graphCommits,
                             remotes: model.remotes,
-                            remoteLocations: hostedRemotes,
+                            remoteURLs: remoteURLs,
                             knownRemotesByCommit: model.knownRemotesByCommit,
                             hostProviders: settings.gitHostProviders,
                             openHosted: { remote, commit in
