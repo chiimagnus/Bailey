@@ -20,12 +20,12 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make doctor
 
 ## 构建与运行
 
-根 [Makefile](../Makefile) 是本机和 CI 的统一入口，直接调用 `xcodebuild`：
+根 [Makefile](../Makefile) 是本机构建／测试与 Tag 发布打包的统一入口，直接调用 `xcodebuild`：
 
 ```sh
 make test:FileTabPersistenceTests,NativeFileTabTests,GitStatusModelTests  # Dev 定点测试
 make build:dev SIGNING=adhoc       # 独立开发版，不安装正式 App
-make test SIGNING=adhoc            # Bailey Dev 宿主测试
+make test                         # Bailey Dev 完整宿主测试
 make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本机定点 UI 测试
 make build                         # 正式版 Debug
 make build:release                 # 正式版 Release
@@ -44,10 +44,10 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
 宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；
-`make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给阶段验收及 CI。
+`make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给本机阶段验收。
 本机完整 GUI 测试应使用已安装的 **Apple Development 签名**，不要强制 `SIGNING=adhoc`：
 本机实测 ad-hoc Runner 被 macOS 拒绝辅助功能自动化，开发签名的同一 Runner 则能够正常操作。
-CI 的 ad-hoc 环境单独验收，不得拿本机结果冒充 CI。
+临时 ad-hoc 签名可用于隔离环境中的非 GUI 验证，但不能代替真实 App 的辅助功能验收。
 即使正式 Bailey 仍在运行，Makefile 测试也只使用 Bailey Dev；
 两者仍共用桌面焦点，XCUI 操作会短暂激活开发版。若需完全不打断当前输入，请使用独立图形会话。
 

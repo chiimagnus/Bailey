@@ -1,38 +1,19 @@
 # 构建交付与发布
 
-本页负责 CI、版本、发布包与分发流程。Makefile 或 workflow 改变时同步更新；
+本页负责 Tag 发布、版本、发布包与分发流程。Makefile 或 workflow 改变时同步更新；
 本机开发见 [development.md](development.md)，证书与权限见 [signing.md](signing.md)。
 
-## PR 检查
+## 开发验收
 
-[CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行。
-纯 Markdown、`docs/`、`.github/features/`、`.github/ISSUE_TEMPLATE/` 或 `LICENSE` 的独立 PR 会跳过；
-如果历史 PR 差异包含代码，即使本次只改文档，事件仍可能触发 CI。普通 `main` 提交不触发；
-版本 Tag 发布不受此过滤影响。Draft PR 的创建、推送和打标签会跳过 CI Job，
-切换为 Ready for review 后自动运行；重新设为 Draft 会取消同一 PR 的在途检查。
-Runner 和 Xcode 版本以 CI workflow 为准。
+GitHub Actions **不对 PR 或普通 `main` 提交运行构建与 XCTest**。
+开发、合并及发布前按 [测试完成标准](testing.md#完成标准)在本机执行受影响测试，
+阶段验收执行适用的完整回归，并记录未覆盖条件；测试未通过不能冒充已经验收。
+合并前的结果由提交者负责，Tag 发布工作流不重复执行测试。
 
-**常规 CI**：非 Draft PR 在独立 Runner 上运行完整宿主 XCTest 与独立 App UI 测试，
-两者均由 `make test SIGNING=adhoc`／`make test:ui SIGNING=adhoc` 构建并执行
-`chiimagnus.bailey.dev`。`make build`／`make package` 始终使用正式 `chiimagnus.bailey`；
-UI 测试和发布包不会共用应用身份或构建目录。CI Runner 仍需独占可用的图形输入会话。
-
-**合并前的完整检查不可省略**：非 Draft PR 首次打开、重新打开、
-由草稿转为可审查状态会跑完整宿主 XCTest 与独立 UI Test；
-正式准备合并时，在最新提交上给 PR 添加 `ci/full` 标签（已有标签则移除后重新添加），
-以 `labeled` 事件重新触发全量测试，核对对应 Head SHA 的绿色运行记录。
-CI 当前每次运行完整宿主 XCTest 和独立 UI Test；其中任一失败都不得宣称整份 PR 已完整验收；
-Release workflow 继续在 Tag 阶段执行全量测试。
-若配置必需 CI 检查，应确保文档变更和显式跳过仍有预期状态，不制造永久 Pending。
-`AppIdentityTests` 继续负责验证宿主身份，CI 不等于完整 App 图形 E2E 或真实用户 SSH 验收；
-详见 [testing.md](testing.md#完成标准)。
-
-PR 不再额外编译 Release，也不重复进行 YAML 中的验签；
-正式 Release 编译、版本和签名检查仍由标签触发的发布流程执行。**PR 通过不等于 Release 构建通过**：
 修改工程、依赖或发布路径时，提交前另运行 `make build:release`；
 无开发证书的隔离环境可用 `make build:release SIGNING=adhoc`。
-本地 `make test` 未指定 `SIGNING` 时使用工程自己的 Apple Development 配置；
-临时签名不代表正式发布身份，本地成功也不代表 GitHub Actions 已通过。
+正式 Release 构建、版本一致性和签名检查由 Tag 发布工作流执行，
+**成功发布仅证明发布包通过构建与校验，不代表测试已通过**。
 
 ## 本地打包
 
@@ -51,22 +32,22 @@ Makefile 校验版本、凭据和输出路径，构建 Release，通过 `ditto` 
 
 ## 正式发布
 
-1. 通过 PR 完成相应检查并合入 `main`，
+1. 在本机按 [完成标准](testing.md#完成标准)验收并将代码合入 `main`，
    将 App 的 Debug／Release `MARKETING_VERSION` 同步为待发布的 `X.Y.Z`。
 2. 在获准发布后创建并推送 `vX.Y.Z` 标签。
    标签必须指向 `main` 中的提交，不能借文档或本地提交任务擅自推送。
-3. [Release workflow](../.github/workflows/release.yml) 使用与 CI 一致的 Xcode 27 环境，
+3. [Release workflow](../.github/workflows/release.yml) 仅由 Tag 推送触发，使用 Xcode 27，
    核对标签提交、版本一致性及现有 Releases，拒绝重复或倒退版本，
-   重新执行测试，再导入临时签名身份。
+   然后导入临时签名身份。
 4. 使用 `make package` 构建和复验唯一发布包，创建对应 GitHub Release；
    构建号来自 workflow 运行编号，最后清理临时凭据。
 
 Tag、工程版本、App 版本、Release 标题和 ZIP 文件名保持一致。
 上传失败时先检查实际已有 Release 与附件，再按授权恢复，不自动重复发布。
 
-已有版本可手动运行 `Release` 工作流，输入现有 `vX.Y.Z` Tag：它会在 GitHub Runner 上重新执行测试、
-导入签名身份、构建并复验 ZIP，但**不会再次创建或覆盖 GitHub Release**。
-正式 Tag 推送仍保留重复版本拦截。
+发布工作流不提供手动触发入口，也不自动重发已有版本。
+既有 Tag 的发布失败须先检查 Release 与附件状态，再单独决定恢复方案；
+不能通过重复推送相同 Tag 绕过重复发布检查。
 
 ## 分发边界
 

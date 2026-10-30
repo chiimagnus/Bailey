@@ -51,7 +51,7 @@
 无法实测的项目逐项写明环境／前提、原因、替代验证、影响及是否阻塞验收；
 关键条件未验证不得宣称功能已完整验收。测试须核对最终可观察结果。
 **XCTest 全绿不等于整个 `make test` 成功**：还须核对构建、签名等后置检查与完整命令退出状态；
-本地、CI、真实用户路径分别报告。
+本地测试、Tag 发布构建与真实用户路径分别报告。
 
 ## 测试目录与入口
 
@@ -90,12 +90,12 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
 要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。
-CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不按文件差异动态筛选测试，
-避免无效选择器导致零项测试却显示绿色。
-`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。
-运行器
-由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme)
-决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+PR 不再自动触发 GitHub Actions 的宿主或 UI 测试；合并前由本机运行受影响的测试，
+阶段验收按上方完成标准执行完整回归，结果须对应实际提交版本。
+GitHub Actions 只在推送版本 Tag 时[构建并发布](release.md#正式发布)，不代替本地验收。
+测试入口由 [Makefile](../Makefile) 与
+[共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；
+不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -159,7 +159,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 
 **本地迭代先定点验证。** 按修改范围运行受影响的 `make test:类名1,类名2`；
 确实涉及完整用户入口时再用上面的 `ONLY_TESTING` 定点运行 UI 类或方法。
-完成阶段验收及 CI 仍执行要求的全量测试，不在每次小改动后重复跑完整 UI Target。
+完成阶段验收时仍执行要求的全量测试，不在每次小改动后重复跑完整 UI Target。
 
 ## 改什么，测什么
 
@@ -184,13 +184,13 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | 标签、Finder 队列、原生关闭及窗口整合 | `WorkspaceWindowsUITests`、`FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`NativeContentIdentityIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`、`DockWorkspaceTests` |
 
 Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言，原生绘制、点击、菜单、
-主题与尺寸仍用窗口和像素检查；不依赖 Vision OCR 在 CI 中反向识别截图文字。
+主题与尺寸仍用窗口和像素检查；不依赖 Vision OCR 从截图反向识别文字。
 
 测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。
 需要前台原生输入的用例由运行环境保证焦点，不以窗口是否为 Key Window 决定跳过或放宽断言。
 只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。
 临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，
-不能依赖本机或 CI 的 `init.defaultBranch`。
+不能依赖执行环境的 `init.defaultBranch`。
 
 `SessionStoreTests` 只检查数据与所有者生命周期，不再挂载完整 `WindowRootView`。
 实际场景登记／退出与重启由 `WorkspaceWindowsUITests` 验证，最小原生组件测试检查窗口关闭协调、
@@ -304,7 +304,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 ```
 
 必须核对原生 XCTest 的实际执行总数、0 failures、0 skipped 和 Windows SSH 用例的 passed 记录；
-不能以不带环境参数的绿色 `make test` 冒充实机验收。没有获准测试主机的 CI 不应擅自连接用户设备。
+不能以不带环境参数的绿色 `make test` 冒充实机验收。未经授权的自动化测试不得擅自连接用户设备。
 XCUITest 只允许启动 Bailey Dev；它不会因 Bundle ID 与正式版冲突而结束正式应用，
 但键盘与鼠标仍属于共享图形会话，用户持续输入时必须在独立 GUI 登录会话验收。
 
@@ -449,5 +449,6 @@ VoiceOver 的逐项语音导航与专项焦点适配不作为普遍验收门槛�
 验证了哪些原生与用户路径，以及失败、跳过、阻塞和未测部分。
 与内存、生命周期或性能有关的改动附前后测量；普通文档任务不制造性能数字。
 
-CI 的执行与签名限制见 [release.md](release.md#pr-检查)。
-报告区分本地验证、Actions、安装、重启和发布；任何一个成功都不能替代其他步骤。
+本机测试的隔离与签名限制见 [development.md](development.md#构建与运行)，
+Tag 发布的凭据和校验见 [release.md](release.md#正式发布)。
+报告区分本地验证、Tag 发布构建、安装、重启和发布；任何一个成功都不能替代其他步骤。

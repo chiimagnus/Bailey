@@ -14,7 +14,7 @@
 | [standards.md](standards.md) | Swift、命名、并发、注释、简化与性能原则 | 开发约定或平台基线改变 |
 | [testing.md](testing.md) | 唯一完成标准、宿主／UI 测试边界、回归选择、性能测量与人工验收 | 测试入口、覆盖范围或验收要求改变 |
 | [development.md](development.md) | 环境、本地构建与安装、依赖和生成资源 | 工具链、构建入口、依赖或生成方式改变 |
-| [release.md](release.md) | CI、版本、打包和发布流程 | workflow、版本规则或分发方式改变 |
+| [release.md](release.md) | Tag 发布、版本、打包和分发流程 | workflow、版本规则或分发方式改变 |
 | [signing.md](signing.md) | 签名身份、证书、权限与验证 | 签名配置、证书或打包验证改变 |
 | [ui.md](ui.md) | 主题、共享组件、字体、交互、无障碍和本地化 | 视觉规则、组件、交互或文案体系改变 |
 

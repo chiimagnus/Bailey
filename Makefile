@@ -59,7 +59,7 @@ help:
 		'  make test:类名1,类名2,...              运行一个或多个宿主 XCTest 类' \
 		'  make build:ui                           只编译独立 UI Test（不启动 App）' \
 		'  make test:ui                            使用 Bailey Dev 执行完整 App UI Test' \
-		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
+		'  make test SIGNING=adhoc                 临时签名运行宿主 XCTest（隔离环境）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
 		'  make test ONLY_TESTING="BaileyTests/类名1 BaileyTests/类名2"  运行多个 XCTest 类' \
