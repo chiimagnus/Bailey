@@ -240,6 +240,11 @@ final class WorkspaceFilesUITests: XCTestCase {
         paths.typeText(remoteRoot)
         sheet.buttons["Add"].click()
 
+        let remoteProject = remoteWindow.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", "SSH · " + host)).firstMatch
+        XCTAssertTrue(remoteProject.waitForExistence(timeout: 20))
+        remoteProject.click()
+        XCTAssertTrue(remoteProject.isSelected, "The Finder rejection must target Windows SSH")
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 25))
         files.click()
@@ -248,7 +253,10 @@ final class WorkspaceFilesUITests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
             .firstMatch
         XCTAssertTrue(remoteFolder.waitForExistence(timeout: 25))
-        remoteFolder.click()
+        if remoteFolder.value as? String == "Collapsed" { remoteFolder.click() }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Expanded"), object: remoteFolder
+        )], timeout: 12), .completed, "The Windows SSH folder must actually expand")
         XCTAssertTrue(WorkspaceUITestSupport.fileRow(
             URL(fileURLWithPath: remoteRoot + "/drop-zone/protected.txt"), in: remoteWindow
         ).waitForExistence(timeout: 25), "The drag target must belong to Windows SSH")
@@ -282,7 +290,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
             .firstMatch
         XCTAssertTrue(localFolder.waitForExistence(timeout: 20))
-        localFolder.click()
+        if localFolder.value as? String == "Collapsed" { localFolder.click() }
         XCTAssertTrue(WorkspaceUITestSupport.fileRow(localAnchor, in: remoteWindow)
             .waitForExistence(timeout: 20), "The positive control must use the Mac project")
         let localPoint = localFolder.coordinate(
