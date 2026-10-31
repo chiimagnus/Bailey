@@ -2900,7 +2900,6 @@ struct GitPanel: View {
             Spacer()
         }
         .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity)
     }
 
     private func statusWarning(_ message: String, isDetail: Bool = false) -> some View {
