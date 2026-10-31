@@ -47,6 +47,5 @@ struct PanelContentView: View {
                     .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
             }
         }
-        .background(Color(nsColor: Theme.background))
     }
 }
