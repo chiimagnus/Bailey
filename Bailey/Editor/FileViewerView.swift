@@ -643,7 +643,6 @@ struct FileViewerView: View {
                 }
             case .loading:
                 Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .unavailable(let reason):
                 VStack(spacing: 8) {
                     MaterialFileIconView(path: file.path, size: 28, opacity: 0.72)
