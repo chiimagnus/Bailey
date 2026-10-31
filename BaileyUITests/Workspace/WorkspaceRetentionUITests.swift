@@ -40,6 +40,88 @@ final class WorkspaceRetentionUITests: XCTestCase {
         add(screenshot)
     }
 
+    func testSystemAppearanceAutoRepaintsWithoutChangingDock() throws {
+        guard ProcessInfo.processInfo.environment["BAILEY_THEME_SYSTEM_TEST_ENABLED"] == "1" else {
+            throw XCTSkip("Real system appearance UI test requires explicit opt-in")
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        func signal(_ name: String) throws {
+            try Data("ready".utf8).write(to: fixture.root.appendingPathComponent("theme-system-" + name))
+        }
+        let file = try fixture.file("workspace/system-appearance.swift", text: "let systemAppearance = true\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "system"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: file.deletingLastPathComponent()
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 15))
+        let fileRow = WorkspaceUITestSupport.fileRow(file, in: main)
+        XCTAssertTrue(fileRow.waitForExistence(timeout: 15))
+        fileRow.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: main)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        XCTAssertEqual(main.textViews.firstMatch.value as? String,
+                       "let systemAppearance = true\n")
+
+        func sample(_ title: String? = nil) throws -> (projects: NSColor, editor: NSColor, files: NSColor) {
+            let shot = main.screenshot()
+            if let title {
+                let attachment = XCTAttachment(screenshot: shot)
+                attachment.name = title
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(shot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(_ x: CGFloat) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(x * scale), y: Int(250 * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (color(50), color(350), color(780))
+        }
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let initial = try sample("System appearance, original automatic mode")
+        try signal("ready")
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let current = try? sample() else { return false }
+            return difference(current.editor, initial.editor) > 0.4
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 65), .completed,
+                       "Bailey's system appearance must respond to the real macOS preference switch")
+        let switched = try sample("System appearance, macOS switched to opposite appearance")
+        XCTAssertLessThan(difference(switched.projects, switched.editor), 0.035)
+        XCTAssertLessThan(difference(switched.files, switched.editor), 0.035)
+        try signal("changed")
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let current = try? sample() else { return false }
+            return difference(current.editor, initial.editor) < 0.025
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 65), .completed,
+                       "Original macOS system appearance must repaint without switching Dock")
+        let final = try sample("System appearance, original automatic appearance restored")
+        XCTAssertLessThan(difference(final.projects, final.editor), 0.035)
+        XCTAssertLessThan(difference(final.files, final.editor), 0.035)
+        XCTAssertLessThan(difference(final.editor, initial.editor), 0.025)
+        XCTAssertTrue(tab.exists && fileRow.exists)
+        XCTAssertEqual(main.textViews.firstMatch.value as? String,
+                       "let systemAppearance = true\n")
+        XCTAssertEqual(try Data(contentsOf: file), Data("let systemAppearance = true\n".utf8))
+        try signal("restored")
+    }
+
     func testLivePaletteChangeRepaintsDockWithoutPanelSwitch() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("workspace/theme-sample.txt", text: "Palette fixture\n")

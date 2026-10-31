@@ -114,6 +114,136 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "real hidden editor bytes\n")
     }
 
+    func testRealSSHPanelAndEditorRepaintAcrossPaletteChanges() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_THEME_TEST_SSH_HOST"],
+              let remoteRoot = ProcessInfo.processInfo.environment["BAILEY_THEME_TEST_SSH_ROOT"] else {
+            throw XCTSkip("Real SSH theme test requires an explicitly authorized test host and fixture")
+        }
+        XCTAssertFalse(host.isEmpty || host.hasPrefix("-"))
+        XCTAssertFalse(host.contains(where: { $0.isWhitespace || $0.isNewline }))
+        XCTAssertTrue(remoteRoot.hasPrefix("/tmp/bailey-theme-ui-"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: remoteRoot),
+                       "Real SSH fixture must not be mistaken for a local file")
+
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        app.menuBarItems["Project"].click()
+        let addSSHItem = app.menuItems["Add SSH Files or Projects…"]
+        XCTAssertTrue(addSSHItem.waitForExistence(timeout: 12))
+        addSSHItem.click()
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        let sheet = main.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        let hostField = sheet.comboBoxes.firstMatch
+        let paths = sheet.textViews.firstMatch
+        XCTAssertTrue(hostField.waitForExistence(timeout: 12))
+        XCTAssertTrue(paths.waitForExistence(timeout: 12))
+        hostField.click()
+        hostField.typeKey("a", modifierFlags: .command)
+        hostField.typeText(host)
+        paths.click()
+        paths.typeText(remoteRoot)
+        sheet.buttons["Add"].click()
+
+        let remoteProject = main.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", "SSH · " + host)).firstMatch
+        XCTAssertTrue(remoteProject.waitForExistence(timeout: 20),
+                      "Real isolated SSH project must be added through its native sheet")
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 20))
+        files.click()
+        let file = URL(fileURLWithPath: remoteRoot + "/remote-theme.swift")
+        let row = WorkspaceUITestSupport.fileRow(file, in: main)
+        XCTAssertTrue(row.waitForExistence(timeout: 35),
+                      "SSH Files must actually receive the remote directory listing")
+        row.doubleClick()
+        let remoteFile = WorkspaceUITestSupport.fileTab(file, in: main)
+        XCTAssertTrue(remoteFile.waitForExistence(timeout: 25))
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (main.textViews.firstMatch.value as? String)?.contains("let remoteColor = true") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 30), .completed,
+                       "Real SSH editor must display bytes fetched from the remote host")
+
+        func capture(_ name: String) throws -> (projects: NSColor, editor: NSColor, files: NSColor) {
+            let screenshot = main.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(screenshot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(_ x: CGFloat) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(x * scale), y: Int(250 * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (color(50), color(350), color(780))
+        }
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+
+        let light = try capture("Real SSH Files and editor, Ayu Light")
+        XCTAssertLessThan(difference(light.projects, light.editor), 0.035)
+        XCTAssertLessThan(difference(light.files, light.editor), 0.035)
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkTab = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(darkTab.waitForExistence(timeout: 12))
+        darkTab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let dark = try capture("Real SSH Files and editor, Adwaita Dark")
+        XCTAssertGreaterThan(difference(light.editor, dark.editor), 0.5)
+        XCTAssertLessThan(difference(dark.projects, dark.editor), 0.035)
+        XCTAssertLessThan(difference(dark.files, dark.editor), 0.035)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let picker = settings.popUpButtons.element(boundBy: 1)
+        XCTAssertTrue(picker.waitForExistence(timeout: 12))
+        picker.click()
+        let ayu = picker.menuItems["Ayu"]
+        XCTAssertTrue(ayu.waitForExistence(timeout: 12))
+        ayu.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let darkVariant = try capture("Real SSH Files and editor, Ayu dark palette")
+        XCTAssertGreaterThan(difference(dark.editor, darkVariant.editor), 0.03)
+        XCTAssertLessThan(difference(darkVariant.projects, darkVariant.editor), 0.035)
+        XCTAssertLessThan(difference(darkVariant.files, darkVariant.editor), 0.035)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let lightTab = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(lightTab.waitForExistence(timeout: 12))
+        lightTab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restored = try capture("Real SSH Files and editor, restored Ayu Light")
+        XCTAssertLessThan(difference(light.projects, restored.projects), 0.025)
+        XCTAssertLessThan(difference(light.editor, restored.editor), 0.025)
+        XCTAssertLessThan(difference(light.files, restored.files), 0.025)
+        XCTAssertTrue(remoteProject.exists && remoteFile.exists && row.exists)
+        XCTAssertEqual(main.textViews.firstMatch.value as? String, "let remoteColor = true\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: remoteRoot))
+    }
+
     func testAuthorizedWindowsSSHExternalFilesRefreshInRealApp() throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
               !host.isEmpty, !host.hasPrefix("-"),

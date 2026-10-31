@@ -222,6 +222,128 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testNestedDockSplitRepaintsEveryPaneAcrossPaletteChanges() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("nested-top.swift", text: "let top = 1\n")
+        let second = try fixture.file("nested-bottom.swift", text: "let bottom = 2\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev"
+        ).compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open two real editors in one Dock group")
+        NSWorkspace.shared.open([first, second], withApplicationAt: bundle,
+                                configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        let upper = WorkspaceUITestSupport.fileTab(first, in: main)
+        let lower = WorkspaceUITestSupport.fileTab(second, in: main)
+        XCTAssertTrue(upper.waitForExistence(timeout: 15))
+        XCTAssertTrue(lower.waitForExistence(timeout: 15))
+        let initialDividers = main.otherElements.matching(identifier: "bailey.dock.divider").count
+        XCTAssertEqual(initialDividers, 2, "Fixture starts in the three-column layout")
+
+        lower.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.3, thenDragTo:
+                main.coordinate(withNormalizedOffset: CGVector(dx: 0.46, dy: 0.91))
+            )
+        let nested = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            main.otherElements.matching(identifier: "bailey.dock.divider").count == 3
+                && upper.exists && lower.exists && abs(upper.frame.midY - lower.frame.midY) > 110
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [nested], timeout: 15), .completed,
+                       "An actual tab drag must create a fourth group and a vertical nested split")
+
+        func capture(_ name: String) throws -> (projects: NSColor, top: NSColor, bottom: NSColor, files: NSColor) {
+            let screenshot = main.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(screenshot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(_ x: CGFloat, _ y: CGFloat) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(x * scale), y: Int(y * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (
+                color(50, 250), color(350, 150), color(350, 430), color(780, 250)
+            )
+        }
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let originalFrames = (upper.frame, lower.frame)
+        let light = try capture("Nested Dock with four groups, Ayu Light")
+        XCTAssertLessThan(difference(light.projects, light.top), 0.035)
+        XCTAssertLessThan(difference(light.bottom, light.top), 0.035)
+        XCTAssertLessThan(difference(light.files, light.top), 0.035)
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(
+            identifier: "com_apple_SwiftUI_Settings_window"
+        ).firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkTab = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(darkTab.waitForExistence(timeout: 12))
+        darkTab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let dark = try capture("Nested Dock after dark appearance")
+        XCTAssertGreaterThan(difference(light.top, dark.top), 0.5)
+        XCTAssertLessThan(difference(dark.projects, dark.top), 0.035)
+        XCTAssertLessThan(difference(dark.bottom, dark.top), 0.035)
+        XCTAssertLessThan(difference(dark.files, dark.top), 0.035)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let picker = settings.popUpButtons.element(boundBy: 1)
+        XCTAssertTrue(picker.waitForExistence(timeout: 12))
+        picker.click()
+        let ayuDark = picker.menuItems["Ayu"]
+        XCTAssertTrue(ayuDark.waitForExistence(timeout: 12))
+        ayuDark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let alternate = try capture("Nested Dock after dark-only palette change")
+        XCTAssertGreaterThan(difference(dark.top, alternate.top), 0.03)
+        XCTAssertLessThan(difference(alternate.projects, alternate.top), 0.035)
+        XCTAssertLessThan(difference(alternate.bottom, alternate.top), 0.035)
+        XCTAssertLessThan(difference(alternate.files, alternate.top), 0.035)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let lightTab = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(lightTab.waitForExistence(timeout: 12))
+        lightTab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restored = try capture("Nested Dock restored Ayu Light without redocking")
+        XCTAssertLessThan(difference(restored.top, light.top), 0.025)
+        XCTAssertLessThan(difference(restored.bottom, light.bottom), 0.025)
+        XCTAssertLessThan(difference(restored.projects, light.projects), 0.025)
+        XCTAssertEqual(main.otherElements.matching(identifier: "bailey.dock.divider").count, 3)
+        XCTAssertEqual(upper.frame.midY, originalFrames.0.midY, accuracy: 3)
+        XCTAssertEqual(lower.frame.midY, originalFrames.1.midY, accuracy: 3)
+        XCTAssertEqual(try Data(contentsOf: first), Data("let top = 1\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("let bottom = 2\n".utf8))
+    }
+
     func testDockFileTabSwitchRevealsOneSelectedExplorerRow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("one.swift", text: "let one = 1\n")

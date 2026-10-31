@@ -84,6 +84,10 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 不使用 `-ApplePersistenceIgnoreState YES`，该参数会阻止当前系统创建初始 WindowGroup 窗口。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
+真实 SSH 主题 GUI 回归要求显式提供 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_HOST` 和
+`TEST_RUNNER_BAILEY_THEME_TEST_SSH_ROOT`，仅能使用获授权的主机及临时测试目录。
+系统外观 GUI 回归默认跳过；仅在显式设置 `TEST_RUNNER_BAILEY_THEME_SYSTEM_TEST_ENABLED=1`
+并从测试进程外安全切换、恢复 macOS 外观时执行，不在普通测试中修改用户系统外观。
 公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
 避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
 在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
