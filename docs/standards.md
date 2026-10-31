@@ -84,6 +84,10 @@ continuation 在成功、失败、取消之间只完成一次，不能遗留等�
 - 普通点击使用 `Button`；只有确需坐标或点击次数时使用手势。图标按钮提供文字语义和辅助功能名称。
   对浏览、打开、激活、聚焦传递明确意图；不能把 `selected`／hover 的变化当作另一个隐式操作。
 - 复杂且独立的界面块提取为 `View` 类型，不堆返回 `some View` 的计算属性和无必要的 `AnyView`。
+- `HStack`／`VStack` 默认不指定间距或对齐；确需特殊布局时再传参数。
+  避免重复 `frame`、`padding`、`contentShape`、按钮／菜单样式和只转发参数的 View。
+  精简前后使用隔离 App，在相同窗口、数据和焦点状态下对照截图、无障碍尺寸与实际点击区域；
+  任何视觉或交互变化都恢复原写法。
 - `ForEach` 使用稳定身份。可用原生布局解决时不增加几何读取；停靠拖动与精确命中保留确需的几何信息。
 - 在语义、视觉和部署目标均允许时使用 `foregroundStyle()`、`clipShape(.rect(cornerRadius:))`、
   `.scrollIndicators(.hidden)`、`Task.sleep(for:)` 等当前写法。
