@@ -127,6 +127,61 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testTabContextMenuFitsContentsWithoutWideShortcutColumn() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("menu-width.md", text: "Content remains untouched\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 12))
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 12))
+        tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Close"].exists && $0.menuItems["Close Others"].exists
+        })
+        print("NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Native file-tab context menu width"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        XCTAssertLessThan(menu.frame.width, 260,
+                          "A short tab context menu should not reserve a 250pt shortcut column")
+        XCTAssertTrue(menu.menuItems["Close Tabs to the Right"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(tab.exists)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "Content remains untouched\n")
+    }
+
+    func testChineseTabContextMenuUsesNaturalWidth() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("menu-width.md", text: "内容保持不变\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "zh-Hans", project: fixture.root
+        )
+        let window = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 12))
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 12))
+        tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["关闭"].exists && $0.menuItems["关闭其他"].exists
+        })
+        print("CHINESE_NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Chinese native file-tab context menu width"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        XCTAssertLessThan(menu.frame.width, 260)
+        XCTAssertTrue(menu.menuItems["关闭右侧标签页"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(tab.exists)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "内容保持不变\n")
+    }
+
     func testRightClickOutsideTabSelectionClosesOnlyItsOwnTarget() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let files = try (0..<3).map {

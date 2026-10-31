@@ -77,7 +77,11 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             let label = $0.title.components(separatedBy: "\t").first ?? $0.title
             return (label as NSString).size(withAttributes: [.font: font]).width
         }.max() ?? 0
-        let tabStop = max(250, widest + 90)
+        let widestHint = hinted.map {
+            let hint = $0.title.components(separatedBy: "\t").last ?? ""
+            return (hint as NSString).size(withAttributes: [.font: font]).width
+        }.max() ?? 0
+        let tabStop = widest + widestHint + 16
 
         for item in hinted {
             let style = NSMutableParagraphStyle()

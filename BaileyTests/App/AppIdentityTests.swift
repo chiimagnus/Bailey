@@ -130,6 +130,19 @@ final class AppIdentityTests: XCTestCase {
         let style = try XCTUnwrap(copy.attributedTitle?
             .attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
         XCTAssertEqual(style.tabStops.first?.alignment, .right)
+        let font = NSFont.menuFont(ofSize: 0)
+        let labels = menu.items.map {
+            ($0.title.components(separatedBy: "\t").first ?? $0.title) as NSString
+        }
+        let hints = menu.items.filter { $0.title.contains("\t") }.map {
+            ($0.title.components(separatedBy: "\t").last ?? "") as NSString
+        }
+        let labelWidth = labels.map { $0.size(withAttributes: [.font: font]).width }.max() ?? 0
+        let hintWidth = hints.map { $0.size(withAttributes: [.font: font]).width }.max() ?? 0
+        let tabStop = try XCTUnwrap(style.tabStops.first?.location)
+        XCTAssertGreaterThanOrEqual(tabStop, labelWidth + hintWidth + 10)
+        XCTAssertLessThanOrEqual(tabStop, labelWidth + hintWidth + 24,
+                                 "Shortcut alignment must fit content instead of reserving 250pt")
         XCTAssertTrue(copy.keyEquivalent.isEmpty)
         XCTAssertTrue(paste.keyEquivalent.isEmpty)
         XCTAssertNil(menu.items.last?.attributedTitle)
