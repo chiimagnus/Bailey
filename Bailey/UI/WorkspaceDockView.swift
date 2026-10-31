@@ -442,7 +442,6 @@ struct DockTabGroupView: View {
                                 Text(verbatim: "⌘T").foregroundStyle(.secondary)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(7)
                         .contentShape(Rectangle())
                     }
@@ -464,7 +463,6 @@ struct DockTabGroupView: View {
                 Spacer(minLength: 0)
                 if isFocused { Text(verbatim: "⌘O").foregroundStyle(.secondary) }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(7)
             .contentShape(Rectangle())
         }
@@ -492,7 +490,6 @@ struct DockTabGroupView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(7)
             .contentShape(Rectangle())
         }

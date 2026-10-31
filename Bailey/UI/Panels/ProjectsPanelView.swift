@@ -99,7 +99,6 @@ struct ProjectsPanelView: View {
                                 Spacer(minLength: 0)
                                 Text(verbatim: "⇧⌘A").foregroundStyle(.secondary)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(7)
                             .contentShape(Rectangle())
                         }
@@ -108,19 +107,15 @@ struct ProjectsPanelView: View {
                             showingProjectPicker = false
                             manager.chooseSSHItems()
                         } label: {
-                            HStack {
-                                Text(String(localized: "Add SSH Files or Projects…", table: "Sidebar"))
-                                Spacer(minLength: 0)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(7)
-                            .contentShape(Rectangle())
+                            Text(String(localized: "Add SSH Files or Projects…", table: "Sidebar"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(7)
+                                .contentShape(Rectangle())
                         }
                     }
                     .buttonStyle(.plain)
                     .padding(6)
                 }
-                .frame(width: 24, height: 24)
                 Spacer()
                 SidebarFooterButton(
                     systemImage: "exclamationmark.bubble",
