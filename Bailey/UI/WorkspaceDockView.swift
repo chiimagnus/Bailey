@@ -332,7 +332,6 @@ struct DockTabGroupView: View {
         VStack(spacing: 0) {
             header
                 .frame(height: 38)
-                .background(Color(nsColor: Theme.background))
                 .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
                     manager: manager,
                     destination: (projectID: project.id, groupID: group.id)
