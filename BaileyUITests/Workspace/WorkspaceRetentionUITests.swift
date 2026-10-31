@@ -47,6 +47,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
             theme = "light"
             theme-light = "Ayu Light"
             theme-dark = "Adwaita Dark"
+            toolbar.visibility = "always"
             """)
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", configurationHome: fixture.root,
@@ -59,18 +60,19 @@ final class WorkspaceRetentionUITests: XCTestCase {
         row.doubleClick()
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: main).waitForExistence(timeout: 12))
 
-        func backgroundSamples() throws -> (projects: NSColor, editor: NSColor, files: NSColor) {
+        func backgroundSamples() throws -> (projects: NSColor, editor: NSColor, sidePanel: NSColor, toolbar: NSColor) {
             let image = main.screenshot().image
             let data = try XCTUnwrap(image.tiffRepresentation)
             let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
             let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
-            func color(x: CGFloat) throws -> NSColor {
+            func color(x: CGFloat, y: CGFloat = 250) throws -> NSColor {
                 let pixel = try XCTUnwrap(bitmap.colorAt(
-                    x: Int(x * scale), y: Int(250 * scale)
+                    x: Int(x * scale), y: Int(y * scale)
                 ))
                 return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
             }
-            return try (color(x: 50), color(x: 340), color(x: 780))
+            return try (color(x: 50), color(x: 340), color(x: 780),
+                        color(x: 340, y: main.frame.height - 10))
         }
 
         func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
@@ -81,6 +83,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
 
         let before = try backgroundSamples()
         XCTAssertLessThan(difference(before.projects, before.editor), 0.012)
+        XCTAssertLessThan(difference(before.toolbar, before.editor), 0.012)
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows.matching(
             identifier: "com_apple_SwiftUI_Settings_window"
@@ -109,8 +112,17 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let after = try backgroundSamples()
         XCTAssertLessThan(difference(after.projects, after.editor), 0.012,
                           "Projects background must update without a Dock switch or resize")
-        XCTAssertLessThan(difference(after.files, after.editor), 0.012,
+        XCTAssertLessThan(difference(after.sidePanel, after.editor), 0.012,
                           "Files and the editor must use the same custom palette backdrop")
+        XCTAssertLessThan(difference(after.toolbar, after.editor), 0.012,
+                          "Bottom toolbar must repaint with the selected palette")
+
+        let gitPanel = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(gitPanel.waitForExistence(timeout: 12))
+        gitPanel.click()
+        let gitBackgrounds = try backgroundSamples()
+        XCTAssertLessThan(difference(gitBackgrounds.sidePanel, gitBackgrounds.editor), 0.012,
+                          "Git must use the custom palette before changing appearance")
 
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(settings.waitForExistence(timeout: 12))
@@ -123,7 +135,9 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertGreaterThan(difference(after.editor, darkBackgrounds.editor), 0.1)
         XCTAssertLessThan(difference(darkBackgrounds.projects, darkBackgrounds.editor), 0.012,
                           "Projects must adopt the custom dark palette without remounting")
-        XCTAssertLessThan(difference(darkBackgrounds.files, darkBackgrounds.editor), 0.012)
+        XCTAssertLessThan(difference(darkBackgrounds.sidePanel, darkBackgrounds.editor), 0.012,
+                          "Git background must repaint with the custom dark theme")
+        XCTAssertLessThan(difference(darkBackgrounds.toolbar, darkBackgrounds.editor), 0.012)
 
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(settings.waitForExistence(timeout: 12))
@@ -134,7 +148,8 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertTrue(settings.waitForNonExistence(timeout: 10))
         let restoredLight = try backgroundSamples()
         XCTAssertLessThan(difference(restoredLight.projects, restoredLight.editor), 0.012)
-        XCTAssertLessThan(difference(restoredLight.files, restoredLight.editor), 0.012)
+        XCTAssertLessThan(difference(restoredLight.sidePanel, restoredLight.editor), 0.012)
+        XCTAssertLessThan(difference(restoredLight.toolbar, restoredLight.editor), 0.012)
         XCTAssertLessThan(difference(restoredLight.editor, after.editor), 0.012,
                           "Light appearance must restore the previously selected light palette")
     }
