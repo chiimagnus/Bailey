@@ -122,6 +122,7 @@ private struct DockTabFrames: PreferenceKey {
 
 struct WorkspaceDockView: View {
     private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     let manager: WorkspaceWindowModel
     let git: GitStatusModel
     @State private var dragging = DockTabDragCoordinator()
@@ -136,7 +137,7 @@ struct WorkspaceDockView: View {
                     git: git, dragging: dragging
                 )
                 .frame(width: rootGeometry.size.width, height: rootGeometry.size.height)
-                .background(Color(nsColor: Theme.background))
+                .background(Color(nsColor: Theme.terminal(dark: colorScheme == .dark).backgroundNSColor))
                 .onPreferenceChange(DockGroupFrames.self) {
                     dragging.setFrames(groups: $0)
                 }

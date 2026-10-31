@@ -83,6 +83,7 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
 /// Renders one tool within a dock tab. Files and Git retain their
 /// original models and actions regardless of where the tab is parked.
 struct ToolPanelView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let panel: ToolPanel
@@ -277,7 +278,7 @@ struct ToolPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: Theme.sidebar))
+        .background(Color(nsColor: Theme.terminal(dark: colorScheme == .dark).sidebarNSColor))
         .onAppear {
             updateLocalFileWatcher()
             updateRemoteFileWatcher()

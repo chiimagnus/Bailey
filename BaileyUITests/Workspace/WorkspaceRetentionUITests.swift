@@ -40,6 +40,105 @@ final class WorkspaceRetentionUITests: XCTestCase {
         add(screenshot)
     }
 
+    func testLivePaletteChangeRepaintsDockWithoutPanelSwitch() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("workspace/theme-sample.txt", text: "Palette fixture\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: file.deletingLastPathComponent()
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 12))
+        let row = WorkspaceUITestSupport.fileRow(file, in: main)
+        XCTAssertTrue(row.waitForExistence(timeout: 12))
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: main).waitForExistence(timeout: 12))
+
+        func backgroundSamples() throws -> (projects: NSColor, editor: NSColor, files: NSColor) {
+            let image = main.screenshot().image
+            let data = try XCTUnwrap(image.tiffRepresentation)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(x: CGFloat) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(x * scale), y: Int(250 * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (color(x: 50), color(x: 340), color(x: 780))
+        }
+
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+
+        let before = try backgroundSamples()
+        XCTAssertLessThan(difference(before.projects, before.editor), 0.012)
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(
+            identifier: "com_apple_SwiftUI_Settings_window"
+        ).firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        // The native controls are PopUpButtons with values, not Buttons with labels.
+        let palette = settings.popUpButtons.element(boundBy: 2)
+        XCTAssertTrue(palette.waitForExistence(timeout: 12))
+        let originalName = palette.value as? String ?? ""
+        let targetName = originalName == "Ayu Light" ? "Apple System Colors Light" : "Ayu Light"
+        palette.click()
+        let choice = palette.menuItems[targetName]
+        XCTAssertTrue(choice.waitForExistence(timeout: 12))
+        choice.click()
+        XCTAssertEqual(palette.value as? String, targetName)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 10),
+                      "Close Settings before sampling the unobscured main window")
+
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let sample = try? backgroundSamples() else { return false }
+            return difference(before.editor, sample.editor) > 0.015
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 8), .completed,
+                       "Editor must show the newly selected palette")
+        let after = try backgroundSamples()
+        XCTAssertLessThan(difference(after.projects, after.editor), 0.012,
+                          "Projects background must update without a Dock switch or resize")
+        XCTAssertLessThan(difference(after.files, after.editor), 0.012,
+                          "Files and the editor must use the same custom palette backdrop")
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let dark = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(dark.waitForExistence(timeout: 12))
+        dark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 10))
+        let darkBackgrounds = try backgroundSamples()
+        XCTAssertGreaterThan(difference(after.editor, darkBackgrounds.editor), 0.1)
+        XCTAssertLessThan(difference(darkBackgrounds.projects, darkBackgrounds.editor), 0.012,
+                          "Projects must adopt the custom dark palette without remounting")
+        XCTAssertLessThan(difference(darkBackgrounds.files, darkBackgrounds.editor), 0.012)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let light = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(light.waitForExistence(timeout: 12))
+        light.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 10))
+        let restoredLight = try backgroundSamples()
+        XCTAssertLessThan(difference(restoredLight.projects, restoredLight.editor), 0.012)
+        XCTAssertLessThan(difference(restoredLight.files, restoredLight.editor), 0.012)
+        XCTAssertLessThan(difference(restoredLight.editor, after.editor), 0.012,
+                          "Light appearance must restore the previously selected light palette")
+    }
+
     func testIsolatedSettingsThemePersistsAcrossRealAppRestart() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let app = try WorkspaceUITestSupport.launch(
