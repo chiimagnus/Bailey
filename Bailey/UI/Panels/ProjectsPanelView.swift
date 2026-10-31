@@ -86,27 +86,39 @@ struct ProjectsPanelView: View {
                     systemImage: "plus",
                     tooltip: String(localized: "Add projects or SSH files", table: "Sidebar")
                 ) { showingProjectPicker.toggle() }
+                .accessibilityIdentifier("bailey.projects.addPicker")
                 .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(spacing: 2) {
                         let addTitle = String(localized: "Add Projects…", table: "Sidebar")
                         Button {
                             showingProjectPicker = false
                             manager.chooseFolders()
                         } label: {
-                            HStack(spacing: 8) {
+                            HStack {
                                 Text(addTitle)
                                 Spacer(minLength: 0)
                                 Text(verbatim: "⇧⌘A").foregroundStyle(.secondary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(7)
+                            .contentShape(Rectangle())
                         }
                         .accessibilityLabel(addTitle)
-                        Button(String(localized: "Add SSH Files or Projects…", table: "Sidebar")) {
+                        Button {
                             showingProjectPicker = false
                             manager.chooseSSHItems()
+                        } label: {
+                            HStack {
+                                Text(String(localized: "Add SSH Files or Projects…", table: "Sidebar"))
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(7)
+                            .contentShape(Rectangle())
                         }
                     }
                     .buttonStyle(.plain)
-                    .padding(10)
+                    .padding(6)
                 }
                 .frame(width: 24, height: 24)
                 Spacer()

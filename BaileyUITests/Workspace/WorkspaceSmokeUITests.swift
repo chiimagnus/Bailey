@@ -13,6 +13,34 @@ final class WorkspaceSmokeUITests: XCTestCase {
         XCTAssertTrue(app.menuBars.menuBarItems["Bailey Dev"].waitForExistence(timeout: 12))
     }
 
+    func testProjectsAddPopoverUsesAlignedActionsAndOpensPicker() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let add = WorkspaceUITestSupport.element("bailey.projects.addPicker", in: app)
+        XCTAssertTrue(add.waitForExistence(timeout: 15))
+        add.click()
+        let local = app.buttons["Add Projects…"]
+        let remote = app.buttons["Add SSH Files or Projects…"]
+        XCTAssertTrue(local.waitForExistence(timeout: 10))
+        XCTAssertTrue(remote.waitForExistence(timeout: 10))
+        XCTAssertEqual(local.frame.minX, remote.frame.minX, accuracy: 2,
+                       "Popover actions must share the same left edge")
+        XCTAssertEqual(local.frame.maxX, remote.frame.maxX, accuracy: 2,
+                       "Popover actions must share the same right edge")
+        XCTAssertLessThan(local.frame.width, 500, "Popover should size to its contents")
+        local.click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(app.sheets.firstMatch.waitForNonExistence(timeout: 10))
+        add.click()
+        let ssh = app.buttons["Add SSH Files or Projects…"]
+        XCTAssertTrue(ssh.waitForExistence(timeout: 10))
+        ssh.click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(app.windows.count, 1)
+    }
+
     func testRepeatedLaunchDoesNotResetTheCurrentTestProject() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let marker = try fixture.file("marker.txt", text: "test-owned bytes\n")
