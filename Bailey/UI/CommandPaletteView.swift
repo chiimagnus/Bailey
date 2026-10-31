@@ -648,7 +648,6 @@ struct CommandPaletteView: View {
             Text(String(localized: "No matches", table: "Interface"))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
         } else {
             ScrollViewReader { proxy in
