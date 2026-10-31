@@ -810,13 +810,12 @@ private struct FileTreeRow: View {
         DispatchQueue.main.async { fieldFocused = true }
     }
 
+    @ViewBuilder
     private var leadingGlyphs: some View {
-        Group {
-            if item.isDirectory {
-                TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
-            } else {
-                MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
-            }
+        if item.isDirectory {
+            TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
+        } else {
+            MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
         }
     }
 }
