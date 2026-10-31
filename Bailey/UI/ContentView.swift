@@ -27,7 +27,8 @@ struct ContentView: View {
                 WorkspaceDockView(manager: manager, git: git)
             } else {
                 VStack(spacing: 0) {
-                    HStack { WindowDragArea().frame(maxWidth: .infinity) }
+                    WindowDragArea()
+                        .frame(maxWidth: .infinity)
                         .frame(height: 38)
                     emptyState
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -117,18 +117,20 @@ struct ProjectsPanelView: View {
                     .padding(6)
                 }
                 Spacer()
-                SidebarFooterButton(
+                ChromeIconButton(
                     systemImage: "exclamationmark.bubble",
                     tooltip: String(localized: "Send Feedback", table: "Sidebar"),
+                    tooltipEdge: .above,
                     tooltipAlignment: .trailing
                 ) {
                     NSWorkspace.shared.open(
                         URL(string: "https://github.com/chiimagnus/Bailey/issues/new")!
                     )
                 }
-                SidebarFooterButton(
+                ChromeIconButton(
                     systemImage: "gearshape",
                     tooltip: String(localized: "Settings (⌘,)", table: "Sidebar"),
+                    tooltipEdge: .above,
                     tooltipAlignment: .trailing
                 ) { openSettings() }
             }
@@ -213,25 +215,6 @@ struct ProjectsPanelView: View {
     private func endProjectDrag() {
         draggedProjectID = nil
         NSCursor.arrow.set()
-    }
-}
-
-private struct SidebarFooterButton: View {
-    let systemImage: String
-    let tooltip: String
-    /// Buttons near the sidebar's right edge anchor `.trailing` so the label
-    /// grows inward instead of off-panel.
-    var tooltipAlignment: HorizontalAlignment = .leading
-    let action: () -> Void
-
-    var body: some View {
-        ChromeIconButton(
-            systemImage: systemImage,
-            tooltip: tooltip,
-            tooltipEdge: .above,
-            tooltipAlignment: tooltipAlignment,
-            action: action
-        )
     }
 }
 
