@@ -479,7 +479,10 @@ private struct TabSwitcherCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: TabSwitcherLayout.previewTitleSpacing) {
-            TabThumbnail(tab: tab, terminalPreviews: terminalPreviews)
+            TabContentThumbnail(
+                content: tab.content,
+                terminalPreview: terminalPreviews[tab.content.id]
+            )
                 .frame(
                     width: TabSwitcherLayout.previewWidth,
                     height: TabSwitcherLayout.previewHeight
@@ -618,19 +621,6 @@ private final class TabSwitcherInteractionNSView: NSView {
     }
 }
 
-private struct TabThumbnail: View {
-    let tab: PaneTab
-    let terminalPreviews: [UUID: String]
-
-    var body: some View {
-        TabContentThumbnail(
-            content: tab.content,
-            terminalPreview: terminalPreviews[tab.content.id]
-        )
-        .background(Color(nsColor: Theme.background))
-    }
-}
-
 private struct TabContentThumbnail: View {
     let content: PaneContent
     let terminalPreview: String?
@@ -645,7 +635,7 @@ private struct TabContentThumbnail: View {
             case .file(let file):
                 filePreview(file)
             case .browser(let browser):
-                browserPreview(browser)
+                BrowserTabSwitcherPreview(browser: browser)
             case .diff(let diff):
                 diffPreview(diff)
             }
@@ -727,10 +717,6 @@ private struct TabContentThumbnail: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(4)
-    }
-
-    private func browserPreview(_ browser: BrowserTab) -> some View {
-        BrowserTabSwitcherPreview(browser: browser)
     }
 
     private var terminalForeground: NSColor {
