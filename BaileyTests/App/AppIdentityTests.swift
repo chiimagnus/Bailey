@@ -132,7 +132,6 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(style.tabStops.first?.alignment, .right)
         XCTAssertTrue(copy.keyEquivalent.isEmpty)
         XCTAssertTrue(paste.keyEquivalent.isEmpty)
-        XCTAssertGreaterThanOrEqual(menu.minimumWidth, 275)
         XCTAssertNil(menu.items.last?.attributedTitle)
     }
 

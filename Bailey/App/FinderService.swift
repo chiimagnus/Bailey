@@ -78,7 +78,6 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             return (label as NSString).size(withAttributes: [.font: font]).width
         }.max() ?? 0
         let tabStop = max(250, widest + 90)
-        menu.minimumWidth = max(menu.minimumWidth, tabStop + 25)
 
         for item in hinted {
             let style = NSMutableParagraphStyle()
