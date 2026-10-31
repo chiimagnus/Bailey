@@ -613,7 +613,6 @@ private struct DescribedSettingsRow<Control: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             control
-                .fixedSize(horizontal: true, vertical: false)
         }
     }
 }
