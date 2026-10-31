@@ -338,9 +338,7 @@ struct GitPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .menuStyle(.button)
         .menuIndicator(.hidden)
-        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(String(localized: "Switch or Create Branch", table: "Sidebar"))
         .disabled(!model.canUseCurrentReferences)
@@ -427,9 +425,7 @@ struct GitPanel: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
-        .menuStyle(.button)
         .menuIndicator(.hidden)
-        .fixedSize()
         .help(String(localized: "More Actions…", table: "Sidebar"))
         .disabled(!model.canUseCurrentStatus)
         .accessibilityLabel(String(localized: "More Git Actions", table: "Sidebar"))
@@ -1545,9 +1541,7 @@ struct GitPanel: View {
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-        .menuStyle(.button)
         .menuIndicator(.hidden)
-        .fixedSize()
         .help(String(localized: "Commit Options", table: "Sidebar"))
         .accessibilityLabel(String(localized: "Commit Options", table: "Sidebar"))
     }
