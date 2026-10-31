@@ -372,7 +372,6 @@ struct DockTabGroupView: View {
                 )
             }
         }
-        .background(Color(nsColor: Theme.background))
         .background(DockGroupFocusReader(
             groupID: group.id,
             isActive: isFocused,
