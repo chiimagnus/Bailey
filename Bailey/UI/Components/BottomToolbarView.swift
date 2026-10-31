@@ -196,7 +196,6 @@ struct BottomToolbarView: View {
                         if filteredBranches.isEmpty {
                             Text(String(localized: "No matches", table: "Interface"))
                                 .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
                                 .padding(.vertical, 24)
                         } else {
                             ForEach(filteredBranches, id: \.self) { branch in
