@@ -141,7 +141,7 @@ struct BottomToolbarView: View {
 
     private var changesButton: some View {
         Button(action: toggleGitPanel) {
-            HStack(spacing: 8) {
+            HStack {
                 if model.totalChangeCount == 0 {
                     Circle()
                         .fill(Color(red: 0.25, green: 0.73, blue: 0.31))

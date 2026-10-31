@@ -499,7 +499,7 @@ private struct TabSwitcherCard: View {
                     .strokeBorder(Color.primary.opacity(0.16), lineWidth: 1)
                 }
 
-            HStack(spacing: 8) {
+            HStack {
                 titleIcon
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary.opacity(isHighlighted ? 1 : 0.82))
