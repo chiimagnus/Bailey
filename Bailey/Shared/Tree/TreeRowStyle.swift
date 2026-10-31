@@ -514,7 +514,6 @@ private struct TreeRowLabel: View {
             } else {
                 MaterialFileIconView(path: iconPath, size: TreeRowStyle.iconSize,
                                      opacity: row.status == .deleted ? 0.6 : 1)
-                    .frame(width: TreeRowStyle.iconSize)
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
@@ -548,7 +547,6 @@ private struct TreeRowLabel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
-        .contentShape(Rectangle())
     }
 }
 

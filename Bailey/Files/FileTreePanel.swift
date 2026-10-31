@@ -818,7 +818,6 @@ private struct FileTreeRow: View {
                 TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
             } else {
                 MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
-                    .frame(width: TreeRowStyle.iconSize)
             }
         }
     }
