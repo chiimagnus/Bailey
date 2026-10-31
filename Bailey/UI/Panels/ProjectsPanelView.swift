@@ -87,7 +87,7 @@ struct ProjectsPanelView: View {
                     tooltip: String(localized: "Add projects or SSH files", table: "Sidebar")
                 ) { showingProjectPicker.toggle() }
                 .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
-                    VStack(spacing: 2) {
+                    VStack(alignment: .leading, spacing: 2) {
                         let addTitle = String(localized: "Add Projects…", table: "Sidebar")
                         Button {
                             showingProjectPicker = false
@@ -107,7 +107,6 @@ struct ProjectsPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(10)
-                    .frame(width: 220, alignment: .leading)
                 }
                 .frame(width: 24, height: 24)
                 Spacer()
