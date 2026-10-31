@@ -338,7 +338,6 @@ struct GitPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .help(String(localized: "Switch or Create Branch", table: "Sidebar"))
         .disabled(!model.canUseCurrentReferences)
         .accessibilityLabel(
