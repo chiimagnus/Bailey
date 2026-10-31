@@ -143,7 +143,6 @@ struct ProjectsPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: Theme.background))
         .onPreferenceChange(ProjectFramePreferenceKey.self) { projectFrames = $0 }
         .onChange(of: manager.selectedProjectID) { _, id in
             contextProjectID = nil
