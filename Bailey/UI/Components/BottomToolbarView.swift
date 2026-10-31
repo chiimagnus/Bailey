@@ -62,7 +62,6 @@ struct BottomToolbarView: View {
         .background {
             ToolbarContextMenuMonitor(hideToolbar: hideToolbar)
         }
-        .background(Color(nsColor: Theme.background))
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color(nsColor: Theme.divider))
