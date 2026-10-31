@@ -293,8 +293,7 @@ struct GitPanel: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.vertical, 8)
     }
 
     private var branchMenu: some View {

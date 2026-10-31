@@ -105,8 +105,7 @@ struct FileTreePanel: View {
                 .accessibilityIdentifier("bailey.files.showExcludedMenu")
             }
             .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
+            .padding(.vertical, 8)
             .background {
                 if dropTargetDirectory == model.rootPath {
                     RoundedRectangle(cornerRadius: 4)
