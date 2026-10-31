@@ -781,7 +781,6 @@ struct BrowserView: View {
                 progress
             }
         }
-        .background(Color(nsColor: Theme.background))
         .onAppear {
             address = browser.urlString
         }
