@@ -376,7 +376,6 @@ struct TreeRowSurface<Content: View>: View {
             trailingInset: trailingInset,
             height: height ?? TreeRowStyle.rowHeight(scale)
         ))
-            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 4))
             .modifier(RowHighlightStyle(
                 isSelected: isSelected, listActive: listActive, displayed: displayed,

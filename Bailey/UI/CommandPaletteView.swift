@@ -568,7 +568,7 @@ struct CommandPaletteView: View {
 
     private var panel: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)

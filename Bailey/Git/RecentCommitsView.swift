@@ -803,7 +803,6 @@ struct RecentCommitsView: View {
                             ? .isSelected : [])
                         Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
                         if let worktree = commit.worktree {

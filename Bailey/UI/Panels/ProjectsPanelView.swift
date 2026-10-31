@@ -281,7 +281,7 @@ private struct SidebarProjectRow: View {
             Image(systemName: project.sshHost == nil ? "folder" : "network")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isSelected ? Color(nsColor: Theme.accent) : .secondary)
-                .frame(width: max(14, fontSize), alignment: .center)
+                .frame(width: max(14, fontSize))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.name)
