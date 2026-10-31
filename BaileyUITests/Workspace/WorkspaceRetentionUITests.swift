@@ -154,6 +154,353 @@ final class WorkspaceRetentionUITests: XCTestCase {
                           "Light appearance must restore the previously selected light palette")
     }
 
+    func testBlankBrowserPaletteRepaintsWithoutChangingPanelLayout() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("workspace/example.swift", text: "let value = 1\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: fixture.root.appendingPathComponent("workspace")
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 12))
+        let newBrowser = app.menuItems["New Browser Tab"]
+        XCTAssertTrue(newBrowser.waitForExistence(timeout: 12))
+        newBrowser.click()
+        XCTAssertTrue(main.textFields["Search or enter website name"].waitForExistence(timeout: 15))
+
+        func sample() throws -> (projects: NSColor, browser: NSColor, toolbar: NSColor) {
+            let image = main.screenshot().image
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(_ x: Int, _ y: Int = 250) throws -> NSColor {
+                let point = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(CGFloat(x) * scale), y: Int(CGFloat(y) * scale)
+                ))
+                return try XCTUnwrap(point.usingColorSpace(.deviceRGB))
+            }
+            return try (color(50), color(350), color(740, 58))
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let before = try sample()
+        let initial = XCTAttachment(screenshot: main.screenshot())
+        initial.name = "Blank browser before palette change"
+        initial.lifetime = .keepAlways
+        add(initial)
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let palette = settings.popUpButtons.element(boundBy: 2)
+        XCTAssertTrue(palette.waitForExistence(timeout: 12))
+        palette.click()
+        let choice = palette.menuItems["Apple System Colors Light"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 12))
+        choice.click()
+        XCTAssertEqual(palette.value as? String, "Apple System Colors Light")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 10))
+        let after = try sample()
+        let updated = XCTAttachment(screenshot: main.screenshot())
+        updated.name = "Blank browser after palette change"
+        updated.lifetime = .keepAlways
+        add(updated)
+        XCTAssertGreaterThan(distance(before.projects, after.projects), 0.015,
+                             "The root background must switch to the chosen palette")
+        XCTAssertLessThan(distance(after.projects, after.browser), 0.012,
+                          "Blank WKWebView overlay must repaint with the root, not retain the old shade")
+        XCTAssertLessThan(distance(after.projects, after.toolbar), 0.012,
+                          "Browser toolbar background must follow the selected color theme")
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let dark = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(dark.waitForExistence(timeout: 12))
+        dark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let darkColors = try sample()
+        let darkShot = XCTAttachment(screenshot: main.screenshot())
+        darkShot.name = "Blank browser after switching to Adwaita Dark"
+        darkShot.lifetime = .keepAlways
+        add(darkShot)
+        XCTAssertGreaterThan(distance(after.projects, darkColors.projects), 0.25)
+        XCTAssertLessThan(distance(darkColors.projects, darkColors.browser), 0.012)
+        XCTAssertLessThan(distance(darkColors.projects, darkColors.toolbar), 0.012)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let light = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(light.waitForExistence(timeout: 12))
+        light.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restored = try sample()
+        XCTAssertLessThan(distance(restored.projects, restored.browser), 0.012)
+        XCTAssertLessThan(distance(restored.projects, restored.toolbar), 0.012)
+        XCTAssertLessThan(distance(restored.browser, after.browser), 0.012)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let lightPicker = settings.popUpButtons.element(boundBy: 2)
+        XCTAssertTrue(lightPicker.waitForExistence(timeout: 12))
+        lightPicker.click()
+        let defaultLight = lightPicker.menuItems["Default Light"]
+        XCTAssertTrue(defaultLight.waitForExistence(timeout: 12))
+        defaultLight.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let builtIn = try sample()
+        XCTAssertLessThan(distance(builtIn.projects, builtIn.browser), 0.03)
+        XCTAssertLessThan(distance(builtIn.browser, builtIn.toolbar), 0.03)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        lightPicker.click()
+        let ayuLight = lightPicker.menuItems["Ayu Light"]
+        XCTAssertTrue(ayuLight.waitForExistence(timeout: 12))
+        ayuLight.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restoredAyu = try sample()
+        let lastShot = XCTAttachment(screenshot: main.screenshot())
+        lastShot.name = "Blank browser restored from Default Light to Ayu Light"
+        lastShot.lifetime = .keepAlways
+        add(lastShot)
+        XCTAssertLessThan(distance(restoredAyu.projects, before.projects), 0.012)
+        XCTAssertLessThan(distance(restoredAyu.browser, before.browser), 0.012)
+        XCTAssertLessThan(distance(restoredAyu.toolbar, before.toolbar), 0.012)
+    }
+
+    func testEmptyDockGroupRepaintsWhenSwitchingFromBuiltInToCatalogPalette() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("workspace/example.swift", text: "let stable = true\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Default Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: fixture.root.appendingPathComponent("workspace")
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 12))
+        XCTAssertTrue(main.buttons["Add Panel"].waitForExistence(timeout: 12))
+
+        func capture(_ title: String) throws -> (projects: NSColor, emptyDock: NSColor, files: NSColor) {
+            let shot = main.screenshot()
+            let attachment = XCTAttachment(screenshot: shot)
+            attachment.name = title
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(shot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(_ x: Int) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(CGFloat(x) * scale), y: Int(250 * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (color(50), color(350), color(780))
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let before = try capture("Empty Dock panel, Default Light")
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let palette = settings.popUpButtons.element(boundBy: 2)
+        XCTAssertTrue(palette.waitForExistence(timeout: 12))
+        palette.click()
+        let ayu = palette.menuItems["Ayu Light"]
+        XCTAssertTrue(ayu.waitForExistence(timeout: 12))
+        ayu.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let after = try capture("Empty Dock panel, Ayu Light")
+        XCTAssertGreaterThan(distance(before.emptyDock, after.emptyDock), 0.012)
+        XCTAssertLessThan(distance(after.emptyDock, after.files), 0.012,
+                          "Empty Dock group must repaint with the selected catalog palette")
+        XCTAssertLessThan(distance(after.projects, after.files), 0.012)
+        XCTAssertTrue(main.buttons["Add Panel"].exists)
+    }
+
+    func testNoProjectWindowRepaintsAfterBuiltInAndCatalogThemeChanges() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Default Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 12))
+        XCTAssertTrue(main.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 12))
+
+        func sample(_ title: String) throws -> NSColor {
+            let shot = main.screenshot()
+            let attachment = XCTAttachment(screenshot: shot)
+            attachment.name = title
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(shot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            let pixel = try XCTUnwrap(bitmap.colorAt(
+                x: Int(340 * scale), y: Int(250 * scale)
+            ))
+            return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let initial = try sample("No-project window, Default Light")
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let lightPicker = settings.popUpButtons.element(boundBy: 2)
+        XCTAssertTrue(lightPicker.waitForExistence(timeout: 12))
+        lightPicker.click()
+        let ayu = lightPicker.menuItems["Ayu Light"]
+        XCTAssertTrue(ayu.waitForExistence(timeout: 12))
+        ayu.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let custom = try sample("No-project window, Ayu Light")
+        XCTAssertGreaterThan(distance(initial, custom), 0.012,
+                             "Empty window must repaint when only its palette changes")
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let dark = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(dark.waitForExistence(timeout: 12))
+        dark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let customDark = try sample("No-project window, Adwaita Dark")
+        XCTAssertGreaterThan(distance(custom, customDark), 0.4)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let light = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(light.waitForExistence(timeout: 12))
+        light.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restored = try sample("No-project window, restored Ayu Light")
+        XCTAssertLessThan(distance(restored, custom), 0.012)
+        XCTAssertTrue(main.buttons["bailey.emptyState.addFolder"].exists)
+    }
+
+    func testBuiltInDefaultAndCatalogPalettesRepaintWithoutSwitchingDock() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("project/default-theme.swift", text: "let stable = true\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "dark"
+            theme-dark = "Adwaita Dark"
+            theme-light = "Default Light"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: file.deletingLastPathComponent()
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 15))
+        let row = WorkspaceUITestSupport.fileRow(file, in: main)
+        XCTAssertTrue(row.waitForExistence(timeout: 12))
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: main).waitForExistence(timeout: 12))
+
+        func capture(_ name: String) throws -> [NSColor] {
+            let screenshot = main.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(screenshot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            return try [50, 340, 780].map { x in
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(CGFloat(x) * scale), y: Int(250 * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+
+        let customDark = try capture("Custom Adwaita Dark")
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkPicker = settings.popUpButtons.element(boundBy: 1)
+        XCTAssertTrue(darkPicker.waitForExistence(timeout: 12))
+        darkPicker.click()
+        let defaultDark = darkPicker.menuItems["Default Dark"]
+        XCTAssertTrue(defaultDark.waitForExistence(timeout: 12))
+        defaultDark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let builtInDark = try capture("Built-in Default Dark after Adwaita")
+        for index in 0..<3 {
+            XCTAssertGreaterThan(distance(customDark[index], builtInDark[index]), 0.04,
+                                 "Area \(index) retained the previous custom dark background")
+        }
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let light = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(light.waitForExistence(timeout: 12))
+        light.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let builtInLight = try capture("Built-in Default Light after Default Dark")
+        for index in 0..<3 {
+            XCTAssertGreaterThan(distance(builtInDark[index], builtInLight[index]), 0.4)
+        }
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let lightPicker = settings.popUpButtons.element(boundBy: 2)
+        XCTAssertTrue(lightPicker.waitForExistence(timeout: 12))
+        lightPicker.click()
+        let ayu = lightPicker.menuItems["Ayu Light"]
+        XCTAssertTrue(ayu.waitForExistence(timeout: 12))
+        ayu.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let customLight = try capture("Custom Ayu Light after built-in Default Light")
+        XCTAssertGreaterThan(distance(builtInLight[1], customLight[1]), 0.012)
+        XCTAssertLessThan(distance(customLight[0], customLight[1]), 0.012)
+        XCTAssertLessThan(distance(customLight[2], customLight[1]), 0.012)
+    }
+
     func testIsolatedSettingsThemePersistsAcrossRealAppRestart() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let app = try WorkspaceUITestSupport.launch(
@@ -391,6 +738,96 @@ final class WorkspaceRetentionUITests: XCTestCase {
                        "P4T5 UNSAVED FORM", "Switching tabs must not reload the WKWebView")
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 1)
         XCTAssertEqual(try Data(contentsOf: file), originalBytes)
+    }
+
+    func testLiveTerminalSurfaceUsesChangedThemesWithoutRecreatingShell() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("workspace/neighbor.swift", text: "let stable = true\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: fixture.root.appendingPathComponent("workspace")
+        )
+        let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(main.waitForExistence(timeout: 12))
+        app.typeKey("t", modifierFlags: .command)
+        main.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.58)).click()
+        let marker = fixture.root.appendingPathComponent("terminal-theme-ready")
+        app.typeText("printf ready > '\(marker.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let shellReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: marker.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [shellReady], timeout: 15), .completed,
+                       "A real Ghostty PTY must be running throughout the theme test")
+
+        func capture(_ title: String) throws -> (projects: NSColor, terminal: NSColor) {
+            let shot = main.screenshot()
+            let attachment = XCTAttachment(screenshot: shot)
+            attachment.name = title
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(shot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / main.frame.width
+            func color(_ x: Int) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(CGFloat(x) * scale), y: Int(250 * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (color(50), color(340))
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let light = try capture("Real Ghostty terminal, Ayu Light")
+        XCTAssertLessThan(distance(light.projects, light.terminal), 0.045)
+
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkTab = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(darkTab.waitForExistence(timeout: 12))
+        darkTab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let dark = try capture("Real Ghostty terminal, Adwaita Dark")
+        XCTAssertGreaterThan(distance(light.terminal, dark.terminal), 0.4)
+        XCTAssertLessThan(distance(dark.projects, dark.terminal), 0.045)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkPicker = settings.popUpButtons.element(boundBy: 1)
+        XCTAssertTrue(darkPicker.waitForExistence(timeout: 12))
+        darkPicker.click()
+        let ayuDark = darkPicker.menuItems["Ayu"]
+        XCTAssertTrue(ayuDark.waitForExistence(timeout: 12))
+        ayuDark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let changedDark = try capture("Real Ghostty terminal, Ayu dark palette")
+        XCTAssertGreaterThan(distance(changedDark.terminal, dark.terminal), 0.03)
+        XCTAssertLessThan(distance(changedDark.projects, changedDark.terminal), 0.045)
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let lightTab = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(lightTab.waitForExistence(timeout: 12))
+        lightTab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restored = try capture("Real Ghostty terminal, restored Ayu Light")
+        XCTAssertLessThan(distance(restored.terminal, light.terminal), 0.045)
+        XCTAssertLessThan(distance(restored.projects, restored.terminal), 0.045)
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "ready")
     }
 
     func testRealTerminalKeepsSameShellAcrossFileTabAndFind() throws {

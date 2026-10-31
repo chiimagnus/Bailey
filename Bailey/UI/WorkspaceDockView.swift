@@ -128,7 +128,6 @@ struct WorkspaceDockView: View {
     @State private var dragging = DockTabDragCoordinator()
 
     var body: some View {
-        let _ = themeChanges.revision
         GeometryReader { rootGeometry in
             if let project = manager.selectedProject {
                 let layout = project.dock.root
@@ -137,7 +136,10 @@ struct WorkspaceDockView: View {
                     git: git, dragging: dragging
                 )
                 .frame(width: rootGeometry.size.width, height: rootGeometry.size.height)
-                .background(Color(nsColor: Theme.terminal(dark: colorScheme == .dark).backgroundNSColor))
+                .background {
+                    let _ = themeChanges.revision
+                    Color(nsColor: Theme.terminal(dark: colorScheme == .dark).backgroundNSColor)
+                }
                 .onPreferenceChange(DockGroupFrames.self) {
                     dragging.setFrames(groups: $0)
                 }
