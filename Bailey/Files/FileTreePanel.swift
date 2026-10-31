@@ -103,7 +103,6 @@ struct FileTreePanel: View {
                 }
                 .menuStyle(.borderlessButton)
                 .accessibilityIdentifier("bailey.files.showExcludedMenu")
-                .fixedSize()
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
