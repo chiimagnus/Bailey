@@ -138,13 +138,3 @@ struct TerminalFindBar: View {
         }
     }
 }
-
-struct TerminalFindOverlay: View {
-    let find: TerminalFind
-
-    var body: some View {
-        if find.isPresented {
-            TerminalFindBar(find: find)
-        }
-    }
-}

@@ -25,7 +25,9 @@ struct PanelContentView: View {
                     onNewFileTab: onNewFileTab
                 )
                 .overlay(alignment: .topTrailing) {
-                    TerminalFindOverlay(find: session.find)
+                    if session.find.isPresented {
+                        TerminalFindBar(find: session.find)
+                    }
                 }
             case .file(let file):
                 FileViewerView(file: file, isFocused: isFocused, canFocus: canFocus, onFocused: onFocused)
