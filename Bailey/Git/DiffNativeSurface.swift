@@ -181,6 +181,11 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         rightPane?.isHidden = editing || !split || plain
         divider?.isHidden = editing || !split || plain
         editPane?.isHidden = !(editing || plain)
+        if let divider {
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                divider.layer?.backgroundColor = Theme.divider.cgColor
+            }
+        }
 
         for pane in [unifiedPane, leftPane, rightPane, editPane] where pane?.isHidden == true {
             guard let pane, pane.scrollView.isFindBarVisible else { continue }
@@ -233,7 +238,6 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         if let leftPane, let rightPane, divider == nil {
             let line = NSView()
             line.wantsLayer = true
-            line.layer?.backgroundColor = Theme.divider.cgColor
             addSubview(line)
             divider = line
             leftPane.onScroll = { [weak rightPane] origin in

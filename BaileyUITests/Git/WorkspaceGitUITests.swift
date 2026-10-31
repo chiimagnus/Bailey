@@ -47,6 +47,104 @@ final class WorkspaceGitUITests: XCTestCase {
                       "The real Git Changes row must open a diff tab")
     }
 
+    func testNativeDiffChromeRepaintsDuringAppearanceSwitchWithoutRedocking() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("theme-diff.swift", text: "let theme = 1\n")
+        try fixture.initializeGit()
+        try "let theme = 2\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "light"
+            theme-light = "Ayu Light"
+            theme-dark = "Adwaita Dark"
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, project: fixture.root
+        )
+        let window = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(change.waitForExistence(timeout: 25))
+        change.click()
+        let mode = window.radioGroups["bailey.diff.mode"]
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        mode.radioButtons.element(boundBy: 0).click()
+        layout.radioButtons.element(boundBy: 1).click()
+        XCTAssertGreaterThanOrEqual(window.textViews.count, 2)
+
+        func capture(_ title: String) throws -> (header: NSColor, body: NSColor, splitDivider: NSColor) {
+            let shot = window.screenshot()
+            let attachment = XCTAttachment(screenshot: shot)
+            attachment.name = title
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(shot.image.tiffRepresentation)
+            ))
+            let scale = CGFloat(bitmap.pixelsWide) / window.frame.width
+            func color(_ x: CGFloat, _ y: CGFloat) throws -> NSColor {
+                let pixel = try XCTUnwrap(bitmap.colorAt(
+                    x: Int(x * scale), y: Int(y * scale)
+                ))
+                return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
+            }
+            return try (color(350, 56), color(350, 350), color(419, 350))
+        }
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        let before = try capture("Native split diff, Ayu Light")
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let dark = settings.descendants(matching: .tab)["Dark"].firstMatch
+        XCTAssertTrue(dark.waitForExistence(timeout: 12))
+        dark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+
+        let after = try capture("Native split diff, Adwaita Dark")
+        XCTAssertGreaterThan(difference(before.body, after.body), 0.25,
+                             "Retained native diff text background must change with appearance")
+        XCTAssertLessThan(difference(after.header, after.body), 0.04,
+                          "Diff native controls row must not remain in the previous theme")
+        XCTAssertGreaterThan(difference(before.splitDivider, after.splitDivider), 0.25,
+                             "Diff divider must change color with the selected appearance")
+        XCTAssertLessThan(difference(after.splitDivider, after.body), 0.2,
+                          "Retained Diff split divider must not keep the original light CGColor")
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkPicker = settings.popUpButtons.element(boundBy: 1)
+        XCTAssertTrue(darkPicker.waitForExistence(timeout: 12))
+        darkPicker.click()
+        let ayuDark = darkPicker.menuItems["Ayu"]
+        XCTAssertTrue(ayuDark.waitForExistence(timeout: 12))
+        ayuDark.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let changedDark = try capture("Native split diff, Ayu Dark without appearance change")
+        XCTAssertGreaterThan(difference(changedDark.body, after.body), 0.03,
+                             "Native diff must apply a new dark palette without changing appearance")
+        XCTAssertLessThan(difference(changedDark.splitDivider, changedDark.body), 0.2,
+                          "Native split divider must also update for dark-to-dark palette changes")
+
+        app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let light = settings.descendants(matching: .tab)["Light"].firstMatch
+        XCTAssertTrue(light.waitForExistence(timeout: 12))
+        light.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        let restored = try capture("Native split diff, restored Ayu Light")
+        XCTAssertLessThan(difference(restored.splitDivider, before.splitDivider), 0.04,
+                          "Split divider must restore its light color after dark-to-light")
+    }
+
     func testWorktreeDiffEditsAndPersistsRealGitFile() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("diff-edit.swift", text: "let value = 1\n")
