@@ -22,7 +22,7 @@ final class SSHFolderPickerModel {
         }
     }
 
-    @ObservationIgnored private let backendForHost: @MainActor (String) -> any WorkspaceBackend
+    private let backendForHost: @MainActor (String) -> any WorkspaceBackend
     @ObservationIgnored private var requestID = 0
 
     @ObservationIgnored private var isActive = true
