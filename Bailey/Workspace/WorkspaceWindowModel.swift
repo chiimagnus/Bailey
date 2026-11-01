@@ -71,6 +71,9 @@ final class WorkspaceWindowModel {
     @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
     @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
     @ObservationIgnored private var commandPaletteContentID: UUID?
+    @ObservationIgnored private weak var sshPickerPreviousResponder: NSResponder?
+    @ObservationIgnored private weak var sshPickerWindow: NSWindow?
+    @ObservationIgnored private var sshPickerContentID: UUID?
     @ObservationIgnored private weak var filesTreeResponder: TreeKeyboardView?
     @ObservationIgnored private weak var gitTreeResponder: TreeKeyboardView?
     /// Window hosting this manager, once SwiftUI has attached its content.
@@ -346,12 +349,37 @@ final class WorkspaceWindowModel {
     var sshFolderHosts: [String] { Self.sshHostAliases() }
 
     func chooseSSHItems() {
-        guard window != nil, !isClosed else { return }
+        guard let window, !isClosed, !isSSHFolderPickerVisible else { return }
+        sshPickerWindow = window
+        sshPickerContentID = selectedProject?.focusedContent?.id
+        if NSApp.isActive, window.isKeyWindow,
+           let responder = window.firstResponder,
+           isStableWorkspaceResponder(responder), ownsActiveResponder(responder) {
+            sshPickerPreviousResponder = responder
+        } else if commandPaletteWindow === window,
+                  let responder = commandPalettePreviousResponder,
+                  ownsActiveResponder(responder) {
+            // A palette command can open this picker before the palette disappears.
+            sshPickerPreviousResponder = responder
+        } else {
+            sshPickerPreviousResponder = nil
+        }
         isSSHFolderPickerVisible = true
     }
 
     func dismissSSHFolderPicker() {
         isSSHFolderPickerVisible = false
+    }
+
+    /// The overlay calls this after its input has left the responder chain.
+    func restoreFocusAfterSSHFolderPicker() {
+        let window = sshPickerWindow
+        let responder = sshPickerPreviousResponder
+        let contentID = sshPickerContentID
+        sshPickerWindow = nil
+        sshPickerPreviousResponder = nil
+        sshPickerContentID = nil
+        restoreDisplacedWorkspaceFocus(in: window, responder: responder, contentID: contentID)
     }
 
     func addSSHFolderFromPicker(host: String, path: String) {
@@ -1036,14 +1064,17 @@ final class WorkspaceWindowModel {
         commandPalettePreviousResponder = nil
         commandPaletteContentID = nil
 
-        // Let the removal transaction finish before restoring the displaced
-        // AppKit responder.
+        restoreDisplacedWorkspaceFocus(in: window, responder: responder, contentID: contentID)
+    }
+
+    private func restoreDisplacedWorkspaceFocus(
+        in window: NSWindow?, responder: NSResponder?, contentID: UUID?
+    ) {
         DispatchQueue.main.async {
             guard let window, NSApp.isActive, window.isKeyWindow,
                   window === self.window, window.attachedSheet == nil,
-                  !self.isCommandPaletteVisible else { return }
-            // A palette command may already have focused a new terminal or
-            // editor. Never let restoration race that newer focus and win.
+                  !self.isCommandPaletteVisible, !self.isSSHFolderPickerVisible else { return }
+            // A later command or project change must always own the new focus.
             if let current = window.firstResponder,
                self.isStableWorkspaceResponder(current),
                self.ownsActiveResponder(current) { return }
@@ -1051,8 +1082,6 @@ final class WorkspaceWindowModel {
                self.ownsActiveResponder(responder) {
                 window.makeFirstResponder(responder)
             } else if let activeTree = self.registeredToolResponder(in: window) {
-                // A palette switch can move from an editor, terminal, or old
-                // tree into Files/Git. Restore the tool that is now visible.
                 window.makeFirstResponder(activeTree)
             }
         }

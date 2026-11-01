@@ -59,6 +59,7 @@ struct ContentView: View {
                         manager.addSSHFolderFromPicker(host: host, path: folder)
                     }
                 )
+                .onDisappear { manager.restoreFocusAfterSSHFolderPicker() }
             }
         }
         .overlay {

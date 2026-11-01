@@ -241,8 +241,19 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                        "SSH picker must stay on the requesting manager")
         XCTAssertNil(first.attachedSheet, "SSH picker is a window-owned overlay, not a native sheet")
         XCTAssertNil(second.attachedSheet)
+        let keyBeforeDismissal = NSApp.keyWindow
+        let firstResponderBefore = first.firstResponder
+        let secondResponderBefore = second.firstResponder
         firstManager.dismissSSHFolderPicker()
         XCTAssertFalse(firstManager.isSSHFolderPickerVisible)
+        firstManager.restoreFocusAfterSSHFolderPicker()
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertTrue(NSApp.keyWindow === keyBeforeDismissal)
+        XCTAssertTrue(first.firstResponder === firstResponderBefore)
+        XCTAssertTrue(second.firstResponder === secondResponderBefore,
+                      "Dismissing one window's picker must not steal another window's responder")
         firstManager.chooseFolders()
         try await settle { first.attachedSheet != nil }
         XCTAssertNil(second.attachedSheet)
