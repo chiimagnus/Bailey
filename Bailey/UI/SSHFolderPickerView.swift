@@ -8,7 +8,6 @@ struct SSHFolderPickerView: View {
     @FocusState private var inputFocused: Bool
     @FocusState private var hostChoicesFocused: Bool
     @State private var highlightedHost = 0
-    @State private var hoveredHost: String?
 
     let onCancel: () -> Void
     let onChoose: @MainActor @Sendable (String, String) -> Void
@@ -178,7 +177,6 @@ struct SSHFolderPickerView: View {
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
                 Button(String(localized: "Cancel", table: "Terminal"), action: onCancel)
-                    .keyboardShortcut(.cancelAction)
                 if model.host != nil {
                     Button(String(localized: "Add", table: "Terminal")) {
                         Task { await model.confirm(onChoose: onChoose) }
@@ -225,14 +223,10 @@ struct SSHFolderPickerView: View {
                             .contentShape(RoundedRectangle(cornerRadius: 6))
                         }
                         .buttonStyle(.plain)
-                        .onHover { hovering in
-                            hoveredHost = hovering ? host : nil
-                            if hovering { highlightedHost = index }
-                        }
+                        .onHover { if $0 { highlightedHost = index } }
                         .modifier(RowHighlightStyle(
                             isSelected: index == highlightedHost,
                             listActive: hostChoicesFocused,
-                            hovering: hoveredHost == host,
                             cornerRadius: 6
                         ))
                         .accessibilityIdentifier("bailey.sshFolderPicker.hostChoice")
@@ -267,11 +261,8 @@ struct SSHFolderPickerView: View {
 
     private var emptyMessage: String {
         if model.host == nil {
-            return model.hosts.isEmpty
-                ? String(localized: "Configure SSH hosts in ~/.ssh/config.", table: "Terminal")
-                : String(localized: "Choose an SSH host to browse folders.", table: "Terminal")
+            return String(localized: "Configure SSH hosts in ~/.ssh/config.", table: "Terminal")
         }
-        if model.errorMessage != nil { return "" }
         if model.directory == nil || model.enterPath != nil {
             return String(localized: "Press Return to open the entered path.", table: "Terminal")
         }
