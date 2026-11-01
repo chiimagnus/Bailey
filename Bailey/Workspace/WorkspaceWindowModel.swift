@@ -291,45 +291,36 @@ final class WorkspaceWindowModel {
         }
     }
 
-    /// One SSH host can supply several independent roots. The remote file
-    /// browser uses the already-supported POSIX shell on the SSH destination.
-    func addSSHItems(host: String, paths: [String],
-                     isCurrentTarget: (@MainActor () -> Bool)? = nil) async throws {
+    /// The SSH picker and Git worktree menu add one remote item per action.
+    func addSSHItem(
+        host: String, path: String, isCurrentTarget: @MainActor () -> Bool
+    ) async throws {
         let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard SSHHostWorkspaces.validHost(host) else {
             throw SSHItemError.invalidHost
         }
-        let paths = paths.map(SSHHostWorkspaces.normalizedPath)
-        guard !paths.isEmpty, paths.allSatisfy({ $0.hasPrefix("/") }) else {
-            throw SSHItemError.invalidPath
-        }
+        let path = SSHHostWorkspaces.normalizedPath(path)
+        guard path.hasPrefix("/") else { throw SSHItemError.invalidPath }
         let backend = SSHHostWorkspaces.backend(for: host)
-        var validated: [(path: String, directory: Bool)] = []
-        for path in paths {
-            guard let stat = try await backend.stat(path: path),
-                  stat.isDirectory || stat.isRegular
-            else { throw SSHItemError.notFound(path) }
-            validated.append((path, stat.isDirectory))
+        guard let stat = try await backend.stat(path: path),
+              stat.isDirectory || stat.isRegular
+        else { throw SSHItemError.notFound(path) }
+        guard isCurrentTarget() else { return }
+        let root = stat.isDirectory ? path : (path as NSString).deletingLastPathComponent
+        let file = stat.isDirectory ? nil : path
+        if let existing = projects.first(where: {
+            $0.sshHost == host && $0.customDirectory == root
+                && $0.pinnedFile == file
+        }) {
+            selectedProjectID = existing.id
+            return
         }
-        guard isCurrentTarget?() ?? true else { return }
-        for item in validated {
-            let root = item.directory ? item.path
-                : (item.path as NSString).deletingLastPathComponent
-            let file = item.directory ? nil : item.path
-            if let existing = projects.first(where: {
-                $0.sshHost == host && $0.customDirectory == root
-                    && $0.pinnedFile == file
-            }) {
-                selectedProjectID = existing.id
-                continue
-            }
-            let project = makeProject()
-            project.sshHost = host
-            project.customDirectory = root
-            project.pinnedFile = file
-            if let file { project.openFile(file) }
-            insert(project)
-        }
+        let project = makeProject()
+        project.sshHost = host
+        project.customDirectory = root
+        project.pinnedFile = file
+        if let file { project.openFile(file) }
+        insert(project)
     }
 
     private enum SSHItemError: LocalizedError {
@@ -392,8 +383,8 @@ final class WorkspaceWindowModel {
                 return !self.isClosed && self.window === receivingWindow
             }
             do {
-                try await self.addSSHItems(
-                    host: host, paths: [path], isCurrentTarget: isCurrent
+                try await self.addSSHItem(
+                    host: host, path: path, isCurrentTarget: isCurrent
                 )
             } catch {
                 if isCurrent() {

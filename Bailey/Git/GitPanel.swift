@@ -939,8 +939,8 @@ struct GitPanel: View {
                 let host = String(target.scope.dropFirst(4))
                 Task { @MainActor in
                     do {
-                        try await manager.addSSHItems(
-                            host: host, paths: [location.path], isCurrentTarget: isCurrent
+                        try await manager.addSSHItem(
+                            host: host, path: location.path, isCurrentTarget: isCurrent
                         )
                     } catch {
                         if isCurrent() { WorkspaceNativeDialogs.showError(error, in: window) }
