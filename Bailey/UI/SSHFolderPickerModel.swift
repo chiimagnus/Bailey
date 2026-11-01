@@ -24,7 +24,6 @@ final class SSHFolderPickerModel {
 
     @ObservationIgnored private let backendForHost: @MainActor (String) -> any WorkspaceBackend
     @ObservationIgnored private var requestID = 0
-    @ObservationIgnored private var inputRevision = 0
 
     @ObservationIgnored private var isActive = true
 
@@ -110,7 +109,6 @@ final class SSHFolderPickerModel {
 
     func editInput(_ text: String) {
         input = text
-        inputRevision &+= 1
         selectedName = nil
         errorMessage = nil
     }
@@ -207,7 +205,6 @@ final class SSHFolderPickerModel {
         if isLoading, pendingPath == destination { return }
         requestID &+= 1
         let request = requestID
-        let editRevision = inputRevision
         input = destination == "/" ? "/" : destination + "/"
         pendingPath = destination
         directory = nil
@@ -238,9 +235,6 @@ final class SSHFolderPickerModel {
             }
             .map(\.name)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            if inputRevision == editRevision {
-                input = destination == "/" ? "/" : destination + "/"
-            }
             isLoading = false
         } catch {
             guard isCurrent(request, host: host) else { return }
