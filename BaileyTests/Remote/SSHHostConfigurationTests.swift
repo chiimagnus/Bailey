@@ -29,6 +29,37 @@ final class SSHHostConfigurationTests: XCTestCase {
         )
     }
 
+    func testDeepIncludesAndSymlinkCycleUseFileIdentityInsteadOfArbitraryDepthLimit() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-SSH-Include-\(UUID())", isDirectory: true)
+        let includes = root.appendingPathComponent("config.d", isDirectory: true)
+        try FileManager.default.createDirectory(at: includes, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let config = root.appendingPathComponent("config")
+        try "Host first\nInclude config.d/level0.conf\n"
+            .write(to: config, atomically: true, encoding: .utf8)
+        for index in 0..<15 {
+            let next = index == 14
+                ? "Host deep\nInclude config.d/loop.conf\n"
+                : "Include config.d/level\(index + 1).conf\n"
+            try next.write(
+                to: includes.appendingPathComponent("level\(index).conf"),
+                atomically: true, encoding: .utf8
+            )
+        }
+        try FileManager.default.createSymbolicLink(
+            at: includes.appendingPathComponent("loop.conf"),
+            withDestinationURL: config
+        )
+
+        XCTAssertEqual(
+            SSHHostConfiguration.aliases(configURL: config),
+            ["first", "deep"],
+            "Deep but finite includes must work; symlink cycles must not recur"
+        )
+    }
+
     func testMissingConfigurationHasNoImplicitHost() {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-no-ssh-\(UUID())")
