@@ -252,10 +252,7 @@ struct SSHFolderPickerView: View {
     }
 
     private func acceptInput() {
-        if let path = model.enterPath {
-            Task { await model.navigate(to: path) }
-        } else if model.addPath != nil {
-            Task { await model.confirm(onChoose: onChoose) }
-        }
+        guard let path = model.enterPath else { return }
+        Task { await model.navigate(to: path) }
     }
 }

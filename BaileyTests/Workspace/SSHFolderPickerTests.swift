@@ -155,6 +155,8 @@ final class SSHFolderPickerTests: XCTestCase {
         await model.navigate(to: "/home/user/Alpha")
         XCTAssertEqual(model.directory, "/home/user/Alpha")
         XCTAssertEqual(model.input, "/home/user/Alpha/")
+        XCTAssertNil(model.enterPath, "Return on the current folder must not submit it")
+        XCTAssertEqual(model.addPath, "/home/user/Alpha")
     }
 
     func testNavigationCommitsInputBeforeSSHResponseAndDiscardsOlderResponse() async {
