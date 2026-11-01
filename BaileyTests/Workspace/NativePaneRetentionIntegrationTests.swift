@@ -197,20 +197,10 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertTrue(files.allowsMultipleSelection)
         XCTAssertEqual(files.prompt, String(localized: "Open", table: "Sidebar"))
         XCTAssertEqual(files.message, String(localized: "Open files in Bailey", table: "Terminal"))
-        let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
-        XCTAssertEqual(
-            ssh.alert.messageText,
-            String(localized: "Add SSH Files or Projects", table: "Terminal")
-        )
-        XCTAssertEqual(ssh.alert.buttons.map(\.title), [
-            String(localized: "Add", table: "Terminal"),
-            String(localized: "Cancel", table: "Terminal"),
-        ])
-        XCTAssertEqual(ssh.hosts.stringValue, "fixture-one")
-        XCTAssertEqual(ssh.hosts.objectValues as? [String], ["fixture-one", "fixture-two"])
-        XCTAssertEqual(ssh.alert.accessoryView?.frame.size, NSSize(width: 420, height: 214))
-        XCTAssertFalse(ssh.paths.isRichText)
-        XCTAssertFalse(ssh.paths.isAutomaticTextReplacementEnabled)
+        let ssh = SSHItemPickerModel(aliases: ["fixture-one", "fixture-two"])
+        XCTAssertEqual(ssh.host, "fixture-one")
+        XCTAssertEqual(ssh.aliases, ["fixture-one", "fixture-two"])
+        XCTAssertFalse(ssh.canAdd)
 
         let previous = SessionStore.load()
         let histories = TerminalHistoryStore.load()
@@ -236,7 +226,11 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         firstManager.chooseSSHItems()
         try await settle { first.attachedSheet != nil }
         XCTAssertNil(second.attachedSheet, "A menu action must not attach to the key window of another manager")
-        first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .alertSecondButtonReturn)
+        XCTAssertEqual(
+            first.attachedSheet?.title,
+            String(localized: "Add SSH Files or Projects", table: "Terminal")
+        )
+        first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .cancel)
         try await settle { first.attachedSheet == nil }
         firstManager.chooseFolders()
         try await settle { first.attachedSheet != nil }

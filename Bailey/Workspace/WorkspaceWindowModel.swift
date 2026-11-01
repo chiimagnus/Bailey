@@ -343,15 +343,20 @@ final class WorkspaceWindowModel {
     }
 
     func chooseSSHItems() {
+        guard let receivingWindow = window else { return }
         WorkspaceNativeDialogs.chooseSSHItems(
-            in: window, aliases: Self.sshHostAliases()
-        ) { [weak self] host, paths in
-            guard let self else { return }
+            in: receivingWindow, aliases: Self.sshHostAliases(),
+            preferredHost: selectedProject?.sshHost
+        ) { [weak self, weak receivingWindow] host, paths in
+            guard let self, let receivingWindow, self.window === receivingWindow else { return }
             Task {
                 do {
-                    try await self.addSSHItems(host: host, paths: paths)
+                    try await self.addSSHItems(host: host, paths: paths) {
+                        self.window === receivingWindow && !self.isClosed
+                    }
                 } catch {
-                    WorkspaceNativeDialogs.showError(error, in: self.window)
+                    guard self.window === receivingWindow, !self.isClosed else { return }
+                    WorkspaceNativeDialogs.showError(error, in: receivingWindow)
                 }
             }
         }

@@ -282,77 +282,31 @@ enum WorkspaceNativeDialogs {
         }
     }
 
-    static func sshForm(aliases: [String]) -> (
-        alert: NSAlert, hosts: NSComboBox, paths: NSTextView
-    ) {
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Add SSH Files or Projects", table: "Terminal")
-        alert.informativeText = String(localized:
-            "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted.", table: "Terminal")
-        alert.addButton(withTitle: String(localized: "Add", table: "Terminal"))
-        alert.addButton(withTitle: String(localized: "Cancel", table: "Terminal"))
-
-        let hosts = NSComboBox()
-        hosts.usesDataSource = false
-        hosts.addItems(withObjectValues: aliases)
-        hosts.placeholderString = String(localized: "SSH host", table: "Terminal")
-        if let first = hosts.objectValues.first as? String {
-            hosts.stringValue = first
-        }
-
-        let scroll = NSTextView.scrollableTextView()
-        let paths = scroll.documentView as! NSTextView
-        paths.isRichText = false
-        paths.isAutomaticQuoteSubstitutionEnabled = false
-        paths.isAutomaticDashSubstitutionEnabled = false
-        paths.isAutomaticTextReplacementEnabled = false
-        paths.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        scroll.borderType = .bezelBorder
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
-
-        let stack = NSStackView(views: [
-            NSTextField(labelWithString: String(localized: "SSH host", table: "Terminal")),
-            hosts,
-            NSTextField(labelWithString: String(localized: "Remote paths (one per line)", table: "Terminal")),
-            scroll,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.setCustomSpacing(12, after: hosts)
-
-        // NSAlert measures its accessory frame, not the constraints of its children.
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 214))
-        accessory.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: accessory.topAnchor, constant: 8),
-            stack.leadingAnchor.constraint(equalTo: accessory.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: accessory.trailingAnchor, constant: -8),
-            stack.bottomAnchor.constraint(equalTo: accessory.bottomAnchor, constant: -8),
-            hosts.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-        ])
-        alert.accessoryView = accessory
-        return (alert, hosts, paths)
-    }
-
     static func chooseSSHItems(
-        in window: NSWindow?, aliases: [String],
+        in window: NSWindow, aliases: [String], preferredHost: String?,
         onSelection: @escaping (String, [String]) -> Void
     ) {
-        let (alert, hosts, paths) = sshForm(aliases: aliases)
-        let finish: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .alertFirstButtonReturn else { return }
-            let values = paths.string.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            onSelection(hosts.stringValue, values)
-        }
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(alert.runModal())
+        var submitted: (host: String, paths: [String])?
+        let sheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 640),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        sheet.title = String(localized: "Add SSH Files or Projects", table: "Terminal")
+        sheet.contentViewController = NSHostingController(rootView: SSHItemPickerView(
+            aliases: aliases, preferredHost: preferredHost,
+            onCancel: { [weak window, weak sheet] in
+                guard let window, let sheet else { return }
+                window.endSheet(sheet, returnCode: .cancel)
+            },
+            onSelection: { [weak window, weak sheet] host, paths in
+                guard let window, let sheet else { return }
+                submitted = (host, paths)
+                window.endSheet(sheet, returnCode: .OK)
+            }
+        ))
+        window.beginSheet(sheet) { response in
+            guard response == .OK, let submitted else { return }
+            onSelection(submitted.host, submitted.paths)
         }
     }
 
