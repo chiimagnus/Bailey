@@ -54,6 +54,72 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
     }
 }
 
+
+/// Only explicit OpenSSH aliases can appear in the picker. OpenSSH still owns
+/// authentication, HostName, ProxyJump and the effective configuration.
+@MainActor
+enum SSHHostConfiguration {
+    static func aliases(
+        configURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ssh/config")
+    ) -> [String] {
+        let configDirectory = configURL.deletingLastPathComponent()
+        var names: [String] = []
+        var seen = Set<String>()
+        var visited = Set<URL>()
+
+        func includedFiles(_ pattern: String) -> [URL] {
+            let expanded: String
+            if pattern.hasPrefix("~/") {
+                expanded = FileManager.default.homeDirectoryForCurrentUser.path
+                    + String(pattern.dropFirst(1))
+            } else if pattern.hasPrefix("/") {
+                expanded = pattern
+            } else {
+                expanded = configDirectory.appendingPathComponent(pattern).path
+            }
+            var matches = glob_t()
+            defer { globfree(&matches) }
+            guard glob(expanded, 0, nil, &matches) == 0 else { return [] }
+            return (0..<Int(matches.gl_pathc)).compactMap { index in
+                guard let path = matches.gl_pathv[index] else { return nil }
+                return URL(fileURLWithPath: String(cString: path))
+            }
+        }
+
+        func read(_ file: URL, depth: Int) {
+            guard depth < 12, visited.insert(file.standardizedFileURL).inserted,
+                  let text = try? String(contentsOf: file, encoding: .utf8) else { return }
+            for line in text.split(whereSeparator: \.isNewline) {
+                let words = line.split(whereSeparator: \.isWhitespace)
+                    .prefix { !$0.hasPrefix("#") }
+                guard let directive = words.first?.lowercased() else { continue }
+                switch directive {
+                case "include":
+                    for pattern in words.dropFirst() {
+                        for included in includedFiles(String(pattern)) {
+                            read(included, depth: depth + 1)
+                        }
+                    }
+                case "host":
+                    for value in words.dropFirst() {
+                        let alias = String(value)
+                        guard !alias.contains(where: { "*?!".contains($0) }),
+                              SSHHostWorkspaces.validHost(alias),
+                              seen.insert(alias.lowercased()).inserted else { continue }
+                        names.append(alias)
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        read(configURL, depth: 0)
+        return names
+    }
+}
+
 /// Cached per SSH host, not per terminal; a folder stays reachable when the
 /// user changes terminal tabs, and separate hosts cannot share the same path.
 @MainActor

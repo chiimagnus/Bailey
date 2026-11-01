@@ -58,6 +58,7 @@ final class WorkspaceWindowModel {
         }
     }
     private(set) var isCommandPaletteVisible = false
+    private(set) var isSSHFolderPickerVisible = false
     let tabSwitcher = TabSwitcherController()
 
     @ObservationIgnored private var projectCounter = 0
@@ -70,6 +71,9 @@ final class WorkspaceWindowModel {
     @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
     @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
     @ObservationIgnored private var commandPaletteContentID: UUID?
+    @ObservationIgnored private weak var sshPickerPreviousResponder: NSResponder?
+    @ObservationIgnored private weak var sshPickerWindow: NSWindow?
+    @ObservationIgnored private var sshPickerContentID: UUID?
     @ObservationIgnored private weak var filesTreeResponder: TreeKeyboardView?
     @ObservationIgnored private weak var gitTreeResponder: TreeKeyboardView?
     /// Window hosting this manager, once SwiftUI has attached its content.
@@ -342,33 +346,65 @@ final class WorkspaceWindowModel {
         }
     }
 
+    var sshFolderHosts: [String] { Self.sshHostAliases() }
+
     func chooseSSHItems() {
-        WorkspaceNativeDialogs.chooseSSHItems(
-            in: window, aliases: Self.sshHostAliases()
-        ) { [weak self] host, paths in
-            guard let self else { return }
-            Task {
-                do {
-                    try await self.addSSHItems(host: host, paths: paths)
-                } catch {
-                    WorkspaceNativeDialogs.showError(error, in: self.window)
+        guard let window, !isClosed, !isSSHFolderPickerVisible else { return }
+        sshPickerWindow = window
+        sshPickerContentID = selectedProject?.focusedContent?.id
+        if NSApp.isActive, window.isKeyWindow,
+           let responder = window.firstResponder,
+           isStableWorkspaceResponder(responder), ownsActiveResponder(responder) {
+            sshPickerPreviousResponder = responder
+        } else if commandPaletteWindow === window,
+                  let responder = commandPalettePreviousResponder,
+                  ownsActiveResponder(responder) {
+            // A palette command can open this picker before the palette disappears.
+            sshPickerPreviousResponder = responder
+        } else {
+            sshPickerPreviousResponder = nil
+        }
+        isSSHFolderPickerVisible = true
+    }
+
+    func dismissSSHFolderPicker() {
+        isSSHFolderPickerVisible = false
+    }
+
+    /// The overlay calls this after its input has left the responder chain.
+    func restoreFocusAfterSSHFolderPicker() {
+        let window = sshPickerWindow
+        let responder = sshPickerPreviousResponder
+        let contentID = sshPickerContentID
+        sshPickerWindow = nil
+        sshPickerPreviousResponder = nil
+        sshPickerContentID = nil
+        restoreDisplacedWorkspaceFocus(in: window, responder: responder, contentID: contentID)
+    }
+
+    func addSSHFolderFromPicker(host: String, path: String) {
+        guard isSSHFolderPickerVisible, let receivingWindow = window else { return }
+        isSSHFolderPickerVisible = false
+        Task { [weak self, weak receivingWindow] in
+            guard let self, let receivingWindow else { return }
+            let isCurrent: @MainActor () -> Bool = { [weak self, weak receivingWindow] in
+                guard let self, let receivingWindow else { return false }
+                return !self.isClosed && self.window === receivingWindow
+            }
+            do {
+                try await self.addSSHItems(
+                    host: host, paths: [path], isCurrentTarget: isCurrent
+                )
+            } catch {
+                if isCurrent() {
+                    WorkspaceNativeDialogs.showError(error, in: receivingWindow)
                 }
             }
         }
     }
 
     private static func sshHostAliases() -> [String] {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".ssh/config")
-        guard let data = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return data.split(whereSeparator: \.isNewline).flatMap { line -> [String] in
-            let words = line.split(whereSeparator: \.isWhitespace)
-            guard words.first?.lowercased() == "host" else { return [] }
-            return words.dropFirst().compactMap { value in
-                let host = String(value)
-                return host.contains("*") || host.contains("?") ? nil : host
-            }
-        }
+        SSHHostConfiguration.aliases()
     }
 
     private func insert(_ project: Project) {
@@ -991,6 +1027,7 @@ final class WorkspaceWindowModel {
     // MARK: - Panels & appearance
 
     func toggleCommandPalette() {
+        guard !isSSHFolderPickerVisible else { return }
         if isCommandPaletteVisible {
             dismissCommandPalette()
         } else {
@@ -1027,14 +1064,17 @@ final class WorkspaceWindowModel {
         commandPalettePreviousResponder = nil
         commandPaletteContentID = nil
 
-        // Let the removal transaction finish before restoring the displaced
-        // AppKit responder.
+        restoreDisplacedWorkspaceFocus(in: window, responder: responder, contentID: contentID)
+    }
+
+    private func restoreDisplacedWorkspaceFocus(
+        in window: NSWindow?, responder: NSResponder?, contentID: UUID?
+    ) {
         DispatchQueue.main.async {
             guard let window, NSApp.isActive, window.isKeyWindow,
                   window === self.window, window.attachedSheet == nil,
-                  !self.isCommandPaletteVisible else { return }
-            // A palette command may already have focused a new terminal or
-            // editor. Never let restoration race that newer focus and win.
+                  !self.isCommandPaletteVisible, !self.isSSHFolderPickerVisible else { return }
+            // A later command or project change must always own the new focus.
             if let current = window.firstResponder,
                self.isStableWorkspaceResponder(current),
                self.ownsActiveResponder(current) { return }
@@ -1042,8 +1082,6 @@ final class WorkspaceWindowModel {
                self.ownsActiveResponder(responder) {
                 window.makeFirstResponder(responder)
             } else if let activeTree = self.registeredToolResponder(in: window) {
-                // A palette switch can move from an editor, terminal, or old
-                // tree into Files/Git. Restore the tool that is now visible.
                 window.makeFirstResponder(activeTree)
             }
         }

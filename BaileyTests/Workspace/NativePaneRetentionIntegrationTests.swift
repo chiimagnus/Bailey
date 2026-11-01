@@ -184,6 +184,23 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         try await settle { window.attachedSheet == nil }
     }
 
+    func testSSHFolderPickerStartsAtWindowsDrivesWithoutChangingUnixHome() {
+        let windows = SSHFolderPickerModel.startupLocation(Data(
+            "/c/Users/Administrator\nDRIVE:d\nDRIVE:c\nDRIVE:d\n".utf8
+        ))
+        XCTAssertEqual(windows?.home, "/c/Users/Administrator")
+        XCTAssertEqual(windows?.drives, ["c", "d"])
+
+        let unix = SSHFolderPickerModel.startupLocation(Data("/home/username\n".utf8))
+        XCTAssertEqual(unix?.home, "/home/username")
+        XCTAssertEqual(unix?.drives, [])
+        XCTAssertNil(SSHFolderPickerModel.startupLocation(Data("invalid\nDRIVE:c\n".utf8)))
+        XCTAssertEqual(
+            SSHFolderPickerModel.startupLocation(Data("/home/user\nDRIVE:../\n".utf8))?.drives,
+            []
+        )
+    }
+
     func testNativeFileAndSSHChoosersStayOnOwningWindow() async throws {
         let local = WorkspaceNativeDialogs.folderPanel()
         XCTAssertFalse(local.canChooseFiles, "Add Projects must select directories only")
@@ -197,21 +214,6 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertTrue(files.allowsMultipleSelection)
         XCTAssertEqual(files.prompt, String(localized: "Open", table: "Sidebar"))
         XCTAssertEqual(files.message, String(localized: "Open files in Bailey", table: "Terminal"))
-        let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
-        XCTAssertEqual(
-            ssh.alert.messageText,
-            String(localized: "Add SSH Files or Projects", table: "Terminal")
-        )
-        XCTAssertEqual(ssh.alert.buttons.map(\.title), [
-            String(localized: "Add", table: "Terminal"),
-            String(localized: "Cancel", table: "Terminal"),
-        ])
-        XCTAssertEqual(ssh.hosts.stringValue, "fixture-one")
-        XCTAssertEqual(ssh.hosts.objectValues as? [String], ["fixture-one", "fixture-two"])
-        XCTAssertEqual(ssh.alert.accessoryView?.frame.size, NSSize(width: 420, height: 214))
-        XCTAssertFalse(ssh.paths.isRichText)
-        XCTAssertFalse(ssh.paths.isAutomaticTextReplacementEnabled)
-
         let previous = SessionStore.load()
         let histories = TerminalHistoryStore.load()
         defer {
@@ -234,10 +236,24 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         second.makeKeyAndOrderFront(nil)
         let initialProjectCount = firstManager.projects.count
         firstManager.chooseSSHItems()
-        try await settle { first.attachedSheet != nil }
-        XCTAssertNil(second.attachedSheet, "A menu action must not attach to the key window of another manager")
-        first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .alertSecondButtonReturn)
-        try await settle { first.attachedSheet == nil }
+        XCTAssertTrue(firstManager.isSSHFolderPickerVisible)
+        XCTAssertFalse(secondManager.isSSHFolderPickerVisible,
+                       "SSH picker must stay on the requesting manager")
+        XCTAssertNil(first.attachedSheet, "SSH picker is a window-owned overlay, not a native sheet")
+        XCTAssertNil(second.attachedSheet)
+        let keyBeforeDismissal = NSApp.keyWindow
+        let firstResponderBefore = first.firstResponder
+        let secondResponderBefore = second.firstResponder
+        firstManager.dismissSSHFolderPicker()
+        XCTAssertFalse(firstManager.isSSHFolderPickerVisible)
+        firstManager.restoreFocusAfterSSHFolderPicker()
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertTrue(NSApp.keyWindow === keyBeforeDismissal)
+        XCTAssertTrue(first.firstResponder === firstResponderBefore)
+        XCTAssertTrue(second.firstResponder === secondResponderBefore,
+                      "Dismissing one window's picker must not steal another window's responder")
         firstManager.chooseFolders()
         try await settle { first.attachedSheet != nil }
         XCTAssertNil(second.attachedSheet)
