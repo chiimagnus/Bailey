@@ -123,6 +123,16 @@
         }
       }
     },
+    "Configure SSH hosts in ~/.ssh/config." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在 ~/.ssh/config 中配置 SSH 主机。"
+          }
+        }
+      }
+    },
     "Close find bar" : {
       "localizations" : {
         "zh-Hans" : {
@@ -273,16 +283,6 @@
         }
       }
     },
-    "Other SSH Host…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "其他 SSH 主机…"
-          }
-        }
-      }
-    },
     "Paste" : {
       "localizations" : {
         "zh-Hans" : {
@@ -299,6 +299,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将此文本粘贴到终端可能有风险，因为其中似乎包含会被执行的命令。"
+          }
+        }
+      }
+    },
+    "Press Return to open the entered path." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Return 进入输入的路径。"
           }
         }
       }
@@ -329,16 +339,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "远程文件夹路径…"
-          }
-        }
-      }
-    },
-    "Remote paths (one per line)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "远程路径（每行一个）"
           }
         }
       }
@@ -374,12 +374,32 @@
         }
       }
     },
+    "SSH hosts are configured in ~/.ssh/config." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 主机在 ~/.ssh/config 中配置。"
+          }
+        }
+      }
+    },
     "SSH host" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "SSH 主机"
+          }
+        }
+      }
+    },
+    "This is a file. Choose Add to open it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是文件，点击「添加」即可打开。"
           }
         }
       }
@@ -420,16 +440,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下划线"
-          }
-        }
-      }
-    },
-    "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从 ~/.ssh/config 选择 SSH 主机，每行输入一个远程路径。支持 D:\\GitHub\\project 这样的 Windows 路径。"
           }
         }
       }

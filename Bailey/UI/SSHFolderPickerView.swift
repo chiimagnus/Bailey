@@ -1,88 +1,25 @@
 import AppKit
 import SwiftUI
 
-/// A compact remote folder picker styled like Bailey's command palette.
-/// The list only reads from the chosen SSH backend, never the Mac filesystem.
+/// A compact remote picker; the connection and path state live in its model.
 @MainActor
 struct SSHFolderPickerView: View {
-    let hosts: [String]
-    let onCancel: () -> Void
-    let onChoose: (String, String) -> Void
-
-    @State private var host = ""
-    @State private var customHost = ""
-    @State private var isEnteringHost = false
-    @State private var directory: String?
-    @State private var input = ""
-    @State private var folders: [String] = []
-    @State private var windowsDrives: [String] = []
-    @State private var selection = -1
-    @State private var showHidden = false
-    @State private var loading = false
-    @State private var errorMessage: String?
-    @State private var requestID = 0
+    @State private var model: SSHFolderPickerModel
     @FocusState private var inputFocused: Bool
+
+    let onCancel: () -> Void
+    let onChoose: @MainActor @Sendable (String, String) -> Void
 
     private let themeChanges = Theme.changes
 
-    private var showingDrives: Bool { directory == "/" && !windowsDrives.isEmpty }
-
-    private var parent: String? {
-        guard let directory, directory != "/" else { return nil }
-        let parent = (directory as NSString).deletingLastPathComponent
-        return parent.isEmpty ? "/" : parent
-    }
-
-    private var visibleFolders: [String] {
-        let available = folders.filter { showHidden || !$0.hasPrefix(".") }
-        guard let directory, !input.isEmpty else { return available }
-        let edited = SSHHostWorkspaces.normalizedPath(input)
-        let prefix = directory == "/" ? "/" : directory + "/"
-        guard edited.hasPrefix(prefix) else { return available }
-        let fragment = String(edited.dropFirst(prefix.count))
-        guard !fragment.isEmpty, !fragment.contains("/") else { return available }
-        return available.filter { $0.localizedStandardContains(fragment) }
-    }
-
-    private var rows: [String] {
-        (parent == nil ? [] : [".."]) + visibleFolders
-    }
-
-    private var typedDirectory: String? {
-        let path = SSHHostWorkspaces.normalizedPath(input)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard path.hasPrefix("/"), !path.contains("\0"), !path.contains("\n") else {
-            return nil
-        }
-        return (path as NSString).standardizingPath
-    }
-
-    private var currentFolder: String? {
-        guard !host.isEmpty, !loading, let directory,
-              typedDirectory == directory else { return nil }
-        if rows.indices.contains(selection), rows[selection] != ".." {
-            return (directory as NSString).appendingPathComponent(rows[selection])
-        }
-        return showingDrives ? nil : directory
-    }
-
-    private var selectionTarget: String? {
-        guard let typedDirectory else { return nil }
-        return typedDirectory == directory ? currentFolder : typedDirectory
-    }
-
-    static func startupLocation(_ output: Data) -> (home: String, drives: [String])? {
-        let lines = String(decoding: output, as: UTF8.self).split(separator: "\n")
-        guard let first = lines.first else { return nil }
-        let home = first.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard home.hasPrefix("/"), !home.contains("\0") else { return nil }
-        let drives = lines.dropFirst().compactMap { line -> String? in
-            guard line.hasPrefix("DRIVE:"), line.count == 7,
-                  let letter = line.last, "abcdefghijklmnopqrstuvwxyz".contains(letter)
-            else { return nil }
-            return String(letter)
-        }
-        return (home, Array(Set(drives)).sorted())
+    init(
+        hosts: [String],
+        onCancel: @escaping () -> Void,
+        onChoose: @escaping @MainActor @Sendable (String, String) -> Void
+    ) {
+        _model = State(initialValue: SSHFolderPickerModel(hosts: hosts))
+        self.onCancel = onCancel
+        self.onChoose = onChoose
     }
 
     var body: some View {
@@ -93,24 +30,15 @@ struct SSHFolderPickerView: View {
                 .onTapGesture(perform: onCancel)
 
             panel
+                .padding(.horizontal, 12)
                 .padding(.top, 110)
         }
         .ignoresSafeArea()
         .onExitCommand(perform: onCancel)
-        .alert(String(localized: "Other SSH Host…", table: "Terminal"),
-               isPresented: $isEnteringHost) {
-            TextField(String(localized: "SSH host", table: "Terminal"), text: $customHost)
-            Button(String(localized: "Connect", table: "Terminal")) {
-                Task { await chooseHost(customHost.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            }
-            Button(String(localized: "Cancel", table: "Terminal"), role: .cancel) {}
+        .onChange(of: model.host) { _, host in
+            if host != nil { DispatchQueue.main.async { inputFocused = true } }
         }
-        .onDisappear { requestID &+= 1 }
-        .onChange(of: showHidden) { selection = -1 }
-        .task {
-            if let first = hosts.first { await chooseHost(first) }
-            DispatchQueue.main.async { inputFocused = true }
-        }
+        .onDisappear { model.invalidate() }
     }
 
     private var panel: some View {
@@ -122,39 +50,71 @@ struct SSHFolderPickerView: View {
 
                 TextField(
                     String(localized: "Remote folder path…", table: "Terminal"),
-                    text: $input
+                    text: Binding(
+                        get: { model.input },
+                        set: { model.editInput($0) }
+                    )
                 )
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .focused($inputFocused)
-                .onSubmit { acceptInput() }
-                .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
-                .onKeyPress(.downArrow) { moveSelection(1); return .handled }
+                .disabled(model.host == nil)
+                .onSubmit(acceptInput)
+                .onKeyPress(.upArrow) {
+                    guard !model.isLoading else { return .ignored }
+                    model.moveSelection(-1)
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    guard !model.isLoading else { return .ignored }
+                    model.moveSelection(1)
+                    return .handled
+                }
                 .onKeyPress(.escape) { onCancel(); return .handled }
                 .accessibilityIdentifier("bailey.sshFolderPicker.path")
 
                 Menu {
-                    ForEach(hosts, id: \.self) { alias in
-                        Button(alias) {
-                            Task { await chooseHost(alias) }
+                    if model.hosts.isEmpty {
+                        Text(String(
+                            localized: "Configure SSH hosts in ~/.ssh/config.",
+                            table: "Terminal"
+                        ))
+                    } else {
+                        ForEach(model.hosts, id: \.self) { alias in
+                            Button {
+                                Task { await model.selectHost(alias) }
+                            } label: {
+                                if model.host == alias {
+                                    Label(alias, systemImage: "checkmark")
+                                } else {
+                                    Text(alias)
+                                }
+                            }
                         }
-                    }
-                    Button(String(localized: "Other SSH Host…", table: "Terminal")) {
-                        isEnteringHost = true
                     }
                     Divider()
                     Toggle(
                         String(localized: "Show Hidden Folders", table: "Terminal"),
-                        isOn: $showHidden
+                        isOn: Binding(
+                            get: { model.showHidden },
+                            set: { model.showHidden = $0 }
+                        )
                     )
                 } label: {
-                    Label(host.isEmpty ? "SSH" : host, systemImage: "network")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    Label(
+                        model.host ?? String(localized: "SSH host", table: "Terminal"),
+                        systemImage: "network"
+                    )
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 }
                 .menuStyle(.borderlessButton)
-                .fixedSize()
+                .frame(maxWidth: 155)
+                .help(String(
+                    localized: "SSH hosts are configured in ~/.ssh/config.",
+                    table: "Terminal"
+                ))
                 .accessibilityIdentifier("bailey.sshFolderPicker.host")
             }
             .padding(.horizontal, 14)
@@ -162,8 +122,8 @@ struct SSHFolderPickerView: View {
 
             Divider().opacity(0.5)
 
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
                     .font(.system(size: 12))
                     .foregroundStyle(.red)
                     .lineLimit(3)
@@ -173,36 +133,35 @@ struct SSHFolderPickerView: View {
                     .accessibilityIdentifier("bailey.sshFolderPicker.error")
             }
 
-            if loading {
-                ProgressView(String(localized: "Loading remote folders…", table: "Terminal"))
-                    .font(.system(size: 12))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 34)
-            } else if rows.isEmpty {
-                Text(directory == nil
-                     ? String(localized: "Choose an SSH host to browse folders.", table: "Terminal")
-                     : String(localized: "No subfolders", table: "Terminal"))
+            if model.isLoading {
+                ProgressView(
+                    String(localized: "Loading remote folders…", table: "Terminal")
+                )
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 34)
+            } else if model.rows.isEmpty, model.errorMessage == nil {
+                Text(emptyMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 27)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 1) {
-                            ForEach(Array(rows.enumerated()), id: \.offset) { index, folder in
-                                folderRow(folder, index: index)
-                                    .id(index)
+                            ForEach(model.rows, id: \.self) { folder in
+                                folderRow(folder)
+                                    .id(folder)
                             }
                         }
                         .padding(6)
                     }
                     .frame(maxHeight: 310)
                     .fixedSize(horizontal: false, vertical: true)
-                    .onChange(of: selection) {
-                        if rows.indices.contains(selection) {
-                            proxy.scrollTo(selection)
-                        }
+                    .onChange(of: model.selectedName) { _, name in
+                        if let name { proxy.scrollTo(name) }
                     }
                 }
             }
@@ -214,16 +173,15 @@ struct SSHFolderPickerView: View {
                 Button(String(localized: "Cancel", table: "Terminal"), action: onCancel)
                     .keyboardShortcut(.cancelAction)
                 Button(String(localized: "Add", table: "Terminal")) {
-                    Task { await chooseFolder() }
+                    Task { await model.confirm(onChoose: onChoose) }
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(host.isEmpty || loading || selectionTarget == nil)
+                .disabled(model.addPath == nil)
                 .accessibilityIdentifier("bailey.sshFolderPicker.add")
             }
             .padding(.horizontal, 12)
             .frame(height: 48)
         }
-        .frame(width: 560)
+        .frame(maxWidth: 560)
         .background(RoundedRectangle(cornerRadius: 12)
             .fill(Color(nsColor: Theme.background)))
         .overlay(RoundedRectangle(cornerRadius: 12)
@@ -231,15 +189,29 @@ struct SSHFolderPickerView: View {
         .shadow(color: .black.opacity(0.3), radius: 28, y: 10)
     }
 
-    private func folderRow(_ folder: String, index: Int) -> some View {
+    private var emptyMessage: String {
+        if model.host == nil {
+            return model.hosts.isEmpty
+                ? String(localized: "Configure SSH hosts in ~/.ssh/config.", table: "Terminal")
+                : String(localized: "Choose an SSH host to browse folders.", table: "Terminal")
+        }
+        if model.errorMessage != nil { return "" }
+        if model.directory == nil {
+            return String(localized: "Press Return to open the entered path.", table: "Terminal")
+        }
+        return String(localized: "No subfolders", table: "Terminal")
+    }
+
+    private func folderRow(_ folder: String) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: folder == ".." ? "arrow.up" : showingDrives ? "internaldrive" : "folder.fill")
+            Image(systemName: folder == ".." ? "arrow.up" :
+                model.showingDrives ? "internaldrive" : "folder.fill")
                 .font(.system(size: 12))
                 .foregroundStyle(
                     folder == ".." ? Color.secondary : Color(nsColor: Theme.accent)
                 )
                 .frame(width: 16)
-            Text(verbatim: showingDrives ? folder.uppercased() + ":" : folder)
+            Text(verbatim: model.showingDrives ? folder.uppercased() + ":" : folder)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -254,156 +226,36 @@ struct SSHFolderPickerView: View {
         .frame(height: 30)
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .gesture(
-            TapGesture(count: 2)
-                .onEnded {
-                    let destination = folder == ".." ? parent
-                        : directory.map { ($0 as NSString).appendingPathComponent(folder) }
-                    if let destination { Task { await browse(destination) } }
+            TapGesture(count: 2).onEnded {
+                if let path = model.path(for: folder) {
+                    Task { await model.navigate(to: path) }
                 }
-                .exclusively(before: TapGesture(count: 1).onEnded {
-                    selection = index
-                    inputFocused = true
-                })
+            }
+            .exclusively(before: TapGesture(count: 1).onEnded {
+                model.selectedName = folder
+                inputFocused = true
+            })
         )
         .modifier(RowHighlightStyle(
-            isSelected: selection == index,
+            isSelected: model.selectedName == folder,
             listActive: inputFocused,
             cornerRadius: 6
         ))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
-            selection = index
+            model.selectedName = folder
             inputFocused = true
         }
         .accessibilityIdentifier("bailey.sshFolderPicker.folder")
         .accessibilityValue(folder)
     }
 
-    private func moveSelection(_ delta: Int) {
-        guard !rows.isEmpty else { return }
-        selection = max(0, min(rows.count - 1, selection + delta))
-    }
-
     private func acceptInput() {
-        guard !loading else { return }
-        if let path = typedDirectory, path != directory {
-            Task { await browse(path) }
-        } else if rows.indices.contains(selection) {
-            let folder = rows[selection]
-            let destination = folder == ".." ? parent
-                : directory.map { ($0 as NSString).appendingPathComponent(folder) }
-            if let destination { Task { await browse(destination) } }
-        } else {
-            Task { await chooseFolder() }
-        }
-    }
-
-    private func chooseFolder() async {
-        let isDirectPath = typedDirectory != directory
-        guard let target = selectionTarget, !host.isEmpty, !loading else { return }
-        let activeHost = host
-        let request = requestID
-        let backend = SSHHostWorkspaces.backend(for: activeHost)
-        loading = true
-        defer { if request == requestID { loading = false } }
-        do {
-            guard let stat = try await backend.stat(path: target),
-                  stat.isDirectory || (isDirectPath && stat.isRegular) else {
-                throw WorkspaceError.notFound
-            }
-            guard request == requestID, host == activeHost else { return }
-            onChoose(activeHost, target)
-        } catch {
-            guard request == requestID, host == activeHost else { return }
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func chooseHost(_ alias: String) async {
-        guard SSHHostWorkspaces.validHost(alias) else { return }
-        requestID &+= 1
-        let request = requestID
-        host = alias
-        directory = nil
-        input = ""
-        folders = []
-        windowsDrives = []
-        selection = -1
-        errorMessage = nil
-        loading = true
-
-        do {
-            let backend = SSHHostWorkspaces.backend(for: alias)
-            let command = "cd && pwd -P && case \"$(uname -s)\" in "
-                + "MSYS*|MINGW*|CYGWIN*) for drive in c d e f g h i j k l m n o p q r s t u v w x y z; do "
-                + "if [ -d \"/$drive\" ]; then printf 'DRIVE:%s\\n' \"$drive\"; fi; "
-                + "done ;; esac"
-            let result = try await backend.run(
-                argv: ["/bin/sh", "-c", command],
-                cwd: nil, env: nil, stdin: nil, timeout: 12
-            )
-            guard result.status == 0 else {
-                throw RemoteCommandFailure(
-                    command: "pwd -P", status: result.status,
-                    message: String(decoding: result.stderr, as: UTF8.self)
-                )
-            }
-            guard let location = Self.startupLocation(result.stdout) else {
-                throw WorkspaceError.notFound
-            }
-            guard request == requestID, host == alias else { return }
-            windowsDrives = location.drives
-            await browse(location.drives.isEmpty ? location.home : "/")
-        } catch {
-            guard request == requestID, host == alias else { return }
-            loading = false
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func browse(_ path: String) async {
-        guard !host.isEmpty else { return }
-        let destination = SSHHostWorkspaces.normalizedPath(path)
-        guard destination.hasPrefix("/"), !destination.contains("\n"),
-              !destination.contains("\0") else {
-            errorMessage = String(localized: "Enter an absolute remote folder path.", table: "Terminal")
-            return
-        }
-        requestID &+= 1
-        let request = requestID
-        let activeHost = host
-        loading = true
-        errorMessage = nil
-        if destination == "/", !windowsDrives.isEmpty {
-            directory = "/"
-            input = "/"
-            folders = windowsDrives
-            selection = -1
-            loading = false
-            return
-        }
-        do {
-            let backend = SSHHostWorkspaces.backend(for: activeHost)
-            guard try await backend.stat(path: destination)?.isDirectory == true else {
-                throw WorkspaceError.notFound
-            }
-            let contents = try await backend.list(directory: destination)
-            guard request == requestID, host == activeHost else { return }
-            directory = destination
-            input = destination == "/" ? "/" : destination + "/"
-            folders = contents.filter {
-                $0.isDirectory && $0.name != "." && $0.name != ".."
-                    && !$0.name.contains("/") && !$0.name.contains("\0")
-            }
-            .map(\.name)
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            selection = -1
-            loading = false
-        } catch {
-            guard request == requestID, host == activeHost else { return }
-            errorMessage = error.localizedDescription
-            loading = false
+        if let path = model.enterPath {
+            Task { await model.navigate(to: path) }
+        } else if model.addPath != nil {
+            Task { await model.confirm(onChoose: onChoose) }
         }
     }
 }

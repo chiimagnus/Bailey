@@ -185,18 +185,18 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testSSHFolderPickerStartsAtWindowsDrivesWithoutChangingUnixHome() {
-        let windows = SSHFolderPickerView.startupLocation(Data(
+        let windows = SSHFolderPickerModel.startupLocation(Data(
             "/c/Users/Administrator\nDRIVE:d\nDRIVE:c\nDRIVE:d\n".utf8
         ))
         XCTAssertEqual(windows?.home, "/c/Users/Administrator")
         XCTAssertEqual(windows?.drives, ["c", "d"])
 
-        let unix = SSHFolderPickerView.startupLocation(Data("/home/username\n".utf8))
+        let unix = SSHFolderPickerModel.startupLocation(Data("/home/username\n".utf8))
         XCTAssertEqual(unix?.home, "/home/username")
         XCTAssertEqual(unix?.drives, [])
-        XCTAssertNil(SSHFolderPickerView.startupLocation(Data("invalid\nDRIVE:c\n".utf8)))
+        XCTAssertNil(SSHFolderPickerModel.startupLocation(Data("invalid\nDRIVE:c\n".utf8)))
         XCTAssertEqual(
-            SSHFolderPickerView.startupLocation(Data("/home/user\nDRIVE:../\n".utf8))?.drives,
+            SSHFolderPickerModel.startupLocation(Data("/home/user\nDRIVE:../\n".utf8))?.drives,
             []
         )
     }
