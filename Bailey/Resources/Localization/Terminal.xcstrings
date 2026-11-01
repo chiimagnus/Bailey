@@ -113,12 +113,32 @@
         }
       }
     },
+    "Choose an SSH host to browse folders." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 SSH 主机后浏览文件夹。"
+          }
+        }
+      }
+    },
     "Close find bar" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭查找栏"
+          }
+        }
+      }
+    },
+    "Connect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接"
           }
         }
       }
@@ -153,6 +173,16 @@
         }
       }
     },
+    "Enter an absolute remote folder path." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入远程文件夹的绝对路径。"
+          }
+        }
+      }
+    },
     "Enter an absolute remote directory or file path." : {
       "localizations" : {
         "zh-Hans" : {
@@ -179,6 +209,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查找"
+          }
+        }
+      }
+    },
+    "Loading remote folders…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载远程文件夹…"
           }
         }
       }
@@ -223,6 +263,26 @@
         }
       }
     },
+    "No subfolders" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有子文件夹"
+          }
+        }
+      }
+    },
+    "Other SSH Host…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他 SSH 主机…"
+          }
+        }
+      }
+    },
     "Paste" : {
       "localizations" : {
         "zh-Hans" : {
@@ -263,6 +323,16 @@
         }
       }
     },
+    "Remote folder path…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程文件夹路径…"
+          }
+        }
+      }
+    },
     "Remote paths (one per line)" : {
       "localizations" : {
         "zh-Hans" : {
@@ -290,6 +360,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会话内容已恢复"
+          }
+        }
+      }
+    },
+    "Show Hidden Folders" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示隐藏文件夹"
           }
         }
       }

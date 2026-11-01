@@ -197,21 +197,6 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertTrue(files.allowsMultipleSelection)
         XCTAssertEqual(files.prompt, String(localized: "Open", table: "Sidebar"))
         XCTAssertEqual(files.message, String(localized: "Open files in Bailey", table: "Terminal"))
-        let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
-        XCTAssertEqual(
-            ssh.alert.messageText,
-            String(localized: "Add SSH Files or Projects", table: "Terminal")
-        )
-        XCTAssertEqual(ssh.alert.buttons.map(\.title), [
-            String(localized: "Add", table: "Terminal"),
-            String(localized: "Cancel", table: "Terminal"),
-        ])
-        XCTAssertEqual(ssh.hosts.stringValue, "fixture-one")
-        XCTAssertEqual(ssh.hosts.objectValues as? [String], ["fixture-one", "fixture-two"])
-        XCTAssertEqual(ssh.alert.accessoryView?.frame.size, NSSize(width: 420, height: 214))
-        XCTAssertFalse(ssh.paths.isRichText)
-        XCTAssertFalse(ssh.paths.isAutomaticTextReplacementEnabled)
-
         let previous = SessionStore.load()
         let histories = TerminalHistoryStore.load()
         defer {
@@ -234,10 +219,13 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         second.makeKeyAndOrderFront(nil)
         let initialProjectCount = firstManager.projects.count
         firstManager.chooseSSHItems()
-        try await settle { first.attachedSheet != nil }
-        XCTAssertNil(second.attachedSheet, "A menu action must not attach to the key window of another manager")
-        first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .alertSecondButtonReturn)
-        try await settle { first.attachedSheet == nil }
+        XCTAssertTrue(firstManager.isSSHFolderPickerVisible)
+        XCTAssertFalse(secondManager.isSSHFolderPickerVisible,
+                       "SSH picker must stay on the requesting manager")
+        XCTAssertNil(first.attachedSheet, "SSH picker is a window-owned overlay, not a native sheet")
+        XCTAssertNil(second.attachedSheet)
+        firstManager.dismissSSHFolderPicker()
+        XCTAssertFalse(firstManager.isSSHFolderPickerVisible)
         firstManager.chooseFolders()
         try await settle { first.attachedSheet != nil }
         XCTAssertNil(second.attachedSheet)

@@ -58,6 +58,7 @@ final class WorkspaceWindowModel {
         }
     }
     private(set) var isCommandPaletteVisible = false
+    private(set) var isSSHFolderPickerVisible = false
     let tabSwitcher = TabSwitcherController()
 
     @ObservationIgnored private var projectCounter = 0
@@ -342,16 +343,33 @@ final class WorkspaceWindowModel {
         }
     }
 
+    var sshFolderHosts: [String] { Self.sshHostAliases() }
+
     func chooseSSHItems() {
-        WorkspaceNativeDialogs.chooseSSHItems(
-            in: window, aliases: Self.sshHostAliases()
-        ) { [weak self] host, paths in
-            guard let self else { return }
-            Task {
-                do {
-                    try await self.addSSHItems(host: host, paths: paths)
-                } catch {
-                    WorkspaceNativeDialogs.showError(error, in: self.window)
+        guard window != nil, !isClosed else { return }
+        isSSHFolderPickerVisible = true
+    }
+
+    func dismissSSHFolderPicker() {
+        isSSHFolderPickerVisible = false
+    }
+
+    func addSSHFolderFromPicker(host: String, path: String) {
+        guard isSSHFolderPickerVisible, let receivingWindow = window else { return }
+        isSSHFolderPickerVisible = false
+        Task { [weak self, weak receivingWindow] in
+            guard let self, let receivingWindow else { return }
+            let isCurrent: @MainActor () -> Bool = { [weak self, weak receivingWindow] in
+                guard let self, let receivingWindow else { return false }
+                return !self.isClosed && self.window === receivingWindow
+            }
+            do {
+                try await self.addSSHItems(
+                    host: host, paths: [path], isCurrentTarget: isCurrent
+                )
+            } catch {
+                if isCurrent() {
+                    WorkspaceNativeDialogs.showError(error, in: receivingWindow)
                 }
             }
         }
@@ -991,6 +1009,7 @@ final class WorkspaceWindowModel {
     // MARK: - Panels & appearance
 
     func toggleCommandPalette() {
+        guard !isSSHFolderPickerVisible else { return }
         if isCommandPaletteVisible {
             dismissCommandPalette()
         } else {
