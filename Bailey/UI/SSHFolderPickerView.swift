@@ -6,6 +6,9 @@ import SwiftUI
 struct SSHFolderPickerView: View {
     @State private var model: SSHFolderPickerModel
     @FocusState private var inputFocused: Bool
+    @FocusState private var hostChoicesFocused: Bool
+    @State private var highlightedHost = 0
+    @State private var hoveredHost: String?
 
     let onCancel: () -> Void
     let onChoose: @MainActor @Sendable (String, String) -> Void
@@ -34,6 +37,7 @@ struct SSHFolderPickerView: View {
                 .padding(.top, 110)
         }
         .ignoresSafeArea()
+        .task { if model.host == nil { hostChoicesFocused = true } }
         .onExitCommand(perform: onCancel)
         .onChange(of: model.host) { _, host in
             if host != nil { DispatchQueue.main.async { inputFocused = true } }
@@ -44,42 +48,43 @@ struct SSHFolderPickerView: View {
     private var panel: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                if model.host == nil {
+                    Image(systemName: "network")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    Text(String(localized: "Choose SSH Host", table: "Terminal"))
+                        .font(.system(size: 15, weight: .medium))
+                    Spacer(minLength: 0)
+                } else {
+                    Image(systemName: "folder")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
 
-                TextField(
-                    String(localized: "Remote folder path…", table: "Terminal"),
-                    text: Binding(
-                        get: { model.input },
-                        set: { model.editInput($0) }
+                    TextField(
+                        String(localized: "Remote folder path…", table: "Terminal"),
+                        text: Binding(
+                            get: { model.input },
+                            set: { model.editInput($0) }
+                        )
                     )
-                )
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .focused($inputFocused)
-                .disabled(model.host == nil)
-                .onSubmit(acceptInput)
-                .onKeyPress(.upArrow) {
-                    guard !model.isLoading else { return .ignored }
-                    model.moveSelection(-1)
-                    return .handled
-                }
-                .onKeyPress(.downArrow) {
-                    guard !model.isLoading else { return .ignored }
-                    model.moveSelection(1)
-                    return .handled
-                }
-                .onKeyPress(.escape) { onCancel(); return .handled }
-                .accessibilityIdentifier("bailey.sshFolderPicker.path")
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15))
+                    .focused($inputFocused)
+                    .onSubmit(acceptInput)
+                    .onKeyPress(.upArrow) {
+                        guard !model.isLoading else { return .ignored }
+                        model.moveSelection(-1)
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                        guard !model.isLoading else { return .ignored }
+                        model.moveSelection(1)
+                        return .handled
+                    }
+                    .onKeyPress(.escape) { onCancel(); return .handled }
+                    .accessibilityIdentifier("bailey.sshFolderPicker.path")
 
-                Menu {
-                    if model.hosts.isEmpty {
-                        Text(String(
-                            localized: "Configure SSH hosts in ~/.ssh/config.",
-                            table: "Terminal"
-                        ))
-                    } else {
+                    Menu {
                         ForEach(model.hosts, id: \.self) { alias in
                             Button {
                                 Task { await model.selectHost(alias) }
@@ -91,31 +96,31 @@ struct SSHFolderPickerView: View {
                                 }
                             }
                         }
-                    }
-                    Divider()
-                    Toggle(
-                        String(localized: "Show Hidden Folders", table: "Terminal"),
-                        isOn: Binding(
-                            get: { model.showHidden },
-                            set: { model.showHidden = $0 }
+                        Divider()
+                        Toggle(
+                            String(localized: "Show Hidden Folders", table: "Terminal"),
+                            isOn: Binding(
+                                get: { model.showHidden },
+                                set: { model.showHidden = $0 }
+                            )
                         )
-                    )
-                } label: {
-                    Label(
-                        model.host ?? String(localized: "SSH host", table: "Terminal"),
-                        systemImage: "network"
-                    )
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    } label: {
+                        Label(
+                            model.host ?? String(localized: "SSH host", table: "Terminal"),
+                            systemImage: "network"
+                        )
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .help(String(
+                        localized: "SSH hosts are configured in ~/.ssh/config.",
+                        table: "Terminal"
+                    ))
+                    .accessibilityIdentifier("bailey.sshFolderPicker.host")
                 }
-                .menuStyle(.borderlessButton)
-                .frame(maxWidth: 155)
-                .help(String(
-                    localized: "SSH hosts are configured in ~/.ssh/config.",
-                    table: "Terminal"
-                ))
-                .accessibilityIdentifier("bailey.sshFolderPicker.host")
             }
             .padding(.horizontal, 14)
             .frame(height: 44)
@@ -133,7 +138,9 @@ struct SSHFolderPickerView: View {
                     .accessibilityIdentifier("bailey.sshFolderPicker.error")
             }
 
-            if model.isLoading {
+            if model.host == nil, !model.hosts.isEmpty {
+                hostChoices
+            } else if model.isLoading {
                 ProgressView(
                     String(localized: "Loading remote folders…", table: "Terminal")
                 )
@@ -172,11 +179,13 @@ struct SSHFolderPickerView: View {
                 Spacer(minLength: 0)
                 Button(String(localized: "Cancel", table: "Terminal"), action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button(String(localized: "Add", table: "Terminal")) {
-                    Task { await model.confirm(onChoose: onChoose) }
+                if model.host != nil {
+                    Button(String(localized: "Add", table: "Terminal")) {
+                        Task { await model.confirm(onChoose: onChoose) }
+                    }
+                    .disabled(model.addPath == nil)
+                    .accessibilityIdentifier("bailey.sshFolderPicker.add")
                 }
-                .disabled(model.addPath == nil)
-                .accessibilityIdentifier("bailey.sshFolderPicker.add")
             }
             .padding(.horizontal, 12)
             .frame(height: 48)
@@ -189,6 +198,73 @@ struct SSHFolderPickerView: View {
         .shadow(color: .black.opacity(0.3), radius: 28, y: 10)
     }
 
+    private var hostChoices: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 1) {
+                    ForEach(Array(model.hosts.enumerated()), id: \.offset) { index, host in
+                        Button {
+                            highlightedHost = index
+                            Task { await model.selectHost(host) }
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: "desktopcomputer")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 16)
+                                Text(verbatim: host)
+                                    .font(.system(size: 12.5))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 9)
+                            .frame(height: 30)
+                            .contentShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                        .onHover { hovering in
+                            hoveredHost = hovering ? host : nil
+                            if hovering { highlightedHost = index }
+                        }
+                        .modifier(RowHighlightStyle(
+                            isSelected: index == highlightedHost,
+                            listActive: hostChoicesFocused,
+                            hovering: hoveredHost == host,
+                            cornerRadius: 6
+                        ))
+                        .accessibilityIdentifier("bailey.sshFolderPicker.hostChoice")
+                        .accessibilityValue(host)
+                        .id(index)
+                    }
+                }
+                .padding(6)
+            }
+            .frame(maxHeight: 310)
+            .fixedSize(horizontal: false, vertical: true)
+            .focusable()
+            .focused($hostChoicesFocused)
+            .focusEffectDisabled()
+            .onKeyPress(.upArrow) {
+                highlightedHost = max(0, highlightedHost - 1)
+                proxy.scrollTo(highlightedHost)
+                return .handled
+            }
+            .onKeyPress(.downArrow) {
+                highlightedHost = min(model.hosts.count - 1, highlightedHost + 1)
+                proxy.scrollTo(highlightedHost)
+                return .handled
+            }
+            .onKeyPress(.return) {
+                guard model.hosts.indices.contains(highlightedHost) else { return .ignored }
+                Task { await model.selectHost(model.hosts[highlightedHost]) }
+                return .handled
+            }
+        }
+    }
+
     private var emptyMessage: String {
         if model.host == nil {
             return model.hosts.isEmpty
@@ -196,8 +272,11 @@ struct SSHFolderPickerView: View {
                 : String(localized: "Choose an SSH host to browse folders.", table: "Terminal")
         }
         if model.errorMessage != nil { return "" }
-        if model.directory == nil {
+        if model.directory == nil || model.enterPath != nil {
             return String(localized: "Press Return to open the entered path.", table: "Terminal")
+        }
+        if SSHFolderPickerModel.remotePath(model.input) == nil {
+            return String(localized: "Enter an absolute remote folder path.", table: "Terminal")
         }
         return String(localized: "No subfolders", table: "Terminal")
     }

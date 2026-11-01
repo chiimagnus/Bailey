@@ -113,6 +113,16 @@
         }
       }
     },
+    "Choose SSH Host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 SSH 主机"
+          }
+        }
+      }
+    },
     "Choose an SSH host to browse folders." : {
       "localizations" : {
         "zh-Hans" : {
