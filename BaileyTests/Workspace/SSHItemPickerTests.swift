@@ -29,12 +29,16 @@ final class SSHItemPickerTests: XCTestCase {
         XCTAssertEqual(Set(model.entries.map(\.name)),
                        ["Folder with spaces", "hello world.swift", ".hidden"])
         XCTAssertEqual(model.pathsToAdd, [root.path])
+        XCTAssertEqual(model.breadcrumbPaths.last, root.path)
+        XCTAssertTrue(model.backHistory.isEmpty)
         XCTAssertTrue(model.canAdd)
 
         let selected = model.entries.filter { $0.name != ".hidden" }
             .map(model.path(for:))
         model.selection = Set(selected)
         XCTAssertEqual(Set(model.pathsToAdd), Set(selected))
+        await model.browse(path: root.path)
+        XCTAssertEqual(model.selection, Set(selected), "Reload keeps the existing valid selection")
 
         await model.browse(path: folder.path)
         XCTAssertEqual(model.currentDirectory, folder.path)
@@ -42,6 +46,15 @@ final class SSHItemPickerTests: XCTestCase {
         XCTAssertTrue(model.selection.isEmpty)
         XCTAssertEqual(model.entries.map(\.name), ["子目录"])
         XCTAssertEqual(model.pathsToAdd, [folder.path])
+        XCTAssertEqual(model.backHistory, [root.path])
+        XCTAssertTrue(model.forwardHistory.isEmpty)
+        await model.goBack()
+        XCTAssertEqual(model.currentDirectory, root.path)
+        XCTAssertTrue(model.backHistory.isEmpty)
+        XCTAssertEqual(model.forwardHistory, [folder.path])
+        await model.goForward()
+        XCTAssertEqual(model.currentDirectory, folder.path)
+        XCTAssertEqual(model.backHistory, [root.path])
 
         XCTAssertNotNil(model.homeDirectory)
     }
@@ -61,15 +74,17 @@ final class SSHItemPickerTests: XCTestCase {
         model.host = "-invalid"
         XCTAssertFalse(model.canAdd)
         model.host = "other"
-        XCTAssertTrue(model.canAdd)
-        XCTAssertEqual(model.manualPaths.components(separatedBy: .newlines)
-            .filter { !$0.isEmpty }.count, 3)
+        XCTAssertFalse(model.canAdd)
+        XCTAssertTrue(model.manualPaths.isEmpty)
+        XCTAssertTrue(model.selection.isEmpty)
     }
 
     func testHostSwitchDropsRemoteSelectionAndFailureDoesNotReplaceValidDirectory() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-picker-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let child = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
         let model = SSHItemPickerModel(
@@ -84,12 +99,17 @@ final class SSHItemPickerTests: XCTestCase {
         XCTAssertNotNil(model.errorMessage)
         XCTAssertEqual(model.currentDirectory, root.path)
         XCTAssertEqual(model.selection, [root.path])
+        XCTAssertTrue(model.backHistory.isEmpty, "Failed navigation leaves history untouched")
+        await model.browse(path: child.path)
+        XCTAssertEqual(model.backHistory, [root.path])
 
         model.host = "first"
         XCTAssertNil(model.currentDirectory)
         XCTAssertNil(model.homeDirectory)
         XCTAssertTrue(model.selection.isEmpty)
         XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertTrue(model.backHistory.isEmpty)
+        XCTAssertTrue(model.forwardHistory.isEmpty)
         XCTAssertNil(model.errorMessage)
         XCTAssertFalse(model.canAdd)
 

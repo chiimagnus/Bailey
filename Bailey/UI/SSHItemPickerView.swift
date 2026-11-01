@@ -15,6 +15,9 @@ final class SSHItemPickerModel {
             currentDirectory = nil
             entries = []
             selection = []
+            manualPaths = ""
+            backHistory = []
+            forwardHistory = []
             errorMessage = nil
         }
     }
@@ -25,6 +28,8 @@ final class SSHItemPickerModel {
     private(set) var entries: [WorkspaceEntry] = []
     private(set) var isLoading = false
     private(set) var errorMessage: String?
+    private(set) var backHistory: [String] = []
+    private(set) var forwardHistory: [String] = []
 
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private let backendForHost: @MainActor (String) -> any WorkspaceBackend
@@ -61,6 +66,17 @@ final class SSHItemPickerModel {
         return (currentDirectory as NSString).deletingLastPathComponent
     }
 
+    var breadcrumbPaths: [String] {
+        guard let currentDirectory else { return [] }
+        var paths = ["/"]
+        var prefix = ""
+        for component in currentDirectory.split(separator: "/") {
+            prefix += "/" + component
+            paths.append(prefix)
+        }
+        return paths
+    }
+
     func path(for entry: WorkspaceEntry) -> String {
         ((currentDirectory ?? "/") as NSString).appendingPathComponent(entry.name)
     }
@@ -71,6 +87,24 @@ final class SSHItemPickerModel {
     }
 
     func browse(path: String? = nil) async {
+        await browse(path: path, navigation: .push)
+    }
+
+    func goBack() async {
+        guard let destination = backHistory.last else { return }
+        await browse(path: destination, navigation: .back)
+    }
+
+    func goForward() async {
+        guard let destination = forwardHistory.last else { return }
+        await browse(path: destination, navigation: .forward)
+    }
+
+    private enum Navigation {
+        case push, back, forward
+    }
+
+    private func browse(path: String?, navigation: Navigation) async {
         let targetHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard SSHHostWorkspaces.validHost(targetHost) else {
             errorMessage = String(localized: "Enter an SSH host from ~/.ssh/config.", table: "Terminal")
@@ -108,16 +142,39 @@ final class SSHItemPickerModel {
             let result = try await backend.list(directory: directory)
             guard revision == request, host.trimmingCharacters(in: .whitespacesAndNewlines) == targetHost
             else { return }
-            homeDirectory = home
-            currentDirectory = directory
-            entries = result.filter {
+
+            let listed = result.filter {
                 $0.name != "." && $0.name != ".."
                     && !$0.name.contains("/") && !$0.name.contains("\0")
             }.sorted {
                 if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
                 return $0.name.localizedStandardCompare($1.name) == .orderedAscending
             }
-            selection = []
+            let previous = currentDirectory
+            if let previous, previous != directory {
+                switch navigation {
+                case .push:
+                    backHistory.append(previous)
+                    forwardHistory = []
+                case .back:
+                    backHistory.removeLast()
+                    forwardHistory.append(previous)
+                case .forward:
+                    forwardHistory.removeLast()
+                    backHistory.append(previous)
+                }
+            }
+            homeDirectory = home
+            currentDirectory = directory
+            entries = listed
+            if previous == directory {
+                let available = Set(listed.map {
+                    (directory as NSString).appendingPathComponent($0.name)
+                })
+                selection.formIntersection(available)
+            } else {
+                selection = []
+            }
         } catch {
             guard revision == request else { return }
             errorMessage = error.localizedDescription
@@ -139,10 +196,19 @@ final class SSHItemPickerModel {
     }
 }
 
+private struct SSHBrowserRow: Identifiable {
+    let id: String
+    let name: String
+    let isDirectory: Bool
+    let isSymlink: Bool
+}
+
 @MainActor
 struct SSHItemPickerView: View {
     @State private var model: SSHItemPickerModel
     @State private var location = ""
+    @State private var isEditingLocation = false
+    @FocusState private var locationIsFocused: Bool
     let onCancel: @MainActor () -> Void
     let onSelection: @MainActor (String, [String]) -> Void
 
@@ -158,21 +224,29 @@ struct SSHItemPickerView: View {
         self.onSelection = onSelection
     }
 
+    private var rows: [SSHBrowserRow] {
+        model.entries.map { entry in
+            SSHBrowserRow(
+                id: model.path(for: entry), name: entry.name,
+                isDirectory: entry.isDirectory, isSymlink: entry.isSymlink
+            )
+        }
+    }
+
     var body: some View {
         @Bindable var picker = model
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(String(localized: "Add SSH Files or Projects", table: "Terminal"))
-                    .font(.title2.weight(.semibold))
-                Text(String(localized: "Choose a host, then browse its folders and files.", table: "Terminal"))
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "network")
                     .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text(String(localized: "SSH host", table: "Terminal"))
-                TextField(String(localized: "Host from ~/.ssh/config", table: "Terminal"),
-                          text: $picker.host)
-                    .accessibilityIdentifier("bailey.sshPicker.host")
+                Text(String(localized: "SSH Host", table: "Terminal"))
+                    .fontWeight(.medium)
+                TextField(
+                    String(localized: "Host from ~/.ssh/config", table: "Terminal"),
+                    text: $picker.host
+                )
+                .frame(maxWidth: 270)
+                .accessibilityIdentifier("bailey.sshPicker.host")
                 if !model.aliases.isEmpty {
                     Menu {
                         ForEach(model.aliases, id: \.self) { alias in
@@ -184,9 +258,14 @@ struct SSHItemPickerView: View {
                     } label: {
                         Image(systemName: "chevron.down")
                     }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                     .help(String(localized: "Saved SSH hosts", table: "Terminal"))
                 }
-                Button(String(localized: "Browse", table: "Terminal")) {
+                Spacer()
+                Button(model.currentDirectory == nil
+                       ? String(localized: "Connect", table: "Terminal")
+                       : String(localized: "Refresh", table: "Terminal")) {
                     Task { await model.browse(path: model.currentDirectory) }
                 }
                 .disabled(model.isLoading || !SSHHostWorkspaces.validHost(
@@ -194,8 +273,30 @@ struct SSHItemPickerView: View {
                 ))
                 .accessibilityIdentifier("bailey.sshPicker.browse")
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
 
-            HStack {
+            Divider()
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await model.goBack() }
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(model.backHistory.isEmpty || model.isLoading)
+                .help(String(localized: "Back", table: "Terminal"))
+                .accessibilityLabel("Back")
+
+                Button {
+                    Task { await model.goForward() }
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(model.forwardHistory.isEmpty || model.isLoading)
+                .help(String(localized: "Forward", table: "Terminal"))
+                .accessibilityLabel("Forward")
+
                 Button {
                     if let home = model.homeDirectory {
                         Task { await model.browse(path: home) }
@@ -203,8 +304,9 @@ struct SSHItemPickerView: View {
                 } label: {
                     Image(systemName: "house")
                 }
-                .help(String(localized: "Home Folder", table: "Terminal"))
                 .disabled(model.homeDirectory == nil || model.isLoading)
+                .help(String(localized: "Home Folder", table: "Terminal"))
+                .accessibilityLabel("Home Folder")
 
                 Button {
                     if let parent = model.parentDirectory {
@@ -213,50 +315,115 @@ struct SSHItemPickerView: View {
                 } label: {
                     Image(systemName: "arrow.up")
                 }
-                .help(String(localized: "Parent Folder", table: "Terminal"))
                 .disabled(model.parentDirectory == nil || model.isLoading)
+                .help(String(localized: "Parent Folder", table: "Terminal"))
+                .accessibilityLabel("Parent Folder")
 
-                TextField(String(localized: "Remote folder path", table: "Terminal"),
-                          text: $location)
+                Divider()
+                    .frame(height: 18)
+
+                if isEditingLocation {
+                    TextField(
+                        String(localized: "Remote folder path", table: "Terminal"),
+                        text: $location
+                    )
+                    .focused($locationIsFocused)
                     .onSubmit { navigateToLocation() }
                     .accessibilityIdentifier("bailey.sshPicker.location")
-                Button(String(localized: "Go", table: "Terminal")) {
-                    navigateToLocation()
+                    Button(String(localized: "Go", table: "Terminal")) {
+                        navigateToLocation()
+                    }
+                    .disabled(location.isEmpty || model.isLoading)
+                } else if let current = model.currentDirectory {
+                    ScrollViewReader { scroll in
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 5) {
+                                ForEach(model.breadcrumbPaths, id: \.self) { path in
+                                    if path != "/" {
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    Button {
+                                        Task { await model.browse(path: path) }
+                                    } label: {
+                                        Text(path == "/" ? "/" : (path as NSString).lastPathComponent)
+                                            .fontWeight(path == current ? .semibold : .regular)
+                                            .foregroundStyle(path == current ? Color.primary : Color.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .disabled(model.isLoading)
+                                    .help(path)
+                                    .id(path)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                        .scrollIndicators(.hidden)
+                        .onAppear { scroll.scrollTo(current, anchor: .trailing) }
+                        .onChange(of: current) { _, next in
+                            scroll.scrollTo(next, anchor: .trailing)
+                        }
+                    }
+                } else {
+                    Text(String(localized: "Choose a host to browse", table: "Terminal"))
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(location.isEmpty || model.isLoading)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    location = model.currentDirectory ?? ""
+                    isEditingLocation.toggle()
+                } label: {
+                    Image(systemName: "pencil.line")
+                }
+                .help(String(localized: "Go to Folder", table: "Terminal"))
+                .accessibilityLabel("Go to Folder")
+                .disabled(model.isLoading)
             }
             .buttonStyle(.borderless)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
 
             ZStack {
-                List(selection: $picker.selection) {
-                    ForEach(model.entries, id: \.name) { entry in
-                        let path = model.path(for: entry)
-                        HStack {
-                            Image(systemName: entry.isDirectory ? "folder" : "doc")
-                                .foregroundStyle(.secondary)
-                            Text(entry.name)
+                Table(rows, selection: $picker.selection) {
+                    TableColumn("Name") { row in
+                        HStack(spacing: 8) {
+                            Image(systemName: row.isDirectory ? "folder.fill" : "doc")
+                                .foregroundStyle(row.isDirectory ? Color.accentColor : Color.secondary)
+                            Text(row.name)
                                 .lineLimit(1)
-                            Spacer()
-                            if entry.isDirectory {
-                                Button {
-                                    Task { await model.browse(path: path) }
-                                } label: {
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.borderless)
-                                .help(String(localized: "Open Folder", table: "Terminal"))
+                            if row.isSymlink {
+                                Image(systemName: "arrow.turn.up.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .tag(path)
                         .simultaneousGesture(TapGesture(count: 2).onEnded {
-                            if entry.isDirectory {
-                                Task { await model.browse(path: path) }
+                            if row.isDirectory {
+                                Task { await model.browse(path: row.id) }
+                            } else {
+                                onSelection(
+                                    model.host.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    [row.id]
+                                )
                             }
                         })
+                        .help(row.id)
                     }
+                    TableColumn("Kind") { row in
+                        Text(row.isSymlink
+                             ? String(localized: "Alias", table: "Terminal")
+                             : row.isDirectory
+                                ? String(localized: "Folder", table: "Terminal")
+                                : String(localized: "File", table: "Terminal"))
+                            .foregroundStyle(.secondary)
+                    }
+                    .width(min: 90, ideal: 112, max: 180)
                 }
-                .listStyle(.plain)
                 .disabled(model.isLoading)
                 .accessibilityIdentifier("bailey.sshPicker.files")
 
@@ -269,7 +436,8 @@ struct SSHItemPickerView: View {
                         String(localized: "Browse a remote host", table: "Terminal"),
                         systemImage: "network",
                         description: Text(String(
-                            localized: "Select an SSH host above to see its files.", table: "Terminal"
+                            localized: "Choose an SSH host above to see its folders and files.",
+                            table: "Terminal"
                         ))
                     )
                 } else if model.entries.isEmpty {
@@ -282,9 +450,13 @@ struct SSHItemPickerView: View {
                     )
                 }
             }
-            .frame(height: 280)
+            .frame(minHeight: 300)
 
-            DisclosureGroup(String(localized: "Enter paths manually", table: "Terminal")) {
+            Divider()
+
+            DisclosureGroup(
+                String(localized: "Enter paths manually", table: "Terminal")
+            ) {
                 Text(String(
                     localized: "One absolute remote path per line. Windows drive paths are also accepted.",
                     table: "Terminal"
@@ -296,21 +468,30 @@ struct SSHItemPickerView: View {
                     .frame(height: 72)
                     .accessibilityIdentifier("bailey.sshPicker.manualPaths")
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
             if let errorMessage = model.errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .font(.callout)
                     .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
                     .accessibilityIdentifier("bailey.sshPicker.error")
             }
 
-            HStack {
+            Divider()
+
+            HStack(spacing: 12) {
                 if model.selection.isEmpty, let directory = model.currentDirectory,
                    model.manualPaths.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(directory)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .foregroundStyle(.secondary)
+                    Label(
+                        String(localized: "Current folder", table: "Terminal"),
+                        systemImage: "folder"
+                    )
+                    .help(directory)
+                    .foregroundStyle(.secondary)
                 } else if !model.pathsToAdd.isEmpty {
                     Text(String(localized: "\(model.pathsToAdd.count) items selected", table: "Terminal"))
                         .foregroundStyle(.secondary)
@@ -328,11 +509,21 @@ struct SSHItemPickerView: View {
                 .disabled(!model.canAdd || model.isLoading)
                 .accessibilityIdentifier("bailey.sshPicker.add")
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        .padding(20)
-        .frame(width: 640)
-        .onChange(of: model.currentDirectory) { _, path in location = path ?? "" }
-        .onChange(of: model.host) { location = "" }
+        .frame(minWidth: 700, idealWidth: 760, minHeight: 510, idealHeight: 550)
+        .onChange(of: isEditingLocation) { _, editing in
+            if editing { locationIsFocused = true }
+        }
+        .onChange(of: model.currentDirectory) { _, path in
+            location = path ?? ""
+            isEditingLocation = false
+        }
+        .onChange(of: model.host) {
+            location = ""
+            isEditingLocation = false
+        }
         .onDisappear { model.invalidate() }
     }
 

@@ -288,7 +288,7 @@ enum WorkspaceNativeDialogs {
     ) {
         var submitted: (host: String, paths: [String])?
         let sheet = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 550),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false
         )
         sheet.title = String(localized: "Add SSH Files or Projects", table: "Terminal")
