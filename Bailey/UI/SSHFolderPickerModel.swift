@@ -30,7 +30,7 @@ final class SSHFolderPickerModel {
 
     private enum FolderIssue: LocalizedError {
         case missing(String)
-        case file(String)
+        case file
 
         var errorDescription: String? {
             switch self {
@@ -61,7 +61,8 @@ final class SSHFolderPickerModel {
     }
 
     var rows: [String] {
-        let available = folders.filter { showHidden || !$0.hasPrefix(".") }
+        let available = (showingDrives ? windowsDrives : folders)
+            .filter { showHidden || !$0.hasPrefix(".") }
         guard let directory, let edited = Self.remotePath(input) else { return [] }
         let prefix = directory == "/" ? "/" : directory + "/"
         let filtered: [String]
@@ -218,7 +219,6 @@ final class SSHFolderPickerModel {
         if destination == "/", !windowsDrives.isEmpty {
             directory = destination
             pendingPath = nil
-            folders = windowsDrives
             isLoading = false
             return
         }
@@ -227,7 +227,7 @@ final class SSHFolderPickerModel {
             guard let stat = try await backend.stat(path: destination) else {
                 throw FolderIssue.missing(destination)
             }
-            guard stat.isDirectory else { throw FolderIssue.file(destination) }
+            guard stat.isDirectory else { throw FolderIssue.file }
             let entries = try await backend.list(directory: destination)
             guard isCurrent(request, host: host) else { return }
             directory = destination

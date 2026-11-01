@@ -346,7 +346,7 @@ final class WorkspaceWindowModel {
         }
     }
 
-    var sshFolderHosts: [String] { Self.sshHostAliases() }
+    var sshFolderHosts: [String] { SSHHostConfiguration.aliases() }
 
     func chooseSSHItems() {
         guard let window, !isClosed, !isSSHFolderPickerVisible else { return }
@@ -401,10 +401,6 @@ final class WorkspaceWindowModel {
                 }
             }
         }
-    }
-
-    private static func sshHostAliases() -> [String] {
-        SSHHostConfiguration.aliases()
     }
 
     private func insert(_ project: Project) {
