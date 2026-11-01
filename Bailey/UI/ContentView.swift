@@ -53,7 +53,7 @@ struct ContentView: View {
         .overlay {
             if manager.isSSHFolderPickerVisible {
                 SSHFolderPickerView(
-                    hosts: manager.sshFolderHosts,
+                    hosts: SSHHostConfiguration.aliases(),
                     onCancel: { manager.dismissSSHFolderPicker() },
                     onChoose: { host, folder in
                         manager.addSSHFolderFromPicker(host: host, path: folder)

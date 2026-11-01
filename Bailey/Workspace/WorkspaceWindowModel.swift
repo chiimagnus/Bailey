@@ -337,8 +337,6 @@ final class WorkspaceWindowModel {
         }
     }
 
-    var sshFolderHosts: [String] { SSHHostConfiguration.aliases() }
-
     func chooseSSHItems() {
         guard let window, !isClosed, !isSSHFolderPickerVisible else { return }
         sshPickerWindow = window
