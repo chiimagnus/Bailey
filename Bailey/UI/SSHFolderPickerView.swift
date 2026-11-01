@@ -15,6 +15,7 @@ struct SSHFolderPickerView: View {
     @State private var directory: String?
     @State private var input = ""
     @State private var folders: [String] = []
+    @State private var windowsDrives: [String] = []
     @State private var selection = -1
     @State private var showHidden = false
     @State private var loading = false
@@ -23,6 +24,8 @@ struct SSHFolderPickerView: View {
     @FocusState private var inputFocused: Bool
 
     private let themeChanges = Theme.changes
+
+    private var showingDrives: Bool { directory == "/" && !windowsDrives.isEmpty }
 
     private var parent: String? {
         guard let directory, directory != "/" else { return nil }
@@ -60,7 +63,26 @@ struct SSHFolderPickerView: View {
         if rows.indices.contains(selection), rows[selection] != ".." {
             return (directory as NSString).appendingPathComponent(rows[selection])
         }
-        return directory
+        return showingDrives ? nil : directory
+    }
+
+    private var selectionTarget: String? {
+        guard let typedDirectory else { return nil }
+        return typedDirectory == directory ? currentFolder : typedDirectory
+    }
+
+    static func startupLocation(_ output: Data) -> (home: String, drives: [String])? {
+        let lines = String(decoding: output, as: UTF8.self).split(separator: "\n")
+        guard let first = lines.first else { return nil }
+        let home = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard home.hasPrefix("/"), !home.contains("\0") else { return nil }
+        let drives = lines.dropFirst().compactMap { line -> String? in
+            guard line.hasPrefix("DRIVE:"), line.count == 7,
+                  let letter = line.last, "abcdefghijklmnopqrstuvwxyz".contains(letter)
+            else { return nil }
+            return String(letter)
+        }
+        return (home, Array(Set(drives)).sorted())
     }
 
     var body: some View {
@@ -195,7 +217,7 @@ struct SSHFolderPickerView: View {
                     Task { await chooseFolder() }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(host.isEmpty || loading || (currentFolder == nil && typedDirectory == nil))
+                .disabled(host.isEmpty || loading || selectionTarget == nil)
                 .accessibilityIdentifier("bailey.sshFolderPicker.add")
             }
             .padding(.horizontal, 12)
@@ -211,13 +233,13 @@ struct SSHFolderPickerView: View {
 
     private func folderRow(_ folder: String, index: Int) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: folder == ".." ? "arrow.up" : "folder.fill")
+            Image(systemName: folder == ".." ? "arrow.up" : showingDrives ? "internaldrive" : "folder.fill")
                 .font(.system(size: 12))
                 .foregroundStyle(
                     folder == ".." ? Color.secondary : Color(nsColor: Theme.accent)
                 )
                 .frame(width: 16)
-            Text(verbatim: folder)
+            Text(verbatim: showingDrives ? folder.uppercased() + ":" : folder)
                 .font(.system(size: 12.5))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -279,8 +301,7 @@ struct SSHFolderPickerView: View {
 
     private func chooseFolder() async {
         let isDirectPath = typedDirectory != directory
-        let target = isDirectPath ? typedDirectory : currentFolder
-        guard let target, !host.isEmpty, !loading else { return }
+        guard let target = selectionTarget, !host.isEmpty, !loading else { return }
         let activeHost = host
         let request = requestID
         let backend = SSHHostWorkspaces.backend(for: activeHost)
@@ -307,14 +328,19 @@ struct SSHFolderPickerView: View {
         directory = nil
         input = ""
         folders = []
+        windowsDrives = []
         selection = -1
         errorMessage = nil
         loading = true
 
         do {
             let backend = SSHHostWorkspaces.backend(for: alias)
+            let command = "cd && pwd -P && case \"$(uname -s)\" in "
+                + "MSYS*|MINGW*|CYGWIN*) for drive in c d e f g h i j k l m n o p q r s t u v w x y z; do "
+                + "if [ -d \"/$drive\" ]; then printf 'DRIVE:%s\\n' \"$drive\"; fi; "
+                + "done ;; esac"
             let result = try await backend.run(
-                argv: ["/bin/sh", "-c", "cd && pwd -P"],
+                argv: ["/bin/sh", "-c", command],
                 cwd: nil, env: nil, stdin: nil, timeout: 12
             )
             guard result.status == 0 else {
@@ -323,13 +349,12 @@ struct SSHFolderPickerView: View {
                     message: String(decoding: result.stderr, as: UTF8.self)
                 )
             }
-            let home = String(decoding: result.stdout, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard home.hasPrefix("/"), !home.contains("\n") else {
+            guard let location = Self.startupLocation(result.stdout) else {
                 throw WorkspaceError.notFound
             }
             guard request == requestID, host == alias else { return }
-            await browse(home)
+            windowsDrives = location.drives
+            await browse(location.drives.isEmpty ? location.home : "/")
         } catch {
             guard request == requestID, host == alias else { return }
             loading = false
@@ -350,6 +375,14 @@ struct SSHFolderPickerView: View {
         let activeHost = host
         loading = true
         errorMessage = nil
+        if destination == "/", !windowsDrives.isEmpty {
+            directory = "/"
+            input = "/"
+            folders = windowsDrives
+            selection = -1
+            loading = false
+            return
+        }
         do {
             let backend = SSHHostWorkspaces.backend(for: activeHost)
             guard try await backend.stat(path: destination)?.isDirectory == true else {

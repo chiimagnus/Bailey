@@ -184,6 +184,23 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         try await settle { window.attachedSheet == nil }
     }
 
+    func testSSHFolderPickerStartsAtWindowsDrivesWithoutChangingUnixHome() {
+        let windows = SSHFolderPickerView.startupLocation(Data(
+            "/c/Users/Administrator\nDRIVE:d\nDRIVE:c\nDRIVE:d\n".utf8
+        ))
+        XCTAssertEqual(windows?.home, "/c/Users/Administrator")
+        XCTAssertEqual(windows?.drives, ["c", "d"])
+
+        let unix = SSHFolderPickerView.startupLocation(Data("/home/username\n".utf8))
+        XCTAssertEqual(unix?.home, "/home/username")
+        XCTAssertEqual(unix?.drives, [])
+        XCTAssertNil(SSHFolderPickerView.startupLocation(Data("invalid\nDRIVE:c\n".utf8)))
+        XCTAssertEqual(
+            SSHFolderPickerView.startupLocation(Data("/home/user\nDRIVE:../\n".utf8))?.drives,
+            []
+        )
+    }
+
     func testNativeFileAndSSHChoosersStayOnOwningWindow() async throws {
         let local = WorkspaceNativeDialogs.folderPanel()
         XCTAssertFalse(local.canChooseFiles, "Add Projects must select directories only")
