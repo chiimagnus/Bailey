@@ -376,17 +376,7 @@ final class WorkspaceWindowModel {
     }
 
     private static func sshHostAliases() -> [String] {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".ssh/config")
-        guard let data = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return data.split(whereSeparator: \.isNewline).flatMap { line -> [String] in
-            let words = line.split(whereSeparator: \.isWhitespace)
-            guard words.first?.lowercased() == "host" else { return [] }
-            return words.dropFirst().compactMap { value in
-                let host = String(value)
-                return host.contains("*") || host.contains("?") ? nil : host
-            }
-        }
+        SSHHostConfiguration.aliases()
     }
 
     private func insert(_ project: Project) {
