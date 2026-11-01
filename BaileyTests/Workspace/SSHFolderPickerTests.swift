@@ -112,6 +112,7 @@ final class SSHFolderPickerTests: XCTestCase {
         XCTAssertEqual(model.host, "windows")
         XCTAssertEqual(model.directory, "/")
         XCTAssertEqual(model.rows, ["c", "d"])
+        XCTAssertTrue(model.folders.isEmpty, "Virtual disks are not duplicate folder entries")
         XCTAssertNil(model.addPath, "The virtual disk overview is not a remote project")
         model.selectedName = "d"
         XCTAssertEqual(model.addPath, "/d")

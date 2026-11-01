@@ -22,15 +22,14 @@ final class SSHFolderPickerModel {
         }
     }
 
-    @ObservationIgnored private let backendForHost: @MainActor (String) -> any WorkspaceBackend
+    private let backendForHost: @MainActor (String) -> any WorkspaceBackend
     @ObservationIgnored private var requestID = 0
-    @ObservationIgnored private var inputRevision = 0
 
     @ObservationIgnored private var isActive = true
 
     private enum FolderIssue: LocalizedError {
         case missing(String)
-        case file(String)
+        case file
 
         var errorDescription: String? {
             switch self {
@@ -61,7 +60,8 @@ final class SSHFolderPickerModel {
     }
 
     var rows: [String] {
-        let available = folders.filter { showHidden || !$0.hasPrefix(".") }
+        let available = (showingDrives ? windowsDrives : folders)
+            .filter { showHidden || !$0.hasPrefix(".") }
         guard let directory, let edited = Self.remotePath(input) else { return [] }
         let prefix = directory == "/" ? "/" : directory + "/"
         let filtered: [String]
@@ -109,7 +109,6 @@ final class SSHFolderPickerModel {
 
     func editInput(_ text: String) {
         input = text
-        inputRevision &+= 1
         selectedName = nil
         errorMessage = nil
     }
@@ -206,7 +205,6 @@ final class SSHFolderPickerModel {
         if isLoading, pendingPath == destination { return }
         requestID &+= 1
         let request = requestID
-        let editRevision = inputRevision
         input = destination == "/" ? "/" : destination + "/"
         pendingPath = destination
         directory = nil
@@ -218,7 +216,6 @@ final class SSHFolderPickerModel {
         if destination == "/", !windowsDrives.isEmpty {
             directory = destination
             pendingPath = nil
-            folders = windowsDrives
             isLoading = false
             return
         }
@@ -227,7 +224,7 @@ final class SSHFolderPickerModel {
             guard let stat = try await backend.stat(path: destination) else {
                 throw FolderIssue.missing(destination)
             }
-            guard stat.isDirectory else { throw FolderIssue.file(destination) }
+            guard stat.isDirectory else { throw FolderIssue.file }
             let entries = try await backend.list(directory: destination)
             guard isCurrent(request, host: host) else { return }
             directory = destination
@@ -238,9 +235,6 @@ final class SSHFolderPickerModel {
             }
             .map(\.name)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            if inputRevision == editRevision {
-                input = destination == "/" ? "/" : destination + "/"
-            }
             isLoading = false
         } catch {
             guard isCurrent(request, host: host) else { return }

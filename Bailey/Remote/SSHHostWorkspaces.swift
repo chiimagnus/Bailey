@@ -87,8 +87,8 @@ enum SSHHostConfiguration {
             }
         }
 
-        func read(_ file: URL, depth: Int) {
-            guard depth < 12, visited.insert(file.standardizedFileURL).inserted,
+        func read(_ file: URL) {
+            guard visited.insert(file.standardizedFileURL.resolvingSymlinksInPath()).inserted,
                   let text = try? String(contentsOf: file, encoding: .utf8) else { return }
             for line in text.split(whereSeparator: \.isNewline) {
                 let words = line.split(whereSeparator: \.isWhitespace)
@@ -98,7 +98,7 @@ enum SSHHostConfiguration {
                 case "include":
                     for pattern in words.dropFirst() {
                         for included in includedFiles(String(pattern)) {
-                            read(included, depth: depth + 1)
+                            read(included)
                         }
                     }
                 case "host":
@@ -115,7 +115,7 @@ enum SSHHostConfiguration {
             }
         }
 
-        read(configURL, depth: 0)
+        read(configURL)
         return names
     }
 }

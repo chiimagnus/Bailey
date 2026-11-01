@@ -939,8 +939,8 @@ struct GitPanel: View {
                 let host = String(target.scope.dropFirst(4))
                 Task { @MainActor in
                     do {
-                        try await manager.addSSHItems(
-                            host: host, paths: [location.path], isCurrentTarget: isCurrent
+                        try await manager.addSSHItem(
+                            host: host, path: location.path, isCurrentTarget: isCurrent
                         )
                     } catch {
                         if isCurrent() { WorkspaceNativeDialogs.showError(error, in: window) }
@@ -1773,7 +1773,7 @@ struct GitPanel: View {
                         changedFileRows(filteredChangedEntries, kind: .unstaged)
                     }
                 }
-                if filterText.isEmpty, !graphCommits.isEmpty {
+                if filterText.isEmpty, model.hasHead || !graphCommits.isEmpty {
                     PanelSectionHeader(
                         title: String(localized: "GIT GRAPH", table: "Git"),
                         count: graphCommits.count,
@@ -1782,8 +1782,22 @@ struct GitPanel: View {
                         actionsDisabled: model.isBusy
                     )
                     if !historyCollapsed {
-                        RecentCommitsView(
-                            commits: graphCommits,
+                        if graphCommits.isEmpty {
+                            if model.isRefreshing {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 16)
+                            } else {
+                                Text(String(localized: "Unable to read Git history.", table: "Git"))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 16)
+                            }
+                        } else {
+                            RecentCommitsView(
+                                commits: graphCommits,
                             remotes: model.remotes,
                             remoteURLs: remoteURLs,
                             knownRemotesByCommit: model.knownRemotesByCommit,
@@ -1910,7 +1924,8 @@ struct GitPanel: View {
                                 }
                             }
                         )
-                        .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity)
+                        }
                     }
                 }
             }

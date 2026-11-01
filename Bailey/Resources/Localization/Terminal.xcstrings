@@ -123,16 +123,6 @@
         }
       }
     },
-    "Choose an SSH host to browse folders." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择 SSH 主机后浏览文件夹。"
-          }
-        }
-      }
-    },
     "Configure SSH hosts in ~/.ssh/config." : {
       "localizations" : {
         "zh-Hans" : {

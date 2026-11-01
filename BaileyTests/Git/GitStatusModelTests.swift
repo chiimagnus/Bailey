@@ -1714,11 +1714,48 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(waiting, "History must be a distinct SSH request")
         XCTAssertTrue(model.hasResolvedStatus, "Core status must publish before history finishes")
         XCTAssertTrue(model.isRepo)
+        XCTAssertTrue(model.hasHead, "A verified HEAD requires a Graph section even before history arrives")
+        XCTAssertTrue(model.recentCommits.isEmpty, "The suspended history query has not loaded commits")
+        XCTAssertTrue(model.isRefreshing, "Core status remains usable during history loading")
         XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"])
         XCTAssertNil(model.statusError)
         await backend.releaseHistory()
         try await wait { !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["first"])
+    }
+
+    func testCleanRepositoryGraphSectionRemainsAvailableWhileHistoryLoads() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"], ["config", "user.name", "Graph Visibility"],
+            ["config", "user.email", "graph@invalid"], ["commit", "--allow-empty", "-qm", "first"]
+        ] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+
+        let backend = DiscardRemoteWorkspaceFixture()
+        await backend.suspendHistory()
+        defer { Task { await backend.releaseHistory() } }
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:graph-loading")
+        let deadline = Date().addingTimeInterval(10)
+        while await !backend.historyWaiting && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let waiting = await backend.historyWaiting
+        XCTAssertTrue(waiting)
+        XCTAssertTrue(model.hasResolvedStatus)
+        XCTAssertTrue(model.isRepo)
+        XCTAssertTrue(model.hasHead, "The Graph section must remain visible before the commit list arrives")
+        XCTAssertTrue(model.isRefreshing)
+        XCTAssertTrue(model.graphCommits.isEmpty, "A clean repo has no synthetic uncommitted node")
+
+        await backend.releaseHistory()
+        try await wait { !model.isRefreshing }
+        XCTAssertEqual(model.graphCommits.map(\.subject), ["first"])
     }
 
     func testStashFileLoadRejectsStaleSSHChannelAndRetriesAfterFailure() async throws {
