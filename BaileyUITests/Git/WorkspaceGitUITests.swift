@@ -70,12 +70,8 @@ final class WorkspaceGitUITests: XCTestCase {
         let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
         XCTAssertTrue(change.waitForExistence(timeout: 25))
         change.click()
-        let mode = window.radioGroups["bailey.diff.mode"]
-        let layout = window.radioGroups["bailey.diff.layout"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
-        mode.radioButtons.element(boundBy: 0).click()
-        layout.radioButtons.element(boundBy: 0).click()
-        let editor = window.textViews.firstMatch
+        XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
+        let editor = window.textViews["bailey.diff.worktree"]
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         let rendered = try XCTUnwrap(editor.value as? String)
         XCTAssertEqual(rendered.components(separatedBy: "alpha").count - 1, 1,
@@ -209,10 +205,7 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(change.waitForExistence(timeout: 90),
                       "Actual Windows SSH project must show its changed file")
         change.click()
-        let mode = window.radioGroups["bailey.diff.mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 40))
-        mode.radioButtons.element(boundBy: 0).click()
-        let review = window.textViews.firstMatch
+        let review = window.textViews["bailey.diff.canonical"]
         XCTAssertTrue(review.waitForExistence(timeout: 40))
         let visible = try XCTUnwrap(review.value as? String)
         XCTAssertTrue(visible.contains("keep") && visible.contains("changed"))
@@ -222,8 +215,7 @@ final class WorkspaceGitUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
 
-        mode.radioButtons.element(boundBy: 1).click()
-        let edit = window.textViews.firstMatch
+        let edit = window.textViews["bailey.diff.worktree"]
         XCTAssertTrue(edit.waitForExistence(timeout: 30))
         XCTAssertEqual(edit.value as? String, "changed\nTRANSIENT\n")
         edit.click()
@@ -234,12 +226,11 @@ final class WorkspaceGitUITests: XCTestCase {
             (try? ssh("cat -- '\(root)/filtered.txt'\n")) == "updated\nTRANSIENT\n"
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [rawSave], timeout: 65), .completed)
-        mode.radioButtons.element(boundBy: 0).click()
         let refreshed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (window.textViews.firstMatch.value as? String)?.contains("updated") == true
+            (review.value as? String)?.contains("updated") == true
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [refreshed], timeout: 65), .completed)
-        XCTAssertFalse((window.textViews.firstMatch.value as? String ?? "").contains("TRANSIENT"))
+        XCTAssertFalse((review.value as? String ?? "").contains("TRANSIENT"))
     }
 
     func testGitCleanFilteredReviewAndRawEditRemainDistinct() throws {
@@ -262,10 +253,7 @@ final class WorkspaceGitUITests: XCTestCase {
         let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
         XCTAssertTrue(row.waitForExistence(timeout: 25))
         row.click()
-        let mode = window.radioGroups["bailey.diff.mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
-        mode.radioButtons.element(boundBy: 0).click()
-        let review = window.textViews.firstMatch
+        let review = window.textViews["bailey.diff.canonical"]
         XCTAssertTrue(review.waitForExistence(timeout: 15))
         let visible = try XCTUnwrap(review.value as? String)
         XCTAssertTrue(visible.contains("keep") && visible.contains("changed"))
@@ -276,8 +264,7 @@ final class WorkspaceGitUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
 
-        mode.radioButtons.element(boundBy: 1).click()
-        let editor = window.textViews.firstMatch
+        let editor = window.textViews["bailey.diff.worktree"]
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, raw,
                        "The editor must expose the original bytes hidden by a clean filter")
@@ -291,16 +278,15 @@ final class WorkspaceGitUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
                        "Command-S must write raw source text without reapplying the clean filter")
-        mode.radioButtons.element(boundBy: 0).click()
         let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (window.textViews.firstMatch.value as? String)?.contains("changed again") == true
+            (review.value as? String)?.contains("changed again") == true
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 20), .completed)
-        XCTAssertFalse((window.textViews.firstMatch.value as? String ?? "").contains("TRANSIENT"))
+        XCTAssertFalse((review.value as? String ?? "").contains("TRANSIENT"))
         XCTAssertEqual(try Data(contentsOf: file), Data(next.utf8))
     }
 
-    func testLargeSwiftDiffHasVisibleFoldAndContextAboveLine595() throws {
+    func testLargeSwiftEditableDiffRendersAllSourceLinesAround595() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let old = (0..<900).map { "    let line\($0) = \($0)" }
         var changed = old
@@ -316,35 +302,20 @@ final class WorkspaceGitUITests: XCTestCase {
         let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
         XCTAssertTrue(change.waitForExistence(timeout: 25))
         change.click()
-        let mode = window.radioGroups["bailey.diff.mode"]
-        let layout = window.radioGroups["bailey.diff.layout"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
-        mode.radioButtons.element(boundBy: 0).click()
-        layout.radioButtons.element(boundBy: 0).click()
-        let editor = window.textViews.firstMatch
+        XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
+        let editor = window.textViews["bailey.diff.worktree"]
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         let displayed = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(displayed.contains("line594 = 2026"))
         XCTAssertTrue(displayed.contains("line617 = 2027"))
-        XCTAssertTrue(displayed.contains("line594 = 594"))
-        let fold = window.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "591 unmodified lines")
-        ).firstMatch
-        XCTAssertTrue(fold.waitForExistence(timeout: 10),
-                      "TextKit viewport must expose the folded context before source line 595")
-        XCTAssertLessThan(fold.frame.minY - window.frame.minY, 240,
-                          "First collapsed context row must be near the top, not below a blank area")
+        XCTAssertTrue(displayed.contains("let line0 = 0"))
+        XCTAssertTrue(displayed.contains("let line899 = 899"))
+        editor.click()
+        for _ in 0..<8 { editor.swipeUp() }
         let shot = XCTAttachment(screenshot: window.screenshot())
-        shot.name = "Real Git review with 900 source lines and visible folded context"
+        shot.name = "Editable Git Diff with all 900 source lines and both modifications"
         shot.lifetime = .keepAlways
         add(shot)
-        fold.click()
-        let expandedFold = window.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "491 unmodified lines")
-        ).firstMatch
-        XCTAssertTrue(expandedFold.waitForExistence(timeout: 12),
-                      "Clicking the gutter accessibility target must expand the intended fold")
-        XCTAssertTrue((editor.value as? String)?.contains("let line492") == true)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
                        changed.joined(separator: "\n") + "\n")
     }
@@ -354,6 +325,7 @@ final class WorkspaceGitUITests: XCTestCase {
         let file = try fixture.file("theme-diff.swift", text: "let theme = 1\n")
         try fixture.initializeGit()
         try "let theme = 2\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "theme-diff.swift"])
         _ = try fixture.file(".config/bailey-dev/config.toml", text: """
             theme = "light"
             theme-light = "Ayu Light"
@@ -368,11 +340,9 @@ final class WorkspaceGitUITests: XCTestCase {
         let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
         XCTAssertTrue(change.waitForExistence(timeout: 25))
         change.click()
-        let mode = window.radioGroups["bailey.diff.mode"]
         let layout = window.radioGroups["bailey.diff.layout"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
         XCTAssertTrue(layout.waitForExistence(timeout: 15))
-        mode.radioButtons.element(boundBy: 0).click()
         layout.radioButtons.element(boundBy: 1).click()
         XCTAssertGreaterThanOrEqual(window.textViews.count, 2)
 
@@ -465,41 +435,33 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(change.waitForExistence(timeout: 25))
         change.click()
 
-        let mode = window.radioGroups["bailey.diff.mode"]
+        XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists,
+                       "Worktree Diff must open directly into its editable native surface")
         let layout = window.radioGroups["bailey.diff.layout"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
         XCTAssertTrue(layout.waitForExistence(timeout: 15))
-        // The user's persisted mode may be Edit, which hides both review panes.
-        // Enter Review explicitly before asserting Split's visible native panes.
-        mode.radioButtons.element(boundBy: 0).click()
-        let split = layout.radioButtons.element(boundBy: 1)
-        split.click()
-        XCTAssertEqual(String(describing: split.value ?? ""), "1",
-                       "Split layout must actually be selected")
-        XCTAssertGreaterThanOrEqual(window.textViews.count, 2,
-                                    "Split mode must mount separate native text panes")
-        let unified = layout.radioButtons.element(boundBy: 0)
-        unified.click()
-        XCTAssertEqual(String(describing: unified.value ?? ""), "1",
-                       "Unified layout must actually be restored")
-        let edit = mode.radioButtons.element(boundBy: 1)
-        edit.click()
-        XCTAssertEqual(String(describing: edit.value ?? ""), "1",
-                       "Native worktree mode must switch to Edit")
-
-        let editor = window.textViews.firstMatch
+        let editor = window.textViews["bailey.diff.worktree"]
+        layout.radioButtons.element(boundBy: 1).click()
+        let baseline = window.textViews["bailey.diff.baseline"]
+        XCTAssertTrue(baseline.waitForExistence(timeout: 15))
+        XCTAssertTrue((baseline.value as? String ?? "").contains("let value = 1"))
+        XCTAssertEqual(window.textViews.count, 2,
+                       "Split must retain the old readonly side and the current editable side")
+        XCTAssertEqual(editor.value as? String, original)
+        let splitShot = XCTAttachment(screenshot: window.screenshot())
+        splitShot.name = "Native editable Split Diff: baseline readonly and worktree editable"
+        splitShot.lifetime = .keepAlways
+        add(splitShot)
+        layout.radioButtons.element(boundBy: 0).click()
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, original,
-                       "Edit mode must expose the live worktree content, not the old Git revision")
+                       "Worktree Diff must expose the live worktree content, not the old Git revision")
         editor.click()
         app.typeKey("a", modifierFlags: .command)
         editor.typeText(updated)
         XCTAssertEqual(editor.value as? String, updated)
-        app.typeKey("z", modifierFlags: .command)
-        XCTAssertEqual(editor.value as? String, original,
-                       "Native Diff Undo must restore the worktree buffer")
-        app.typeKey("z", modifierFlags: [.command, .shift])
-        XCTAssertEqual(editor.value as? String, updated)
+        // Real native Undo/Redo is tested against this retained NSTextView in
+        // NativeDiffTabTests. This UI test verifies the Split/Unified path,
+        // keyboard editing and save without repeating synthetic Cmd-Z input.
         app.typeKey("s", modifierFlags: .command)
 
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

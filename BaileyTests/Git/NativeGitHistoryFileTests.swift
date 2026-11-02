@@ -52,7 +52,6 @@ final class NativeGitHistoryFileTests: XCTestCase {
         _ = try git(["commit", "-qam", "updated"], in: root)
         let defaults = UserDefaults(suiteName: "bailey-history-" + UUID().uuidString)!
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = true
         let revision = DiffTab(repoRoot: root.path, path: "note.txt",
             source: .revision(hash: selected), untracked: false, origPath: nil,
             backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil, preferences: preferences)

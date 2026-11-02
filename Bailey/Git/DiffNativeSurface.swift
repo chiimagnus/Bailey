@@ -80,9 +80,21 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
-        unifiedPane?.frame = bounds
-        editPane?.frame = bounds
-        if let leftPane, let rightPane, let divider {
+        let editing = diff?.isEditing == true
+        let canonical = editing && diff?.showsCanonicalComparison == true
+        let paired = editing && diff?.display != nil
+            && (canonical || diff?.preferences.diffStyle == .split)
+        let half = floor((bounds.width - 1) / 2)
+        let leftFrame = CGRect(x: 0, y: 0, width: half, height: bounds.height)
+        unifiedPane?.frame = canonical && paired ? leftFrame : bounds
+        editPane?.frame = paired
+            ? CGRect(x: half + 1, y: 0, width: max(0, bounds.width - half - 1),
+                     height: bounds.height) : bounds
+        if paired {
+            leftPane?.frame = leftFrame
+            divider?.frame = CGRect(x: half, y: 0, width: 1, height: bounds.height)
+        }
+        if let leftPane, let rightPane, let divider, !editing {
             let leftWidth = floor((bounds.width - 1) / 2)
             leftPane.frame = CGRect(x: 0, y: 0, width: leftWidth, height: bounds.height)
             divider.frame = CGRect(x: leftWidth, y: 0, width: 1, height: bounds.height)
@@ -140,14 +152,16 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             pane.decorations = .empty
         } else if editing {
             let pane = editPane ?? makeEditPane()
+            let width: LongLineDisplayWidth = split && !diff.showsCanonicalComparison
+                && longLineDisplayWidth == .showAll ? .expanded : longLineDisplayWidth
             pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text,
-                                 longLineDisplayWidth: longLineDisplayWidth)
+                                 longLineDisplayWidth: width)
             pane.textView.insertionPointColor = palette.insertionPoint
+            pane.textView.isEditable = diff.isEditableNow
             if renderedEditRevision != diff.editBufferRevision {
                 renderedEditRevision = diff.editBufferRevision
                 pane.setEditBufferText(diff.editedNewContent)
-                // Install the language plugin only on a new edit pane. It
-                // cannot be detached, so the review panes remain separate.
+                // Keep syntax highlighting attached to the live native text buffer.
                 if !paneHasSyntaxPlugin {
                     paneHasSyntaxPlugin = true
                     if let plugin = SyntaxHighlighting.configuration(for: diff.path) {
@@ -156,6 +170,25 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                 }
             }
             pane.decorations = diff.editDecorations
+            if let display = diff.display {
+                if diff.showsCanonicalComparison {
+                    let review = unifiedPane ?? makeUnifiedPane()
+                    apply(display.unifiedText, document: display.computation.unified,
+                          id: display.id, to: review, font: font, style: style, palette: palette,
+                          longLineDisplayWidth: longLineDisplayWidth)
+                    _ = ensureDivider()
+                } else if split {
+                    let left = leftPane ?? makeSplitPane(side: .oldOnly)
+                    apply(display.leftText, document: display.computation.splitLeft,
+                          id: display.id, to: left, font: font, style: style, palette: palette,
+                          longLineDisplayWidth: width)
+                    _ = ensureDivider()
+                    left.onScroll = { [weak pane] offset in pane?.setScrollOffset(offset) }
+                    pane.onScroll = { [weak left] offset in left?.setScrollOffset(offset) }
+                    left.setScrollOffset(pane.scrollOffset)
+                }
+            }
+            if !split || diff.showsCanonicalComparison { pane.onScroll = nil }
             if let anchor = pendingAnchor, let line = anchor.newLine {
                 pendingAnchor = nil
                 pane.scrollToRow(max(0, line - 1))
@@ -186,10 +219,12 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         }
 
         let plain = diff.source.isPlainRevision
-        unifiedPane?.isHidden = editing || split || plain
-        leftPane?.isHidden = editing || !split || plain
+        let canonical = editing && diff.showsCanonicalComparison && diff.display != nil
+        let editableSplit = editing && split && diff.display != nil && !canonical
+        unifiedPane?.isHidden = editing ? !canonical : split || plain
+        leftPane?.isHidden = editing ? !editableSplit : !split || plain
         rightPane?.isHidden = editing || !split || plain
-        divider?.isHidden = editing || !split || plain
+        divider?.isHidden = editing ? !(canonical || editableSplit) : !split || plain
         editPane?.isHidden = !(editing || plain)
         if let divider {
             effectiveAppearance.performAsCurrentDrawingAppearance {
@@ -218,6 +253,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     private func makeEditPane() -> DiffCodePaneView {
         let pane = makePane(mode: .edit, gutter: .single)
+        pane.textView.setAccessibilityIdentifier("bailey.diff.worktree")
         pane.textView.delegate = self
         pane.textView.onCharacterEdit = { [weak self] in self?.editTextDidChange() }
         pane.textView.onResignFirstResponder = { [weak self] in
@@ -234,22 +270,23 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     private func makeUnifiedPane() -> DiffCodePaneView {
         let pane = makePane(mode: .review, gutter: .single)
+        pane.textView.setAccessibilityIdentifier("bailey.diff.canonical")
         unifiedPane = pane
         return pane
     }
 
     private func makeSplitPane(side: DiffGutterLayout) -> DiffCodePaneView {
         let pane = makePane(mode: .review, gutter: side)
+        pane.textView.setAccessibilityIdentifier(
+            side == .oldOnly ? "bailey.diff.baseline" : "bailey.diff.readonly-new"
+        )
         if side == .oldOnly {
             leftPane = pane
         } else {
             rightPane = pane
         }
-        if let leftPane, let rightPane, divider == nil {
-            let line = NSView()
-            line.wantsLayer = true
-            addSubview(line)
-            divider = line
+        if let leftPane, let rightPane {
+            _ = ensureDivider()
             leftPane.onScroll = { [weak rightPane] origin in
                 rightPane?.setScrollOffset(origin)
             }
@@ -258,6 +295,15 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             }
         }
         return pane
+    }
+
+    private func ensureDivider() -> NSView {
+        if let divider { return divider }
+        let view = NSView()
+        view.wantsLayer = true
+        addSubview(view)
+        divider = view
+        return view
     }
 
     private func apply(

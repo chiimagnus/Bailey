@@ -874,9 +874,8 @@ final class NativeDiffTabTests: XCTestCase {
         let domain = "bailey-diff-appearance-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
-        // The native-text assertion needs an isolated, explicitly unified review mode.
+        // Keep the same native tab through a read failure and appearance change.
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = false
         preferences.diffStyle = .unified
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -903,8 +902,7 @@ final class NativeDiffTabTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText.string
-                == before.unifiedText.string
+            self.findNativeTextView(in: host, editable: true)?.text == "after\n"
         }
         let git = root.appendingPathComponent(".git")
         let unavailable = root.appendingPathComponent(".git-unavailable")
@@ -954,7 +952,6 @@ final class NativeDiffTabTests: XCTestCase {
         lines[1800] = "let value1800 = 111111\n"
         try Data(lines.joined().utf8).write(to: file)
         let preferences = try isolatedPreferences()
-        XCTAssertFalse(preferences.prefersEditing)
         let tab = DiffTab(
             repoRoot: directory.path, path: "pending.swift", source: .worktree,
             untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
@@ -1031,7 +1028,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = false
         let diff = DiffTab(repoRoot: directory.path, path: "canonical.txt", source: .worktree,
                            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
                            workspaceIdentity: nil, preferences: preferences)
@@ -1058,7 +1054,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = true
         let diff = DiffTab(repoRoot: directory.path, path: "canonical.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
                            workspaceIdentity: nil, preferences: preferences)
@@ -1084,13 +1079,9 @@ final class NativeDiffTabTests: XCTestCase {
         await diff.save()
         XCTAssertEqual(try Data(contentsOf: path), Data(decomposed.utf8))
         XCTAssertFalse(diff.isDirty)
-        let oldDisplayID = diff.display?.id
-        diff.setEditing(false)
-        XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
-        if diff.newContent.utf8.elementsEqual(decomposed.utf8) {
-            try await wait { diff.display?.id != oldDisplayID }
-            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
-        }
+        try await wait { diff.newContent.utf8.elementsEqual(decomposed.utf8) }
+        XCTAssertTrue(editor.isEditable)
+        XCTAssertEqual(editor.text, decomposed)
         try Data(composed.utf8).write(to: path)
         diff.reload()
         try await wait { !diff.isLoading }
@@ -1191,7 +1182,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = true
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
@@ -1363,7 +1353,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = false
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "render.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
@@ -1387,7 +1376,7 @@ final class NativeDiffTabTests: XCTestCase {
         let surface = try XCTUnwrap(diff.nativeSurface)
         let textView = try XCTUnwrap(findNativeTextView(in: surface))
         XCTAssertTrue(textView.attributedText.string.contains("baseline") == true)
-        XCTAssertFalse(textView.isEditable)
+        XCTAssertTrue(textView.isEditable)
         XCTAssertTrue(textView.window === window)
 
         first.removeFromSuperview()
@@ -1689,7 +1678,6 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: ordinary), Data(changed.utf8))
 
         normal.autoSaveSuspendedForClose = true
-        normal.setEditing(true)
         try await wait { normal.editDecorations.rows.filter { $0.kind == .added }.count == 1 }
         let edited = "alpha\r\n中文👋 edited again\r\nlast\r\n"
         normal.updateEditedContent(edited)
@@ -1702,10 +1690,8 @@ final class NativeDiffTabTests: XCTestCase {
         await normal.save()
         XCTAssertNil(normal.saveError)
         XCTAssertEqual(try Data(contentsOf: ordinary), Data(edited.utf8))
-        let beforeReview = normal.display?.id
-        normal.setEditing(false)
         try await wait {
-            normal.display?.id != beforeReview
+            !normal.isLoading && normal.newContent == edited
                 && normal.display?.computation.unified.rows.filter { $0.kind == .added }.count == 1
         }
         let beforeAppearance = normal.display?.id
@@ -1824,7 +1810,6 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(visible.unifiedText.string.contains("changed"))
         XCTAssertFalse(visible.unifiedText.string.contains("TRANSIENT"),
                        "Review must show exactly the Git-cleaned comparison")
-        filtered.setEditing(true)
         XCTAssertEqual(filtered.editedNewContent, "changed\nTRANSIENT\n")
         XCTAssertEqual(try Data(contentsOf: lines), Data("changed\nTRANSIENT\n".utf8))
     }
@@ -2012,14 +1997,12 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(review.computation.unified.rows.filter { $0.kind == .removed }.count, 1)
             XCTAssertEqual(review.computation.unified.rows.filter { $0.kind == .added }.count, 1)
 
-            filtered.setEditing(true)
             XCTAssertTrue(filtered.isEditing)
             filtered.updateEditedContent("changed again\nTRANSIENT\n")
             await filtered.save()
             XCTAssertNil(filtered.saveError)
             let persisted = try await backend.read(path: root + "/filtered.txt", maxBytes: 128)
             XCTAssertEqual(persisted, Data("changed again\nTRANSIENT\n".utf8))
-            filtered.setEditing(false)
             try await wait({
                 !filtered.isLoading && !filtered.isDirty
                     && filtered.newContent == "changed again\nTRANSIENT\n"
@@ -2057,7 +2040,6 @@ final class NativeDiffTabTests: XCTestCase {
                           preferences: try isolatedPreferences())
         try await wait { !tab.isLoading }
         XCTAssertFalse(tab.hasChanges)
-        tab.setEditing(true)
         tab.updateEditedContent(canonical)
         await tab.save()
         XCTAssertNil(tab.saveError)
@@ -2065,19 +2047,17 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(
             ["diff", "--numstat", "--", "eol-edit.txt"], in: root.path
         ).stdout, "")
-        tab.setEditing(false)
         try await wait { !tab.isLoading && !tab.hasChanges }
         XCTAssertNil(tab.display, "Review must converge to Git's clean state after saving")
 
-        tab.setEditing(true)
         tab.updateEditedContent(checkedOut)
-        tab.setEditing(false)
+        tab.autoSaveOnFocusLoss()
         try await wait {
             !tab.isLoading && !tab.isDirty && !tab.hasChanges
                 && (try? Data(contentsOf: path)) == Data(checkedOut.utf8)
         }
         XCTAssertNil(tab.saveError)
-        XCTAssertNil(tab.display, "Auto-save on mode switch must refresh the same Git baseline")
+        XCTAssertNil(tab.display, "Auto-save must refresh the Git comparison baseline")
     }
 
     func testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes() async throws {
@@ -2095,7 +2075,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = false
         let diff = DiffTab(
             repoRoot: directory.path, path: "crlf.txt", source: .worktree,
             untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
@@ -2120,16 +2099,21 @@ final class NativeDiffTabTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
-        try await wait { self.findNativeTextView(in: host, editable: false) != nil }
-        let textView = try XCTUnwrap(findNativeTextView(in: host, editable: false))
-        XCTAssertEqual(Data((textView.attributedText.string ?? "").utf8), Data(display.unifiedText.string.utf8))
-        diff.setDiffStyle(.split)
-        let surface = try XCTUnwrap(diff.nativeSurface)
-        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 2 }
-        diff.setDiffStyle(.unified)
-        diff.setEditing(true)
         try await wait { self.findNativeTextView(in: host, editable: true) != nil }
         let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        XCTAssertEqual(Data((editor.text ?? "").utf8), Data(new.utf8))
+        try await wait { diff.editDecorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count } == 1 }
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        diff.setDiffStyle(.split)
+        try await wait {
+            let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden }
+            return visible.count == 2 && visible.filter { $0.textView.isEditable }.count == 1
+        }
+        XCTAssertTrue(findNativeTextView(in: surface, editable: true) === editor)
+        XCTAssertTrue(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .contains { !$0.isHidden && !$0.textView.isEditable })
+        diff.setDiffStyle(.unified)
         let replacement = (try XCTUnwrap(editor.text) as NSString).range(of: "new")
         XCTAssertNotEqual(replacement.location, NSNotFound)
         editor.insertText("newer", replacementRange: replacement)
@@ -2142,7 +2126,6 @@ final class NativeDiffTabTests: XCTestCase {
         await diff.save()
         XCTAssertNil(diff.error)
         XCTAssertEqual(try Data(contentsOf: file), Data(edited.utf8))
-        diff.setEditing(false)
         try await wait { diff.newContent.utf8.elementsEqual(edited.utf8) }
     }
 
@@ -2221,7 +2204,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = false
         preferences.diffStyle = .unified
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(
@@ -2243,40 +2225,24 @@ final class NativeDiffTabTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: host) != nil }
         let surface = try XCTUnwrap(diff.nativeSurface)
-        let firstUnified = try XCTUnwrap(findNativeTextView(in: surface))
-        XCTAssertTrue(firstUnified.attributedText.string.contains("baseline") == true)
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertEqual(editor.text, diff.newContent)
 
+        // The worktree has one editable TextKit document independent of the
+        // layout preference; changing the preference cannot replace its undo stack.
+        let manager = editor.undoManager
         diff.setDiffStyle(.split)
         try await wait {
-            surface.subviews.filter { ($0 as? DiffCodePaneView)?.isHidden == false }.count == 2
+            let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden }
+            return visible.count == 2 && visible.filter { $0.textView.isEditable }.count == 1
         }
-        let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
-        XCTAssertEqual(visible.count, 2)
-        XCTAssertTrue(visible.allSatisfy { !$0.textView.isEditable })
-        XCTAssertTrue(visible.contains { $0.textView.attributedText.string.contains("baseline") == true })
-        XCTAssertEqual(visible[0].scrollView.contentView.bounds.height, visible[1].scrollView.contentView.bounds.height)
-
+        XCTAssertTrue(findNativeTextView(in: surface, editable: true) === editor)
+        XCTAssertTrue(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .contains { !$0.isHidden && !$0.textView.isEditable })
         diff.setDiffStyle(.unified)
-        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 1 }
-        XCTAssertTrue(findNativeTextView(in: surface) === firstUnified)
-
-        // The toolbar can update independently of the native surface. Its
-        // Observation change must still switch the actual visible TextKit pane.
-        diff.setEditing(true)
-        try await wait {
-            let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
-            return visible.count == 1 && visible[0].textView.isEditable
-        }
-        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
-            .first { !$0.isHidden && $0.textView.isEditable })
-        XCTAssertEqual(editor.textView.text, diff.newContent)
-
-        diff.setEditing(false)
-        try await wait {
-            let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
-            return visible.count == 1 && !visible[0].textView.isEditable
-        }
-        XCTAssertFalse(firstUnified.isHidden)
+        XCTAssertTrue(findNativeTextView(in: surface, editable: true) === editor)
+        XCTAssertTrue(editor.undoManager === manager)
     }
 
     func testSplitDiffSynchronizesHorizontalAndVerticalScrolling() async throws {
@@ -2291,15 +2257,15 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["add", "wide.txt"], in: directory.path).status, 0)
         XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
         try Data(newText.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "wide.txt"], in: directory.path).status, 0)
 
         let suite = "bailey-diff-scroll-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.diffStyle = .split
-        preferences.prefersEditing = false
         let diff = DiffTab(
-            repoRoot: directory.path, path: "wide.txt", source: .worktree,
+            repoRoot: directory.path, path: "wide.txt", source: .staged,
             untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
             workspaceIdentity: nil, preferences: preferences
         )
@@ -2370,7 +2336,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = false
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "stale.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
@@ -2412,7 +2377,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = true
         let diff = DiffTab(repoRoot: directory.path, path: "reload.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
                            workspaceIdentity: nil, preferences: preferences)
@@ -2447,7 +2411,6 @@ final class NativeDiffTabTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
-        preferences.prefersEditing = true
         let diff = DiffTab(repoRoot: directory.path, path: "editor.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
                            workspaceIdentity: nil, preferences: preferences)
@@ -2509,13 +2472,12 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "E" + original)
 
         // A mode switch must expose the saved buffer as the review document.
-        diff.setEditing(false)
         try await wait { diff.newContent == "E" + original && diff.display != nil }
         XCTAssertEqual(diff.newContent, "E" + original)
         host?.removeFromSuperview()
     }
 
-    func testEnteringEditModeDiscardsInFlightReadAndKeepsSharedPreferenceIdentity() async throws {
+    func testDirectWorktreeEditingDiscardsInFlightReadAndKeepsSharedPreferences() async throws {
         let domain = "bailey-diff-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
@@ -2529,14 +2491,14 @@ final class NativeDiffTabTests: XCTestCase {
         await backend.pauseOneRead()
         diff.reload()
         try await wait { await backend.reading }
-        diff.setEditing(true)
         XCTAssertTrue(diff.preferences === preferences)
-        XCTAssertEqual(defaults.string(forKey: "diffView.mode"), "edit")
+        XCTAssertTrue(diff.isEditing, "A regular worktree is directly editable")
+        diff.updateEditedContent("current buffer")
+        XCTAssertTrue(diff.isDirty)
         await backend.finishRead(with: Data("stale before editor appeared".utf8))
         try await wait { !diff.isLoading }
         XCTAssertEqual(diff.newContent, baseline)
-        XCTAssertFalse(diff.isDirty)
-        diff.updateEditedContent("current buffer")
+        XCTAssertEqual(diff.editedNewContent, "current buffer")
         diff.reload()
         XCTAssertEqual(diff.newContent, baseline)
         XCTAssertTrue(diff.isDirty)

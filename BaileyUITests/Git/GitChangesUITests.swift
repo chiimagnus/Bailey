@@ -64,16 +64,19 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(secondRow.isSelected)
 
         func expectSplit(old: String, new: String, worktree: Bool = false) {
+            if worktree {
+                XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
+                let editor = window.textViews["bailey.diff.worktree"]
+                let actual = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    editor.exists && (editor.value as? String) == new
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [actual], timeout: 15), .completed,
+                               "Worktree must expose its exact editable contents without a mode switch")
+                return
+            }
             let layout = window.radioGroups["bailey.diff.layout"]
             XCTAssertTrue(layout.waitForExistence(timeout: 15))
             guard layout.exists else { return }
-            if worktree {
-                let mode = window.radioGroups["bailey.diff.mode"]
-                XCTAssertTrue(mode.waitForExistence(timeout: 15),
-                              "A loaded regular worktree Diff must expose Review/Edit")
-                guard mode.exists else { return }
-                mode.radioButtons.element(boundBy: 0).click()
-            }
             layout.radioButtons.element(boundBy: 1).click()
             let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 let values = Set(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })
@@ -443,14 +446,11 @@ final class GitChangesUITests: XCTestCase {
         expectSplit(old: "HEAD contents\n", new: "INDEX contents\n")
 
         rows.element(boundBy: 1).click()
-        // Worktree diffs can be edited, so explicitly re-enter Review before
-        // comparing two immutable sides; this selector is absent for staged.
-        let mode = window.radioGroups["bailey.diff.mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
-        mode.radioButtons.element(boundBy: 0).click()
-        XCTAssertTrue(layout.waitForExistence(timeout: 15))
-        layout.radioButtons.element(boundBy: 1).click()
-        expectSplit(old: "INDEX contents\n", new: "WORKTREE contents\n")
+        // The worktree is editable; its immutable index baseline stays in Git.
+        XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
+        let worktreeEditor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(worktreeEditor.waitForExistence(timeout: 15))
+        XCTAssertEqual(worktreeEditor.value as? String, "WORKTREE contents\n")
         XCTAssertEqual(try fixture.git(["show", ":index-side.txt"]),
                        Data("INDEX contents\n".utf8))
         XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE contents\n".utf8))
@@ -573,7 +573,7 @@ final class GitChangesUITests: XCTestCase {
         let firstRow = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 25))
         firstRow.click()
-        XCTAssertTrue(window.radioGroups["bailey.diff.mode"].waitForExistence(timeout: 15))
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
         app.typeKey("p", modifierFlags: .command)
         let search = window.textFields["bailey.commandPalette.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
@@ -582,9 +582,7 @@ final class GitChangesUITests: XCTestCase {
                       "Escape must dismiss an empty palette before Git keyboard navigation resumes")
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         app.typeKey(" ", modifierFlags: [])
-        let mode = window.radioGroups["bailey.diff.mode"]
-        mode.radioButtons.element(boundBy: 1).click()
-        let pane = window.textViews.firstMatch
+        let pane = window.textViews["bailey.diff.worktree"]
         XCTAssertTrue(pane.waitForExistence(timeout: 15))
         XCTAssertEqual(pane.value as? String, "beta new\n",
                        "Down+Space must browse the next Git Changes file without moving focus to Diff")
@@ -623,7 +621,7 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(firstRow.exists,
                        "Changing the selected project must remove the former Git Changes rows")
         secondRow.click()
-        XCTAssertTrue(window.radioGroups["bailey.diff.mode"].waitForExistence(timeout: 15))
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
         XCTAssertEqual(try firstFixture.git(["rev-parse", "HEAD"]), headA)
         XCTAssertEqual(try secondFixture.git(["rev-parse", "HEAD"]), headB)
         XCTAssertTrue(try firstFixture.git(["diff", "--cached", "--name-only"]).isEmpty)
@@ -673,8 +671,8 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertTrue(changed.waitForExistence(timeout: 25),
                       "FSEvents must refresh the visible Git Changes without a manual refresh")
         changed.click()
-        XCTAssertTrue(window.radioGroups["bailey.diff.mode"].waitForExistence(timeout: 15),
-                      "A real Git Changes click must open its native Diff")
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15),
+                      "A real Git Changes click must open its native editable Diff")
 
         try fixture.git(["add", "--", "external.txt"])
         XCTAssertEqual(try fixture.git(["show", ":external.txt"]), Data("external edit 中文\n".utf8))

@@ -11,21 +11,11 @@ final class DiffViewPreferences {
     static let shared = DiffViewPreferences()
 
     private static let layoutKey = "diffView.layout"
-    private static let modeKey = "diffView.mode"
     @ObservationIgnored private let defaults: UserDefaults
 
     var diffStyle: DiffLayoutStyle {
         didSet {
             defaults.set(diffStyle.rawValue, forKey: Self.layoutKey)
-        }
-    }
-
-    var prefersEditing: Bool {
-        didSet {
-            defaults.set(
-                prefersEditing ? "edit" : "review",
-                forKey: Self.modeKey
-            )
         }
     }
 
@@ -37,7 +27,6 @@ final class DiffViewPreferences {
         } else {
             diffStyle = .unified
         }
-        prefersEditing = defaults.string(forKey: Self.modeKey) == "edit"
     }
 }
 
@@ -131,7 +120,10 @@ final class DiffTab: nonisolated Identifiable {
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
     var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(comparisonNew.utf8) }
-    var isEditing: Bool { isEditableNow && preferences.prefersEditing }
+    /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
+    var isEditing: Bool { source == .worktree && isEditable }
+    /// A non-invertible clean filter needs Git's canonical Review alongside the raw editor.
+    var showsCanonicalComparison: Bool { isEditing && editComparisonOld != nil }
 
     private nonisolated static let maxBytes = 5 << 20
     @ObservationIgnored private var savedNewContent = ""
@@ -280,7 +272,7 @@ final class DiffTab: nonisolated Identifiable {
     func reload(afterGitAction: Bool = false, snapshotAttempt: Int = 0) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
-        guard readOnlyReason == nil, (!isEditing || afterGitAction), !isDirty else { return }
+        guard readOnlyReason == nil, !isDirty else { return }
         invalidateReload()
         let generation = reloadGeneration
         isLoading = true
@@ -424,7 +416,7 @@ final class DiffTab: nonisolated Identifiable {
             guard let self, self.reloadGeneration == generation,
                   self.readOnlyReason == nil
             else { return }
-            guard (!self.isEditing || afterGitAction), !self.isDirty else { return }
+            guard !self.isDirty else { return }
             if result.snapshotOutdated {
                 if snapshotAttempt < 3 {
                     try? await Task.sleep(for: .milliseconds(90))
@@ -460,7 +452,9 @@ final class DiffTab: nonisolated Identifiable {
             if changed || (self.hasChanges && self.display == nil) {
                 self.recomputeDisplay()
             }
-            self.editBufferRevision &+= 1
+            if !self.editedNewContent.utf8.elementsEqual(result.new.utf8) {
+                self.editBufferRevision &+= 1
+            }
             self.savedNewContent = result.new
             self.editedNewContent = result.new
             if self.isEditing { self.refreshEditDecorations(immediate: true) }
@@ -485,7 +479,7 @@ final class DiffTab: nonisolated Identifiable {
 
     /// Keep the native TextKit buffer as the editing source of truth.
     func updateEditedContent(_ contents: String) {
-        guard isEditable else { return }
+        guard isEditableNow else { return }
         editedNewContent = contents
         isDirty = !contents.utf8.elementsEqual(savedNewContent.utf8)
         if isDirty { invalidateReload() }
@@ -496,33 +490,6 @@ final class DiffTab: nonisolated Identifiable {
         guard preferences.diffStyle != style else { return }
         nativeSurface?.rememberScrollAnchor()
         preferences.diffStyle = style
-    }
-
-    func setEditing(_ editing: Bool) {
-        guard isEditableNow, editing != isEditing else { return }
-        nativeSurface?.rememberScrollAnchor()
-        let changed = !newContent.utf8.elementsEqual(editedNewContent.utf8)
-        if !editing && changed {
-            newContent = editedNewContent
-            comparisonNew = editedNewContent
-            if let editComparisonOld {
-                comparisonOld = editComparisonOld
-                self.editComparisonOld = nil
-            }
-            runExpansions.removeAll()
-            recomputeDisplay()
-        }
-        preferences.prefersEditing = editing
-        if editing {
-            refreshEditDecorations(immediate: true)
-        } else if changed || isDirty {
-            Task { [weak self] in
-                guard let self, !self.autoSaveSuspendedForClose else { return }
-                if self.isDirty { await self.save() }
-                guard !self.isDirty, self.saveError == nil, !self.isEditing else { return }
-                self.reload(afterGitAction: true)
-            }
-        }
     }
 
 
@@ -761,6 +728,7 @@ final class DiffTab: nonisolated Identifiable {
             // An edit landing while the write was in flight stays dirty.
             isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
             saveError = nil
+            if !isDirty { reload(afterGitAction: true) }
         } catch {
             guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
@@ -1076,8 +1044,9 @@ struct DiffViewerView: View {
 
     var body: some View {
         let _ = themeChanges.revision
-        let _ = preferences.prefersEditing
         let _ = preferences.diffStyle
+        let _ = diff.display
+        let _ = diff.showsCanonicalComparison
         let _ = diff.editDecorations
         VStack(spacing: 0) {
             if let reason = diff.readOnlyReason {
@@ -1096,7 +1065,7 @@ struct DiffViewerView: View {
             Group {
                 if let error = diff.error, !diff.hasLoadedContent {
                     placeholder(icon: "exclamationmark.triangle", text: error)
-                } else if !diff.hasChanges && !diff.source.isPlainRevision {
+                } else if !diff.hasChanges && !diff.source.isPlainRevision && !diff.isEditing {
                     if diff.isLoading {
                         initialLoadingSkeleton
                     } else if diff.isUnmerged {
@@ -1110,7 +1079,7 @@ struct DiffViewerView: View {
                 } else {
                     VStack(spacing: 0) {
                         if !diff.source.isPlainRevision { controlBar }
-                        if diff.source.isPlainRevision || diff.display != nil {
+                        if diff.source.isPlainRevision || diff.isEditing || diff.display != nil {
                             // Each tab retains its own TextKit document; never reuse another tab's NSView.
                             DiffNativeRoot(diff: diff, isFocused: isFocused,
                                            canFocus: canFocus, onFocused: onFocused)
@@ -1164,12 +1133,7 @@ struct DiffViewerView: View {
             diffStyle: Binding(
                 get: { preferences.diffStyle },
                 set: { diff.setDiffStyle($0) }
-            ),
-            isEditing: Binding(
-                get: { diff.isEditableNow && preferences.prefersEditing },
-                set: { diff.setEditing($0) }
-            ),
-            canEdit: diff.isEditableNow
+            )
         )
         .frame(height: DiffViewerLayout.controlsHeight)
     }
@@ -1178,10 +1142,8 @@ struct DiffViewerView: View {
     /// layout never jumps when the text panes become available.
     private var initialLoadingSkeleton: some View {
         VStack(spacing: 0) {
-            DiffControlsSkeletonBar(
-                showsModePlaceholder: diff.source == .worktree
-            )
-            .frame(height: DiffViewerLayout.controlsHeight)
+            DiffControlsSkeletonBar()
+                .frame(height: DiffViewerLayout.controlsHeight)
             DiffSkeletonView()
         }
     }
@@ -1227,21 +1189,13 @@ private enum DiffViewerLayout {
 /// AppKit diff controls mounted in the SwiftUI diff toolbar.
 private struct DiffControlsBar: NSViewRepresentable {
     @Binding var diffStyle: DiffLayoutStyle
-    @Binding var isEditing: Bool
-    let canEdit: Bool
 
     func makeNSView(context: Context) -> DiffControlsNSView {
         DiffControlsNSView()
     }
 
     func updateNSView(_ view: DiffControlsNSView, context: Context) {
-        view.update(
-            diffStyle: diffStyle,
-            isEditing: isEditing,
-            canEdit: canEdit,
-            onDiffStyleChange: { diffStyle = $0 },
-            onEditingChange: { isEditing = $0 }
-        )
+        view.update(diffStyle: diffStyle, onDiffStyleChange: { diffStyle = $0 })
     }
 }
 
@@ -1249,19 +1203,16 @@ private struct DiffControlsBar: NSViewRepresentable {
 /// Keeping this in AppKit gives the placeholder the same sizing and divider
 /// behavior as the toolbar that replaces it.
 private struct DiffControlsSkeletonBar: NSViewRepresentable {
-    let showsModePlaceholder: Bool
-
     func makeNSView(context: Context) -> DiffControlsSkeletonNSView {
         DiffControlsSkeletonNSView()
     }
 
     func updateNSView(_ view: DiffControlsSkeletonNSView, context: Context) {
-        view.update(showsModePlaceholder: showsModePlaceholder)
+        view.updateAppearanceColors()
     }
 }
 
 private final class DiffControlsSkeletonNSView: NSView {
-    private let modePlaceholder = NSView()
     private let layoutPlaceholder = NSView()
     private let divider = NSView()
 
@@ -1270,12 +1221,10 @@ private final class DiffControlsSkeletonNSView: NSView {
         wantsLayer = true
         setAccessibilityElement(false)
 
-        for placeholder in [modePlaceholder, layoutPlaceholder] {
-            placeholder.wantsLayer = true
-            placeholder.layer?.cornerRadius = 5
-            placeholder.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(placeholder)
-        }
+        layoutPlaceholder.wantsLayer = true
+        layoutPlaceholder.layer?.cornerRadius = 5
+        layoutPlaceholder.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(layoutPlaceholder)
 
         divider.wantsLayer = true
         divider.translatesAutoresizingMaskIntoConstraints = false
@@ -1286,12 +1235,6 @@ private final class DiffControlsSkeletonNSView: NSView {
             layoutPlaceholder.centerYAnchor.constraint(equalTo: centerYAnchor),
             layoutPlaceholder.widthAnchor.constraint(equalToConstant: 111),
             layoutPlaceholder.heightAnchor.constraint(equalToConstant: 20),
-            modePlaceholder.trailingAnchor.constraint(
-                equalTo: layoutPlaceholder.leadingAnchor, constant: -8
-            ),
-            modePlaceholder.centerYAnchor.constraint(equalTo: centerYAnchor),
-            modePlaceholder.widthAnchor.constraint(equalToConstant: 93),
-            modePlaceholder.heightAnchor.constraint(equalToConstant: 20),
             divider.leadingAnchor.constraint(equalTo: leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -1304,11 +1247,6 @@ private final class DiffControlsSkeletonNSView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(showsModePlaceholder: Bool) {
-        updateAppearanceColors()
-        modePlaceholder.isHidden = !showsModePlaceholder
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateAppearanceColors()
@@ -1319,27 +1257,16 @@ private final class DiffControlsSkeletonNSView: NSView {
         updateAppearanceColors()
     }
 
-    private func updateAppearanceColors() {
+    func updateAppearanceColors() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = Theme.background.cgColor
             divider.layer?.backgroundColor = Theme.divider.cgColor
-            let fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
-            modePlaceholder.layer?.backgroundColor = fill
-            layoutPlaceholder.layer?.backgroundColor = fill
+            layoutPlaceholder.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.05).cgColor
         }
     }
 }
 
 private final class DiffControlsNSView: NSView {
-    private let modeControl = NSSegmentedControl(
-        labels: [
-            String(localized: "Review", table: "Git", comment: "Read-only mode for a diff."),
-            String(localized: "Edit", table: "Git", comment: "Editable mode for a diff."),
-        ],
-        trackingMode: .selectOne,
-        target: nil,
-        action: nil
-    )
     private let layoutControl = NSSegmentedControl(
         labels: [
             String(localized: "Unified", table: "Git", comment: "A single-column diff layout."),
@@ -1351,21 +1278,14 @@ private final class DiffControlsNSView: NSView {
     )
     private let divider = NSView()
     private var onDiffStyleChange: ((DiffLayoutStyle) -> Void)?
-    private var onEditingChange: ((Bool) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
 
-        for control in [modeControl, layoutControl] {
-            control.controlSize = .small
-            control.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(control)
-        }
-        modeControl.target = self
-        modeControl.action = #selector(modeChanged)
-        modeControl.setAccessibilityLabel(String(localized: "Diff Mode", table: "Git"))
-        modeControl.setAccessibilityIdentifier("bailey.diff.mode")
+        layoutControl.controlSize = .small
+        layoutControl.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(layoutControl)
         layoutControl.target = self
         layoutControl.action = #selector(layoutChanged)
         layoutControl.setAccessibilityLabel(String(localized: "Diff Layout", table: "Git"))
@@ -1378,8 +1298,6 @@ private final class DiffControlsNSView: NSView {
         NSLayoutConstraint.activate([
             layoutControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             layoutControl.centerYAnchor.constraint(equalTo: centerYAnchor),
-            modeControl.trailingAnchor.constraint(equalTo: layoutControl.leadingAnchor, constant: -8),
-            modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
             divider.leadingAnchor.constraint(equalTo: leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -1392,21 +1310,10 @@ private final class DiffControlsNSView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(
-        diffStyle: DiffLayoutStyle,
-        isEditing: Bool,
-        canEdit: Bool,
-        onDiffStyleChange: @escaping (DiffLayoutStyle) -> Void,
-        onEditingChange: @escaping (Bool) -> Void
-    ) {
+    func update(diffStyle: DiffLayoutStyle, onDiffStyleChange: @escaping (DiffLayoutStyle) -> Void) {
         self.onDiffStyleChange = onDiffStyleChange
-        self.onEditingChange = onEditingChange
         updateAppearanceColors()
-
         layoutControl.selectedSegment = diffStyle == .split ? 1 : 0
-        modeControl.isHidden = !canEdit
-        modeControl.setEnabled(canEdit, forSegment: 1)
-        modeControl.selectedSegment = canEdit && isEditing ? 1 : 0
     }
 
     override func viewDidMoveToWindow() {
@@ -1417,7 +1324,6 @@ private final class DiffControlsNSView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateAppearanceColors()
-        modeControl.needsDisplay = true
         layoutControl.needsDisplay = true
     }
 
@@ -1426,10 +1332,6 @@ private final class DiffControlsNSView: NSView {
             layer?.backgroundColor = Theme.background.cgColor
             divider.layer?.backgroundColor = Theme.divider.cgColor
         }
-    }
-
-    @objc private func modeChanged() {
-        onEditingChange?(modeControl.selectedSegment == 1)
     }
 
     @objc private func layoutChanged() {
