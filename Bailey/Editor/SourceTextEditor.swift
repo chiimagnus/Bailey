@@ -44,6 +44,7 @@ struct SourceTextEditor: NSViewRepresentable {
     let font: NSFont
     let palette: EditorPalette
     let wrapLines: Bool
+    var longLineDisplayWidth: LongLineDisplayWidth = .standard
     var isFocused: Bool = true
     var canFocus: () -> Bool = { true }
     var onFocused: () -> Void = {}
@@ -238,7 +239,7 @@ struct SourceTextEditor: NSViewRepresentable {
         }
         textView.insertionPointColor = palette.insertionPoint
         textView.selectedLineHighlightColor = palette.lineHighlight
-        // false = wrap at the view width, true = expand horizontally.
+        textView.longLineDisplayWidth = longLineDisplayWidth
         textView.configureWrapping(wrapLines, viewportWidth: scrollView.contentView.bounds.width)
         if let gutter = textView.gutterView {
             gutter.backgroundColor = palette.background

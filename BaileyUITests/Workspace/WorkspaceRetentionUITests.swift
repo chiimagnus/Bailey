@@ -3,6 +3,79 @@ import XCTest
 
 @MainActor
 final class WorkspaceRetentionUITests: XCTestCase {
+    func testEditorLongLineWidthIsConfigurableInNativeSettings() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        app.typeKey(",", modifierFlags: .command)
+        let window = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let editorPage = window.staticTexts["Text Editor"].firstMatch
+        XCTAssertTrue(editorPage.waitForExistence(timeout: 10))
+        editorPage.click()
+        XCTAssertTrue(window.staticTexts["Long line display width"].waitForExistence(timeout: 10))
+        let picker = window.popUpButtons.firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        XCTAssertTrue((picker.value as? String)?.contains("12,288") == true)
+        picker.click()
+        let showAll = app.menuItems["Show all (wrap extra-long lines)"]
+        XCTAssertTrue(showAll.waitForExistence(timeout: 10))
+        showAll.click()
+        XCTAssertTrue((picker.value as? String)?.contains("Show all") == true)
+        let config = fixture.root.appendingPathComponent(".config/bailey-dev/config.toml")
+        let persisted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: config, encoding: .utf8))?
+                .contains("editor.long-line-width = -1") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [persisted], timeout: 10), .completed)
+        let shot = XCTAttachment(screenshot: window.screenshot())
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testFullDisplayNativeSVGEditorRetainsAllBytesAndCapturesVisiblePaths() throws {
+        let asset = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Bailey/Resources/AppIcon.icon/Assets/Bailey.svg")
+        let source = try String(contentsOf: asset, encoding: .utf8)
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("workspace/long-paths.svg", text: source)
+        _ = try fixture.file(".config/bailey-dev/config.toml",
+                             text: "editor.long-line-width = -1\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: file.deletingLastPathComponent()
+        )
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 12))
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertEqual(editor.value as? String, source)
+        let top = XCTAttachment(screenshot: window.screenshot())
+        top.name = "Real SVG full display first frame"
+        top.lifetime = .keepAlways
+        add(top)
+        editor.click()
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .command)
+        for _ in 0..<36 {
+            app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        }
+        let shot = XCTAttachment(screenshot: window.screenshot())
+        shot.name = "Real SVG full display after keyboard navigation"
+        shot.lifetime = .keepAlways
+        add(shot)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source,
+                       "Displaying a fully wrapped long line must not modify the on-disk file")
+    }
+
     func testGitHostingSettingsStayInNativeSettingsWithoutExtraGraphToggles() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let app = try WorkspaceUITestSupport.launch(

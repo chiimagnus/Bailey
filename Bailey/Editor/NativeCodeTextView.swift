@@ -1,5 +1,25 @@
 import AppKit
 
+/// Maximum unwrapped display width, in points. Full display wraps exceptionally
+/// long lines inside a bounded native TextKit 2 layout instead of hiding text.
+enum LongLineDisplayWidth: Int, CaseIterable, Identifiable {
+    case compact = 8192
+    case standard = 12288
+    case expanded = 24576
+    case showAll = -1
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .compact: String(localized: "8,192 pt", table: "Settings")
+        case .standard: String(localized: "12,288 pt (Default)", table: "Settings")
+        case .expanded: String(localized: "24,576 pt", table: "Settings")
+        case .showAll: String(localized: "Show all (wrap extra-long lines)", table: "Settings")
+        }
+    }
+}
+
 /// A single AppKit text editor backed by TextKit 2. Source and Diff both use it.
 /// The text storage is owned by the view retained by its tab, not by SwiftUI.
 @MainActor
@@ -8,10 +28,6 @@ class NativeCodeTextView: NSTextView {
         let stops = NSParagraphStyle.default.tabStops
         return stops.count > 1 ? stops[1].location - stops[0].location : 28
     }()
-    // TextKit 2 can omit whole glyph rows when SVG paths create enormous document surfaces.
-    // Limit only the visual width, never the backing text.
-    private static let maximumUnwrappedWidth: CGFloat = 12288
-
     private let documentUndoManager = UndoManager()
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
@@ -122,6 +138,7 @@ class NativeCodeTextView: NSTextView {
     private var lineIndex: NativeTextLineIndex?
     private var measuredLineWidths: NativeMeasuredLineWidths?
     private var isWrappingLines = false
+    var longLineDisplayWidth: LongLineDisplayWidth = .standard
     // nil means a replaced document still needs its paragraph styles reconciled.
     private var isTruncatingLongLines: Bool? = false
     var wrapsLines: Bool { isWrappingLines }
@@ -516,7 +533,8 @@ class NativeCodeTextView: NSTextView {
     }
 
     func configureWrapping(_ wraps: Bool, viewportWidth: CGFloat) {
-        isWrappingLines = wraps
+        let showAll = longLineDisplayWidth == .showAll
+        isWrappingLines = wraps || showAll
         guard viewportWidth > 0 else { return }
         let codeWidth: CGFloat
         let truncate: Bool
@@ -534,9 +552,13 @@ class NativeCodeTextView: NSTextView {
             }
             let padding = (textContainer?.lineFragmentPadding ?? 5) * 2
             let naturalWidth = max(viewportWidth, ceil((measuredLineWidths?.maximum ?? 0) + padding))
-            let limit = max(viewportWidth, Self.maximumUnwrappedWidth)
+            // TextKit 2 can omit glyphs from very wide single-line surfaces.
+            // Full display keeps every glyph by wrapping only beyond the
+            // largest width verified in the real App compositor.
+            let limit = max(viewportWidth, CGFloat(showAll
+                ? LongLineDisplayWidth.expanded.rawValue : longLineDisplayWidth.rawValue))
             codeWidth = min(naturalWidth, limit)
-            truncate = naturalWidth > limit
+            truncate = !showAll && naturalWidth > limit
         } else {
             codeWidth = viewportWidth
             truncate = false

@@ -251,6 +251,7 @@ struct SettingsView: View {
             || settings.gitAlwaysProceedPushTag
             || settings.filesExclude != AppSettings.defaultFilesExclude
             || settings.wrapLines
+            || settings.longLineDisplayWidth != .standard
             || settings.restoreTerminalHistory
     }
 
@@ -334,6 +335,15 @@ struct SettingsView: View {
         Section(String(localized: "Text Editing", table: "Settings")) {
             Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
                 .tint(themeAccent)
+            Picker(String(localized: "Long line display width", table: "Settings"),
+                   selection: $settings.longLineDisplayWidth) {
+                ForEach(LongLineDisplayWidth.allCases) { width in
+                    Text(width.title).tag(width)
+                }
+            }
+            Text(String(localized: "Limits display only, never file content. Show all wraps lines beyond 24,576 pt.", table: "Settings"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
         }
     }
 

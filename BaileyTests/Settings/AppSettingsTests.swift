@@ -53,6 +53,37 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
+    func testLongLineRenderingWidthPersistsValidModesAndRejectsBadValues() throws {
+        let settings = AppSettings(configURL: configURL)
+        XCTAssertEqual(settings.longLineDisplayWidth, .standard)
+        XCTAssertNil(TOML.parse(at: configURL)?["editor.long-line-width"])
+        let view = SettingsView(application: WorkspaceApplication(), settings: settings)
+        XCTAssertFalse(view.hasCustomizedPreferences)
+
+        for width in LongLineDisplayWidth.allCases where width != .standard {
+            settings.longLineDisplayWidth = width
+            XCTAssertEqual(TOML.parse(at: configURL)?["editor.long-line-width"]?.double,
+                           Double(width.rawValue))
+            XCTAssertEqual(AppSettings(configURL: configURL).longLineDisplayWidth, width)
+            XCTAssertTrue(view.hasCustomizedPreferences)
+        }
+        settings.wrapLines = true
+        XCTAssertEqual(AppSettings(configURL: configURL).longLineDisplayWidth, .showAll,
+                       "Wrapping and the long-line rendering preference are independent")
+        settings.resetToDefaults()
+        XCTAssertEqual(settings.longLineDisplayWidth, .standard)
+        XCTAssertNil(TOML.parse(at: configURL)?["editor.long-line-width"])
+        XCTAssertFalse(view.hasCustomizedPreferences)
+
+        for invalid in ["0", "-2", "12000", "65536", "12288.5", "1e300", "true", "\"unlimited\""] {
+            try "editor.long-line-width = \(invalid)\n".write(
+                to: configURL, atomically: true, encoding: .utf8
+            )
+            XCTAssertEqual(AppSettings(configURL: configURL).longLineDisplayWidth, .standard,
+                           "Invalid persisted width \(invalid) must not reach native layout")
+        }
+    }
+
     func testCustomHostRulesPersistWithoutUnrequestedGitGraphPreferences() throws {
         let settings = AppSettings(configURL: configURL)
         XCTAssertTrue(settings.gitHostingRules.isEmpty)

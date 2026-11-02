@@ -120,6 +120,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         guard let diff else { return }
         let font = TerminalFont.current()
         let style = DiffTypography.paragraphStyle(for: font)
+        let longLineDisplayWidth = AppSettings.shared.longLineDisplayWidth
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let palette = EditorPalette.theme(dark: dark)
         let editing = diff.isEditing
@@ -129,7 +130,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             // A historical revision is an actual read-only document, not a diff
             // whose every line should be colored as an insertion.
             let pane = editPane ?? makeEditPane()
-            pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text)
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text,
+                                 longLineDisplayWidth: longLineDisplayWidth)
             if renderedEditRevision != diff.editBufferRevision {
                 renderedEditRevision = diff.editBufferRevision
                 pane.setEditBufferText(diff.newContent)
@@ -138,7 +140,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             pane.decorations = .empty
         } else if editing {
             let pane = editPane ?? makeEditPane()
-            pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text)
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text,
+                                 longLineDisplayWidth: longLineDisplayWidth)
             pane.textView.insertionPointColor = palette.insertionPoint
             if renderedEditRevision != diff.editBufferRevision {
                 renderedEditRevision = diff.editBufferRevision
@@ -159,18 +162,25 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             }
         } else if let display = diff.display {
             if split {
+                // Two panes must share fixed row heights; wrapping one side
+                // independently would move corresponding Git rows out of alignment.
+                let splitWidth: LongLineDisplayWidth = longLineDisplayWidth == .showAll
+                    ? .expanded : longLineDisplayWidth
                 let left = leftPane ?? makeSplitPane(side: .oldOnly)
                 let right = rightPane ?? makeSplitPane(side: .newOnly)
                 apply(display.leftText, document: display.computation.splitLeft,
-                      id: display.id, to: left, font: font, style: style, palette: palette)
+                      id: display.id, to: left, font: font, style: style, palette: palette,
+                      longLineDisplayWidth: splitWidth)
                 apply(display.rightText, document: display.computation.splitRight,
-                      id: display.id, to: right, font: font, style: style, palette: palette)
+                      id: display.id, to: right, font: font, style: style, palette: palette,
+                      longLineDisplayWidth: splitWidth)
                 restoreAnchor(to: right, rows: display.computation.splitRight.rows)
                 left.setScrollOffset(right.scrollOffset)
             } else {
                 let pane = unifiedPane ?? makeUnifiedPane()
                 apply(display.unifiedText, document: display.computation.unified,
-                      id: display.id, to: pane, font: font, style: style, palette: palette)
+                      id: display.id, to: pane, font: font, style: style, palette: palette,
+                      longLineDisplayWidth: longLineDisplayWidth)
                 restoreAnchor(to: pane, rows: display.computation.unified.rows)
             }
         }
@@ -253,9 +263,10 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     private func apply(
         _ text: NSAttributedString, document: DiffSideDocument, id: UUID,
         to pane: DiffCodePaneView, font: NSFont, style: NSParagraphStyle,
-        palette: EditorPalette
+        palette: EditorPalette, longLineDisplayWidth: LongLineDisplayWidth
     ) {
-        pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text,
+                             longLineDisplayWidth: longLineDisplayWidth)
         guard pane.renderedDisplayID != id else { return }
         pane.renderedDisplayID = id
         pane.setReviewDocument(text, decorations: .review(document))

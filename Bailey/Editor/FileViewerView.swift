@@ -625,6 +625,7 @@ struct FileViewerView: View {
                         font: TerminalFont.current(),
                         palette: .theme(dark: colorScheme == .dark),
                         wrapLines: settings.wrapLines,
+                        longLineDisplayWidth: settings.longLineDisplayWidth,
                         isFocused: isFocused,
                         canFocus: canFocus,
                         onFocused: onFocused

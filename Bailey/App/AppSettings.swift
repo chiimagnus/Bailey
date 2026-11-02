@@ -222,6 +222,12 @@ final class AppSettings {
         didSet { save() }
     }
 
+    /// Maximum rendered width of unwrapped editor and Diff lines; a separate
+    /// setting from word wrapping, which always exposes the entire text.
+    var longLineDisplayWidth: LongLineDisplayWidth {
+        didSet { save() }
+    }
+
     /// Restore each terminal's previous scrollback (as static, styled text)
     /// when the app relaunches, above the freshly started shell. Off by
     /// default: opt-in, and it writes captured output to disk.
@@ -290,6 +296,14 @@ final class AppSettings {
         cursorBlinking = toml["terminal.cursor-blinking"]?.bool ?? true
         macosOptionAsAlt = toml["terminal.macos-option-as-alt"]?.bool ?? false
         wrapLines = toml["editor.wrap-lines"]?.bool ?? false
+        longLineDisplayWidth = LongLineDisplayWidth(
+            rawValue: toml["editor.long-line-width"]?.double.flatMap { number in
+                guard number.isFinite, number >= Double(Int.min), number < Double(Int.max) else {
+                    return nil
+                }
+                return Int(exactly: number)
+            } ?? LongLineDisplayWidth.standard.rawValue
+        ) ?? .standard
         restoreTerminalHistory = toml["terminal.restore-history"]?.bool ?? false
         if let patterns = toml["files.exclude"]?.strings,
            (try? FilesExcludeGlob.validate(patterns)) != nil {
@@ -381,6 +395,7 @@ final class AppSettings {
         cursorBlinking = true
         macosOptionAsAlt = false
         wrapLines = false
+        longLineDisplayWidth = .standard
         restoreTerminalHistory = false
         do { try applyFilesExclude(Self.defaultFilesExclude) }
         catch { NSLog("bailey: failed to reset Files exclusions: \(error)") }
@@ -439,6 +454,9 @@ final class AppSettings {
         }
         if wrapLines {
             lines.append("editor.wrap-lines = true")
+        }
+        if longLineDisplayWidth != .standard {
+            lines.append("editor.long-line-width = \(longLineDisplayWidth.rawValue)")
         }
         if restoreTerminalHistory {
             lines.append("terminal.restore-history = true")

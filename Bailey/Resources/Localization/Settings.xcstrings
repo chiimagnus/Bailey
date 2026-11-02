@@ -824,7 +824,13 @@
           }
         }
       }
-    }
+    },
+    "8,192 pt" : { "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "8,192 点" } } } },
+    "12,288 pt (Default)" : { "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "12,288 点（默认）" } } } },
+    "24,576 pt" : { "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "24,576 点" } } } },
+    "Show all (wrap extra-long lines)" : { "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "完整显示（超长行换行）" } } } },
+    "Long line display width" : { "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "超长行显示宽度" } } } },
+    "Limits display only, never file content. Show all wraps lines beyond 24,576 pt." : { "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅控制显示，不修改原文。完整显示会将超过 24,576 点的长行自动换行。" } } } }
   },
   "version" : "1.0"
 }
