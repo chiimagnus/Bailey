@@ -47,6 +47,47 @@ final class WorkspaceGitUITests: XCTestCase {
                       "The real Git Changes row must open a diff tab")
     }
 
+    func testGitReviewShowsOnlyRealChangeForCRLFCheckout() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let name = "windows-eol.md"
+        let file = try fixture.file(name, text: "alpha\nbeta\nlast\n")
+        try fixture.initializeGit()
+        try fixture.git(["config", "core.autocrlf", "true"])
+        let pureEOL = "alpha\r\nbeta\r\nlast\r\n"
+        try Data(pureEOL.utf8).write(to: file)
+        XCTAssertTrue(try fixture.git(["diff", "--numstat", "HEAD", "--", name]).isEmpty,
+                      "Git must see no change from checkout line endings")
+        let modified = "alpha\r\nbeta edited\r\nlast\r\n"
+        try Data(modified.utf8).write(to: file)
+        XCTAssertEqual(String(decoding: try fixture.git(["diff", "--numstat", "HEAD", "--", name]),
+                              as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
+                       "1\t1\t" + name)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(change.waitForExistence(timeout: 25))
+        change.click()
+        let mode = window.radioGroups["bailey.diff.mode"]
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        mode.radioButtons.element(boundBy: 0).click()
+        layout.radioButtons.element(boundBy: 0).click()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        let rendered = try XCTUnwrap(editor.value as? String)
+        XCTAssertEqual(rendered.components(separatedBy: "alpha").count - 1, 1,
+                       "Unchanged first line must not be removed and re-added")
+        XCTAssertEqual(rendered.components(separatedBy: "last").count - 1, 1)
+        XCTAssertTrue(rendered.contains("beta edited"))
+        let shot = XCTAttachment(screenshot: window.screenshot())
+        shot.name = "Git Review with one real edit and Windows CRLF"
+        shot.lifetime = .keepAlways
+        add(shot)
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+    }
+
     func testLargeSwiftDiffHasVisibleFoldAndContextAboveLine595() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let old = (0..<900).map { "    let line\($0) = \($0)" }

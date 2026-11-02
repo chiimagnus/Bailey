@@ -59,6 +59,85 @@ nonisolated enum DiffLineSplitter {
     }
 }
 
+/// Project Git's notion of unchanged lines into worktree text once.
+/// The editor still owns the untouched worktree bytes; every subsequent
+/// Review/Edit comparison uses this one projected baseline and DiffEngine.
+nonisolated enum GitWorktreeComparison {
+    static func baseline(
+        old: String, worktree: String, patch: String,
+        oldOID: String, newOID: String
+    ) -> String? {
+        let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: old)
+        let (newLines, newTrailing) = DiffLineSplitter.lines(of: worktree)
+        guard !patch.contains("Binary files "), !patch.contains("GIT binary patch") else { return nil }
+        if patch.isEmpty {
+            return oldOID == newOID ? worktree : nil
+        }
+        var fileCount = 0
+        var hunkCount = 0
+        var indexPair: (String, String)?
+        var oldCursor = 0
+        var newCursor = 0
+        var projected = oldLines.map(\.text)
+
+        func coordinate(_ field: Substring, prefix: Character) -> (Int, Int)? {
+            guard field.first == prefix else { return nil }
+            let pieces = field.dropFirst().split(separator: ",", omittingEmptySubsequences: false)
+            guard (1...2).contains(pieces.count),
+                  let start = Int(pieces[0]), start >= 0,
+                  let count = pieces.count == 2 ? Int(pieces[1]) : 1,
+                  count >= 0, (count == 0 || start > 0) else { return nil }
+            return (count == 0 ? start : start - 1, count)
+        }
+
+        func align(oldEnd: Int, newEnd: Int) -> Bool {
+            guard oldEnd >= oldCursor, newEnd >= newCursor,
+                  oldEnd - oldCursor == newEnd - newCursor,
+                  oldEnd <= oldLines.count, newEnd <= newLines.count else { return false }
+            for offset in 0..<(oldEnd - oldCursor) {
+                projected[oldCursor + offset] = newLines[newCursor + offset].text
+            }
+            return true
+        }
+
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("diff --git ") {
+                fileCount += 1
+                guard fileCount == 1 else { return nil }
+            } else if line.hasPrefix("index ") {
+                let pair = line.dropFirst(6).split(separator: " ").first?
+                    .components(separatedBy: "..")
+                guard let pair, pair.count == 2 else { return nil }
+                indexPair = (pair[0], pair[1])
+            } else if line.hasPrefix("@@ -") {
+                hunkCount += 1
+                let fields = line.split(separator: " ", maxSplits: 3)
+                guard fields.count >= 3, fields[0] == "@@",
+                      let before = coordinate(fields[1], prefix: "-"),
+                      let after = coordinate(fields[2], prefix: "+"),
+                      align(oldEnd: before.0, newEnd: after.0),
+                      before.0 + before.1 <= oldLines.count,
+                      after.0 + after.1 <= newLines.count else { return nil }
+                oldCursor = before.0 + before.1
+                newCursor = after.0 + after.1
+            }
+        }
+        guard fileCount == 1, let indexPair,
+              indexPair.0 == oldOID,
+              indexPair.1 == newOID || (worktree.isEmpty && indexPair.1.allSatisfy { $0 == "0" }),
+              align(oldEnd: oldLines.count, newEnd: newLines.count) else { return nil }
+
+        let matchedLastLine = !oldLines.isEmpty
+            && oldCursor <= oldLines.count - 1
+        let trailing = matchedLastLine ? newTrailing : oldTrailing
+        let baseline = projected.map(String.init).joined(separator: "\n") + (trailing ? "\n" : "")
+        // A non-invertible clean filter may change Git's blob even when its
+        // raw worktree still looks identical. Never hide Git's real change.
+        if hunkCount > 0, baseline.utf8.elementsEqual(worktree.utf8) { return nil }
+        return baseline
+    }
+}
+
 // MARK: - Line diff
 
 /// A run of consecutive lines with one fate. Offsets index the line arrays.
@@ -76,15 +155,14 @@ nonisolated enum DiffLineOp: Equatable {
 ///    each gap recurses. Bounded and fast even when the middle is huge (e.g.
 ///    a regenerated lockfile), and it produces the readable, structure-aware
 ///    splits patience diff is known for.
-/// 3. Myers for small gaps — optimal diffs where it's affordable; gaps too
-///    large for Myers *with no unique anchors* degrade to whole-block
-///    replace, which is also what such content (minified/generated text)
-///    reads best as.
+/// 3. Exact Myers for small gaps, and bounded Myers for large gaps with
+///    few changes. Large regions with neither cheap matches nor unique
+///    anchors become a single replace block.
 nonisolated enum DiffEngine {
-    /// Gaps at most this many lines per side go to Myers; larger anchor-free
-    /// gaps become a single replace block. Myers is O((N+M)·D), so the worst
-    /// case here stays around a few million steps.
+    /// Large repeated regions still get precise matches when edit distance
+    /// is small, without allowing unbounded quadratic work.
     private static let myersLimit = 700
+    private static let largeGapEditLimit = 96
 
     static func lineOps(old: [DiffSourceLine], new: [DiffSourceLine]) -> [DiffLineOp] {
         var builder = OpsBuilder()
@@ -222,8 +300,10 @@ nonisolated enum DiffEngine {
             return
         }
 
-        if old.count <= myersLimit && new.count <= myersLimit {
-            myersDiff(context, old: old, new: new, into: &builder)
+        let smallGap = old.count <= myersLimit && new.count <= myersLimit
+        if myersDiff(context, old: old, new: new,
+                     editLimit: smallGap ? old.count + new.count : largeGapEditLimit,
+                     into: &builder) {
             return
         }
 
@@ -331,17 +411,16 @@ nonisolated enum DiffEngine {
 
     // MARK: Myers
 
-    /// Classic greedy O((N+M)·D) Myers over a small region, emitting ops by
-    /// backtracking the trace. Region sizes are capped by `myersLimit`.
+    /// Exact Myers within a bounded edit-distance budget.
     private static func myersDiff(
-        _ context: Context, old: Range<Int>, new: Range<Int>, into builder: inout OpsBuilder
-    ) {
+        _ context: Context, old: Range<Int>, new: Range<Int>,
+        editLimit: Int, into builder: inout OpsBuilder
+    ) -> Bool {
         let n = old.count
         let m = new.count
-        let maxD = n + m
-        let offset = maxD
-        // v[k + offset] = furthest x on diagonal k
-        var v = [Int](repeating: 0, count: 2 * maxD + 1)
+        let maxD = min(n + m, editLimit)
+        let offset = maxD + 1
+        var v = [Int](repeating: 0, count: 2 * maxD + 3)
         var trace: [[Int]] = []
 
         var foundD = -1
@@ -369,7 +448,7 @@ nonisolated enum DiffEngine {
                 k += 2
             }
         }
-        precondition(foundD >= 0, "Myers must terminate at d ≤ n+m")
+        guard foundD >= 0 else { return false }
 
         // Backtrack from (n, m) to (0, 0), collecting steps in reverse.
         enum Step { case equalOne, deleteOne, insertOne }
@@ -432,6 +511,7 @@ nonisolated enum DiffEngine {
                 newCursor += 1
             }
         }
+        return true
     }
 
     #if DEBUG

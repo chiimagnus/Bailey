@@ -1615,6 +1615,250 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testGitWorktreeDiffUsesGitEOLRulesWithoutChangingEditorBytes() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ordinary = root.appendingPathComponent("normal space 'quoted'.md")
+        let literal = root.appendingPathComponent("literal.txt")
+        let explicitEOL = root.appendingPathComponent("explicit-eol.txt")
+        let old = "alpha\n中文👋\nlast\n"
+        let worktree = "alpha\r\n中文👋\r\nlast\r\n"
+        let changed = "alpha\r\n中文👋 edited\r\nlast\r\n"
+        try Data(old.utf8).write(to: ordinary)
+        try Data(old.utf8).write(to: literal)
+        try Data(old.utf8).write(to: explicitEOL)
+        try Data("literal.txt -text\nexplicit-eol.txt text eol=crlf\n".utf8)
+            .write(to: root.appendingPathComponent(".gitattributes"))
+        for args in [["config", "core.autocrlf", "true"], ["add", "."],
+                     ["commit", "-qm", "baseline"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data(worktree.utf8).write(to: ordinary)
+        try Data(worktree.utf8).write(to: literal)
+        try Data(worktree.utf8).write(to: explicitEOL)
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--numstat", "HEAD", "--",
+                                                 ordinary.lastPathComponent],
+                                                in: root.path).stdout, "")
+
+        let preferences = try isolatedPreferences()
+        let normal = DiffTab(repoRoot: root.path, path: ordinary.lastPathComponent,
+                             source: .worktree, untracked: false, origPath: nil,
+                             backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                             preferences: preferences)
+        let raw = DiffTab(repoRoot: root.path, path: literal.lastPathComponent,
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: preferences)
+        let eol = DiffTab(repoRoot: root.path, path: explicitEOL.lastPathComponent,
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: preferences)
+        try await wait { !normal.isLoading && !raw.isLoading && !eol.isLoading }
+        XCTAssertNil(normal.error)
+        XCTAssertNil(raw.error)
+        XCTAssertNil(eol.error)
+        XCTAssertFalse(eol.hasChanges, "Per-path eol=crlf must not invent additions")
+        XCTAssertEqual(normal.oldContent, old)
+        XCTAssertEqual(normal.newContent, worktree)
+        XCTAssertFalse(normal.hasChanges, "Git regards a CRLF checkout as unchanged")
+        XCTAssertNil(normal.display)
+        XCTAssertTrue(raw.hasChanges, "-text must preserve real CRLF changes")
+
+        let mixed = "alpha\r\n中文👋\nlast\r\n"
+        try Data(mixed.utf8).write(to: ordinary)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["diff", "--numstat", "--", ordinary.lastPathComponent], in: root.path
+        ).stdout, "")
+        normal.reload()
+        try await wait { !normal.isLoading && normal.newContent == mixed }
+        XCTAssertFalse(normal.hasChanges, "Mixed LF/CRLF is still Git-equivalent")
+        XCTAssertNil(normal.display)
+
+        try Data(changed.utf8).write(to: ordinary)
+        normal.reload()
+        try await wait { !normal.isLoading && normal.newContent == changed }
+        try await wait { normal.display != nil }
+        let display = try XCTUnwrap(normal.display)
+        let removed = display.computation.unified.rows.filter { $0.kind == .removed }
+        let added = display.computation.unified.rows.filter { $0.kind == .added }
+        XCTAssertEqual(removed.count, 1)
+        XCTAssertEqual(added.count, 1)
+        XCTAssertEqual(removed.first?.oldLine, 2)
+        XCTAssertEqual(added.first?.newLine, 2)
+        XCTAssertEqual(try Data(contentsOf: ordinary), Data(changed.utf8))
+
+        normal.autoSaveSuspendedForClose = true
+        normal.setEditing(true)
+        try await wait { normal.editDecorations.rows.filter { $0.kind == .added }.count == 1 }
+        let edited = "alpha\r\n中文👋 edited again\r\nlast\r\n"
+        normal.updateEditedContent(edited)
+        try await wait {
+            normal.editDecorations.rows.filter { $0.kind == .added }.count == 1
+                && normal.editedNewContent == edited
+        }
+        XCTAssertEqual(normal.editDecorations.rows.filter { $0.kind == .added }.count, 1)
+        XCTAssertEqual(normal.editDecorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count }, 1)
+        await normal.save()
+        XCTAssertNil(normal.saveError)
+        XCTAssertEqual(try Data(contentsOf: ordinary), Data(edited.utf8))
+        let beforeReview = normal.display?.id
+        normal.setEditing(false)
+        try await wait {
+            normal.display?.id != beforeReview
+                && normal.display?.computation.unified.rows.filter { $0.kind == .added }.count == 1
+        }
+        let beforeAppearance = normal.display?.id
+        normal.refreshNativeAppearance()
+        try await wait {
+            normal.display?.id != beforeAppearance
+                && normal.display?.computation.unified.rows.filter { $0.kind == .added }.count == 1
+        }
+        XCTAssertEqual(normal.newContent, edited)
+        normal.reload(afterGitAction: true)
+        try await wait { !normal.isLoading && normal.newContent == edited }
+        try await wait {
+            normal.display?.computation.unified.rows.filter { $0.kind == .added }.count == 1
+        }
+
+        let oldRevision = GitCommandExecution.run(["rev-parse", "HEAD"], in: root.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let historical = DiffTab(
+            repoRoot: root.path, path: ordinary.lastPathComponent,
+            source: .revisionWorktree(hash: oldRevision), untracked: false,
+            origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { !historical.isLoading && historical.display != nil }
+        XCTAssertEqual(historical.display?.computation.unified.rows.filter { $0.kind == .added }.count, 1)
+        let stagedResult = GitCommandExecution.run(
+            ["--literal-pathspecs", "add", "--", ordinary.lastPathComponent], in: root.path
+        )
+        XCTAssertEqual(stagedResult.status, 0, stagedResult.stderr)
+        let staged = DiffTab(repoRoot: root.path, path: ordinary.lastPathComponent,
+                             source: .staged, untracked: false, origPath: nil,
+                             backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                             preferences: preferences)
+        let clean = DiffTab(repoRoot: root.path, path: ordinary.lastPathComponent,
+                            source: .worktree, untracked: false, origPath: nil,
+                            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                            preferences: preferences)
+        try await wait { !staged.isLoading && !clean.isLoading && staged.display != nil }
+        XCTAssertNil(staged.error)
+        XCTAssertNil(clean.error)
+        XCTAssertEqual(staged.display?.computation.unified.rows.filter { $0.kind == .added }.count, 1)
+        XCTAssertFalse(clean.hasChanges, "Index and CRLF checkout are Git-equivalent after staging")
+        XCTAssertNil(clean.display)
+        XCTAssertEqual(clean.newContent, edited)
+        XCTAssertEqual(try Data(contentsOf: ordinary), Data(edited.utf8))
+    }
+
+    func testGitCleanFiltersRespectSemanticEqualityAndRejectUnmappableLineChanges() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attributes = """
+        one.txt filter=swap
+        lines.txt filter=drop
+        """
+        try Data((attributes + "\n").utf8).write(
+            to: root.appendingPathComponent(".gitattributes")
+        )
+        let one = root.appendingPathComponent("one.txt")
+        let lines = root.appendingPathComponent("lines.txt")
+        try Data("value BASE\n".utf8).write(to: one)
+        try Data("keep\n".utf8).write(to: lines)
+        for args in [
+            ["config", "filter.swap.clean", "sed 's/SECRET/BASE/g'"],
+            ["config", "filter.drop.clean", "sed '/^TRANSIENT/d'"],
+            ["add", "."],
+            ["commit", "-qm", "filtered baseline"],
+        ] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data("value SECRET\n".utf8).write(to: one)
+        try Data("keep\nTRANSIENT\n".utf8).write(to: lines)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["diff", "--numstat", "HEAD", "--", "one.txt", "lines.txt"],
+            in: root.path
+        ).stdout, "")
+        let prefs = try isolatedPreferences()
+        let simple = DiffTab(repoRoot: root.path, path: "one.txt", source: .worktree,
+                             untracked: false, origPath: nil,
+                             backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                             preferences: prefs)
+        let filtered = DiffTab(repoRoot: root.path, path: "lines.txt", source: .worktree,
+                               untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                               preferences: prefs)
+        try await wait { !simple.isLoading && !filtered.isLoading }
+        XCTAssertNil(simple.error)
+        XCTAssertNil(filtered.error)
+        XCTAssertFalse(simple.hasChanges)
+        XCTAssertFalse(filtered.hasChanges)
+        XCTAssertEqual(simple.newContent, "value SECRET\n")
+        XCTAssertEqual(filtered.newContent, "keep\nTRANSIENT\n")
+        XCTAssertNil(filtered.display)
+
+        try Data("value SECRET edited\n".utf8).write(to: one)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["diff", "--numstat", "--", "one.txt"], in: root.path
+        ).stdout.trimmingCharacters(in: .whitespacesAndNewlines), "1\t1\tone.txt")
+        simple.reload()
+        try await wait { !simple.isLoading && simple.display != nil }
+        XCTAssertEqual(simple.display?.computation.unified.rows.filter { $0.kind == .added }.count, 1)
+        XCTAssertEqual(simple.display?.computation.unified.rows.filter { $0.kind == .removed }.count, 1)
+
+        try Data("changed\nTRANSIENT\n".utf8).write(to: lines)
+        filtered.reload()
+        try await wait { !filtered.isLoading }
+        XCTAssertNotNil(filtered.error, "An unrepresentable Git filter cannot silently fabricate diff rows")
+        XCTAssertEqual(filtered.newContent, "keep\nTRANSIENT\n",
+                       "A failed mapping must retain the previous successful editor buffer")
+        XCTAssertEqual(try Data(contentsOf: lines), Data("changed\nTRANSIENT\n".utf8))
+    }
+
+    func testEOLOnlyEditAndSaveConvergesToCleanGitReview() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("eol-edit.txt")
+        let canonical = "alpha\nbeta\nlast\n"
+        let checkedOut = "alpha\r\nbeta\r\nlast\r\n"
+        try Data(canonical.utf8).write(to: path)
+        for args in [["config", "core.autocrlf", "true"], ["add", "."],
+                     ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data(checkedOut.utf8).write(to: path)
+        let tab = DiffTab(repoRoot: root.path, path: "eol-edit.txt", source: .worktree,
+                          untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        try await wait { !tab.isLoading }
+        XCTAssertFalse(tab.hasChanges)
+        tab.setEditing(true)
+        tab.updateEditedContent(canonical)
+        await tab.save()
+        XCTAssertNil(tab.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), Data(canonical.utf8))
+        XCTAssertEqual(GitCommandExecution.run(
+            ["diff", "--numstat", "--", "eol-edit.txt"], in: root.path
+        ).stdout, "")
+        tab.setEditing(false)
+        try await wait { !tab.isLoading && !tab.hasChanges }
+        XCTAssertNil(tab.display, "Review must converge to Git's clean state after saving")
+
+        tab.setEditing(true)
+        tab.updateEditedContent(checkedOut)
+        tab.setEditing(false)
+        try await wait {
+            !tab.isLoading && !tab.isDirty && !tab.hasChanges
+                && (try? Data(contentsOf: path)) == Data(checkedOut.utf8)
+        }
+        XCTAssertNil(tab.saveError)
+        XCTAssertNil(tab.display, "Auto-save on mode switch must refresh the same Git baseline")
+    }
+
     func testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

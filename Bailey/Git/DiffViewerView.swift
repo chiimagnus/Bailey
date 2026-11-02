@@ -122,12 +122,13 @@ final class DiffTab: nonisolated Identifiable {
 
     let preferences: DiffViewPreferences
     private(set) var oldContent = ""
+    private var comparisonOld = ""
     private(set) var newContent = ""
     private(set) var display: DiffDisplay?
     private(set) var editDecorations = DiffDecorations.empty
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
-    var hasChanges: Bool { !oldContent.utf8.elementsEqual(newContent.utf8) }
+    var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(newContent.utf8) }
     var isEditing: Bool { isEditableNow && preferences.prefersEditing }
 
     private nonisolated static let maxBytes = 5 << 20
@@ -298,6 +299,8 @@ final class DiffTab: nonisolated Identifiable {
                 var newFromGit: String?
                 var worktreePath = path
                 var unmerged = false
+                var oldOID: String?
+                var oldFromIndex = false
                 func take(_ result: (text: String, error: String?)) -> String {
                     if let error = result.error { failure = error }
                     return result.text
@@ -305,8 +308,9 @@ final class DiffTab: nonisolated Identifiable {
                 switch source {
                 case .commit(let hash, let parent, let status):
                     if status != "A", let parent {
-                        old = take(await Self.requiredGitContent(
-                            .tree(revision: parent, path: oldPath), in: root, backend: backend))
+                        let previous = await Self.requiredGitContent(
+                            .tree(revision: parent, path: oldPath), in: root, backend: backend)
+                        old = take((previous.text, previous.error))
                     }
                     if status == "D" {
                         let deleted = await Self.firstGitContent(
@@ -314,15 +318,19 @@ final class DiffTab: nonisolated Identifiable {
                         )
                         newFromGit = take((deleted.text, deleted.error))
                     } else {
-                        newFromGit = take(await Self.requiredGitContent(
-                            .tree(revision: hash, path: path), in: root, backend: backend))
+                        let next = await Self.requiredGitContent(
+                            .tree(revision: hash, path: path), in: root, backend: backend)
+                        newFromGit = take((next.text, next.error))
                     }
                 case .revision(let hash):
-                    newFromGit = take(await Self.requiredGitContent(
-                        .tree(revision: hash, path: path), in: root, backend: backend))
+                    let revision = await Self.requiredGitContent(
+                        .tree(revision: hash, path: path), in: root, backend: backend)
+                    newFromGit = take((revision.text, revision.error))
                 case .revisionWorktree(let hash):
-                    old = take(await Self.requiredGitContent(
-                        .tree(revision: hash, path: path), in: root, backend: backend))
+                    let revision = await Self.requiredGitContent(
+                        .tree(revision: hash, path: path), in: root, backend: backend)
+                    old = take((revision.text, revision.error))
+                    oldOID = revision.oid
                     switch await GitHistoricalFileLocator.resolve(
                         root: root, path: path, revision: hash, backend: backend
                     ) {
@@ -352,10 +360,13 @@ final class DiffTab: nonisolated Identifiable {
                         )
                         unmerged = earlier.isUnmerged
                         old = take((earlier.text, earlier.error))
+                        oldOID = earlier.oid
+                        oldFromIndex = earlier.fromIndex
                     }
                 }
                 return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
-                        failure: failure, unmerged: unmerged)
+                        failure: failure, unmerged: unmerged,
+                        oldOID: oldOID, oldFromIndex: oldFromIndex)
             }.value
 
             var failure = git.failure
@@ -380,8 +391,19 @@ final class DiffTab: nonisolated Identifiable {
                     editable = false
                 }
             }
+            var baseline = git.old
+            if failure == nil, let oldOID = git.oldOID, !git.unmerged {
+                let projected = await Self.gitComparisonBaseline(
+                    source: source, oldPath: oldPath, path: path,
+                    worktreePath: git.worktreePath, oldFromIndex: git.oldFromIndex,
+                    root: root, oldOID: oldOID, old: git.old, worktree: new,
+                    backend: backend
+                )
+                baseline = projected.text
+                if let error = projected.error { failure = error }
+            }
             let result = (
-                old: git.old, new: new, failure: failure,
+                old: git.old, baseline: baseline, new: new, failure: failure,
                 unmerged: git.unmerged, editable: editable,
                 resolvedPath: source.isLive ? git.worktreePath : nil
             )
@@ -403,8 +425,10 @@ final class DiffTab: nonisolated Identifiable {
             self.isEditable = result.editable && result.failure == nil
             self.resolvedWorktreePath = result.resolvedPath
             let changed = !self.oldContent.utf8.elementsEqual(result.old.utf8)
+                || !self.comparisonOld.utf8.elementsEqual(result.baseline.utf8)
                 || !self.newContent.utf8.elementsEqual(result.new.utf8)
             self.oldContent = result.old
+            self.comparisonOld = result.baseline
             self.newContent = result.new
             if changed { self.runExpansions.removeAll() }
             if changed || (self.hasChanges && self.display == nil) {
@@ -451,7 +475,8 @@ final class DiffTab: nonisolated Identifiable {
     func setEditing(_ editing: Bool) {
         guard isEditableNow, editing != isEditing else { return }
         nativeSurface?.rememberScrollAnchor()
-        if !editing && !newContent.utf8.elementsEqual(editedNewContent.utf8) {
+        let changed = !newContent.utf8.elementsEqual(editedNewContent.utf8)
+        if !editing && changed {
             newContent = editedNewContent
             runExpansions.removeAll()
             recomputeDisplay()
@@ -459,8 +484,13 @@ final class DiffTab: nonisolated Identifiable {
         preferences.prefersEditing = editing
         if editing {
             refreshEditDecorations(immediate: true)
-        } else {
-            autoSaveOnFocusLoss()
+        } else if changed || isDirty {
+            Task { [weak self] in
+                guard let self, !self.autoSaveSuspendedForClose else { return }
+                if self.isDirty { await self.save() }
+                guard !self.isDirty, self.saveError == nil, !self.isEditing else { return }
+                self.reload(afterGitAction: true)
+            }
         }
     }
 
@@ -475,7 +505,7 @@ final class DiffTab: nonisolated Identifiable {
             display = nil
             return
         }
-        let before = oldContent
+        let before = comparisonOld
         let after = newContent
         let path = path
         let expansions = runExpansions
@@ -574,7 +604,7 @@ final class DiffTab: nonisolated Identifiable {
     func refreshEditDecorations(immediate: Bool = false) {
         editGeneration &+= 1
         let generation = editGeneration
-        let before = oldContent
+        let before = comparisonOld
         let after = editedNewContent
         let oldRuns = displayInputs?.oldRuns ?? []
         let font = TerminalFont.current()
@@ -708,7 +738,7 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated enum GitContent {
         case missing
-        case content(String)
+        case content(String, oid: String)
         case binary
         case tooLarge
         case failed(String)
@@ -723,33 +753,36 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated static func firstGitContent(
         _ locations: [GitLocation], in root: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?, isUnmerged: Bool) {
+    ) async -> (text: String, error: String?, isUnmerged: Bool,
+                 oid: String?, fromIndex: Bool) {
         var isUnmerged = false
         for location in locations {
             let result = await gitContent(location, in: root, backend: backend)
             isUnmerged = isUnmerged || result.isUnmerged
             switch result.content {
             case .missing: continue
-            case .content(let text): return (text, nil, isUnmerged)
-            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged)
-            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged)
-            case .failed(let message): return ("", message, isUnmerged)
+            case .content(let text, let oid):
+                if case .index = location { return (text, nil, isUnmerged, oid, true) }
+                return (text, nil, isUnmerged, oid, false)
+            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged, nil, false)
+            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged, nil, false)
+            case .failed(let message): return ("", message, isUnmerged, nil, false)
             }
         }
-        return ("", nil, isUnmerged)
+        return ("", nil, isUnmerged, nil, false)
     }
 
     private nonisolated static func requiredGitContent(
         _ location: GitLocation, in root: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?) {
+    ) async -> (text: String, error: String?, oid: String?) {
         let result = await gitContent(location, in: root, backend: backend)
         switch result.content {
-        case .content(let text): return (text, nil)
+        case .content(let text, let oid): return (text, nil, oid)
         case .missing:
-            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"))
-        case .binary: return ("", String(localized: "Binary file", table: "Git"))
-        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"))
-        case .failed(let message): return ("", message)
+            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"), nil)
+        case .binary: return ("", String(localized: "Binary file", table: "Git"), nil)
+        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), nil)
+        case .failed(let message): return ("", message, nil)
         }
     }
 
@@ -785,7 +818,7 @@ final class DiffTab: nonisolated Identifiable {
         guard !blob.stdout.contains(0), let text = String(data: blob.stdout, encoding: .utf8) else {
             return (.binary, selection.isUnmerged)
         }
-        return (.content(text), selection.isUnmerged)
+        return (.content(text, oid: oid), selection.isUnmerged)
     }
 
     private nonisolated static func gitObject(
@@ -886,6 +919,57 @@ final class DiffTab: nonisolated Identifiable {
         let filePath = (root as NSString).appendingPathComponent(path)
         guard let stat = try? await backend.stat(path: filePath) else { return false }
         return !stat.isSymlink && stat.isRegular
+    }
+
+    /// Git is the authority for equivalence; turn its unchanged lines into
+    /// a single comparison baseline in the editor's original worktree format.
+    /// The actual blob and editable buffer are never rewritten.
+    private nonisolated static func gitComparisonBaseline(
+        source: Source, oldPath: String, path: String, worktreePath: String,
+        oldFromIndex: Bool, root: String, oldOID: String, old: String,
+        worktree: String, backend: WorkspaceBackend
+    ) async -> (text: String, error: String?) {
+        let comparison: [String]
+        switch source {
+        case .worktree where oldPath == path:
+            comparison = oldFromIndex ? [] : ["HEAD"]
+        case .revisionWorktree(let revision) where worktreePath == path:
+            comparison = [revision]
+        default:
+            return (old, nil)
+        }
+        let failure = String(localized: "Unable to read Git content", table: "Git")
+        let cleaned: WorkspaceRunResult
+        do {
+            cleaned = try await backend.run(
+                argv: ["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
+                       "LC_ALL=C", "git", "hash-object", "--path=" + worktreePath, "--stdin"],
+                cwd: root, env: nil, stdin: Data(worktree.utf8), timeout: 60
+            )
+        } catch {
+            return (old, error.localizedDescription)
+        }
+        guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
+            let detail = String(decoding: cleaned.stderr, as: UTF8.self)
+            return (old, detail.isEmpty ? failure : detail)
+        }
+        let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let patch = await GitCommandExecution.runData(
+            ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+             "--no-color", "--no-renames", "--full-index", "--unified=0",
+             "--inter-hunk-context=0"] + comparison + ["--", path],
+            in: root, stdoutLimit: maxBytes * 4 + 1, backend: backend
+        )
+        guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
+              let text = String(data: patch.stdout, encoding: .utf8),
+              let baseline = GitWorktreeComparison.baseline(
+                  old: old, worktree: worktree, patch: text,
+                  oldOID: oldOID, newOID: newOID
+              ) else {
+            return (old, patch.stderr.isEmpty ? failure : patch.stderr)
+        }
+        return (baseline, nil)
     }
 
     private nonisolated static func readWorktreeFile(
