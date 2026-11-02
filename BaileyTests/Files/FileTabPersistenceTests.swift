@@ -1187,6 +1187,49 @@ final class FileTabPersistenceTests: XCTestCase {
 final class NativeFileTabTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testTruncatedLongLineEditSavesAllHiddenBytesAndSurvivesReopen() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".svg")
+        let original = String(repeating: "M 123.45,678.90 ", count: 1_500) + "\n"
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -980, y: -980, width: 800, height: 460),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertTrue(editor.truncatesLongLines)
+        let range = NSRange(location: 20_000, length: 4)
+        let expected = (original as NSString).replacingCharacters(in: range, with: "EDIT")
+        editor.insertText("EDIT", replacementRange: range)
+        XCTAssertEqual(file.text, expected)
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+        XCTAssertEqual(editor.text, expected)
+        XCTAssertTrue(editor.truncatesLongLines)
+
+        let reopened = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+        try await reopened.waitForText()
+        XCTAssertEqual(reopened.text, expected)
+    }
+
     func testMountedNativeMultipleSelectionsPreserveBytesDirtyStateAndUndo() async throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".txt")

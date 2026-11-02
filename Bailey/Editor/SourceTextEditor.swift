@@ -105,6 +105,11 @@ struct SourceTextEditor: NSViewRepresentable {
         textView.isIncrementalSearchingEnabled = true
         apply(to: textView, scrollView: scrollView)
         textView.text = file.text
+        // The first frame must size the actual document, not the empty buffer.
+        // Long SVG lines otherwise wait for a later asynchronous resize pass.
+        textView.configureWrapping(
+            wrapLines, viewportWidth: max(scrollView.contentView.bounds.width, textView.frame.width)
+        )
 
         // Tree-sitter syntax highlighting, for file types with
         // a bundled grammar. Added after the text is set so the plugin's

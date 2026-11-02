@@ -8,17 +8,26 @@ class NativeCodeTextView: NSTextView {
         let stops = NSParagraphStyle.default.tabStops
         return stops.count > 1 ? stops[1].location - stops[0].location : 28
     }()
+    // TextKit 2 can omit whole glyph rows when SVG paths create enormous document surfaces.
+    // Limit only the visual width, never the backing text.
+    private static let maximumUnwrappedWidth: CGFloat = 12288
 
     private let documentUndoManager = UndoManager()
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
         get { string }
-        set { string = newValue ?? "" }
+        set {
+            if isTruncatingLongLines == true { isTruncatingLongLines = nil }
+            string = newValue ?? ""
+        }
     }
 
     var attributedText: NSAttributedString {
         get { textStorage ?? NSAttributedString(string: string) }
-        set { textStorage?.setAttributedString(newValue) }
+        set {
+            if isTruncatingLongLines == true { isTruncatingLongLines = nil }
+            textStorage?.setAttributedString(newValue)
+        }
     }
 
     var textSelection: NSRange {
@@ -113,7 +122,10 @@ class NativeCodeTextView: NSTextView {
     private var lineIndex: NativeTextLineIndex?
     private var measuredLineWidths: NativeMeasuredLineWidths?
     private var isWrappingLines = false
+    // nil means a replaced document still needs its paragraph styles reconciled.
+    private var isTruncatingLongLines: Bool? = false
     var wrapsLines: Bool { isWrappingLines }
+    var truncatesLongLines: Bool { isTruncatingLongLines == true }
 
     /// Called for actual character mutations, including Undo/Redo, which do
     /// not necessarily emit NSTextViewDelegate.textDidChange.
@@ -507,9 +519,11 @@ class NativeCodeTextView: NSTextView {
         isWrappingLines = wraps
         guard viewportWidth > 0 else { return }
         let codeWidth: CGFloat
+        let truncate: Bool
         if wraps {
             measuredLineWidths = nil
             codeWidth = viewportWidth
+            truncate = false
         } else if let index = lineIndex {
             let currentFont = font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
             if measuredLineWidths?.font.isEqual(currentFont) != true
@@ -519,13 +533,51 @@ class NativeCodeTextView: NSTextView {
                 )
             }
             let padding = (textContainer?.lineFragmentPadding ?? 5) * 2
-            codeWidth = max(viewportWidth, ceil((measuredLineWidths?.maximum ?? 0) + padding))
+            let naturalWidth = max(viewportWidth, ceil((measuredLineWidths?.maximum ?? 0) + padding))
+            let limit = max(viewportWidth, Self.maximumUnwrappedWidth)
+            codeWidth = min(naturalWidth, limit)
+            truncate = naturalWidth > limit
         } else {
             codeWidth = viewportWidth
+            truncate = false
         }
+        setLongLineTruncation(truncate)
         // Keep the native document and TextKit 2 container at the same finite
         // width so far-distance navigation does not eagerly lay out every row.
         setCodeWidth(codeWidth)
+    }
+
+    private func setLongLineTruncation(_ truncate: Bool) {
+        guard isTruncatingLongLines != truncate else { return }
+        isTruncatingLongLines = truncate
+        let breakMode: NSLineBreakMode = truncate ? .byTruncatingTail : .byWordWrapping
+        if let storage = textStorage, storage.length > 0 {
+            var replacements: [(NSRange, NSParagraphStyle)] = []
+            storage.enumerateAttribute(
+                .paragraphStyle, in: NSRange(location: 0, length: storage.length)
+            ) { value, range, _ in
+                let original = (value as? NSParagraphStyle) ?? defaultParagraphStyle ?? .default
+                guard (value as? NSParagraphStyle)?.lineBreakMode != breakMode else { return }
+                let style = original.mutableCopy() as! NSMutableParagraphStyle
+                style.lineBreakMode = breakMode
+                replacements.append((range, style))
+            }
+            storage.beginEditing()
+            for (range, style) in replacements {
+                storage.addAttribute(.paragraphStyle, value: style, range: range)
+            }
+            storage.endEditing()
+        }
+        let defaultStyle = (defaultParagraphStyle ?? .default).mutableCopy() as! NSMutableParagraphStyle
+        defaultStyle.lineBreakMode = breakMode
+        defaultParagraphStyle = defaultStyle
+        var attributes = typingAttributes
+        let typingStyle = ((attributes[.paragraphStyle] as? NSParagraphStyle) ?? defaultStyle)
+            .mutableCopy() as! NSMutableParagraphStyle
+        typingStyle.lineBreakMode = breakMode
+        attributes[.paragraphStyle] = typingStyle
+        typingAttributes = attributes
+        textContainer?.lineBreakMode = breakMode
     }
 
     private func processStorageEdit(_ storage: NSTextStorage) {

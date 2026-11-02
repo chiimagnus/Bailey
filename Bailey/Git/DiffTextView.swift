@@ -1159,6 +1159,7 @@ final class DiffCodePaneView: NSView {
             guard let style = base.mutableCopy() as? NSMutableParagraphStyle else { return }
             style.paragraphSpacingBefore = CGFloat(spacing.rowsBefore) * rowHeight
             style.paragraphSpacing = CGFloat(spacing.rowsAfter) * rowHeight
+            if textView.truncatesLongLines { style.lineBreakMode = .byTruncatingTail }
             textView.textStorage?.addAttributes([.paragraphStyle: style], range: range)
         }
         for line in Set(appliedGhostSpacing.keys).union(wanted.keys) {
@@ -1389,9 +1390,17 @@ final class DiffCodePaneView: NSView {
         if textView.font != font {
             textView.font = font
         }
-        if textView.defaultParagraphStyle?.isEqual(paragraphStyle) != true {
-            textView.defaultParagraphStyle = paragraphStyle
-            textView.typingAttributes[.paragraphStyle] = paragraphStyle
+        let effectiveStyle: NSParagraphStyle
+        if textView.truncatesLongLines {
+            let style = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+            style.lineBreakMode = .byTruncatingTail
+            effectiveStyle = style
+        } else {
+            effectiveStyle = paragraphStyle
+        }
+        if textView.defaultParagraphStyle?.isEqual(effectiveStyle) != true {
+            textView.defaultParagraphStyle = effectiveStyle
+            textView.typingAttributes[.paragraphStyle] = effectiveStyle
         }
         if textView.textColor != textColor {
             textView.textColor = textColor

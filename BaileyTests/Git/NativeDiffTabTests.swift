@@ -352,6 +352,61 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testLongDiffLineTruncationPreservesGhostSpacingAndTypography() throws {
+        let long = String(repeating: "0123456789", count: 2_200)
+        let old = long + "\nremoved\nlast\n"
+        let current = long + "\nlast\n"
+        let core = DiffCore.compute(oldText: old, newText: current)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let starts = DiffLineSplitter.lines(of: current).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .newOnly)
+        let window = NSWindow(
+            contentRect: NSRect(x: -920, y: -920, width: 680, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = pane
+        window.orderFront(nil)
+        defer { window.close() }
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
+        pane.setEditBufferText(current)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: starts, lineCount: starts.count,
+            ghostBlocks: [.init(anchorLine: 1, firstOldLine: 2, lines: [
+                NSAttributedString(string: "removed")
+            ])]
+        )
+        pane.layoutSubtreeIfNeeded()
+
+        let editor = pane.textView
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12288, accuracy: 1)
+        let firstStyle = try XCTUnwrap(editor.textStorage?.attribute(
+            .paragraphStyle, at: 0, effectiveRange: nil
+        ) as? NSParagraphStyle)
+        XCTAssertEqual(firstStyle.lineBreakMode, .byTruncatingTail)
+        XCTAssertEqual(firstStyle.minimumLineHeight, style.minimumLineHeight)
+
+        let lastStyle = try XCTUnwrap(editor.textStorage?.attribute(
+            .paragraphStyle, at: starts[1], effectiveRange: nil
+        ) as? NSParagraphStyle)
+        XCTAssertEqual(lastStyle.lineBreakMode, .byTruncatingTail)
+        XCTAssertGreaterThan(lastStyle.paragraphSpacingBefore, 0)
+
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
+        XCTAssertEqual(editor.defaultParagraphStyle?.lineBreakMode, .byTruncatingTail)
+        XCTAssertEqual(editor.text, current)
+
+        pane.setEditBufferText("short\nlast\n")
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.text, "short\nlast\n")
+    }
+
     func testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary() {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(
