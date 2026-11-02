@@ -1004,6 +1004,7 @@ struct DiffViewerView: View {
         }
         .onChange(of: settings.fontFamily) { _, _ in diff.refreshNativeAppearance() }
         .onChange(of: settings.fontSize) { _, _ in diff.refreshNativeAppearance() }
+        .onChange(of: settings.longLineDisplayWidth) { _, _ in diff.nativeSurface?.render() }
         .onChange(of: themeChanges.revision) { _, _ in diff.refreshNativeAppearance() }
     }
 

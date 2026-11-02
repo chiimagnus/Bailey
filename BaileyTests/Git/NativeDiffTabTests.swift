@@ -352,6 +352,161 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testLongDiffLineTruncationPreservesGhostSpacingAndTypography() throws {
+        let long = String(repeating: "0123456789", count: 2_200)
+        let old = long + "\nremoved\nlast\n"
+        let current = long + "\nlast\n"
+        let core = DiffCore.compute(oldText: old, newText: current)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let starts = DiffLineSplitter.lines(of: current).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .newOnly)
+        let window = NSWindow(
+            contentRect: NSRect(x: -920, y: -920, width: 680, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = pane
+        window.orderFront(nil)
+        defer { window.close() }
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
+        pane.setEditBufferText(current)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: starts, lineCount: starts.count,
+            ghostBlocks: [.init(anchorLine: 1, firstOldLine: 2, lines: [
+                NSAttributedString(string: "removed")
+            ])]
+        )
+        pane.layoutSubtreeIfNeeded()
+
+        let editor = pane.textView
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12288, accuracy: 1)
+        let firstStyle = try XCTUnwrap(editor.textStorage?.attribute(
+            .paragraphStyle, at: 0, effectiveRange: nil
+        ) as? NSParagraphStyle)
+        XCTAssertEqual(firstStyle.lineBreakMode, .byTruncatingTail)
+        XCTAssertEqual(firstStyle.minimumLineHeight, style.minimumLineHeight)
+
+        let lastStyle = try XCTUnwrap(editor.textStorage?.attribute(
+            .paragraphStyle, at: starts[1], effectiveRange: nil
+        ) as? NSParagraphStyle)
+        XCTAssertEqual(lastStyle.lineBreakMode, .byTruncatingTail)
+        XCTAssertGreaterThan(lastStyle.paragraphSpacingBefore, 0)
+
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
+        XCTAssertEqual(editor.defaultParagraphStyle?.lineBreakMode, .byTruncatingTail)
+        XCTAssertEqual(editor.text, current)
+
+        pane.setEditBufferText("short\nlast\n")
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.text, "short\nlast\n")
+    }
+
+    func testDiffLongLineWidthModesPreserveEditGhostsAndReviewText() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let full = String(repeating: "x", count: 9_000) + "\nshort\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 680, height: 280),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = pane
+        window.orderFront(nil)
+        defer { window.close() }
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black,
+                             longLineDisplayWidth: .standard)
+        pane.setEditBufferText(full)
+        let old = String(repeating: "x", count: 9_000) + "\nremoved\nshort\n"
+        let core = DiffCore.compute(oldText: old, newText: full)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let starts = DiffLineSplitter.lines(of: full).lines.map(\.utf16Range.location)
+        pane.decorations = .edit(state: state, snapshotOffsets: starts, lineCount: starts.count,
+        ghostBlocks: [.init(anchorLine: 1, firstOldLine: 2,
+                            lines: [NSAttributedString(string: "removed")])])
+        pane.layoutSubtreeIfNeeded()
+        let editor = pane.textView
+        XCTAssertEqual(editor.frame.width, 12_288, accuracy: 1)
+        let before = try XCTUnwrap(editor.textStorage?.attribute(
+            .paragraphStyle, at: 9_001, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertGreaterThan(before.paragraphSpacingBefore, 0)
+        for mode in [LongLineDisplayWidth.expanded, .showAll, .compact, .standard] {
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .black,
+                                 longLineDisplayWidth: mode)
+            pane.layoutSubtreeIfNeeded()
+            let actual = CGFloat(mode == .showAll
+                ? LongLineDisplayWidth.expanded.rawValue : mode.rawValue)
+            XCTAssertLessThanOrEqual(editor.frame.width, max(680, actual) + 1)
+            let after = try XCTUnwrap(editor.textStorage?.attribute(
+                .paragraphStyle, at: 9_001, effectiveRange: nil) as? NSParagraphStyle)
+            XCTAssertEqual(after.paragraphSpacingBefore, before.paragraphSpacingBefore,
+                           "Ghost spacing must survive \(mode)")
+            XCTAssertEqual(editor.text, full)
+            if mode == .showAll {
+                XCTAssertTrue(editor.wrapsLines)
+                let fragment = try XCTUnwrap(editor.nativeLayoutManager.textLayoutFragment(
+                    for: editor.nativeLayoutManager.documentRange.location
+                ))
+                XCTAssertGreaterThan(fragment.textLineFragments.count, 1)
+            }
+        }
+        let review = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        review.frame = CGRect(x: 0, y: 0, width: 600, height: 250)
+        window.contentView = review
+        review.applyTypography(font: font, paragraphStyle: style, textColor: .black,
+                               longLineDisplayWidth: .showAll)
+        let document = DiffComputation.compute(oldText: full, newText: full).unified
+        review.setReviewDocument(NSAttributedString(string: document.text),
+                                 decorations: .review(document))
+        review.layoutSubtreeIfNeeded()
+        XCTAssertFalse(review.textView.truncatesLongLines)
+        XCTAssertTrue(review.textView.wrapsLines)
+        XCTAssertNil(review.textView.overrideContentHeight,
+                     "Wrapped review cannot use a fixed height per Git row")
+        XCTAssertEqual(review.textView.text, document.text)
+        review.applyTypography(font: font, paragraphStyle: style, textColor: .black,
+                               longLineDisplayWidth: .standard)
+        XCTAssertTrue(review.textView.truncatesLongLines)
+        XCTAssertFalse(review.textView.wrapsLines)
+        XCTAssertEqual(review.textView.overrideContentHeight,
+                       CGFloat(document.rows.count) * style.maximumLineHeight,
+                       "Returning to fixed lines must restore the split/unified row height")
+        review.applyTypography(font: font, paragraphStyle: style, textColor: .black,
+                               longLineDisplayWidth: .showAll)
+        XCTAssertNil(review.textView.overrideContentHeight)
+        XCTAssertEqual(review.textView.text, document.text)
+    }
+
+    func testFullDisplayDiffScrollToGitRowUsesWrappedParagraphGeometry() throws {
+        let line = String(repeating: "abcdefghij", count: 7_000)
+        let source = line + "\nsecond\nthird\n"
+        let document = DiffComputation.compute(oldText: source, newText: source).unified
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 650, height: 120),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = pane
+        window.orderFront(nil)
+        defer { window.close() }
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .black, longLineDisplayWidth: .showAll)
+        pane.setReviewDocument(NSAttributedString(string: document.text),
+                               decorations: .review(document))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertNil(pane.textView.overrideContentHeight)
+        pane.scrollToRow(1)
+        XCTAssertGreaterThan(pane.scrollOffset.y, 80,
+                             "Anchor must follow wrapped layout, not a one-row offset")
+        XCTAssertEqual(pane.textView.text, document.text)
+    }
+
     func testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary() {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(

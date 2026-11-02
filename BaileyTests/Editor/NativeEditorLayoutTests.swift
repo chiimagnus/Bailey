@@ -42,6 +42,43 @@ final class NativeEditorLayoutTests: XCTestCase {
         return (window, scroll, editor)
     }
 
+    private var realSVGURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Bailey/Resources/AppIcon.icon/Assets/Bailey.svg")
+    }
+
+    private func assertSVGPathsPaint(in view: NSView, editor: NativeCodeTextView,
+                                     paneWidth: CGFloat, file: StaticString = #filePath,
+                                     line: UInt = #line) throws {
+        let image = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: image)
+        let gutterWidth = try XCTUnwrap(editor.gutterView).preferredWidth
+        let font = try XCTUnwrap(editor.font)
+        let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        let scaleX = CGFloat(image.pixelsWide) / view.bounds.width
+        let scaleY = CGFloat(image.pixelsHigh) / view.bounds.height
+        let left = Int((gutterWidth + 40) * scaleX)
+        let right = min(image.pixelsWide, Int((gutterWidth + 155) * scaleX))
+        for row in 32...39 {
+            let top = Int(CGFloat(row - 1) * lineHeight * scaleY)
+            let bottom = min(image.pixelsHigh, Int(CGFloat(row) * lineHeight * scaleY))
+            let ink = (top..<bottom).reduce(0) { count, y in
+                count + (left..<right).filter { x in
+                    guard let pixel = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                    else { return false }
+                    return pixel.redComponent < 0.65
+                        && pixel.greenComponent < 0.65
+                        && pixel.blueComponent < 0.65
+                }.count
+            }
+            XCTAssertGreaterThan(ink, 10,
+                "SVG line \(row) blank at width=\(paneWidth), textWidth=\(editor.frame.width)",
+                file: file, line: line)
+        }
+    }
+
     private func viewport(_ editor: NativeCodeTextView) -> NSRange? {
         editor.layoutSubtreeIfNeeded()
         editor.nativeLayoutManager.textViewportLayoutController.layoutViewport()
@@ -552,6 +589,429 @@ final class NativeEditorLayoutTests: XCTestCase {
         let hit = editor.characterIndex(for: NSPoint(x: rect.midX, y: rect.midY))
         XCTAssertNotEqual(hit, NSNotFound)
         if hit != NSNotFound { XCTAssertLessThanOrEqual(abs(hit - target), 1) }
+    }
+
+    func testRealSVGUnwrappedPathRowsPaintInWideAndNarrowPanes() throws {
+        let asset = realSVGURL
+        let source = try String(contentsOf: asset, encoding: .utf8)
+        let lines = source.components(separatedBy: "\n")
+        XCTAssertTrue((32...39).allSatisfy { lines[$0 - 1].count > 1_000 },
+                      "Use the original SVG's eight consecutive extremely long paths")
+
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        for width in [1_200.0, 600.0] {
+            let (window, scroll, editor) = mount(
+                source, font: font, width: width, wraps: false, viewportHeight: 850,
+                appearance: .aqua
+            )
+            defer { window.close() }
+            editor.showsLineNumbers = true
+            editor.backgroundColor = .white
+            editor.textColor = .black
+            window.contentView?.layoutSubtreeIfNeeded()
+            scroll.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+
+            try assertSVGPathsPaint(in: XCTUnwrap(window.contentView), editor: editor,
+                                    paneWidth: width)
+            XCTAssertEqual(editor.text, source)
+        }
+    }
+
+    func testMountedSVGStillPaintsEachPathAfterDockLikeResizes() async throws {
+        let asset = realSVGURL
+        let source = try String(contentsOf: asset, encoding: .utf8)
+        let file = FileTab(path: asset.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: font, palette: .theme(dark: false),
+            wrapLines: false, isFocused: false
+        ))
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 850),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+        XCTAssertTrue(editor.truncatesLongLines, "Initial mounted frame must clip before asynchronous geometry updates")
+        let path33 = (source as NSString).range(of: "<path d=\"M 458.00").location
+        XCTAssertNotEqual(path33, NSNotFound)
+
+        for width in [1200.0, 600.0, 320.0, 1200.0, 600.0] {
+            window.setContentSize(NSSize(width: width, height: 850))
+            host.layoutSubtreeIfNeeded()
+            scroll.layoutSubtreeIfNeeded()
+            await Task.yield()
+            host.layoutSubtreeIfNeeded()
+            scroll.layoutSubtreeIfNeeded()
+            editor.textSelection = NSRange(location: path33 + 12, length: 6)
+            window.displayIfNeeded()
+
+            try assertSVGPathsPaint(in: host, editor: editor, paneWidth: width)
+            XCTAssertTrue(scroll.documentView === editor)
+            XCTAssertEqual(editor.text, source)
+        }
+    }
+
+    func testRealSVGVeryLongPathsHaveReachableGlyphsWithAndWithoutWrapping() async throws {
+        let asset = realSVGURL
+        let source = try String(contentsOf: asset, encoding: .utf8)
+        let index = NativeTextLineIndex(source as NSString)
+        for wraps in [false, true] {
+            let (window, scroll, editor) = mount(
+                source, width: 480, wraps: wraps, viewportHeight: 350
+            )
+            defer { window.close() }
+            for row in [31, 37, 32, 39, 34, 36, 31] {
+                let start = index.offset(atLine: row - 1)
+                let end = index.offset(atLine: row)
+                let targets = wraps
+                    ? [start + 8, (start + end) / 2, end - 3, start + 8]
+                    : [start + 8, min(start + 500, end - 3), start + 8]
+                for target in targets {
+                    try await reveal(NSRange(location: target, length: 1), in: editor)
+                    let rect = editor.firstRect(
+                        forCharacterRange: NSRange(location: target, length: 1), actualRange: nil
+                    )
+                    XCTAssertGreaterThan(rect.width, 0)
+                    XCTAssertGreaterThan(rect.height, 0)
+                    let point = editor.convert(
+                        try XCTUnwrap(editor.window).convertPoint(fromScreen: NSPoint(
+                            x: rect.midX, y: rect.midY
+                        )), from: nil
+                    )
+                    XCTAssertTrue(
+                        scroll.contentView.bounds.insetBy(dx: -5, dy: -5).contains(point),
+                        "SVG line \(row), offset \(target), wraps=\(wraps): glyph \(rect) "
+                        + "is not in clip \(scroll.contentView.bounds)"
+                    )
+                }
+            }
+            XCTAssertEqual(editor.text, source)
+        }
+    }
+
+    func testNativeTruncationKeepsRealSVGPathsSingleLineAndAllBytes() throws {
+        let asset = realSVGURL
+        let source = try String(contentsOf: asset, encoding: .utf8)
+        let (window, scroll, editor) = mount(source, width: 480, wraps: false)
+        defer { window.close() }
+
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12288, accuracy: 1)
+        XCTAssertEqual(editor.textContainer?.size.width ?? 0, editor.frame.width, accuracy: 1)
+        let index = NativeTextLineIndex(source as NSString)
+        let layout = editor.nativeLayoutManager
+        let manager = editor.nativeContentManager
+        let lineHeight = ceil(NSLayoutManager().defaultLineHeight(
+            for: try XCTUnwrap(editor.font)
+        ))
+        for row in [31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41] {
+            let offset = index.offset(atLine: row - 1)
+            let position = try XCTUnwrap(manager.location(manager.documentRange.location, offsetBy: offset))
+            layout.ensureLayout(for: try XCTUnwrap(NSTextRange(
+                NSRange(location: offset, length: 1), in: manager
+            )))
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: position))
+            XCTAssertEqual(fragment.textLineFragments.count, 1,
+                "An unwrapped SVG path must remain one visual row when truncated")
+            XCTAssertEqual(fragment.layoutFragmentFrame.height, lineHeight, accuracy: 1)
+        }
+        let tail = NSRange(location: index.offset(atLine: 33) - 80, length: 50)
+        editor.textSelection = tail
+        XCTAssertEqual(editor.textSelection, tail)
+        XCTAssertEqual(editor.textStorage?.attributedSubstring(from: tail).string,
+                       (source as NSString).substring(with: tail))
+        XCTAssertEqual(editor.text, source, "Display truncation cannot change the document")
+
+        editor.configureWrapping(true, viewportWidth: 480)
+        XCTAssertFalse(editor.truncatesLongLines)
+        let offset = index.offset(atLine: 32)
+        let location = try XCTUnwrap(manager.location(manager.documentRange.location, offsetBy: offset))
+        layout.ensureLayout(for: try XCTUnwrap(NSTextRange(
+            NSRange(location: offset, length: 1), in: manager
+        )))
+        XCTAssertGreaterThan(try XCTUnwrap(layout.textLayoutFragment(for: location))
+            .textLineFragments.count, 1, "Word wrap must recover the complete SVG path")
+        editor.configureWrapping(false, viewportWidth: 480)
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.text, source)
+    }
+
+    func testTruncatedLongLineSupportsHiddenTextEditsUndoAndDocumentReplacement() throws {
+        let full = String(repeating: "0123456789", count: 2_300) + "\nshort\n"
+        let (window, scroll, editor) = mount(full, width: 480, wraps: false)
+        defer { window.close() }
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12288, accuracy: 1)
+
+        let hidden = NSRange(location: 17_000, length: 4)
+        editor.textSelection = hidden
+        XCTAssertEqual(editor.textSelection, hidden)
+        XCTAssertEqual(editor.textStorage?.attributedSubstring(from: hidden).string, "0123")
+        editor.insertText("ABCD", replacementRange: hidden)
+        XCTAssertEqual((try XCTUnwrap(editor.text) as NSString)
+            .substring(with: hidden), "ABCD")
+        XCTAssertTrue(editor.truncatesLongLines)
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.text, full, "Undo must recover hidden content, not only visible glyphs")
+
+        editor.breakUndoCoalescing()
+        editor.insertText("tiny\n", replacementRange: NSRange(location: 0, length: 23_001))
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, scroll.contentView.bounds.width, accuracy: 1)
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.text, full)
+        XCTAssertTrue(editor.truncatesLongLines)
+
+        editor.text = "short\n"
+        editor.configureWrapping(false, viewportWidth: 480)
+        XCTAssertFalse(editor.truncatesLongLines)
+        editor.text = full
+        editor.configureWrapping(false, viewportWidth: 480)
+        XCTAssertTrue(editor.truncatesLongLines)
+
+        let originalStyle = NSMutableParagraphStyle()
+        originalStyle.minimumLineHeight = 22
+        originalStyle.maximumLineHeight = 22
+        editor.attributedText = NSAttributedString(string: full, attributes: [
+            .font: try XCTUnwrap(editor.font), .paragraphStyle: originalStyle
+        ])
+        editor.configureWrapping(false, viewportWidth: 480)
+        let applied = try XCTUnwrap(editor.textStorage?.attribute(
+            .paragraphStyle, at: 0, effectiveRange: nil
+        ) as? NSParagraphStyle)
+        XCTAssertEqual(applied.lineBreakMode, .byTruncatingTail)
+        XCTAssertEqual(applied.maximumLineHeight, 22)
+        XCTAssertEqual(editor.text, full)
+    }
+
+    func testTruncatedTextKeepsOneVisualRowAfterNewlineInsertion() throws {
+        let prefix = String(repeating: "a", count: 2_200)
+        let suffix = String(repeating: "b", count: 2_200)
+        let (window, _, editor) = mount(prefix, width: 480, wraps: false)
+        defer { window.close() }
+        XCTAssertTrue(editor.truncatesLongLines)
+        editor.insertText("\n" + suffix, replacementRange: NSRange(location: prefix.utf16.count, length: 0))
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.text, prefix + "\n" + suffix)
+        let manager = editor.nativeContentManager
+        let layout = editor.nativeLayoutManager
+        let location = try XCTUnwrap(manager.location(
+            manager.documentRange.location, offsetBy: prefix.utf16.count + 1
+        ))
+        layout.ensureLayout(for: try XCTUnwrap(NSTextRange(
+            NSRange(location: prefix.utf16.count + 1, length: 1), in: manager
+        )))
+        let fragment = try XCTUnwrap(layout.textLayoutFragment(for: location))
+        XCTAssertEqual(fragment.textLineFragments.count, 1)
+    }
+
+    func testLongLineWidthModesReactImmediatelyWithoutChangingDataOrRowGeometry() throws {
+        let source = String(repeating: "M1234,5678 ", count: 600) + "\nnext\n"
+        let (window, scroll, editor) = mount(source, width: 480)
+        defer { window.close() }
+        let expectedNaturalWidth = CGFloat(600 * 11) *
+            (editor.font?.maximumAdvancement.width ?? 0) + 10
+        let rowHeight = ceil(NSLayoutManager().defaultLineHeight(for: try XCTUnwrap(editor.font)))
+        for mode in LongLineDisplayWidth.allCases {
+            editor.longLineDisplayWidth = mode
+            editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+            scroll.layoutSubtreeIfNeeded()
+            let limit = mode == .showAll ? CGFloat(LongLineDisplayWidth.expanded.rawValue)
+                : CGFloat(mode.rawValue)
+            let expected = min(limit, expectedNaturalWidth)
+            XCTAssertEqual(editor.frame.width, expected, accuracy: 20, "\(mode)")
+            XCTAssertEqual(editor.textContainer?.size.width ?? 0, editor.frame.width, accuracy: 1)
+            XCTAssertEqual(editor.truncatesLongLines, mode != .showAll && expectedNaturalWidth > CGFloat(mode.rawValue), "\(mode)")
+            let first = try XCTUnwrap(editor.textStorage?.attribute(.paragraphStyle, at: 0,
+                effectiveRange: nil) as? NSParagraphStyle)
+            XCTAssertEqual(first.lineBreakMode,
+                           editor.truncatesLongLines ? .byTruncatingTail : .byWordWrapping)
+            let layout = editor.nativeLayoutManager
+            layout.ensureLayout(for: try XCTUnwrap(NSTextRange(
+                NSRange(location: 0, length: 1), in: editor.nativeContentManager
+            )))
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: layout.documentRange.location))
+            if mode == .showAll {
+                XCTAssertGreaterThan(fragment.textLineFragments.count, 1)
+                XCTAssertGreaterThan(fragment.layoutFragmentFrame.height, rowHeight)
+                XCTAssertTrue(editor.wrapsLines)
+            } else {
+                XCTAssertEqual(fragment.textLineFragments.count, 1, "\(mode)")
+                XCTAssertEqual(fragment.layoutFragmentFrame.height, rowHeight, accuracy: 1)
+            }
+            XCTAssertEqual(editor.text, source)
+        }
+        editor.longLineDisplayWidth = .compact
+        editor.configureWrapping(true, viewportWidth: 480)
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, scroll.contentView.bounds.width, accuracy: 1)
+        editor.configureWrapping(false, viewportWidth: 480)
+        XCTAssertTrue(editor.truncatesLongLines)
+        editor.textSelection = NSRange(location: 3_000, length: 6)
+        editor.insertText("UPDATE", replacementRange: editor.textSelection)
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.text, source)
+    }
+
+    func testFullLineModeShowsRealSVGAndCanRestoreDefaultOnSameNativeView() async throws {
+        let asset = realSVGURL
+        let source = try String(contentsOf: asset, encoding: .utf8)
+        let file = FileTab(path: asset.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: font, palette: .theme(dark: false),
+            wrapLines: false, longLineDisplayWidth: .showAll, isFocused: false
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 850),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 24_576, accuracy: 1)
+        let pathOffset = (source as NSString).range(of: "<path d=\"M 741.00").location
+        XCTAssertNotEqual(pathOffset, NSNotFound)
+        let range = try XCTUnwrap(NSTextRange(
+            NSRange(location: pathOffset, length: 1), in: editor.nativeContentManager
+        ))
+        let layout = editor.nativeLayoutManager
+        layout.ensureLayout(for: range)
+        let paragraph = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+        XCTAssertGreaterThan(paragraph.textLineFragments.count, 1,
+                             "Full display must wrap the long SVG path instead of dropping it")
+        let lastPath = (source as NSString).range(of: "<path d=\"M 458.00")
+        XCTAssertNotEqual(lastPath.location, NSNotFound)
+        try await reveal(NSRange(location: lastPath.location + 3, length: 4), in: editor)
+        host.rootView = SourceTextEditor(
+            file: file, font: font, palette: .theme(dark: false),
+            wrapLines: false, longLineDisplayWidth: .standard, isFocused: false
+        )
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(scroll.documentView === editor)
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12_288, accuracy: 1)
+        XCTAssertEqual(editor.text, source)
+        try assertSVGPathsPaint(in: host, editor: editor, paneWidth: 1200)
+    }
+
+    func testFullDisplayNavigatesDeepIntoWrappedVeryLongLineWithoutLosingSource() async throws {
+        let line = String(repeating: "abcdefghij", count: 10_000)
+        let source = line + "\nlast\n"
+        let (window, scroll, editor) = mount(source, width: 480, viewportHeight: 270)
+        defer { window.close() }
+        editor.longLineDisplayWidth = .showAll
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 24_576, accuracy: 1)
+        XCTAssertEqual(editor.textContainer?.size.width ?? 0, editor.frame.width, accuracy: 1)
+        let target = NSRange(location: line.utf16.count - 25, length: 8)
+        try await reveal(target, in: editor)
+        let glyph = editor.firstRect(forCharacterRange: target, actualRange: nil)
+        XCTAssertGreaterThan(glyph.width, 0)
+        XCTAssertGreaterThan(glyph.height, 0)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0,
+                             "Full display must navigate to a distant wrapped continuation")
+        let screenBounds = try XCTUnwrap(editor.window).convertToScreen(
+            scroll.convert(scroll.bounds, to: nil)
+        )
+        XCTAssertTrue(screenBounds.insetBy(dx: -8, dy: -8).intersects(glyph),
+                      "The distant target must actually be visible: \(glyph), \(screenBounds)")
+        XCTAssertEqual(editor.textStorage?.attributedSubstring(from: target).string,
+                       (source as NSString).substring(with: target))
+        XCTAssertEqual(editor.text, source)
+        editor.longLineDisplayWidth = .standard
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12_288, accuracy: 1)
+        XCTAssertEqual(editor.text, source)
+    }
+
+    func testFullDisplayMixedUnicodeTabsAndCRLFKeepSourceAndLogicalLineNumbers() throws {
+        let line = String(repeating: "\t中文👋👩‍💻🙂0123456789", count: 2_500)
+        let source = line + "\r\nsecond\n"
+        let (window, scroll, editor) = mount(source, width: 440, viewportHeight: 240)
+        defer { window.close() }
+        editor.longLineDisplayWidth = .showAll
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertTrue(editor.wrapsLines)
+        XCTAssertEqual(editor.frame.width, 24_576, accuracy: 1)
+        XCTAssertEqual(editor.text, source)
+        let layout = editor.nativeLayoutManager
+        layout.ensureLayout(for: try XCTUnwrap(NSTextRange(
+            NSRange(location: 0, length: 1), in: editor.nativeContentManager
+        )))
+        let fragment = try XCTUnwrap(layout.textLayoutFragment(for: layout.documentRange.location))
+        XCTAssertGreaterThan(fragment.textLineFragments.count, 1)
+        let offset = (source as NSString).range(of: "second").location
+        XCTAssertNotEqual(offset, NSNotFound)
+        XCTAssertEqual(editor.lineNumber(atUTF16Offset: offset), 2)
+        editor.longLineDisplayWidth = .compact
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.text, source)
+        editor.longLineDisplayWidth = .showAll
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        XCTAssertEqual(editor.text, source)
+        XCTAssertEqual(editor.lineNumber(atUTF16Offset: offset), 2)
+    }
+
+    func testFullDisplayMegabyteLineStillKeepsFullTextAndRestoresBoundedMode() async throws {
+        let source = String(repeating: "0123456789", count: 100_000) + "\nend"
+        let (window, scroll, editor) = mount(source, width: 480, viewportHeight: 290)
+        defer { window.close() }
+        XCTAssertTrue(editor.truncatesLongLines)
+        editor.longLineDisplayWidth = .showAll
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        XCTAssertFalse(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 24_576, accuracy: 1)
+        XCTAssertEqual(editor.textContainer?.size.width ?? 0, editor.frame.width, accuracy: 1)
+        let target = NSRange(location: 900_000, length: 5)
+        try await reveal(target, in: editor)
+        let first = editor.firstRect(forCharacterRange: target, actualRange: nil)
+        XCTAssertGreaterThan(first.width, 0)
+        XCTAssertGreaterThan(scroll.contentView.bounds.origin.y, 0)
+        XCTAssertEqual(editor.textStorage?.attributedSubstring(from: target).string, "01234")
+        editor.longLineDisplayWidth = .standard
+        editor.configureWrapping(false, viewportWidth: 480)
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12_288, accuracy: 1)
+        XCTAssertEqual(editor.text, source)
+    }
+
+    func testMegabyteUnwrappedLineDoesNotAllocateUnboundedDocumentWidth() throws {
+        let source = String(repeating: "M123.45,678.90 ", count: 75_000)
+        let (window, scroll, editor) = mount(source, width: 480, wraps: false,
+                                              viewportHeight: 280)
+        defer { window.close() }
+        XCTAssertTrue(editor.truncatesLongLines)
+        XCTAssertEqual(editor.frame.width, 12288, accuracy: 1)
+        XCTAssertEqual(editor.textContainer?.size.width ?? 0, editor.frame.width, accuracy: 1)
+        let layout = editor.nativeLayoutManager
+        layout.ensureLayout(for: layout.documentRange)
+        let fragment = try XCTUnwrap(layout.textLayoutFragment(
+            for: layout.documentRange.location
+        ))
+        XCTAssertEqual(fragment.textLineFragments.count, 1)
+        XCTAssertEqual(editor.text, source)
+        XCTAssertEqual(scroll.contentView.bounds.width, 480, accuracy: 1)
     }
 
     func testMountedSourceEditorActuallyPaintsVisibleTextInBothAppearances() async throws {

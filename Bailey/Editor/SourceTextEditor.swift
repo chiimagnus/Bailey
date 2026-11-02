@@ -44,6 +44,7 @@ struct SourceTextEditor: NSViewRepresentable {
     let font: NSFont
     let palette: EditorPalette
     let wrapLines: Bool
+    var longLineDisplayWidth: LongLineDisplayWidth = .standard
     var isFocused: Bool = true
     var canFocus: () -> Bool = { true }
     var onFocused: () -> Void = {}
@@ -105,6 +106,11 @@ struct SourceTextEditor: NSViewRepresentable {
         textView.isIncrementalSearchingEnabled = true
         apply(to: textView, scrollView: scrollView)
         textView.text = file.text
+        // The first frame must size the actual document, not the empty buffer.
+        // Long SVG lines otherwise wait for a later asynchronous resize pass.
+        textView.configureWrapping(
+            wrapLines, viewportWidth: max(scrollView.contentView.bounds.width, textView.frame.width)
+        )
 
         // Tree-sitter syntax highlighting, for file types with
         // a bundled grammar. Added after the text is set so the plugin's
@@ -233,7 +239,7 @@ struct SourceTextEditor: NSViewRepresentable {
         }
         textView.insertionPointColor = palette.insertionPoint
         textView.selectedLineHighlightColor = palette.lineHighlight
-        // false = wrap at the view width, true = expand horizontally.
+        textView.longLineDisplayWidth = longLineDisplayWidth
         textView.configureWrapping(wrapLines, viewportWidth: scrollView.contentView.bounds.width)
         if let gutter = textView.gutterView {
             gutter.backgroundColor = palette.background

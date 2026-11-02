@@ -1118,6 +1118,7 @@ final class DiffCodePaneView: NSView {
         appliedGhostSpacing = [:]
         textView.text = text
         textView.updateNativeLineBreaks(for: text)
+        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         applyContentHeightOverride()
     }
 
@@ -1159,6 +1160,7 @@ final class DiffCodePaneView: NSView {
             guard let style = base.mutableCopy() as? NSMutableParagraphStyle else { return }
             style.paragraphSpacingBefore = CGFloat(spacing.rowsBefore) * rowHeight
             style.paragraphSpacing = CGFloat(spacing.rowsAfter) * rowHeight
+            if textView.truncatesLongLines { style.lineBreakMode = .byTruncatingTail }
             textView.textStorage?.addAttributes([.paragraphStyle: style], range: range)
         }
         for line in Set(appliedGhostSpacing.keys).union(wanted.keys) {
@@ -1340,11 +1342,13 @@ final class DiffCodePaneView: NSView {
         }
 
         textView.attributedText = text
+        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         decorations = newDecorations
         // Preserve TextKit's real height when its paragraph boundaries do
         // not match Git LF rows; reuse the text-owned line-break flag.
         textView.updateNativeLineBreaks(for: text.string)
-        setFixedRowCount(textView.hasNativeNonLFSeparators ? nil : newDecorations.rows.count)
+        setFixedRowCount(textView.wrapsLines || textView.hasNativeNonLFSeparators
+            ? nil : newDecorations.rows.count)
 
         if isExpansionSwap {
             setVerticalScrollOffset(savedOffset)
@@ -1385,13 +1389,24 @@ final class DiffCodePaneView: NSView {
     /// Guarded assignments: the font/color/paragraph-style setters restyle the
     /// whole document, and this runs on every re-render (each keystroke while
     /// editing).
-    func applyTypography(font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor) {
+    func applyTypography(font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor,
+                         longLineDisplayWidth: LongLineDisplayWidth = .standard) {
         if textView.font != font {
             textView.font = font
         }
-        if textView.defaultParagraphStyle?.isEqual(paragraphStyle) != true {
-            textView.defaultParagraphStyle = paragraphStyle
-            textView.typingAttributes[.paragraphStyle] = paragraphStyle
+        textView.longLineDisplayWidth = longLineDisplayWidth
+        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
+        let effectiveStyle: NSParagraphStyle
+        if textView.truncatesLongLines {
+            let style = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+            style.lineBreakMode = .byTruncatingTail
+            effectiveStyle = style
+        } else {
+            effectiveStyle = paragraphStyle
+        }
+        if textView.defaultParagraphStyle?.isEqual(effectiveStyle) != true {
+            textView.defaultParagraphStyle = effectiveStyle
+            textView.typingAttributes[.paragraphStyle] = effectiveStyle
         }
         if textView.textColor != textColor {
             textView.textColor = textColor
@@ -1406,6 +1421,10 @@ final class DiffCodePaneView: NSView {
             underlay.labelFont = labelFont
         }
         rowHeight = paragraphStyle.maximumLineHeight
+        if mode == .review, !decorations.rows.isEmpty {
+            fixedRowCount = textView.wrapsLines || textView.hasNativeNonLFSeparators
+                ? nil : decorations.rows.count
+        }
         applyContentHeightOverride()
     }
 
@@ -1417,13 +1436,29 @@ final class DiffCodePaneView: NSView {
             .index
     }
 
-    /// Scrolls so `rowIndex` is the first visible row. Rows have a fixed
-    /// height (the paragraph style pins line height), so this needs no layout
-    /// to have happened yet.
+    /// Align a Git row with the viewport; soft-wrapped paragraphs occupy
+    /// multiple visual rows and cannot use the fixed-row pixel estimate.
     func scrollToRow(_ rowIndex: Int) {
         guard rowIndex > 0, rowHeight > 0 else {
             setVerticalScrollOffset(0)
             return
+        }
+        if textView.wrapsLines {
+            let starts = mode == .review
+                ? decorations.lineStartOffsets : decorations.editSnapshotOffsets
+            if rowIndex < starts.count {
+                let content = textView.nativeContentManager
+                let offset = starts[rowIndex]
+                if let target = NSTextRange(NSRange(location: offset, length: 1), in: content) {
+                    let layout = textView.nativeLayoutManager
+                    layout.ensureLayout(for: target)
+                    if let fragment = layout.textLayoutFragment(for: target.location) {
+                        scrollView.layoutSubtreeIfNeeded()
+                        setVerticalScrollOffset(fragment.layoutFragmentFrame.minY)
+                        return
+                    }
+                }
+            }
         }
         setVerticalScrollOffset(CGFloat(rowIndex) * rowHeight)
     }
