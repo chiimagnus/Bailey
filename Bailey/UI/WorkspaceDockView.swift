@@ -621,8 +621,9 @@ struct DockTabGroupView: View {
                         guard isValidMenuTarget(item) else { return }
                         close(item)
                     } label: {
-                        Text(verbatim: closeTitle + "\t⌘W")
+                        Text(verbatim: closeTitle)
                     }
+                    .keyboardShortcut("w", modifiers: .command)
                     .accessibilityLabel(closeTitle)
                     .disabled(project.isClosingPanels)
                 }
@@ -833,8 +834,9 @@ struct DockTabGroupView: View {
             guard currentMenuTab(tabID) != nil else { return }
             close(.tab(tabID))
         } label: {
-            Text(verbatim: closeTitle + "\t⌘W")
+            Text(verbatim: closeTitle)
         }
+        .keyboardShortcut("w", modifiers: .command)
         .accessibilityLabel(closeTitle)
         .disabled(project.isClosingPanels || tab.content.isClosing)
         Button(String(localized: "Close Others", table: "Interface")) {
