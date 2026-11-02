@@ -123,12 +123,14 @@ final class DiffTab: nonisolated Identifiable {
     let preferences: DiffViewPreferences
     private(set) var oldContent = ""
     private var comparisonOld = ""
+    private var comparisonNew = ""
+    private var editComparisonOld: String?
     private(set) var newContent = ""
     private(set) var display: DiffDisplay?
     private(set) var editDecorations = DiffDecorations.empty
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
-    var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(newContent.utf8) }
+    var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(comparisonNew.utf8) }
     var isEditing: Bool { isEditableNow && preferences.prefersEditing }
 
     private nonisolated static let maxBytes = 5 << 20
@@ -275,7 +277,7 @@ final class DiffTab: nonisolated Identifiable {
         isLoading = false
     }
 
-    func reload(afterGitAction: Bool = false) {
+    func reload(afterGitAction: Bool = false, snapshotAttempt: Int = 0) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
         guard readOnlyReason == nil, (!isEditing || afterGitAction), !isDirty else { return }
@@ -392,6 +394,9 @@ final class DiffTab: nonisolated Identifiable {
                 }
             }
             var baseline = git.old
+            var reviewNew = new
+            var editBaseline: String?
+            var snapshotOutdated = false
             if failure == nil, let oldOID = git.oldOID, !git.unmerged {
                 let projected = await Self.gitComparisonBaseline(
                     source: source, oldPath: oldPath, path: path,
@@ -399,11 +404,18 @@ final class DiffTab: nonisolated Identifiable {
                     root: root, oldOID: oldOID, old: git.old, worktree: new,
                     backend: backend
                 )
-                baseline = projected.text
+                if let content = projected.content {
+                    baseline = content.old
+                    reviewNew = content.new
+                    editBaseline = content.editBaseline
+                }
                 if let error = projected.error { failure = error }
+                snapshotOutdated = projected.outdated
             }
             let result = (
-                old: git.old, baseline: baseline, new: new, failure: failure,
+                old: git.old, baseline: baseline, reviewNew: reviewNew,
+                editBaseline: editBaseline, new: new, failure: failure,
+                snapshotOutdated: snapshotOutdated,
                 unmerged: git.unmerged, editable: editable,
                 resolvedPath: source.isLive ? git.worktreePath : nil
             )
@@ -412,8 +424,19 @@ final class DiffTab: nonisolated Identifiable {
             guard let self, self.reloadGeneration == generation,
                   self.readOnlyReason == nil
             else { return }
-            self.isLoading = false
             guard (!self.isEditing || afterGitAction), !self.isDirty else { return }
+            if result.snapshotOutdated {
+                if snapshotAttempt < 3 {
+                    try? await Task.sleep(for: .milliseconds(90))
+                    guard self.reloadGeneration == generation, !self.isDirty else { return }
+                    self.reload(afterGitAction: true, snapshotAttempt: snapshotAttempt + 1)
+                    return
+                }
+                self.isLoading = false
+                self.error = String(localized: "Git file changed while loading. Refresh to retry.", table: "Git")
+                return
+            }
+            self.isLoading = false
             self.error = result.failure
             guard result.failure == nil else {
                 // A broken repository must not erase a previously loaded review.
@@ -426,9 +449,12 @@ final class DiffTab: nonisolated Identifiable {
             self.resolvedWorktreePath = result.resolvedPath
             let changed = !self.oldContent.utf8.elementsEqual(result.old.utf8)
                 || !self.comparisonOld.utf8.elementsEqual(result.baseline.utf8)
+                || !self.comparisonNew.utf8.elementsEqual(result.reviewNew.utf8)
                 || !self.newContent.utf8.elementsEqual(result.new.utf8)
             self.oldContent = result.old
             self.comparisonOld = result.baseline
+            self.comparisonNew = result.reviewNew
+            self.editComparisonOld = result.editBaseline
             self.newContent = result.new
             if changed { self.runExpansions.removeAll() }
             if changed || (self.hasChanges && self.display == nil) {
@@ -478,6 +504,11 @@ final class DiffTab: nonisolated Identifiable {
         let changed = !newContent.utf8.elementsEqual(editedNewContent.utf8)
         if !editing && changed {
             newContent = editedNewContent
+            comparisonNew = editedNewContent
+            if let editComparisonOld {
+                comparisonOld = editComparisonOld
+                self.editComparisonOld = nil
+            }
             runExpansions.removeAll()
             recomputeDisplay()
         }
@@ -506,7 +537,7 @@ final class DiffTab: nonisolated Identifiable {
             return
         }
         let before = comparisonOld
-        let after = newContent
+        let after = comparisonNew
         let path = path
         let expansions = runExpansions
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -604,9 +635,9 @@ final class DiffTab: nonisolated Identifiable {
     func refreshEditDecorations(immediate: Bool = false) {
         editGeneration &+= 1
         let generation = editGeneration
-        let before = comparisonOld
+        let before = editComparisonOld ?? comparisonOld
         let after = editedNewContent
-        let oldRuns = displayInputs?.oldRuns ?? []
+        let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
         let font = TerminalFont.current()
         let style = DiffTypography.paragraphStyle(for: font)
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -921,14 +952,14 @@ final class DiffTab: nonisolated Identifiable {
         return !stat.isSymlink && stat.isRegular
     }
 
-    /// Git is the authority for equivalence; turn its unchanged lines into
-    /// a single comparison baseline in the editor's original worktree format.
+    /// Git owns comparison semantics; Review uses canonical Git content when
+    /// a clean filter cannot map its line ranges back to raw worktree lines.
     /// The actual blob and editable buffer are never rewritten.
     private nonisolated static func gitComparisonBaseline(
         source: Source, oldPath: String, path: String, worktreePath: String,
         oldFromIndex: Bool, root: String, oldOID: String, old: String,
         worktree: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?) {
+    ) async -> (content: GitWorktreeComparison.Content?, error: String?, outdated: Bool) {
         let comparison: [String]
         switch source {
         case .worktree where oldPath == path:
@@ -936,7 +967,7 @@ final class DiffTab: nonisolated Identifiable {
         case .revisionWorktree(let revision) where worktreePath == path:
             comparison = [revision]
         default:
-            return (old, nil)
+            return (.init(old: old, new: worktree, editBaseline: nil), nil, false)
         }
         let failure = String(localized: "Unable to read Git content", table: "Git")
         let cleaned: WorkspaceRunResult
@@ -947,11 +978,11 @@ final class DiffTab: nonisolated Identifiable {
                 cwd: root, env: nil, stdin: Data(worktree.utf8), timeout: 60
             )
         } catch {
-            return (old, error.localizedDescription)
+            return (nil, error.localizedDescription, false)
         }
         guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
             let detail = String(decoding: cleaned.stderr, as: UTF8.self)
-            return (old, detail.isEmpty ? failure : detail)
+            return (nil, detail.isEmpty ? failure : detail, false)
         }
         let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -962,14 +993,28 @@ final class DiffTab: nonisolated Identifiable {
             in: root, stdoutLimit: maxBytes * 4 + 1, backend: backend
         )
         guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
-              let text = String(data: patch.stdout, encoding: .utf8),
-              let baseline = GitWorktreeComparison.baseline(
-                  old: old, worktree: worktree, patch: text,
-                  oldOID: oldOID, newOID: newOID
-              ) else {
-            return (old, patch.stderr.isEmpty ? failure : patch.stderr)
+              let text = String(data: patch.stdout, encoding: .utf8) else {
+            return (nil, patch.stderr.isEmpty ? failure : patch.stderr, false)
         }
-        return (baseline, nil)
+        if let content = GitWorktreeComparison.resolve(
+            old: old, worktree: worktree, patch: text,
+            oldOID: oldOID, newOID: newOID
+        ) {
+            return (content, nil, false)
+        }
+        // Git diff reads a live file. A different index OID or file content
+        // means the patch does not describe the snapshot we already loaded.
+        let refreshed = await readWorktreeFile(root: root, path: worktreePath, backend: backend)
+        let worktreeMoved = refreshed.error == nil
+            && !refreshed.text.utf8.elementsEqual(worktree.utf8)
+        let indexLine = DiffLineSplitter.lines(of: text).lines
+            .first(where: { $0.text.hasPrefix("index ") })?.text
+        let patchIDs = indexLine?.dropFirst(6).split(separator: " ").first?
+            .components(separatedBy: "..")
+        let gitMoved = patchIDs?.count == 2
+            && (patchIDs?[0] != oldOID || patchIDs?[1] != newOID)
+        let outdated = worktreeMoved || gitMoved
+        return (nil, outdated ? nil : (patch.stderr.isEmpty ? failure : patch.stderr), outdated)
     }
 
     private nonisolated static func readWorktreeFile(

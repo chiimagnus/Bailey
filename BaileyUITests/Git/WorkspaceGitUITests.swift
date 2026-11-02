@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 @MainActor
@@ -86,6 +87,217 @@ final class WorkspaceGitUITests: XCTestCase {
         shot.lifetime = .keepAlways
         add(shot)
         XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+    }
+
+    func testAuthorizedWindowsSSHGitReviewThroughRealUI() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Windows SSH GUI requires explicitly authorized host")
+        }
+        func ssh(_ script: String) throws -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = [
+                "-T", "-o", "ControlMaster=no", "-o", "ControlPath=none",
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", host, "sh -s",
+            ]
+            let input = Pipe()
+            let output = Pipe()
+            let errors = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = errors
+            try process.run()
+            input.fileHandleForWriting.write(Data(script.utf8))
+            try? input.fileHandleForWriting.close()
+            let stdout = output.fileHandleForReading.readDataToEndOfFile()
+            let stderr = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw NSError(domain: "WindowsSSHGuiFixture", code: Int(process.terminationStatus),
+                              userInfo: [
+                                NSLocalizedDescriptionKey: String(decoding: stderr, as: UTF8.self)
+                              ])
+            }
+            return String(decoding: stdout, as: UTF8.self)
+        }
+        let root = try ssh("mktemp -d /tmp/bailey-git-ui-XXXXXX\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-git-ui-") else {
+            throw NSError(domain: "WindowsSSHGuiFixture", code: 1)
+        }
+        defer {
+            WorkspaceUITestSupport.finishSession()
+            // The generated path is checked against the fixed owned prefix.
+            try? ssh("rm -r -- '\(root)'\n")
+        }
+
+        let status = try ssh("""
+        set -eu
+        cd '\(root)'
+        git init -q -b main
+        git config user.name 'Bailey Windows UI Test'
+        git config user.email fixture@invalid
+        git config commit.gpgsign false
+        git config core.autocrlf true
+        git config filter.drop.clean "sed '/^TRANSIENT/d'"
+        printf 'filtered.txt filter=drop\\n' > .gitattributes
+        printf 'keep\\n' > filtered.txt
+        git add -- .
+        git commit -qm baseline
+        printf 'changed\\nTRANSIENT\\n' > filtered.txt
+        git diff --numstat -- filtered.txt
+        """)
+        XCTAssertEqual(status.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "1\t1\tfiltered.txt")
+        let local = try WorkspaceUITestFixture(in: self)
+        _ = try local.file("local.txt", text: "UI anchor\n")
+        try local.initializeGit()
+        let actualHome = try XCTUnwrap(getpwuid(getuid()))
+        let actualSSHConfig = URL(fileURLWithPath: String(cString: actualHome.pointee.pw_dir))
+            .appendingPathComponent(".ssh/config")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: actualSSHConfig.path),
+                      "The UI fixture must use the real user's approved SSH alias file")
+        _ = try local.file(".ssh/config", text: "Include \(actualSSHConfig.path)\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: local.root, project: local.root
+        )
+        let window = app.windows.firstMatch
+        let addProject = app.buttons["bailey.projects.addPicker"]
+        XCTAssertTrue(addProject.waitForExistence(timeout: 15))
+        addProject.click()
+        let openSSH = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Add SSH Files")
+        ).firstMatch
+        XCTAssertTrue(openSSH.waitForExistence(timeout: 10))
+        openSSH.click()
+        let hostChoice = app.buttons.matching(identifier: "bailey.sshFolderPicker.hostChoice")
+            .matching(NSPredicate(format: "value == %@", host)).firstMatch
+        XCTAssertTrue(hostChoice.waitForExistence(timeout: 15),
+                      "SSH picker must offer the authorized Windows host")
+        hostChoice.click()
+        let field = app.textFields["bailey.sshFolderPicker.path"]
+        XCTAssertTrue(field.waitForExistence(timeout: 40))
+        field.click()
+        app.typeKey("a", modifierFlags: .command)
+        field.typeText(root)
+        field.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        let confirmButton = app.buttons["bailey.sshFolderPicker.add"]
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 40))
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: confirmButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 40), .completed)
+        confirmButton.click()
+
+        let addPanel = window.buttons["Add Panel"]
+        XCTAssertTrue(addPanel.waitForExistence(timeout: 40),
+                      "The selected SSH project must mount its workspace")
+        addPanel.click()
+        let gitAction = app.buttons.matching(
+            NSPredicate(format: "label == %@", "Git Manager")
+        ).firstMatch
+        XCTAssertTrue(gitAction.waitForExistence(timeout: 15))
+        gitAction.click()
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(git.waitForExistence(timeout: 40))
+        let remoteURL = URL(fileURLWithPath: root + "/filtered.txt")
+        let rootURL = URL(fileURLWithPath: root)
+        let change = WorkspaceUITestSupport.fileRow(
+            remoteURL, in: window, relativeTo: rootURL
+        )
+        XCTAssertTrue(change.waitForExistence(timeout: 90),
+                      "Actual Windows SSH project must show its changed file")
+        change.click()
+        let mode = window.radioGroups["bailey.diff.mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 40))
+        mode.radioButtons.element(boundBy: 0).click()
+        let review = window.textViews.firstMatch
+        XCTAssertTrue(review.waitForExistence(timeout: 40))
+        let visible = try XCTUnwrap(review.value as? String)
+        XCTAssertTrue(visible.contains("keep") && visible.contains("changed"))
+        XCTAssertFalse(visible.contains("TRANSIENT"))
+        let shot = XCTAttachment(screenshot: window.screenshot())
+        shot.name = "Real Windows SSH Git Review with noninvertible clean filter"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        mode.radioButtons.element(boundBy: 1).click()
+        let edit = window.textViews.firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 30))
+        XCTAssertEqual(edit.value as? String, "changed\nTRANSIENT\n")
+        edit.click()
+        app.typeKey("a", modifierFlags: .command)
+        edit.typeText("updated\nTRANSIENT\n")
+        app.typeKey("s", modifierFlags: .command)
+        let rawSave = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? ssh("cat -- '\(root)/filtered.txt'\n")) == "updated\nTRANSIENT\n"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [rawSave], timeout: 65), .completed)
+        mode.radioButtons.element(boundBy: 0).click()
+        let refreshed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (window.textViews.firstMatch.value as? String)?.contains("updated") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [refreshed], timeout: 65), .completed)
+        XCTAssertFalse((window.textViews.firstMatch.value as? String ?? "").contains("TRANSIENT"))
+    }
+
+    func testGitCleanFilteredReviewAndRawEditRemainDistinct() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("filter-lines.txt", text: "keep\n")
+        _ = try fixture.file(".gitattributes", text: "filter-lines.txt filter=drop\n")
+        try fixture.initializeGit()
+        try fixture.git(["config", "filter.drop.clean", "sed '/^TRANSIENT/d'"])
+        let raw = "changed\nTRANSIENT\n"
+        try Data(raw.utf8).write(to: file)
+        XCTAssertEqual(
+            String(decoding: try fixture.git(["diff", "--numstat", "--", "filter-lines.txt"]),
+                   as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
+            "1\t1\tfilter-lines.txt"
+        )
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(row.waitForExistence(timeout: 25))
+        row.click()
+        let mode = window.radioGroups["bailey.diff.mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        mode.radioButtons.element(boundBy: 0).click()
+        let review = window.textViews.firstMatch
+        XCTAssertTrue(review.waitForExistence(timeout: 15))
+        let visible = try XCTUnwrap(review.value as? String)
+        XCTAssertTrue(visible.contains("keep") && visible.contains("changed"))
+        XCTAssertFalse(visible.contains("TRANSIENT"),
+                       "Review must display the Git-cleaned content, not invented raw lines")
+        let shot = XCTAttachment(screenshot: window.screenshot())
+        shot.name = "Git clean filter changes line count without losing real Review"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        mode.radioButtons.element(boundBy: 1).click()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertEqual(editor.value as? String, raw,
+                       "The editor must expose the original bytes hidden by a clean filter")
+        editor.click()
+        app.typeKey("a", modifierFlags: .command)
+        let next = "changed again\nTRANSIENT\n"
+        editor.typeText(next)
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(next.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "Command-S must write raw source text without reapplying the clean filter")
+        mode.radioButtons.element(boundBy: 0).click()
+        let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (window.textViews.firstMatch.value as? String)?.contains("changed again") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 20), .completed)
+        XCTAssertFalse((window.textViews.firstMatch.value as? String ?? "").contains("TRANSIENT"))
+        XCTAssertEqual(try Data(contentsOf: file), Data(next.utf8))
     }
 
     func testLargeSwiftDiffHasVisibleFoldAndContextAboveLine595() throws {

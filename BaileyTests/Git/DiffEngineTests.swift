@@ -102,10 +102,10 @@ final class DiffEngineTests: XCTestCase {
         let oldOID = String(repeating: "a", count: 40)
         let newOID = String(repeating: "b", count: 40)
         let cleanCheckout = "alpha\r\nold\r\nlast\r\n"
-        XCTAssertEqual(GitWorktreeComparison.baseline(
+        XCTAssertEqual(GitWorktreeComparison.resolve(
             old: old, worktree: cleanCheckout, patch: "",
             oldOID: oldOID, newOID: oldOID
-        ), cleanCheckout)
+        )?.old, cleanCheckout)
         let patch = """
         diff --git a/file b/file
         index \(oldOID)..\(newOID) 100644
@@ -115,10 +115,10 @@ final class DiffEngineTests: XCTestCase {
         -old
         +new
         """
-        let baseline = try XCTUnwrap(GitWorktreeComparison.baseline(
+        let baseline = try XCTUnwrap(GitWorktreeComparison.resolve(
             old: old, worktree: edited, patch: patch,
             oldOID: oldOID, newOID: newOID
-        ))
+        )).old
         XCTAssertEqual(baseline, "alpha\r\nold\nlast\r\n")
         let expected: [DiffLineOp] = [
             .equal(oldStart: 0, newStart: 0, count: 1),
@@ -130,11 +130,11 @@ final class DiffEngineTests: XCTestCase {
         XCTAssertEqual(DiffCore.compute(
             oldText: baseline, newText: "alpha\r\nnewer\r\nlast\r\n"
         ).ops, expected, "Editing must reuse the exact same comparison baseline")
-        XCTAssertNil(GitWorktreeComparison.baseline(
+        XCTAssertNil(GitWorktreeComparison.resolve(
             old: old, worktree: edited, patch: patch,
             oldOID: newOID, newOID: newOID
         ), "Changing the index between reads must not reinterpret the old blob")
-        XCTAssertNil(GitWorktreeComparison.baseline(
+        XCTAssertNil(GitWorktreeComparison.resolve(
             old: old, worktree: edited, patch: patch,
             oldOID: oldOID, newOID: oldOID
         ), "Changing the worktree between reads must not reinterpret the patch")
@@ -155,23 +155,23 @@ final class DiffEngineTests: XCTestCase {
         +first
         +second
         """
-        let baseline = try XCTUnwrap(GitWorktreeComparison.baseline(
+        let baseline = try XCTUnwrap(GitWorktreeComparison.resolve(
             old: old, worktree: checkout, patch: patch,
             oldOID: oldOID, newOID: newOID
-        ))
+        )).old
         XCTAssertEqual(baseline, old, "-text does not normalize CRLF")
         let ops = DiffCore.compute(oldText: baseline, newText: checkout).ops
         XCTAssertEqual(ops.filter { if case .equal = $0 { false } else { true } }.count, 2)
         let filtered = "first\nTRANSIENT\nsecond\n"
-        XCTAssertEqual(GitWorktreeComparison.baseline(
+        XCTAssertEqual(GitWorktreeComparison.resolve(
             old: old, worktree: filtered, patch: "",
             oldOID: oldOID, newOID: oldOID
-        ), filtered, "Git can clean entire lines without changing its stored blob")
-        XCTAssertNil(GitWorktreeComparison.baseline(
+        )?.old, filtered, "Git can clean entire lines without changing its stored blob")
+        XCTAssertNil(GitWorktreeComparison.resolve(
             old: old, worktree: filtered, patch: "",
             oldOID: oldOID, newOID: newOID
         ))
-        XCTAssertNil(GitWorktreeComparison.baseline(
+        XCTAssertNil(GitWorktreeComparison.resolve(
             old: old, worktree: checkout,
             patch: "diff --git a/a b/a\ndiff --git a/b b/b\n",
             oldOID: oldOID, newOID: newOID
@@ -183,10 +183,82 @@ final class DiffEngineTests: XCTestCase {
         -first
         +cleaned first
         """
-        XCTAssertNil(GitWorktreeComparison.baseline(
+        let canonical = try XCTUnwrap(GitWorktreeComparison.resolve(
             old: old, worktree: old, patch: noninvertible,
             oldOID: oldOID, newOID: newOID
-        ), "A Git-visible change must not disappear when the raw bytes match")
+        ))
+        XCTAssertEqual(canonical.old, old)
+        XCTAssertEqual(canonical.new, "cleaned first\nsecond\n")
+        XCTAssertEqual(canonical.editBaseline, old,
+                       "Filtered Review must not silently change what Edit saves")
+    }
+
+    func testGitCanonicalReviewPatchHandlesMultipleHunksUnicodeAndNoFinalNewline() throws {
+        let old = "first\nmiddle\nlast"
+        let raw = "甲\nTRANSIENT\nmiddle\n乙"
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let patch = """
+        diff --git a/x b/x
+        index \(oldOID)..\(newOID) 100644
+        --- a/x
+        +++ b/x
+        @@ -1 +1 @@
+        -first
+        +甲
+        @@ -3 +3 @@
+        -last
+        \\ No newline at end of file
+        +乙
+        \\ No newline at end of file
+        """
+        let result = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: raw, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        XCTAssertEqual(result.old, old)
+        XCTAssertEqual(result.new, "甲\nmiddle\n乙")
+        XCTAssertEqual(result.editBaseline, raw)
+        XCTAssertEqual(DiffCore.compute(oldText: result.old, newText: result.new)
+            .ops.filter { if case .equal = $0 { false } else { true } }.count, 4)
+    }
+
+    func testGitCanonicalReviewHandlesCompleteDeletionWithoutVirtualNewline() throws {
+        let oldOID = String(repeating: "a", count: 40)
+        let patch = """
+        diff --git a/file b/file
+        deleted file mode 100644
+        index \(oldOID)..\(String(repeating: "0", count: 40))
+        --- a/file
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -gone
+        """
+        let content = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: "gone\n", worktree: "", patch: patch,
+            oldOID: oldOID, newOID: String(repeating: "b", count: 40)
+        ))
+        XCTAssertEqual(content.old, "gone\n")
+        XCTAssertEqual(content.new, "", "Deleting the last line must not invent a trailing blank row")
+        XCTAssertEqual(DiffCore.compute(oldText: content.old, newText: content.new)
+            .ops.filter { if case .delete = $0 { true } else { false } }.count, 1)
+    }
+
+    func testGitModeOnlyPatchNeedsNoContentFallback() throws {
+        let oid = String(repeating: "c", count: 40)
+        let raw = "unchanged\r\n"
+        let patch = """
+        diff --git a/a.txt b/a.txt
+        old mode 100644
+        new mode 100755
+        """
+        let result = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: "unchanged\n", worktree: raw, patch: patch,
+            oldOID: oid, newOID: oid
+        ))
+        XCTAssertEqual(result.old, raw)
+        XCTAssertEqual(result.new, raw)
+        XCTAssertNil(result.editBaseline)
     }
 
     func testLargeRepeatedShiftStillProducesMinimalLineDiff() {

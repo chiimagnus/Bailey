@@ -59,82 +59,152 @@ nonisolated enum DiffLineSplitter {
     }
 }
 
-/// Project Git's notion of unchanged lines into worktree text once.
-/// The editor still owns the untouched worktree bytes; every subsequent
-/// Review/Edit comparison uses this one projected baseline and DiffEngine.
+/// Git determines which lines change; the editor retains raw worktree bytes.
+/// Only use raw Review coordinates when its lines match Git's cleaned content.
 nonisolated enum GitWorktreeComparison {
-    static func baseline(
+    nonisolated struct Content {
+        let old: String
+        let new: String
+        /// When a clean filter changes line structure, live editing compares
+        /// against the raw buffer captured at load rather than Git's blob.
+        let editBaseline: String?
+    }
+
+    static func resolve(
         old: String, worktree: String, patch: String,
         oldOID: String, newOID: String
-    ) -> String? {
+    ) -> Content? {
         let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: old)
-        let (newLines, newTrailing) = DiffLineSplitter.lines(of: worktree)
-        guard !patch.contains("Binary files "), !patch.contains("GIT binary patch") else { return nil }
-        if patch.isEmpty {
-            return oldOID == newOID ? worktree : nil
+        let (rawLines, rawTrailing) = DiffLineSplitter.lines(of: worktree)
+        guard !patch.contains("Binary files "), !patch.contains("GIT binary patch") else {
+            return nil
         }
-        var fileCount = 0
-        var hunkCount = 0
-        var indexPair: (String, String)?
+        if patch.isEmpty {
+            return oldOID == newOID
+                ? Content(old: worktree, new: worktree, editBaseline: nil)
+                : nil
+        }
+
+        var files = 0
+        var hunks = 0
+        var pair: (String, String)?
         var oldCursor = 0
         var newCursor = 0
-        var projected = oldLines.map(\.text)
+        var oldRemaining = 0
+        var newRemaining = 0
+        var projected = oldLines.map { String($0.text) }
+        var canonical: [String] = []
+        var lastChangedOldEnd = 0
+        var newTrailing = oldTrailing
+        var lastKind: Character?
 
-        func coordinate(_ field: Substring, prefix: Character) -> (Int, Int)? {
-            guard field.first == prefix else { return nil }
-            let pieces = field.dropFirst().split(separator: ",", omittingEmptySubsequences: false)
-            guard (1...2).contains(pieces.count),
-                  let start = Int(pieces[0]), start >= 0,
-                  let count = pieces.count == 2 ? Int(pieces[1]) : 1,
+        func coordinate(_ token: Substring, prefix: Character) -> (start: Int, count: Int)? {
+            guard token.first == prefix else { return nil }
+            let parts = token.dropFirst().split(separator: ",", omittingEmptySubsequences: false)
+            guard (1...2).contains(parts.count),
+                  let start = Int(parts[0]), start >= 0,
+                  let count = parts.count == 2 ? Int(parts[1]) : 1,
                   count >= 0, (count == 0 || start > 0) else { return nil }
             return (count == 0 ? start : start - 1, count)
         }
 
-        func align(oldEnd: Int, newEnd: Int) -> Bool {
-            guard oldEnd >= oldCursor, newEnd >= newCursor,
-                  oldEnd - oldCursor == newEnd - newCursor,
-                  oldEnd <= oldLines.count, newEnd <= newLines.count else { return false }
+        func unchanged(until oldEnd: Int, newEnd: Int) -> Bool {
+            guard oldEnd >= oldCursor, oldEnd <= oldLines.count,
+                  newEnd >= newCursor,
+                  oldEnd - oldCursor == newEnd - newCursor else { return false }
             for offset in 0..<(oldEnd - oldCursor) {
-                projected[oldCursor + offset] = newLines[newCursor + offset].text
+                canonical.append(String(oldLines[oldCursor + offset].text))
+                if newCursor + offset < rawLines.count {
+                    projected[oldCursor + offset] = String(rawLines[newCursor + offset].text)
+                }
             }
+            oldCursor = oldEnd
+            newCursor = newEnd
             return true
         }
 
-        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+        for entry in DiffLineSplitter.lines(of: patch).lines {
+            let line = entry.text
             if line.hasPrefix("diff --git ") {
-                fileCount += 1
-                guard fileCount == 1 else { return nil }
+                files += 1
+                guard files == 1 else { return nil }
             } else if line.hasPrefix("index ") {
-                let pair = line.dropFirst(6).split(separator: " ").first?
+                let ids = line.dropFirst(6).split(separator: " ").first?
                     .components(separatedBy: "..")
-                guard let pair, pair.count == 2 else { return nil }
-                indexPair = (pair[0], pair[1])
+                guard let ids, ids.count == 2 else { return nil }
+                pair = (ids[0], ids[1])
             } else if line.hasPrefix("@@ -") {
-                hunkCount += 1
-                let fields = line.split(separator: " ", maxSplits: 3)
-                guard fields.count >= 3, fields[0] == "@@",
-                      let before = coordinate(fields[1], prefix: "-"),
-                      let after = coordinate(fields[2], prefix: "+"),
-                      align(oldEnd: before.0, newEnd: after.0),
-                      before.0 + before.1 <= oldLines.count,
-                      after.0 + after.1 <= newLines.count else { return nil }
-                oldCursor = before.0 + before.1
-                newCursor = after.0 + after.1
+                guard oldRemaining == 0, newRemaining == 0 else { return nil }
+                let parts = line.split(separator: " ", maxSplits: 3)
+                guard parts.count >= 3, parts[0] == "@@",
+                      let before = coordinate(parts[1], prefix: "-"),
+                      let after = coordinate(parts[2], prefix: "+"),
+                      unchanged(until: before.start, newEnd: after.start),
+                      before.start + before.count <= oldLines.count else { return nil }
+                hunks += 1
+                oldRemaining = before.count
+                newRemaining = after.count
+                lastChangedOldEnd = before.start + before.count
+                if lastChangedOldEnd == oldLines.count { newTrailing = true }
+                lastKind = nil
+            } else if hunks > 0, let kind = line.first, kind == "-" || kind == "+" || kind == " " {
+                let content = String(line.dropFirst())
+                switch kind {
+                case "-":
+                    guard oldRemaining > 0, oldCursor < oldLines.count,
+                          oldLines[oldCursor].text == content else { return nil }
+                    oldCursor += 1
+                    oldRemaining -= 1
+                case "+":
+                    guard newRemaining > 0 else { return nil }
+                    canonical.append(content)
+                    newCursor += 1
+                    newRemaining -= 1
+                default:
+                    guard oldRemaining > 0, newRemaining > 0,
+                          oldCursor < oldLines.count,
+                          oldLines[oldCursor].text == content else { return nil }
+                    canonical.append(content)
+                    oldCursor += 1
+                    newCursor += 1
+                    oldRemaining -= 1
+                    newRemaining -= 1
+                }
+                lastKind = kind
+            } else if line.hasPrefix("\\ No newline at end of file") {
+                if lastKind == "+" || lastKind == " " { newTrailing = false }
+            } else if !line.isEmpty, hunks > 0 {
+                // Git itself produced the patch; unknown output must never be
+                // mistaken for an unchanged line.
+                return nil
             }
         }
-        guard fileCount == 1, let indexPair,
-              indexPair.0 == oldOID,
-              indexPair.1 == newOID || (worktree.isEmpty && indexPair.1.allSatisfy { $0 == "0" }),
-              align(oldEnd: oldLines.count, newEnd: newLines.count) else { return nil }
+        if files == 1, hunks == 0, oldOID == newOID,
+           pair == nil || (pair?.0 == oldOID && pair?.1 == newOID) {
+            // A mode-only patch carries no text changes.
+            return Content(old: worktree, new: worktree, editBaseline: nil)
+        }
+        guard files == 1, hunks > 0, oldRemaining == 0, newRemaining == 0,
+              let pair, pair.0 == oldOID,
+              pair.1 == newOID || (worktree.isEmpty && pair.1.allSatisfy { $0 == "0" }),
+              unchanged(until: oldLines.count,
+                        newEnd: newCursor + oldLines.count - oldCursor) else { return nil }
 
-        let matchedLastLine = !oldLines.isEmpty
-            && oldCursor <= oldLines.count - 1
-        let trailing = matchedLastLine ? newTrailing : oldTrailing
-        let baseline = projected.map(String.init).joined(separator: "\n") + (trailing ? "\n" : "")
-        // A non-invertible clean filter may change Git's blob even when its
-        // raw worktree still looks identical. Never hide Git's real change.
-        if hunkCount > 0, baseline.utf8.elementsEqual(worktree.utf8) { return nil }
-        return baseline
+        let canonicalNew = canonical.joined(separator: "\n")
+            + (!canonical.isEmpty && newTrailing ? "\n" : "")
+        let projectedTrailing = lastChangedOldEnd < oldLines.count ? rawTrailing : oldTrailing
+        let projectedOld = projected.joined(separator: "\n") + (projectedTrailing ? "\n" : "")
+        let (cleanedLines, cleanedTrailing) = DiffLineSplitter.lines(of: canonicalNew)
+        let rawMatchesGit = rawTrailing == cleanedTrailing && rawLines.count == cleanedLines.count
+            && zip(rawLines, cleanedLines).allSatisfy { raw, cleaned in
+                raw.text == cleaned.text || raw.text == String(cleaned.text) + "\r"
+            }
+        if rawMatchesGit && !projectedOld.utf8.elementsEqual(worktree.utf8) {
+            return Content(old: projectedOld, new: worktree, editBaseline: nil)
+        }
+        // Clean filters are not generally invertible (they can erase lines).
+        // Render the two canonical sides Git compared; edit the raw file.
+        return Content(old: old, new: canonicalNew, editBaseline: worktree)
     }
 }
 

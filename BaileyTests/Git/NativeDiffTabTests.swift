@@ -1753,7 +1753,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: ordinary), Data(edited.utf8))
     }
 
-    func testGitCleanFiltersRespectSemanticEqualityAndRejectUnmappableLineChanges() async throws {
+    func testGitCleanFiltersShowCanonicalReviewWhenRawLinesDoNotCorrespond() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
         let attributes = """
@@ -1812,10 +1812,231 @@ final class NativeDiffTabTests: XCTestCase {
         try Data("changed\nTRANSIENT\n".utf8).write(to: lines)
         filtered.reload()
         try await wait { !filtered.isLoading }
-        XCTAssertNotNil(filtered.error, "An unrepresentable Git filter cannot silently fabricate diff rows")
-        XCTAssertEqual(filtered.newContent, "keep\nTRANSIENT\n",
-                       "A failed mapping must retain the previous successful editor buffer")
+        try await wait { !filtered.isLoading && filtered.display != nil }
+        XCTAssertNil(filtered.error)
+        XCTAssertTrue(filtered.hasChanges)
+        XCTAssertEqual(filtered.oldContent, "keep\n")
+        XCTAssertEqual(filtered.newContent, "changed\nTRANSIENT\n",
+                       "Editable buffer must remain the original unfiltered worktree bytes")
+        let visible = try XCTUnwrap(filtered.display)
+        XCTAssertEqual(visible.computation.unified.rows.filter { $0.kind == .removed }.count, 1)
+        XCTAssertEqual(visible.computation.unified.rows.filter { $0.kind == .added }.count, 1)
+        XCTAssertTrue(visible.unifiedText.string.contains("changed"))
+        XCTAssertFalse(visible.unifiedText.string.contains("TRANSIENT"),
+                       "Review must show exactly the Git-cleaned comparison")
+        filtered.setEditing(true)
+        XCTAssertEqual(filtered.editedNewContent, "changed\nTRANSIENT\n")
         XCTAssertEqual(try Data(contentsOf: lines), Data("changed\nTRANSIENT\n".utf8))
+    }
+
+    func testLargeSwiftWorktreeWithManyIndependentHunksRendersWithoutReadError() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("DiffEngine.swift")
+        let original = (0..<1300).map { "    let value_\($0) = \($0)" }
+        try Data((original.joined(separator: "\n") + "\n").utf8).write(to: file)
+        for args in [["add", "."], ["commit", "-qm", "Swift baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        var modified = original
+        let changed = Array(stride(from: 12, to: 1290, by: 37))
+        for row in changed { modified[row] += " + 1" }
+        let body = modified.joined(separator: "\n") + "\n"
+        try Data(body.utf8).write(to: file)
+        let tab = DiffTab(repoRoot: root.path, path: "DiffEngine.swift", source: .worktree,
+                          untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        try await wait({ !tab.isLoading && tab.display != nil }, timeout: 30)
+        XCTAssertNil(tab.error, "Unrelated Git hunks must never blank the entire editor")
+        XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+            $0.kind == .added
+        }.count, changed.count)
+        XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+            $0.kind == .removed
+        }.count, changed.count)
+        XCTAssertEqual(tab.newContent, body)
+    }
+
+    func testWorktreeRewriteDuringGitCleanReloadsOneCoherentSnapshot() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("edited.txt")
+        let script = root.appendingPathComponent("clean-once.sh")
+        try Data("old\n".utf8).write(to: file)
+        try Data("edited.txt filter=once\n".utf8)
+            .write(to: root.appendingPathComponent(".gitattributes"))
+        for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data("""
+        #!/bin/sh
+        marker='\(root.path)/.git/clean-ran'
+        if [ ! -e "$marker" ]; then
+            : > "$marker"
+            printf 'new\\n' > '\(file.path)'
+        fi
+        cat
+        """.utf8).write(to: script)
+        let configured = GitCommandExecution.run(
+            ["config", "filter.once.clean", "sh '\(script.path)'"], in: root.path
+        )
+        XCTAssertEqual(configured.status, 0, configured.stderr)
+
+        let tab = DiffTab(repoRoot: root.path, path: "edited.txt", source: .worktree,
+                          untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        try await wait({
+            !tab.isLoading && tab.newContent == "new\n" && tab.display != nil
+        }, timeout: 30)
+        XCTAssertNil(tab.error, "The Git diff should reload if the file changes while reading")
+        XCTAssertEqual(try Data(contentsOf: file), Data("new\n".utf8))
+        XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+            $0.kind == .removed
+        }.count, 1)
+        XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+            $0.kind == .added
+        }.count, 1)
+    }
+
+    func testAuthorizedWindowsSSHGitReviewAndRawSaveMatchGitCleanRules() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Real SSH Git Review requires an explicitly selected test host")
+        }
+        let socket = "/tmp/bailey-diff-eol-" + UUID().uuidString + ".sock"
+        let backend = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 45
+        )
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-diff-eol-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 30
+        )
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-diff-eol-") else {
+            throw WorkspaceError.notFound
+        }
+
+        func execute(_ command: [String]) async throws -> String {
+            let result = try await backend.run(
+                argv: command, cwd: root, env: nil, stdin: nil, timeout: 45
+            )
+            XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+            guard result.status == 0 else { throw WorkspaceError.notFound }
+            return String(decoding: result.stdout, as: UTF8.self)
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not clean owned Windows SSH Git fixture: \(error)") }
+            if FileManager.default.fileExists(atPath: socket) {
+                do {
+                    let result = try await Task.detached {
+                        try ProcessRemoteCommandRunner.launch(
+                            sshPath: "/usr/bin/ssh",
+                            arguments: ["-S", socket, "-O", "exit", host],
+                            stdin: nil, timeout: 10
+                        )
+                    }.value
+                    XCTAssertEqual(result.status, 0)
+                } catch {
+                    XCTFail("Could not stop test-owned SSH master: \(error)")
+                }
+            }
+        }
+
+        do {
+            _ = try await execute(["git", "init", "-q", "-b", "main"])
+            for pair in [
+                ["user.name", "Windows Git Review Fixture"],
+                ["user.email", "fixture@invalid"],
+                ["commit.gpgsign", "false"],
+                ["core.autocrlf", "true"],
+                ["filter.drop.clean", "sed '/^TRANSIENT/d'"],
+            ] {
+                _ = try await execute(["git", "config"] + pair)
+            }
+            try await backend.write(
+                path: root + "/.gitattributes",
+                data: Data("note.txt text\nraw.txt -text\nfiltered.txt filter=drop\n".utf8)
+            )
+            let base = "alpha\nbeta\nlast\n"
+            try await backend.write(path: root + "/note.txt", data: Data(base.utf8))
+            try await backend.write(path: root + "/raw.txt", data: Data(base.utf8))
+            try await backend.write(path: root + "/filtered.txt", data: Data("keep\n".utf8))
+            _ = try await execute(["git", "add", "--", "."])
+            _ = try await execute(["git", "commit", "-qm", "Windows SSH fixture"])
+            let checkout = "alpha\r\nbeta\r\nlast\r\n"
+            try await backend.write(path: root + "/note.txt", data: Data(checkout.utf8))
+            try await backend.write(path: root + "/raw.txt", data: Data(checkout.utf8))
+            try await backend.write(
+                path: root + "/filtered.txt",
+                data: Data("changed\nTRANSIENT\n".utf8)
+            )
+            let truth = try await execute(["git", "diff", "--numstat", "--"])
+            XCTAssertFalse(truth.contains("note.txt"), truth)
+            XCTAssertTrue(truth.contains("raw.txt"), truth)
+            XCTAssertTrue(truth.contains("filtered.txt"), truth)
+
+            let preferences = try isolatedPreferences()
+            let normal = DiffTab(
+                repoRoot: root, path: "note.txt", source: .worktree,
+                untracked: false, origPath: nil, backend: backend,
+                workspaceIdentity: nil, preferences: preferences
+            )
+            let raw = DiffTab(
+                repoRoot: root, path: "raw.txt", source: .worktree,
+                untracked: false, origPath: nil, backend: backend,
+                workspaceIdentity: nil, preferences: preferences
+            )
+            let filtered = DiffTab(
+                repoRoot: root, path: "filtered.txt", source: .worktree,
+                untracked: false, origPath: nil, backend: backend,
+                workspaceIdentity: nil, preferences: preferences
+            )
+            try await wait({ !normal.isLoading && !raw.isLoading && !filtered.isLoading },
+                           timeout: 90)
+            XCTAssertNil(normal.error)
+            XCTAssertNil(raw.error)
+            XCTAssertNil(filtered.error)
+            XCTAssertFalse(normal.hasChanges, "Windows checkout CRLF is Git-equivalent")
+            XCTAssertTrue(raw.hasChanges, "Windows -text must retain real EOL changes")
+            XCTAssertEqual(filtered.newContent, "changed\nTRANSIENT\n")
+            XCTAssertTrue(filtered.hasChanges)
+            try await wait({ filtered.display != nil }, timeout: 30)
+            let review = try XCTUnwrap(filtered.display)
+            XCTAssertTrue(review.unifiedText.string.contains("changed"))
+            XCTAssertFalse(review.unifiedText.string.contains("TRANSIENT"))
+            XCTAssertEqual(review.computation.unified.rows.filter { $0.kind == .removed }.count, 1)
+            XCTAssertEqual(review.computation.unified.rows.filter { $0.kind == .added }.count, 1)
+
+            filtered.setEditing(true)
+            XCTAssertTrue(filtered.isEditing)
+            filtered.updateEditedContent("changed again\nTRANSIENT\n")
+            await filtered.save()
+            XCTAssertNil(filtered.saveError)
+            let persisted = try await backend.read(path: root + "/filtered.txt", maxBytes: 128)
+            XCTAssertEqual(persisted, Data("changed again\nTRANSIENT\n".utf8))
+            filtered.setEditing(false)
+            try await wait({
+                !filtered.isLoading && !filtered.isDirty
+                    && filtered.newContent == "changed again\nTRANSIENT\n"
+                    && filtered.display?.unifiedText.string.contains("changed again") == true
+            }, timeout: 90)
+            XCTAssertNil(filtered.error)
+            XCTAssertEqual(filtered.display?.computation.unified.rows.filter {
+                $0.kind == .added
+            }.count, 1)
+            let after = try await execute(["git", "diff", "--numstat", "--", "filtered.txt"])
+            XCTAssertEqual(after.trimmingCharacters(in: .whitespacesAndNewlines),
+                           "1\t1\tfiltered.txt")
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
     }
 
     func testEOLOnlyEditAndSaveConvergesToCleanGitReview() async throws {
