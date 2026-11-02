@@ -45,6 +45,13 @@ struct DiffDisplay {
     let rightText: NSAttributedString
 }
 
+/// The readonly split side, projected from the same live buffer as edit decorations.
+struct DiffEditableBaseline {
+    let id = UUID()
+    let document: DiffSideDocument
+    let text: NSAttributedString
+}
+
 private struct DiffDisplayInputs {
     let core: DiffCore
     let oldRuns: [DiffHighlightRun]
@@ -117,6 +124,7 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var newContent = ""
     private(set) var display: DiffDisplay?
     private(set) var editDecorations = DiffDecorations.empty
+    private(set) var editableBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
     var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(comparisonNew.utf8) }
@@ -269,7 +277,7 @@ final class DiffTab: nonisolated Identifiable {
         isLoading = false
     }
 
-    func reload(afterGitAction: Bool = false, snapshotAttempt: Int = 0) {
+    func reload(snapshotAttempt: Int = 0) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
         guard readOnlyReason == nil, !isDirty else { return }
@@ -421,7 +429,7 @@ final class DiffTab: nonisolated Identifiable {
                 if snapshotAttempt < 3 {
                     try? await Task.sleep(for: .milliseconds(90))
                     guard self.reloadGeneration == generation, !self.isDirty else { return }
-                    self.reload(afterGitAction: true, snapshotAttempt: snapshotAttempt + 1)
+                    self.reload(snapshotAttempt: snapshotAttempt + 1)
                     return
                 }
                 self.isLoading = false
@@ -490,8 +498,8 @@ final class DiffTab: nonisolated Identifiable {
         guard preferences.diffStyle != style else { return }
         nativeSurface?.rememberScrollAnchor()
         preferences.diffStyle = style
+        if isEditing { refreshEditDecorations(immediate: true) }
     }
-
 
     /// Generate review rows and syntax tokens off the main actor. Superseded
     /// results never overwrite a newer local/remote target or edit.
@@ -535,6 +543,9 @@ final class DiffTab: nonisolated Identifiable {
                 newRuns: DiffSyntaxHighlighter.colors(for: result.2)
             )
             self.displayInputs = inputs
+            if self.isEditing && self.preferences.diffStyle == .split {
+                self.refreshEditDecorations(immediate: true)
+            }
             self.display = Self.makeDisplay(
                 computation: result.3, inputs: inputs,
                 font: font, paragraphStyle: paragraphStyle, textColor: textColor
@@ -605,6 +616,8 @@ final class DiffTab: nonisolated Identifiable {
         let before = editComparisonOld ?? comparisonOld
         let after = editedNewContent
         let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
+        let prepareSplit = isEditing && preferences.diffStyle == .split
+            && editComparisonOld == nil
         let font = TerminalFont.current()
         let style = DiffTypography.paragraphStyle(for: font)
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -619,28 +632,59 @@ final class DiffTab: nonisolated Identifiable {
             guard !Task.isCancelled else { return }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
-            let (state, offsets, lineCount) = await Task.detached(priority: .userInitiated) {
-                let (oldLines, _) = DiffLineSplitter.lines(of: before)
-                let (newLines, _) = DiffLineSplitter.lines(of: after)
-                let ops = DiffEngine.lineOps(old: oldLines, new: newLines)
+            let (state, offsets, lineCount, split) = await Task.detached(priority: .userInitiated) {
+                let core = DiffCore.compute(oldText: before, newText: after)
+                let split = prepareSplit ? DiffComputation.editableSplit(core: core) : nil
                 return (
-                    DiffComputation.editState(ops: ops, oldLines: oldLines, newLines: newLines),
-                    newLines.map(\.utf16Range.location), newLines.count
+                    DiffComputation.editState(ops: core.ops,
+                                              oldLines: core.oldLines, newLines: core.newLines),
+                    core.newLines.map(\.utf16Range.location), core.newLines.count, split
                 )
             }.value
             guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
             let base: [NSAttributedString.Key: Any] = [
                 .font: font, .foregroundColor: color, .paragraphStyle: style,
             ]
-            let ghosts = state.ghosts.map { block in
-                DiffDecorations.GhostBlock(
-                    anchorLine: block.anchorLine,
-                    firstOldLine: block.firstOldLine,
-                    lines: DiffSyntaxHighlighter.attributedGhostLines(
-                        oldText: before as NSString, block: block, runs: oldRuns,
-                        baseAttributes: base, emphasisColor: emphasis
+            let ghosts: [DiffDecorations.GhostBlock]
+            if let split {
+                var inserted = 0
+                var missing: [Int: Int] = [:]
+                for row in split.right.rows {
+                    if row.kind == .filler {
+                        missing[inserted, default: 0] += 1
+                    } else {
+                        inserted += 1
+                    }
+                }
+                if lineCount == 0, let count = missing.removeValue(forKey: 0), count > 1 {
+                    // The empty TextKit buffer already supplies the first filler row.
+                    missing[1] = count - 1
+                }
+                let empty = NSAttributedString(string: "")
+                ghosts = missing.sorted(by: { $0.key < $1.key }).map { anchor, count in
+                    DiffDecorations.GhostBlock(
+                        anchorLine: anchor, firstOldLine: 0,
+                        lines: Array(repeating: empty, count: count), kind: .filler
+                    )
+                }
+                self.editableBaseline = DiffEditableBaseline(
+                    document: split.left,
+                    text: DiffSyntaxHighlighter.attributedDocument(
+                        split.left, oldRuns: oldRuns, newRuns: [], baseAttributes: base
                     )
                 )
+            } else {
+                ghosts = state.ghosts.map { block in
+                    DiffDecorations.GhostBlock(
+                        anchorLine: block.anchorLine,
+                        firstOldLine: block.firstOldLine,
+                        lines: DiffSyntaxHighlighter.attributedGhostLines(
+                            oldText: before as NSString, block: block, runs: oldRuns,
+                            baseAttributes: base, emphasisColor: emphasis
+                        )
+                    )
+                }
+                self.editableBaseline = nil
             }
             self.editDecorations = DiffDecorations.edit(
                 state: state, snapshotOffsets: offsets,
@@ -728,7 +772,7 @@ final class DiffTab: nonisolated Identifiable {
             // An edit landing while the write was in flight stays dirty.
             isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
             saveError = nil
-            if !isDirty { reload(afterGitAction: true) }
+            if !isDirty { reload() }
         } catch {
             guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
@@ -1048,6 +1092,7 @@ struct DiffViewerView: View {
         let _ = diff.display
         let _ = diff.showsCanonicalComparison
         let _ = diff.editDecorations
+        let _ = diff.editableBaseline
         VStack(spacing: 0) {
             if let reason = diff.readOnlyReason {
                 RemoteReadOnlyBanner(message: reason)
@@ -1099,6 +1144,12 @@ struct DiffViewerView: View {
         }
         .onChange(of: isSelected) {
             if isSelected { diff.refreshWhenSelected() }
+        }
+        .onChange(of: preferences.diffStyle) { _, style in
+            guard diff.isEditing, !diff.showsCanonicalComparison else { return }
+            if (style == .split) != (diff.editableBaseline != nil) {
+                diff.refreshEditDecorations(immediate: true)
+            }
         }
         .onChange(of: settings.fontFamily) { _, _ in diff.refreshNativeAppearance() }
         .onChange(of: settings.fontSize) { _, _ in diff.refreshNativeAppearance() }

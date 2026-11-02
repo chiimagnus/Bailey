@@ -300,6 +300,154 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testLongLeadingDeletionRemainsVisibleAtTopOfEditableDiff() throws {
+        let old = (0..<500).map { "removed line \($0)\n" }.joined() + "survivor\n"
+        let current = "survivor\n"
+        let core = DiffCore.compute(oldText: old, newText: current)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let ghostLines = (0..<500).map { NSAttributedString(string: "removed line \($0)") }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -920, y: -920, width: 680, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(current)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: [0], lineCount: 1,
+            ghostBlocks: [.init(anchorLine: 0, firstOldLine: 1, lines: ghostLines)]
+        )
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let expected = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedRow.usingColorSpace(.sRGB))
+        let matching = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).reduce(0) { count, color in
+            let isRemoval = abs((color.greenComponent - color.redComponent)
+                - (expected.greenComponent - expected.redComponent)) < 0.03
+                && abs((color.blueComponent - color.redComponent)
+                    - (expected.blueComponent - expected.redComponent)) < 0.03
+            return count + (isRemoval ? 1 : 0)
+        }
+        XCTAssertGreaterThan(matching, 8,
+                             "Removed lines cannot become blank space when their anchor is below the viewport")
+        pane.setVerticalScrollOffset(2_000)
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let scrolled = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: scrolled)
+        let middle = sRGBColumn(scrolled, x: scrolled.pixelsWide - 50).filter { color in
+            abs((color.greenComponent - color.redComponent)
+                - (expected.greenComponent - expected.redComponent)) < 0.03
+                && abs((color.blueComponent - color.redComponent)
+                    - (expected.blueComponent - expected.redComponent)) < 0.03
+        }.count
+        XCTAssertGreaterThan(middle, 8, "Removed rows must stay visible while scrolling inside a ghost block")
+    }
+
+    func testEditableSplitAlignsFullWorktreeWithReadOnlyBaselineAcrossFoldedContext() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<900).map { "line \($0)\n" }.joined()
+        let file = directory.appendingPathComponent("large.txt")
+        try Data(original.utf8).write(to: file)
+        for arguments in [["add", "large.txt"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let modified = original.replacingOccurrences(of: "line 600\n", with: "changed 600\n")
+        try Data(modified.utf8).write(to: file)
+        let preferences = try isolatedPreferences()
+        preferences.diffStyle = .split
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "large.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { tab.display != nil && tab.editDecorations.rows.count == 900 }
+        tab.autoSaveSuspendedForClose = true
+        let window = NSWindow(contentRect: NSRect(x: -930, y: -930, width: 800, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: tab))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            let panes = tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden } ?? []
+            return panes.count == 2
+        }
+        let panes = try XCTUnwrap(tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+            .filter { !$0.isHidden })
+        let baseline = try XCTUnwrap(panes.first { !$0.textView.isEditable })
+        let editor = try XCTUnwrap(panes.first { $0.textView.isEditable })
+        let editableRowCount = editor.decorations.rows.count
+            + editor.decorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count }
+        XCTAssertEqual(baseline.decorations.rows.count, editableRowCount,
+                       "Folded Review rows cannot be scrolled in lockstep with a full editable buffer")
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            tab.nativeSurface?.layoutSubtreeIfNeeded()
+            return editor.scrollOffset.y > 2_000
+        }
+        XCTAssertEqual(baseline.scrollOffset.y, editor.scrollOffset.y, accuracy: 2,
+                       "Initial change navigation must keep both split sides in the same viewport")
+        let previousID = tab.editableBaseline?.id
+        editor.textView.insertText("new first line\n", replacementRange: NSRange(location: 0, length: 0))
+        try await wait {
+            tab.editableBaseline?.id != previousID && tab.editDecorations.rows.count == 901
+        }
+        try await wait {
+            baseline.decorations.rows.count == editor.decorations.rows.count
+                + editor.decorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count }
+        }
+        XCTAssertTrue(tab.isDirty)
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8),
+                       "Typing into a diff cannot write the file before an explicit save")
+        editor.textView.undoManager?.undo()
+        try await wait { !tab.isDirty }
+    }
+
+    func testEditableSplitUsesEmptyCaretRowForFirstRemovedFileLine() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("empty.txt")
+        try Data("first\nsecond\nthird\n".utf8).write(to: path)
+        for arguments in [["add", "empty.txt"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        try Data().write(to: path)
+        let preferences = try isolatedPreferences()
+        preferences.diffStyle = .split
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "empty.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { tab.editableBaseline != nil && !tab.editDecorations.rows.isEmpty }
+        let originalRows = try XCTUnwrap(tab.editableBaseline).document.rows.count
+        XCTAssertEqual(originalRows, 3)
+        XCTAssertEqual(tab.editDecorations.rows.count, 1)
+        XCTAssertEqual(
+            originalRows,
+            tab.editDecorations.rows.count
+                + tab.editDecorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count },
+            "An empty editor already owns one real cursor row; Split must not add a fourth row"
+        )
+        XCTAssertEqual(try Data(contentsOf: path), Data())
+    }
+
     func testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes() throws {
         let old = "first\ndeleted\nlast\n"
         let current = "first\nlast\n"
@@ -1728,7 +1876,7 @@ final class NativeDiffTabTests: XCTestCase {
                 && normal.display?.computation.unified.rows.filter { $0.kind == .added }.count == 1
         }
         XCTAssertEqual(normal.newContent, edited)
-        normal.reload(afterGitAction: true)
+        normal.reload()
         try await wait { !normal.isLoading && normal.newContent == edited }
         try await wait {
             normal.display?.computation.unified.rows.filter { $0.kind == .added }.count == 1
@@ -2417,13 +2565,13 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { self.findNativeTextView(in: window.contentView!, editable: true) != nil }
         let editor = try XCTUnwrap(findNativeTextView(in: window.contentView!, editable: true))
         try Data("after Git\n".utf8).write(to: file)
-        diff.reload(afterGitAction: true)
+        diff.reload()
         try await wait { !diff.isLoading && editor.text == "after Git\n" }
         XCTAssertTrue(findNativeTextView(in: window.contentView!, editable: true) === editor)
         editor.insertText("draft ", replacementRange: .init(location: 0, length: 0))
         try await wait { diff.isDirty }
         try Data("external\n".utf8).write(to: file)
-        diff.reload(afterGitAction: true)
+        diff.reload()
         XCTAssertEqual(editor.text, "draft after Git\n")
         XCTAssertTrue(diff.isDirty)
     }

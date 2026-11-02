@@ -276,7 +276,7 @@ final class WorkspaceApplication {
         for content in gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths) {
             switch content {
             case .file(let file): file.reloadFromDiskIfClean()
-            case .diff(let diff): diff.reload(afterGitAction: true)
+            case .diff(let diff): diff.reload()
             case .session, .browser: break
             }
         }

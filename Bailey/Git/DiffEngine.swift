@@ -1075,6 +1075,17 @@ nonisolated struct DiffComputation {
         )
     }
 
+    /// The editable side has the full worktree; its paired baseline must share
+    /// the same uncollapsed Git rows and removed-line gaps.
+    static func editableSplit(core: DiffCore) -> (left: DiffSideDocument, right: DiffSideDocument) {
+        let blocks = DiffBlocks(ops: core.ops)
+        return buildSplit(
+            blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
+            oldMissingNewline: core.oldMissingNewline,
+            newMissingNewline: core.newMissingNewline, expansions: nil
+        )
+    }
+
     /// Full render with no folding — the shape the invariant tests verify.
     static func compute(oldText: String, newText: String) -> DiffComputation {
         build(core: .compute(oldText: oldText, newText: newText), expansions: nil)

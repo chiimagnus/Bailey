@@ -35,6 +35,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     private var editPane: DiffCodePaneView?
     private var renderedEditRevision: UInt?
     private var pendingAnchor: (oldLine: Int?, newLine: Int?)?
+    private var didRevealInitialChange = false
+    private var pendingFirstChangeRow: Int?
 
     init(diff: DiffTab) {
         self.diff = diff
@@ -82,8 +84,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         super.layout()
         let editing = diff?.isEditing == true
         let canonical = editing && diff?.showsCanonicalComparison == true
-        let paired = editing && diff?.display != nil
-            && (canonical || diff?.preferences.diffStyle == .split)
+        let paired = editing && ((canonical && diff?.display != nil)
+            || (diff?.preferences.diffStyle == .split && diff?.editableBaseline != nil))
         let half = floor((bounds.width - 1) / 2)
         let leftFrame = CGRect(x: 0, y: 0, width: half, height: bounds.height)
         unifiedPane?.frame = canonical && paired ? leftFrame : bounds
@@ -103,7 +105,29 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                 height: bounds.height
             )
         }
-        if bounds.width > 0, bounds.height > 0 { restorePendingViewports() }
+        if bounds.width > 0, bounds.height > 0 {
+            restorePendingViewports()
+            if let row = pendingFirstChangeRow, let pane = editPane, !pane.isHidden {
+                pane.layoutSubtreeIfNeeded()
+                pane.scrollView.layoutSubtreeIfNeeded()
+                pane.textView.layoutSubtreeIfNeeded()
+                pane.scrollToRow(row)
+                if let leftPane, !leftPane.isHidden {
+                    leftPane.layoutSubtreeIfNeeded()
+                    leftPane.scrollView.layoutSubtreeIfNeeded()
+                    leftPane.textView.layoutSubtreeIfNeeded()
+                    leftPane.setScrollOffset(pane.scrollOffset)
+                }
+                let rowHeight = DiffTypography.paragraphStyle(for: TerminalFont.current())
+                    .maximumLineHeight
+                let visibleRows = Int(pane.scrollView.contentView.bounds.height / max(1, rowHeight))
+                if row < visibleRows || (pane.scrollOffset.y > 1
+                    && (leftPane?.isHidden != false
+                        || abs((leftPane?.scrollOffset.y ?? 0) - pane.scrollOffset.y) < 2)) {
+                    pendingFirstChangeRow = nil
+                }
+            }
+        }
         focusIfRequested()
     }
 
@@ -177,21 +201,31 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                           id: display.id, to: review, font: font, style: style, palette: palette,
                           longLineDisplayWidth: longLineDisplayWidth)
                     _ = ensureDivider()
-                } else if split {
-                    let left = leftPane ?? makeSplitPane(side: .oldOnly)
-                    apply(display.leftText, document: display.computation.splitLeft,
-                          id: display.id, to: left, font: font, style: style, palette: palette,
-                          longLineDisplayWidth: width)
-                    _ = ensureDivider()
-                    left.onScroll = { [weak pane] offset in pane?.setScrollOffset(offset) }
-                    pane.onScroll = { [weak left] offset in left?.setScrollOffset(offset) }
-                    left.setScrollOffset(pane.scrollOffset)
                 }
+            }
+            if split, !diff.showsCanonicalComparison, let baseline = diff.editableBaseline {
+                let left = leftPane ?? makeSplitPane(side: .oldOnly)
+                apply(baseline.text, document: baseline.document,
+                      id: baseline.id, to: left, font: font, style: style, palette: palette,
+                      longLineDisplayWidth: width)
+                _ = ensureDivider()
+                left.onScroll = { [weak pane] offset in pane?.setScrollOffset(offset) }
+                pane.onScroll = { [weak left] offset in left?.setScrollOffset(offset) }
+                left.setScrollOffset(pane.scrollOffset)
             }
             if !split || diff.showsCanonicalComparison { pane.onScroll = nil }
             if let anchor = pendingAnchor, let line = anchor.newLine {
                 pendingAnchor = nil
+                didRevealInitialChange = true
                 pane.scrollToRow(max(0, line - 1))
+            } else if !didRevealInitialChange, !diff.isDirty,
+                      !diff.editDecorations.rows.isEmpty {
+                didRevealInitialChange = true
+                let firstAdded = diff.editDecorations.rows.firstIndex { $0.kind == .added }
+                let firstDeleted = diff.editDecorations.ghostsByAnchor.keys.min()
+                if let row = [firstAdded, firstDeleted].compactMap({ $0 }).min() {
+                    pendingFirstChangeRow = max(0, row - 3)
+                }
             }
         } else if let display = diff.display {
             if split {
@@ -220,7 +254,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
         let plain = diff.source.isPlainRevision
         let canonical = editing && diff.showsCanonicalComparison && diff.display != nil
-        let editableSplit = editing && split && diff.display != nil && !canonical
+        let editableSplit = editing && split && diff.editableBaseline != nil && !canonical
         unifiedPane?.isHidden = editing ? !canonical : split || plain
         leftPane?.isHidden = editing ? !editableSplit : !split || plain
         rightPane?.isHidden = editing || !split || plain

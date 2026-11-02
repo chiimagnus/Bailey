@@ -135,6 +135,15 @@ struct DiffDecorations {
         /// 1-based old-file number of the first ghost line.
         let firstOldLine: Int
         let lines: [NSAttributedString]
+        let kind: DiffRowKind
+
+        init(anchorLine: Int, firstOldLine: Int, lines: [NSAttributedString],
+             kind: DiffRowKind = .removed) {
+            self.anchorLine = anchorLine
+            self.firstOldLine = firstOldLine
+            self.lines = lines
+            self.kind = kind
+        }
     }
 
     let rows: [Row]
@@ -149,6 +158,12 @@ struct DiffDecorations {
     var editSnapshotOffsets: [Int] = []
     /// Edit mode: ghost deletion blocks keyed by anchor paragraph.
     var ghostsByAnchor: [Int: GhostBlock] = [:]
+    /// Virtual Git rows, including removed rows absent from the editable buffer.
+    struct PositionedGhost {
+        let startRow: Int
+        let block: GhostBlock
+    }
+    var positionedGhosts: [PositionedGhost] = []
     let maxOldLine: Int
     let maxNewLine: Int
 
@@ -226,6 +241,13 @@ struct DiffDecorations {
         )
         decorations.editSnapshotOffsets = snapshotOffsets
         decorations.ghostsByAnchor = ghostsByAnchor
+        var priorGhostRows = 0
+        for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
+            decorations.positionedGhosts.append(
+                PositionedGhost(startRow: anchor + priorGhostRows, block: block)
+            )
+            priorGhostRows += block.lines.count
+        }
         return decorations
     }
 
@@ -432,6 +454,42 @@ enum DiffRowGeometry {
     }
 }
 
+/// Paint ghost rows independently of TextKit paragraph visibility. A long
+/// deletion can fill the viewport even when its next live paragraph is far away.
+@MainActor
+private enum DiffGhostGeometry {
+    struct VisibleBlock {
+        let block: DiffDecorations.GhostBlock
+        let bottomY: CGFloat
+        let rowHeight: CGFloat
+    }
+
+    static func visibleBlocks(
+        textView: DiffTextView, clipView: NSClipView, decorations: DiffDecorations
+    ) -> [VisibleBlock] {
+        guard !textView.wrapsLines, !textView.hasNativeNonLFSeparators,
+              !decorations.positionedGhosts.isEmpty else { return [] }
+        let rowHeight = DiffTypography.paragraphStyle(
+            for: textView.font ?? TerminalFont.current()
+        ).maximumLineHeight
+        guard rowHeight > 0 else { return [] }
+        let viewport = clipView.bounds
+        var result: [VisibleBlock] = []
+        for ghost in decorations.positionedGhosts {
+            let top = textView.textContainerInset.height + CGFloat(ghost.startRow) * rowHeight
+            let bottom = top + CGFloat(ghost.block.lines.count) * rowHeight
+            if top >= viewport.maxY { break }
+            if bottom <= viewport.minY { continue }
+            result.append(VisibleBlock(
+                block: ghost.block,
+                bottomY: bottom - viewport.minY,
+                rowHeight: rowHeight
+            ))
+        }
+        return result
+    }
+}
+
 // MARK: - Decoration underlay
 
 /// Viewport-sized view behind the scroll view. Paints the pane background,
@@ -479,9 +537,9 @@ final class DiffDecorationUnderlayView: NSView {
         scheme.background.setFill()
         dirtyRect.fill()
 
-        guard let textView, !decorations.rows.isEmpty else { return }
+        guard let textView, let clipView, !decorations.rows.isEmpty else { return }
         let rows = DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
-        guard !rows.isEmpty else { return }
+        let virtualGhosts = !textView.wrapsLines && !textView.hasNativeNonLFSeparators
 
         for row in rows {
             guard row.index < decorations.rows.count else { continue }
@@ -551,7 +609,8 @@ final class DiffDecorationUnderlayView: NSView {
             // Read-only deletion ghosts (edit mode): the paragraph carries
             // spacing above it exactly tall enough for the block, and the
             // lines are drawn into that gap.
-            if !row.isContinuation, let block = decorations.ghostsByAnchor[row.index] {
+            if !virtualGhosts, !row.isContinuation,
+               let block = decorations.ghostsByAnchor[row.index] {
                 drawGhostBlock(
                     block,
                     endingAt: rowRect.minY,
@@ -562,13 +621,24 @@ final class DiffDecorationUnderlayView: NSView {
             }
             // A deletion at end-of-file anchors past the last row and draws
             // below it (the last paragraph carries spacing after).
-            if lastVisualSegment, row.index == decorations.rows.count - 1,
+            if !virtualGhosts, lastVisualSegment, row.index == decorations.rows.count - 1,
                let block = decorations.ghostsByAnchor[decorations.rows.count] {
                 drawGhostBlock(
                     block,
                     endingAt: rowRect.maxY + CGFloat(block.lines.count) * row.frame.height,
                     rowHeight: row.frame.height,
                     textX: converted(row.frame).origin.x,
+                    scheme: scheme
+                )
+            }
+        }
+        if virtualGhosts {
+            for ghost in DiffGhostGeometry.visibleBlocks(
+                textView: textView, clipView: clipView, decorations: decorations
+            ) {
+                drawGhostBlock(
+                    ghost.block, endingAt: ghost.bottomY, rowHeight: ghost.rowHeight,
+                    textX: textView.textContainerInset.width - clipView.bounds.minX,
                     scheme: scheme
                 )
             }
@@ -583,15 +653,20 @@ final class DiffDecorationUnderlayView: NSView {
         textX: CGFloat,
         scheme: DiffColorScheme
     ) {
-        var y = bottomY - CGFloat(block.lines.count) * rowHeight
-        for line in block.lines {
+        let startY = bottomY - CGFloat(block.lines.count) * rowHeight
+        let first = max(0, Int(floor((bounds.minY - startY) / rowHeight)))
+        let end = min(block.lines.count, Int(ceil((bounds.maxY - startY) / rowHeight)))
+        guard first < end else { return }
+        for index in first..<end {
+            let y = startY + CGFloat(index) * rowHeight
             let rect = CGRect(x: 0, y: y, width: bounds.width, height: rowHeight)
-            if rect.intersects(bounds) {
-                scheme.removedRow.setFill()
-                rect.fill()
-                line.draw(at: CGPoint(x: textX, y: y))
+            (block.kind == .filler ? scheme.fillerRow : scheme.removedRow).setFill()
+            rect.fill()
+            if block.kind == .filler {
+                drawFillerStripes(in: rect, color: scheme.fillerStripe)
+            } else {
+                block.lines[index].draw(at: CGPoint(x: textX, y: y))
             }
-            y += rowHeight
         }
     }
 
@@ -748,6 +823,7 @@ final class DiffGutterView: NSView {
 
         guard let textView, let clipView, !decorations.rows.isEmpty else { return }
         let rows = DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
+        let virtualGhosts = !textView.wrapsLines && !textView.hasNativeNonLFSeparators
 
         let numberFont = numberFont
         let digit = digitWidth(numberFont)
@@ -818,7 +894,7 @@ final class DiffGutterView: NSView {
 
             // EOF ghosts are drawn after the last physical segment, including
             // a native continuation from CR or a Unicode line separator.
-            if lastVisualSegment, row.index == decorations.rows.count - 1,
+            if !virtualGhosts, lastVisualSegment, row.index == decorations.rows.count - 1,
                let block = decorations.ghostsByAnchor[decorations.rows.count] {
                 drawGhostGutterRows(
                     block,
@@ -864,7 +940,7 @@ final class DiffGutterView: NSView {
                 string.draw(at: CGPoint(x: markerX, y: rowRect.midY - size.height / 2))
             }
 
-            if let block = decorations.ghostsByAnchor[row.index] {
+            if !virtualGhosts, let block = decorations.ghostsByAnchor[row.index] {
                 drawGhostGutterRows(
                     block,
                     endingAt: rowRect.minY,
@@ -876,6 +952,17 @@ final class DiffGutterView: NSView {
                 )
             }
 
+        }
+        if virtualGhosts {
+            for ghost in DiffGhostGeometry.visibleBlocks(
+                textView: textView, clipView: clipView, decorations: decorations
+            ) {
+                drawGhostGutterRows(
+                    ghost.block, endingAt: ghost.bottomY, rowHeight: ghost.rowHeight,
+                    numberFont: numberFont, numberRight: numberRight, markerX: markerX,
+                    scheme: scheme
+                )
+            }
         }
     }
 
@@ -890,31 +977,33 @@ final class DiffGutterView: NSView {
         markerX: CGFloat,
         scheme: DiffColorScheme
     ) {
-        var y = bottomY - CGFloat(block.lines.count) * rowHeight
+        let startY = bottomY - CGFloat(block.lines.count) * rowHeight
+        let first = max(0, Int(floor((bounds.minY - startY) / rowHeight)))
+        let end = min(block.lines.count, Int(ceil((bounds.maxY - startY) / rowHeight)))
+        guard first < end else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: numberFont,
             .foregroundColor: scheme.removedGutterText,
         ]
-        for lineOffset in 0..<block.lines.count {
+        for lineOffset in first..<end {
+            let y = startY + CGFloat(lineOffset) * rowHeight
             let rect = CGRect(x: 0, y: y, width: bounds.width, height: rowHeight)
-            if rect.intersects(bounds) {
-                scheme.removedRow.setFill()
-                rect.fill()
-                scheme.removedGutterText.setFill()
-                CGRect(x: 0, y: rect.minY, width: 3, height: rect.height).fill()
-                let number = NSAttributedString(
-                    string: String(block.firstOldLine + lineOffset), attributes: attributes
-                )
-                let numberSize = number.size()
-                number.draw(at: CGPoint(
-                    x: numberRight - numberSize.width,
-                    y: rect.midY - numberSize.height / 2
-                ))
-                let marker = NSAttributedString(string: "−", attributes: attributes)
-                let markerSize = marker.size()
-                marker.draw(at: CGPoint(x: markerX, y: rect.midY - markerSize.height / 2))
-            }
-            y += rowHeight
+            (block.kind == .filler ? scheme.fillerRow : scheme.removedRow).setFill()
+            rect.fill()
+            if block.kind == .filler { continue }
+            scheme.removedGutterText.setFill()
+            CGRect(x: 0, y: rect.minY, width: 3, height: rect.height).fill()
+            let number = NSAttributedString(
+                string: String(block.firstOldLine + lineOffset), attributes: attributes
+            )
+            let numberSize = number.size()
+            number.draw(at: CGPoint(
+                x: numberRight - numberSize.width,
+                y: rect.midY - numberSize.height / 2
+            ))
+            let marker = NSAttributedString(string: "−", attributes: attributes)
+            let markerSize = marker.size()
+            marker.draw(at: CGPoint(x: markerX, y: rect.midY - markerSize.height / 2))
         }
     }
 
@@ -1469,12 +1558,21 @@ final class DiffCodePaneView: NSView {
                 }
             }
         }
-        return CGFloat(rowIndex) * rowHeight
+        let rowsBefore = mode == .edit
+            ? decorations.ghostsByAnchor.reduce(0) { total, entry in
+                total + (entry.key <= rowIndex ? entry.value.lines.count : 0)
+            } : 0
+        return CGFloat(rowIndex + rowsBefore) * rowHeight
     }
 
     func scrollToRow(_ rowIndex: Int) {
         guard rowIndex > 0, rowHeight > 0 else {
             setVerticalScrollOffset(0)
+            return
+        }
+        if mode == .edit, rowIndex < decorations.editSnapshotOffsets.count {
+            let offset = decorations.editSnapshotOffsets[rowIndex]
+            textView.scrollRangeToVisible(NSRange(location: offset, length: 1))
             return
         }
         setVerticalScrollOffset(documentY(forRow: rowIndex))
