@@ -1400,6 +1400,195 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
 
+    func testReviewDocumentChangeRestoresHorizontalStartWithoutDiscardingRestyleScroll() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -940, y: -940, width: 730, height: 370),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.layoutSubtreeIfNeeded()
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
+
+        let oldLine = String(repeating: "before", count: 700)
+        let newLine = String(repeating: "after", count: 700)
+        let original = DiffComputation.compute(oldText: oldLine + "\n", newText: "initial\n").unified
+        pane.setReviewDocument(NSAttributedString(string: original.text), decorations: .review(original))
+        pane.layoutSubtreeIfNeeded()
+        let clip = pane.scrollView.contentView
+        XCTAssertGreaterThan(pane.textView.frame.width, 3000)
+        clip.scroll(to: NSPoint(x: 2600, y: 0))
+        pane.scrollView.reflectScrolledClipView(clip)
+        XCTAssertEqual(clip.bounds.origin.x, 2600, accuracy: 2)
+
+        // A pure restyle/rebuild is the same document and should keep the user's viewport.
+        pane.setReviewDocument(NSAttributedString(string: original.text), decorations: .review(original))
+        XCTAssertEqual(clip.bounds.origin.x, 2600, accuracy: 2)
+
+        // The new Git snapshot retains a long deleted line, but its newly added
+        // content lives near x=0. A stale offset otherwise makes additions blank.
+        let changed = DiffComputation.compute(oldText: oldLine + "\n", newText: newLine + "\n").unified
+        pane.setReviewDocument(NSAttributedString(string: changed.text), decorations: .review(changed))
+        XCTAssertEqual(clip.bounds.origin.x, 0, accuracy: 2)
+        XCTAssertEqual(pane.textView.text, changed.text)
+    }
+
+    func testWrappedReviewReloadKeepsRealLineAnchorRatherThanFixedPixelEstimate() throws {
+        let veryLong = String(repeating: "let a = 1234567890; ", count: 3_300)
+        let old = ([veryLong] + (1..<800).map { "line \($0)" }).joined(separator: "\n") + "\n"
+        var next = ([veryLong] + (1..<800).map { "line \($0)" })
+        next[710] = "line 710 edited"
+        let first = DiffComputation.compute(oldText: "", newText: old).unified
+        let second = DiffComputation.compute(oldText: "", newText: next.joined(separator: "\n") + "\n").unified
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 700, height: 280),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.layoutSubtreeIfNeeded()
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .black,
+                             longLineDisplayWidth: .showAll)
+        pane.setReviewDocument(NSAttributedString(string: first.text), decorations: .review(first))
+        pane.layoutSubtreeIfNeeded()
+        pane.scrollToRow(595)
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let before = try XCTUnwrap(pane.firstVisibleRowIndex)
+        XCTAssertGreaterThanOrEqual(before, 593)
+        XCTAssertLessThanOrEqual(before, 596)
+        XCTAssertTrue(pane.textView.wrapsLines)
+        pane.setReviewDocument(NSAttributedString(string: second.text), decorations: .review(second))
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let after = try XCTUnwrap(pane.firstVisibleRowIndex)
+        XCTAssertEqual(after, before, "Full display reload must restore the real native paragraph geometry")
+        for index in [780, 2, 595] {
+            pane.scrollToRow(index)
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let visible = try XCTUnwrap(pane.firstVisibleRowIndex)
+            XCTAssertGreaterThanOrEqual(visible, max(0, index - 2))
+            XCTAssertLessThanOrEqual(visible, index + 1)
+        }
+        XCTAssertEqual(pane.textView.text, second.text)
+    }
+
+    func testReviewReloadPreservesLogicalRowWithCRLFUnicodeSeparatorsAndFontChanges() throws {
+        let source = "start\rbare\u{2028}segment\r\n"
+            + (1..<160).map { "line \($0)\r\n" }.joined()
+        let updated = source.replacingOccurrences(of: "line 140", with: "line 140 updated")
+        let initial = DiffComputation.compute(oldText: "", newText: source).unified
+        let changed = DiffComputation.compute(oldText: "", newText: updated).unified
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -930, y: -930, width: 650, height: 220),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.layoutSubtreeIfNeeded()
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .black)
+        pane.setReviewDocument(NSAttributedString(string: initial.text), decorations: .review(initial))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+        pane.scrollToRow(90)
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let before = try XCTUnwrap(pane.firstVisibleRowIndex)
+        XCTAssertGreaterThanOrEqual(before, 88)
+        XCTAssertLessThanOrEqual(before, 91)
+        pane.setReviewDocument(NSAttributedString(string: changed.text), decorations: .review(changed))
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertEqual(pane.firstVisibleRowIndex, before)
+        let larger = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        pane.applyTypography(font: larger, paragraphStyle: DiffTypography.paragraphStyle(for: larger),
+                             textColor: .black)
+        pane.setReviewDocument(NSAttributedString(string: changed.text), decorations: .review(changed))
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(pane.firstVisibleRowIndex), before - 2)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(pane.firstVisibleRowIndex), before + 2)
+        XCTAssertEqual(pane.textView.text, changed.text)
+    }
+
+    func testReviewCompactFoldStartsAtTopAndKeepsContextAfterDeepScroll() throws {
+        let original = (0..<900).map { "line \($0)" }
+        var edited = original
+        edited[594] = "line 594 changed"
+        edited[617] = "line 617 changed"
+        let oldSource = original.joined(separator: "\n") + "\n"
+        let newSource = edited.joined(separator: "\n") + "\n"
+        let complete = DiffComputation.compute(oldText: oldSource, newText: newSource).unified
+        let compact = DiffComputation.build(core: .compute(oldText: oldSource, newText: newSource),
+                                            expansions: [:]).unified
+        XCTAssertTrue(compact.rows.contains(where: { $0.collapsed != nil }))
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -930, y: -930, width: 700, height: 750),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.layoutSubtreeIfNeeded()
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .black)
+        pane.setReviewDocument(NSAttributedString(string: complete.text), decorations: .review(complete))
+        pane.layoutSubtreeIfNeeded()
+        let clip = pane.scrollView.contentView
+        clip.scroll(to: NSPoint(x: 0, y: 9000))
+        pane.scrollView.reflectScrolledClipView(clip)
+        XCTAssertGreaterThan(clip.bounds.minY, 750)
+        pane.setReviewDocument(NSAttributedString(string: compact.text), decorations: .review(compact))
+        pane.layoutSubtreeIfNeeded()
+        let expectedHeight = CGFloat(compact.rows.count) * DiffTypography.lineHeight(for: font)
+        XCTAssertGreaterThanOrEqual(pane.textView.frame.height, expectedHeight - 2)
+        XCTAssertLessThanOrEqual(pane.textView.frame.height,
+                                 expectedHeight + DiffTypography.lineHeight(for: font) + 3)
+        XCTAssertEqual(clip.bounds.minY, 0, accuracy: 2,
+                       "Collapsing thousands of context lines must not leave an empty viewport")
+        let layout = pane.textView.nativeLayoutManager
+        let first = try XCTUnwrap(layout.textLayoutFragment(for: layout.documentRange.location))
+        XCTAssertLessThan(first.layoutFragmentFrame.minY, 2)
+        XCTAssertEqual(pane.textView.text, compact.text)
+    }
+
+    func testReviewTypographyUpdatesDoNotEraseTreeSitterForegroundColors() throws {
+        let source = "import AppKit\nstruct FileTreePanel: View { let model: Int }\n"
+        let document = DiffComputation.compute(oldText: "", newText: source).unified
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let colored = NSMutableAttributedString(string: document.text, attributes: [
+            .font: font, .foregroundColor: NSColor.black, .paragraphStyle: style,
+        ])
+        let keyword = (colored.string as NSString).range(of: "struct")
+        colored.addAttribute(.foregroundColor, value: NSColor.systemPink, range: keyword)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+            pane.appearance = NSAppearance(named: appearance)
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
+            pane.setReviewDocument(colored, decorations: .review(document))
+            let storage = try XCTUnwrap(pane.textView.textStorage)
+            XCTAssertEqual(storage.attribute(.foregroundColor, at: keyword.location,
+                                             effectiveRange: nil) as? NSColor, .systemPink)
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .systemBlue)
+            XCTAssertEqual(storage.attribute(.foregroundColor, at: keyword.location,
+                                             effectiveRange: nil) as? NSColor, .systemPink,
+                           "Review colors belong to the immutable attributed document, not NSTextView.textColor")
+            XCTAssertEqual(pane.textView.text, document.text)
+        }
+    }
+
     func testBackgroundSyntaxCapturesReachNativeDiffColors() async throws {
         for (path, source) in [
             ("sample.swift", "let answer = 42\n"),

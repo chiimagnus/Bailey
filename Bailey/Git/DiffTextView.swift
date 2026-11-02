@@ -1022,9 +1022,10 @@ final class DiffGutterView: NSView {
                 DiffCollapsedRunLabel.expandAction(hiddenLines: info.hiddenLines)
             )
             element.setAccessibilityParent(self)
+            let top = row.frame.origin.y - clipView.bounds.origin.y
             element.setAccessibilityFrameInParentSpace(NSRect(
                 x: 0,
-                y: row.frame.origin.y - clipView.bounds.origin.y,
+                y: bounds.height - top - row.frame.height,
                 width: bounds.width,
                 height: row.frame.height
             ))
@@ -1327,6 +1328,13 @@ final class DiffCodePaneView: NSView {
         let isExpansionSwap = pendingExpansionSwap
         pendingExpansionSwap = false
         let savedOffset = scrollView.contentView.bounds.origin.y
+        let contentChanged = textView.attributedText.string != text.string
+        defer {
+            if contentChanged && !isExpansionSwap {
+                let y = scrollView.contentView.bounds.origin.y
+                setScrollOffset(NSPoint(x: 0, y: y))
+            }
+        }
 
         var lineAnchor: (oldLine: Int?, newLine: Int?, viewportY: CGFloat)?
         if !isExpansionSwap, rowHeight > 0, !decorations.rows.isEmpty {
@@ -1355,10 +1363,14 @@ final class DiffCodePaneView: NSView {
             return
         }
         guard let lineAnchor else { return }
+        if textView.wrapsLines || textView.hasNativeNonLFSeparators {
+            scrollView.layoutSubtreeIfNeeded()
+            textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+        }
         if let index = newDecorations.rows.firstIndex(where: {
             $0.oldLine == lineAnchor.oldLine && $0.newLine == lineAnchor.newLine
         }) {
-            setVerticalScrollOffset(max(0, CGFloat(index) * rowHeight - lineAnchor.viewportY))
+            setVerticalScrollOffset(max(0, documentY(forRow: index) - lineAnchor.viewportY))
         }
     }
 
@@ -1408,7 +1420,9 @@ final class DiffCodePaneView: NSView {
             textView.defaultParagraphStyle = effectiveStyle
             textView.typingAttributes[.paragraphStyle] = effectiveStyle
         }
-        if textView.textColor != textColor {
+        // Review documents own their per-token foreground attributes. Setting
+        // NSTextView.textColor would overwrite all of those colors in storage.
+        if mode == .edit, textView.textColor != textColor {
             textView.textColor = textColor
         }
         if gutter.font != font {
@@ -1436,30 +1450,33 @@ final class DiffCodePaneView: NSView {
             .index
     }
 
-    /// Align a Git row with the viewport; soft-wrapped paragraphs occupy
-    /// multiple visual rows and cannot use the fixed-row pixel estimate.
+    /// The same native row geometry is used for explicit navigation and for
+    /// keeping a stable reading anchor when a review document is replaced.
+    private func documentY(forRow rowIndex: Int) -> CGFloat {
+        if textView.wrapsLines || textView.hasNativeNonLFSeparators {
+            let starts = mode == .review
+                ? decorations.lineStartOffsets : decorations.editSnapshotOffsets
+            if rowIndex < starts.count {
+                let content = textView.nativeContentManager
+                if let target = NSTextRange(NSRange(location: starts[rowIndex], length: 1),
+                                            in: content) {
+                    let layout = textView.nativeLayoutManager
+                    layout.ensureLayout(for: target)
+                    if let fragment = layout.textLayoutFragment(for: target.location) {
+                        scrollView.layoutSubtreeIfNeeded()
+                        return fragment.layoutFragmentFrame.minY
+                    }
+                }
+            }
+        }
+        return CGFloat(rowIndex) * rowHeight
+    }
+
     func scrollToRow(_ rowIndex: Int) {
         guard rowIndex > 0, rowHeight > 0 else {
             setVerticalScrollOffset(0)
             return
         }
-        if textView.wrapsLines {
-            let starts = mode == .review
-                ? decorations.lineStartOffsets : decorations.editSnapshotOffsets
-            if rowIndex < starts.count {
-                let content = textView.nativeContentManager
-                let offset = starts[rowIndex]
-                if let target = NSTextRange(NSRange(location: offset, length: 1), in: content) {
-                    let layout = textView.nativeLayoutManager
-                    layout.ensureLayout(for: target)
-                    if let fragment = layout.textLayoutFragment(for: target.location) {
-                        scrollView.layoutSubtreeIfNeeded()
-                        setVerticalScrollOffset(fragment.layoutFragmentFrame.minY)
-                        return
-                    }
-                }
-            }
-        }
-        setVerticalScrollOffset(CGFloat(rowIndex) * rowHeight)
+        setVerticalScrollOffset(documentY(forRow: rowIndex))
     }
 }
