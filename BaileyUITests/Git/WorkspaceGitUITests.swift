@@ -47,6 +47,55 @@ final class WorkspaceGitUITests: XCTestCase {
                       "The real Git Changes row must open a diff tab")
     }
 
+    func testLargeSwiftDiffHasVisibleFoldAndContextAboveLine595() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let old = (0..<900).map { "    let line\($0) = \($0)" }
+        var changed = old
+        changed[594] = "    let line594 = 2026 // altered"
+        changed[617] = "    let line617 = 2027 // altered"
+        let file = try fixture.file("FileTreeModel.swift", text: old.joined(separator: "\n") + "\n")
+        try fixture.initializeGit()
+        try (changed.joined(separator: "\n") + "\n").write(to: file, atomically: true,
+                                                           encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(change.waitForExistence(timeout: 25))
+        change.click()
+        let mode = window.radioGroups["bailey.diff.mode"]
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        mode.radioButtons.element(boundBy: 0).click()
+        layout.radioButtons.element(boundBy: 0).click()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        let displayed = try XCTUnwrap(editor.value as? String)
+        XCTAssertTrue(displayed.contains("line594 = 2026"))
+        XCTAssertTrue(displayed.contains("line617 = 2027"))
+        XCTAssertTrue(displayed.contains("line594 = 594"))
+        let fold = window.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "591 unmodified lines")
+        ).firstMatch
+        XCTAssertTrue(fold.waitForExistence(timeout: 10),
+                      "TextKit viewport must expose the folded context before source line 595")
+        XCTAssertLessThan(fold.frame.minY - window.frame.minY, 240,
+                          "First collapsed context row must be near the top, not below a blank area")
+        let shot = XCTAttachment(screenshot: window.screenshot())
+        shot.name = "Real Git review with 900 source lines and visible folded context"
+        shot.lifetime = .keepAlways
+        add(shot)
+        fold.click()
+        let expandedFold = window.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "491 unmodified lines")
+        ).firstMatch
+        XCTAssertTrue(expandedFold.waitForExistence(timeout: 12),
+                      "Clicking the gutter accessibility target must expand the intended fold")
+        XCTAssertTrue((editor.value as? String)?.contains("let line492") == true)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
+                       changed.joined(separator: "\n") + "\n")
+    }
+
     func testNativeDiffChromeRepaintsDuringAppearanceSwitchWithoutRedocking() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("theme-diff.swift", text: "let theme = 1\n")
