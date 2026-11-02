@@ -76,9 +76,6 @@ nonisolated enum GitWorktreeComparison {
     ) -> Content? {
         let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: old)
         let (rawLines, rawTrailing) = DiffLineSplitter.lines(of: worktree)
-        guard !patch.contains("Binary files "), !patch.contains("GIT binary patch") else {
-            return nil
-        }
         if patch.isEmpty {
             return oldOID == newOID
                 ? Content(old: worktree, new: worktree, editBaseline: nil)
@@ -133,6 +130,9 @@ nonisolated enum GitWorktreeComparison {
                     .components(separatedBy: "..")
                 guard let ids, ids.count == 2 else { return nil }
                 pair = (ids[0], ids[1])
+            } else if hunks == 0,
+                      line.hasPrefix("Binary files ") || line == "GIT binary patch" {
+                return nil
             } else if line.hasPrefix("@@ -") {
                 guard oldRemaining == 0, newRemaining == 0 else { return nil }
                 let parts = line.split(separator: " ", maxSplits: 3)

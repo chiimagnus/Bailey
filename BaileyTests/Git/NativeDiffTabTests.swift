@@ -1043,6 +1043,33 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(display.computation.unified.rows.contains { $0.kind == .added })
     }
 
+    func testTextContainingGitBinaryPatchWordsOpensAndSavesInWorktreeDiff() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("ordinary.txt")
+        try Data("before\n".utf8).write(to: path)
+        for arguments in [["add", "ordinary.txt"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let changed = "Binary files a/x and b/x differ\nGIT binary patch\n"
+        try Data(changed.utf8).write(to: path)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "ordinary.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error, "Text lines must not be treated as binary patch metadata")
+        try await wait { tab.display != nil }
+        XCTAssertEqual(tab.newContent, changed)
+        XCTAssertTrue(tab.hasChanges)
+        XCTAssertTrue(tab.isEditing)
+        tab.updateEditedContent(changed + "saved\n")
+        await tab.save()
+        XCTAssertNil(tab.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), Data((changed + "saved\n").utf8))
+    }
+
     func testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

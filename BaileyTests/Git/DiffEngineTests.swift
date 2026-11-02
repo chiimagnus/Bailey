@@ -261,6 +261,35 @@ final class DiffEngineTests: XCTestCase {
         XCTAssertNil(result.editBaseline)
     }
 
+    func testBinaryPatchMarkersInsideAddedTextDoNotRejectOrdinaryDiff() throws {
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let actual = "Binary files a/x and b/x differ\nGIT binary patch\n"
+        let patch = """
+        diff --git a/x b/x
+        index \(oldOID)..\(newOID) 100644
+        --- a/x
+        +++ b/x
+        @@ -1 +1,2 @@
+        -before
+        +Binary files a/x and b/x differ
+        +GIT binary patch
+        """
+        let content = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: "before\n", worktree: actual, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        XCTAssertEqual(content.old, "before\n")
+        XCTAssertEqual(content.new, actual)
+        XCTAssertNil(content.editBaseline)
+        XCTAssertNil(GitWorktreeComparison.resolve(
+            old: "before\n", worktree: actual,
+            patch: "diff --git a/x b/x\nindex \(oldOID)..\(newOID) 100644\n"
+                + "Binary files a/x and b/x differ\n",
+            oldOID: oldOID, newOID: newOID
+        ), "Actual binary metadata must still be rejected")
+    }
+
     func testLargeRepeatedShiftStillProducesMinimalLineDiff() {
         let old = (0..<800).map { $0.isMultiple(of: 2) ? "A" : "B" }.joined(separator: "\n") + "\n"
         let new = (0..<800).map { $0.isMultiple(of: 2) ? "B" : "A" }.joined(separator: "\n") + "\n"
