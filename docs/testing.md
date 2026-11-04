@@ -81,7 +81,8 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 `make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与
 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
 `WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；
-不使用 `-ApplePersistenceIgnoreState YES`，该参数会阻止当前系统创建初始 WindowGroup 窗口。
+隔离测试抑制 SwiftUI 隐式首窗，由窗口命令唯一地请求首次挂载；测试夹具不得在超时后发送第二个新建窗口快捷键。
+不使用 `-ApplePersistenceIgnoreState YES`，该参数会干扰原生窗口生命周期与恢复。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
 真实 SSH 主题 GUI 回归要求显式提供 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_HOST` 和
@@ -92,6 +93,8 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 并从测试进程外安全切换、恢复 macOS 外观时执行，不在普通测试中修改用户系统外观。
 公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
 避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
+完整 App GUI 测试优先在独立 macOS 图形会话（例如 `offstage` 的 session lane）执行，
+避免系统设置、正式 Bailey 或用户输入抢占前台，使失败的焦点与菜单证据不可重现。
 在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
