@@ -100,6 +100,43 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testPanelItemsDoNotReconfigureUnrelatedEditShortcut() throws {
+        let main = try XCTUnwrap(NSApp.mainMenu)
+        let panel = try XCTUnwrap(main.items.first {
+            $0.title == String(localized: "Panel", table: "Interface")
+        }?.submenu)
+        let edit = try XCTUnwrap(main.items.compactMap(\.submenu).first { menu in
+            menu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
+                && menu.items.contains { $0.action == #selector(TreeKeyboardView.paste(_:)) }
+        })
+        let delete = try XCTUnwrap(edit.items.first {
+            $0.action == #selector(TreeKeyboardView.delete(_:))
+        })
+        let originalKey = delete.keyEquivalent
+        let originalMask = delete.keyEquivalentModifierMask
+        defer {
+            delete.keyEquivalent = originalKey
+            delete.keyEquivalentModifierMask = originalMask
+        }
+        delete.keyEquivalentModifierMask = .command
+        XCTAssertEqual(delete.keyEquivalentModifierMask, .command)
+
+        let unrelated = NSMenuItem(title: "Panel Probe", action: nil, keyEquivalent: "")
+        panel.addItem(unrelated)
+        defer { panel.removeItem(unrelated) }
+        XCTAssertEqual(delete.keyEquivalentModifierMask, .command,
+                       "Adding a Panel row must not reconfigure the unrelated Edit menu")
+
+        let editChange = NSMenuItem(title: "Edit Probe", action: #selector(TreeKeyboardView.copy(_:)),
+                                    keyEquivalent: "")
+        edit.addItem(editChange)
+        defer { edit.removeItem(editChange) }
+        XCTAssertEqual(delete.keyEquivalent, originalKey,
+                       "Edit changes must still restore the native Delete shortcut")
+        XCTAssertTrue(delete.keyEquivalentModifierMask.isEmpty)
+    }
+
+    @MainActor
     func testSystemMenuTrackingPinsPresentationUntilEndNotification() throws {
         let appDelegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
         let mainMenu = try XCTUnwrap(NSApp.mainMenu)

@@ -86,9 +86,15 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func mainMenuItemAdded(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
-        if menu === NSApp.mainMenu { removeUnusedViewMenu() }
-        if menu === NSApp.mainMenu
-            || NSApp.mainMenu?.items.contains(where: { $0.submenu === menu }) == true {
+        if menu === NSApp.mainMenu {
+            removeUnusedViewMenu()
+            configureDeleteShortcut()
+        } else if menu.supermenu === NSApp.mainMenu,
+                  let index = notification.userInfo?["NSMenuItemIndex"] as? Int,
+                  let action = menu.item(at: index)?.action,
+                  action == #selector(TreeKeyboardView.copy(_:))
+                      || action == #selector(TreeKeyboardView.paste(_:))
+                      || action == #selector(TreeKeyboardView.delete(_:)) {
             configureDeleteShortcut()
         }
     }
@@ -135,8 +141,9 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         }), let delete = edit.items.first(where: {
             $0.action == #selector(TreeKeyboardView.delete(_:))
         }) else { return }
-        delete.keyEquivalent = String(UnicodeScalar(NSBackspaceCharacter)!)
-        delete.keyEquivalentModifierMask = []
+        let shortcut = String(UnicodeScalar(NSBackspaceCharacter)!)
+        if delete.keyEquivalent != shortcut { delete.keyEquivalent = shortcut }
+        if !delete.keyEquivalentModifierMask.isEmpty { delete.keyEquivalentModifierMask = [] }
     }
 
     private func removeUnusedViewMenu() {
