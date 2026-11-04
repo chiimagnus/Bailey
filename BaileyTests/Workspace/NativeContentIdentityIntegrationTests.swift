@@ -213,6 +213,53 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         XCTAssertFalse(manager.isCommandPaletteVisible)
     }
 
+    func testSSHFolderPickerBackdropExposesNativeCancelPress() async throws {
+        var canceled = 0
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 900, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SSHFolderPickerView(
+            hosts: ["test-server"],
+            onCancel: { canceled += 1 },
+            onChoose: { _, _ in }
+        ))
+        host.frame = window.contentView?.bounds ?? .zero
+        window.contentView = host
+        window.orderFront(nil)
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let ax = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(ax, AXError.success.rawValue)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        func attribute(_ element: NSObject, _ name: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(name)) else { return nil }
+            return element.value(forKey: name)
+        }
+        func descendants(_ element: NSObject) -> [NSObject] {
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            return [element] + children.flatMap(descendants)
+        }
+        let elements = (host.accessibilityChildren() as? [NSObject] ?? [])
+            .flatMap(descendants)
+        let dismiss = try XCTUnwrap(elements.first {
+            attribute($0, "accessibilityIdentifier") as? String == "bailey.sshFolderPicker.dismiss"
+        }, "The tappable SSH picker backdrop must expose its own cancel action")
+        XCTAssertEqual(attribute(dismiss, "accessibilityRole") as? String, "AXButton")
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(dismiss.responds(to: selector))
+        typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+        let invoke = unsafeBitCast(dismiss.method(for: selector), to: Action.self)
+        XCTAssertTrue(invoke(dismiss, selector))
+        XCTAssertEqual(canceled, 1)
+    }
+
     func testTerminalOverlayScrollbarOffersNativeAccessibleScrollActions() {
         let scroll = OverlayScrollbarView(frame: CGRect(x: 0, y: 0, width: 14, height: 250))
         var requests: [Double] = []
