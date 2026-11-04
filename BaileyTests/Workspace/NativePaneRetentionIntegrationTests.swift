@@ -1243,7 +1243,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
 
         terminal.terminalDidChangeTitle("⠋ Meaningful Unicode")
         XCTAssertEqual(presentation.panelEntries(for: project).first?.title, "⠋ Meaningful Unicode")
-        presentation.beginPanelTracking(project: project)
+        presentation.beginTracking(project: project, projects: [project])
         let initial = presentation.panelEntries(for: project)
         let invalidated = expectation(description: "Changing a live title must not update a tracked menu")
         invalidated.isInverted = true
@@ -1262,7 +1262,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(presentation.panelEntries(for: project).map(\.id), initial.map(\.id))
         await fulfillment(of: [invalidated], timeout: 0.1)
 
-        presentation.endPanelTracking()
+        presentation.endTracking()
         XCTAssertEqual(presentation.panelEntries(for: project).first?.title, "User rename")
         XCTAssertEqual(presentation.panelEntries(for: project).count, 2)
         XCTAssertEqual(terminal.title, "Final title")
@@ -1273,9 +1273,9 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
         let presentation = MainMenuPresentation()
         XCTAssertEqual(presentation.projectEntries(for: [first]).map(\.title), ["First"])
-        presentation.beginProjectTracking(projects: [first])
+        presentation.beginTracking(project: nil, projects: [first])
         XCTAssertEqual(presentation.projectEntries(for: [first, second]).map(\.title), ["First"])
-        presentation.endProjectTracking()
+        presentation.endTracking()
         XCTAssertEqual(presentation.projectEntries(for: [first, second]).map(\.title),
                        ["First", "Second"])
     }

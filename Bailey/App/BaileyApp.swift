@@ -96,27 +96,21 @@ extension FocusedValues {
 @MainActor
 @Observable
 final class MainMenuPresentation {
-    private(set) var trackedPanelEntries: [PanelMenuEntry]?
-    private(set) var trackedProjectEntries: [ProjectMenuEntry]?
+    private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
 
     func panelEntries(for project: Project?) -> [PanelMenuEntry] {
-        trackedPanelEntries ?? PanelMenuEntry.entries(for: project)
+        tracked?.panels ?? PanelMenuEntry.entries(for: project)
     }
 
     func projectEntries(for projects: [Project]) -> [ProjectMenuEntry] {
-        trackedProjectEntries ?? ProjectMenuEntry.entries(for: projects)
+        tracked?.projects ?? ProjectMenuEntry.entries(for: projects)
     }
 
-    func beginPanelTracking(project: Project?) {
-        trackedPanelEntries = PanelMenuEntry.entries(for: project)
+    func beginTracking(project: Project?, projects: [Project]) {
+        tracked = (PanelMenuEntry.entries(for: project), ProjectMenuEntry.entries(for: projects))
     }
 
-    func beginProjectTracking(projects: [Project]) {
-        trackedProjectEntries = ProjectMenuEntry.entries(for: projects)
-    }
-
-    func endPanelTracking() { trackedPanelEntries = nil }
-    func endProjectTracking() { trackedProjectEntries = nil }
+    func endTracking() { tracked = nil }
 }
 
 /// Menu commands routed to the focused window's manager.

@@ -68,8 +68,9 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         guard let menu = notification.object as? NSMenu else { return }
         if menu === NSApp.mainMenu {
             let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
-            menuPresentation.beginPanelTracking(project: owner?.selectedProject)
-            menuPresentation.beginProjectTracking(projects: owner?.projects ?? [])
+            menuPresentation.beginTracking(
+                project: owner?.selectedProject, projects: owner?.projects ?? []
+            )
         } else {
             var root = menu
             while let parent = root.supermenu { root = parent }
@@ -80,8 +81,7 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuDidEndTracking(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu,
               menu === NSApp.mainMenu else { return }
-        menuPresentation.endPanelTracking()
-        menuPresentation.endProjectTracking()
+        menuPresentation.endTracking()
     }
 
     @objc private func mainMenuItemAdded(_ notification: Notification) {

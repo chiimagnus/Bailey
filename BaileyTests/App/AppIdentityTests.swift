@@ -141,18 +141,15 @@ final class AppIdentityTests: XCTestCase {
         let appDelegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
         let mainMenu = try XCTUnwrap(NSApp.mainMenu)
         let presentation = appDelegate.menuPresentation
-        XCTAssertNil(presentation.trackedPanelEntries)
-        XCTAssertNil(presentation.trackedProjectEntries)
+        XCTAssertNil(presentation.tracked)
 
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
-        XCTAssertNotNil(presentation.trackedPanelEntries)
-        XCTAssertNotNil(presentation.trackedProjectEntries)
+        XCTAssertNotNil(presentation.tracked)
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
-        XCTAssertNotNil(presentation.trackedPanelEntries,
+        XCTAssertNotNil(presentation.tracked,
                         "Unrelated popup tracking must not release the system menu snapshot")
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
-        XCTAssertNil(presentation.trackedPanelEntries)
-        XCTAssertNil(presentation.trackedProjectEntries)
+        XCTAssertNil(presentation.tracked)
     }
 
     @MainActor
