@@ -488,11 +488,11 @@ struct TreeCompactSegment<MenuContent: View>: View {
                                       isExpectedMenu: isExpectedMenu)
                     .contextMenu(menuItems: menuContent)
             }
-            .accessibilityRepresentation {
-                Button(component.name, action: onClick)
-                    .accessibilityValue(component.path)
-                    .accessibilityIdentifier("bailey.tree.folder.component.\(index)")
-            }
+            .accessibilityLabel(component.name)
+            .accessibilityValue(component.path)
+            .accessibilityIdentifier("bailey.tree.folder.component.\(index)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default) { onClick() }
     }
 }
 
@@ -576,21 +576,15 @@ struct TreeFolderRow<Accessory: View>: View {
                     .modifier(layout)
                     .onTapGesture { if !nativeClickOwner { toggle() } }
                     .help(row.accessibilityLabel + "\n" + row.path)
-                    .accessibilityRepresentation {
-                        Button(row.accessibilityLabel, action: toggle)
-                            .accessibilityIdentifier("bailey.tree.folder")
-                            .accessibilityAddTraits(isSelected ? .isSelected : [])
-                            .accessibilityValue(row.isExpanded
-                                ? String(localized: "Expanded", table: "Sidebar")
-                                : String(localized: "Collapsed", table: "Sidebar"))
-                            .accessibilityChildren {
-                                if let compactSegment, !row.compactPrefix.isEmpty {
-                                    ForEach(Array(row.compactComponents.enumerated()), id: \.element.path) { entry in
-                                        compactSegment(entry.element, entry.offset)
-                                    }
-                                }
-                            }
-                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(row.accessibilityLabel)
+                    .accessibilityIdentifier("bailey.tree.folder")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityAction(.default) { toggle() }
+                    .accessibilityValue(row.isExpanded
+                        ? String(localized: "Expanded", table: "Sidebar")
+                        : String(localized: "Collapsed", table: "Sidebar"))
                 accessory(hovering || focusRing)
             }
         }
