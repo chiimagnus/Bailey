@@ -267,8 +267,8 @@ final class GitChangesUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [historicalContent], timeout: 15), .completed,
                        "Graph history must display the committed file, not its changed working copy")
-        XCTAssertFalse(historyFirst.isSelected,
-                       "Browsing Graph history must not invent a Git resource selection")
+        XCTAssertTrue(historyFirst.isSelected,
+                      "Clicking a historical row explicitly selects that Graph resource")
         app.typeKey("p", modifierFlags: .command)
         let palette = window.textFields["bailey.commandPalette.search"]
         XCTAssertTrue(palette.waitForExistence(timeout: 10))
@@ -871,10 +871,12 @@ final class GitChangesUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [displayed], timeout: 15), .completed,
                        "Space must reach the focused file's real historical Diff before checking its AX state")
-        XCTAssertFalse(nested.isSelected, "Displaying a historical Diff cannot create Selection")
+        XCTAssertTrue(nested.isSelected,
+                      "Space explicitly selects the focused Graph file when opening its Diff")
         nested.rightClick()
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        XCTAssertFalse(nested.isSelected, "Context cancellation cannot leave a false AX Selection")
+        XCTAssertTrue(nested.isSelected,
+                      "Canceling the context menu must preserve the explicit Selection")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
