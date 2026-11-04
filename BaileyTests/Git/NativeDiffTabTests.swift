@@ -377,6 +377,93 @@ final class NativeDiffTabTests: XCTestCase {
                              "Deep scrolling must locate the next virtual deletion block")
     }
 
+    func testWorktreeDiffWaitsForFoldedDisplayBeforeFirstNativeFrame() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var lines = (0..<24_000).map { "let entry\($0) = \($0)\n" }
+        let path = directory.appendingPathComponent("first-frame.swift")
+        try Data(lines.joined().utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "first-frame.swift"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        lines[12_000] = "let entry12000 = 42\n"
+        try Data(lines.joined().utf8).write(to: path)
+        let tab = DiffTab(repoRoot: directory.path, path: "first-frame.swift",
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: tab, isSelected: false))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait({
+            tab.isEditing && tab.hasChanges && tab.display == nil
+        }, pollingInterval: .milliseconds(1), timeout: 15)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertNil(tab.nativeSurface,
+                     "An unfinished diff must not briefly expose the full editable source")
+        try await wait({ tab.display != nil }, timeout: 20)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+                .contains { !$0.isHidden && $0.decorations.rows.contains { $0.collapsed != nil } }
+                == true
+        }
+        XCTAssertEqual(try Data(contentsOf: path), Data(lines.joined().utf8))
+    }
+
+    func testActiveCleanWorktreeEditorSurvivesNewDiffComputation() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var lines = (0..<20_000).map { "line \($0)\n" }
+        let path = directory.appendingPathComponent("was-clean.txt")
+        try Data(lines.joined().utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "was-clean.txt"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        let tab = DiffTab(repoRoot: directory.path, path: "was-clean.txt",
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        try await wait { !tab.isLoading && tab.isEditing && !tab.hasChanges }
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: tab, isSelected: false))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+                .contains { !$0.isHidden && $0.textView.isEditable } == true
+        }
+        let editor = try XCTUnwrap(tab.nativeSurface?.subviews
+            .compactMap { $0 as? DiffCodePaneView }.first { $0.textView.isEditable })
+        XCTAssertTrue(window.makeFirstResponder(editor.textView))
+        XCTAssertTrue(tab.editorActive)
+
+        lines[10_000] = "line 10000 is changed\n"
+        let modified = lines.joined()
+        try Data(modified.utf8).write(to: path)
+        tab.reload()
+        try await wait({
+            tab.hasChanges && tab.display == nil
+        }, pollingInterval: .milliseconds(1), timeout: 15)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(tab.canPresentNativeContent,
+                      "A pending diff must not hide a native editor that owns keyboard focus")
+        XCTAssertFalse(editor.isHidden)
+        try await wait({ tab.display != nil }, timeout: 20)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(editor.isHidden)
+        XCTAssertEqual(editor.textView.text, modified)
+        XCTAssertFalse(tab.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
+    }
+
     func testWorktreeDiffOpensWithFoldedContextAndActivatesRetainedEditorOnClick() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1203,8 +1290,10 @@ final class NativeDiffTabTests: XCTestCase {
         try Data(latest.utf8).write(to: file)
         tab.reload()
         try await wait({ tab.newContent.utf8.elementsEqual(latest.utf8) }, pollingInterval: .milliseconds(1), timeout: 15)
+        XCTAssertNotEqual(tab.display?.id, oldDisplay.id,
+                          "A newly accepted snapshot must not show the previous file's row mapping")
         tab.expandRun(oldFold)
-        try await wait({ tab.display?.id != oldDisplay.id }, timeout: 15)
+        try await wait({ tab.display != nil && tab.display?.id != oldDisplay.id }, timeout: 15)
         let rendered = try XCTUnwrap(tab.display)
         XCTAssertEqual(Data(tab.newContent.utf8), Data(latest.utf8))
         XCTAssertTrue(rendered.computation.unified.text.contains("333333"),
@@ -1307,7 +1396,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data((changed + "saved\n").utf8))
     }
 
-    func testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload() async throws {
+    func testCanonicalEquivalentNativeDiffEditSaveAndReload() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("canonical.txt")
@@ -2765,7 +2854,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(diff.isDirty)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "E" + original)
 
-        // A mode switch must expose the saved buffer as the review document.
+        // Save completion must update the comparison without replacing the editor.
         try await wait { diff.newContent == "E" + original && diff.display != nil }
         XCTAssertEqual(diff.newContent, "E" + original)
         host?.removeFromSuperview()

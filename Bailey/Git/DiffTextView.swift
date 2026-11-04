@@ -1561,8 +1561,8 @@ final class DiffCodePaneView: NSView {
         applyContentHeightOverride()
     }
 
-    /// First visible row index, for carrying the reading position across
-    /// review/edit mode switches.
+    /// First visible row index, for restoring position across folded/full
+    /// presentations and document reloads.
     var firstVisibleRowIndex: Int? {
         DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
             .first(where: { $0.frame.maxY > scrollView.contentView.bounds.minY + 1 })?

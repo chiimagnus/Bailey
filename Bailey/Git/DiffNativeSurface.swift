@@ -15,10 +15,6 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     }
 
     private func focusIfRequested() {
-        // Do not focus the temporary full editor while the compact Git diff
-        // is still computing: a programmatic focus is not an edit request.
-        if let diff, diff.isEditing, diff.display == nil,
-           (diff.isLoading || diff.hasChanges) { return }
         guard pendingFocus, canFocus(), NSApp.isActive, let window, window.isKeyWindow,
               let pane = [editPane, rightPane, unifiedPane, leftPane].compactMap({ $0 })
                 .first(where: { !$0.isHidden }) else { return }
@@ -35,16 +31,17 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     private var pendingAnchor: (oldLine: Int?, newLine: Int?)?
     private var didRevealInitialChange = false
     private var pendingFirstChangeRow: Int?
-    private var editorActivated = false
 
     /// Compact review is only a presentation of unchanged lines. The worktree
     /// retains its full native editor, even while that editor is not visible.
     private var showsFoldedWorktree: Bool {
         guard let diff, diff.isEditing, !diff.showsCanonicalComparison,
-              !editorActivated, !diff.isDirty,
+              !diff.editorActive, !diff.isDirty,
               let display = diff.display else { return false }
-        return display.computation.unified.rows.contains { $0.collapsed != nil }
+        return display.hasCollapsedContext
     }
+
+    private var showsEditor: Bool { diff?.isEditing == true && !showsFoldedWorktree }
 
     init(diff: DiffTab) {
         self.diff = diff
@@ -90,7 +87,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
-        let editing = diff?.isEditing == true && !showsFoldedWorktree
+        let editing = showsEditor
         let canonical = editing && diff?.showsCanonicalComparison == true
         let paired = editing && ((canonical && diff?.display != nil)
             || (diff?.preferences.diffStyle == .split && diff?.editableBaseline != nil))
@@ -168,7 +165,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let palette = EditorPalette.theme(dark: dark)
         let compact = showsFoldedWorktree
-        let editing = diff.isEditing && !compact
+        let editing = showsEditor
         let split = diff.preferences.diffStyle == .split
 
         if diff.source.isPlainRevision {
@@ -297,7 +294,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         let pane = DiffCodePaneView(mode: mode, gutterLayout: gutter)
         pane.textView.onBecomeFirstResponder = { [weak self, weak pane] in
             guard let self else { return }
-            if pane === self.editPane { self.editorActivated = true }
+            if pane === self.editPane { self.diff?.setEditorActive(true) }
             self.onFocused?()
         }
         pane.onExpandCollapsedRun = { [weak self] run in self?.diff?.expandRun(run) }
@@ -313,7 +310,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         pane.textView.onResignFirstResponder = { [weak self] in
             guard let self else { return }
             self.diff?.autoSaveOnFocusLoss()
-            self.editorActivated = false
+            self.diff?.setEditorActive(false)
             if self.showsFoldedWorktree { self.render() }
         }
         editPane = pane
@@ -322,7 +319,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     private func activateEditor(atNewLine line: Int?) {
         guard let diff, diff.isEditableNow, showsFoldedWorktree else { return }
-        editorActivated = true
+        diff.setEditorActive(true)
         pendingAnchor = nil
         pendingFirstChangeRow = nil
         didRevealInitialChange = true

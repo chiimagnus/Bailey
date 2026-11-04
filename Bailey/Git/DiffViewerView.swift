@@ -40,6 +40,7 @@ enum DiffLayoutStyle: String {
 struct DiffDisplay {
     let id = UUID()
     let computation: DiffComputation
+    let hasCollapsedContext: Bool
     let unifiedText: NSAttributedString
     let leftText: NSAttributedString
     let rightText: NSAttributedString
@@ -130,6 +131,21 @@ final class DiffTab: nonisolated Identifiable {
     var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(comparisonNew.utf8) }
     /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
     var isEditing: Bool { source == .worktree && isEditable }
+    /// Transient editing intent; the native editor remains the only text/Undo owner.
+    private(set) var editorActive = false
+
+    func setEditorActive(_ active: Bool) {
+        if editorActive != active { editorActive = active }
+    }
+
+    /// A changed file must not mount full source while its first diff is computing.
+    /// An already-active editor remains visible through saves and refreshes.
+    var canPresentNativeContent: Bool {
+        guard hasLoadedContent else { return false }
+        if source.isPlainRevision || isDirty { return true }
+        if isEditing && (editorActive || !hasChanges) { return true }
+        return display != nil
+    }
     /// A non-invertible clean filter needs Git's canonical Review alongside the raw editor.
     var showsCanonicalComparison: Bool { isEditing && editComparisonOld != nil }
 
@@ -456,7 +472,10 @@ final class DiffTab: nonisolated Identifiable {
             self.comparisonNew = result.reviewNew
             self.editComparisonOld = result.editBaseline
             self.newContent = result.new
-            if changed { self.runExpansions.removeAll() }
+            if changed {
+                self.runExpansions.removeAll()
+                self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
+            }
             if changed || (self.hasChanges && self.display == nil) {
                 self.recomputeDisplay()
             }
@@ -562,6 +581,7 @@ final class DiffTab: nonisolated Identifiable {
         ]
         return DiffDisplay(
             computation: computation,
+            hasCollapsedContext: computation.unified.rows.contains { $0.collapsed != nil },
             unifiedText: DiffSyntaxHighlighter.attributedDocument(
                 computation.unified, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
                 baseAttributes: base
@@ -1124,7 +1144,7 @@ struct DiffViewerView: View {
                 } else {
                     VStack(spacing: 0) {
                         if !diff.source.isPlainRevision { controlBar }
-                        if diff.source.isPlainRevision || diff.isEditing || diff.display != nil {
+                        if diff.canPresentNativeContent {
                             // Each tab retains its own TextKit document; never reuse another tab's NSView.
                             DiffNativeRoot(diff: diff, isFocused: isFocused,
                                            canFocus: canFocus, onFocused: onFocused)
