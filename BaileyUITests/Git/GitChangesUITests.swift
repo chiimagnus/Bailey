@@ -408,6 +408,141 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
     }
 
+    func testComplexGitChangesPreserveEachRealDiffAcrossRepeatedBrowsing() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let baseline = (0..<3_600).map { "let line\($0) = \($0)\n" }
+        let dense = try fixture.file("src/Multihunk.swift", text: baseline.joined())
+        _ = try fixture.file("src/BeforeRename.swift", text: "let renamed = \"original\"\n")
+        let removed = try fixture.file("src/Removed.swift", text: "let deleted = \"GONE_ONLY\"\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+
+        var staged = baseline
+        for row in stride(from: 30, to: 3_540, by: 180) {
+            staged[row] = "let line\(row) = \(row) + 1 // INDEX_ONLY_\(row)\n"
+        }
+        try Data(staged.joined().utf8).write(to: dense)
+        try fixture.git(["add", "--", "src/Multihunk.swift"])
+
+        var worktree = staged
+        for row in stride(from: 85, to: 3_550, by: 180) {
+            worktree[row] = "let line\(row) = \(row) + 2 // WORKTREE_ONLY_\(row)\n"
+        }
+        worktree.removeSubrange(1_500..<1_507)
+        worktree.insert("let inserted = \"INSERT_ONLY\"\n", at: 2_500)
+        let rawWorktree = worktree.joined()
+        try Data(rawWorktree.utf8).write(to: dense)
+
+        try fixture.git(["mv", "src/BeforeRename.swift", "src/AfterRename.swift"])
+        let renamed = fixture.root.appendingPathComponent("src/AfterRename.swift")
+        try "let renamed = \"RENAMED_WORKTREE_ONLY\"\n".write(to: renamed, atomically: true,
+                                                        encoding: .utf8)
+        try FileManager.default.removeItem(at: removed)
+        let untracked = try fixture.file("src/Untracked.swift", text: "let brandNew = \"UNTRACKED_ONLY\"\n")
+        let status = try fixture.git(["status", "--porcelain=v1"])
+        let statusText = String(decoding: status, as: UTF8.self)
+        XCTAssertTrue(statusText.contains("MM src/Multihunk.swift"), statusText)
+        XCTAssertTrue(statusText.contains("RM src/BeforeRename.swift -> src/AfterRename.swift"), statusText)
+        XCTAssertTrue(statusText.contains(" D src/Removed.swift"), statusText)
+        XCTAssertTrue(statusText.contains("?? src/Untracked.swift"), statusText)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        let window = app.windows.firstMatch
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app, in: window)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let denseRows = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@",
+                                  ", src/Multihunk.swift"))
+        let stagedRow = denseRows.element(boundBy: 0)
+        let worktreeRow = denseRows.element(boundBy: 1)
+        XCTAssertTrue(worktreeRow.waitForExistence(timeout: 30),
+                      "A partially staged file must have independent staged and unstaged rows")
+        let layout = window.radioGroups["bailey.diff.layout"]
+        let review = window.textViews["bailey.diff.canonical"]
+
+        func expectReview(after clicking: XCUIElement, contains marker: String,
+                          excludes other: String) {
+            clicking.click()
+            XCTAssertTrue(layout.waitForExistence(timeout: 25))
+            layout.radioButtons.element(boundBy: 0).click()
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let visible = review.value as? String else { return false }
+                return review.exists && visible.contains(marker) && !visible.contains(other)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed,
+                           "The current diff must render \(marker), not the previous file or stage")
+            XCTAssertTrue(review.isHittable,
+                          "Correct text in a hidden view does not count as a visible Git Diff")
+        }
+
+        expectReview(after: stagedRow, contains: "INDEX_ONLY_30",
+                     excludes: "WORKTREE_ONLY_85")
+        let stagePreview = try XCTUnwrap(review.value as? String)
+        XCTAssertFalse(stagePreview.contains("let line0 = 0"),
+                       "Staged multi-hunk Diff must collapse distant unchanged context")
+
+        expectReview(after: worktreeRow, contains: "WORKTREE_ONLY_85",
+                     excludes: "INDEX_ONLY_30")
+        XCTAssertFalse((review.value as? String ?? "").contains("let line0 = 0"))
+        let screenshot = XCTAttachment(screenshot: window.screenshot())
+        screenshot.name = "Complex staged and unstaged multi-hunk Diff in actual Bailey Dev"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        review.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.1)).click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 25))
+        XCTAssertEqual(editor.value as? String, rawWorktree,
+                       "Editing must preserve inserted/deleted lines plus all staged and unstaged hunks")
+
+        expectReview(after: stagedRow, contains: "INDEX_ONLY_30",
+                     excludes: "WORKTREE_ONLY_85")
+        let renameRows = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", src/AfterRename.swift"))
+        let renamedStaged = renameRows.element(boundBy: 0)
+        let renamedWorktree = renameRows.element(boundBy: 1)
+        XCTAssertTrue(renamedWorktree.waitForExistence(timeout: 15),
+                      "A staged rename with further edits must expose both stage sides")
+        renamedStaged.click()
+        renamedWorktree.click()
+        let renamedVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String)?.contains("RENAMED_WORKTREE_ONLY") == true
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [renamedVisible], timeout: 20), .completed,
+                       "The renamed worktree file must use its actual new path")
+
+        let removedRow = WorkspaceUITestSupport.fileRow(removed, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(removedRow.waitForExistence(timeout: 15))
+        removedRow.click()
+        let removedVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (review.value as? String)?.contains("GONE_ONLY") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [removedVisible], timeout: 20), .completed,
+                       "A deleted file must still show its old text instead of a blank Diff")
+        XCTAssertTrue(review.isHittable)
+
+        let untrackedRow = WorkspaceUITestSupport.fileRow(untracked, in: window,
+                                                           relativeTo: fixture.root)
+        XCTAssertTrue(untrackedRow.waitForExistence(timeout: 15))
+        untrackedRow.click()
+        let untrackedVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (editor.value as? String)?.contains("UNTRACKED_ONLY") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [untrackedVisible], timeout: 20), .completed,
+                       "An untracked source must not retain a previous file's document")
+        XCTAssertTrue(editor.isHittable)
+
+        expectReview(after: worktreeRow, contains: "WORKTREE_ONLY_85",
+                     excludes: "INDEX_ONLY_30")
+        XCTAssertEqual(try Data(contentsOf: dense), Data(rawWorktree.utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), status,
+                       "Preview browsing must never stage, discard or write Git changes")
+    }
+
     func testStagedAndUnstagedRowsPreviewTheirDistinctGitBaselines() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("index-side.txt", text: "HEAD contents\n")
