@@ -377,6 +377,57 @@ final class NativeDiffTabTests: XCTestCase {
                              "Deep scrolling must locate the next virtual deletion block")
     }
 
+    func testWorktreeDiffOpensWithFoldedContextAndActivatesRetainedEditorOnClick() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<320).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let path = directory.appendingPathComponent("folded.txt")
+        try Data(original.utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "folded.txt"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: path)
+
+        let tab = DiffTab(repoRoot: directory.path, path: "folded.txt", source: .worktree,
+                          untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                          workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { tab.display != nil && tab.editDecorations.rows.count == 320 }
+        tab.autoSaveSuspendedForClose = true
+        let window = NSWindow(contentRect: NSRect(x: -930, y: -930, width: 800, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: tab))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.nativeSurface != nil
+        }
+        let surface = try XCTUnwrap(tab.nativeSurface)
+        let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .filter { !$0.isHidden }
+        XCTAssertEqual(visible.count, 1)
+        let preview = try XCTUnwrap(visible.first)
+        XCTAssertFalse(preview.textView.isEditable, "Browsing a long worktree diff must be compact")
+        XCTAssertTrue(preview.decorations.rows.contains { $0.collapsed != nil })
+        XCTAssertLessThan(preview.decorations.rows.count, 320)
+
+        try await clickDiffSourceRow(preview, in: window)
+
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .contains { !$0.isHidden && $0.textView.isEditable }
+        }
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { $0.textView.isEditable })
+        XCTAssertEqual(editor.textView.text, modified)
+        XCTAssertTrue(tab.isEditing)
+        XCTAssertFalse(tab.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
+    }
+
     func testEditableSplitAlignsFullWorktreeWithReadOnlyBaselineAcrossFoldedContext() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -409,8 +460,25 @@ final class NativeDiffTabTests: XCTestCase {
                 .filter { !$0.isHidden } ?? []
             return panes.count == 2
         }
-        let panes = try XCTUnwrap(tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
-            .filter { !$0.isHidden })
+        let surface = try XCTUnwrap(tab.nativeSurface)
+        let compactPanes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .filter { !$0.isHidden }
+        XCTAssertEqual(compactPanes.filter { $0.textView.isEditable }.count, 0)
+        XCTAssertTrue(compactPanes.allSatisfy { $0.decorations.rows.contains { $0.collapsed != nil } },
+                      "Split browsing must fold the same context on both sides")
+        XCTAssertEqual(compactPanes[0].decorations.rows.count, compactPanes[1].decorations.rows.count)
+        // Entering via the visible new-file row reveals the retained editor;
+        // ordinary pane focus alone must not force the diff to expand.
+        let rightPreview = try XCTUnwrap(compactPanes.first {
+            $0.textView.accessibilityIdentifier() == "bailey.diff.readonly-new"
+        })
+        try await clickDiffSourceRow(rightPreview, in: window)
+        try await wait {
+            surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden && $0.textView.isEditable }.count == 1
+        }
+        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .filter { !$0.isHidden }
         let baseline = try XCTUnwrap(panes.first { !$0.textView.isEditable })
         let editor = try XCTUnwrap(panes.first { $0.textView.isEditable })
         let editableRowCount = editor.decorations.rows.count
@@ -1288,6 +1356,36 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { !diff.isLoading }
         try await wait { diff.display?.id != newDisplayID }
         XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
+    }
+
+    private func clickDiffSourceRow(_ pane: DiffCodePaneView, in window: NSWindow) async throws {
+        try await wait {
+            pane.layoutSubtreeIfNeeded()
+            pane.scrollView.layoutSubtreeIfNeeded()
+            pane.textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+            return DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).contains { row in
+                row.index < pane.decorations.rows.count
+                    && pane.decorations.rows[row.index].newLine != nil
+            }
+        }
+        let rows = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        )
+        let target = try XCTUnwrap(rows.first {
+            $0.index < pane.decorations.rows.count
+                && pane.decorations.rows[$0.index].newLine != nil
+        })
+        let position = pane.textView.convert(
+            NSPoint(x: 12, y: target.frame.midY), to: nil
+        )
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: position, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1,
+            clickCount: 1, pressure: 1
+        ))
+        pane.textView.mouseDown(with: click)
     }
 
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {

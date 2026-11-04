@@ -1179,6 +1179,8 @@ final class DiffCodePaneView: NSView {
     /// Fired with the fold's metadata when the user activates a collapsed-run
     /// separator (row click, gutter click, or accessibility press).
     var onExpandCollapsedRun: ((DiffCollapsedRun) -> Void)?
+    /// A compact worktree diff can activate the retained editor on an actual source row.
+    var onBeginEditing: ((Int?) -> Void)?
     /// Set while a fold-expansion click is waiting for its rebuilt document,
     /// so the swap keeps the raw scroll offset instead of re-anchoring by
     /// line. Single-shot.
@@ -1327,7 +1329,9 @@ final class DiffCodePaneView: NSView {
         gutter.clipView = scrollView.contentView
 
         textView.handleCollapsedClick = { [weak self] point in
-            self?.expandCollapsedRow(atDocumentY: point.y) ?? false
+            guard let self else { return false }
+            return self.expandCollapsedRow(atDocumentY: point.y)
+                || self.beginEditing(atDocumentY: point.y)
         }
         gutter.onExpandRun = { [weak self] fold in
             self?.activateFold(fold)
@@ -1472,6 +1476,21 @@ final class DiffCodePaneView: NSView {
         }) {
             setVerticalScrollOffset(max(0, documentY(forRow: index) - lineAnchor.viewportY))
         }
+    }
+
+    /// A compact source row maps to the editable new-file line, never to the
+    /// shortened review-document offset. Removed rows choose the next live line.
+    private func beginEditing(atDocumentY documentY: CGFloat) -> Bool {
+        guard let onBeginEditing,
+              let row = DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
+                .first(where: { documentY >= $0.frame.minY && documentY < $0.frame.maxY }),
+              row.index < decorations.rows.count else { return false }
+        let sourceRows = decorations.rows
+        let line = sourceRows[row.index].newLine
+            ?? sourceRows[row.index...].compactMap(\.newLine).first
+            ?? sourceRows[..<row.index].last(where: { $0.newLine != nil })?.newLine
+        onBeginEditing(line)
+        return true
     }
 
     /// Expands the collapsed run whose separator row contains `documentY`

@@ -15,18 +15,16 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     }
 
     private func focusIfRequested() {
+        // Do not focus the temporary full editor while the compact Git diff
+        // is still computing: a programmatic focus is not an edit request.
+        if let diff, diff.isEditing, diff.display == nil,
+           (diff.isLoading || diff.hasChanges) { return }
         guard pendingFocus, canFocus(), NSApp.isActive, let window, window.isKeyWindow,
               let pane = [editPane, rightPane, unifiedPane, leftPane].compactMap({ $0 })
                 .first(where: { !$0.isHidden }) else { return }
         if window.makeFirstResponder(pane.textView) { pendingFocus = false }
     }
-    var onFocused: (() -> Void)? {
-        didSet {
-            for pane in [unifiedPane, leftPane, rightPane, editPane].compactMap({ $0 }) {
-                pane.textView.onBecomeFirstResponder = onFocused
-            }
-        }
-    }
+    var onFocused: (() -> Void)?
 
     private var unifiedPane: DiffCodePaneView?
     private var leftPane: DiffCodePaneView?
@@ -37,6 +35,16 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     private var pendingAnchor: (oldLine: Int?, newLine: Int?)?
     private var didRevealInitialChange = false
     private var pendingFirstChangeRow: Int?
+    private var editorActivated = false
+
+    /// Compact review is only a presentation of unchanged lines. The worktree
+    /// retains its full native editor, even while that editor is not visible.
+    private var showsFoldedWorktree: Bool {
+        guard let diff, diff.isEditing, !diff.showsCanonicalComparison,
+              !editorActivated, !diff.isDirty,
+              let display = diff.display else { return false }
+        return display.computation.unified.rows.contains { $0.collapsed != nil }
+    }
 
     init(diff: DiffTab) {
         self.diff = diff
@@ -82,7 +90,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
-        let editing = diff?.isEditing == true
+        let editing = diff?.isEditing == true && !showsFoldedWorktree
         let canonical = editing && diff?.showsCanonicalComparison == true
         let paired = editing && ((canonical && diff?.display != nil)
             || (diff?.preferences.diffStyle == .split && diff?.editableBaseline != nil))
@@ -138,7 +146,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     func rememberScrollAnchor() {
         guard let diff, let display = diff.display else { return }
-        if diff.isEditing {
+        if diff.isEditing && !showsFoldedWorktree {
             if let row = editPane?.firstVisibleRowIndex { pendingAnchor = (nil, row + 1) }
             return
         }
@@ -159,7 +167,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         let longLineDisplayWidth = AppSettings.shared.longLineDisplayWidth
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let palette = EditorPalette.theme(dark: dark)
-        let editing = diff.isEditing
+        let compact = showsFoldedWorktree
+        let editing = diff.isEditing && !compact
         let split = diff.preferences.diffStyle == .split
 
         if diff.source.isPlainRevision {
@@ -241,6 +250,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                 apply(display.rightText, document: display.computation.splitRight,
                       id: display.id, to: right, font: font, style: style, palette: palette,
                       longLineDisplayWidth: splitWidth)
+                left.onScroll = { [weak right] offset in right?.setScrollOffset(offset) }
+                right.onScroll = { [weak left] offset in left?.setScrollOffset(offset) }
                 restoreAnchor(to: right, rows: display.computation.splitRight.rows)
                 left.setScrollOffset(right.scrollOffset)
             } else {
@@ -251,6 +262,11 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                 restoreAnchor(to: pane, rows: display.computation.unified.rows)
             }
         }
+
+        let beginEditing: ((Int?) -> Void)? = compact && diff.isEditableNow
+            ? { [weak self] line in self?.activateEditor(atNewLine: line) } : nil
+        unifiedPane?.onBeginEditing = beginEditing
+        rightPane?.onBeginEditing = beginEditing
 
         let plain = diff.source.isPlainRevision
         let canonical = editing && diff.showsCanonicalComparison && diff.display != nil
@@ -279,7 +295,11 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     private func makePane(mode: DiffCodePaneView.Mode, gutter: DiffGutterLayout) -> DiffCodePaneView {
         let pane = DiffCodePaneView(mode: mode, gutterLayout: gutter)
-        pane.textView.onBecomeFirstResponder = onFocused
+        pane.textView.onBecomeFirstResponder = { [weak self, weak pane] in
+            guard let self else { return }
+            if pane === self.editPane { self.editorActivated = true }
+            self.onFocused?()
+        }
         pane.onExpandCollapsedRun = { [weak self] run in self?.diff?.expandRun(run) }
         addSubview(pane)
         return pane
@@ -291,10 +311,30 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         pane.textView.delegate = self
         pane.textView.onCharacterEdit = { [weak self] in self?.editTextDidChange() }
         pane.textView.onResignFirstResponder = { [weak self] in
-            self?.diff?.autoSaveOnFocusLoss()
+            guard let self else { return }
+            self.diff?.autoSaveOnFocusLoss()
+            self.editorActivated = false
+            if self.showsFoldedWorktree { self.render() }
         }
         editPane = pane
         return pane
+    }
+
+    private func activateEditor(atNewLine line: Int?) {
+        guard let diff, diff.isEditableNow, showsFoldedWorktree else { return }
+        editorActivated = true
+        pendingAnchor = nil
+        pendingFirstChangeRow = nil
+        didRevealInitialChange = true
+        render()
+        guard let pane = editPane else { return }
+        pane.layoutSubtreeIfNeeded()
+        if let line, line > 0, line <= diff.editDecorations.editSnapshotOffsets.count {
+            let offset = diff.editDecorations.editSnapshotOffsets[line - 1]
+            pane.textView.setSelectedRange(NSRange(location: offset, length: 0))
+            pane.textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+        }
+        window?.makeFirstResponder(pane.textView)
     }
 
     func undoManager(for view: NSTextView) -> UndoManager? {

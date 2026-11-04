@@ -305,7 +305,18 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(change.waitForExistence(timeout: 25))
         change.click()
         XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        layout.radioButtons.element(boundBy: 0).click()
+        let preview = window.textViews["bailey.diff.canonical"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let folded = try XCTUnwrap(preview.value as? String)
+        XCTAssertTrue(folded.contains("line594 = 2026"))
+        XCTAssertTrue(folded.contains("line617 = 2027"))
+        XCTAssertFalse(folded.contains("let line0 = 0"),
+                       "Git Changes must hide distant unchanged lines just like historical Diff")
         let editor = window.textViews["bailey.diff.worktree"]
+        preview.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.1)).click()
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         let displayed = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(displayed.contains("line594 = 2026"))
