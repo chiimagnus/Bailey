@@ -568,7 +568,8 @@ final class WorkspaceApplication {
     func registerWindowOpener(_ open: @escaping () -> Void) {
         windowOpener = open
         deliverPendingExternalFiles()
-        if BaileyInstanceMode.isIsolated && !didAttachAnyWindow && !isOpeningWindow {
+        if BaileyInstanceMode.isIsolated && windows.isEmpty
+            && !didAttachAnyWindow && !isOpeningWindow {
             // Isolated launch suppresses SwiftUI's implicit first scene. Open
             // exactly one here, even if SwiftUI reevaluates Commands before attachment.
             isOpeningWindow = true

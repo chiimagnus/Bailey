@@ -789,6 +789,17 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: bURL, encoding: .utf8), "window B")
     }
 
+    func testAlreadyRegisteredInitialSceneDoesNotRequestAnotherWindowBeforeNativeAttachment() throws {
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        var extraWindows = 0
+        application.openRestoredWindows { extraWindows += 1 }
+        XCTAssertEqual(application.windowCount, 1)
+        XCTAssertEqual(extraWindows, 0,
+                       "A scene already registered before native attachment must not launch a duplicate window")
+    }
+
     func testOneExplicitInitialSceneOwnsPendingFoldersWithoutDuplicateWindowRequests() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
