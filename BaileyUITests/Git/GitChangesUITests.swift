@@ -444,6 +444,126 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["diff", "--cached", "--name-only"]), Data())
     }
 
+    func testRealBaileySourceHistoryDiffLoadsAcrossIndexWorktreeAndOtherSource() throws {
+        // This is the Bailey source repository's actual history and source bytes,
+        // not a synthetic Git snapshot. All mutations stay in a temporary clone.
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.git(["clone", "--local", "--no-hardlinks", "--single-branch", source.path, "."])
+        let relativeDiff = "Bailey/Git/DiffViewerView.swift"
+        let relativeTree = "Bailey/Shared/Tree/TreeRowStyle.swift"
+        let diff = fixture.root.appendingPathComponent(relativeDiff)
+        let tree = fixture.root.appendingPathComponent(relativeTree)
+        func priorSource(_ path: String) throws -> Data {
+            let history = String(decoding: try fixture.git(["log", "-2", "--format=%H", "--", path]),
+                                 as: UTF8.self).split(separator: "\n")
+            let previous = try XCTUnwrap(history.dropFirst().first,
+                                        "An actual earlier Bailey source revision is required")
+            return try fixture.git(["show", "\(previous):\(path)"])
+        }
+        let currentDiff = try Data(contentsOf: diff)
+        let previousDiff = try priorSource(relativeDiff)
+        let currentTree = try Data(contentsOf: tree)
+        let previousTree = try priorSource(relativeTree)
+        XCTAssertNotEqual(currentDiff, previousDiff)
+        XCTAssertNotEqual(currentTree, previousTree)
+        let head = try fixture.git(["rev-parse", "HEAD"])
+
+        try previousDiff.write(to: diff)
+        try fixture.git(["add", "--", relativeDiff])
+        try currentDiff.write(to: diff)
+        try previousTree.write(to: tree)
+        let status = try fixture.git(["status", "--porcelain=v1"])
+        XCTAssertEqual(String(decoding: status, as: UTF8.self),
+                       "MM " + relativeDiff + "\n M " + relativeTree + "\n")
+        func changedLine(_ args: [String]) throws -> String {
+            let patch = String(decoding: try fixture.git(args), as: UTF8.self)
+            let candidate = patch.split(separator: "\n").first { line in
+                line.hasPrefix("+") && !line.hasPrefix("+++")
+                    && line.dropFirst().trimmingCharacters(in: .whitespaces).count > 18
+            }
+            return try XCTUnwrap(candidate.map { String($0.dropFirst())
+                .trimmingCharacters(in: .whitespaces) },
+                "A real source change needs an identifiable added line")
+        }
+        let stagedMarker = try changedLine(["diff", "--cached", "--unified=0", "--", relativeDiff])
+        let worktreeMarker = try changedLine(["diff", "--unified=0", "--", relativeDiff])
+        let otherMarker = try changedLine(["diff", "--unified=0", "--", relativeTree])
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let all = window.descendants(matching: .any).matching(identifier: "bailey.tree.file")
+        let first = all.matching(NSPredicate(format: "label ENDSWITH %@",
+                                            ", " + relativeDiff))
+        let staged = first.element(boundBy: 0)
+        let worktree = first.element(boundBy: 1)
+        let other = all.matching(NSPredicate(format: "label ENDSWITH %@",
+                                            ", " + relativeTree)).firstMatch
+        XCTAssertTrue(worktree.waitForExistence(timeout: 35),
+                      "The real Bailey source must expose both index and worktree changes")
+        XCTAssertTrue(other.waitForExistence(timeout: 20))
+
+        staged.click()
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 25))
+        layout.radioButtons.element(boundBy: 1).click()
+        let stageReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String)?.contains(stagedMarker) == true
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [stageReady], timeout: 25), .completed,
+                       "Actual prior Bailey source must be visible as a staged native Diff")
+
+        func verifyEditableSource(after clicking: XCUIElement, text: Data,
+                                  previewMarker: String) {
+            clicking.click()
+            XCTAssertTrue(layout.waitForExistence(timeout: 25))
+            layout.radioButtons.element(boundBy: 0).click()
+            let preview = window.textViews["bailey.diff.canonical"]
+            let folded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                preview.exists && (preview.value as? String)?.contains(previewMarker) == true
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [folded], timeout: 30), .completed,
+                           "Actual source changes must first appear in a native folded Diff")
+            XCTAssertTrue(preview.isHittable)
+            preview.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.1)).click()
+            let editor = window.textViews["bailey.diff.worktree"]
+            let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (editor.value as? String) == String(decoding: text, as: UTF8.self)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 25), .completed,
+                           "Explicit activation must load the exact real Bailey source bytes")
+            XCTAssertTrue(editor.isHittable)
+        }
+        verifyEditableSource(after: worktree, text: currentDiff,
+                             previewMarker: worktreeMarker)
+        verifyEditableSource(after: other, text: previousTree,
+                             previewMarker: otherMarker)
+
+        staged.click()
+        XCTAssertTrue(layout.waitForExistence(timeout: 25))
+        worktree.click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        if !editor.exists {
+            let preview = window.textViews["bailey.diff.canonical"]
+            XCTAssertTrue(preview.waitForExistence(timeout: 25))
+            preview.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.1)).click()
+        }
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (editor.value as? String) == String(decoding: currentDiff, as: UTF8.self)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 25), .completed)
+        XCTAssertEqual(try Data(contentsOf: diff), currentDiff)
+        XCTAssertEqual(try Data(contentsOf: tree), previousTree)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), status)
+        XCTAssertEqual(try fixture.git(["show", ":" + relativeDiff]), previousDiff)
+    }
+
     func testRapidStagedWorktreeAndOtherDiffSwitchesFinishAtLatestSelectedFile() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let baseline = (0..<18_000).map { "let value\($0) = \($0)\n" }
