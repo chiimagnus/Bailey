@@ -87,9 +87,18 @@ struct WindowRootView: View {
     }
 }
 
+/// A focused command has one identity per Git panel mount; its closure always
+/// revalidates the current repository when invoked.
+struct FocusedGitCommitAction: Equatable {
+    let id: UUID
+    let perform: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+}
+
 extension FocusedValues {
     @Entry var baileyManager: WorkspaceWindowModel?
-    @Entry var baileyGitCommit: (() -> Void)?
+    @Entry var baileyGitCommit: FocusedGitCommitAction?
 }
 
 /// Presentation snapshots live only while AppKit tracks an open system menu.
@@ -118,7 +127,7 @@ private struct BaileyCommands: Commands {
     let application: WorkspaceApplication
     let menuPresentation: MainMenuPresentation
     @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
-    @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: (() -> Void)?
+    @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: FocusedGitCommitAction?
     private var manager: WorkspaceWindowModel? {
         guard let focusedManager, NSApp.isActive,
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
@@ -303,7 +312,7 @@ private struct BaileyCommands: Commands {
             if manager?.selectedProject?.dock.activeGroup?.selected == .git {
                 Divider()
                 Button(String(localized: "Commit Staged", table: "Sidebar")) {
-                    focusedGitCommit?()
+                    focusedGitCommit?.perform()
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(focusedGitCommit == nil)
