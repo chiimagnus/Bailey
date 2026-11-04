@@ -108,7 +108,7 @@ final class AppIdentityTests: XCTestCase {
                 .accessibilityLabel("Close Panel")
             Button(action: {}) { Text(verbatim: "Close\t⌘W") }
                 .accessibilityLabel("Close")
-            Button("Other action", action: {})
+            Button("Close Tabs to the Right", action: {})
         })
         menu.update()
 
@@ -145,6 +145,7 @@ final class AppIdentityTests: XCTestCase {
                                  "Shortcut alignment must fit content instead of reserving 250pt")
         XCTAssertTrue(copy.keyEquivalent.isEmpty)
         XCTAssertTrue(paste.keyEquivalent.isEmpty)
+        XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
         XCTAssertNil(menu.items.last?.attributedTitle)
     }
 
