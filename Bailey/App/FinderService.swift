@@ -57,8 +57,12 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func mainMenuItemAdded(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
-        // A later, unhinted item can widen the menu after the shortcut was formatted.
-        Self.formatShortcutHints(in: menu)
+        var root = menu
+        while let parent = root.supermenu { root = parent }
+        if root !== NSApp.mainMenu {
+            // A later, unhinted item can widen the context menu's shortcut column.
+            Self.formatShortcutHints(in: menu)
+        }
         if menu === NSApp.mainMenu { removeUnusedViewMenu() }
         if menu === NSApp.mainMenu
             || NSApp.mainMenu?.items.contains(where: { $0.submenu === menu }) == true {

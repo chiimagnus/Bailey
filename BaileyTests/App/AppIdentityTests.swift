@@ -100,6 +100,18 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testSystemPanelMenuDoesNotReceiveContextShortcutFormatting() throws {
+        let panel = try XCTUnwrap(NSApp.mainMenu?.items.first {
+            $0.title == String(localized: "Panel", table: "Interface")
+        }?.submenu)
+        let item = NSMenuItem(title: "Example\t⌃1", action: nil, keyEquivalent: "")
+        panel.addItem(item)
+        defer { panel.removeItem(item) }
+        XCTAssertNil(item.attributedTitle,
+                     "The app's context-menu formatter must never rewrite a system Panel entry")
+    }
+
+    @MainActor
     func testContextMenuShortcutHintsAreDisplayOnly() throws {
         let menu = NSHostingMenu(rootView: VStack {
             Button(action: {}) { Text(verbatim: "Copy\t⌘C") }
