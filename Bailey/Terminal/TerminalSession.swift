@@ -25,6 +25,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     nonisolated let id: UUID
 
     var title: String
+    private(set) var menuTitle: String
     var workingDirectory: String? {
         didSet { if workingDirectory != oldValue { onSnapshotChange?() } }
     }
@@ -95,7 +96,9 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         launchWorkingDirectory = directory
         launchDirectoryURL = artifacts.directoryURL
         shellPidFileURL = artifacts.pidFileURL
-        title = (shellPath as NSString).lastPathComponent
+        let initialTitle = (shellPath as NSString).lastPathComponent
+        title = initialTitle
+        menuTitle = initialTitle
 
         let surface = BaileyTerminalView(launch: launch)
         self.surface = surface
@@ -612,6 +615,16 @@ extension TerminalSession: TerminalBackendEvents {
     func terminalDidChangeTitle(_ title: String) {
         guard !title.isEmpty else { return }
         self.title = title
+        let semanticTitle = Self.menuTitle(for: title)
+        if menuTitle != semanticTitle { menuTitle = semanticTitle }
+    }
+
+    private static func menuTitle(for title: String) -> String {
+        // Braille spinner frames in terminal titles must not rebuild an open system menu.
+        guard let first = title.unicodeScalars.first,
+              (0x2800...0x28FF).contains(first.value),
+              title.dropFirst().first == " " else { return title }
+        return String(title.dropFirst(2))
     }
 
     func terminalDidChangeWorkingDirectory(_ path: String) {

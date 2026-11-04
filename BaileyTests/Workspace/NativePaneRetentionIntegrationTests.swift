@@ -1233,6 +1233,39 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), original)
     }
 
+    func testTerminalMenuTitleIgnoresSpinnerFramesWithoutLosingRealRenames() async {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let tab = PaneTab(content: .session(terminal))
+        let stable = "Bailey | current task"
+        terminal.terminalDidChangeTitle("⠋ " + stable)
+        XCTAssertEqual(terminal.menuTitle, stable)
+        XCTAssertEqual(tab.displayTitle, "⠋ " + stable,
+                       "The actual Dock title must retain the terminal's live status")
+
+        let noMenuUpdate = expectation(description: "Transient spinner frames are ignored")
+        noMenuUpdate.isInverted = true
+        withObservationTracking({ _ = terminal.menuTitle }) { noMenuUpdate.fulfill() }
+        for frame in "⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋" {
+            terminal.terminalDidChangeTitle(String(frame) + " " + stable)
+            XCTAssertEqual(terminal.menuTitle, stable)
+        }
+        await fulfillment(of: [noMenuUpdate], timeout: 0.1)
+
+        let rename = expectation(description: "A real terminal rename updates Panel menu")
+        withObservationTracking({ _ = terminal.menuTitle }) { rename.fulfill() }
+        terminal.terminalDidChangeTitle("Build complete")
+        await fulfillment(of: [rename], timeout: 2)
+        XCTAssertEqual(terminal.menuTitle, "Build complete")
+        XCTAssertEqual(tab.displayTitle, "Build complete")
+        tab.customName = "My terminal"
+        XCTAssertEqual(tab.displayTitle, "My terminal")
+
+        terminal.terminalDidChangeTitle("⠋Braille is meaningful")
+        XCTAssertEqual(terminal.menuTitle, "⠋Braille is meaningful",
+                       "A braille glyph not followed by a space is part of the actual title")
+    }
+
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }

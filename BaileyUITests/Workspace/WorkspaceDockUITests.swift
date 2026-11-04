@@ -127,6 +127,140 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testHoveringSystemPanelMenuRetainsEveryOpenTabCommand() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("panel-hover-\($0).swift", text: "let panel = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        for file in files {
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 12))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window)
+                .waitForExistence(timeout: 12))
+        }
+        let panel = app.menuBarItems["Panel"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 10))
+        panel.click()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems[files[0].lastPathComponent].exists
+        })
+        let originalCount = menu.menuItems.count
+        for file in files + Array(files.reversed()) {
+            let item = menu.menuItems[file.lastPathComponent]
+            XCTAssertTrue(item.exists)
+            item.hover()
+            XCTAssertTrue(item.isHittable, "Panel entries must remain hittable while hovering")
+            XCTAssertEqual(menu.menuItems.count, originalCount)
+            for open in files {
+                XCTAssertTrue(menu.menuItems[open.lastPathComponent].exists)
+            }
+        }
+        let highlighted = menu.menuItems[files[0].lastPathComponent]
+        highlighted.hover()
+        let menuFrame = menu.frame
+        let itemFrame = highlighted.frame
+        let sampleX = (itemFrame.minX + itemFrame.width * 0.57 - menuFrame.minX) / menuFrame.width
+        let sampleY = (itemFrame.midY - menuFrame.minY) / menuFrame.height
+        var colors: [String] = []
+        for _ in 0..<12 {
+            let screenshot = menu.screenshot().image
+            let data = try XCTUnwrap(screenshot.tiffRepresentation)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+            let x = min(bitmap.pixelsWide - 1, max(0, Int(sampleX * CGFloat(bitmap.pixelsWide))))
+            let y = min(bitmap.pixelsHigh - 1, max(0, Int(sampleY * CGFloat(bitmap.pixelsHigh))))
+            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            colors.append(String(format: "%.2f,%.2f,%.2f", color.redComponent,
+                                 color.greenComponent, color.blueComponent))
+            Thread.sleep(forTimeInterval: 0.12)
+        }
+        print("PANEL_HOVER_SAMPLES=\(colors.joined(separator: " | "))")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "System Panel menu while hovering an open tab"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        for file in files {
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).exists)
+        }
+    }
+
+    func testSystemPanelMenuRemainsStableWhileTerminalTitleAnimates() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<10).map {
+            try fixture.file("panel-long-diff-title-\($0)-context.swift", text: "let value = \($0)\n")
+        }
+        let marker = fixture.root.appendingPathComponent("spinner-started.txt")
+        let script = try fixture.file("terminal-spinner.py", text: """
+        import pathlib, sys, time
+        pathlib.Path(r"\(marker.path)").write_text("running")
+        for _ in range(400):
+            for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
+                sys.stdout.write("\\x1b]0;" + frame + " Panel Hover Test\\x07")
+                sys.stdout.flush()
+                time.sleep(0.008)
+        sys.stdout.write("\\x1b]0;Panel Hover Test\\x07")
+        sys.stdout.flush()
+        """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open ten real work tabs")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: configuration) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        for file in files {
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window)
+                .waitForExistence(timeout: 15))
+        }
+        app.typeKey("t", modifierFlags: .command)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.57)).click()
+        app.typeText("/usr/bin/python3 '\(script.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let started = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: marker.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [started], timeout: 15), .completed)
+
+        app.menuBarItems["Panel"].click()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems.matching(NSPredicate(format: "title CONTAINS %@", "Panel Hover Test"))
+                .firstMatch.exists
+        })
+        let terminalItem = app.menuItems.matching(NSPredicate(
+            format: "title == %@", "Panel Hover Test"
+        )).firstMatch
+        XCTAssertTrue(terminalItem.waitForExistence(timeout: 5),
+                      "A terminal progress spinner must never enter the system menu item title")
+        let expectedCount = menu.menuItems.count
+        for _ in 0..<12 {
+            terminalItem.hover()
+            XCTAssertTrue(terminalItem.isHittable)
+            XCTAssertEqual(terminalItem.title, "Panel Hover Test")
+            XCTAssertEqual(menu.menuItems.count, expectedCount)
+            XCTAssertTrue(app.menuItems.matching(NSPredicate(
+                format: "title == %@", files[0].lastPathComponent
+            )).firstMatch.exists)
+        }
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Panel menu remains stable during terminal title animation"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
+                           "let value = \(index)\n")
+        }
+    }
+
     func testTabContextMenuFitsContentsWithoutWideShortcutColumn() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("menu-width.md", text: "Content remains untouched\n")

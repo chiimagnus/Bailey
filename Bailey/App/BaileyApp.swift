@@ -414,7 +414,13 @@ private struct PanelMenuEntry: Identifiable {
     init(tab: PaneTab, index: Int) {
         id = .tab(tab.id)
         self.index = index
-        title = tab.displayTitle
+        if let customName = tab.customName, !customName.isEmpty {
+            title = customName
+        } else if case .session(let session) = tab.content {
+            title = session.menuTitle
+        } else {
+            title = tab.content.title
+        }
         if let path = tab.content.fileIconPath {
             let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
             icon = MaterialFileIcon.image(forPath: fileIconPath)
