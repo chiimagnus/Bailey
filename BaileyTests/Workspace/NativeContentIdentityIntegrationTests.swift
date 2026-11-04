@@ -567,7 +567,8 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         }.first)
         try await wait {
             host.layoutSubtreeIfNeeded()
-            return diff.display != nil && self.find(DiffNativeSurface.self, in: host) === diff.nativeSurface
+            guard diff.display != nil, let surface = diff.nativeSurface else { return false }
+            return self.find(DiffNativeSurface.self, in: host) === surface
         }
         let originalDiffSurface = try XCTUnwrap(diff.nativeSurface)
         XCTAssertEqual(diff.newContent, "let identity = \"worktree A\"\n")
