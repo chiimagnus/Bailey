@@ -377,6 +377,171 @@ final class NativeDiffTabTests: XCTestCase {
                              "Deep scrolling must locate the next virtual deletion block")
     }
 
+    func testClosingDiffDuringSyntaxCaptureReleasesItsOwner() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("close-during-color.swift")
+        var lines = (0..<24_000).map { "let item\($0) = \($0)\n" }
+        try Data(lines.joined().utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", file.lastPathComponent], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: root.path).status, 0)
+        lines[12_000] = "let item12000 = -1\n"
+        try Data(lines.joined().utf8).write(to: file)
+        weak var retained: DiffTab?
+        func loadAndRelease() async throws {
+            let diff = DiffTab(repoRoot: root.path, path: file.lastPathComponent,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                               preferences: try isolatedPreferences())
+            retained = diff
+            try await wait({ diff.canPresentNativeContent },
+                           pollingInterval: .milliseconds(1), timeout: 20)
+            XCTAssertTrue(diff.hasChanges)
+        }
+        try await loadAndRelease()
+        let started = CFAbsoluteTimeGetCurrent()
+        try await wait({ retained == nil }, pollingInterval: .milliseconds(1), timeout: 0.4)
+        print("AUDIT_DIFF_OWNER_RELEASE milliseconds=\((CFAbsoluteTimeGetCurrent() - started) * 1_000)")
+    }
+
+    func testFoldedWorktreeViewportGeometryBudgetWithManyChanges() throws {
+        var lines = (0..<24_000).map { "let row\($0) = \($0)\n" }
+        let original = lines.joined()
+        for index in stride(from: 100, to: lines.count, by: 240) {
+            lines[index] = "let row\(index) = -1\n"
+        }
+        let updated = lines.joined()
+        let core = DiffCore.compute(oldText: original, newText: updated)
+        let presentation = DiffComputation.build(core: core, expansions: [:])
+        let folds = DiffEditFold.sourceFolds(in: presentation.unified,
+                                              lineCount: core.newLines.count)
+        let starts = core.newLines.map(\.utf16Range.location)
+        let oldText = original as NSString
+        let ghosts = presentation.editState.ghosts.map { block in
+            DiffDecorations.GhostBlock(
+                anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                lines: block.lines.map {
+                    NSAttributedString(string: oldText.substring(with: $0.sourceRange))
+                }
+            )
+        }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 360),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.setEditBufferText(updated)
+        pane.setEditingFolds(
+            folds, lineOffsets: starts,
+            baseDecorations: .edit(state: presentation.editState, snapshotOffsets: starts,
+                                   lineCount: starts.count, ghostBlocks: ghosts),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        var samples: [Double] = []
+        for index in 0..<30 {
+            pane.setVerticalScrollOffset(CGFloat((index * 347) % 9_000))
+            pane.layoutSubtreeIfNeeded()
+            let started = CFAbsoluteTimeGetCurrent()
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            samples.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+            XCTAssertFalse(visible.isEmpty, "The native folded viewport must never lose every row")
+        }
+        samples.sort()
+        print("AUDIT_DIFF_FOLDED_GEOMETRY lines=24000 folds=\(folds.count) samples=30 median=\(samples[15]) p95=\(samples[28]) worst=\(samples[29])")
+        XCTAssertLessThanOrEqual(samples[28], 32,
+                                 "Warm folded TextKit viewport geometry must meet the Debug p95 budget")
+        XCTAssertEqual(pane.textView.string, updated)
+    }
+
+    func testDiffPipelineTwentyFourThousandLinePhaseCosts() async throws {
+        var rows = (0..<24_000).map { "let value\($0) = \($0)\n" }
+        let before = rows.joined()
+        rows[12_000] = "let value12000 = -1\n"
+        let after = rows.joined()
+        let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
+        let context = try XCTUnwrap(resolved)
+        var coreTimes: [Double] = []
+        var projectionTimes: [Double] = []
+        var syntaxTimes: [Double] = []
+        for _ in 0..<10 {
+            var start = CFAbsoluteTimeGetCurrent()
+            let core = await Task.detached(priority: .userInitiated) {
+                DiffCore.compute(oldText: before, newText: after)
+            }.value
+            coreTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            start = CFAbsoluteTimeGetCurrent()
+            let projection = await Task.detached(priority: .userInitiated) {
+                DiffComputation.build(core: core, expansions: [:])
+            }.value
+            projectionTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertTrue(projection.unified.rows.contains { $0.kind == .added })
+            start = CFAbsoluteTimeGetCurrent()
+            let captured = await Task.detached(priority: .userInitiated) {
+                (
+                    DiffSyntaxHighlighter.captures(text: before, context: context),
+                    DiffSyntaxHighlighter.captures(text: after, context: context)
+                )
+            }.value
+            syntaxTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertFalse(captured.0.isEmpty)
+            XCTAssertFalse(captured.1.isEmpty)
+        }
+        coreTimes.sort()
+        projectionTimes.sort()
+        syntaxTimes.sort()
+        print("AUDIT_DIFF_PHASE lines=24000 samples=10 coreMedian=\(coreTimes[5]) projectionMedian=\(projectionTimes[5]) syntaxMedian=\(syntaxTimes[5]) coreWorst=\(coreTimes[9]) projectionWorst=\(projectionTimes[9]) syntaxWorst=\(syntaxTimes[9])")
+    }
+
+    func testLocalGitStagedAndUnstagedDiffReadyLatencyMatrix() async throws {
+        for lineCount in [1_000, 24_000] {
+            let root = try repository()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let filename = "latency-\(lineCount).swift"
+            let file = root.appendingPathComponent(filename)
+            var lines = (0..<lineCount).map { "let value\($0) = \($0)\n" }
+            try Data(lines.joined().utf8).write(to: file)
+            XCTAssertEqual(GitCommandExecution.run(["add", filename], in: root.path).status, 0)
+            XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: root.path).status, 0)
+            lines[lineCount / 2] = "let value\(lineCount / 2) = -1\n"
+            try Data(lines.joined().utf8).write(to: file)
+            XCTAssertEqual(GitCommandExecution.run(["add", filename], in: root.path).status, 0)
+            lines[lineCount / 2 + 1] = "let value\(lineCount / 2 + 1) = -2\n"
+            try Data(lines.joined().utf8).write(to: file)
+
+            let preferences = try isolatedPreferences()
+            func load(_ source: DiffTab.Source) async throws -> Double {
+                let start = CFAbsoluteTimeGetCurrent()
+                let diff = DiffTab(repoRoot: root.path, path: filename, source: source,
+                                   untracked: false, origPath: nil,
+                                   backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                                   preferences: preferences)
+                try await wait({ diff.canPresentNativeContent }, pollingInterval: .milliseconds(1),
+                               timeout: 25)
+                XCTAssertNil(diff.error)
+                XCTAssertTrue(diff.hasChanges)
+                return (CFAbsoluteTimeGetCurrent() - start) * 1_000
+            }
+            var staged: [Double] = []
+            var unstaged: [Double] = []
+            for run in 0..<30 {
+                if run.isMultiple(of: 2) {
+                    staged.append(try await load(.staged))
+                    unstaged.append(try await load(.worktree))
+                } else {
+                    unstaged.append(try await load(.worktree))
+                    staged.append(try await load(.staged))
+                }
+            }
+            staged.sort()
+            unstaged.sort()
+            print("AUDIT_GIT_DIFF_MODEL_READY rows=\(lineCount) samples=30 stagedMedian=\(staged[15]) stagedP95=\(staged[28]) unstagedMedian=\(unstaged[15]) unstagedP95=\(unstaged[28])")
+        }
+    }
+
     func testWorktreeDiffWaitsForFoldedDisplayBeforeFirstNativeFrame() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -435,7 +600,7 @@ final class NativeDiffTabTests: XCTestCase {
             return XCTFail("Git Changes must create a DiffTab")
         }
         try await wait({
-            !diff.isLoading && diff.hasChanges && diff.display == nil
+            !diff.isLoading && diff.hasChanges && diff.display != nil
         }, pollingInterval: .milliseconds(1), timeout: 15)
 
         project.openDiff(repoRoot: directory.path, path: "reopen.swift", staged: false,
@@ -452,6 +617,16 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(diff.isLoading, "Mounting the selected diff must not restart its read")
         try await wait({ diff.display != nil }, timeout: 20)
         XCTAssertTrue(try XCTUnwrap(diff.display).hasCollapsedContext)
+        let keyword = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
+            for: "keyword", theme: SyntaxHighlighting.theme
+        ))
+        try await wait({
+            guard let colored = diff.display?.unifiedText else { return false }
+            let location = (colored.string as NSString).range(of: "let value12000").location
+            guard location != NSNotFound else { return false }
+            return (colored.attribute(.foregroundColor, at: location,
+                                      effectiveRange: nil) as? NSColor) == keyword
+        }, timeout: 20)
 
         lines[13_000] = "let value13000 = 43\n"
         let latest = lines.joined()
@@ -2246,10 +2421,228 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testReadonlySyntaxRestyleKeepsTheExistingSourceSelectionAndScroll() throws {
+        let projection = DiffComputation.compute(
+            oldText: "let value = 0\n", newText: "let value = 42\n"
+        )
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 720, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let source = projection.unified
+        let plain = NSAttributedString(string: source.text,
+                                       attributes: [.foregroundColor: NSColor.textColor])
+        let rows = DiffDecorations.review(source)
+        pane.setReviewDocument(plain, decorations: rows)
+        let selection = (source.text as NSString).range(of: "value")
+        XCTAssertNotEqual(selection.location, NSNotFound)
+        pane.textView.setSelectedRange(selection)
+        let scroll = pane.scrollView.contentView.bounds.origin
+        let colored = NSMutableAttributedString(attributedString: plain)
+        colored.addAttribute(.foregroundColor, value: NSColor.systemPink, range: selection)
+        pane.setReviewDocument(colored, decorations: rows)
+        XCTAssertEqual(pane.textView.selectedRange(), selection,
+                       "Asynchronous syntax coloring cannot clear a user's read-only selection")
+        XCTAssertEqual(pane.scrollView.contentView.bounds.origin, scroll)
+        XCTAssertEqual(pane.textView.string, source.text)
+    }
+
+    func testHistoricalSourceRevisionSharesWorktreeSyntaxHighlightingWithoutBecomingEditable() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let content = "// syntax revision\nlet value = 42\n"
+        try Data(content.utf8).write(to: root.appendingPathComponent("revision.swift"))
+        XCTAssertEqual(GitCommandExecution.run(["add", "revision.swift"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: root.path).status, 0)
+        let hashResult = GitCommandExecution.run(["rev-parse", "HEAD"], in: root.path)
+        XCTAssertEqual(hashResult.status, 0)
+        let hash = hashResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let diff = DiffTab(repoRoot: root.path, path: "revision.swift",
+                           source: .revision(hash: hash), untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 380),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return diff.nativeSurface != nil && !diff.isLoading
+        }
+        let source = try XCTUnwrap(findNativeTextView(in: host, editable: false))
+        XCTAssertEqual(source.string, content)
+        XCTAssertNotNil(source.syntaxCoordinator,
+                        "A historical source is read-only, not plain unhighlighted text")
+        let expected = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
+            for: "comment", theme: SyntaxHighlighting.theme
+        ))
+        try await wait {
+            source.layoutSubtreeIfNeeded()
+            var painted: NSColor?
+            source.nativeLayoutManager.enumerateRenderingAttributes(
+                from: source.nativeContentManager.documentRange.location, reverse: false
+            ) { _, attributes, range in
+                if NSLocationInRange(3, NSRange(range, in: source.nativeContentManager)) {
+                    painted = attributes[.foregroundColor] as? NSColor
+                    return false
+                }
+                return true
+            }
+            return painted == expected
+        }
+        XCTAssertEqual(source.string, content)
+        XCTAssertFalse(source.isEditable)
+    }
+
+    func testStagedAndUnstagedShareUnifiedDiffRowsAndExplicitFoldSemantics() throws {
+        let old = (0..<320).map { "line \($0)\n" }.joined()
+        let new = old.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let core = DiffCore.compute(oldText: old, newText: new)
+        let projection = DiffComputation.build(core: core, expansions: [:])
+        let reviewed = DiffDecorations.review(projection.unified)
+        let state = projection.editState
+        let offsets = core.newLines.map(\.utf16Range.location)
+        let source = old as NSString
+        let ghosts = state.ghosts.map { block in
+            DiffDecorations.GhostBlock(
+                anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                lines: block.lines.map { NSAttributedString(string: source.substring(with: $0.sourceRange)) }
+            )
+        }
+        let editable = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 380),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = editable
+        window.orderFront(nil)
+        editable.setEditBufferText(new)
+        let folds = DiffEditFold.sourceFolds(in: projection.unified,
+                                              lineCount: core.newLines.count)
+        editable.setEditingFolds(
+            folds, lineOffsets: offsets,
+            baseDecorations: .edit(state: state, snapshotOffsets: offsets,
+                                   lineCount: offsets.count, ghostBlocks: ghosts),
+            revision: 1
+        )
+        editable.layoutSubtreeIfNeeded()
+        let editRows = editable.decorations.rows
+        XCTAssertEqual(reviewed.rows.compactMap { $0.kind == .added ? $0.newLine : nil },
+                       editRows.compactMap { $0.kind == .added ? $0.newLine : nil })
+        XCTAssertEqual(reviewed.rows.compactMap { $0.kind == .removed ? $0.oldLine : nil },
+                       ghosts.flatMap { block in
+                           (0..<block.lines.count).map { block.firstOldLine + $0 }
+                       })
+        XCTAssertEqual(reviewed.rows.compactMap { $0.collapsed?.hiddenLines },
+                       editRows.compactMap { $0.collapsed?.hiddenLines })
+        for ghost in editable.decorations.positionedGhosts {
+            let hidden = folds.reduce(0) { count, fold in
+                let preceding = min(ghost.block.anchorLine, fold.range.upperBound)
+                    - fold.range.lowerBound
+                return count + max(0, preceding - 1)
+            }
+            XCTAssertEqual(ghost.visibleStartRow, ghost.startRow - hidden,
+                           "Unstaged ghost rows must share the staged diff's folded geometry")
+        }
+        XCTAssertEqual(editable.textView.string, new,
+                       "Shared diff presentation must never replace the writable source with review rows")
+        XCTAssertTrue(editable.textView.isEditable)
+    }
+
+    func testVisibleSyntaxCapturesRemainAvailableBeyondWholeFileHighlightBudget() async throws {
+        let source = String(repeating: "let value = 42\n", count: 115_000)
+        XCTAssertGreaterThan(source.utf8.count, DiffSyntaxHighlighter.highlightByteLimit)
+        let resolved = await DiffSyntaxHighlighter.context(for: "large.swift")
+        let context = try XCTUnwrap(resolved)
+        XCTAssertTrue(DiffSyntaxHighlighter.captures(text: source, context: context).isEmpty,
+                      "Unbounded captures should retain the existing whole-file resource limit")
+        let started = CFAbsoluteTimeGetCurrent()
+        let visible = await Task.detached(priority: .userInitiated) {
+            DiffSyntaxHighlighter.captures(
+                text: source, context: context, ranges: [NSRange(location: 0, length: 30)]
+            )
+        }.value
+        print("AUDIT_LARGE_DIFF_VISIBLE_SYNTAX bytes=\(source.utf8.count) milliseconds=\((CFAbsoluteTimeGetCurrent() - started) * 1_000)")
+        XCTAssertFalse(visible.isEmpty,
+                       "Large files must still highlight the visible source even when full capture is skipped")
+        XCTAssertTrue(visible.contains { NSLocationInRange(2, $0.range) })
+    }
+
+    func testVisibleSyntaxRangesMatchFullCapturesAfterFoldingAndExpansion() async throws {
+        for path in ["fixture.swift", "README.md"] {
+            let source: String
+            let replacement: String
+            if path.hasSuffix(".md") {
+                source = (0..<360).map { "# Heading \($0)\n**bold** and `code`\n" }.joined()
+                replacement = "# New Heading 180\n**bold** and `code`\n"
+            } else {
+                source = (0..<360).map { "let value\($0) = \($0) // comment\n" }.joined()
+                replacement = "let value180 = -1 // changed\n"
+            }
+            let oldLine = path.hasSuffix(".md")
+                ? "# Heading 180\n**bold** and `code`\n"
+                : "let value180 = 180 // comment\n"
+            let after = source.replacingOccurrences(of: oldLine, with: replacement)
+            let resolved = await DiffSyntaxHighlighter.context(for: path)
+            let context = try XCTUnwrap(resolved)
+            let core = DiffCore.compute(oldText: source, newText: after)
+            var variants: [[Int: DiffRunExpansion]] = [[:]]
+            let initial = DiffComputation.build(core: core, expansions: [:])
+            if let collapsed = initial.unified.rows.first(where: { $0.collapsed != nil })?.collapsed {
+                var expanded = DiffRunExpansion()
+                expanded.fromStart = 30
+                expanded.fromEnd = 30
+                variants.append([collapsed.runIndex: expanded])
+            }
+            for expansions in variants {
+                let computation = DiffComputation.build(core: core, expansions: expansions)
+                let oldRanges = DiffSyntaxHighlighter.visibleRanges(
+                    in: computation.splitLeft, source: .old
+                )
+                let newRanges = DiffSyntaxHighlighter.visibleRanges(
+                    in: computation.splitRight, source: .new
+                )
+                let oldAll = DiffSyntaxHighlighter.colors(for:
+                    DiffSyntaxHighlighter.captures(text: source, context: context))
+                let newAll = DiffSyntaxHighlighter.colors(for:
+                    DiffSyntaxHighlighter.captures(text: after, context: context))
+                let oldVisible = DiffSyntaxHighlighter.colors(for:
+                    DiffSyntaxHighlighter.captures(text: source, context: context, ranges: oldRanges))
+                let newVisible = DiffSyntaxHighlighter.colors(for:
+                    DiffSyntaxHighlighter.captures(text: after, context: context, ranges: newRanges))
+                let plain: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.textColor]
+                for document in [computation.unified, computation.splitLeft, computation.splitRight] {
+                    let full = DiffSyntaxHighlighter.attributedDocument(
+                        document, oldRuns: oldAll, newRuns: newAll, baseAttributes: plain)
+                    let visible = DiffSyntaxHighlighter.attributedDocument(
+                        document, oldRuns: oldVisible, newRuns: newVisible, baseAttributes: plain)
+                    XCTAssertTrue(full.isEqual(to: visible),
+                                  "Visible \(path) capture colors must equal full query after folding")
+                }
+            }
+        }
+    }
+
     func testBackgroundSyntaxCapturesReachNativeDiffColors() async throws {
         for (path, source) in [
             ("sample.swift", "let answer = 42\n"),
             ("View.tsx", "const View = () => <main title=\"hi\">Hello</main>;\n"),
+            ("script.py", "def answer():\n    return 42\n"),
+            ("script.ts", "const answer: number = 42;\n"),
+            ("README.md", "# Heading\n\n**bold** and `inline code`\n"),
+            ("style.css", "main { color: red; margin: 1px; }\n"),
+            ("data.json", "{\"enabled\": true, \"count\": 42}\n"),
+            ("page.html", "<main class=\"hero\">Hello</main>\n"),
+            ("query.sql", "SELECT id FROM records WHERE id = 42;\n"),
+            ("main.go", "package main\nfunc main() {}\n"),
+            ("main.rs", "fn main() { let answer = 42; }\n"),
+            ("config.yaml", "enabled: true\nport: 42\n"),
         ] {
             let resolved = await DiffSyntaxHighlighter.context(for: path)
             let context = try XCTUnwrap(resolved, "Missing grammar for \(path)")

@@ -93,8 +93,10 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 并从测试进程外安全切换、恢复 macOS 外观时执行，不在普通测试中修改用户系统外观。
 公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
 避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
-完整 App GUI 测试优先在独立 macOS 图形会话（例如 `offstage` 的 session lane）执行，
-避免系统设置、正式 Bailey 或用户输入抢占前台，使失败的焦点与菜单证据不可重现。
+完整 App GUI 测试须在能认证 XCUITest Runner 的独立 macOS 图形会话执行，
+避免系统设置、正式 Bailey 或用户输入抢占前台。
+辅助账户登录且有辅助功能权限仍可能在非 console 会话报 `Can't authenticate off console`；
+测试枚举为 0 不表示成功，不能为补测抢占当前桌面。
 在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
@@ -234,8 +236,8 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --ar
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
 仅隔离测试模式禁用 SwiftUI 系统场景恢复，防止继承上一轮测试的窗口；
-正常应用的窗口恢复不变。Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，
-共用启动辅助函数在窗口缺失时用现有 `⌘⇧N` 创建首窗，并断言启动后恰好一个窗口；
+正常应用的窗口恢复不变。隔离模式抑制系统隐式首窗，由应用级窗口开启动作唯一请求首窗；
+测试直接断言只有一个窗口，不允许在启动等待超时后补发 `⌘⇧N` 掩盖缺窗故障；
 不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。
 **开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；
 正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。
@@ -367,6 +369,14 @@ iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文
 | Git | 状态可用、详情完成、进程数、读取量、SSH 往返 |
 | Diff | 数据读取、差异计算、TextKit 首屏、滚动与编辑 |
 | 多标签和空闲 | 冷开、重复切换、峰值内存、关闭后稳定内存、CPU 与唤醒 |
+
+编辑器性能验收目标（不是已达成结果）：普通输入 P95 不超过 16 ms，
+10 万行极端输入 P95 不超过 32 ms；折叠 Diff 热视口几何在 Debug 下 P95 不超过 32 ms。
+滚动帧与主线程连续占用的目标为 16.7 ms。
+本机真实 Git 的 1,000／24,000 行 Staged、Unstaged 至少各做 30 次热样本，
+独立测冷启动、语法颜色稳定时间、原生首帧，不把模型就绪时间当作实际绘制时间。
+多标签测试要记录 RSS／retained heap 峰值、关闭后的稳定占用，
+不保留看不到的富文本布局，也不以缓存命中取代内存释放证据。
 
 在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。
 Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、

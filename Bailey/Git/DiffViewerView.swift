@@ -36,14 +36,41 @@ enum DiffLayoutStyle: String {
     case split
 }
 
-/// One native review artifact shared across the unified and split layouts.
-struct DiffDisplay {
+/// Compute a text layout only when a visible pane needs it. The editable
+/// worktree never displays these review documents unless Git requires a
+/// separate canonical comparison, so building all three on every load wastes
+/// main-thread time and memory.
+@MainActor
+final class DiffDisplay {
     let id = UUID()
     let computation: DiffComputation
     let hasCollapsedContext: Bool
-    let unifiedText: NSAttributedString
-    let leftText: NSAttributedString
-    let rightText: NSAttributedString
+    private let oldRuns: [DiffHighlightRun]
+    private let newRuns: [DiffHighlightRun]
+    private let baseAttributes: [NSAttributedString.Key: Any]
+
+    fileprivate init(computation: DiffComputation, inputs: DiffDisplayInputs,
+         font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor) {
+        self.computation = computation
+        hasCollapsedContext = computation.unified.rows.contains { $0.collapsed != nil }
+        oldRuns = inputs.oldRuns
+        newRuns = inputs.newRuns
+        baseAttributes = [.font: font, .foregroundColor: textColor,
+                          .paragraphStyle: paragraphStyle]
+    }
+
+    lazy var unifiedText = DiffSyntaxHighlighter.attributedDocument(
+        computation.unified, oldRuns: oldRuns, newRuns: newRuns,
+        baseAttributes: baseAttributes
+    )
+    lazy var leftText = DiffSyntaxHighlighter.attributedDocument(
+        computation.splitLeft, oldRuns: oldRuns, newRuns: newRuns,
+        baseAttributes: baseAttributes
+    )
+    lazy var rightText = DiffSyntaxHighlighter.attributedDocument(
+        computation.splitRight, oldRuns: oldRuns, newRuns: newRuns,
+        baseAttributes: baseAttributes
+    )
 }
 
 /// The readonly split side, projected from the same live buffer as edit decorations.
@@ -132,7 +159,7 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var editableFoldedBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
-    var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(comparisonNew.utf8) }
+    private(set) var hasChanges = false
     /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
     var isEditing: Bool { source == .worktree && isEditable }
     /// Transient editing intent; the native editor remains the only text/Undo owner.
@@ -159,6 +186,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private(set) var editBufferRevision: UInt = 0
     @ObservationIgnored private var displayGeneration: UInt = 0
     @ObservationIgnored private var displayTask: Task<Void, Never>?
+    @ObservationIgnored private var displayCoreTask: Task<DiffCore, Never>?
     @ObservationIgnored private var hasAppeared = false
     @ObservationIgnored private var displayInputs: DiffDisplayInputs?
     @ObservationIgnored private var runExpansions: [Int: DiffRunExpansion] = [:]
@@ -177,6 +205,7 @@ final class DiffTab: nonisolated Identifiable {
     /// follows the session onto another machine — and re-binds to a new
     /// connection to the same machine when one arrives.
     @ObservationIgnored private var backend: WorkspaceBackend
+    private let syntaxContextTask: Task<DiffHighlightContext?, Never>
     /// The workspace this diff belongs to: nil for this Mac, else the machine
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a diff opened locally is never read-only.
@@ -200,7 +229,17 @@ final class DiffTab: nonisolated Identifiable {
         self.source = source
         self.untracked = untracked
         self.origPath = origPath
+        // Compile the immutable syntax query while Git and file IO are
+        // running, rather than adding first-use compilation after the read.
+        syntaxContextTask = Task { await DiffSyntaxHighlighter.context(for: path) }
         reload()
+    }
+
+    deinit {
+        syntaxContextTask.cancel()
+        displayTask?.cancel()
+        displayCoreTask?.cancel()
+        editTask?.cancel()
     }
 
     /// Whether the file can be edited right now: a regular worktree file whose
@@ -306,6 +345,8 @@ final class DiffTab: nonisolated Identifiable {
         displayGeneration &+= 1
         displayTask?.cancel()
         displayTask = nil
+        displayCoreTask?.cancel()
+        displayCoreTask = nil
         let generation = reloadGeneration
         isLoading = true
         error = nil
@@ -405,17 +446,22 @@ final class DiffTab: nonisolated Identifiable {
                 new = ""
                 editable = false
             } else {
-                let worktree = await Self.readWorktreeFile(
-                    root: root, path: git.worktreePath, backend: backend
-                )
-                new = worktree.text
-                if let error = worktree.error { failure = error }
+                let worktree: (text: String, error: String?)
                 if case .worktree = source {
-                    editable = await Self.isEditableWorktreeFile(
+                    // File IO and metadata lookup are independent. On SSH,
+                    // serializing them adds an avoidable full round trip.
+                    async let fileIsEditable = Self.isEditableWorktreeFile(
                         root: root, path: git.worktreePath, backend: backend)
+                    worktree = await Self.readWorktreeFile(
+                        root: root, path: git.worktreePath, backend: backend)
+                    editable = await fileIsEditable
                 } else {
+                    worktree = await Self.readWorktreeFile(
+                        root: root, path: git.worktreePath, backend: backend)
                     editable = false
                 }
+                new = worktree.text
+                if let error = worktree.error { failure = error }
             }
             var baseline = git.old
             var reviewNew = new
@@ -478,6 +524,7 @@ final class DiffTab: nonisolated Identifiable {
             self.oldContent = result.old
             self.comparisonOld = result.baseline
             self.comparisonNew = result.reviewNew
+            self.hasChanges = !result.baseline.utf8.elementsEqual(result.reviewNew.utf8)
             self.editComparisonOld = result.editBaseline
             self.newContent = result.new
             if changed {
@@ -515,8 +562,7 @@ final class DiffTab: nonisolated Identifiable {
             SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: repoRoot + "/" + path)
             return
         }
-        guard source.isLive, !isLoading,
-              (display != nil || displayTask == nil) else { return }
+        guard source.isLive, !isLoading, displayTask == nil else { return }
         reload()
     }
 
@@ -544,75 +590,95 @@ final class DiffTab: nonisolated Identifiable {
         displayInputs = nil
         displayTask?.cancel()
         displayTask = nil
+        displayCoreTask?.cancel()
+        displayCoreTask = nil
         guard !source.isPlainRevision, hasLoadedContent, hasChanges else {
             display = nil
             return
         }
         let before = comparisonOld
         let after = comparisonNew
-        let path = path
         let expansions = runExpansions
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let font = TerminalFont.current()
-        let paragraphStyle = DiffTypography.paragraphStyle(for: font)
-        let textColor = Theme.terminal(dark: dark).foregroundNSColor
+        let syntaxContextTask = syntaxContextTask
+        // The edit decorations and review projection use the same initial
+        // old/new snapshot. Share the expensive line diff instead of running
+        // Myers twice while the initial worktree pane waits to appear.
+        let coreTask = Task.detached(priority: .userInitiated) {
+            DiffCore.compute(oldText: before, newText: after)
+        }
+        displayCoreTask = coreTask
         displayTask = Task { [weak self] in
-            let context = await DiffSyntaxHighlighter.context(for: path)
-            // Parse/diff off-main; do not send NSColor or attributed strings
-            // across actors. Only immutable token names and ranges return.
-            let result = await Task.detached(priority: .userInitiated) {
-                let core = DiffCore.compute(oldText: before, newText: after)
-                // Both sides parse independent source snapshots.
-                async let oldCaptures: [DiffCaptureRun] = context.map {
-                    DiffSyntaxHighlighter.captures(text: before, context: $0)
-                } ?? []
-                async let newCaptures: [DiffCaptureRun] = context.map {
-                    DiffSyntaxHighlighter.captures(text: after, context: $0)
-                } ?? []
-                let computation = DiffComputation.build(core: core, expansions: expansions)
-                return (core, await oldCaptures, await newCaptures, computation)
+            let core = await coreTask.value
+            let computation = await Task.detached(priority: .userInitiated) {
+                DiffComputation.build(core: core, expansions: expansions)
             }.value
-            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
-            let inputs = DiffDisplayInputs(
-                core: result.0,
-                oldRuns: DiffSyntaxHighlighter.colors(for: result.1),
-                newRuns: DiffSyntaxHighlighter.colors(for: result.2)
+            do {
+                guard let self, !Task.isCancelled,
+                      self.displayGeneration == generation else { return }
+                let plain = DiffDisplayInputs(core: core, oldRuns: [], newRuns: [])
+                self.displayCoreTask = nil
+                // Do not retain the tab across a long syntax parse: a closed
+                // tab must be able to cancel and release its own work.
+                self.publishDisplay(computation, inputs: plain)
+                if self.isEditing && self.preferences.diffStyle == .split {
+                    self.refreshEditDecorations(immediate: true)
+                }
+            }
+            let context = await syntaxContextTask.value
+            let captures = await Self.captureVisibleSyntax(
+                before: before, after: after, computation: computation, context: context
             )
-            self.displayInputs = inputs
-            if self.isEditing && self.preferences.diffStyle == .split {
+            guard let self, !Task.isCancelled,
+                  self.displayGeneration == generation else { return }
+            let colored = DiffDisplayInputs(
+                core: core,
+                oldRuns: DiffSyntaxHighlighter.colors(for: captures.old),
+                newRuns: DiffSyntaxHighlighter.colors(for: captures.new)
+            )
+            self.publishDisplay(computation, inputs: colored)
+            self.displayTask = nil
+            if self.isEditing && (!colored.oldRuns.isEmpty || self.preferences.diffStyle == .split) {
                 self.refreshEditDecorations(immediate: true)
             }
-            self.display = Self.makeDisplay(
-                computation: result.3, inputs: inputs,
-                font: font, paragraphStyle: paragraphStyle, textColor: textColor
-            )
-            self.displayTask = nil
         }
     }
 
-    private static func makeDisplay(
-        computation: DiffComputation, inputs: DiffDisplayInputs,
-        font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor
-    ) -> DiffDisplay {
-        let base: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
-        ]
-        return DiffDisplay(
-            computation: computation,
-            hasCollapsedContext: computation.unified.rows.contains { $0.collapsed != nil },
-            unifiedText: DiffSyntaxHighlighter.attributedDocument(
-                computation.unified, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
-                baseAttributes: base
-            ),
-            leftText: DiffSyntaxHighlighter.attributedDocument(
-                computation.splitLeft, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
-                baseAttributes: base
-            ),
-            rightText: DiffSyntaxHighlighter.attributedDocument(
-                computation.splitRight, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
-                baseAttributes: base
-            )
+    private func publishDisplay(_ computation: DiffComputation, inputs: DiffDisplayInputs) {
+        displayInputs = inputs
+        let font = TerminalFont.current()
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        display = DiffDisplay(
+            computation: computation, inputs: inputs,
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: Theme.terminal(dark: dark).foregroundNSColor
         )
+    }
+
+    private nonisolated static func captureVisibleSyntax(
+        before: String, after: String, computation: DiffComputation,
+        context: DiffHighlightContext?
+    ) async -> (old: [DiffCaptureRun], new: [DiffCaptureRun]) {
+        guard let context else { return ([], []) }
+        let oldRanges = DiffSyntaxHighlighter.visibleRanges(
+            in: computation.splitLeft, source: .old
+        )
+        let newRanges = DiffSyntaxHighlighter.visibleRanges(
+            in: computation.splitRight, source: .new
+        )
+        let captureTask = Task.detached(priority: .userInitiated) {
+            async let old = DiffSyntaxHighlighter.captures(
+                text: before, context: context, ranges: oldRanges
+            )
+            async let new = DiffSyntaxHighlighter.captures(
+                text: after, context: context, ranges: newRanges
+            )
+            return (await old, await new)
+        }
+        return await withTaskCancellationHandler {
+            await captureTask.value
+        } onCancel: {
+            captureTask.cancel()
+        }
     }
 
     func expandRun(_ fold: DiffCollapsedRun) {
@@ -626,27 +692,38 @@ final class DiffTab: nonisolated Identifiable {
             expansion.fromEnd += DiffCollapse.expansionLineCount
         }
         runExpansions[fold.runIndex] = expansion
-        if isEditing { refreshEditDecorations(immediate: true) }
-        // Reuse only captures belonging to the current content, not a previous read.
         displayGeneration &+= 1
         let generation = displayGeneration
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let font = TerminalFont.current()
-        let style = DiffTypography.paragraphStyle(for: font)
-        let color = Theme.terminal(dark: dark).foregroundNSColor
         let expansions = runExpansions
         let core = inputs.core
+        let before = comparisonOld
+        let after = comparisonNew
+        let syntaxContextTask = syntaxContextTask
         displayTask?.cancel()
         displayTask = Task { [weak self] in
             let computation = await Task.detached(priority: .userInitiated) {
                 DiffComputation.build(core: core, expansions: expansions)
             }.value
-            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
-            self.display = Self.makeDisplay(
-                computation: computation, inputs: inputs,
-                font: font, paragraphStyle: style, textColor: color
+            do {
+                guard let self, !Task.isCancelled,
+                      self.displayGeneration == generation else { return }
+                self.publishDisplay(computation, inputs: inputs)
+                if self.isEditing { self.refreshEditDecorations(immediate: true) }
+            }
+            let context = await syntaxContextTask.value
+            let captures = await Self.captureVisibleSyntax(
+                before: before, after: after, computation: computation, context: context
             )
+            guard let self, !Task.isCancelled,
+                  self.displayGeneration == generation else { return }
+            let updated = DiffDisplayInputs(
+                core: core,
+                oldRuns: DiffSyntaxHighlighter.colors(for: captures.old),
+                newRuns: DiffSyntaxHighlighter.colors(for: captures.new)
+            )
+            self.publishDisplay(computation, inputs: updated)
             self.displayTask = nil
+            if self.isEditing { self.refreshEditDecorations(immediate: true) }
         }
     }
 
@@ -659,14 +736,15 @@ final class DiffTab: nonisolated Identifiable {
         let expansions = runExpansions
         let prepareSplit = isEditing && preferences.diffStyle == .split
             && editComparisonOld == nil
+        let matchingReviewSnapshot = !isDirty && editComparisonOld == nil
+        let inFlightCore = matchingReviewSnapshot ? displayCoreTask : nil
+        let cachedCore = matchingReviewSnapshot ? displayInputs?.core : nil
         let font = TerminalFont.current()
         let style = DiffTypography.paragraphStyle(for: font)
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let theme = Theme.terminal(dark: dark)
         let color = theme.foregroundNSColor
-        let emphasis = theme.backgroundNSColor.blended(
-            withFraction: 0.38, of: theme.paletteNSColor(1) ?? .systemRed
-        ) ?? .systemRed
+        let emphasis = DiffColorScheme.current(dark: dark).removedEmphasis
         editTask?.cancel()
         editTask = Task { [weak self] in
             if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
@@ -674,12 +752,18 @@ final class DiffTab: nonisolated Identifiable {
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
             let (state, offsets, lineCount, split, folded) = await Task.detached(priority: .userInitiated) {
-                let core = DiffCore.compute(oldText: before, newText: after)
+                let core: DiffCore
+                if let cachedCore {
+                    core = cachedCore
+                } else if let inFlightCore {
+                    core = await inFlightCore.value
+                } else {
+                    core = DiffCore.compute(oldText: before, newText: after)
+                }
                 let split = prepareSplit ? DiffComputation.editableSplit(core: core) : nil
                 let folded = DiffComputation.build(core: core, expansions: expansions)
                 return (
-                    DiffComputation.editState(ops: core.ops,
-                                              oldLines: core.oldLines, newLines: core.newLines),
+                    folded.editState,
                     core.newLines.map(\.utf16Range.location), core.newLines.count, split, folded
                 )
             }.value
@@ -747,7 +831,11 @@ final class DiffTab: nonisolated Identifiable {
 
     /// No parallel editor state: native NSTextView keeps selection and undo.
     func refreshNativeAppearance() {
-        recomputeDisplay()
+        if let display, let inputs = displayInputs {
+            publishDisplay(display.computation, inputs: inputs)
+        } else if displayTask == nil, hasChanges {
+            recomputeDisplay()
+        }
         if isEditing { refreshEditDecorations(immediate: true) }
     }
 

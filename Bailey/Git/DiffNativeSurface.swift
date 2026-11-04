@@ -167,10 +167,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             let pane = editPane ?? makeEditPane()
             pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text,
                                  longLineDisplayWidth: longLineDisplayWidth)
-            if renderedEditRevision != diff.editBufferRevision {
-                renderedEditRevision = diff.editBufferRevision
-                pane.setEditBufferText(diff.newContent)
-            }
+            loadSourceText(diff.newContent, revision: diff.editBufferRevision,
+                           path: diff.path, into: pane)
             pane.textView.isEditable = false
             pane.decorations = .empty
         } else if editing {
@@ -181,17 +179,8 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                                  longLineDisplayWidth: width)
             pane.textView.insertionPointColor = palette.insertionPoint
             pane.textView.isEditable = diff.isEditableNow
-            if renderedEditRevision != diff.editBufferRevision {
-                renderedEditRevision = diff.editBufferRevision
-                pane.setEditBufferText(diff.editedNewContent)
-                // Keep syntax highlighting attached to the live native text buffer.
-                if !paneHasSyntaxPlugin {
-                    paneHasSyntaxPlugin = true
-                    if let plugin = SyntaxHighlighting.configuration(for: diff.path) {
-                        pane.textView.installSyntaxHighlighting(plugin)
-                    }
-                }
-            }
+            loadSourceText(diff.editedNewContent, revision: diff.editBufferRevision,
+                           path: diff.path, into: pane)
             let lineOffsets = diff.editDecorations.editSnapshotOffsets
             pane.setEditingFolds(folds, lineOffsets: lineOffsets,
                                  baseDecorations: diff.editDecorations,
@@ -286,6 +275,22 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     }
 
     private var paneHasSyntaxPlugin = false
+
+    /// Both a historical source and a live worktree use the same native
+    /// source editor and token provider; only the write permission differs.
+    private func loadSourceText(_ text: String, revision: UInt, path: String,
+                                into pane: DiffCodePaneView) {
+        if renderedEditRevision != revision {
+            renderedEditRevision = revision
+            pane.setEditBufferText(text)
+        }
+        if !paneHasSyntaxPlugin {
+            paneHasSyntaxPlugin = true
+            if let configuration = SyntaxHighlighting.configuration(for: path) {
+                pane.textView.installSyntaxHighlighting(configuration)
+            }
+        }
+    }
 
     private func makePane(mode: DiffCodePaneView.Mode, gutter: DiffGutterLayout) -> DiffCodePaneView {
         let pane = DiffCodePaneView(mode: mode, gutterLayout: gutter)

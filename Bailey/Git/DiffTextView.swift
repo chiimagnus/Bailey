@@ -161,6 +161,7 @@ struct DiffDecorations {
     /// Virtual Git rows, including removed rows absent from the editable buffer.
     struct PositionedGhost {
         let startRow: Int
+        var visibleStartRow: Int
         let block: GhostBlock
     }
     var positionedGhosts: [PositionedGhost] = []
@@ -244,11 +245,35 @@ struct DiffDecorations {
         var priorGhostRows = 0
         for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
             decorations.positionedGhosts.append(
-                PositionedGhost(startRow: anchor + priorGhostRows, block: block)
+                PositionedGhost(startRow: anchor + priorGhostRows,
+                                visibleStartRow: anchor + priorGhostRows, block: block)
             )
             priorGhostRows += block.lines.count
         }
         return decorations
+    }
+
+    /// Map hidden source lines to display coordinates once per fold change,
+    /// instead of scanning every fold on every gutter and background repaint.
+    mutating func positionGhosts(for folds: [DiffEditFold]) {
+        var completed = 0
+        var foldIndex = 0
+        for index in positionedGhosts.indices {
+            let anchor = positionedGhosts[index].block.anchorLine
+            while foldIndex < folds.count && folds[foldIndex].range.upperBound <= anchor {
+                completed += max(0, folds[foldIndex].range.count - 1)
+                foldIndex += 1
+            }
+            let partial: Int
+            if foldIndex < folds.count {
+                let range = folds[foldIndex].range
+                partial = max(0, min(anchor, range.upperBound) - range.lowerBound - 1)
+            } else {
+                partial = 0
+            }
+            positionedGhosts[index].visibleStartRow = positionedGhosts[index].startRow
+                - completed - partial
+        }
     }
 
     /// Row index containing a document UTF-16 offset (review mode only).
@@ -533,14 +558,6 @@ private enum DiffGhostGeometry {
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
         let inset = textView.textContainerInset.height
-        func visualStartRow(_ ghost: DiffDecorations.PositionedGhost) -> Int {
-            let anchor = ghost.block.anchorLine
-            let hiddenBefore = textView.editingFolds.reduce(0) { count, fold in
-                let preceding = min(anchor, fold.range.upperBound) - fold.range.lowerBound
-                return count + max(0, preceding - 1)
-            }
-            return ghost.startRow - hiddenBefore
-        }
         // Both the gutter and underlay query this on every scroll frame.
         // Skip blocks ending before the viewport instead of walking the file.
         var low = 0
@@ -548,12 +565,12 @@ private enum DiffGhostGeometry {
         while low < high {
             let middle = (low + high) / 2
             let ghost = ghosts[middle]
-            let bottom = inset + CGFloat(visualStartRow(ghost) + ghost.block.lines.count) * rowHeight
+            let bottom = inset + CGFloat(ghost.visibleStartRow + ghost.block.lines.count) * rowHeight
             if bottom <= viewport.minY { low = middle + 1 } else { high = middle }
         }
         var result: [VisibleBlock] = []
         for ghost in ghosts[low...] {
-            let top = inset + CGFloat(visualStartRow(ghost)) * rowHeight
+            let top = inset + CGFloat(ghost.visibleStartRow) * rowHeight
             if top >= viewport.maxY { break }
             let bottom = top + CGFloat(ghost.block.lines.count) * rowHeight
             result.append(VisibleBlock(
@@ -1315,6 +1332,7 @@ final class DiffCodePaneView: NSView {
         appliedFoldRevision = revision
         textView.setEditingFolds(folds, lineOffsets: lineOffsets)
         var decorated = baseDecorations
+        decorated.positionGhosts(for: folds)
         for fold in folds where fold.range.lowerBound < decorated.rows.count {
             decorated.rows[fold.range.lowerBound].kind = .collapsed
             decorated.rows[fold.range.lowerBound].collapsed = fold.separator
@@ -1576,7 +1594,9 @@ final class DiffCodePaneView: NSView {
             }
         }
 
+        let selection = contentChanged ? nil : textView.selectedRanges
         textView.attributedText = text
+        if let selection { textView.selectedRanges = selection }
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         decorations = newDecorations
         // Preserve TextKit's real height when its paragraph boundaries do
