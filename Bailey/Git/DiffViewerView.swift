@@ -155,6 +155,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private(set) var editBufferRevision: UInt = 0
     @ObservationIgnored private var displayGeneration: UInt = 0
     @ObservationIgnored private var displayTask: Task<Void, Never>?
+    @ObservationIgnored private var hasAppeared = false
     @ObservationIgnored private var displayInputs: DiffDisplayInputs?
     @ObservationIgnored private var runExpansions: [Int: DiffRunExpansion] = [:]
     @ObservationIgnored private var editGeneration: UInt = 0
@@ -298,6 +299,9 @@ final class DiffTab: nonisolated Identifiable {
         // and an error would replace the diff the user was reading.
         guard readOnlyReason == nil, !isDirty else { return }
         invalidateReload()
+        displayGeneration &+= 1
+        displayTask?.cancel()
+        displayTask = nil
         let generation = reloadGeneration
         isLoading = true
         error = nil
@@ -490,6 +494,12 @@ final class DiffTab: nonisolated Identifiable {
         }
     }
 
+    /// The initial read starts in init; a first view mount must not launch another read.
+    func refreshOnAppear() {
+        guard hasAppeared else { hasAppeared = true; return }
+        refreshWhenSelected()
+    }
+
     /// Refreshes a live diff when navigation brings it back on screen.
     /// Historical blobs are immutable and already loaded by `init`; rerunning
     /// Git operations and recomputing native rows on every project switch
@@ -500,7 +510,8 @@ final class DiffTab: nonisolated Identifiable {
             SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: repoRoot + "/" + path)
             return
         }
-        guard source.isLive, !isLoading else { return }
+        guard source.isLive, !isLoading,
+              (display != nil || displayTask == nil) else { return }
         reload()
     }
 
@@ -526,6 +537,8 @@ final class DiffTab: nonisolated Identifiable {
         displayGeneration &+= 1
         let generation = displayGeneration
         displayInputs = nil
+        displayTask?.cancel()
+        displayTask = nil
         guard !source.isPlainRevision, hasLoadedContent, hasChanges else {
             display = nil
             return
@@ -538,7 +551,6 @@ final class DiffTab: nonisolated Identifiable {
         let font = TerminalFont.current()
         let paragraphStyle = DiffTypography.paragraphStyle(for: font)
         let textColor = Theme.terminal(dark: dark).foregroundNSColor
-        displayTask?.cancel()
         displayTask = Task { [weak self] in
             let context = await DiffSyntaxHighlighter.context(for: path)
             // Parse/diff off-main; do not send NSColor or attributed strings
@@ -569,6 +581,7 @@ final class DiffTab: nonisolated Identifiable {
                 computation: result.3, inputs: inputs,
                 font: font, paragraphStyle: paragraphStyle, textColor: textColor
             )
+            self.displayTask = nil
         }
     }
 
@@ -627,6 +640,7 @@ final class DiffTab: nonisolated Identifiable {
                 computation: computation, inputs: inputs,
                 font: font, paragraphStyle: style, textColor: color
             )
+            self.displayTask = nil
         }
     }
 
@@ -1158,9 +1172,7 @@ struct DiffViewerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
-            if isSelected {
-                diff.refreshWhenSelected()
-            }
+            if isSelected { diff.refreshOnAppear() }
         }
         .onChange(of: isSelected) {
             if isSelected { diff.refreshWhenSelected() }

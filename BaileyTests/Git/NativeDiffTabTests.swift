@@ -415,6 +415,55 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data(lines.joined().utf8))
     }
 
+    func testReopeningGitChangesDuringDiffPreparationKeepsTheOriginalRead() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var lines = (0..<24_000).map { "let value\($0) = \($0)\n" }
+        let file = directory.appendingPathComponent("reopen.swift")
+        try Data(lines.joined().utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "reopen.swift"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        lines[12_000] = "let value12000 = 42\n"
+        try Data(lines.joined().utf8).write(to: file)
+
+        let project = Project(fallbackName: "Git", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        project.openDiff(repoRoot: directory.path, path: "reopen.swift", staged: false,
+                         untracked: false, origPath: nil, activating: false)
+        let firstTab = try XCTUnwrap(project.selectedTab)
+        guard case .diff(let diff) = firstTab.content else {
+            return XCTFail("Git Changes must create a DiffTab")
+        }
+        try await wait({
+            !diff.isLoading && diff.hasChanges && diff.display == nil
+        }, pollingInterval: .milliseconds(1), timeout: 15)
+
+        project.openDiff(repoRoot: directory.path, path: "reopen.swift", staged: false,
+                         untracked: false, origPath: nil, activating: false)
+        XCTAssertTrue(project.selectedTab === firstTab)
+        XCTAssertFalse(diff.isLoading,
+                       "Reopening an unfinished diff must not restart its Git read")
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.orderFront(nil)
+        XCTAssertFalse(diff.isLoading, "Mounting the selected diff must not restart its read")
+        try await wait({ diff.display != nil }, timeout: 20)
+        XCTAssertTrue(try XCTUnwrap(diff.display).hasCollapsedContext)
+
+        lines[13_000] = "let value13000 = 43\n"
+        let latest = lines.joined()
+        try Data(latest.utf8).write(to: file)
+        project.openDiff(repoRoot: directory.path, path: "reopen.swift", staged: false,
+                         untracked: false, origPath: nil, activating: false)
+        try await wait({ diff.newContent == latest && !diff.isLoading }, timeout: 15)
+        try await wait({ diff.display?.computation.unified.text.contains("value13000 = 43") == true },
+                       timeout: 20)
+        XCTAssertEqual(try Data(contentsOf: file), Data(latest.utf8))
+    }
+
     func testActiveCleanWorktreeEditorSurvivesNewDiffComputation() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
