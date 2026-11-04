@@ -775,6 +775,118 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, modified)
     }
 
+
+    func testFoldIndicatorUsesTheSameForegroundPixelsInReviewAndEdit() throws {
+        let before = (0..<320).map { "line \($0)\n" }.joined()
+        let after = before.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let core = DiffCore.compute(oldText: before, newText: after)
+        let compared = DiffComputation.build(core: core, expansions: [:])
+        let folds = DiffEditFold.sourceFolds(in: compared.unified,
+                                              lineCount: core.newLines.count)
+        XCTAssertFalse(folds.isEmpty)
+        let previous = before as NSString
+        let ghostBlocks = compared.editState.ghosts.map { block in
+            DiffDecorations.GhostBlock(
+                anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                lines: block.lines.map { NSAttributedString(string: previous.substring(with: $0.sourceRange)) }
+            )
+        }
+
+        func foldedOverlay(dark: Bool, editable: Bool) throws -> NSBitmapImageRep {
+            let window = NSWindow(
+                contentRect: NSRect(x: -900, y: -900, width: 820, height: 400),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let pane = DiffCodePaneView(mode: editable ? .edit : .review, gutterLayout: .single)
+            window.contentView = pane
+            window.orderFront(nil)
+            let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            pane.applyTypography(font: font,
+                                 paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: Theme.terminal(dark: dark).foregroundNSColor)
+            if editable {
+                pane.setEditBufferText(after)
+                let offsets = core.newLines.map(\.utf16Range.location)
+                pane.setEditingFolds(
+                    folds, lineOffsets: offsets,
+                    baseDecorations: .edit(state: compared.editState,
+                                           snapshotOffsets: offsets,
+                                           lineCount: offsets.count, ghostBlocks: ghostBlocks),
+                    revision: 1
+                )
+            } else {
+                pane.setReviewDocument(NSAttributedString(string: compared.unified.text),
+                                       decorations: .review(compared.unified))
+            }
+            pane.layoutSubtreeIfNeeded()
+            pane.scrollView.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            XCTAssertTrue(DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).contains { $0.index < pane.decorations.rows.count
+                && pane.decorations.rows[$0.index].collapsed != nil })
+            let gutter = try XCTUnwrap(pane.subviews.compactMap { $0 as? DiffGutterView }.first)
+            let button = try XCTUnwrap(gutter.accessibilityChildren()?.first as? NSAccessibilityElement)
+            var expanded: DiffCollapsedRun?
+            pane.onExpandCollapsedRun = { expanded = $0 }
+            XCTAssertTrue(button.accessibilityPerformPress())
+            XCTAssertNotNil(expanded,
+                            "Both read-only and editable folds must expose an AX expand action")
+            let separator = try XCTUnwrap(DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).first { $0.index < pane.decorations.rows.count
+                && pane.decorations.rows[$0.index].collapsed != nil })
+            expanded = nil
+            let windowPoint = pane.textView.convert(
+                NSPoint(x: 24, y: separator.frame.midY), to: nil
+            )
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .leftMouseDown, location: windowPoint,
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1
+            ))
+            pane.textView.mouseDown(with: event)
+            XCTAssertNotNil(expanded,
+                            "Clicking the actual folded text row must expand in both modes")
+            let overlay = try XCTUnwrap(pane.subviews.last)
+            let bitmap = try XCTUnwrap(
+                overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds)?
+                    .retagging(with: .sRGB)
+            )
+            overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
+            return bitmap
+        }
+
+        for dark in [false, true] {
+            let review = try foldedOverlay(dark: dark, editable: false)
+            let edit = try foldedOverlay(dark: dark, editable: true)
+            XCTAssertEqual(review.pixelsWide, edit.pixelsWide)
+            XCTAssertEqual(review.pixelsHigh, edit.pixelsHigh)
+            var differing = 0
+            var painted = 0
+            for y in 0..<min(review.pixelsHigh, edit.pixelsHigh) {
+                for x in 0..<min(220, review.pixelsWide, edit.pixelsWide) {
+                    let a = review.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) ?? .clear
+                    let b = edit.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) ?? .clear
+                    if a.alphaComponent > 0.15 { painted += 1 }
+                    if abs(a.alphaComponent - b.alphaComponent) > 0.04 ||
+                        abs(a.redComponent - b.redComponent) > 0.04 ||
+                        abs(a.greenComponent - b.greenComponent) > 0.04 ||
+                        abs(a.blueComponent - b.blueComponent) > 0.04 {
+                        differing += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(painted, 200,
+                                 "Both layouts must visibly paint a folded separator")
+            XCTAssertLessThan(differing, 160,
+                              "Read-only and editable xx unmodified lines must share one visual renderer")
+        }
+    }
+
     func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

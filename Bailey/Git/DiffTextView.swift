@@ -84,7 +84,7 @@ struct DiffColorScheme {
     }
 }
 
-/// Labels for a collapsed-run separator, shared by the underlay's drawn text
+/// Labels for a collapsed-run separator, shared by the foreground painter
 /// and the gutter's accessibility elements.
 enum DiffCollapsedRunLabel {
     static func text(hiddenLines: Int) -> String {
@@ -594,12 +594,6 @@ final class DiffDecorationUnderlayView: NSView {
     var decorations: DiffDecorations = .empty {
         didSet { needsDisplay = true }
     }
-    /// Font for the "N unmodified lines" separator label, derived from the
-    /// pane's code font.
-    var labelFont: NSFont = .monospacedSystemFont(ofSize: 10, weight: .regular) {
-        didSet { needsDisplay = true }
-    }
-
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
@@ -662,19 +656,9 @@ final class DiffDecorationUnderlayView: NSView {
                 rowRect.fill()
                 drawFillerStripes(in: rowRect, color: scheme.fillerStripe)
             case .collapsed:
-                scheme.collapsedBand.setFill()
-                rowRect.fill()
-                if let info = metadata.collapsed {
-                    let label = NSAttributedString(
-                        string: DiffCollapsedRunLabel.text(hiddenLines: info.hiddenLines),
-                        attributes: [
-                            .font: labelFont,
-                            .foregroundColor: scheme.annotationText,
-                        ]
-                    )
-                    let size = label.size()
-                    label.draw(at: CGPoint(x: 12, y: rowRect.midY - size.height / 2))
-                }
+                // The shared foreground overlay owns the folded separator
+                // for both read-only and editable text surfaces.
+                break
             }
 
             if !metadata.emphasis.isEmpty {
@@ -1239,24 +1223,30 @@ private final class DiffClipView: NSClipView {
     }
 }
 
-/// Paints folded separators above TextKit's glyph rendering surface.
-/// Hidden paragraphs still belong to the editable document, so a backdrop
-/// behind NSTextView cannot conceal the first (separator) paragraph's text.
+/// Paints the same folded separator over both review and editable TextKit.
+/// Editable source paragraphs remain in storage, so a backdrop alone cannot
+/// conceal their glyphs; one foreground painter keeps both modes identical.
 private final class DiffFoldOverlayView: NSView {
     weak var textView: DiffTextView?
     weak var clipView: NSClipView?
     var decorations: DiffDecorations = .empty {
+        didSet {
+            hasCollapsedRows = decorations.rows.contains { $0.collapsed != nil }
+            needsDisplay = true
+        }
+    }
+    var labelFont: NSFont = .monospacedSystemFont(ofSize: 10, weight: .regular) {
         didSet { needsDisplay = true }
     }
+    private var hasCollapsedRows = false
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let textView, let clipView, !textView.editingFolds.isEmpty else { return }
+        guard hasCollapsedRows, let textView, let clipView else { return }
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let colors = DiffColorScheme.current(dark: dark)
-        let font = textView.font ?? TerminalFont.current()
         for row in DiffRowGeometry.visibleRows(textView: textView, decorations: decorations) {
             guard row.index < decorations.rows.count,
                   let fold = decorations.rows[row.index].collapsed,
@@ -1268,7 +1258,7 @@ private final class DiffFoldOverlayView: NSView {
             frame.fill()
             let label = NSAttributedString(
                 string: DiffCollapsedRunLabel.text(hiddenLines: fold.hiddenLines),
-                attributes: [.font: font, .foregroundColor: colors.annotationText]
+                attributes: [.font: labelFont, .foregroundColor: colors.annotationText]
             )
             let size = label.size()
             label.draw(at: CGPoint(x: 12, y: frame.midY - size.height / 2))
@@ -1678,8 +1668,8 @@ final class DiffCodePaneView: NSView {
         let labelFont = NSFont(
             descriptor: font.fontDescriptor, size: max(8, font.pointSize - 1.5)
         ) ?? font
-        if underlay.labelFont != labelFont {
-            underlay.labelFont = labelFont
+        if foldOverlay.labelFont != labelFont {
+            foldOverlay.labelFont = labelFont
         }
         rowHeight = paragraphStyle.maximumLineHeight
         if mode == .review, !decorations.rows.isEmpty {
