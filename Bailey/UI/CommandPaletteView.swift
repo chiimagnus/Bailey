@@ -144,6 +144,12 @@ struct CommandPaletteView: View {
             Color.black.opacity(0.15)
                 .onTapGesture { dismiss() }
                 .pointerStyle(.default)
+                .accessibilityRepresentation {
+                    Button(String(localized: "Close Command Palette", table: "Interface")) {
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("bailey.commandPalette.dismiss")
+                }
 
             panel
                 .padding(.top, 110)
