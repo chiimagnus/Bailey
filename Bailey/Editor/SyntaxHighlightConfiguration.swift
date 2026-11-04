@@ -218,8 +218,8 @@ final class SyntaxHighlightCoordinator {
     }
 
     private func setTokenProvider(query: SwiftTreeSitter.Query, textContentManager: NSTextContentManager) {
-        let provider = tsClient.tokenProvider(with: query) { range, _ in
-            guard range.length > 0 else { return nil }
+        let provider = tsClient.tokenProvider(with: query) { [weak textContentManager] range, _ in
+            guard range.length > 0, let textContentManager else { return nil }
             return textContentManager.attributedString(in: NSTextRange(range, provider: textContentManager))?.string
         }
         highlighter?.tokenProvider = { [weak self] range, completion in
@@ -247,8 +247,8 @@ final class SyntaxHighlightCoordinator {
         injectionsQuery: SwiftTreeSitter.Query,
         textContentManager: NSTextContentManager
     ) {
-        let textProvider: SwiftTreeSitter.Predicate.TextProvider = { range, _ in
-            guard range.length > 0 else { return nil }
+        let textProvider: SwiftTreeSitter.Predicate.TextProvider = { [weak textContentManager] range, _ in
+            guard range.length > 0, let textContentManager else { return nil }
             return textContentManager.attributedString(in: NSTextRange(range, provider: textContentManager))?.string
         }
 
@@ -265,17 +265,23 @@ final class SyntaxHighlightCoordinator {
                     self.tsClient.executeInjectionsQuery(injectionsQuery, in: range, textProvider: textProvider) { [weak self] injectionResult in
                         guard let self, self.highlightRevision == revision else { return }
                         Task { @MainActor [weak self] in
-                            guard let self, self.highlightRevision == revision else { return }
+                            guard self?.highlightRevision == revision else { return }
                             var tokens = baseRanges.compactMap { capture -> Neon.Token? in
                                 let clipped = NSIntersectionRange(capture.range, range)
                                 return clipped.length > 0 ? Neon.Token(name: capture.name, range: clipped) : nil
                             }
                             if case .success(let injections) = injectionResult {
                                 for injection in injections {
-                                    let captures = await self.injectedCaptures(
-                                        for: injection, revision: revision, textProvider: textProvider
-                                    )
-                                    guard self.highlightRevision == revision else { return }
+                                    let pending: Task<[SwiftTreeSitter.NamedRange], Never>?
+                                    do {
+                                        guard let owner = self, owner.highlightRevision == revision else { return }
+                                        pending = owner.injectedCaptureTask(
+                                            for: injection, revision: revision, textProvider: textProvider
+                                        )
+                                    }
+                                    guard let pending else { continue }
+                                    let captures = await pending.value
+                                    guard self?.highlightRevision == revision else { return }
                                     for capture in captures {
                                         let shifted = NSRange(location: capture.range.location + injection.range.location,
                                                               length: capture.range.length)
@@ -286,7 +292,7 @@ final class SyntaxHighlightCoordinator {
                                     }
                                 }
                             }
-                            guard self.highlightRevision == revision else { return }
+                            guard self?.highlightRevision == revision else { return }
                             completion(.success(TokenApplication(tokens: tokens)))
                         }
                     }
@@ -296,21 +302,21 @@ final class SyntaxHighlightCoordinator {
         highlighter?.invalidate()
     }
 
-    private func injectedCaptures(
+    private func injectedCaptureTask(
         for injection: SwiftTreeSitter.NamedRange,
         revision: UInt,
         textProvider: SwiftTreeSitter.Predicate.TextProvider
-    ) async -> [SwiftTreeSitter.NamedRange] {
+    ) -> Task<[SwiftTreeSitter.NamedRange], Never>? {
         let injectionRange = injection.range
         guard highlightRevision == revision, injectionRange.length > 0,
               let language = SyntaxHighlighting.language(forInjectionName: injection.name),
               let query = injectedHighlightsQuery(for: language)
-        else { return [] }
-        if let task = injectedFragments[injection] { return await task.value }
+        else { return nil }
+        if let task = injectedFragments[injection] { return task }
         guard let grammarIndex = language.grammarIndex,
               let fragment = textProvider(injectionRange, Point.zero..<Point.zero),
               !fragment.isEmpty, highlightRevision == revision
-        else { return [] }
+        else { return nil }
         let task = Task.detached(priority: .userInitiated) { () -> [SwiftTreeSitter.NamedRange] in
             guard !Task.isCancelled, let grammar = SyntaxLanguage.parser(grammarIndex: grammarIndex) else { return [] }
             let parser = Parser()
@@ -322,7 +328,7 @@ final class SyntaxHighlightCoordinator {
             }
         }
         injectedFragments[injection] = task
-        return await task.value
+        return task
     }
 
     private func injectedHighlightsQuery(for language: SyntaxLanguage) -> SwiftTreeSitter.Query? {
