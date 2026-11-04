@@ -236,15 +236,21 @@ final class WorkspaceDockUITests: XCTestCase {
                 .firstMatch.exists
         })
         let terminalItem = app.menuItems.matching(NSPredicate(
-            format: "title == %@", "Panel Hover Test"
+            format: "title CONTAINS %@", "Panel Hover Test"
         )).firstMatch
-        XCTAssertTrue(terminalItem.waitForExistence(timeout: 5),
-                      "A terminal progress spinner must never enter the system menu item title")
+        XCTAssertTrue(terminalItem.waitForExistence(timeout: 5))
+        let displayedTitle = terminalItem.title
+        XCTAssertTrue(displayedTitle.contains("Panel Hover Test"))
         let expectedCount = menu.menuItems.count
+        let first = app.menuItems.matching(NSPredicate(
+            format: "title == %@", files[0].lastPathComponent
+        )).firstMatch
         for _ in 0..<12 {
-            terminalItem.hover()
-            XCTAssertTrue(terminalItem.isHittable)
-            XCTAssertEqual(terminalItem.title, "Panel Hover Test")
+            first.hover()
+            XCTAssertTrue(first.isHittable,
+                          "Control-1 menu item must remain hittable throughout title animation")
+            XCTAssertEqual(terminalItem.title, displayedTitle,
+                           "A tracking system menu must preserve its displayed title")
             XCTAssertEqual(menu.menuItems.count, expectedCount)
             XCTAssertTrue(app.menuItems.matching(NSPredicate(
                 format: "title == %@", files[0].lastPathComponent
@@ -254,7 +260,12 @@ final class WorkspaceDockUITests: XCTestCase {
         screenshot.name = "Panel menu remains stable during terminal title animation"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        first.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).isSelected,
+                      "A pinned menu entry must still select its real tab")
+        app.typeKey("2", modifierFlags: .control)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[1], in: window).isSelected,
+                      "Control-2 must retain the native Panel shortcut after tracking ends")
         for (index, file) in files.enumerated() {
             XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
                            "let value = \(index)\n")
@@ -803,6 +814,44 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(secondTab.exists, "Right-clicking an inactive tab must not replace the active one")
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
+    func testSystemProjectMenuSelectsCurrentProjectAndCommandTwo() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("alpha-project/readme.txt", text: "alpha stays intact\n")
+        let second = try fixture.file("bravo-project/readme.txt", text: "bravo stays intact\n")
+        let folders = [first, second].map { $0.deletingLastPathComponent() }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: folders[0])
+        let window = app.windows.firstMatch
+        app.typeKey("a", modifierFlags: [.command, .shift])
+        try WorkspaceUITestSupport.choose(folders[1], in: app, window: window)
+
+        let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
+        XCTAssertTrue(projects.waitForExistence(timeout: 12))
+        projects.click()
+        func row(_ index: Int) -> XCUIElement {
+            window.descendants(matching: .any)
+                .matching(identifier: "bailey.project.row")
+                .matching(NSPredicate(format: "label CONTAINS %@", folders[index].lastPathComponent))
+                .firstMatch
+        }
+        XCTAssertTrue(row(0).waitForExistence(timeout: 12))
+        XCTAssertTrue(row(1).waitForExistence(timeout: 12))
+
+        app.menuBarItems["Project"].click()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems[folders[0].lastPathComponent].exists
+                && $0.menuItems[folders[1].lastPathComponent].exists
+        })
+        let firstEntry = menu.menuItems[folders[0].lastPathComponent]
+        firstEntry.hover()
+        XCTAssertTrue(firstEntry.isHittable)
+        firstEntry.click()
+        XCTAssertTrue(row(0).isSelected, "Project command must resolve the actual project ID")
+        app.typeKey("2", modifierFlags: .command)
+        XCTAssertTrue(row(1).isSelected, "Command-2 must select the second project")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "alpha stays intact\n")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "bravo stays intact\n")
     }
 
     func testProjectKeyboardCursorAndContextSurviveBackgroundDeletion() throws {

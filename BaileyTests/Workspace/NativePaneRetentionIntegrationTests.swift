@@ -1233,37 +1233,51 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), original)
     }
 
-    func testTerminalMenuTitleIgnoresSpinnerFramesWithoutLosingRealRenames() async {
+    func testPanelMenuPresentationPinsEntriesOnlyDuringNativeTracking() async {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
+        let project = Project(fallbackName: "menu", workspaceConfiguration: .standard)
         let tab = PaneTab(content: .session(terminal))
-        let stable = "Bailey | current task"
-        terminal.terminalDidChangeTitle("⠋ " + stable)
-        XCTAssertEqual(terminal.menuTitle, stable)
-        XCTAssertEqual(tab.displayTitle, "⠋ " + stable,
-                       "The actual Dock title must retain the terminal's live status")
+        project.append(tab)
+        let presentation = MainMenuPresentation()
 
-        let noMenuUpdate = expectation(description: "Transient spinner frames are ignored")
-        noMenuUpdate.isInverted = true
-        withObservationTracking({ _ = terminal.menuTitle }) { noMenuUpdate.fulfill() }
-        for frame in "⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋" {
-            terminal.terminalDidChangeTitle(String(frame) + " " + stable)
-            XCTAssertEqual(terminal.menuTitle, stable)
+        terminal.terminalDidChangeTitle("⠋ Meaningful Unicode")
+        XCTAssertEqual(presentation.panelEntries(for: project).first?.title, "⠋ Meaningful Unicode")
+        presentation.beginPanelTracking(project: project)
+        let initial = presentation.panelEntries(for: project)
+        let invalidated = expectation(description: "Changing a live title must not update a tracked menu")
+        invalidated.isInverted = true
+        withObservationTracking({ _ = presentation.panelEntries(for: project).map(\.title) }) {
+            invalidated.fulfill()
         }
-        await fulfillment(of: [noMenuUpdate], timeout: 0.1)
+        for title in ["⠙ Meaningful Unicode", "42% complete", "Elapsed 00:03", "Final title"] {
+            terminal.terminalDidChangeTitle(title)
+            XCTAssertEqual(tab.displayTitle, title)
+            XCTAssertEqual(presentation.panelEntries(for: project).map(\.title), initial.map(\.title))
+        }
+        tab.customName = "User rename"
+        XCTAssertEqual(presentation.panelEntries(for: project).map(\.title), initial.map(\.title))
+        let another = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        project.append(another)
+        XCTAssertEqual(presentation.panelEntries(for: project).map(\.id), initial.map(\.id))
+        await fulfillment(of: [invalidated], timeout: 0.1)
 
-        let rename = expectation(description: "A real terminal rename updates Panel menu")
-        withObservationTracking({ _ = terminal.menuTitle }) { rename.fulfill() }
-        terminal.terminalDidChangeTitle("Build complete")
-        await fulfillment(of: [rename], timeout: 2)
-        XCTAssertEqual(terminal.menuTitle, "Build complete")
-        XCTAssertEqual(tab.displayTitle, "Build complete")
-        tab.customName = "My terminal"
-        XCTAssertEqual(tab.displayTitle, "My terminal")
+        presentation.endPanelTracking()
+        XCTAssertEqual(presentation.panelEntries(for: project).first?.title, "User rename")
+        XCTAssertEqual(presentation.panelEntries(for: project).count, 2)
+        XCTAssertEqual(terminal.title, "Final title")
+    }
 
-        terminal.terminalDidChangeTitle("⠋Braille is meaningful")
-        XCTAssertEqual(terminal.menuTitle, "⠋Braille is meaningful",
-                       "A braille glyph not followed by a space is part of the actual title")
+    func testProjectMenuPresentationPinsOrderOnlyWhileTracked() {
+        let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
+        let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
+        let presentation = MainMenuPresentation()
+        XCTAssertEqual(presentation.projectEntries(for: [first]).map(\.title), ["First"])
+        presentation.beginProjectTracking(projects: [first])
+        XCTAssertEqual(presentation.projectEntries(for: [first, second]).map(\.title), ["First"])
+        presentation.endProjectTracking()
+        XCTAssertEqual(presentation.projectEntries(for: [first, second]).map(\.title),
+                       ["First", "Second"])
     }
 
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {

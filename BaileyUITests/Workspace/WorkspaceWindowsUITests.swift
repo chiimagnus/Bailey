@@ -228,6 +228,45 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), savedBytes)
     }
 
+    func testSystemPanelMenuUsesOnlyTheActualKeyWindow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("window-a/panel-a.txt", text: "window A bytes\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: file.deletingLastPathComponent()
+        )
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let firstID = app.windows.firstMatch.identifier
+        let windowA = app.windows.matching(identifier: firstID).firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: windowA)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: windowA)
+            .waitForExistence(timeout: 12))
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let secondID = try XCTUnwrap(app.windows.allElementsBoundByIndex
+            .first(where: { $0.identifier != firstID })?.identifier)
+        let windowB = app.windows.matching(identifier: secondID).firstMatch
+        XCTAssertNotEqual(windowA.identifier, windowB.identifier)
+        activate(windowB, in: app)
+        app.menuBarItems["Panel"].click()
+        let emptyMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Command Palette…"].exists
+        })
+        XCTAssertFalse(emptyMenu.menuItems[file.lastPathComponent].exists,
+                       "An empty key window must not expose another window's tab")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        activate(windowA, in: app)
+        app.menuBarItems["Panel"].click()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems[file.lastPathComponent].exists
+        })
+        menu.menuItems[file.lastPathComponent].click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: windowA).isSelected)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "window A bytes\n")
+    }
+
     func testKeyboardFocusAndPaletteRestorationStayWithTheOwningWindow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let firstA = try fixture.file("window-a/a-first.swift", text: "first A\n")

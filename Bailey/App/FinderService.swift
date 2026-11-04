@@ -6,6 +6,7 @@ import Carbon
 @MainActor
 final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     let workspace = WorkspaceApplication(loadSavedState: true)
+    let menuPresentation = MainMenuPresentation()
     private var preparingToQuit = false
 
     /// Let AppKit finish quitting only after all edited files were written.
@@ -46,6 +47,14 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(mainMenuItemAdded(_:)),
             name: NSMenu.didAddItemNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuDidBeginTracking(_:)),
+            name: NSMenu.didBeginTrackingNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuDidEndTracking(_:)),
+            name: NSMenu.didEndTrackingNotification, object: nil
+        )
         removeUnusedViewMenu()
         configureDeleteShortcut()
     }
@@ -55,14 +64,28 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         configureDeleteShortcut()
     }
 
+    @objc private func menuDidBeginTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu else { return }
+        if menu === NSApp.mainMenu {
+            let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
+            menuPresentation.beginPanelTracking(project: owner?.selectedProject)
+            menuPresentation.beginProjectTracking(projects: owner?.projects ?? [])
+        } else {
+            var root = menu
+            while let parent = root.supermenu { root = parent }
+            if root !== NSApp.mainMenu { Self.formatShortcutHints(in: menu) }
+        }
+    }
+
+    @objc private func menuDidEndTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu,
+              menu === NSApp.mainMenu else { return }
+        menuPresentation.endPanelTracking()
+        menuPresentation.endProjectTracking()
+    }
+
     @objc private func mainMenuItemAdded(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
-        var root = menu
-        while let parent = root.supermenu { root = parent }
-        if root !== NSApp.mainMenu {
-            // A later, unhinted item can widen the context menu's shortcut column.
-            Self.formatShortcutHints(in: menu)
-        }
         if menu === NSApp.mainMenu { removeUnusedViewMenu() }
         if menu === NSApp.mainMenu
             || NSApp.mainMenu?.items.contains(where: { $0.submenu === menu }) == true {

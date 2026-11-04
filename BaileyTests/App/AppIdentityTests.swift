@@ -100,6 +100,25 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testSystemMenuTrackingPinsPresentationUntilEndNotification() throws {
+        let appDelegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
+        let mainMenu = try XCTUnwrap(NSApp.mainMenu)
+        let presentation = appDelegate.menuPresentation
+        XCTAssertNil(presentation.trackedPanelEntries)
+        XCTAssertNil(presentation.trackedProjectEntries)
+
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
+        XCTAssertNotNil(presentation.trackedPanelEntries)
+        XCTAssertNotNil(presentation.trackedProjectEntries)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
+        XCTAssertNotNil(presentation.trackedPanelEntries,
+                        "Unrelated popup tracking must not release the system menu snapshot")
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
+        XCTAssertNil(presentation.trackedPanelEntries)
+        XCTAssertNil(presentation.trackedProjectEntries)
+    }
+
+    @MainActor
     func testSystemPanelMenuDoesNotReceiveContextShortcutFormatting() throws {
         let panel = try XCTUnwrap(NSApp.mainMenu?.items.first {
             $0.title == String(localized: "Panel", table: "Interface")
@@ -123,6 +142,12 @@ final class AppIdentityTests: XCTestCase {
             Button("Close Tabs to the Right", action: {})
         })
         menu.update()
+        XCTAssertNil(menu.items.first?.attributedTitle,
+                     "Formatting belongs to native popup tracking, not incremental menu construction")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        defer {
+            NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        }
 
         let copy = try XCTUnwrap(menu.items.first)
         let paste = try XCTUnwrap(menu.items.dropFirst().first)

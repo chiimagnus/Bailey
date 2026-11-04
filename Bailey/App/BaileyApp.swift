@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 struct BaileyApp: App {
@@ -26,7 +27,10 @@ struct BaileyApp: App {
         .windowBackgroundDragBehavior(.disabled)
         .defaultSize(width: 900, height: 600)
         .commands {
-            BaileyCommands(application: applicationDelegate.workspace)
+            BaileyCommands(
+                application: applicationDelegate.workspace,
+                menuPresentation: applicationDelegate.menuPresentation
+            )
         }
 
         Settings {
@@ -88,9 +92,37 @@ extension FocusedValues {
     @Entry var baileyGitCommit: (() -> Void)?
 }
 
+/// Presentation snapshots live only while AppKit tracks an open system menu.
+@MainActor
+@Observable
+final class MainMenuPresentation {
+    private(set) var trackedPanelEntries: [PanelMenuEntry]?
+    private(set) var trackedProjectEntries: [ProjectMenuEntry]?
+
+    func panelEntries(for project: Project?) -> [PanelMenuEntry] {
+        trackedPanelEntries ?? PanelMenuEntry.entries(for: project)
+    }
+
+    func projectEntries(for projects: [Project]) -> [ProjectMenuEntry] {
+        trackedProjectEntries ?? ProjectMenuEntry.entries(for: projects)
+    }
+
+    func beginPanelTracking(project: Project?) {
+        trackedPanelEntries = PanelMenuEntry.entries(for: project)
+    }
+
+    func beginProjectTracking(projects: [Project]) {
+        trackedProjectEntries = ProjectMenuEntry.entries(for: projects)
+    }
+
+    func endPanelTracking() { trackedPanelEntries = nil }
+    func endProjectTracking() { trackedProjectEntries = nil }
+}
+
 /// Menu commands routed to the focused window's manager.
 private struct BaileyCommands: Commands {
     let application: WorkspaceApplication
+    let menuPresentation: MainMenuPresentation
     @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
     @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: (() -> Void)?
     private var manager: WorkspaceWindowModel? {
@@ -218,13 +250,11 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("w", modifiers: .command)
 
-            if let project = manager?.selectedProject, !project.dock.tabOrder.isEmpty {
+            let entries = menuPresentation.panelEntries(for: manager?.selectedProject)
+            if !entries.isEmpty {
                 Divider()
 
-                let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
-                ForEach(Array(project.dock.tabOrder.compactMap { tabsByID[$0] }.enumerated()).map {
-                    PanelMenuEntry(tab: $0.element, index: $0.offset)
-                }) { item in
+                ForEach(entries) { item in
                     Button {
                         manager?.selectPanel(item.id)
                     } label: {
@@ -285,14 +315,15 @@ private struct BaileyCommands: Commands {
                 .disabled(focusedGitCommit == nil)
             }
 
-            if manager?.projects.isEmpty == false {
+            let entries = menuPresentation.projectEntries(for: manager?.projects ?? [])
+            if !entries.isEmpty {
                 Divider()
 
-                ForEach(Array((manager?.projects ?? []).enumerated()).map {
-                    ProjectMenuEntry(project: $0.element, index: $0.offset)
-                }) { item in
+                ForEach(entries) { item in
                     Button {
-                        manager?.selectProject(index: item.index)
+                        if let index = manager?.projects.firstIndex(where: { $0.id == item.id }) {
+                            manager?.selectProject(index: index)
+                        }
                     } label: {
                         Label {
                             Text(verbatim: item.title)
@@ -405,7 +436,7 @@ private struct BaileyCommands: Commands {
     }
 }
 
-private struct PanelMenuEntry: Identifiable {
+struct PanelMenuEntry: Identifiable {
     let id: DockItem
     let index: Int
     let title: String
@@ -414,13 +445,7 @@ private struct PanelMenuEntry: Identifiable {
     init(tab: PaneTab, index: Int) {
         id = .tab(tab.id)
         self.index = index
-        if let customName = tab.customName, !customName.isEmpty {
-            title = customName
-        } else if case .session(let session) = tab.content {
-            title = session.menuTitle
-        } else {
-            title = tab.content.title
-        }
+        title = tab.displayTitle
         if let path = tab.content.fileIconPath {
             let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
             icon = MaterialFileIcon.image(forPath: fileIconPath)
@@ -430,9 +455,17 @@ private struct PanelMenuEntry: Identifiable {
             icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
         }
     }
+
+    static func entries(for project: Project?) -> [Self] {
+        guard let project else { return [] }
+        let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
+        return Array(project.dock.tabOrder.compactMap { tabsByID[$0] }.enumerated()).map {
+            Self(tab: $0.element, index: $0.offset)
+        }
+    }
 }
 
-private struct ProjectMenuEntry: Identifiable {
+struct ProjectMenuEntry: Identifiable {
     let id: UUID
     let index: Int
     let title: String
@@ -446,5 +479,9 @@ private struct ProjectMenuEntry: Identifiable {
             systemSymbolName: project.sshHost == nil ? "folder" : "network",
             accessibilityDescription: nil
         ) ?? NSImage()
+    }
+
+    static func entries(for projects: [Project]) -> [Self] {
+        Array(projects.enumerated()).map { Self(project: $0.element, index: $0.offset) }
     }
 }
