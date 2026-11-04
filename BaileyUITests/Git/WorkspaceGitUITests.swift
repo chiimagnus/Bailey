@@ -118,8 +118,10 @@ final class WorkspaceGitUITests: XCTestCase {
         }
         let root = try ssh("mktemp -d /tmp/bailey-git-ui-XXXXXX\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (root as NSString).deletingLastPathComponent == "/tmp",
-              (root as NSString).lastPathComponent.hasPrefix("bailey-git-ui-") else {
+        // The remote output is reused in shell commands, including cleanup.
+        // Accept only the exact mktemp name so it cannot become shell input.
+        guard root.range(of: #"^/tmp/bailey-git-ui-[A-Za-z0-9]{6}$"#,
+                         options: .regularExpression) != nil else {
             throw NSError(domain: "WindowsSSHGuiFixture", code: 1)
         }
         defer {

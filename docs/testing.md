@@ -86,6 +86,8 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
 真实 SSH 主题 GUI 回归要求显式提供 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_HOST` 和
 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_ROOT`，仅能使用获授权的主机及临时测试目录。
+远端测试创建的路径必须先验证完整绝对路径和随机文件名字符集，再用于 Shell 命令或递归清理；
+只检查目录前缀不能防止远端输出中的引号或换行变成命令。
 系统外观 GUI 回归默认跳过；仅在显式设置 `TEST_RUNNER_BAILEY_THEME_SYSTEM_TEST_ENABLED=1`
 并从测试进程外安全切换、恢复 macOS 外观时执行，不在普通测试中修改用户系统外观。
 公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，

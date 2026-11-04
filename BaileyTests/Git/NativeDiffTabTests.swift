@@ -2096,8 +2096,8 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
         let root = String(decoding: created.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (root as NSString).deletingLastPathComponent == "/tmp",
-              (root as NSString).lastPathComponent.hasPrefix("bailey-diff-eol-") else {
+        guard root.range(of: #"^/tmp/bailey-diff-eol-[A-Za-z0-9]{6}$"#,
+                         options: .regularExpression) != nil else {
             throw WorkspaceError.notFound
         }
 
