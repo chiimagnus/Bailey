@@ -408,6 +408,116 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
     }
 
+    func testFocusedCommitShortcutUsesLatestDraftAndWritesOnlyStagedChanges() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let staged = try fixture.file("staged.txt", text: "before\n")
+        let unstaged = try fixture.file("unstaged.txt", text: "stay\n")
+        try fixture.initializeGit()
+        try "staged change\n".write(to: staged, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "staged.txt"])
+        try "unstaged change\n".write(to: unstaged, atomically: true, encoding: .utf8)
+        let before = try fixture.git(["rev-parse", "HEAD"])
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        let window = app.windows.firstMatch
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app, in: window)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let input = WorkspaceUITestSupport.element("bailey.git.commit.message", in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 25))
+        input.click()
+        input.typeText("outdated message")
+        input.typeKey("a", modifierFlags: .command)
+        input.typeText("latest focused commit message")
+        XCTAssertEqual(input.value as? String, "latest focused commit message")
+
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
+        let complete = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["log", "-1", "--format=%s"])) ==
+                Data("latest focused commit message\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [complete], timeout: 20), .completed,
+                       "⌘Return must execute the currently focused Git panel's live commit action")
+        XCTAssertNotEqual(try fixture.git(["rev-parse", "HEAD"]), before)
+        XCTAssertEqual(try fixture.git(["show", "HEAD:staged.txt"]), Data("staged change\n".utf8))
+        XCTAssertEqual(try fixture.git(["show", "HEAD:unstaged.txt"]), Data("stay\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: unstaged), Data("unstaged change\n".utf8))
+        XCTAssertEqual(try fixture.git(["diff", "--cached", "--name-only"]), Data())
+    }
+
+    func testRapidStagedWorktreeAndOtherDiffSwitchesFinishAtLatestSelectedFile() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let baseline = (0..<18_000).map { "let value\($0) = \($0)\n" }
+        let first = try fixture.file("src/First.swift", text: baseline.joined())
+        let second = try fixture.file("src/Second.swift", text: baseline.joined())
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+
+        var index = baseline
+        index[9_000] = "let value9000 = 9001 // INDEX_ONLY\n"
+        try Data(index.joined().utf8).write(to: first)
+        try fixture.git(["add", "--", "src/First.swift"])
+
+        var worktree = index
+        worktree[14_000] = "let value14000 = 14002 // WORKTREE_ONLY\n"
+        let worktreeBytes = Data(worktree.joined().utf8)
+        try worktreeBytes.write(to: first)
+        var other = baseline
+        other[12_000] = "let value12000 = 12003 // SECOND_ONLY\n"
+        let otherBytes = Data(other.joined().utf8)
+        try otherBytes.write(to: second)
+        let status = try fixture.git(["status", "--porcelain=v1"])
+        XCTAssertEqual(String(decoding: status, as: UTF8.self),
+                       "MM src/First.swift\n M src/Second.swift\n")
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let rows = window.descendants(matching: .any).matching(identifier: "bailey.tree.file")
+        let firstRows = rows.matching(NSPredicate(format: "label ENDSWITH %@",
+                                                 ", src/First.swift"))
+        let staged = firstRows.element(boundBy: 0)
+        let unstaged = firstRows.element(boundBy: 1)
+        let independent = rows.matching(NSPredicate(format: "label ENDSWITH %@",
+                                                   ", src/Second.swift")).firstMatch
+        XCTAssertTrue(unstaged.waitForExistence(timeout: 30))
+        XCTAssertTrue(independent.waitForExistence(timeout: 20))
+
+        // Deliberately do not await any Diff display between these clicks.
+        for target in [staged, independent, unstaged, independent, staged, unstaged] {
+            target.click()
+        }
+        let review = window.textViews["bailey.diff.canonical"]
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 25))
+        layout.radioButtons.element(boundBy: 0).click()
+        func expect(_ marker: String, not previous: String) {
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let text = review.value as? String else { return false }
+                return review.exists && text.contains(marker) && !text.contains(previous)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed,
+                           "Rapid navigation must resolve the most recently selected Diff: \(marker)")
+            XCTAssertTrue(review.isHittable,
+                          "Correct content in an invisible or stale tab does not count")
+        }
+        expect("WORKTREE_ONLY", not: "SECOND_ONLY")
+        XCTAssertFalse((review.value as? String ?? "").contains("let value0 = 0"),
+                       "The completed 18k-line worktree Diff must display collapsed context")
+
+        independent.click()
+        expect("SECOND_ONLY", not: "WORKTREE_ONLY")
+        staged.click()
+        expect("INDEX_ONLY", not: "WORKTREE_ONLY")
+        unstaged.click()
+        expect("WORKTREE_ONLY", not: "INDEX_ONLY")
+        XCTAssertEqual(try Data(contentsOf: first), worktreeBytes)
+        XCTAssertEqual(try Data(contentsOf: second), otherBytes)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), status,
+                       "Fast browsing must not mutate Git or either source file")
+    }
+
     func testComplexGitChangesPreserveEachRealDiffAcrossRepeatedBrowsing() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let baseline = (0..<3_600).map { "let line\($0) = \($0)\n" }
