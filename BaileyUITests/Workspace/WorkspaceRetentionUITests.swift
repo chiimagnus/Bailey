@@ -691,14 +691,9 @@ final class WorkspaceRetentionUITests: XCTestCase {
         app.launch()
         app.activate()
         let mainWindow = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
-        if !mainWindow.waitForExistence(timeout: 4) {
-            let newWindow = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
-            XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
-            newWindow.click()
-        }
-        XCTAssertTrue(mainWindow.waitForExistence(timeout: 15))
-        // Reopen through the native menu after Xcode's synthetic no-window relaunch.
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 15),
+                      "Relaunch must create the main window without test-side recovery")
+        // Reopen Settings through the native menu to verify the saved appearance.
         let openSettings = app.menuItems.matching(NSPredicate(
             format: "title CONTAINS[c] %@", "Settings")).firstMatch
         XCTAssertTrue(openSettings.waitForExistence(timeout: 12))
@@ -792,14 +787,10 @@ final class WorkspaceRetentionUITests: XCTestCase {
         // Same UUID and HOME: verify applicationWillTerminate's saved session.
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
-            let newWindow = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
-            XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
-            newWindow.click()
-        }
         let restored = app.windows.firstMatch
-        XCTAssertTrue(restored.waitForExistence(timeout: 15))
+        XCTAssertTrue(restored.waitForExistence(timeout: 15),
+                      "Relaunch must restore the workspace without opening a second scene")
+        XCTAssertEqual(app.windows.count, 1)
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: restored)
             .waitForExistence(timeout: 20))
         XCTAssertTrue((restored.textViews.firstMatch.value as? String)?
