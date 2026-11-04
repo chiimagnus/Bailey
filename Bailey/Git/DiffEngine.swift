@@ -916,6 +916,36 @@ nonisolated struct DiffRunExpansion: Equatable {
     var fromEnd = 0
 }
 
+/// Hidden original new-file paragraphs for a fold. TextKit skips their layout,
+/// never removes them from the editable text storage.
+nonisolated struct DiffEditFold: Equatable {
+    let range: Range<Int> // 0-based source lines; first line hosts the expander
+    let separator: DiffCollapsedRun
+
+    static func sourceFolds(in document: DiffSideDocument, lineCount: Int) -> [Self] {
+        let rows = document.rows
+        var following = Array(repeating: lineCount + 1, count: rows.count)
+        var next = lineCount + 1
+        for index in rows.indices.reversed() {
+            following[index] = next
+            if let line = rows[index].newLine { next = line }
+        }
+        var previous = 0
+        var result: [Self] = []
+        for (index, row) in rows.enumerated() {
+            if let separator = row.collapsed {
+                let end = min(lineCount, following[index] - 1)
+                if end > previous, end - previous == separator.hiddenLines {
+                    result.append(Self(range: previous..<end, separator: separator))
+                }
+            } else if let line = row.newLine {
+                previous = line
+            }
+        }
+        return result
+    }
+}
+
 /// A block of removed lines shown as read-only ghosts in edit mode, anchored
 /// to the new-file line it precedes. Mirrors Pierre's editable diffs, where
 /// the buffer holds only the new file and deletions are render-layer rows.

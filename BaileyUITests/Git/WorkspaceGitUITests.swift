@@ -308,27 +308,32 @@ final class WorkspaceGitUITests: XCTestCase {
         let layout = window.radioGroups["bailey.diff.layout"]
         XCTAssertTrue(layout.waitForExistence(timeout: 15))
         layout.radioButtons.element(boundBy: 0).click()
-        let preview = window.textViews["bailey.diff.canonical"]
-        XCTAssertTrue(preview.waitForExistence(timeout: 15))
-        let folded = try XCTUnwrap(preview.value as? String)
-        XCTAssertTrue(folded.contains("line594 = 2026"))
-        XCTAssertTrue(folded.contains("line617 = 2027"))
-        XCTAssertFalse(folded.contains("let line0 = 0"),
-                       "Git Changes must hide distant unchanged lines just like historical Diff")
         let editor = window.textViews["bailey.diff.worktree"]
-        preview.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.1)).click()
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         let displayed = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(displayed.contains("line594 = 2026"))
         XCTAssertTrue(displayed.contains("line617 = 2027"))
         XCTAssertTrue(displayed.contains("let line0 = 0"))
-        XCTAssertTrue(displayed.contains("let line899 = 899"))
-        editor.click()
-        for _ in 0..<8 { editor.swipeUp() }
-        let shot = XCTAttachment(screenshot: window.screenshot())
-        shot.name = "Editable Git Diff with all 900 source lines and both modifications"
-        shot.lifetime = .keepAlways
-        add(shot)
+        XCTAssertTrue(displayed.contains("let line899 = 899"),
+                      "The single editable NSTextView must retain every original source line")
+        let foldButtons = window.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "unmodified lines")
+        )
+        XCTAssertTrue(foldButtons.firstMatch.waitForExistence(timeout: 15),
+                      "Visible unchanged code must be collapsed inside the actual editable surface")
+        let initialFold = foldButtons.firstMatch.label
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertEqual(foldButtons.firstMatch.label, initialFold,
+                       "Clicking editable code must not unfold the hidden source lines")
+        XCTAssertTrue(foldButtons.firstMatch.isHittable)
+        foldButtons.firstMatch.click()
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            foldButtons.firstMatch.exists && foldButtons.firstMatch.label != initialFold
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 15), .completed,
+                       "Only the explicit unmodified-lines expander may reveal source lines")
+        XCTAssertEqual(editor.value as? String, displayed,
+                       "Folding and unfolding must not replace or alter the edit buffer")
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
                        changed.joined(separator: "\n") + "\n")
     }
@@ -460,10 +465,6 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertEqual(window.textViews.count, 2,
                        "Split must retain the old readonly side and the current editable side")
         XCTAssertEqual(editor.value as? String, original)
-        let splitShot = XCTAttachment(screenshot: window.screenshot())
-        splitShot.name = "Native editable Split Diff: baseline readonly and worktree editable"
-        splitShot.lifetime = .keepAlways
-        add(splitShot)
         layout.radioButtons.element(boundBy: 0).click()
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, original,

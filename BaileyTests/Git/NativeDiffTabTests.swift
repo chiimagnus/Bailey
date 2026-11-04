@@ -513,7 +513,94 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
     }
 
-    func testWorktreeDiffOpensWithFoldedContextAndActivatesRetainedEditorOnClick() async throws {
+    func testTextKitContentDelegateCanCollapseLayoutWithoutChangingEditableStorage() async throws {
+        final class Filter: NSObject, NSTextContentStorageDelegate {
+            func textContentManager(_ textContentManager: NSTextContentManager,
+                                    shouldEnumerate textElement: NSTextElement,
+                                    options: NSTextContentManager.EnumerationOptions) -> Bool {
+                !((textElement as? NSTextParagraph)?.attributedString.string
+                    .hasPrefix("hidden ") ?? false)
+            }
+        }
+        let filter = Filter()
+        let source = "first visible\n"
+            + (0..<120).map { "hidden \($0)\n" }.joined()
+            + "last visible\n"
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 440),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.setEditBufferText(source)
+        pane.textView.nativeContentManager.delegate = filter
+        pane.textView.nativeLayoutManager.invalidateLayout(
+            for: pane.textView.nativeLayoutManager.documentRange)
+        pane.layoutSubtreeIfNeeded()
+        var shown: [String] = []
+        pane.textView.nativeLayoutManager.enumerateTextLayoutFragments(
+            in: pane.textView.nativeLayoutManager.documentRange) { fragment in
+            shown.append((fragment.textElement as? NSTextParagraph)?.attributedString.string ?? "")
+            return true
+        }
+        XCTAssertEqual(pane.textView.string, source)
+        XCTAssertTrue(pane.textView.isEditable)
+        XCTAssertTrue(shown.contains { $0.contains("first visible") })
+        XCTAssertTrue(shown.contains { $0.contains("last visible") })
+        XCTAssertFalse(shown.contains { $0.contains("hidden ") },
+                       "Native TextKit can skip layout of unchanged paragraphs without altering source")
+    }
+
+    func testFoldedGitLineHidesAllItsNativeCRParagraphsExceptSeparator() throws {
+        let original = "head\rtail\n" + (0..<240).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 170\n", with: "changed 170\n")
+        let core = DiffCore.compute(oldText: original, newText: modified)
+        let folds = DiffEditFold.sourceFolds(
+            in: DiffComputation.build(core: core, expansions: [:]).unified,
+            lineCount: core.newLines.count
+        )
+        XCTAssertEqual(folds.first?.range.lowerBound, 0)
+        let offsets = core.newLines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 700, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.setEditBufferText(modified)
+        pane.setEditingFolds(
+            folds, lineOffsets: offsets,
+            baseDecorations: .edit(
+                state: DiffComputation.editState(ops: core.ops, oldLines: core.oldLines,
+                                                 newLines: core.newLines),
+                snapshotOffsets: offsets, lineCount: offsets.count, ghostBlocks: []
+            ), revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        func laidOutParagraphs() -> [String] {
+            var result: [String] = []
+            pane.textView.nativeLayoutManager.enumerateTextLayoutFragments(
+                in: pane.textView.nativeLayoutManager.documentRange
+            ) { fragment in
+                result.append((fragment.textElement as? NSTextParagraph)?.attributedString.string ?? "")
+                return true
+            }
+            return result
+        }
+        let collapsed = laidOutParagraphs()
+        XCTAssertTrue(collapsed.contains { $0.contains("head") },
+                      "The fold's first native paragraph hosts its separator")
+        XCTAssertFalse(collapsed.contains { $0.contains("tail") },
+                       "A bare CR cannot expose a second paragraph inside a hidden Git LF line")
+        XCTAssertEqual(pane.textView.string, modified)
+        pane.setEditingFolds([], lineOffsets: offsets, baseDecorations: .empty, revision: 2)
+        XCTAssertTrue(laidOutParagraphs().contains { $0.contains("tail") })
+        XCTAssertEqual(pane.textView.string, modified)
+    }
+
+    func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
         let original = (0..<320).map { "line \($0)\n" }.joined()
@@ -528,6 +615,11 @@ final class NativeDiffTabTests: XCTestCase {
                           untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
                           workspaceIdentity: nil, preferences: try isolatedPreferences())
         try await wait { tab.display != nil && tab.editDecorations.rows.count == 320 }
+        let display = try XCTUnwrap(tab.display)
+        let foldMapping = DiffEditFold.sourceFolds(in: display.computation.unified,
+                                                    lineCount: 320)
+        XCTAssertFalse(foldMapping.isEmpty,
+                       "Fold mapping from actual Git new-line numbers must retain hidden intervals")
         tab.autoSaveSuspendedForClose = true
         let window = NSWindow(contentRect: NSRect(x: -930, y: -930, width: 800, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -544,21 +636,40 @@ final class NativeDiffTabTests: XCTestCase {
         let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }
             .filter { !$0.isHidden }
         XCTAssertEqual(visible.count, 1)
-        let preview = try XCTUnwrap(visible.first)
-        XCTAssertFalse(preview.textView.isEditable, "Browsing a long worktree diff must be compact")
-        XCTAssertTrue(preview.decorations.rows.contains { $0.collapsed != nil })
-        XCTAssertLessThan(preview.decorations.rows.count, 320)
-
-        try await clickDiffSourceRow(preview, in: window)
-
+        let editor = try XCTUnwrap(visible.first)
+        XCTAssertTrue(editor.textView.isEditable,
+                      "The folded presentation must itself be the editable source document")
+        XCTAssertEqual(editor.textView.string, modified)
+        XCTAssertFalse(tab.isDirty)
+        XCTAssertFalse(tab.showsCanonicalComparison)
+        XCTAssertFalse(editor.textView.editingFolds.isEmpty,
+                       "native fold mapping: \(foldMapping.count), dirty: \(tab.isDirty), editing: \(tab.isEditing), canonical: \(tab.showsCanonicalComparison), source: \(tab.editDecorations.editSnapshotOffsets.count)")
+        XCTAssertTrue(editor.decorations.rows.contains { $0.collapsed != nil })
+        editor.layoutSubtreeIfNeeded()
+        editor.scrollView.layoutSubtreeIfNeeded()
+        editor.textView.layoutSubtreeIfNeeded()
+        let visibleRows = DiffRowGeometry.visibleRows(textView: editor.textView,
+                                                      decorations: editor.decorations)
+        XCTAssertTrue(visibleRows.contains {
+            $0.index < editor.decorations.rows.count &&
+                editor.decorations.rows[$0.index].collapsed != nil
+        }, "Native folded editor must expose real visible separator rows; visible indexes: \(visibleRows.map(\.index)), fold indexes: \(editor.textView.editingFolds.map { $0.range.lowerBound })")
+        let before = editor.textView.editingFolds
+        let surfaceID = ObjectIdentifier(editor.textView)
+        editor.textView.setSelectedRange(NSRange(location: 30, length: 0))
+        window.makeFirstResponder(editor.textView)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.textView.editingFolds, before,
+                       "Moving the caret and focusing editable code must not unfold context")
+        XCTAssertEqual(ObjectIdentifier(editor.textView), surfaceID)
+        let previousDisplay = tab.display?.id
+        tab.expandRun(try XCTUnwrap(before.first).separator)
         try await wait {
             host.layoutSubtreeIfNeeded()
-            return surface.subviews.compactMap { $0 as? DiffCodePaneView }
-                .contains { !$0.isHidden && $0.textView.isEditable }
+            return tab.display?.id != previousDisplay
         }
-        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
-            .first { $0.textView.isEditable })
-        XCTAssertEqual(editor.textView.text, modified)
+        XCTAssertEqual(ObjectIdentifier(editor.textView), surfaceID)
+        XCTAssertEqual(editor.textView.string, modified)
         XCTAssertTrue(tab.isEditing)
         XCTAssertFalse(tab.isDirty)
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
@@ -599,49 +710,58 @@ final class NativeDiffTabTests: XCTestCase {
         let surface = try XCTUnwrap(tab.nativeSurface)
         let compactPanes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
             .filter { !$0.isHidden }
-        XCTAssertEqual(compactPanes.filter { $0.textView.isEditable }.count, 0)
-        XCTAssertTrue(compactPanes.allSatisfy { $0.decorations.rows.contains { $0.collapsed != nil } },
-                      "Split browsing must fold the same context on both sides")
-        XCTAssertEqual(compactPanes[0].decorations.rows.count, compactPanes[1].decorations.rows.count)
-        // Entering via the visible new-file row reveals the retained editor;
-        // ordinary pane focus alone must not force the diff to expand.
-        let rightPreview = try XCTUnwrap(compactPanes.first {
-            $0.textView.accessibilityIdentifier() == "bailey.diff.readonly-new"
-        })
-        try await clickDiffSourceRow(rightPreview, in: window)
-        try await wait {
-            surface.subviews.compactMap { $0 as? DiffCodePaneView }
-                .filter { !$0.isHidden && $0.textView.isEditable }.count == 1
-        }
-        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
-            .filter { !$0.isHidden }
-        let baseline = try XCTUnwrap(panes.first { !$0.textView.isEditable })
-        let editor = try XCTUnwrap(panes.first { $0.textView.isEditable })
-        let editableRowCount = editor.decorations.rows.count
-            + editor.decorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count }
-        XCTAssertEqual(baseline.decorations.rows.count, editableRowCount,
-                       "Folded Review rows cannot be scrolled in lockstep with a full editable buffer")
+        XCTAssertEqual(compactPanes.filter { $0.textView.isEditable }.count, 1)
+        let baseline = try XCTUnwrap(compactPanes.first { !$0.textView.isEditable })
+        let editor = try XCTUnwrap(compactPanes.first { $0.textView.isEditable })
+        XCTAssertTrue(baseline.decorations.rows.contains { $0.collapsed != nil })
+        XCTAssertTrue(editor.decorations.rows.contains { $0.collapsed != nil })
+        XCTAssertFalse(editor.textView.editingFolds.isEmpty)
+        let originalFolds = editor.textView.editingFolds
+        XCTAssertLessThan(baseline.decorations.rows.count, editor.decorations.rows.count,
+                          "Only the editable source owns all physical lines")
+        XCTAssertEqual(editor.textView.string, modified)
+        let content = editor.textView.nativeContentManager
+        let offset = tab.editDecorations.editSnapshotOffsets[599]
+        let sourceRange = try XCTUnwrap(NSTextRange(NSRange(location: offset, length: 1), in: content))
+        let layout = editor.textView.nativeLayoutManager
+        layout.ensureLayout(for: sourceRange)
+        let changedFragment = try XCTUnwrap(layout.textLayoutFragment(for: sourceRange.location))
+        XCTAssertLessThan(changedFragment.layoutFragmentFrame.minY, 600,
+                          "Folded TextKit layout must remove the physical height of hidden lines")
         try await wait {
             host.layoutSubtreeIfNeeded()
-            tab.nativeSurface?.layoutSubtreeIfNeeded()
-            return editor.scrollOffset.y > 2_000
+            return editor.textView.window === window
         }
-        XCTAssertEqual(baseline.scrollOffset.y, editor.scrollOffset.y, accuracy: 2,
-                       "Initial change navigation must keep both split sides in the same viewport")
+        XCTAssertTrue(window.makeFirstResponder(editor.textView))
+        XCTAssertTrue(window.firstResponder === editor.textView,
+                      "Split focus must reach the mounted native worktree editor")
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(editor.textView.editingFolds.isEmpty,
+                       "Split editor focus must not unfold unchanged lines")
         let previousID = tab.editableBaseline?.id
-        editor.textView.insertText("new first line\n", replacementRange: NSRange(location: 0, length: 0))
+        let caret = (modified as NSString).range(of: "changed 600").location
+        editor.textView.insertText("new line\n", replacementRange: NSRange(location: caret, length: 0))
         try await wait {
             tab.editableBaseline?.id != previousID && tab.editDecorations.rows.count == 901
         }
         try await wait {
-            baseline.decorations.rows.count == editor.decorations.rows.count
-                + editor.decorations.ghostsByAnchor.values.reduce(0) { $0 + $1.lines.count }
+            host.layoutSubtreeIfNeeded()
+            return editor.textView.editingFolds != originalFolds
+                && baseline.decorations.rows.contains { $0.collapsed != nil }
         }
         XCTAssertTrue(tab.isDirty)
+        XCTAssertGreaterThan(editor.textView.editingFolds.last?.range.lowerBound ?? -1,
+                             originalFolds.last?.range.lowerBound ?? -1,
+                             "A newline before a later fold must shift the actual hidden source lines")
+        XCTAssertEqual(editor.textView.string,
+                       (modified as NSString).replacingCharacters(
+                           in: NSRange(location: caret, length: 0), with: "new line\n"))
         XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8),
                        "Typing into a diff cannot write the file before an explicit save")
         editor.textView.undoManager?.undo()
         try await wait { !tab.isDirty }
+        XCTAssertEqual(editor.textView.string, modified)
+        XCTAssertFalse(editor.textView.editingFolds.isEmpty)
     }
 
     func testEditableSplitUsesEmptyCaretRowForFirstRemovedFileLine() async throws {
@@ -723,6 +843,121 @@ final class NativeDiffTabTests: XCTestCase {
                                  "Editable diff deletion ghosts must be visibly red, dark=\(dark)")
             window.close()
         }
+    }
+
+    func testFoldedEditableDiffDrawsRemovalGhostBesideChangedSource() throws {
+        let before = (0..<500).map { "line \($0)\n" }.joined()
+        let after = before.replacingOccurrences(of: "line 250\n", with: "changed 250\n")
+        let core = DiffCore.compute(oldText: before, newText: after)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let folds = DiffEditFold.sourceFolds(
+            in: DiffComputation.build(core: core, expansions: [:]).unified,
+            lineCount: core.newLines.count
+        )
+        XCTAssertFalse(folds.isEmpty)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: .init(x: -930, y: -930, width: 680, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(after)
+        let offsets = core.newLines.map(\.utf16Range.location)
+        let removed = try XCTUnwrap(state.ghosts.first)
+        XCTAssertEqual(removed.anchorLine, 250)
+        let base = DiffDecorations.edit(
+            state: state, snapshotOffsets: offsets, lineCount: offsets.count,
+            ghostBlocks: [
+                .init(anchorLine: removed.anchorLine, firstOldLine: removed.firstOldLine,
+                      lines: [NSAttributedString(string: "line 250", attributes: [
+                        .font: font, .foregroundColor: NSColor.textColor,
+                      ])]),
+            ]
+        )
+        pane.setEditingFolds(folds, lineOffsets: offsets, baseDecorations: base, revision: 1)
+        pane.layoutSubtreeIfNeeded()
+        pane.scrollToRow(250)
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let expected = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedRow.usingColorSpace(.sRGB))
+        let count = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).filter { sample in
+            abs((sample.greenComponent - sample.redComponent)
+                - (expected.greenComponent - expected.redComponent)) < 0.03 &&
+            abs((sample.blueComponent - sample.redComponent)
+                - (expected.blueComponent - expected.redComponent)) < 0.03
+        }.count
+        XCTAssertGreaterThan(count, 8,
+                             "Collapsed context must not move real removed rows offscreen")
+        XCTAssertEqual(pane.textView.string, after)
+    }
+
+    func testLongDeletedBlockRemainsVisibleInsideFoldedEditorViewport() throws {
+        let prefix = (0..<400).map { "before \($0)\n" }.joined()
+        let removed = (0..<500).map { "deleted \($0)\n" }.joined()
+        let suffix = (0..<400).map { "after \($0)\n" }.joined()
+        let before = prefix + removed + suffix
+        let after = prefix + suffix
+        let core = DiffCore.compute(oldText: before, newText: after)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let folds = DiffEditFold.sourceFolds(
+            in: DiffComputation.build(core: core, expansions: [:]).unified,
+            lineCount: core.newLines.count
+        )
+        XCTAssertEqual(state.ghosts.first?.lines.count, 500)
+        XCTAssertGreaterThanOrEqual(folds.count, 2)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: .init(x: -930, y: -930, width: 680, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(after)
+        let starts = core.newLines.map(\.utf16Range.location)
+        pane.setEditingFolds(
+            folds, lineOffsets: starts,
+            baseDecorations: .edit(state: state, snapshotOffsets: starts,
+                                   lineCount: starts.count, ghostBlocks: [
+                .init(anchorLine: 400, firstOldLine: 401,
+                      lines: (0..<500).map { NSAttributedString(string: "deleted \($0)") }),
+            ]),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let red = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedRow.usingColorSpace(.sRGB))
+        for offset: CGFloat in [2_000, 6_000] {
+            pane.setVerticalScrollOffset(offset)
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+                .retagging(with: .sRGB))
+            pane.cacheDisplay(in: pane.bounds, to: bitmap)
+            let redPixels = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).filter { pixel in
+                abs((pixel.greenComponent - pixel.redComponent)
+                    - (red.greenComponent - red.redComponent)) < 0.03 &&
+                abs((pixel.blueComponent - pixel.redComponent)
+                    - (red.blueComponent - red.redComponent)) < 0.03
+            }.count
+            XCTAssertGreaterThan(redPixels, 8,
+                                 "Long deletion must paint inside folded viewport at y=\(offset)")
+        }
+        XCTAssertEqual(pane.textView.string, after)
     }
 
     func testLongDiffLineTruncationPreservesGhostSpacingAndTypography() throws {
@@ -1514,6 +1749,7 @@ final class NativeDiffTabTests: XCTestCase {
         let target = try XCTUnwrap(rows.first {
             $0.index < pane.decorations.rows.count
                 && pane.decorations.rows[$0.index].newLine != nil
+                && pane.decorations.rows[$0.index].collapsed == nil
         })
         let position = pane.textView.convert(
             NSPoint(x: 12, y: target.frame.midY), to: nil
@@ -2823,7 +3059,10 @@ final class NativeDiffTabTests: XCTestCase {
         let editor = try XCTUnwrap(findNativeTextView(in: window.contentView!, editable: true))
         try Data("after Git\n".utf8).write(to: file)
         diff.reload()
-        try await wait { !diff.isLoading && editor.text == "after Git\n" }
+        try await wait {
+            !diff.isLoading && diff.canPresentNativeContent && editor.text == "after Git\n"
+                && self.findNativeTextView(in: window.contentView!, editable: true) === editor
+        }
         XCTAssertTrue(findNativeTextView(in: window.contentView!, editable: true) === editor)
         editor.insertText("draft ", replacementRange: .init(location: 0, length: 0))
         try await wait { diff.isDirty }

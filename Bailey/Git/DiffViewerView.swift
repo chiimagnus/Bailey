@@ -125,7 +125,11 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var newContent = ""
     private(set) var display: DiffDisplay?
     private(set) var editDecorations = DiffDecorations.empty
+    private(set) var editFolds: [DiffEditFold] = []
+    private(set) var editFoldsReady = false
+    @ObservationIgnored private(set) var editPresentationRevision: UInt = 0
     private(set) var editableBaseline: DiffEditableBaseline?
+    private(set) var editableFoldedBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
     var hasChanges: Bool { !comparisonOld.utf8.elementsEqual(comparisonNew.utf8) }
@@ -144,7 +148,7 @@ final class DiffTab: nonisolated Identifiable {
         guard hasLoadedContent else { return false }
         if source.isPlainRevision || isDirty { return true }
         if isEditing && (editorActive || !hasChanges) { return true }
-        return display != nil
+        return display != nil && (!isEditing || editFoldsReady)
     }
     /// A non-invertible clean filter needs Git's canonical Review alongside the raw editor.
     var showsCanonicalComparison: Bool { isEditing && editComparisonOld != nil }
@@ -478,6 +482,7 @@ final class DiffTab: nonisolated Identifiable {
             self.newContent = result.new
             if changed {
                 self.runExpansions.removeAll()
+                self.editFoldsReady = false
                 self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
             }
             if changed || (self.hasChanges && self.display == nil) {
@@ -621,6 +626,7 @@ final class DiffTab: nonisolated Identifiable {
             expansion.fromEnd += DiffCollapse.expansionLineCount
         }
         runExpansions[fold.runIndex] = expansion
+        if isEditing { refreshEditDecorations(immediate: true) }
         // Reuse only captures belonging to the current content, not a previous read.
         displayGeneration &+= 1
         let generation = displayGeneration
@@ -650,6 +656,7 @@ final class DiffTab: nonisolated Identifiable {
         let before = editComparisonOld ?? comparisonOld
         let after = editedNewContent
         let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
+        let expansions = runExpansions
         let prepareSplit = isEditing && preferences.diffStyle == .split
             && editComparisonOld == nil
         let font = TerminalFont.current()
@@ -666,13 +673,14 @@ final class DiffTab: nonisolated Identifiable {
             guard !Task.isCancelled else { return }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
-            let (state, offsets, lineCount, split) = await Task.detached(priority: .userInitiated) {
+            let (state, offsets, lineCount, split, folded) = await Task.detached(priority: .userInitiated) {
                 let core = DiffCore.compute(oldText: before, newText: after)
                 let split = prepareSplit ? DiffComputation.editableSplit(core: core) : nil
+                let folded = DiffComputation.build(core: core, expansions: expansions)
                 return (
                     DiffComputation.editState(ops: core.ops,
                                               oldLines: core.oldLines, newLines: core.newLines),
-                    core.newLines.map(\.utf16Range.location), core.newLines.count, split
+                    core.newLines.map(\.utf16Range.location), core.newLines.count, split, folded
                 )
             }.value
             guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
@@ -707,6 +715,12 @@ final class DiffTab: nonisolated Identifiable {
                         split.left, oldRuns: oldRuns, newRuns: [], baseAttributes: base
                     )
                 )
+                self.editableFoldedBaseline = DiffEditableBaseline(
+                    document: folded.splitLeft,
+                    text: DiffSyntaxHighlighter.attributedDocument(
+                        folded.splitLeft, oldRuns: oldRuns, newRuns: [], baseAttributes: base
+                    )
+                )
             } else {
                 ghosts = state.ghosts.map { block in
                     DiffDecorations.GhostBlock(
@@ -719,7 +733,11 @@ final class DiffTab: nonisolated Identifiable {
                     )
                 }
                 self.editableBaseline = nil
+                self.editableFoldedBaseline = nil
             }
+            self.editFolds = DiffEditFold.sourceFolds(in: folded.unified, lineCount: lineCount)
+            self.editFoldsReady = true
+            self.editPresentationRevision &+= 1
             self.editDecorations = DiffDecorations.edit(
                 state: state, snapshotOffsets: offsets,
                 lineCount: lineCount, ghostBlocks: ghosts

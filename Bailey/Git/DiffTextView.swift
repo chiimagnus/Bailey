@@ -115,7 +115,7 @@ enum DiffCollapsedRunLabel {
 /// native colors, attributed ghost rows and decorations are built on MainActor.
 struct DiffDecorations {
     struct Row {
-        let kind: DiffRowKind
+        var kind: DiffRowKind
         let oldLine: Int?
         let newLine: Int?
         /// Word-level changed spans in *document* UTF-16 coordinates.
@@ -146,7 +146,7 @@ struct DiffDecorations {
         }
     }
 
-    let rows: [Row]
+    var rows: [Row]
     /// UTF-16 offset of each row's start; empty in edit mode, where the live
     /// buffer's offsets drift between recomputes and rows are addressed by
     /// paragraph counting instead.
@@ -268,8 +268,52 @@ struct DiffDecorations {
 
 /// The pane's text view expands collapsed-run separators on click instead
 /// of placing a caret in the separator row.
-final class DiffTextView: NativeCodeTextView {
+final class DiffTextView: NativeCodeTextView, NSTextContentStorageDelegate {
     private var nativeBreaksSnapshot: Bool?
+    private(set) var editingFolds: [DiffEditFold] = []
+    private var foldedLineOffsets: [Int] = []
+
+    /// Fold in the TextKit layout, never in the underlying NSTextStorage.
+    func setEditingFolds(_ folds: [DiffEditFold], lineOffsets: [Int]) {
+        let changed = editingFolds != folds || (!folds.isEmpty && foldedLineOffsets != lineOffsets)
+        guard changed else { return }
+        editingFolds = folds
+        foldedLineOffsets = lineOffsets
+        nativeContentManager.delegate = folds.isEmpty ? nil : self
+        nativeLayoutManager.invalidateLayout(for: nativeLayoutManager.documentRange)
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    private func sourceLine(at offset: Int) -> Int {
+        var low = 0
+        var high = foldedLineOffsets.count
+        while low < high {
+            let middle = (low + high) / 2
+            if foldedLineOffsets[middle] <= offset { low = middle + 1 }
+            else { high = middle }
+        }
+        return max(0, low - 1)
+    }
+
+    func textContentManager(_ manager: NSTextContentManager,
+                            shouldEnumerate element: NSTextElement,
+                            options: NSTextContentManager.EnumerationOptions) -> Bool {
+        guard !editingFolds.isEmpty, let range = element.elementRange else { return true }
+        let offset = manager.offset(from: manager.documentRange.location, to: range.location)
+        let source = sourceLine(at: offset)
+        var low = 0
+        var high = editingFolds.count
+        while low < high {
+            let middle = (low + high) / 2
+            if editingFolds[middle].range.lowerBound <= source { low = middle + 1 }
+            else { high = middle }
+        }
+        guard low > 0 else { return true }
+        let fold = editingFolds[low - 1].range
+        return !fold.contains(source)
+            || (source == fold.lowerBound && offset == foldedLineOffsets[source])
+    }
 
     var hasNativeNonLFSeparators: Bool {
         if let nativeBreaksSnapshot { return nativeBreaksSnapshot }
@@ -352,16 +396,19 @@ enum DiffRowGeometry {
     ) -> [DiffVisibleRow] {
         let layoutManager = textView.nativeLayoutManager
         let contentManager = textView.nativeContentManager
-        guard let viewportRange = layoutManager.textViewportLayoutController.viewportRange else {
-            return []
+        let viewport = layoutManager.textViewportLayoutController
+        if !textView.editingFolds.isEmpty || viewport.viewportRange == nil {
+            viewport.layoutViewport()
         }
+        guard let viewportRange = viewport.viewportRange else { return [] }
 
         let byOffsets = !decorations.lineStartOffsets.isEmpty
+        let foldedEditing = !textView.editingFolds.isEmpty
         let nativeBreaks = textView.hasNativeNonLFSeparators
         let hasNativeBreaks = !byOffsets && nativeBreaks
         var nextCountedIndex = 0
         var previousGitRow: Int?
-        if !byOffsets {
+        if !byOffsets && !foldedEditing {
             let preceding = contentManager.textElements(
                 for: NSTextRange(
                     location: layoutManager.documentRange.location,
@@ -386,14 +433,22 @@ enum DiffRowGeometry {
         layoutManager.enumerateTextLayoutFragments(in: viewportRange) { fragment in
             let fragmentFrame = fragment.layoutFragmentFrame
             let baseIndex: Int
-            if byOffsets {
+            if byOffsets || foldedEditing {
                 let offset = contentManager.offset(
                     from: layoutManager.documentRange.location,
                     to: fragment.rangeInElement.location
                 )
-                baseIndex = decorations.rowIndex(forUTF16Offset: offset) ?? 0
-                if previousGitRow == nil, baseIndex < decorations.lineStartOffsets.count,
-                   offset > decorations.lineStartOffsets[baseIndex] {
+                let offsets = byOffsets ? decorations.lineStartOffsets : decorations.editSnapshotOffsets
+                var low = 0
+                var high = offsets.count
+                while low < high {
+                    let middle = (low + high) / 2
+                    if offsets[middle] <= offset { low = middle + 1 }
+                    else { high = middle }
+                }
+                baseIndex = max(0, low - 1)
+                if previousGitRow == nil, baseIndex < offsets.count,
+                   offset > offsets[baseIndex] {
                     previousGitRow = baseIndex
                 }
             } else {
@@ -440,13 +495,15 @@ enum DiffRowGeometry {
                     previousGitRow = rowIndex
                 }
             }
-            if !hasNativeBreaks {
-                nextCountedIndex = baseIndex + max(1, lineOffset)
-            } else {
-                // Native CR paragraphs share a Git line until an LF is reached.
-                let paragraph = fragment.textElement as? NSTextParagraph
-                nextCountedIndex = baseIndex
-                    + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
+            if !foldedEditing {
+                if !hasNativeBreaks {
+                    nextCountedIndex = baseIndex + max(1, lineOffset)
+                } else {
+                    // Native CR paragraphs share a Git line until an LF is reached.
+                    let paragraph = fragment.textElement as? NSTextParagraph
+                    nextCountedIndex = baseIndex
+                        + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
+                }
             }
             return true
         }
@@ -476,6 +533,14 @@ private enum DiffGhostGeometry {
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
         let inset = textView.textContainerInset.height
+        func visualStartRow(_ ghost: DiffDecorations.PositionedGhost) -> Int {
+            let anchor = ghost.block.anchorLine
+            let hiddenBefore = textView.editingFolds.reduce(0) { count, fold in
+                let preceding = min(anchor, fold.range.upperBound) - fold.range.lowerBound
+                return count + max(0, preceding - 1)
+            }
+            return ghost.startRow - hiddenBefore
+        }
         // Both the gutter and underlay query this on every scroll frame.
         // Skip blocks ending before the viewport instead of walking the file.
         var low = 0
@@ -483,12 +548,12 @@ private enum DiffGhostGeometry {
         while low < high {
             let middle = (low + high) / 2
             let ghost = ghosts[middle]
-            let bottom = inset + CGFloat(ghost.startRow + ghost.block.lines.count) * rowHeight
+            let bottom = inset + CGFloat(visualStartRow(ghost) + ghost.block.lines.count) * rowHeight
             if bottom <= viewport.minY { low = middle + 1 } else { high = middle }
         }
         var result: [VisibleBlock] = []
         for ghost in ghosts[low...] {
-            let top = inset + CGFloat(ghost.startRow) * rowHeight
+            let top = inset + CGFloat(visualStartRow(ghost)) * rowHeight
             if top >= viewport.maxY { break }
             let bottom = top + CGFloat(ghost.block.lines.count) * rowHeight
             result.append(VisibleBlock(
@@ -1157,6 +1222,43 @@ private final class DiffClipView: NSClipView {
     }
 }
 
+/// Paints folded separators above TextKit's glyph rendering surface.
+/// Hidden paragraphs still belong to the editable document, so a backdrop
+/// behind NSTextView cannot conceal the first (separator) paragraph's text.
+private final class DiffFoldOverlayView: NSView {
+    weak var textView: DiffTextView?
+    weak var clipView: NSClipView?
+    var decorations: DiffDecorations = .empty {
+        didSet { needsDisplay = true }
+    }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let textView, let clipView, !textView.editingFolds.isEmpty else { return }
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let colors = DiffColorScheme.current(dark: dark)
+        let font = textView.font ?? TerminalFont.current()
+        for row in DiffRowGeometry.visibleRows(textView: textView, decorations: decorations) {
+            guard row.index < decorations.rows.count,
+                  let fold = decorations.rows[row.index].collapsed,
+                  !row.isContinuation else { continue }
+            let frame = CGRect(x: 0, y: row.frame.minY - clipView.bounds.minY,
+                               width: bounds.width, height: row.frame.height)
+            guard frame.intersects(dirtyRect) else { continue }
+            colors.collapsedBand.setFill()
+            frame.fill()
+            let label = NSAttributedString(
+                string: DiffCollapsedRunLabel.text(hiddenLines: fold.hiddenLines),
+                attributes: [.font: font, .foregroundColor: colors.annotationText]
+            )
+            let size = label.size()
+            label.draw(at: CGPoint(x: 12, y: frame.midY - size.height / 2))
+        }
+    }
+}
+
 /// One diff column: gutter + decoration underlay + transparent scroll/text
 /// stack. Configured once as review (immutable attributed document) or edit
 /// (live buffer with the editor's syntax plugin); the mode never changes for
@@ -1172,6 +1274,7 @@ final class DiffCodePaneView: NSView {
     let textView = DiffTextView()
     private let underlay = DiffDecorationUnderlayView()
     private let gutter = DiffGutterView()
+    private let foldOverlay = DiffFoldOverlayView()
     /// Re-entrancy guard for vertical scroll syncing between split panes.
     private var isSyncingScroll = false
 
@@ -1179,8 +1282,6 @@ final class DiffCodePaneView: NSView {
     /// Fired with the fold's metadata when the user activates a collapsed-run
     /// separator (row click, gutter click, or accessibility press).
     var onExpandCollapsedRun: ((DiffCollapsedRun) -> Void)?
-    /// A compact worktree diff can activate the retained editor on an actual source row.
-    var onBeginEditing: ((Int?) -> Void)?
     /// Set while a fold-expansion click is waiting for its rebuilt document,
     /// so the swap keeps the raw scroll offset instead of re-anchoring by
     /// line. Single-shot.
@@ -1193,6 +1294,7 @@ final class DiffCodePaneView: NSView {
         didSet {
             underlay.decorations = decorations
             gutter.decorations = decorations
+            foldOverlay.decorations = decorations
             let thickness = gutter.thickness
             if abs(thickness - gutterWidth) > 0.5 {
                 gutterWidth = thickness
@@ -1203,6 +1305,22 @@ final class DiffCodePaneView: NSView {
                 applyContentHeightOverride()
             }
         }
+    }
+
+    private var appliedFoldRevision: UInt?
+
+    func setEditingFolds(_ folds: [DiffEditFold], lineOffsets: [Int],
+                         baseDecorations: DiffDecorations, revision: UInt) {
+        guard appliedFoldRevision != revision else { return }
+        appliedFoldRevision = revision
+        textView.setEditingFolds(folds, lineOffsets: lineOffsets)
+        var decorated = baseDecorations
+        for fold in folds where fold.range.lowerBound < decorated.rows.count {
+            decorated.rows[fold.range.lowerBound].kind = .collapsed
+            decorated.rows[fold.range.lowerBound].collapsed = fold.separator
+        }
+        decorations = decorated
+        if !folds.isEmpty { setFixedRowCount(nil) }
     }
 
     /// Ghost spacing last applied, keyed by buffer paragraph index →
@@ -1325,13 +1443,13 @@ final class DiffCodePaneView: NSView {
 
         underlay.textView = textView
         underlay.clipView = scrollView.contentView
+        foldOverlay.textView = textView
+        foldOverlay.clipView = scrollView.contentView
         gutter.textView = textView
         gutter.clipView = scrollView.contentView
 
         textView.handleCollapsedClick = { [weak self] point in
-            guard let self else { return false }
-            return self.expandCollapsedRow(atDocumentY: point.y)
-                || self.beginEditing(atDocumentY: point.y)
+            self?.expandCollapsedRow(atDocumentY: point.y) ?? false
         }
         gutter.onExpandRun = { [weak self] fold in
             self?.activateFold(fold)
@@ -1340,6 +1458,7 @@ final class DiffCodePaneView: NSView {
         addSubview(underlay)
         addSubview(gutter)
         addSubview(scrollView)
+        addSubview(foldOverlay)
 
         // Repaint decorations after every viewport layout pass; scroll
         // movements are reported synchronously by DiffClipView above.
@@ -1349,6 +1468,7 @@ final class DiffCodePaneView: NSView {
     private func handleScrolled() {
         underlay.needsDisplay = true
         gutter.needsDisplay = true
+        foldOverlay.needsDisplay = true
         if !isSyncingScroll {
             onScroll?(scrollView.contentView.bounds.origin)
         }
@@ -1369,15 +1489,18 @@ final class DiffCodePaneView: NSView {
         scrollView.frame = contentFrame
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         underlay.frame = contentFrame
+        foldOverlay.frame = contentFrame
         // Row rects span the current width; a resize must repaint them.
         underlay.needsDisplay = true
         gutter.needsDisplay = true
+        foldOverlay.needsDisplay = true
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         underlay.needsDisplay = true
         gutter.needsDisplay = true
+        foldOverlay.needsDisplay = true
     }
 
     /// Follow a sibling pane without echoing scroll events back to it.
@@ -1476,21 +1599,6 @@ final class DiffCodePaneView: NSView {
         }) {
             setVerticalScrollOffset(max(0, documentY(forRow: index) - lineAnchor.viewportY))
         }
-    }
-
-    /// A compact source row maps to the editable new-file line, never to the
-    /// shortened review-document offset. Removed rows choose the next live line.
-    private func beginEditing(atDocumentY documentY: CGFloat) -> Bool {
-        guard let onBeginEditing,
-              let row = DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
-                .first(where: { documentY >= $0.frame.minY && documentY < $0.frame.maxY }),
-              row.index < decorations.rows.count else { return false }
-        let sourceRows = decorations.rows
-        let line = sourceRows[row.index].newLine
-            ?? sourceRows[row.index...].compactMap(\.newLine).first
-            ?? sourceRows[..<row.index].last(where: { $0.newLine != nil })?.newLine
-        onBeginEditing(line)
-        return true
     }
 
     /// Expands the collapsed run whose separator row contains `documentY`
