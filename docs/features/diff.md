@@ -116,17 +116,10 @@ Git 内容先通过原始 NUL 分隔的 index／tree metadata 匹配字面路径
 
 ## 验证
 
-`DiffEngineTests` 检查原文字节重建及 UTF-16 行内范围；
-`NativeDiffTabTests` 与 `NativeGitHistoryFileTests` 检查原生文本、不同历史来源、空文件、Git 读错误、
-重命名、二进制、超限、只读边界、刷新与重新挂载。覆盖统一／分栏、行内差异、编辑、撤销、保存、未跟踪、
-暂存、历史、字节与大小边界、两侧内容宽度不同、快速切换及在途读取。
-
-`WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile` 在独立 Bailey Dev 真实 GUI
-验证从 Git Changes 直接编辑、Undo／Redo、⌘S 与最终文件字节。
-`WorkspaceGitUITests.testGitCleanFilteredReviewAndRawEditRemainDistinct` 进一步验证
-Git 规范化差异和原始编辑器在同一界面并存，保存仍写入原始正文。
-AppKit 的 `NSSegmentedControl` 在 XCUI 辅助功能树中表现为 `RadioGroup`，测试按实际类型查询。
-宿主 Diff 像素测试将位图通道与主题色在 sRGB 空间比较，保持原阈值；
-只读折叠与工作区重载测试使用独立 UserDefaults，不能依赖旧的模式偏好。
-仍需在完整工作区中验证文件→Diff→文件的内容身份和焦点。接口返回或桥接成功不代表用户可用；
-性能测量须包含 TextKit 首屏、滚动和编辑，而不是 WebKit 指标。入口见 [testing.md](../testing.md)。
+`DiffEngineTests` 验证行／词差异及字节坐标；
+`NativeDiffTabTests` 与 `NativeGitHistoryFileTests` 使用真实临时 Git 仓库和原生 TextKit，
+覆盖 Git 规范化／过滤器、布局、保存、只读来源、失败与恢复。
+`WorkspaceGitUITests` 验证 Git Changes／Graph 打开、实际键盘输入、跨界面焦点及最终文件字节。
+更改虚拟删除行绘制后，除首屏外必须在深处滚动的多个删除块之间验证可见像素；
+只检查靠近正文锚点的一块会漏掉视口定位错误。
+测试入口、适用环境和完成标准归 [testing.md](../testing.md)。

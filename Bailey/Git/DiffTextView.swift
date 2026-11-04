@@ -474,12 +474,23 @@ private enum DiffGhostGeometry {
         ).maximumLineHeight
         guard rowHeight > 0 else { return [] }
         let viewport = clipView.bounds
+        let ghosts = decorations.positionedGhosts
+        let inset = textView.textContainerInset.height
+        // Both the gutter and underlay query this on every scroll frame.
+        // Skip blocks ending before the viewport instead of walking the file.
+        var low = 0
+        var high = ghosts.count
+        while low < high {
+            let middle = (low + high) / 2
+            let ghost = ghosts[middle]
+            let bottom = inset + CGFloat(ghost.startRow + ghost.block.lines.count) * rowHeight
+            if bottom <= viewport.minY { low = middle + 1 } else { high = middle }
+        }
         var result: [VisibleBlock] = []
-        for ghost in decorations.positionedGhosts {
-            let top = textView.textContainerInset.height + CGFloat(ghost.startRow) * rowHeight
-            let bottom = top + CGFloat(ghost.block.lines.count) * rowHeight
+        for ghost in ghosts[low...] {
+            let top = inset + CGFloat(ghost.startRow) * rowHeight
             if top >= viewport.maxY { break }
-            if bottom <= viewport.minY { continue }
+            let bottom = top + CGFloat(ghost.block.lines.count) * rowHeight
             result.append(VisibleBlock(
                 block: ghost.block,
                 bottomY: bottom - viewport.minY,

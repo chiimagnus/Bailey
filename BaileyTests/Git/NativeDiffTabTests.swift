@@ -302,12 +302,16 @@ final class NativeDiffTabTests: XCTestCase {
 
     func testLongLeadingDeletionRemainsVisibleAtTopOfEditableDiff() throws {
         let old = (0..<500).map { "removed line \($0)\n" }.joined() + "survivor\n"
+            + (0..<500).map { "trailing removed line \($0)\n" }.joined()
         let current = "survivor\n"
         let core = DiffCore.compute(oldText: old, newText: current)
         let state = DiffComputation.editState(
             ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
         )
         let ghostLines = (0..<500).map { NSAttributedString(string: "removed line \($0)") }
+        let trailingLines = (0..<500).map {
+            NSAttributedString(string: "trailing removed line \($0)")
+        }
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(
             contentRect: NSRect(x: -920, y: -920, width: 680, height: 300),
@@ -323,7 +327,10 @@ final class NativeDiffTabTests: XCTestCase {
         pane.setEditBufferText(current)
         pane.decorations = .edit(
             state: state, snapshotOffsets: [0], lineCount: 1,
-            ghostBlocks: [.init(anchorLine: 0, firstOldLine: 1, lines: ghostLines)]
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1, lines: ghostLines),
+                .init(anchorLine: 1, firstOldLine: 502, lines: trailingLines),
+            ]
         )
         pane.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
@@ -354,6 +361,20 @@ final class NativeDiffTabTests: XCTestCase {
                     - (expected.blueComponent - expected.redComponent)) < 0.03
         }.count
         XCTAssertGreaterThan(middle, 8, "Removed rows must stay visible while scrolling inside a ghost block")
+        pane.setVerticalScrollOffset(10_000)
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let trailing = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: trailing)
+        let lastBlock = sRGBColumn(trailing, x: trailing.pixelsWide - 50).filter { color in
+            abs((color.greenComponent - color.redComponent)
+                - (expected.greenComponent - expected.redComponent)) < 0.03
+                && abs((color.blueComponent - color.redComponent)
+                    - (expected.blueComponent - expected.redComponent)) < 0.03
+        }.count
+        XCTAssertGreaterThan(lastBlock, 8,
+                             "Deep scrolling must locate the next virtual deletion block")
     }
 
     func testEditableSplitAlignsFullWorktreeWithReadOnlyBaselineAcrossFoldedContext() async throws {
