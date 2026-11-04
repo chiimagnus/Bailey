@@ -97,7 +97,7 @@ final class SyntaxHighlightCoordinator {
         highlightsData: Data,
         injectionsData: Data?
     ) {
-        let string = textView.nativeContentManager.attributedString(in: nil)?.string ?? ""
+        let string = textView.textStorage?.string ?? ""
         let coordinates = TextCoordinateIndex(string)
         self.coordinates = coordinates
         tsClient = try! TreeSitterClient(
@@ -127,11 +127,12 @@ final class SyntaxHighlightCoordinator {
         highlighter = Neon.Highlighter(textInterface: textInterface)
 
         // Parse the whole document once up front.
+        let initialLength = string.utf16.count
         tsClient.willChangeContent(in: .zero)
         tsClient.didChangeContent(
             in: .zero,
-            delta: textView.nativeContentManager.length,
-            limit: textView.nativeContentManager.length,
+            delta: initialLength,
+            limit: initialLength,
             readHandler: Parser.readFunction(for: string),
             completionHandler: {}
         )
@@ -185,21 +186,32 @@ final class SyntaxHighlightCoordinator {
         language: SyntaxLanguage, highlightsData: Data, injectionsData: Data?, textContentManager: NSTextContentManager
     ) {
         Task { @MainActor [weak self, weak textContentManager] in
-            guard let query = await HighlightQueryCache.shared.query(for: language, data: highlightsData) else { return }
-            let injectionsQuery: SwiftTreeSitter.Query?
             if let injectionsData {
-                injectionsQuery = await HighlightQueryCache.shared.query(
-                    for: language, kind: .injections, data: injectionsData
-                )
+                // Start both immutable query compilations before awaiting
+                // either one. Each task remains MainActor-isolated while the
+                // cache compiles on its own worker; no non-Sendable grammar
+                // crosses an additional concurrency boundary.
+                let root = Task { @MainActor in
+                    await HighlightQueryCache.shared.query(for: language, data: highlightsData)
+                }
+                let embedded = Task { @MainActor in
+                    await HighlightQueryCache.shared.query(
+                        for: language, kind: .injections, data: injectionsData
+                    )
+                }
+                guard let query = await root.value, let self, let textContentManager else { return }
+                if let injectionsQuery = await embedded.value {
+                    self.setInjectionTokenProvider(
+                        highlightsQuery: query, injectionsQuery: injectionsQuery,
+                        textContentManager: textContentManager
+                    )
+                } else {
+                    self.setTokenProvider(query: query, textContentManager: textContentManager)
+                }
             } else {
-                injectionsQuery = nil
-            }
-            guard let self, let textContentManager else { return }
-            if let injectionsQuery {
-                self.setInjectionTokenProvider(
-                    highlightsQuery: query, injectionsQuery: injectionsQuery, textContentManager: textContentManager
-                )
-            } else {
+                guard let query = await HighlightQueryCache.shared.query(
+                    for: language, data: highlightsData
+                ), let self, let textContentManager else { return }
                 self.setTokenProvider(query: query, textContentManager: textContentManager)
             }
         }
@@ -355,8 +367,7 @@ final class SyntaxHighlightCoordinator {
         tsClient.willChangeContent(in: range)
     }
 
-    func didChangeContent(_ textContentManager: NSTextContentManager, in range: NSRange, replacementString: String) {
-        guard let string = textContentManager.attributedString(in: nil)?.string else { return }
+    func didChangeContent(_ string: String, in range: NSRange, replacementString: String) {
         coordinates.replace(in: range, with: replacementString)
         let delta = replacementString.utf16.count - range.length
         highlighter?.didChangeContent(in: range, delta: delta)

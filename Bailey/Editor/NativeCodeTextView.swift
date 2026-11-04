@@ -629,7 +629,9 @@ class NativeCodeTextView: NSTextView {
         } else {
             resetDocumentIndex(storage.string)
         }
-        syntaxCoordinator?.didChangeContent(nativeContentManager, in: previousRange,
+        // The parser needs immutable bytes, not a reconstructed attributed
+        // document on every edit. Storage already owns the current string.
+        syntaxCoordinator?.didChangeContent(storage.string, in: previousRange,
                                            replacementString: replacement)
         updateGutter()
         if !isWrappingLines, let width = enclosingScrollView?.contentView.bounds.width {
