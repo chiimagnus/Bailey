@@ -199,8 +199,10 @@ final class SyntaxHighlightCoordinator {
                         for: language, kind: .injections, data: injectionsData
                     )
                 }
-                guard let query = await root.value, let self, let textContentManager else { return }
-                if let injectionsQuery = await embedded.value {
+                let rootQuery = await root.value
+                let injectionsQuery = await embedded.value
+                guard let query = rootQuery, let self, let textContentManager else { return }
+                if let injectionsQuery {
                     self.setInjectionTokenProvider(
                         highlightsQuery: query, injectionsQuery: injectionsQuery,
                         textContentManager: textContentManager
