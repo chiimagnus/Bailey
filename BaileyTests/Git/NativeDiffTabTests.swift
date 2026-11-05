@@ -637,6 +637,30 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, source)
     }
 
+    func testCancelledDiffTaskStopsItsBackgroundChild() async {
+        let started = AsyncStream<Void>.makeStream()
+        let gate = AsyncStream<Void>.makeStream()
+        defer {
+            started.continuation.finish()
+            gate.continuation.finish()
+        }
+        let parent = Task { () -> Bool? in
+            await DiffTab.runBackgroundDiffWork {
+                started.continuation.yield()
+                var waiting = gate.stream.makeAsyncIterator()
+                _ = await waiting.next()
+                return Task.isCancelled
+            }
+        }
+        var ready = started.stream.makeAsyncIterator()
+        _ = await ready.next()
+        parent.cancel()
+        gate.continuation.yield()
+        let value = await parent.value
+        XCTAssertNil(value,
+                     "Cancelling the tab task must also cancel its running background projection")
+    }
+
     func testClosingDiffDuringSyntaxCaptureReleasesItsOwner() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }

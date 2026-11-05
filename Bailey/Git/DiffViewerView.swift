@@ -622,9 +622,11 @@ final class DiffTab: nonisolated Identifiable {
         displayCoreTask = coreTask
         displayTask = Task { [weak self] in
             let core = await coreTask.value
-            let computation = await Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return }
+            let computed: DiffComputation? = await Self.runBackgroundDiffWork {
                 DiffComputation.build(core: core, revealedLines: revealedLines)
-            }.value
+            }
+            guard let computation = computed else { return }
             do {
                 guard let self, !Task.isCancelled,
                       self.displayGeneration == generation else { return }
@@ -667,6 +669,21 @@ final class DiffTab: nonisolated Identifiable {
             font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
             textColor: Theme.terminal(dark: dark).foregroundNSColor
         )
+    }
+
+    /// Structured child work inherits the owner task's cancellation instead
+    /// of continuing as an unrelated detached diff after its tab has moved on.
+    nonisolated static func runBackgroundDiffWork<Result: Sendable>(
+        _ work: @escaping @Sendable () async -> Result?
+    ) async -> Result? {
+        await withTaskGroup(of: Result?.self) { group in
+            group.addTask(priority: .userInitiated) {
+                guard !Task.isCancelled else { return nil }
+                let result = await work()
+                return Task.isCancelled ? nil : result
+            }
+            return await group.next() ?? nil
+        }
     }
 
     nonisolated static func captureVisibleSyntax(
@@ -726,9 +743,10 @@ final class DiffTab: nonisolated Identifiable {
         let highlightModified = !isEditing || showsCanonicalComparison
         displayTask?.cancel()
         displayTask = Task { [weak self] in
-            let computation = await Task.detached(priority: .userInitiated) {
+            let computed: DiffComputation? = await Self.runBackgroundDiffWork {
                 DiffComputation.build(core: core, revealedLines: revealedLines)
-            }.value
+            }
+            guard let computation = computed else { return }
             do {
                 guard let self, !Task.isCancelled,
                       self.displayGeneration == generation else { return }
@@ -778,23 +796,27 @@ final class DiffTab: nonisolated Identifiable {
             guard !Task.isCancelled else { return }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
-            let (state, offsets, lineCount, padding, folded) = await Task.detached(priority: .userInitiated) {
-                let core: DiffCore
-                if let cachedCore {
-                    core = cachedCore
-                } else if let inFlightCore {
-                    core = await inFlightCore.value
-                } else {
-                    core = DiffCore.compute(oldText: before, newText: after)
+            let prepared: (DiffEditState, [Int], Int, [Int: Int]?, DiffComputation)? =
+                await Self.runBackgroundDiffWork {
+                    let core: DiffCore
+                    if let cachedCore {
+                        core = cachedCore
+                    } else if let inFlightCore {
+                        core = await inFlightCore.value
+                    } else {
+                        core = DiffCore.compute(oldText: before, newText: after)
+                    }
+                    guard !Task.isCancelled else { return nil }
+                    let padding = prepareSplit ? DiffComputation.editableSplitPadding(core: core) : nil
+                    guard !Task.isCancelled else { return nil }
+                    let folded = DiffComputation.build(core: core, revealedLines: revealedLines)
+                    return (
+                        folded.editState,
+                        core.newLines.map(\.utf16Range.location), core.newLines.count, padding, folded
+                    )
                 }
-                let padding = prepareSplit ? DiffComputation.editableSplitPadding(core: core) : nil
-                let folded = DiffComputation.build(core: core, revealedLines: revealedLines)
-                return (
-                    folded.editState,
-                    core.newLines.map(\.utf16Range.location), core.newLines.count, padding, folded
-                )
-            }.value
-            guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
+            guard let (state, offsets, lineCount, padding, folded) = prepared,
+                  let self, !Task.isCancelled, self.editGeneration == generation else { return }
             let base: [NSAttributedString.Key: Any] = [
                 .font: font, .foregroundColor: color, .paragraphStyle: style,
             ]
