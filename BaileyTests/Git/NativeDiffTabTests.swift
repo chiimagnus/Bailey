@@ -780,6 +780,75 @@ final class NativeDiffTabTests: XCTestCase {
         print("AUDIT_DIFF_PHASE lines=24000 samples=10 coreMedian=\(coreTimes[5]) projectionMedian=\(projectionTimes[5]) syntaxMedian=\(syntaxTimes[5]) coreWorst=\(coreTimes[9]) projectionWorst=\(projectionTimes[9]) syntaxWorst=\(syntaxTimes[9])")
     }
 
+    func testVerifiedGitHunksMatchLoadedWorktreeForLineMutationMatrix() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "worktree hunk matrix.txt"
+        let file = root.appendingPathComponent(name)
+        let original = "alpha\nbeta\nsame\nsame\nsame\nlast\n"
+        try Data(original.utf8).write(to: file)
+        for arguments in [["add", "--", name], ["commit", "-qm", "baseline"]] {
+            let result = GitCommandExecution.run(arguments, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let previous = GitCommandExecution.run(["rev-parse", "HEAD:" + name], in: root.path)
+        XCTAssertEqual(previous.status, 0)
+        let oldOID = previous.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let variants: [(label: String, value: String)] = [
+            ("prepend", "new\n" + original),
+            ("append", original + "new\n"),
+            ("delete first", "beta\nsame\nsame\nsame\nlast\n"),
+            ("delete all", ""),
+            ("change repeated", "alpha\nbeta\nsame\nchanged\nsame\nlast\n"),
+            ("two distant edits", "new\nalpha\nbeta\nsame\nsame\nsame\nLAST\n"),
+            ("no final LF", "alpha\nbeta\nsame\nsame\nsame\nlast"),
+            ("unicode and mixed newlines", "alpha\r\n👩‍🚀\nbeta\r\nsame\nsame\nlast\r\n"),
+            ("replace entire", "完全不同\n"),
+        ]
+        let preferences = try isolatedPreferences()
+        func rowSignatures(_ rows: [DiffRow]) -> [String] {
+            rows.map { "\($0.kind) \($0.oldLine ?? 0) \($0.newLine ?? 0)" }
+        }
+        for variant in variants {
+            try Data(variant.value.utf8).write(to: file)
+            let oid = GitCommandExecution.run(
+                ["hash-object", "--path=" + name, name], in: root.path
+            )
+            XCTAssertEqual(oid.status, 0, variant.label)
+            let patch = GitCommandExecution.run(
+                ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+                 "--no-color", "--no-renames", "--full-index", "--unified=0",
+                 "--inter-hunk-context=0", "HEAD", "--", name], in: root.path
+            )
+            XCTAssertEqual(patch.status, 0, "\(variant.label): \(patch.stderr)")
+            let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
+                old: original, worktree: variant.value, patch: patch.stdout,
+                oldOID: oldOID,
+                newOID: oid.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            ), variant.label)
+            let expected = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+                oldText: comparison.old, newText: comparison.new,
+                operations: try XCTUnwrap(comparison.operations)
+            ), variant.label)
+            let tab = DiffTab(repoRoot: root.path, path: name, source: .worktree,
+                              untracked: false, origPath: nil,
+                              backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                              preferences: preferences)
+            try await wait { !tab.isLoading && tab.display != nil }
+            XCTAssertNil(tab.error, variant.label)
+            XCTAssertEqual(tab.newContent, variant.value, variant.label)
+            let actual = try XCTUnwrap(tab.display, variant.label).computation
+            let direct = DiffComputation.build(core: expected, revealedLines: [])
+            XCTAssertEqual(rowSignatures(actual.unified.rows),
+                           rowSignatures(direct.unified.rows), variant.label)
+            XCTAssertEqual(rowSignatures(actual.splitLeft.rows),
+                           rowSignatures(direct.splitLeft.rows), variant.label)
+            XCTAssertEqual(rowSignatures(actual.splitRight.rows),
+                           rowSignatures(direct.splitRight.rows), variant.label)
+            XCTAssertEqual(try Data(contentsOf: file), Data(variant.value.utf8), variant.label)
+        }
+    }
+
     func testLocalGitStagedAndUnstagedDiffReadyLatencyMatrix() async throws {
         for lineCount in [1_000, 24_000] {
             let root = try repository()

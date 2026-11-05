@@ -468,6 +468,7 @@ final class DiffTab: nonisolated Identifiable {
             var baseline = git.old
             var reviewNew = new
             var editBaseline: String?
+            var verifiedCore: DiffCore?
             var snapshotOutdated = false
             if failure == nil, let oldOID = git.oldOID, !git.unmerged {
                 let projected = await Self.gitComparisonBaseline(
@@ -480,13 +481,15 @@ final class DiffTab: nonisolated Identifiable {
                     baseline = content.old
                     reviewNew = content.new
                     editBaseline = content.editBaseline
+                    verifiedCore = projected.core
                 }
                 if let error = projected.error { failure = error }
                 snapshotOutdated = projected.outdated
             }
             let result = (
                 old: git.old, baseline: baseline, reviewNew: reviewNew,
-                editBaseline: editBaseline, new: new, failure: failure,
+                editBaseline: editBaseline, verifiedCore: verifiedCore,
+                new: new, failure: failure,
                 snapshotOutdated: snapshotOutdated,
                 unmerged: git.unmerged, editable: editable,
                 resolvedPath: source.isLive ? git.worktreePath : nil
@@ -544,7 +547,7 @@ final class DiffTab: nonisolated Identifiable {
                 self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
             }
             if changed || (self.hasChanges && self.display == nil) {
-                self.recomputeDisplay()
+                self.recomputeDisplay(core: result.verifiedCore)
             }
             if !self.editedNewContent.utf8.elementsEqual(result.new.utf8) {
                 self.editBufferRevision &+= 1
@@ -595,7 +598,7 @@ final class DiffTab: nonisolated Identifiable {
 
     /// Generate review rows and syntax tokens off the main actor. Superseded
     /// results never overwrite a newer local/remote target or edit.
-    func recomputeDisplay() {
+    func recomputeDisplay(core verifiedCore: DiffCore? = nil) {
         displayGeneration &+= 1
         let generation = displayGeneration
         displayInputs = nil
@@ -617,8 +620,9 @@ final class DiffTab: nonisolated Identifiable {
         // The edit decorations and review projection use the same initial
         // old/new snapshot. Share the expensive line diff instead of running
         // Myers twice while the initial worktree pane waits to appear.
-        let coreTask = Task.detached(priority: .userInitiated) {
-            DiffCore.computeIfActive(
+        let coreTask = Task.detached(priority: .userInitiated) { () -> DiffCore? in
+            guard !Task.isCancelled else { return nil }
+            return verifiedCore ?? DiffCore.computeIfActive(
                 oldText: before, newText: after, cancellation: { Task.isCancelled }
             )
         }
@@ -1150,7 +1154,8 @@ final class DiffTab: nonisolated Identifiable {
         source: Source, oldPath: String, path: String, worktreePath: String,
         oldFromIndex: Bool, root: String, oldOID: String, old: String,
         worktree: String, backend: WorkspaceBackend
-    ) async -> (content: GitWorktreeComparison.Content?, error: String?, outdated: Bool) {
+    ) async -> (content: GitWorktreeComparison.Content?, core: DiffCore?,
+                error: String?, outdated: Bool) {
         let comparison: [String]
         switch source {
         case .worktree where oldPath == path:
@@ -1158,7 +1163,7 @@ final class DiffTab: nonisolated Identifiable {
         case .revisionWorktree(let revision) where worktreePath == path:
             comparison = [revision]
         default:
-            return (.init(old: old, new: worktree, editBaseline: nil), nil, false)
+            return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
         }
         let failure = String(localized: "Unable to read Git content", table: "Git")
         let cleaned: WorkspaceRunResult
@@ -1169,11 +1174,11 @@ final class DiffTab: nonisolated Identifiable {
                 cwd: root, env: nil, stdin: Data(worktree.utf8), timeout: 60
             )
         } catch {
-            return (nil, error.localizedDescription, false)
+            return (nil, nil, error.localizedDescription, false)
         }
         guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
             let detail = String(decoding: cleaned.stderr, as: UTF8.self)
-            return (nil, detail.isEmpty ? failure : detail, false)
+            return (nil, nil, detail.isEmpty ? failure : detail, false)
         }
         let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1185,13 +1190,19 @@ final class DiffTab: nonisolated Identifiable {
         )
         guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
               let text = String(data: patch.stdout, encoding: .utf8) else {
-            return (nil, patch.stderr.isEmpty ? failure : patch.stderr, false)
+            return (nil, nil, patch.stderr.isEmpty ? failure : patch.stderr, false)
         }
         if let content = GitWorktreeComparison.resolve(
             old: old, worktree: worktree, patch: text,
             oldOID: oldOID, newOID: newOID
         ) {
-            return (content, nil, false)
+            let core: DiffCore? = await Self.runBackgroundDiffWork {
+                guard let ops = content.operations else { return nil }
+                return DiffCore.fromVerifiedOperations(
+                    oldText: content.old, newText: content.new, operations: ops
+                )
+            }
+            return (content, core, nil, false)
         }
         // Git diff reads a live file. A different index OID or file content
         // means the patch does not describe the snapshot we already loaded.
@@ -1205,7 +1216,7 @@ final class DiffTab: nonisolated Identifiable {
         let gitMoved = patchIDs?.count == 2
             && (patchIDs?[0] != oldOID || patchIDs?[1] != newOID)
         let outdated = worktreeMoved || gitMoved
-        return (nil, outdated ? nil : (patch.stderr.isEmpty ? failure : patch.stderr), outdated)
+        return (nil, nil, outdated ? nil : (patch.stderr.isEmpty ? failure : patch.stderr), outdated)
     }
 
     private nonisolated static func readWorktreeFile(

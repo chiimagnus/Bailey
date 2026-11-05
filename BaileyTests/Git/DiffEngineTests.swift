@@ -3,6 +3,20 @@ import XCTest
 @testable import Bailey
 
 final class DiffEngineTests: XCTestCase {
+    private func assertVerifiedHunksAgreeWithOriginalDiff(
+        _ content: GitWorktreeComparison.Content,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let ops = try XCTUnwrap(content.operations, file: file, line: line)
+        let reused = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: content.old, newText: content.new, operations: ops
+        ), file: file, line: line)
+        let original = DiffCore.compute(oldText: content.old, newText: content.new)
+        XCTAssertEqual(reused.ops, original.ops, file: file, line: line)
+        XCTAssertEqual(reused.oldMissingNewline, original.oldMissingNewline, file: file, line: line)
+        XCTAssertEqual(reused.newMissingNewline, original.newMissingNewline, file: file, line: line)
+    }
+
     func testBaselineRevelationsSurviveNewEditsAndSplitUnchangedRunIntoTwoFolds() {
         let original = (0..<1_200).map { "line \($0)\n" }.joined()
         let modified = original.replacingOccurrences(of: "line 150\n", with: "changed 150\n")
@@ -290,6 +304,65 @@ final class DiffEngineTests: XCTestCase {
         check(large, "first\n" + large + "last\n", caseID: 501)
     }
 
+    func testLargeUTF8GitLineSplitterRetainsScalarAndUTF16Ranges() {
+        let source = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
+        var samples: [Double] = []
+        for _ in 0..<9 {
+            let start = CFAbsoluteTimeGetCurrent()
+            let lines = DiffLineSplitter.lines(of: source)
+            samples.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertEqual(lines.lines.count, 24_000)
+            XCTAssertTrue(lines.hasTrailingNewline)
+        }
+        samples.sort()
+        print("AUDIT_GIT_LINE_SPLIT lines=24000 medianMs=\(samples[4]) worstMs=\(samples[8])")
+        let special = "甲👩‍🚀\r\n你\u{2028}好\n孤\r独\n尾行"
+        let chunks = DiffLineSplitter.lines(of: special)
+        XCTAssertFalse(chunks.hasTrailingNewline)
+        XCTAssertEqual(chunks.lines.map { String($0.text) },
+                       ["甲👩‍🚀\r", "你\u{2028}好", "孤\r独", "尾行"])
+        let nsSpecial = special as NSString
+        for line in chunks.lines {
+            XCTAssertEqual(nsSpecial.substring(with: line.utf16Range), String(line.text))
+        }
+    }
+
+    func testVerifiedGitHunksSupplyCompleteReusableDiffOperations() throws {
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let old = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
+        var rows = (0..<24_000).map { "let value\($0) = \($0)\n" }
+        rows[12_000] = "let value12000 = -1\n"
+        rows[19_000] = "let value19000 = -2\n"
+        let modified = rows.joined()
+        let patch = """
+        diff --git a/large.swift b/large.swift
+        index \(oldOID)..\(newOID) 100644
+        --- a/large.swift
+        +++ b/large.swift
+        @@ -12001 +12001 @@
+        -let value12000 = 12000
+        +let value12000 = -1
+        @@ -19001 +19001 @@
+        -let value19000 = 19000
+        +let value19000 = -2
+        """
+        let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: modified, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        let reused = try XCTUnwrap(comparison.operations,
+                                   "Verified Git hunks should provide complete line operations")
+        let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: comparison.old, newText: comparison.new, operations: reused
+        ))
+        XCTAssertEqual(core.ops, DiffCore.compute(oldText: comparison.old,
+                                                   newText: comparison.new).ops)
+        XCTAssertEqual(core.newLines.count, 24_000)
+        XCTAssertEqual(DiffComputation.build(core: core, revealedLines: []).unified.rows
+            .filter { $0.kind == .added }.count, 2)
+    }
+
     func testGitWorktreeProjectionKeepsOneBaselineAcrossReviewAndEditing() throws {
         let old = "alpha\nold\nlast\n"
         let edited = "alpha\r\nnew\r\nlast\r\n"
@@ -309,10 +382,12 @@ final class DiffEngineTests: XCTestCase {
         -old
         +new
         """
-        let baseline = try XCTUnwrap(GitWorktreeComparison.resolve(
+        let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
             old: old, worktree: edited, patch: patch,
             oldOID: oldOID, newOID: newOID
-        )).old
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(comparison)
+        let baseline = comparison.old
         XCTAssertEqual(baseline, "alpha\r\nold\nlast\r\n")
         let expected: [DiffLineOp] = [
             .equal(oldStart: 0, newStart: 0, count: 1),
@@ -349,10 +424,12 @@ final class DiffEngineTests: XCTestCase {
         +first
         +second
         """
-        let baseline = try XCTUnwrap(GitWorktreeComparison.resolve(
+        let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
             old: old, worktree: checkout, patch: patch,
             oldOID: oldOID, newOID: newOID
-        )).old
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(comparison)
+        let baseline = comparison.old
         XCTAssertEqual(baseline, old, "-text does not normalize CRLF")
         let ops = DiffCore.compute(oldText: baseline, newText: checkout).ops
         XCTAssertEqual(ops.filter { if case .equal = $0 { false } else { true } }.count, 2)
@@ -381,6 +458,7 @@ final class DiffEngineTests: XCTestCase {
             old: old, worktree: old, patch: noninvertible,
             oldOID: oldOID, newOID: newOID
         ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(canonical)
         XCTAssertEqual(canonical.old, old)
         XCTAssertEqual(canonical.new, "cleaned first\nsecond\n")
         XCTAssertEqual(canonical.editBaseline, old,
@@ -410,6 +488,7 @@ final class DiffEngineTests: XCTestCase {
             old: old, worktree: raw, patch: patch,
             oldOID: oldOID, newOID: newOID
         ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(result)
         XCTAssertEqual(result.old, old)
         XCTAssertEqual(result.new, "甲\nmiddle\n乙")
         XCTAssertEqual(result.editBaseline, raw)
@@ -432,6 +511,7 @@ final class DiffEngineTests: XCTestCase {
             old: "gone\n", worktree: "", patch: patch,
             oldOID: oldOID, newOID: String(repeating: "b", count: 40)
         ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(content)
         XCTAssertEqual(content.old, "gone\n")
         XCTAssertEqual(content.new, "", "Deleting the last line must not invent a trailing blank row")
         XCTAssertEqual(DiffCore.compute(oldText: content.old, newText: content.new)

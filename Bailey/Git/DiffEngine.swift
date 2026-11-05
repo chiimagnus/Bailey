@@ -68,6 +68,8 @@ nonisolated enum GitWorktreeComparison {
         /// When a clean filter changes line structure, live editing compares
         /// against the raw buffer captured at load rather than Git's blob.
         let editBaseline: String?
+        /// Verified Git hunk coordinates, reusable for the first display snapshot.
+        var operations: [DiffLineOp]? = nil
     }
 
     static func resolve(
@@ -93,6 +95,7 @@ nonisolated enum GitWorktreeComparison {
         var canonical: [String] = []
         var lastChangedOldEnd = 0
         var newTrailing = oldTrailing
+        var operations = DiffEngine.OpsBuilder()
         var lastKind: Character?
 
         func coordinate(_ token: Substring, prefix: Character) -> (start: Int, count: Int)? {
@@ -109,6 +112,8 @@ nonisolated enum GitWorktreeComparison {
             guard oldEnd >= oldCursor, oldEnd <= oldLines.count,
                   newEnd >= newCursor,
                   oldEnd - oldCursor == newEnd - newCursor else { return false }
+            operations.equal(oldStart: oldCursor, newStart: newCursor,
+                             count: oldEnd - oldCursor)
             for offset in 0..<(oldEnd - oldCursor) {
                 canonical.append(String(oldLines[oldCursor + offset].text))
                 if newCursor + offset < rawLines.count {
@@ -153,10 +158,12 @@ nonisolated enum GitWorktreeComparison {
                 case "-":
                     guard oldRemaining > 0, oldCursor < oldLines.count,
                           oldLines[oldCursor].text == content else { return nil }
+                    operations.delete(oldStart: oldCursor, count: 1)
                     oldCursor += 1
                     oldRemaining -= 1
                 case "+":
                     guard newRemaining > 0 else { return nil }
+                    operations.insert(newStart: newCursor, count: 1)
                     canonical.append(content)
                     newCursor += 1
                     newRemaining -= 1
@@ -164,6 +171,7 @@ nonisolated enum GitWorktreeComparison {
                     guard oldRemaining > 0, newRemaining > 0,
                           oldCursor < oldLines.count,
                           oldLines[oldCursor].text == content else { return nil }
+                    operations.equal(oldStart: oldCursor, newStart: newCursor, count: 1)
                     canonical.append(content)
                     oldCursor += 1
                     newCursor += 1
@@ -200,11 +208,13 @@ nonisolated enum GitWorktreeComparison {
                 raw.text == cleaned.text || raw.text == String(cleaned.text) + "\r"
             }
         if rawMatchesGit && !projectedOld.utf8.elementsEqual(worktree.utf8) {
-            return Content(old: projectedOld, new: worktree, editBaseline: nil)
+            return Content(old: projectedOld, new: worktree, editBaseline: nil,
+                           operations: operations.finish())
         }
         // Clean filters are not generally invertible (they can erase lines).
         // Render the two canonical sides Git compared; edit the raw file.
-        return Content(old: old, new: canonicalNew, editBaseline: worktree)
+        return Content(old: old, new: canonicalNew, editBaseline: worktree,
+                       operations: operations.finish())
     }
 }
 
@@ -307,7 +317,7 @@ nonisolated enum DiffEngine {
 
     /// Accumulates ops while merging adjacent runs of the same kind, so the
     /// recursive splits can emit freely.
-    private struct OpsBuilder {
+    fileprivate struct OpsBuilder {
         private var ops: [DiffLineOp] = []
 
         mutating func equal(oldStart: Int, newStart: Int, count: Int) {
@@ -1105,6 +1115,39 @@ nonisolated struct DiffCore {
             oldTrailing: oldTrailing, newTrailing: newTrailing,
             ops: DiffEngine.lineOps(old: oldLines, new: newLines)
         )
+    }
+
+    static func fromVerifiedOperations(
+        oldText: String, newText: String, operations: [DiffLineOp]
+    ) -> DiffCore? {
+        let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: oldText)
+        let (newLines, newTrailing) = DiffLineSplitter.lines(of: newText)
+        var oldCursor = 0
+        var newCursor = 0
+        for op in operations {
+            switch op {
+            case .equal(let old, let new, let count):
+                guard old == oldCursor, new == newCursor,
+                      count > 0, old + count <= oldLines.count,
+                      new + count <= newLines.count else { return nil }
+                // The Git patch verifier already constructed matching unchanged
+                // source rows; validating their indices here is sufficient.
+                oldCursor += count
+                newCursor += count
+            case .delete(let old, let count):
+                guard old == oldCursor, count > 0,
+                      old + count <= oldLines.count else { return nil }
+                oldCursor += count
+            case .insert(let new, let count):
+                guard new == newCursor, count > 0,
+                      new + count <= newLines.count else { return nil }
+                newCursor += count
+            }
+        }
+        guard oldCursor == oldLines.count, newCursor == newLines.count else { return nil }
+        return assemble(oldLines: oldLines, newLines: newLines,
+                        oldTrailing: oldTrailing, newTrailing: newTrailing,
+                        ops: operations)
     }
 
     static func computeIfActive(
