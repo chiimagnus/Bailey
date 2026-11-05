@@ -79,6 +79,51 @@ final class GitExecutionTests: XCTestCase {
         }
     }
 
+    func testInterleavedStagedMetadataCanDescribeNoCoherentGitSnapshot() throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let name = "staged-snapshot.txt"
+        let path = directory.appendingPathComponent(name)
+        try Data("before\n".utf8).write(to: path)
+        func git(_ arguments: [String]) -> (status: Int32, stdout: String, stderr: String) {
+            GitCommandExecution.run(arguments, in: directory.path)
+        }
+        XCTAssertEqual(git(["add", "--", name]).status, 0)
+        XCTAssertEqual(git(["commit", "-qm", "before"]).status, 0)
+        let beforeHead = git(["rev-parse", "HEAD"]).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try Data("after\n".utf8).write(to: path)
+        XCTAssertEqual(git(["add", "--", name]).status, 0)
+        XCTAssertEqual(git(["commit", "-qm", "after"]).status, 0)
+        let afterHead = git(["rev-parse", "HEAD"]).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(git(["reset", "--hard", beforeHead]).status, 0)
+        XCTAssertEqual(git(["diff", "--cached", "--quiet"]).status, 0)
+
+        // These are the two independent metadata calls made by a Staged Diff.
+        let tree = GitCommandExecution.runData(
+            ["--literal-pathspecs", "ls-tree", "-rz", "--full-tree", "HEAD", "--", name],
+            in: directory.path)
+        XCTAssertEqual(tree.status, 0)
+        XCTAssertEqual(git(["reset", "--hard", afterHead]).status, 0)
+        let index = GitCommandExecution.runData(
+            ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name],
+            in: directory.path)
+        XCTAssertEqual(index.status, 0)
+        XCTAssertEqual(git(["diff", "--cached", "--quiet"]).status, 0)
+
+        let treeRecord = String(decoding: tree.stdout.dropLast(), as: UTF8.self)
+        let indexRecord = String(decoding: index.stdout.dropLast(), as: UTF8.self)
+        let treeOID = try XCTUnwrap(treeRecord.split(separator: "\t").first?.split(separator: " ").last)
+        let indexOID = try XCTUnwrap(indexRecord.split(separator: "\t").first?.split(separator: " ").dropLast().last)
+        XCTAssertNotEqual(treeOID, indexOID)
+        let oldBlob = GitCommandExecution.runData(["cat-file", "blob", String(treeOID)], in: directory.path)
+        let newBlob = GitCommandExecution.runData(["cat-file", "blob", String(indexOID)], in: directory.path)
+        XCTAssertEqual(oldBlob.stdout, Data("before\n".utf8))
+        XCTAssertEqual(newBlob.stdout, Data("after\n".utf8))
+        XCTAssertNotEqual(oldBlob.stdout, newBlob.stdout)
+        XCTAssertEqual(try Data(contentsOf: path), Data("after\n".utf8))
+        print("AUDIT_GIT_STAGED_CROSS_SNAPSHOT heads=2 stages=2 bothClean=true hybridDiff=true")
+    }
+
     private func makeRepository() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
