@@ -1,0 +1,154 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "建立 Git Diff 全链路体验与性能基线"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "验证 TextKit 完整滚动范围与快速首屏的可行路线"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "实证编辑事件与隐藏区间编辑语义"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "分析 Git 快照子进程与语法派生真实成本"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T5"
+title = "固定预算技术决定与生产阶段准入"
+status = "pending"
+plan = "plan-p1.md#p1-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "修复原生首帧布局和滚动几何的共同根因"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "消除逐键正文全量回读及重复判定"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "统一实时折叠编辑坐标和手动展开行为"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T4"
+title = "收敛 Unified Split 滚动与原生绘制"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T5"
+title = "验证 Git 行浏览、折叠 AX 与焦点动作"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "修复 Git 输出预算与对象完整性"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "验证 Git patch 与原始工作区快照一致性"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "收拢可取消 Diff 计算和展示发布"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "核实可见语法着色缓存与释放"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "核销所有 Git Diff 来源和实际字节结果"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "完成完整 App GUI 交互与可访问性验收"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "验收获授权 Windows SSH Diff 与失败恢复"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "完成首帧热编辑滚动与长期内存测量"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T5"
+title = "执行最终全量回归并完成交付审计"
+status = "pending"
+plan = "plan-p4.md#p4-t5"
+commit = ""
+note = ""
