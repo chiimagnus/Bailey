@@ -1031,6 +1031,30 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(tab.editFolds.contains { $0.range.contains(500) },
                       "Typing elsewhere must not apply a stale fold ordinal to a different region")
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
+
+        await tab.save()
+        try await wait {
+            !tab.isLoading && tab.newContent == next && tab.editFoldsReady
+                && !tab.isDirty
+        }
+        XCTAssertFalse(tab.editFolds.contains { $0.range.contains(720) },
+                       "Saving the edited worktree must not collapse a manually revealed baseline range")
+        XCTAssertTrue(tab.editFolds.contains { $0.range.contains(500) },
+                      "Saving must not unfold unrelated unchanged regions")
+        XCTAssertEqual(try Data(contentsOf: path), Data(next.utf8))
+        XCTAssertEqual(GitCommandExecution.run(["status", "--porcelain=v1"], in: directory.path).stdout,
+                       " M stable-fold.txt\n")
+
+        XCTAssertEqual(GitCommandExecution.run(["add", "stable-fold.txt"], in: directory.path).status, 0)
+        let later = next.replacingOccurrences(of: "changed 400\n", with: "revised 400\n")
+        try Data(later.utf8).write(to: path)
+        tab.reload()
+        try await wait { !tab.isLoading && tab.newContent == later && tab.editFoldsReady }
+        XCTAssertTrue(tab.editFolds.contains { $0.range.contains(720) },
+                      "A new Git index baseline must discard reveals anchored to the previous index")
+        XCTAssertEqual(try Data(contentsOf: path), Data(later.utf8))
+        XCTAssertEqual(GitCommandExecution.run(["status", "--porcelain=v1"], in: directory.path).stdout,
+                       "MM stable-fold.txt\n")
     }
 
     func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {

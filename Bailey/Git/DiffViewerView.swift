@@ -518,8 +518,17 @@ final class DiffTab: nonisolated Identifiable {
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
             self.resolvedWorktreePath = result.resolvedPath
-            let changed = !self.oldContent.utf8.elementsEqual(result.old.utf8)
+            let filteredBaselineChanged: Bool
+            switch (self.editComparisonOld, result.editBaseline) {
+            case (nil, nil): filteredBaselineChanged = false
+            case (let previous?, let current?):
+                filteredBaselineChanged = !previous.utf8.elementsEqual(current.utf8)
+            default: filteredBaselineChanged = true
+            }
+            let baselineChanged = !self.oldContent.utf8.elementsEqual(result.old.utf8)
                 || !self.comparisonOld.utf8.elementsEqual(result.baseline.utf8)
+                || filteredBaselineChanged
+            let changed = baselineChanged
                 || !self.comparisonNew.utf8.elementsEqual(result.reviewNew.utf8)
                 || !self.newContent.utf8.elementsEqual(result.new.utf8)
             self.oldContent = result.old
@@ -529,7 +538,7 @@ final class DiffTab: nonisolated Identifiable {
             self.editComparisonOld = result.editBaseline
             self.newContent = result.new
             if changed {
-                self.revealedOldLines.removeAll()
+                if baselineChanged { self.revealedOldLines.removeAll() }
                 self.editFoldsReady = false
                 self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
             }
