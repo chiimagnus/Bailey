@@ -30,12 +30,12 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
 | `DiffRowGeometry.visibleRows / DiffTextView.hasNativeNonLFSeparators` | 非折叠、无只读行起点时会从文首枚举至视口；原生换行种类缓存每次字符编辑会失效，随后可能全篇扫描 | 需实测深处滚动与每键布局；优先复用已有 `NativeTextLineIndex`，不是搭第二套索引 |
 | `NativeCodeTextView.processStorageEdit` | 已获取 `editedRange`／替换文本并增量维护行索引，但对 Diff 只调用零参数 `onCharacterEdit` | 增量信息在进入 `DiffTab` 前丢失；必须以真实 AppKit 事件和全文保存语义检验最小改动接口 |
 | `DiffNativeSurface.editTextDidChange → DiffTab.updateEditedContent` | 每次编辑取 `textView.string`，随后比较保存基线并安排 Diff 刷新 | 不等于已测出输入 P95；必须分别量化取全文、比较、着色与布局 |
-| `DiffTab.reload → gitContent/gitComparisonBaseline` | Staged 双基线可并行；Unstaged 仍需有序 `hash-object` 与 Git patch 快照校验 | 不得为了少启动进程跳过 clean filter 或接受不一致快照 |
+| `DiffTab.reload → gitContent/gitComparisonBaseline` | Staged 双基线可并行；Unstaged 仍需有序 `hash-object` 与 Git patch 快照校验；24k 行 30 次热测模型就绪中位 Staged 199.1 ms、Unstaged 242.9 ms，P95 为 351.2／328.5 ms；1k 中位 69.8／102.3 ms | 这些数值不是可见首帧；必须区分不可并行的快照顺序与可压缩的 Git 启动／对象读取 |
 | `GitCommandExecution.runData(stdoutLimit:) → WorkspaceBackend.run / ProcessRemoteCommandRunner.run` | 本地 stdout reader 限制保留字节，但 stderr 仍完整接收；SSH runner 的 stdout／stderr 都持续追加完整 Data，`backend.run()` 返回后才 `.prefix(limit)`；`hash-object` 另经无上限 `backend.run` | **远端输出上限并未约束传输与峰值内存**，截断也不自动标记失败；需在实际读取处设置调用者预算并验证 Git patch／状态输出完整性 |
 | `GitWorktreeComparison.resolve → DiffCore.fromVerifiedOperations` | 能复用已验证 Git hunk；不能映射时回退算法；实时编辑仍重新计算 | 不代表全部 Git 来源、特殊文本与并发路径都已完成跨界面验收 |
 | `DiffComputation.build` | 仍构造 Unified／Split 左右／编辑状态；既有样本投影中位约 0.17 ms | 没有证据支持优先大重构这一轻量阶段 |
 | `DiffSyntaxSource.captures` | 未变字节复用 Tree-sitter 树，修改侧 Worktree 由 Neon 着色；大于 2 MB 的源码不缓存树 | 未实现编辑增量解析，也尚未证明增量解析值得引入 |
-| 2026-11-05 测试日志 | 全量宿主 843 项，16 跳过、0 失败；随后定点 105 项、1 跳过、0 失败；5 项 Git GUI 复测通过 | 全量宿主完成早于最后一个提交；没有独立证明 Release、长期内存及 SSH 实机 |
+| 2026-11-05 测试日志 | 全量宿主 843 项、16 跳过、0 失败（16:15）；定点 105 项、1 跳过、0 失败（16:27）；5 项 Git GUI 曾因 `WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile` 的 ⌘S 事件合成超时失败，随后 5 项完整复测通过 | `5230f341` 在 16:27:58 提交；旧全量不是最终 HEAD 验收；一次复测通过**不能**认定 GUI 偶发超时根因已解决，16 项跳过也不能算通过 |
 | `docs/testing.md` | 输入 P95、滚动帧、热视口几何和本地 Git 30 次热样本均有现行测量标准 | 模型准备时间不是文本真正显示或可交互时间 |
 
 ## 必须交付的产品结果
@@ -61,6 +61,9 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
   最末真实源码行及末尾删除虚拟行均可到达。
 - 不以整篇同步布局换取表面正确：在 P1 以原生实验选出**既准确又低成本**的布局归属；
   不能把错误的固定高度、尾端补刷新或滚动时补全作为修复。
+  若 TextKit 原生布局的正确性与首屏性能冲突，必须保留最小复现和真实 API 证据，
+  **修订并验证新的原生方案后**才能通过 P2-T1；只删除 `ensureLayout(documentRange)`、
+  把 206 ms 转移到后台或把完整布局推迟到首次滚动，都不能算根因修复。
 - 支持 Unified／Split、可编辑／只读、长行截断／完整显示、
   原生 LF／CRLF／裸 CR／Unicode 段落、删除占位、改字号／折行宽度、窗口缩放、横纵滚动和滚动条两种样式。
 - 文本、行号、背景、折叠标记、原生滚动条、AX 坐标和实际像素始终对齐。
@@ -91,6 +94,11 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
 - `stdoutLimit`、metadata、Blob 和 Git patch 的输出预算必须**约束实际接收／驻留**，
   而不是接收完整远端输出后截取前缀；超限、短读、错误退出和取消不能冒充完整结果。
   不给 SSH Files、Git 大仓状态或其它共享命令添加错误的全局输出上限。
+- 针对 Git 模型准备的 1k／24k 行中位与 P95，P1 必须分离 Git 进程启动、
+  `gitObject` 定位、`cat-file -s/blob`、不可破坏顺序的 `hash-object → git diff`、
+  Diff 算法和语法成本；**已证实可消除的重复 Git 启动／读取**必须由 P3 同路径实施并量化收益，
+  而不是只修输出限制后将原性能问题作为“待以后再做”。
+  不为速度省略 OID／快照一致性检查，也不虚构任意性能优化的保证。
 - 所有错误路径保留已显示内容，不让失败的来源变成空侧或意外写本机。
 
 ### R5 不以过度架构掩盖性能或正确性
@@ -113,6 +121,9 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
   兼容代码或多余安全围栏直接删。具体删改必须有调用图和行为回归证据。
 - 工作与内存随标签生命周期结束；关闭后的文本、语法树、布局与旧计算不会被后台任务长期持有。
 - 优化必须有同机、同样本、同设置前后数据，既报告中位也报告 P95／最差与真实用户可见结果。
+- GUI 输入合成曾出现一次 ⌘S 超时后复测通过：要调查实际前台焦点、第一响应者、
+  XCTest 注入与 AppKit 事件接收，分清产品缺陷、测试夹具与系统环境；
+  **重跑转绿不等于修复**。无法判定时保留失败证据与未通过结论。
 
 ## 范围与相邻计划
 
@@ -182,7 +193,9 @@ SSH 认证、Monaco／Electron／WebKit 编辑器替换、LSP、正式发布以�
 5. 每个实施 task 先适用的 Red→Green，处理同根因其它入口、
    及时删替代路径与更新其文档 owner，然后原子提交本任务改动。
 6. 最终当前 HEAD 的完整 `make test`、`make build`、UI 必要 E2E、
-   签名和内存／性能证据全部核销；实际失败或必需 SSH 条件缺失时只给有保留的结论。
+   签名和内存／性能证据全部核销；16 项 SSH 跳过逐项分类，
+   GUI 曾失败的 ⌘S 用例必须有原因归类及相应连续复测证据；
+   实际失败或必需 SSH 条件缺失时只给有保留的结论。
 7. 计划与执行过程不得改动正在运行的正式 Bailey、不借用 SSH master、
    不触碰真实个人工作区测试文件、不得擅自推送／合并 PR。
 

@@ -155,9 +155,13 @@
    拖动滑块直接跳底、17 次远跳、恢复滚动锚点、修改字号与长行显示，
    真实光标和最后的删除 ghost 都可达到。
 4. 同机对比首帧主线程最长阻塞、P95、滚动 P95、峰值 RSS、全篇布局触发次数；
-   以纯原生几何证据做 Gate。若两路线失败，明确最小不变量冲突、
-   是否需要更低层原生布局方案，并在准入前修订 P2-T1 方案，
-   **不能**先上生产随后补“到末尾再刷新”。
+   除第一次挂载，还检查内容／折叠／字号／ghost 变化引起的**重复全文布局**。
+   Gate 必须同时证明 LF 固定行高快路径、CR／Unicode／折行等可变行高路径
+   的原生末行真实坐标、首屏阻塞和无额外全文布局。
+   如果现有原生几何路径均失败，记录最小不变量冲突并检索当前 SDK／原生接口契约，
+   验证更低层的**单一 TextKit 2 布局归属**是否可行；无可行实现时明确
+   `No-Go：P0 首屏根因未解决` 并修订 P2-T1，**不能**把阻塞放到后台、
+   换成估算高度或在首次滚动时补齐布局后宣称通过。
 
 **验证：** `make test:NativeDiffTabTests,NativeEditorLayoutTests`
 的现有真实组件场景，新增实验测试只在现有测试目标内；
@@ -244,17 +248,24 @@
 `DiffEngineTests`、`NativeDiffTabTests`、`NativeGitHistoryFileTests`、`GitExecutionTests`。
 
 **步骤：**
-1. 真实 Git 临时仓库记录 `ls-tree/ls-files`、`cat-file -s/blob`、
-   `hash-object`、`git diff --unified=0` 的调用次数、stdin／stdout 字节数、
-   命令排队、CPU／等待与已授权 SSH 往返。Staged、Unstaged、历史、clean filter 分开计。
+1. 用与旧日志完全对应的 1k／24k 真实 Git 临时仓库，
+   分别测 Staged／Unstaged 冷／热模型准备，复核 30 次样本的
+   69.8／102.3 ms、199.1／242.9 ms 中位，以及 24k P95 351.2／328.5 ms。
+   逐调用记录 `ls-tree/ls-files`、`cat-file -s/blob`、`hash-object`、
+   `git diff --unified=0` 的启动次数、CPU／等待／排队、stdin／stdout 字节数，
+   并把可优化的 Git 元数据／Blob 读取与**不可破坏快照顺序**的 hash→diff 拆开；
+   Staged、Unstaged、历史、clean filter、已打开重新选择与获授权 SSH 分开计。
    **先测试输出上限的真实性：**`GitCommandExecution.runData(stdoutLimit:)` 本机、远端
    分别施加大于 cap 的 stdout／stderr、Git 退出失败、阻塞与被取消命令；
    远端不能以“最终只返回 `.prefix(limit)`”冒充传输／峰值内存有界。
 2. 对照已优化的 `LocalWorkspaceBackend` 子进程等待机制，
    区分 Blob 单对象 5 MiB、Git patch 20 MiB、远端整个进程管道这三个不同预算；
    验证是否在完整接收远端输出后才截断，或丢失被截断的失败状态。
-   **真正的输出边界缺口先修正计划优先级；**批量 `cat-file` 只是可选性能收益，
-   只有证明能保留类型、OID、长度、完整性与失败语义才考虑替换。
+   输出预算缺口属于**已确认正确性问题**，P3-T1 必须修复。
+   另以同机 profile 判定 `gitObject → cat-file -s → cat-file blob` 的串行启动
+   是否对模型中位／P95 构成实质成本；若成立，在 P3-T1 的同一读取链中给出
+   **可以实施的最短对象读取方案及其完整性反例**，不得只写“未来再研究”。
+   Git batch／常驻进程只有收益超过自身资源和状态复杂度时才考虑。
 3. 复盘已验证 Git hunk 快路径是否在 0 上下文、重复行、CRLF、clean filter
    及并发编辑时保持 `DiffCore.compute` 等价；
    不改变 `hash-object → diff` 必须保持的顺序；
@@ -297,7 +308,10 @@
 3. 对编辑增量事件作独立 Go/No-Go，锁定 `⌘A`、隐藏行及 Find/Replace 的可观察语义；
    如果改动会改变既有安全预期，先在需求真源写清决策而非埋在实现备注。
 4. 对 Git／高亮／投影按可归因收益决定“实施／只补测试／不动”；
-   远端无效 `stdoutLimit` 属**已由源码证明的边界缺口**，不能与推测的 `cat-file` 优化同级。
+   必须交付 Git 模型**剩余延迟的归因表**：可消除的进程／IO 工作进入 P3-T1，
+   不可并行的 `hash-object → diff` 保持现顺序，
+   `DiffComputation.build` 约 0.17 ms 时不得投入大重构。
+   远端无效 `stdoutLimit` 属**已由源码证明的正确性缺口**，不能与可选的 `cat-file` 优化同级。
    同时交付 CodeGraph 调用者核对后的删改分类：
    例如 `DiffDisplay.hasCollapsedContext` 仅有一个宿主测试读者，
    可在相关实现 task 直接以 `DiffComputation.unified.rows` 断言替代；
@@ -317,5 +331,9 @@
 ## Phase Gate
 
 全部 P1 tasks 核销后，按仓库流程进入阶段审计；实际审计开始时才创建
-`audit-p1.md`。TextKit 与编辑输入准入失败时不得继续沿未经证明路线实施 P2；
-需要时修改当前计划，而不是保留死方案和兼容后门。
+`audit-p1.md`。TextKit P0 与原生编辑链的实验若无可验证方案，
+**不能以“探索完成”判定生产问题已解决**；保留 No-Go 及反证，
+修订当前 P2 实施方案再进行下一轮准入。
+Git 延迟如果已证实由可消除的串行启动主导，P3-T1 必须给出相应实现与
+同条件中位／P95 验收；不准把该根因留为不明确的“以后优化”。
+任何已否决路线同步从实施计划移除，不保留兼容后门。

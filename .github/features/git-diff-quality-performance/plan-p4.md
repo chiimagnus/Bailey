@@ -107,8 +107,8 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
 `DiffNativeRoot.updateNSView`、`DiffNativeSurface.render/requestFocus`、
 `DiffCodePaneView.layout/setReviewDocument/activateFold`、
 `DiffRowGeometry.visibleRows`、`DiffTab.save/autoSaveOnFocusLoss`；
-`BaileyUITests/Git/WorkspaceGitUITests.swift`、
-`GitChangesUITests.swift`、`GitHistoryUITests.swift`、
+`BaileyUITests/Git/{WorkspaceGitUITests,GitChangesUITests,GitHistoryUITests,GitGraphUITests}.swift`、
+`BaileyUITests/Support/WorkspaceUITestSupport.swift` 的启动／焦点／输入辅助函数、
 `BaileyTests/Git/NativeDiffTabTests.swift`。
 
 **步骤：**
@@ -136,6 +136,19 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
    无按钮／空状态的只读 Diff 不声明可编辑；
    Changes 右键仅改变操作目标而不误触发 Diff 打开或其他组焦点，
    右键菜单期间快捷键作用于当前第一响应者而非后台窗口。
+6. **专门追查已发生的 GUI 偶发失败，不以复测成功结案：**
+   `build/git-diff-verified-hunks-ui.log` 中
+   `WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile`
+   在 `WorkspaceGitUITests.swift:483` 的 `app.typeKey("s", modifierFlags: .command)`
+   报 `Failed to synthesize event: Timed out while synthesizing event`，
+   后续同组五用例复测成功。保留失败和成功日志，核对发送前
+   Bailey Dev 是否为前台、原生 `NSTextView` 是否为第一响应者、
+   UI Runner 的真实会话／键盘授权、菜单处理和在途 Diff 任务；
+   用相同 App、相同测试顺序、单例和随机交错顺序进行连续复测，
+   分清**XCTest 系统输入合成失败／测试夹具焦点问题／Bailey 产品事件问题**。
+   若是产品或测试代码问题，回对应 owner 做 Red→Green 并重跑；
+   如果只有系统合成失败证据，不修改产品添加 sleep、盲目重发或强制抢焦点。
+   无法归因且仍不稳定时明确留作阻塞，绝不能因下一次绿色而抹去。
 
 **验证：**
 `make build:ui` 仅负责确认 target 可编译，随后使用
@@ -144,7 +157,11 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
 保留极端原生像素、IME、AX 组件级断言，
 不重复整套 GUI 大规模数据矩阵。
 每个失败对应截图、AX frame、前台进程、XCTest 日志与真实磁盘结果；
-单次组合用例超时须独立再测并保留证据，不能直接归为 Bailey 产品缺陷。
+`testWorktreeDiffEditsAndPersistsRealGitFile` 至少做同样本连续重复回归，
+并与其所在五用例全组重复执行互证；记录失败率、事件前后焦点、
+保存命令是否实际发出及文件最终原字节，不以测试运行成功率代替保存结果。
+单次合成超时须先归因并保留证据，不能直接定性为 Bailey 产品或系统故障；
+无证据的重复超时不能宣称已解决。
 
 **Uncovered：**
 真实 macOS 15.6 与不可授权的系统候选输入测试按 `idea.md` 列明具体条件。
@@ -237,6 +254,9 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
    重新跑完整性能测量；只在相同硬件和同参数下比较改动前后。
 2. **分别**记录文件事件→Git 状态核心→详情→Changes 行出现，
    以及鼠标／键盘点击已显示行→Diff 首像素→真实可输入→语法色稳定。
+   同时按最早 24k 行基线重新核对模型 Staged 199.1 ms／Unstaged 242.9 ms、
+   P95 351.2／328.5 ms 是否在同硬件相同快照下改善，
+   不以 Git 进程少了却实际可见时间不变冒充成功。
    `GitStatusModel.refresh`、Changes 选择计算、Git IO、DiffCore、投影、
    TextKit 布局、WindowServer 显示分开计时；
    1／100／10k 级状态项，1k／24k Staged／Unstaged 至少 30 次热，
@@ -296,9 +316,16 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
    未执行者列原因、影响、替代证据与必需补验，
    无法完成必需路径则明确 **No-Go**。
 3. 以**最终实现提交**运行完整 `make test`，核对 XCTest 总数、
-   跳过原因、完整 Make 命令状态；
-   执行 `make build`、`make build:ui` 和必要的
-   `make test:ui`，功能涉及签名或优化构建时执行 `make build:release`。
+   跳过原因、完整 Make 命令状态。旧记录：843 项全量在 16:15 完成、
+   定点 105 项在 16:27:27 完成，均早于 `5230f341` 的 16:27:58 提交，
+   **不得视为最新 HEAD 的最终全量验收**。
+   逐项列出历史 16 项 SSH skipped 中属于 Git Diff／其它 SSH 的项目及其授权条件；
+   未执行的相关实机用例不能计入通过。
+   执行 `make build`、`make build:ui`、适用 `make test:ui`；
+   独占 GUI 会话可用且不会破坏用户环境时运行完整 UI Test Target，
+   否则记录未执行的方法与实际阻塞，受影响的 Git GUI 用户路径必须实际运行。
+   针对本计划的首屏与 CPU/内存优化还须执行独立 `make build:release`
+   及 Release 实测，不用 Debug 宿主或旧二进制冒充。
    构建、应用签名、GUI 实际验证和正式安装分别证明。
 4. 只在本次实施授权含产品安装且满足 `docs/development.md#本地安装` 时，
    对正式 App 做整包安装／验签／文件一致性核对，
@@ -316,8 +343,8 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 
 **验证与退出：**
 `make test` 完整 `TEST SUCCEEDED`、`make build`、`make build:ui`、
-`make test:ui` 的适用用户路径、
-必要 `make build:release` 与 `codesign`、
+`make test:ui` 的适用用户路径（包括此前 ⌘S 合成失败用例的重复归因与回归）、
+性能优化后的 `make build:release` 与 `codesign`、
 `git diff --check`、`feature_tool.py todo validate`；
 所有统计与当前 HEAD 一一匹配。
 任何新产品修复先回 owner 重测，再重新跑受影响项目及最终全量验收。
