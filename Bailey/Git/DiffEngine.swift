@@ -1097,7 +1097,7 @@ nonisolated struct DiffComputation {
     /// Revealed ranges are anchored to the immutable original file.
     /// Pass nil to disable folding entirely.
     static func build(core: DiffCore, revealedLines: [Range<Int>]?) -> DiffComputation {
-        let blocks = DiffBlocks(ops: core.ops)
+        let blocks = DiffBlocks(ops: core.ops, oldLines: core.oldLines, newLines: core.newLines)
         let unified = buildUnified(
             blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
             oldMissingNewline: core.oldMissingNewline,
@@ -1115,9 +1115,7 @@ nonisolated struct DiffComputation {
             unified: unified,
             splitLeft: left,
             splitRight: right,
-            editState: editState(
-                ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
-            )
+            editState: editState(blocks: blocks, oldLines: core.oldLines)
         )
     }
 
@@ -1220,62 +1218,40 @@ nonisolated struct DiffComputation {
     static func editState(
         ops: [DiffLineOp], oldLines: [DiffSourceLine], newLines: [DiffSourceLine]
     ) -> DiffEditState {
+        editState(blocks: DiffBlocks(ops: ops, oldLines: oldLines, newLines: newLines),
+                  oldLines: oldLines)
+    }
+
+    private static func editState(blocks: DiffBlocks, oldLines: [DiffSourceLine]) -> DiffEditState {
         var added: [Int] = []
         var addedEmphasis: [Int: [NSRange]] = [:]
         var ghosts: [DiffEditGhostBlock] = []
         var newCursor = 0
-
-        var pendingDeletes: [Int] = []
-        var pendingInserts: [Int] = []
-        func flushBlock() {
-            guard !pendingDeletes.isEmpty || !pendingInserts.isEmpty else { return }
-            // Word-level pairing, same index-wise rule the review documents use.
-            var ghostEmphasis: [Int: [NSRange]] = [:]
-            for pair in 0..<min(pendingDeletes.count, pendingInserts.count) {
-                let oldIndex = pendingDeletes[pair]
-                let newIndex = pendingInserts[pair]
-                if let result = DiffIntraline.diff(
-                    old: oldLines[oldIndex].text, new: newLines[newIndex].text
-                ) {
-                    ghostEmphasis[oldIndex] = result.oldRanges
-                    addedEmphasis[newIndex] = result.newRanges
-                }
-            }
-            if !pendingDeletes.isEmpty {
-                let anchor = pendingInserts.first ?? newCursor
-                ghosts.append(DiffEditGhostBlock(
-                    anchorLine: anchor,
-                    firstOldLine: pendingDeletes[0] + 1,
-                    lines: pendingDeletes.map { index in
-                        DiffEditGhostBlock.Line(
-                            sourceRange: oldLines[index].utf16Range,
-                            emphasis: ghostEmphasis[index] ?? []
-                        )
-                    }
-                ))
-            }
-            pendingDeletes.removeAll(keepingCapacity: true)
-            pendingInserts.removeAll(keepingCapacity: true)
-        }
-
-        for op in ops {
-            switch op {
+        for item in blocks.items {
+            switch item {
             case .equal(_, _, let count):
-                flushBlock()
                 newCursor += count
-            case .delete(let oldStart, let count):
-                pendingDeletes.append(contentsOf: oldStart..<(oldStart + count))
-            case .insert(let newStart, let count):
-                pendingInserts.append(contentsOf: newStart..<(newStart + count))
-                added.append(contentsOf: newStart..<(newStart + count))
-                newCursor += count
+            case .block(let block):
+                added.append(contentsOf: block.inserts)
+                for index in block.inserts {
+                    if let ranges = block.newEmphasis[index] { addedEmphasis[index] = ranges }
+                }
+                if let first = block.deletes.first {
+                    ghosts.append(DiffEditGhostBlock(
+                        anchorLine: block.inserts.first ?? newCursor,
+                        firstOldLine: first + 1,
+                        lines: block.deletes.map { index in
+                            DiffEditGhostBlock.Line(
+                                sourceRange: oldLines[index].utf16Range,
+                                emphasis: block.oldEmphasis[index] ?? []
+                            )
+                        }
+                    ))
+                }
+                newCursor += block.inserts.count
             }
         }
-        flushBlock()
-
-        return DiffEditState(
-            addedLines: added, addedEmphasis: addedEmphasis, ghosts: ghosts
-        )
+        return DiffEditState(addedLines: added, addedEmphasis: addedEmphasis, ghosts: ghosts)
     }
 
     /// Change blocks: consecutive delete+insert ops between equal runs, with
@@ -1284,6 +1260,8 @@ nonisolated struct DiffComputation {
         struct Block {
             var deletes: [Int] = []   // old line indexes
             var inserts: [Int] = []   // new line indexes
+            var oldEmphasis: [Int: [NSRange]] = [:]
+            var newEmphasis: [Int: [NSRange]] = [:]
         }
         /// Ordered walk items: either an equal run or a change block.
         enum Item {
@@ -1292,10 +1270,18 @@ nonisolated struct DiffComputation {
         }
         var items: [Item] = []
 
-        init(ops: [DiffLineOp]) {
+        init(ops: [DiffLineOp], oldLines: [DiffSourceLine]? = nil,
+             newLines: [DiffSourceLine]? = nil) {
             var pending = Block()
             func flush() {
                 if !pending.deletes.isEmpty || !pending.inserts.isEmpty {
+                    if let oldLines, let newLines {
+                        let ranges = DiffComputation.blockEmphasis(
+                            pending, oldLines: oldLines, newLines: newLines
+                        )
+                        pending.oldEmphasis = ranges.old
+                        pending.newEmphasis = ranges.new
+                    }
                     items.append(.block(pending))
                     pending = Block()
                 }
@@ -1402,7 +1388,6 @@ nonisolated struct DiffComputation {
                     }
                 }
             case .block(let block):
-                let emphasis = blockEmphasis(block, oldLines: oldLines, newLines: newLines)
                 for oldIndex in block.deletes {
                     builder.append(
                         DiffRow(
@@ -1411,7 +1396,7 @@ nonisolated struct DiffComputation {
                             newLine: nil,
                             source: .old,
                             sourceRange: oldLines[oldIndex].utf16Range,
-                            emphasis: emphasis.old[oldIndex] ?? [],
+                            emphasis: block.oldEmphasis[oldIndex] ?? [],
                             missingNewline: oldMissingNewline && oldIndex == oldLines.count - 1
                         ),
                         text: oldLines[oldIndex].text
@@ -1425,7 +1410,7 @@ nonisolated struct DiffComputation {
                             newLine: newIndex + 1,
                             source: .new,
                             sourceRange: newLines[newIndex].utf16Range,
-                            emphasis: emphasis.new[newIndex] ?? [],
+                            emphasis: block.newEmphasis[newIndex] ?? [],
                             missingNewline: newMissingNewline && newIndex == newLines.count - 1
                         ),
                         text: newLines[newIndex].text
@@ -1503,7 +1488,6 @@ nonisolated struct DiffComputation {
                     }
                 }
             case .block(let block):
-                let emphasis = blockEmphasis(block, oldLines: oldLines, newLines: newLines)
                 let rowCount = max(block.deletes.count, block.inserts.count)
                 for rowOffset in 0..<rowCount {
                     if rowOffset < block.deletes.count {
@@ -1515,7 +1499,7 @@ nonisolated struct DiffComputation {
                                 newLine: nil,
                                 source: .old,
                                 sourceRange: oldLines[oldIndex].utf16Range,
-                                emphasis: emphasis.old[oldIndex] ?? [],
+                                emphasis: block.oldEmphasis[oldIndex] ?? [],
                                 missingNewline: oldMissingNewline && oldIndex == oldLines.count - 1
                             ),
                             text: oldLines[oldIndex].text
@@ -1532,7 +1516,7 @@ nonisolated struct DiffComputation {
                                 newLine: newIndex + 1,
                                 source: .new,
                                 sourceRange: newLines[newIndex].utf16Range,
-                                emphasis: emphasis.new[newIndex] ?? [],
+                                emphasis: block.newEmphasis[newIndex] ?? [],
                                 missingNewline: newMissingNewline && newIndex == newLines.count - 1
                             ),
                             text: newLines[newIndex].text

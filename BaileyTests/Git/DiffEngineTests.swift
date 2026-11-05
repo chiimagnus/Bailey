@@ -35,6 +35,68 @@ final class DiffEngineTests: XCTestCase {
                        edited.splitRight.rows.compactMap(\.collapsed))
     }
 
+    func testIntralineEmphasisAgreesAcrossUnifiedSplitAndEditableGhosts() {
+        let source = "start\n"
+            + (0..<180).map {
+                "let name\($0) = alpha beta gamma delta old🚀 // stable\n"
+            }.joined()
+            + "tail\n"
+        let changed = "start\n"
+            + (0..<180).map {
+                "let name\($0) = alpha beta gamma delta new👩‍🚀 // stable\n"
+            }.joined()
+            + "inserted extra\n" + "tail\n"
+        let variants = [
+            (source, changed),
+            ("a\r\nb🚀 old\r\nc", "a\r\nb👩‍🚀 new\r\nc\n"),
+            ("first\nsecond\nthird\n", "first\nreplaced\n"),
+        ]
+        for (before, after) in variants {
+            let core = DiffCore.compute(oldText: before, newText: after)
+            let projection = DiffComputation.build(core: core, revealedLines: nil)
+            let splitOld = Dictionary(uniqueKeysWithValues:
+                projection.splitLeft.rows.compactMap { row -> (Int, [NSRange])? in
+                    guard row.kind == .removed, let line = row.oldLine else { return nil }
+                    return (line, row.emphasis)
+                })
+            let splitNew = Dictionary(uniqueKeysWithValues:
+                projection.splitRight.rows.compactMap { row -> (Int, [NSRange])? in
+                    guard row.kind == .added, let line = row.newLine else { return nil }
+                    return (line, row.emphasis)
+                })
+            var ghostOld: [Int: [NSRange]] = [:]
+            for ghost in projection.editState.ghosts {
+                for (index, line) in ghost.lines.enumerated() {
+                    ghostOld[ghost.firstOldLine + index] = line.emphasis
+                }
+            }
+            var added: [Int] = []
+            for row in projection.unified.rows {
+                if row.kind == .removed, let line = row.oldLine {
+                    XCTAssertEqual(row.emphasis, splitOld[line])
+                    XCTAssertEqual(row.emphasis, ghostOld[line])
+                }
+                if row.kind == .added, let line = row.newLine {
+                    XCTAssertEqual(row.emphasis, splitNew[line])
+                    XCTAssertEqual(row.emphasis,
+                                   projection.editState.addedEmphasis[line - 1] ?? [])
+                    added.append(line - 1)
+                }
+            }
+            XCTAssertEqual(projection.editState.addedLines, added)
+        }
+
+        let core = DiffCore.compute(oldText: source, newText: changed)
+        var elapsed: [Double] = []
+        for _ in 0..<7 {
+            let start = CFAbsoluteTimeGetCurrent()
+            _ = DiffComputation.build(core: core, revealedLines: nil)
+            elapsed.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+        }
+        elapsed.sort()
+        print("AUDIT_DIFF_INTRA_BLOCK pairs=180 medianMs=\(elapsed[3]) worstMs=\(elapsed[6])")
+    }
+
     func testEditableSplitPaddingMatchesTheFullSplitAcrossLineChanges() {
         let long = (0..<900).map { "line \($0)\n" }.joined()
         let variants: [(String, String)] = [
