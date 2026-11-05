@@ -612,6 +612,7 @@ final class DiffTab: nonisolated Identifiable {
         let syntaxContextTask = syntaxContextTask
         let originalSyntax = originalSyntax
         let modifiedSyntax = modifiedSyntax
+        let highlightModified = !isEditing || showsCanonicalComparison
         // The edit decorations and review projection use the same initial
         // old/new snapshot. Share the expensive line diff instead of running
         // Myers twice while the initial worktree pane waits to appear.
@@ -639,7 +640,8 @@ final class DiffTab: nonisolated Identifiable {
             let context = await syntaxContextTask.value
             let captures = await Self.captureVisibleSyntax(
                 before: before, after: after, computation: computation, context: context,
-                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax
+                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax,
+                highlightModified: highlightModified
             )
             guard let self, !Task.isCancelled,
                   self.displayGeneration == generation else { return }
@@ -667,18 +669,20 @@ final class DiffTab: nonisolated Identifiable {
         )
     }
 
-    private nonisolated static func captureVisibleSyntax(
+    nonisolated static func captureVisibleSyntax(
         before: String, after: String, computation: DiffComputation,
         context: DiffHighlightContext?, originalSyntax: DiffSyntaxSource,
-        modifiedSyntax: DiffSyntaxSource
+        modifiedSyntax: DiffSyntaxSource, highlightModified: Bool
     ) async -> (old: [DiffCaptureRun], new: [DiffCaptureRun]) {
         guard let context else { return ([], []) }
         let oldRanges = DiffSyntaxHighlighter.visibleRanges(
             in: computation.splitLeft, source: .old
         )
-        let newRanges = DiffSyntaxHighlighter.visibleRanges(
-            in: computation.splitRight, source: .new
-        )
+        // The editable source is colored by Neon's live TextKit plugin.
+        // Only read-only/canonical views consume modified-side offline runs.
+        let newRanges = highlightModified
+            ? DiffSyntaxHighlighter.visibleRanges(in: computation.splitRight, source: .new)
+            : []
         let captureTask = Task.detached(priority: .userInitiated) {
             async let old = originalSyntax.captures(
                 text: before, context: context, ranges: oldRanges
@@ -719,6 +723,7 @@ final class DiffTab: nonisolated Identifiable {
         let syntaxContextTask = syntaxContextTask
         let originalSyntax = originalSyntax
         let modifiedSyntax = modifiedSyntax
+        let highlightModified = !isEditing || showsCanonicalComparison
         displayTask?.cancel()
         displayTask = Task { [weak self] in
             let computation = await Task.detached(priority: .userInitiated) {
@@ -733,7 +738,8 @@ final class DiffTab: nonisolated Identifiable {
             let context = await syntaxContextTask.value
             let captures = await Self.captureVisibleSyntax(
                 before: before, after: after, computation: computation, context: context,
-                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax
+                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax,
+                highlightModified: highlightModified
             )
             guard let self, !Task.isCancelled,
                   self.displayGeneration == generation else { return }

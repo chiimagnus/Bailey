@@ -3174,6 +3174,50 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(visible.contains { NSLocationInRange(2, $0.range) })
     }
 
+    func testEditableDiffSkipsModifiedOfflineSyntaxWhileReadonlyParsesBothSides() async throws {
+        let resolved = await DiffSyntaxHighlighter.context(for: "editable.swift")
+        let context = try XCTUnwrap(resolved)
+        let original = (0..<320).map { "let count\($0) = \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "let count160 = 160\n",
+                                                      with: "let count160 = -1\n")
+        let projection = DiffComputation.build(
+            core: DiffCore.compute(oldText: original, newText: modified), revealedLines: []
+        )
+        let oldParser = DiffSyntaxSource()
+        let newParser = DiffSyntaxSource()
+        let edited = await DiffTab.captureVisibleSyntax(
+            before: original, after: modified, computation: projection,
+            context: context, originalSyntax: oldParser, modifiedSyntax: newParser,
+            highlightModified: false
+        )
+        XCTAssertFalse(edited.old.isEmpty)
+        XCTAssertTrue(edited.new.isEmpty,
+                      "The editable new buffer is already highlighted by Neon")
+        let editedOldParseCount = await oldParser.parseCount
+        let editedNewParseCount = await newParser.parseCount
+        XCTAssertEqual(editedOldParseCount, 1)
+        XCTAssertEqual(editedNewParseCount, 0,
+                       "Worktree Diff must not parse the same modified source twice")
+
+        let readonly = await DiffTab.captureVisibleSyntax(
+            before: original, after: modified, computation: projection,
+            context: context, originalSyntax: oldParser, modifiedSyntax: newParser,
+            highlightModified: true
+        )
+        XCTAssertFalse(readonly.new.isEmpty,
+                       "Staged, history and clean-filter canonical review still need new-side tokens")
+        let afterReadonlyOldCount = await oldParser.parseCount
+        let afterReadonlyNewCount = await newParser.parseCount
+        XCTAssertEqual(afterReadonlyOldCount, 1)
+        XCTAssertEqual(afterReadonlyNewCount, 1)
+        let direct = DiffSyntaxHighlighter.captures(
+            text: modified, context: context,
+            ranges: DiffSyntaxHighlighter.visibleRanges(in: projection.splitRight, source: .new)
+        )
+        XCTAssertEqual(readonly.new.map(\.range), direct.map(\.range))
+        XCTAssertEqual(readonly.new.map(\.name), direct.map(\.name))
+    }
+
     func testDiffSyntaxReusesParseTreeAcrossFoldExpansionAndInvalidatesOnByteChanges() async throws {
         let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
         let context = try XCTUnwrap(resolved)
