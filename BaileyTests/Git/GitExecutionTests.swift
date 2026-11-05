@@ -11,6 +11,7 @@ private actor GitBackendFixture: WorkspaceBackend {
     private(set) var deadline: TimeInterval?
 
     func configure(failure: WorkspaceError?) { self.failure = failure }
+    func configure(result: WorkspaceRunResult) { self.result = result }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
         arguments = argv
         directory = cwd
@@ -204,6 +205,24 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertEqual(result.stdout, "partial")
         XCTAssertTrue(result.stderr.contains("warning"))
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+    }
+
+    func testRemoteOutputLimitDoesNotBoundBackendTransmission() async {
+        let backend = GitBackendFixture()
+        let payload = Data(repeating: 65, count: 8 * 1_024 * 1_024)
+        let errorOutput = Data(repeating: 66, count: 1_024 * 1_024)
+        await backend.configure(result: WorkspaceRunResult(
+            status: 7, stdout: payload, stderr: errorOutput
+        ))
+        let limit = 1_024
+        let result = await GitCommandExecution.runData(
+            ["cat-file", "blob", "012345"], in: "/repo", stdoutLimit: limit,
+            backend: backend
+        )
+        XCTAssertEqual(result.status, 7)
+        XCTAssertEqual(result.stdout, payload.prefix(limit))
+        XCTAssertEqual(result.stderr.utf8.count, errorOutput.count)
+        print("AUDIT_GIT_REMOTE_OUTPUT requestedLimit=\(limit) backendBytes=\(payload.count) returnedBytes=\(result.stdout.count) unboundedStderrBytes=\(result.stderr.utf8.count)")
     }
 
     func testRemoteBackendMapping() async {
