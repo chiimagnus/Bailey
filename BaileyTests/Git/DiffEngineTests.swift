@@ -35,6 +35,33 @@ final class DiffEngineTests: XCTestCase {
                        edited.splitRight.rows.compactMap(\.collapsed))
     }
 
+    func testEditableSplitPaddingMatchesTheFullSplitAcrossLineChanges() {
+        let long = (0..<900).map { "line \($0)\n" }.joined()
+        let variants: [(String, String)] = [
+            ("", ""),
+            ("", "added\n"),
+            ("first\nsecond\nthird\n", ""),
+            ("one\ntwo\n", "one\nnew\ntwo\n"),
+            ("one\ntwo\n", "one\n"),
+            ("one\ntwo\nthree\n", "one\nupdated\n"),
+            ("a\r\nb\r\nc", "a\r\nnew\r\nc\n"),
+            (long, long.replacingOccurrences(of: "line 400\n", with: "replacement\n")
+                .replacingOccurrences(of: "line 700\n", with: "")),
+        ]
+        for (old, new) in variants {
+            let core = DiffCore.compute(oldText: old, newText: new)
+            let original = DiffComputation.build(core: core, revealedLines: nil)
+            var offset = 0
+            var expected: [Int: Int] = [:]
+            for row in original.splitRight.rows {
+                if row.kind == .filler { expected[offset, default: 0] += 1 }
+                else { offset += 1 }
+            }
+            XCTAssertEqual(DiffComputation.editableSplitPadding(core: core), expected)
+            XCTAssertEqual(original.splitLeft.rows.count, original.splitRight.rows.count)
+        }
+    }
+
     func testSeededUnicodeAndNewlineDiffsPreserveAllOriginalByteAndRowRanges() {
         var seed: UInt64 = 0x5A17E20261017
         func next(_ max: Int) -> Int {

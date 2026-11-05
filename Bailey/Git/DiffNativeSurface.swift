@@ -196,15 +196,9 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             }
             if split, !diff.showsCanonicalComparison, let baseline = diff.editableBaseline {
                 let left = leftPane ?? makeSplitPane(side: .oldOnly)
-                if !folds.isEmpty, let folded = diff.editableFoldedBaseline {
-                    apply(folded.text, document: folded.document,
-                          id: folded.id, to: left, font: font, style: style, palette: palette,
-                          longLineDisplayWidth: width)
-                } else {
-                    apply(baseline.text, document: baseline.document,
-                          id: baseline.id, to: left, font: font, style: style, palette: palette,
-                          longLineDisplayWidth: width)
-                }
+                apply(baseline.text, document: baseline.document,
+                      id: baseline.id, to: left, font: font, style: style, palette: palette,
+                      longLineDisplayWidth: width)
                 _ = ensureDivider()
                 left.onScroll = { [weak pane] offset in pane?.setScrollOffset(offset) }
                 pane.onScroll = { [weak left] offset in left?.setScrollOffset(offset) }

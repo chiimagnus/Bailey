@@ -156,7 +156,6 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var editFoldsReady = false
     @ObservationIgnored private(set) var editPresentationRevision: UInt = 0
     private(set) var editableBaseline: DiffEditableBaseline?
-    private(set) var editableFoldedBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
     private(set) var hasChanges = false
@@ -753,7 +752,7 @@ final class DiffTab: nonisolated Identifiable {
             guard !Task.isCancelled else { return }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
-            let (state, offsets, lineCount, split, folded) = await Task.detached(priority: .userInitiated) {
+            let (state, offsets, lineCount, padding, folded) = await Task.detached(priority: .userInitiated) {
                 let core: DiffCore
                 if let cachedCore {
                     core = cachedCore
@@ -762,11 +761,11 @@ final class DiffTab: nonisolated Identifiable {
                 } else {
                     core = DiffCore.compute(oldText: before, newText: after)
                 }
-                let split = prepareSplit ? DiffComputation.editableSplit(core: core) : nil
+                let padding = prepareSplit ? DiffComputation.editableSplitPadding(core: core) : nil
                 let folded = DiffComputation.build(core: core, revealedLines: revealedLines)
                 return (
                     folded.editState,
-                    core.newLines.map(\.utf16Range.location), core.newLines.count, split, folded
+                    core.newLines.map(\.utf16Range.location), core.newLines.count, padding, folded
                 )
             }.value
             guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
@@ -774,16 +773,7 @@ final class DiffTab: nonisolated Identifiable {
                 .font: font, .foregroundColor: color, .paragraphStyle: style,
             ]
             let ghosts: [DiffDecorations.GhostBlock]
-            if let split {
-                var inserted = 0
-                var missing: [Int: Int] = [:]
-                for row in split.right.rows {
-                    if row.kind == .filler {
-                        missing[inserted, default: 0] += 1
-                    } else {
-                        inserted += 1
-                    }
-                }
+            if var missing = padding {
                 if lineCount == 0, let count = missing.removeValue(forKey: 0), count > 1 {
                     // The empty TextKit buffer already supplies the first filler row.
                     missing[1] = count - 1
@@ -796,12 +786,6 @@ final class DiffTab: nonisolated Identifiable {
                     )
                 }
                 self.editableBaseline = DiffEditableBaseline(
-                    document: split.left,
-                    text: DiffSyntaxHighlighter.attributedDocument(
-                        split.left, oldRuns: oldRuns, newRuns: [], baseAttributes: base
-                    )
-                )
-                self.editableFoldedBaseline = DiffEditableBaseline(
                     document: folded.splitLeft,
                     text: DiffSyntaxHighlighter.attributedDocument(
                         folded.splitLeft, oldRuns: oldRuns, newRuns: [], baseAttributes: base
@@ -819,7 +803,6 @@ final class DiffTab: nonisolated Identifiable {
                     )
                 }
                 self.editableBaseline = nil
-                self.editableFoldedBaseline = nil
             }
             self.editFolds = DiffEditFold.sourceFolds(in: folded.unified, lineCount: lineCount)
             self.editFoldsReady = true

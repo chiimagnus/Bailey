@@ -1109,15 +1109,23 @@ nonisolated struct DiffComputation {
         )
     }
 
-    /// The editable side has the full worktree; its paired baseline must share
-    /// the same uncollapsed Git rows and removed-line gaps.
-    static func editableSplit(core: DiffCore) -> (left: DiffSideDocument, right: DiffSideDocument) {
+    /// Extra blank rows on the editable side when old lines outnumber new
+    /// lines within a change block. No complete unfolded split document needed.
+    static func editableSplitPadding(core: DiffCore) -> [Int: Int] {
         let blocks = DiffBlocks(ops: core.ops)
-        return buildSplit(
-            blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
-            oldMissingNewline: core.oldMissingNewline,
-            newMissingNewline: core.newMissingNewline, revealedLines: nil
-        )
+        var padding: [Int: Int] = [:]
+        var newLine = 0
+        for item in blocks.items {
+            switch item {
+            case .equal(_, _, let count):
+                newLine += count
+            case .block(let block):
+                newLine += block.inserts.count
+                let excess = block.deletes.count - block.inserts.count
+                if excess > 0 { padding[newLine, default: 0] += excess }
+            }
+        }
+        return padding
     }
 
     /// Full render with no folding — the shape the invariant tests verify.
