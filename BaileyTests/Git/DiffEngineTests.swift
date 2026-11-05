@@ -35,6 +35,79 @@ final class DiffEngineTests: XCTestCase {
                        edited.splitRight.rows.compactMap(\.collapsed))
     }
 
+    func testCancellableLineDiffStopsWithinLongRepeatedSourceWithoutChangingPureResults() {
+        let source = (0..<12_000).map { "let line\($0) = content\n" }.joined()
+        let modified = source.replacingOccurrences(of: "let line11000 = content\n",
+                                                    with: "let line11000 = changed\n")
+        let oldLines = DiffLineSplitter.lines(of: source).lines
+        let newLines = DiffLineSplitter.lines(of: modified).lines
+        let baseline = DiffEngine.lineOps(old: oldLines, new: newLines)
+        var checks = 0
+        let canceled = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) {
+            checks += 1
+            return checks >= 4
+        }
+        XCTAssertNil(canceled,
+                     "Cancelling in the middle of a long common prefix must stop the actual Diff engine")
+        XCTAssertGreaterThanOrEqual(checks, 4)
+        let active = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) { false }
+        XCTAssertEqual(active, baseline,
+                       "An active cancel-aware path must produce exactly the old pure diff")
+    }
+
+    func testCancellableCoreMatchesPureDiffForUnicodeNewlinesAndLargeFiles() {
+        let long = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
+        let cases = [
+            ("", ""),
+            ("", "added\n"),
+            ("gone", ""),
+            ("a\r\nb\r\nc", "a\r\nnew\r\nc\n"),
+            ("é\n👩‍🚀\nend", "e\u{301}\n👩‍🚀\nend\n"),
+            ("first\nsecond\nlast", "first\nchanged\nlast\n"),
+            (long, long.replacingOccurrences(of: "let value12000 = 12000\n",
+                                              with: "let value12000 = -1\n"))
+        ]
+        for (old, new) in cases {
+            let expected = DiffCore.compute(oldText: old, newText: new)
+            let active = DiffCore.computeIfActive(oldText: old, newText: new) { false }
+            XCTAssertEqual(active?.ops, expected.ops)
+            XCTAssertEqual(active?.oldMissingNewline, expected.oldMissingNewline)
+            XCTAssertEqual(active?.newMissingNewline, expected.newMissingNewline)
+            XCTAssertEqual(active?.oldLines.map(\.utf16Range), expected.oldLines.map(\.utf16Range))
+            XCTAssertEqual(active?.newLines.map(\.utf16Range), expected.newLines.map(\.utf16Range))
+        }
+        XCTAssertNil(DiffCore.computeIfActive(oldText: long, newText: long) { true },
+                     "An already-cancelled request must never return a partial DiffCore")
+    }
+
+    func testCancellableLineDiffInterruptsDenseMyersAndPatiencePaths() {
+        let cases = [
+            ((0..<1_600).map { _ in "old\n" }.joined(),
+             (0..<1_600).map { _ in "new\n" }.joined()),
+            ((0..<2_000).map { "old\($0)\n" }.joined(),
+             (0..<2_000).map { "new\($0)\n" }.joined())
+        ]
+        for (old, new) in cases {
+            let oldLines = DiffLineSplitter.lines(of: old).lines
+            let newLines = DiffLineSplitter.lines(of: new).lines
+            var totalChecks = 0
+            let active = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) {
+                totalChecks += 1
+                return false
+            }
+            XCTAssertEqual(active, DiffEngine.lineOps(old: oldLines, new: newLines))
+            XCTAssertGreaterThan(totalChecks, 10)
+            var canceledChecks = 0
+            let interrupted = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) {
+                canceledChecks += 1
+                return canceledChecks >= totalChecks / 2
+            }
+            XCTAssertNil(interrupted, "A canceled expensive diff cannot publish partial line ops")
+            XCTAssertGreaterThan(canceledChecks, 1)
+            XCTAssertLessThan(canceledChecks, totalChecks)
+        }
+    }
+
     func testIntralineEmphasisAgreesAcrossUnifiedSplitAndEditableGhosts() {
         let source = "start\n"
             + (0..<180).map {

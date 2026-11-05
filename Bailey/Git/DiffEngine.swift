@@ -235,20 +235,40 @@ nonisolated enum DiffEngine {
     private static let largeGapEditLimit = 96
 
     static func lineOps(old: [DiffSourceLine], new: [DiffSourceLine]) -> [DiffLineOp] {
+        // Only cancellation can throw; this synchronous API cannot cancel.
+        do {
+            return try computeLineOps(old: old, new: new, cancellation: { false })
+        } catch {
+            preconditionFailure("Non-cancellable diff unexpectedly aborted: \(error)")
+        }
+    }
+
+    static func lineOpsIfActive(
+        old: [DiffSourceLine], new: [DiffSourceLine], cancellation: @escaping () -> Bool
+    ) -> [DiffLineOp]? {
+        // CancellationError is the only thrown error; no partial ops escape.
+        try? computeLineOps(old: old, new: new, cancellation: cancellation)
+    }
+
+    private static func computeLineOps(
+        old: [DiffSourceLine], new: [DiffSourceLine], cancellation: @escaping () -> Bool
+    ) throws -> [DiffLineOp] {
+        guard !cancellation() else { throw CancellationError() }
         var builder = OpsBuilder()
         // Hash once: line equality during the diff is then integer comparison
         // with a rare full-text confirmation on hash collisions.
-        let oldHashes = old.map { $0.text.hashValue }
-        let newHashes = new.map { $0.text.hashValue }
+        let oldHashes = try hashes(for: old, cancellation: cancellation)
+        let newHashes = try hashes(for: new, cancellation: cancellation)
         let oldTexts = old.map(\.text)
         let newTexts = new.map(\.text)
         let context = Context(
             oldHashes: oldHashes, newHashes: newHashes,
-            oldTexts: oldTexts, newTexts: newTexts
+            oldTexts: oldTexts, newTexts: newTexts, cancellation: cancellation
         )
-        diffRegion(
+        try diffRegion(
             context, old: 0..<old.count, new: 0..<new.count, into: &builder
         )
+        try context.checkCancellation()
         let ops = builder.finish()
         #if DEBUG
         assertReconstructs(ops: ops, oldCount: old.count, newCount: new.count)
@@ -256,11 +276,28 @@ nonisolated enum DiffEngine {
         return ops
     }
 
+    private static func hashes(
+        for lines: [DiffSourceLine], cancellation: () -> Bool
+    ) throws -> [Int] {
+        var result: [Int] = []
+        result.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() {
+            if index.isMultiple(of: 256), cancellation() { throw CancellationError() }
+            result.append(line.text.hashValue)
+        }
+        return result
+    }
+
     private struct Context {
         let oldHashes: [Int]
         let newHashes: [Int]
         let oldTexts: [Substring]
         let newTexts: [Substring]
+        let cancellation: () -> Bool
+
+        func checkCancellation() throws {
+            if cancellation() { throw CancellationError() }
+        }
 
         func linesEqual(_ oldIndex: Int, _ newIndex: Int) -> Bool {
             oldHashes[oldIndex] == newHashes[newIndex]
@@ -326,7 +363,8 @@ nonisolated enum DiffEngine {
 
     private static func diffRegion(
         _ context: Context, old: Range<Int>, new: Range<Int>, into builder: inout OpsBuilder
-    ) {
+    ) throws {
+        try context.checkCancellation()
         var old = old
         var new = new
 
@@ -334,6 +372,7 @@ nonisolated enum DiffEngine {
         var prefixCount = 0
         while prefixCount < old.count, prefixCount < new.count,
               context.linesEqual(old.lowerBound + prefixCount, new.lowerBound + prefixCount) {
+            if prefixCount.isMultiple(of: 256) { try context.checkCancellation() }
             prefixCount += 1
         }
         if prefixCount > 0 {
@@ -347,6 +386,7 @@ nonisolated enum DiffEngine {
         var suffixCount = 0
         while suffixCount < old.count, suffixCount < new.count,
               context.linesEqual(old.upperBound - 1 - suffixCount, new.upperBound - 1 - suffixCount) {
+            if suffixCount.isMultiple(of: 256) { try context.checkCancellation() }
             suffixCount += 1
         }
         let suffixOldStart = old.upperBound - suffixCount
@@ -371,13 +411,13 @@ nonisolated enum DiffEngine {
         }
 
         let smallGap = old.count <= myersLimit && new.count <= myersLimit
-        if myersDiff(context, old: old, new: new,
-                     editLimit: smallGap ? old.count + new.count : largeGapEditLimit,
-                     into: &builder) {
+        if try myersDiff(context, old: old, new: new,
+                         editLimit: smallGap ? old.count + new.count : largeGapEditLimit,
+                         into: &builder) {
             return
         }
 
-        let anchors = patienceAnchors(context, old: old, new: new)
+        let anchors = try patienceAnchors(context, old: old, new: new)
         guard !anchors.isEmpty else {
             // A huge region with no unique common line: generated content.
             // Optimal alignment is unaffordable and would not read better.
@@ -389,7 +429,7 @@ nonisolated enum DiffEngine {
         var oldCursor = old.lowerBound
         var newCursor = new.lowerBound
         for anchor in anchors {
-            diffRegion(
+            try diffRegion(
                 context,
                 old: oldCursor..<anchor.oldIndex,
                 new: newCursor..<anchor.newIndex,
@@ -399,7 +439,7 @@ nonisolated enum DiffEngine {
             oldCursor = anchor.oldIndex + 1
             newCursor = anchor.newIndex + 1
         }
-        diffRegion(
+        try diffRegion(
             context, old: oldCursor..<old.upperBound, new: newCursor..<new.upperBound, into: &builder
         )
     }
@@ -416,7 +456,7 @@ nonisolated enum DiffEngine {
     /// consistent.
     private static func patienceAnchors(
         _ context: Context, old: Range<Int>, new: Range<Int>
-    ) -> [Anchor] {
+    ) throws -> [Anchor] {
         struct Occurrence {
             var oldIndex = -1
             var oldCount = 0
@@ -429,18 +469,22 @@ nonisolated enum DiffEngine {
         var table: [Int: Occurrence] = [:]
         table.reserveCapacity(min(old.count + new.count, 4096))
         for index in old {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
             table[context.oldHashes[index], default: Occurrence()].oldCount += 1
             table[context.oldHashes[index]]?.oldIndex = index
         }
         for index in new {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
             table[context.newHashes[index], default: Occurrence()].newCount += 1
             table[context.newHashes[index]]?.newIndex = index
         }
 
         var candidates: [Anchor] = []
-        for occurrence in table.values
-        where occurrence.oldCount == 1 && occurrence.newCount == 1 {
-            guard context.linesEqual(occurrence.oldIndex, occurrence.newIndex) else { continue }
+        for (index, occurrence) in table.values.enumerated() {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
+            guard occurrence.oldCount == 1, occurrence.newCount == 1,
+                  context.linesEqual(occurrence.oldIndex, occurrence.newIndex)
+            else { continue }
             candidates.append(Anchor(oldIndex: occurrence.oldIndex, newIndex: occurrence.newIndex))
         }
         candidates.sort { $0.oldIndex < $1.oldIndex }
@@ -450,6 +494,7 @@ nonisolated enum DiffEngine {
         var pileTops: [Int] = [] // candidate index of the top of each pile
         var previous = [Int](repeating: -1, count: candidates.count)
         for (index, candidate) in candidates.enumerated() {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
             var lo = 0
             var hi = pileTops.count
             while lo < hi {
@@ -485,7 +530,7 @@ nonisolated enum DiffEngine {
     private static func myersDiff(
         _ context: Context, old: Range<Int>, new: Range<Int>,
         editLimit: Int, into builder: inout OpsBuilder
-    ) -> Bool {
+    ) throws -> Bool {
         let n = old.count
         let m = new.count
         let maxD = min(n + m, editLimit)
@@ -495,6 +540,7 @@ nonisolated enum DiffEngine {
 
         var foundD = -1
         outer: for d in 0...maxD {
+            try context.checkCancellation()
             trace.append(v)
             var k = -d
             while k <= d {
@@ -507,6 +553,7 @@ nonisolated enum DiffEngine {
                 var y = x - k
                 while x < n, y < m,
                       context.linesEqual(old.lowerBound + x, new.lowerBound + y) {
+                    if x.isMultiple(of: 256) { try context.checkCancellation() }
                     x += 1
                     y += 1
                 }
@@ -1053,8 +1100,35 @@ nonisolated struct DiffCore {
     static func compute(oldText: String, newText: String) -> DiffCore {
         let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: oldText)
         let (newLines, newTrailing) = DiffLineSplitter.lines(of: newText)
-        var ops = DiffEngine.lineOps(old: oldLines, new: newLines)
+        return assemble(
+            oldLines: oldLines, newLines: newLines,
+            oldTrailing: oldTrailing, newTrailing: newTrailing,
+            ops: DiffEngine.lineOps(old: oldLines, new: newLines)
+        )
+    }
 
+    static func computeIfActive(
+        oldText: String, newText: String, cancellation: @escaping () -> Bool
+    ) -> DiffCore? {
+        guard !cancellation() else { return nil }
+        let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: oldText)
+        guard !cancellation() else { return nil }
+        let (newLines, newTrailing) = DiffLineSplitter.lines(of: newText)
+        guard !cancellation(),
+              let ops = DiffEngine.lineOpsIfActive(
+                  old: oldLines, new: newLines, cancellation: cancellation
+              ), !cancellation() else { return nil }
+        return assemble(
+            oldLines: oldLines, newLines: newLines,
+            oldTrailing: oldTrailing, newTrailing: newTrailing, ops: ops
+        )
+    }
+
+    private static func assemble(
+        oldLines: [DiffSourceLine], newLines: [DiffSourceLine],
+        oldTrailing: Bool, newTrailing: Bool, ops sourceOps: [DiffLineOp]
+    ) -> DiffCore {
+        var ops = sourceOps
         // A trailing-newline difference is a real change to the last line that
         // line-splitting hides. Convert the final shared line into a
         // removed/added pair so it surfaces.

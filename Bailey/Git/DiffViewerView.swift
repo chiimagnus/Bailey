@@ -185,7 +185,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private(set) var editBufferRevision: UInt = 0
     @ObservationIgnored private var displayGeneration: UInt = 0
     @ObservationIgnored private var displayTask: Task<Void, Never>?
-    @ObservationIgnored private var displayCoreTask: Task<DiffCore, Never>?
+    @ObservationIgnored private var displayCoreTask: Task<DiffCore?, Never>?
     @ObservationIgnored private var hasAppeared = false
     @ObservationIgnored private var displayInputs: DiffDisplayInputs?
     @ObservationIgnored private var revealedOldLines: [Range<Int>] = []
@@ -617,12 +617,13 @@ final class DiffTab: nonisolated Identifiable {
         // old/new snapshot. Share the expensive line diff instead of running
         // Myers twice while the initial worktree pane waits to appear.
         let coreTask = Task.detached(priority: .userInitiated) {
-            DiffCore.compute(oldText: before, newText: after)
+            DiffCore.computeIfActive(
+                oldText: before, newText: after, cancellation: { Task.isCancelled }
+            )
         }
         displayCoreTask = coreTask
         displayTask = Task { [weak self] in
-            let core = await coreTask.value
-            guard !Task.isCancelled else { return }
+            guard let core = await coreTask.value, !Task.isCancelled else { return }
             let computed: DiffComputation? = await Self.runBackgroundDiffWork {
                 DiffComputation.build(core: core, revealedLines: revealedLines)
             }
@@ -802,9 +803,13 @@ final class DiffTab: nonisolated Identifiable {
                     if let cachedCore {
                         core = cachedCore
                     } else if let inFlightCore {
-                        core = await inFlightCore.value
+                        guard let active = await inFlightCore.value else { return nil }
+                        core = active
                     } else {
-                        core = DiffCore.compute(oldText: before, newText: after)
+                        guard let active = DiffCore.computeIfActive(
+                            oldText: before, newText: after, cancellation: { Task.isCancelled }
+                        ) else { return nil }
+                        core = active
                     }
                     guard !Task.isCancelled else { return nil }
                     let padding = prepareSplit ? DiffComputation.editableSplitPadding(core: core) : nil
