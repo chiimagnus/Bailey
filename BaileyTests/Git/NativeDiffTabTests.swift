@@ -2849,13 +2849,18 @@ final class NativeDiffTabTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
-        try await wait { diff.nativeSurface != nil }
-        let surface = try XCTUnwrap(diff.nativeSurface)
-        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.findNativeTextView(in: host, editable: true)?.window === window
+        }
+        let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        XCTAssertTrue(editor.window === window)
         XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(window.firstResponder === editor)
         editor.insertText("new🙂", replacementRange: NSRange(location: 0, length: 0))
         try await wait { diff.isDirty }
         XCTAssertTrue(window.makeFirstResponder(nil))
+        XCTAssertFalse(window.firstResponder === editor)
         try await wait { await backend.writing }
         await backend.finishWrite()
         try await wait { !diff.isDirty }
