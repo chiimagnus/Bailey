@@ -2832,6 +2832,57 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(visible.contains { NSLocationInRange(2, $0.range) })
     }
 
+    func testDiffSyntaxReusesParseTreeAcrossFoldExpansionAndInvalidatesOnByteChanges() async throws {
+        let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
+        let context = try XCTUnwrap(resolved)
+        let source = (0..<24_000).map { "let value\($0) = \($0) // text\n" }.joined()
+        let modified = source.replacingOccurrences(
+            of: "let value12000 = 12000 // text\n", with: "let value12000 = -1 // text\n"
+        )
+        let core = DiffCore.compute(oldText: source, newText: modified)
+        let initial = DiffComputation.build(core: core, revealedLines: [])
+        let oldRanges = DiffSyntaxHighlighter.visibleRanges(in: initial.splitLeft, source: .old)
+        let cached = DiffSyntaxSource()
+        let start = CFAbsoluteTimeGetCurrent()
+        let first = await cached.captures(text: source, context: context, ranges: oldRanges)
+        let cold = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertFalse(first.isEmpty)
+        let initialCount = await cached.parseCount
+        XCTAssertEqual(initialCount, 1)
+
+        let fold = try XCTUnwrap(initial.unified.rows.first(where: { $0.collapsed != nil })?.collapsed)
+        let expanded = DiffComputation.build(core: core, revealedLines: fold.revealNext())
+        let expandedRanges = DiffSyntaxHighlighter.visibleRanges(
+            in: expanded.splitLeft, source: .old
+        )
+        let warmStart = CFAbsoluteTimeGetCurrent()
+        let warm = await cached.captures(text: source, context: context, ranges: expandedRanges)
+        let warmTime = (CFAbsoluteTimeGetCurrent() - warmStart) * 1_000
+        XCTAssertFalse(warm.isEmpty)
+        let afterExpansion = await cached.parseCount
+        XCTAssertEqual(afterExpansion, 1, "Unfolding may query new rows, but may not reparse source")
+        let direct = DiffSyntaxHighlighter.captures(
+            text: source, context: context, ranges: expandedRanges
+        )
+        XCTAssertEqual(warm.map(\.range), direct.map(\.range))
+        XCTAssertEqual(warm.map(\.name), direct.map(\.name))
+
+        let composed = "let café = 1\n"
+        let decomposed = "let cafe\u{301} = 1\n"
+        _ = await cached.captures(
+            text: composed, context: context,
+            ranges: [NSRange(location: 0, length: composed.utf16.count)]
+        )
+        _ = await cached.captures(
+            text: decomposed, context: context,
+            ranges: [NSRange(location: 0, length: decomposed.utf16.count)]
+        )
+        let afterUnicode = await cached.parseCount
+        XCTAssertEqual(afterUnicode, 3,
+                       "Unicode-canonically equivalent but byte-different text must reparse")
+        print("AUDIT_DIFF_SYNTAX_REUSE lines=24000 coldMs=\(cold) foldReuseMs=\(warmTime)")
+    }
+
     func testVisibleSyntaxRangesMatchFullCapturesAfterFoldingAndExpansion() async throws {
         for path in ["fixture.swift", "README.md"] {
             let source: String

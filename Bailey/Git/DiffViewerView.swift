@@ -205,6 +205,8 @@ final class DiffTab: nonisolated Identifiable {
     /// connection to the same machine when one arrives.
     @ObservationIgnored private var backend: WorkspaceBackend
     private let syntaxContextTask: Task<DiffHighlightContext?, Never>
+    @ObservationIgnored private let originalSyntax = DiffSyntaxSource()
+    @ObservationIgnored private let modifiedSyntax = DiffSyntaxSource()
     /// The workspace this diff belongs to: nil for this Mac, else the machine
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a diff opened locally is never read-only.
@@ -599,6 +601,8 @@ final class DiffTab: nonisolated Identifiable {
         let after = comparisonNew
         let revealedLines = revealedOldLines
         let syntaxContextTask = syntaxContextTask
+        let originalSyntax = originalSyntax
+        let modifiedSyntax = modifiedSyntax
         // The edit decorations and review projection use the same initial
         // old/new snapshot. Share the expensive line diff instead of running
         // Myers twice while the initial worktree pane waits to appear.
@@ -625,7 +629,8 @@ final class DiffTab: nonisolated Identifiable {
             }
             let context = await syntaxContextTask.value
             let captures = await Self.captureVisibleSyntax(
-                before: before, after: after, computation: computation, context: context
+                before: before, after: after, computation: computation, context: context,
+                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax
             )
             guard let self, !Task.isCancelled,
                   self.displayGeneration == generation else { return }
@@ -655,7 +660,8 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated static func captureVisibleSyntax(
         before: String, after: String, computation: DiffComputation,
-        context: DiffHighlightContext?
+        context: DiffHighlightContext?, originalSyntax: DiffSyntaxSource,
+        modifiedSyntax: DiffSyntaxSource
     ) async -> (old: [DiffCaptureRun], new: [DiffCaptureRun]) {
         guard let context else { return ([], []) }
         let oldRanges = DiffSyntaxHighlighter.visibleRanges(
@@ -665,10 +671,10 @@ final class DiffTab: nonisolated Identifiable {
             in: computation.splitRight, source: .new
         )
         let captureTask = Task.detached(priority: .userInitiated) {
-            async let old = DiffSyntaxHighlighter.captures(
+            async let old = originalSyntax.captures(
                 text: before, context: context, ranges: oldRanges
             )
-            async let new = DiffSyntaxHighlighter.captures(
+            async let new = modifiedSyntax.captures(
                 text: after, context: context, ranges: newRanges
             )
             return (await old, await new)
@@ -700,6 +706,8 @@ final class DiffTab: nonisolated Identifiable {
         let before = comparisonOld
         let after = comparisonNew
         let syntaxContextTask = syntaxContextTask
+        let originalSyntax = originalSyntax
+        let modifiedSyntax = modifiedSyntax
         displayTask?.cancel()
         displayTask = Task { [weak self] in
             let computation = await Task.detached(priority: .userInitiated) {
@@ -713,7 +721,8 @@ final class DiffTab: nonisolated Identifiable {
             }
             let context = await syntaxContextTask.value
             let captures = await Self.captureVisibleSyntax(
-                before: before, after: after, computation: computation, context: context
+                before: before, after: after, computation: computation, context: context,
+                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax
             )
             guard let self, !Task.isCancelled,
                   self.displayGeneration == generation else { return }

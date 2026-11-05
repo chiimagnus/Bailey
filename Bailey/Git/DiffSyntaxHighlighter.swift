@@ -28,6 +28,48 @@ nonisolated struct DiffHighlightContext: Sendable {
     let query: SwiftTreeSitter.Query
 }
 
+/// Each diff tab owns two independent source parsers. Folding only changes
+/// queried rows; it must not rebuild syntax trees for unchanged source text.
+actor DiffSyntaxSource {
+    private var cachedText: String?
+    private var cachedGrammar: Int?
+    private var cachedTree: MutableTree?
+    private(set) var parseCount = 0
+
+    func captures(
+        text: String, context: DiffHighlightContext, ranges: [NSRange]
+    ) -> [DiffCaptureRun] {
+        guard !Task.isCancelled, !text.isEmpty, !ranges.isEmpty else { return [] }
+        let unchanged = cachedGrammar == context.grammarIndex
+            && (cachedText?.utf8.elementsEqual(text.utf8) ?? false)
+        if !unchanged {
+            let parser = Parser()
+            guard let grammar = SyntaxLanguage.parser(grammarIndex: context.grammarIndex),
+                  (try? parser.setLanguage(grammar)) != nil,
+                  let parsed = parser.parse(text), !Task.isCancelled else { return [] }
+            parseCount += 1
+            // Retain bounded snapshots only. Large files still get visible
+            // highlights without keeping two multi-megabyte trees per tab.
+            if text.utf8.count <= 2_000_000 {
+                cachedText = text
+                cachedGrammar = context.grammarIndex
+                cachedTree = parsed
+            } else {
+                cachedText = nil
+                cachedGrammar = nil
+                cachedTree = nil
+            }
+            return DiffSyntaxHighlighter.queryCaptures(
+                tree: parsed, text: text, context: context, ranges: ranges
+            )
+        }
+        guard let cachedTree else { return [] }
+        return DiffSyntaxHighlighter.queryCaptures(
+            tree: cachedTree, text: text, context: context, ranges: ranges
+        )
+    }
+}
+
 enum DiffSyntaxHighlighter {
     /// Whole-file capture requests over multi-megabyte generated files are
     /// skipped. Diff panes instead query their visible source ranges, even
@@ -83,9 +125,15 @@ enum DiffSyntaxHighlighter {
         } catch {
             return []
         }
-        guard let tree = parser.parse(text), let root = tree.rootNode,
-              !Task.isCancelled else { return [] }
+        guard let tree = parser.parse(text), !Task.isCancelled else { return [] }
+        return queryCaptures(tree: tree, text: text, context: context, ranges: ranges)
+    }
 
+    fileprivate nonisolated static func queryCaptures(
+        tree: MutableTree, text: String, context: DiffHighlightContext,
+        ranges: [NSRange]?
+    ) -> [DiffCaptureRun] {
+        guard !Task.isCancelled, let root = tree.rootNode else { return [] }
         let predicateContext = SwiftTreeSitter.Predicate.Context(string: text)
         var runs: [DiffCaptureRun] = []
         for visible in ranges ?? [NSRange(location: 0, length: text.utf16.count)] {
