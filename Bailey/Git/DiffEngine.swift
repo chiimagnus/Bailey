@@ -905,17 +905,29 @@ nonisolated struct DiffCollapsedRun: Equatable {
     var hiddenLines: Int { baselineRange.count }
     let direction: Direction
 
-    func revealNext() -> [Range<Int>] {
-        let step = min(hiddenLines, DiffCollapse.expansionLineCount)
+    func revealNext(excluding revealed: [Range<Int>] = []) -> [Range<Int>] {
+        // The tab keeps revealed intervals sorted and merged. Subtract them
+        // from this separator's original range so consecutive clicks on a
+        // still-rendered separator reveal new lines instead of the same ones.
+        var hidden: [Range<Int>] = []
+        var cursor = baselineRange.lowerBound
+        for range in revealed where range.upperBound > cursor
+            && range.lowerBound < baselineRange.upperBound {
+            let end = min(baselineRange.upperBound, range.lowerBound)
+            if cursor < end { hidden.append(cursor..<end) }
+            cursor = max(cursor, min(baselineRange.upperBound, range.upperBound))
+        }
+        if cursor < baselineRange.upperBound { hidden.append(cursor..<baselineRange.upperBound) }
+        guard let first = hidden.first, let last = hidden.last else { return [] }
         switch direction {
         case .revealUp:
-            return [(baselineRange.upperBound - step)..<baselineRange.upperBound]
+            return [(last.upperBound - min(last.count, DiffCollapse.expansionLineCount))..<last.upperBound]
         case .revealDown:
-            return [baselineRange.lowerBound..<(baselineRange.lowerBound + step)]
+            return [first.lowerBound..<(first.lowerBound + min(first.count, DiffCollapse.expansionLineCount))]
         case .both:
             return [
-                baselineRange.lowerBound..<(baselineRange.lowerBound + step),
-                (baselineRange.upperBound - step)..<baselineRange.upperBound,
+                first.lowerBound..<(first.lowerBound + min(first.count, DiffCollapse.expansionLineCount)),
+                (last.upperBound - min(last.count, DiffCollapse.expansionLineCount))..<last.upperBound,
             ]
         }
     }

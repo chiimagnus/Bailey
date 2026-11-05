@@ -1057,6 +1057,36 @@ final class NativeDiffTabTests: XCTestCase {
                        "MM stable-fold.txt\n")
     }
 
+    func testRapidRepeatedFoldClicksRevealDistinctUnchangedLines() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<1_200).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 400\n", with: "changed 400\n")
+        let file = directory.appendingPathComponent("rapid-fold.txt")
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "rapid-fold.txt"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: file)
+
+        let tab = DiffTab(repoRoot: directory.path, path: "rapid-fold.txt",
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        tab.autoSaveSuspendedForClose = true
+        try await wait { tab.isEditing && tab.editFoldsReady && tab.editFolds.count >= 2 }
+        let tail = try XCTUnwrap(tab.editFolds.last?.separator)
+        XCTAssertEqual(tail.direction, .revealDown)
+        XCTAssertTrue(tail.baselineRange.contains(550))
+        XCTAssertTrue(tail.baselineRange.contains(650))
+        tab.expandRun(tail)
+        tab.expandRun(tail)
+        try await wait {
+            tab.editFoldsReady && tab.editFolds.contains { $0.range.contains(650) }
+                && !tab.editFolds.contains { $0.range.contains(550) }
+        }
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+    }
+
     func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

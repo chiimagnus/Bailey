@@ -697,7 +697,9 @@ final class DiffTab: nonisolated Identifiable {
 
     func expandRun(_ fold: DiffCollapsedRun) {
         guard hasChanges, let inputs = displayInputs else { return }
-        revealedOldLines.append(contentsOf: fold.revealNext())
+        let next = fold.revealNext(excluding: revealedOldLines)
+        guard !next.isEmpty else { return }
+        revealedOldLines.append(contentsOf: next)
         revealedOldLines.sort { $0.lowerBound < $1.lowerBound }
         var merged: [Range<Int>] = []
         for range in revealedOldLines {
