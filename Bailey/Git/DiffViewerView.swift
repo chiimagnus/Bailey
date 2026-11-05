@@ -407,13 +407,14 @@ final class DiffTab: nonisolated Identifiable {
                     case .failed(let message): failure = message
                     }
                 case .staged:
-                    let earlier = await Self.firstGitContent(
+                    async let previous = Self.firstGitContent(
                         [.tree(revision: "HEAD", path: oldPath)], in: root, backend: backend
                     )
-                    old = take((earlier.text, earlier.error))
-                    let staged = await Self.firstGitContent(
+                    async let indexed = Self.firstGitContent(
                         [.index(path: path, stages: [0])], in: root, backend: backend
                     )
+                    let (earlier, staged) = await (previous, indexed)
+                    old = take((earlier.text, earlier.error))
                     newFromGit = take((staged.text, staged.error))
                     unmerged = staged.isUnmerged
                     if staged.isUnmerged && staged.error == nil {
