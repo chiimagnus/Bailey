@@ -412,7 +412,7 @@ final class NativeDiffTabTests: XCTestCase {
         }
         let updated = lines.joined()
         let core = DiffCore.compute(oldText: original, newText: updated)
-        let presentation = DiffComputation.build(core: core, expansions: [:])
+        let presentation = DiffComputation.build(core: core, revealedLines: [])
         let folds = DiffEditFold.sourceFolds(in: presentation.unified,
                                               lineCount: core.newLines.count)
         let starts = core.newLines.map(\.utf16Range.location)
@@ -475,7 +475,7 @@ final class NativeDiffTabTests: XCTestCase {
             coreTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
             start = CFAbsoluteTimeGetCurrent()
             let projection = await Task.detached(priority: .userInitiated) {
-                DiffComputation.build(core: core, expansions: [:])
+                DiffComputation.build(core: core, revealedLines: [])
             }.value
             projectionTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
             XCTAssertTrue(projection.unified.rows.contains { $0.kind == .added })
@@ -732,7 +732,7 @@ final class NativeDiffTabTests: XCTestCase {
         let modified = original.replacingOccurrences(of: "line 170\n", with: "changed 170\n")
         let core = DiffCore.compute(oldText: original, newText: modified)
         let folds = DiffEditFold.sourceFolds(
-            in: DiffComputation.build(core: core, expansions: [:]).unified,
+            in: DiffComputation.build(core: core, revealedLines: []).unified,
             lineCount: core.newLines.count
         )
         XCTAssertEqual(folds.first?.range.lowerBound, 0)
@@ -786,7 +786,7 @@ final class NativeDiffTabTests: XCTestCase {
             after = after.replacingOccurrences(of: "line \(line)\n", with: replacement + "\n")
         }
         let core = DiffCore.compute(oldText: before, newText: after)
-        let compared = DiffComputation.build(core: core, expansions: [:])
+        let compared = DiffComputation.build(core: core, revealedLines: [])
         let folds = DiffEditFold.sourceFolds(in: compared.unified, lineCount: core.newLines.count)
         XCTAssertFalse(folds.isEmpty)
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -887,7 +887,7 @@ final class NativeDiffTabTests: XCTestCase {
         let before = (0..<320).map { "line \($0)\n" }.joined()
         let after = before.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
         let core = DiffCore.compute(oldText: before, newText: after)
-        let compared = DiffComputation.build(core: core, expansions: [:])
+        let compared = DiffComputation.build(core: core, revealedLines: [])
         let folds = DiffEditFold.sourceFolds(in: compared.unified,
                                               lineCount: core.newLines.count)
         XCTAssertFalse(folds.isEmpty)
@@ -994,6 +994,43 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertLessThan(differing, 160,
                               "Read-only and editable xx unmodified lines must share one visual renderer")
         }
+    }
+
+    func testEditingBeforeExpandedContextRetainsItsSourceLinesWithoutOpeningOtherFolds() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<1_200).map { "line \($0)\n" }.joined()
+        let modified = original
+            .replacingOccurrences(of: "line 400\n", with: "changed 400\n")
+            .replacingOccurrences(of: "line 700\n", with: "changed 700\n")
+        let path = directory.appendingPathComponent("stable-fold.txt")
+        try Data(original.utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "stable-fold.txt"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: path)
+
+        let tab = DiffTab(repoRoot: directory.path, path: "stable-fold.txt",
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        tab.autoSaveSuspendedForClose = true
+        try await wait { tab.isEditing && tab.editFoldsReady && tab.editFolds.count >= 3 }
+        let tail = try XCTUnwrap(tab.editFolds.last)
+        XCTAssertGreaterThan(tail.range.lowerBound, 700)
+        tab.expandRun(tail.separator)
+        try await wait { !tab.editFolds.contains { $0.range.contains(720) } }
+        XCTAssertTrue(tab.editFolds.contains { $0.range.contains(500) })
+
+        let priorRevision = tab.editPresentationRevision
+        let next = modified.replacingOccurrences(of: "line 180\n", with: "changed 180\n")
+        tab.updateEditedContent(next)
+        try await wait { tab.editPresentationRevision > priorRevision }
+        XCTAssertTrue(tab.isDirty)
+        XCTAssertFalse(tab.editFolds.contains { $0.range.contains(720) },
+                       "Typing before a revealed region must not refold its original source lines")
+        XCTAssertTrue(tab.editFolds.contains { $0.range.contains(500) },
+                      "Typing elsewhere must not apply a stale fold ordinal to a different region")
+        XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
     }
 
     func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {
@@ -1249,7 +1286,7 @@ final class NativeDiffTabTests: XCTestCase {
             ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
         )
         let folds = DiffEditFold.sourceFolds(
-            in: DiffComputation.build(core: core, expansions: [:]).unified,
+            in: DiffComputation.build(core: core, revealedLines: []).unified,
             lineCount: core.newLines.count
         )
         XCTAssertFalse(folds.isEmpty)
@@ -1308,7 +1345,7 @@ final class NativeDiffTabTests: XCTestCase {
             ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
         )
         let folds = DiffEditFold.sourceFolds(
-            in: DiffComputation.build(core: core, expansions: [:]).unified,
+            in: DiffComputation.build(core: core, revealedLines: []).unified,
             lineCount: core.newLines.count
         )
         XCTAssertEqual(state.ghosts.first?.lines.count, 500)
@@ -2583,7 +2620,7 @@ final class NativeDiffTabTests: XCTestCase {
         let newSource = edited.joined(separator: "\n") + "\n"
         let complete = DiffComputation.compute(oldText: oldSource, newText: newSource).unified
         let compact = DiffComputation.build(core: .compute(oldText: oldSource, newText: newSource),
-                                            expansions: [:]).unified
+                                            revealedLines: []).unified
         XCTAssertTrue(compact.rows.contains(where: { $0.collapsed != nil }))
         let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
         let window = NSWindow(contentRect: NSRect(x: -930, y: -930, width: 700, height: 750),
@@ -2725,7 +2762,7 @@ final class NativeDiffTabTests: XCTestCase {
         let old = (0..<320).map { "line \($0)\n" }.joined()
         let new = old.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
         let core = DiffCore.compute(oldText: old, newText: new)
-        let projection = DiffComputation.build(core: core, expansions: [:])
+        let projection = DiffComputation.build(core: core, revealedLines: [])
         let reviewed = DiffDecorations.review(projection.unified)
         let state = projection.editState
         let offsets = core.newLines.map(\.utf16Range.location)
@@ -2813,16 +2850,13 @@ final class NativeDiffTabTests: XCTestCase {
             let resolved = await DiffSyntaxHighlighter.context(for: path)
             let context = try XCTUnwrap(resolved)
             let core = DiffCore.compute(oldText: source, newText: after)
-            var variants: [[Int: DiffRunExpansion]] = [[:]]
-            let initial = DiffComputation.build(core: core, expansions: [:])
+            var variants: [[Range<Int>]] = [[]]
+            let initial = DiffComputation.build(core: core, revealedLines: [])
             if let collapsed = initial.unified.rows.first(where: { $0.collapsed != nil })?.collapsed {
-                var expanded = DiffRunExpansion()
-                expanded.fromStart = 30
-                expanded.fromEnd = 30
-                variants.append([collapsed.runIndex: expanded])
+                variants.append(collapsed.revealNext())
             }
-            for expansions in variants {
-                let computation = DiffComputation.build(core: core, expansions: expansions)
+            for revealed in variants {
+                let computation = DiffComputation.build(core: core, revealedLines: revealed)
                 let oldRanges = DiffSyntaxHighlighter.visibleRanges(
                     in: computation.splitLeft, source: .old
                 )
@@ -3428,13 +3462,13 @@ final class NativeDiffTabTests: XCTestCase {
         let oldText = oldLines.joined(separator: "\n") + "\n"
         let newText = newLines.joined(separator: "\n") + "\n"
         let core = DiffCore.compute(oldText: oldText, newText: newText)
-        let folded = DiffComputation.build(core: core, expansions: [:])
+        let folded = DiffComputation.build(core: core, revealedLines: [])
         let folds = folded.unified.rows.compactMap(\.collapsed)
         XCTAssertFalse(folds.isEmpty)
         XCTAssertEqual(folded.splitLeft.rows.count, folded.splitRight.rows.count)
         let expanded = DiffComputation.build(
             core: core,
-            expansions: [folds[0].runIndex: DiffRunExpansion(fromStart: 100, fromEnd: 0)]
+            revealedLines: folds[0].revealNext()
         )
         XCTAssertGreaterThan(expanded.unified.rows.count, folded.unified.rows.count)
         XCTAssertEqual(expanded.splitLeft.rows.count, expanded.splitRight.rows.count)
@@ -3447,7 +3481,7 @@ final class NativeDiffTabTests: XCTestCase {
         let old = oldLines.joined(separator: "\n") + "\n"
         let new = newLines.joined(separator: "\n") + "\n"
         let compared = DiffComputation.build(
-            core: DiffCore.compute(oldText: old, newText: new), expansions: [:]
+            core: DiffCore.compute(oldText: old, newText: new), revealedLines: []
         )
         XCTAssertTrue(compared.unified.rows.contains { $0.collapsed != nil })
 
@@ -3477,7 +3511,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(first.accessibilityPerformPress())
         let activated = try XCTUnwrap(expanded)
         XCTAssertTrue(compared.unified.rows.contains {
-            $0.collapsed?.runIndex == activated.runIndex
+            $0.collapsed?.baselineRange == activated.baselineRange
         })
     }
 

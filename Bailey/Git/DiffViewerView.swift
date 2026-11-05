@@ -189,7 +189,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var displayCoreTask: Task<DiffCore, Never>?
     @ObservationIgnored private var hasAppeared = false
     @ObservationIgnored private var displayInputs: DiffDisplayInputs?
-    @ObservationIgnored private var runExpansions: [Int: DiffRunExpansion] = [:]
+    @ObservationIgnored private var revealedOldLines: [Range<Int>] = []
     @ObservationIgnored private var editGeneration: UInt = 0
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
@@ -290,7 +290,7 @@ final class DiffTab: nonisolated Identifiable {
         // the read-only diff instead of making the draft disappear on screen.
         if isReadOnly, isDirty, !newContent.utf8.elementsEqual(editedNewContent.utf8) {
             newContent = editedNewContent
-            runExpansions.removeAll()
+            revealedOldLines.removeAll()
             recomputeDisplay()
         }
         // An edit made before the connection dropped remains saveable once
@@ -528,7 +528,7 @@ final class DiffTab: nonisolated Identifiable {
             self.editComparisonOld = result.editBaseline
             self.newContent = result.new
             if changed {
-                self.runExpansions.removeAll()
+                self.revealedOldLines.removeAll()
                 self.editFoldsReady = false
                 self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
             }
@@ -598,7 +598,7 @@ final class DiffTab: nonisolated Identifiable {
         }
         let before = comparisonOld
         let after = comparisonNew
-        let expansions = runExpansions
+        let revealedLines = revealedOldLines
         let syntaxContextTask = syntaxContextTask
         // The edit decorations and review projection use the same initial
         // old/new snapshot. Share the expensive line diff instead of running
@@ -610,7 +610,7 @@ final class DiffTab: nonisolated Identifiable {
         displayTask = Task { [weak self] in
             let core = await coreTask.value
             let computation = await Task.detached(priority: .userInitiated) {
-                DiffComputation.build(core: core, expansions: expansions)
+                DiffComputation.build(core: core, revealedLines: revealedLines)
             }.value
             do {
                 guard let self, !Task.isCancelled,
@@ -683,18 +683,20 @@ final class DiffTab: nonisolated Identifiable {
 
     func expandRun(_ fold: DiffCollapsedRun) {
         guard hasChanges, let inputs = displayInputs else { return }
-        var expansion = runExpansions[fold.runIndex] ?? DiffRunExpansion()
-        switch fold.direction {
-        case .revealUp: expansion.fromEnd += DiffCollapse.expansionLineCount
-        case .revealDown: expansion.fromStart += DiffCollapse.expansionLineCount
-        case .both:
-            expansion.fromStart += DiffCollapse.expansionLineCount
-            expansion.fromEnd += DiffCollapse.expansionLineCount
+        revealedOldLines.append(contentsOf: fold.revealNext())
+        revealedOldLines.sort { $0.lowerBound < $1.lowerBound }
+        var merged: [Range<Int>] = []
+        for range in revealedOldLines {
+            if let last = merged.last, range.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                merged.append(range)
+            }
         }
-        runExpansions[fold.runIndex] = expansion
+        revealedOldLines = merged
         displayGeneration &+= 1
         let generation = displayGeneration
-        let expansions = runExpansions
+        let revealedLines = revealedOldLines
         let core = inputs.core
         let before = comparisonOld
         let after = comparisonNew
@@ -702,7 +704,7 @@ final class DiffTab: nonisolated Identifiable {
         displayTask?.cancel()
         displayTask = Task { [weak self] in
             let computation = await Task.detached(priority: .userInitiated) {
-                DiffComputation.build(core: core, expansions: expansions)
+                DiffComputation.build(core: core, revealedLines: revealedLines)
             }.value
             do {
                 guard let self, !Task.isCancelled,
@@ -733,7 +735,7 @@ final class DiffTab: nonisolated Identifiable {
         let before = editComparisonOld ?? comparisonOld
         let after = editedNewContent
         let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
-        let expansions = runExpansions
+        let revealedLines = revealedOldLines
         let prepareSplit = isEditing && preferences.diffStyle == .split
             && editComparisonOld == nil
         let matchingReviewSnapshot = !isDirty && editComparisonOld == nil
@@ -761,7 +763,7 @@ final class DiffTab: nonisolated Identifiable {
                     core = DiffCore.compute(oldText: before, newText: after)
                 }
                 let split = prepareSplit ? DiffComputation.editableSplit(core: core) : nil
-                let folded = DiffComputation.build(core: core, expansions: expansions)
+                let folded = DiffComputation.build(core: core, revealedLines: revealedLines)
                 return (
                     folded.editState,
                     core.newLines.map(\.utf16Range.location), core.newLines.count, split, folded

@@ -900,20 +900,25 @@ nonisolated struct DiffCollapsedRun: Equatable {
         case both
     }
 
-    /// How many unmodified lines the row still hides.
-    let hiddenLines: Int
-    /// Stable identity of the equal run within the diff (ordinal of the equal
-    /// run in the op stream), used to record expansion.
-    let runIndex: Int
+    /// Original-file coordinates survive editing on the modified side.
+    let baselineRange: Range<Int>
+    var hiddenLines: Int { baselineRange.count }
     let direction: Direction
-}
 
-/// Lines a fold has revealed at each edge of its hidden range. Mirrors
-/// Pierre's `expandedHunks` entries: counters accumulate per click and the
-/// fold disappears once they cover the range.
-nonisolated struct DiffRunExpansion: Equatable {
-    var fromStart = 0
-    var fromEnd = 0
+    func revealNext() -> [Range<Int>] {
+        let step = min(hiddenLines, DiffCollapse.expansionLineCount)
+        switch direction {
+        case .revealUp:
+            return [(baselineRange.upperBound - step)..<baselineRange.upperBound]
+        case .revealDown:
+            return [baselineRange.lowerBound..<(baselineRange.lowerBound + step)]
+        case .both:
+            return [
+                baselineRange.lowerBound..<(baselineRange.lowerBound + step),
+                (baselineRange.upperBound - step)..<baselineRange.upperBound,
+            ]
+        }
+    }
 }
 
 /// Hidden original new-file paragraphs for a fold. TextKit skips their layout,
@@ -1077,22 +1082,21 @@ nonisolated struct DiffComputation {
     /// emphasis, and read-only deletion ghost blocks.
     let editState: DiffEditState
 
-    /// Builds the rendered documents. `expansions` carries how far each
-    /// folded run has been revealed (keyed by `DiffCollapsedRun.runIndex`);
-    /// pass nil to disable folding entirely and render every line.
-    static func build(core: DiffCore, expansions: [Int: DiffRunExpansion]?) -> DiffComputation {
+    /// Revealed ranges are anchored to the immutable original file.
+    /// Pass nil to disable folding entirely.
+    static func build(core: DiffCore, revealedLines: [Range<Int>]?) -> DiffComputation {
         let blocks = DiffBlocks(ops: core.ops)
         let unified = buildUnified(
             blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
             oldMissingNewline: core.oldMissingNewline,
             newMissingNewline: core.newMissingNewline,
-            expansions: expansions
+            revealedLines: revealedLines
         )
         let (left, right) = buildSplit(
             blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
             oldMissingNewline: core.oldMissingNewline,
             newMissingNewline: core.newMissingNewline,
-            expansions: expansions
+            revealedLines: revealedLines
         )
 
         return DiffComputation(
@@ -1112,51 +1116,44 @@ nonisolated struct DiffComputation {
         return buildSplit(
             blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
             oldMissingNewline: core.oldMissingNewline,
-            newMissingNewline: core.newMissingNewline, expansions: nil
+            newMissingNewline: core.newMissingNewline, revealedLines: nil
         )
     }
 
     /// Full render with no folding — the shape the invariant tests verify.
     static func compute(oldText: String, newText: String) -> DiffComputation {
-        build(core: .compute(oldText: oldText, newText: newText), expansions: nil)
+        build(core: .compute(oldText: oldText, newText: newText), revealedLines: nil)
     }
 
     // MARK: Collapse planning
 
-    /// How one equal run renders: visible line stretches interleaved with at
-    /// most one fold.
+    /// A previously revealed interval can lie in the middle of a new
+    /// equal run after editing, so one run may contain multiple folds.
     private enum EqualSegment {
-        /// Offsets within the run to render as context rows.
         case lines(Range<Int>)
-        /// Offsets within the run hidden behind a separator row.
-        case fold(hidden: Range<Int>, runIndex: Int, direction: DiffCollapsedRun.Direction)
+        case fold(hidden: Range<Int>, direction: DiffCollapsedRun.Direction)
     }
 
-    /// Ported from Pierre's `Wt`: the fold decision uses the *original* gap
-    /// size against the inline threshold, expansion counters are clamped to
-    /// the range, and counters that cover the range render everything.
     private static func equalSegments(
-        count: Int,
-        runIndex: Int,
-        hasChangeBefore: Bool,
-        hasChangeAfter: Bool,
-        expansions: [Int: DiffRunExpansion]?
+        oldStart: Int, count: Int, hasChangeBefore: Bool, hasChangeAfter: Bool,
+        revealedLines: [Range<Int>]?
     ) -> [EqualSegment] {
-        guard let expansions else {
+        guard let revealedLines else { return [.lines(0..<count)] }
+        let lead = hasChangeBefore ? min(count, DiffCollapse.contextLines) : 0
+        let trail = hasChangeAfter ? min(count - lead, DiffCollapse.contextLines) : 0
+        guard count - lead - trail > DiffCollapse.inlineGapThreshold else {
             return [.lines(0..<count)]
         }
-        let lead = hasChangeBefore ? DiffCollapse.contextLines : 0
-        let trail = hasChangeAfter ? DiffCollapse.contextLines : 0
-        let hidden = count - lead - trail
-        guard hidden > DiffCollapse.inlineGapThreshold else {
-            return [.lines(0..<count)]
+
+        var visible: [Range<Int>] = []
+        if lead > 0 { visible.append(0..<lead) }
+        for revealed in revealedLines {
+            let start = max(oldStart, revealed.lowerBound)
+            let end = min(oldStart + count, revealed.upperBound)
+            if start < end { visible.append((start - oldStart)..<(end - oldStart)) }
         }
-        let expansion = expansions[runIndex] ?? DiffRunExpansion()
-        let fromStart = min(max(expansion.fromStart, 0), hidden)
-        let fromEnd = min(max(expansion.fromEnd, 0), hidden)
-        guard fromStart + fromEnd < hidden else {
-            return [.lines(0..<count)]
-        }
+        if trail > 0 { visible.append((count - trail)..<count) }
+        visible.sort { $0.lowerBound < $1.lowerBound }
 
         let direction: DiffCollapsedRun.Direction
         switch (hasChangeBefore, hasChangeAfter) {
@@ -1164,26 +1161,24 @@ nonisolated struct DiffComputation {
         case (_, false): direction = .revealDown
         default: direction = .both
         }
-
-        let headVisible = lead + fromStart
-        let tailVisible = trail + fromEnd
         var segments: [EqualSegment] = []
-        if headVisible > 0 {
-            segments.append(.lines(0..<headVisible))
+        var position = 0
+        for range in visible where range.upperBound > position {
+            if range.lowerBound > position {
+                segments.append(.fold(hidden: position..<range.lowerBound, direction: direction))
+            }
+            let start = max(position, range.lowerBound)
+            segments.append(.lines(start..<range.upperBound))
+            position = range.upperBound
         }
-        segments.append(.fold(
-            hidden: headVisible..<(count - tailVisible),
-            runIndex: runIndex,
-            direction: direction
-        ))
-        if tailVisible > 0 {
-            segments.append(.lines((count - tailVisible)..<count))
+        if position < count {
+            segments.append(.fold(hidden: position..<count, direction: direction))
         }
         return segments
     }
 
     private static func collapsedRow(
-        hidden: Int, runIndex: Int, direction: DiffCollapsedRun.Direction
+        baselineRange: Range<Int>, direction: DiffCollapsedRun.Direction
     ) -> DiffRow {
         DiffRow(
             kind: .collapsed,
@@ -1193,9 +1188,7 @@ nonisolated struct DiffComputation {
             sourceRange: NSRange(location: 0, length: 0),
             emphasis: [],
             missingNewline: false,
-            collapsed: DiffCollapsedRun(
-                hiddenLines: hidden, runIndex: runIndex, direction: direction
-            )
+            collapsed: DiffCollapsedRun(baselineRange: baselineRange, direction: direction)
         )
     }
 
@@ -1348,20 +1341,17 @@ nonisolated struct DiffComputation {
     private static func buildUnified(
         blocks: DiffBlocks, oldLines: [DiffSourceLine], newLines: [DiffSourceLine],
         oldMissingNewline: Bool, newMissingNewline: Bool,
-        expansions: [Int: DiffRunExpansion]?
+        revealedLines: [Range<Int>]?
     ) -> DiffSideDocument {
         var builder = DocumentBuilder()
-        var runIndex = -1
         for (itemIndex, item) in blocks.items.enumerated() {
             switch item {
             case .equal(let oldStart, let newStart, let count):
-                runIndex += 1
                 let segments = equalSegments(
-                    count: count,
-                    runIndex: runIndex,
+                    oldStart: oldStart, count: count,
                     hasChangeBefore: itemIndex > 0,
                     hasChangeAfter: itemIndex < blocks.items.count - 1,
-                    expansions: expansions
+                    revealedLines: revealedLines
                 )
                 for segment in segments {
                     switch segment {
@@ -1381,10 +1371,11 @@ nonisolated struct DiffComputation {
                                 text: newLines[newIndex].text
                             )
                         }
-                    case .fold(let hidden, let run, let direction):
+                    case .fold(let hidden, let direction):
                         builder.append(
                             collapsedRow(
-                                hidden: hidden.count, runIndex: run, direction: direction
+                                baselineRange: (oldStart + hidden.lowerBound)..<(oldStart + hidden.upperBound),
+                                direction: direction
                             ),
                             text: ""
                         )
@@ -1428,7 +1419,7 @@ nonisolated struct DiffComputation {
     private static func buildSplit(
         blocks: DiffBlocks, oldLines: [DiffSourceLine], newLines: [DiffSourceLine],
         oldMissingNewline: Bool, newMissingNewline: Bool,
-        expansions: [Int: DiffRunExpansion]?
+        revealedLines: [Range<Int>]?
     ) -> (left: DiffSideDocument, right: DiffSideDocument) {
         var left = DocumentBuilder()
         var right = DocumentBuilder()
@@ -1441,17 +1432,14 @@ nonisolated struct DiffComputation {
             )
         }
 
-        var runIndex = -1
         for (itemIndex, item) in blocks.items.enumerated() {
             switch item {
             case .equal(let oldStart, let newStart, let count):
-                runIndex += 1
                 let segments = equalSegments(
-                    count: count,
-                    runIndex: runIndex,
+                    oldStart: oldStart, count: count,
                     hasChangeBefore: itemIndex > 0,
                     hasChangeAfter: itemIndex < blocks.items.count - 1,
-                    expansions: expansions
+                    revealedLines: revealedLines
                 )
                 for segment in segments {
                     switch segment {
@@ -1484,21 +1472,14 @@ nonisolated struct DiffComputation {
                                 text: newLines[newIndex].text
                             )
                         }
-                    case .fold(let hidden, let run, let direction):
-                        // Same separator on both sides at the same row index,
-                        // preserving the split alignment invariant.
-                        left.append(
-                            collapsedRow(
-                                hidden: hidden.count, runIndex: run, direction: direction
-                            ),
-                            text: ""
+                    case .fold(let hidden, let direction):
+                        // Both sides share the exact original-file interval.
+                        let separator = collapsedRow(
+                            baselineRange: (oldStart + hidden.lowerBound)..<(oldStart + hidden.upperBound),
+                            direction: direction
                         )
-                        right.append(
-                            collapsedRow(
-                                hidden: hidden.count, runIndex: run, direction: direction
-                            ),
-                            text: ""
-                        )
+                        left.append(separator, text: "")
+                        right.append(separator, text: "")
                     }
                 }
             case .block(let block):

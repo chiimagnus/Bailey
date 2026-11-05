@@ -3,6 +3,38 @@ import XCTest
 @testable import Bailey
 
 final class DiffEngineTests: XCTestCase {
+    func testBaselineRevelationsSurviveNewEditsAndSplitUnchangedRunIntoTwoFolds() {
+        let original = (0..<1_200).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 150\n", with: "changed 150\n")
+            .replacingOccurrences(of: "line 1050\n", with: "changed 1050\n")
+        let core = DiffCore.compute(oldText: original, newText: modified)
+        let revealed = 500..<506
+        let projected = DiffComputation.build(core: core, revealedLines: [revealed])
+        let originalRanges = projected.unified.rows.compactMap(\.collapsed)
+            .map(\.baselineRange)
+        XCTAssertTrue(originalRanges.contains { $0.upperBound == revealed.lowerBound })
+        XCTAssertTrue(originalRanges.contains { $0.lowerBound == revealed.upperBound })
+        for line in revealed {
+            XCTAssertTrue(projected.unified.rows.contains { $0.oldLine == line + 1 },
+                          "Explicitly revealed original line \(line) must stay visible")
+        }
+        XCTAssertEqual(projected.splitLeft.rows.count, projected.splitRight.rows.count)
+        XCTAssertEqual(projected.unified.rows.compactMap(\.collapsed),
+                       projected.splitLeft.rows.compactMap(\.collapsed))
+
+        let updated = modified.replacingOccurrences(of: "line 300\n", with: "changed 300\n")
+        let edited = DiffComputation.build(
+            core: .compute(oldText: original, newText: updated), revealedLines: [revealed]
+        )
+        for line in revealed {
+            XCTAssertTrue(edited.unified.rows.contains { $0.oldLine == line + 1 })
+        }
+        XCTAssertTrue(edited.unified.rows.contains { $0.collapsed?.baselineRange.contains(900) == true })
+        XCTAssertEqual(edited.splitLeft.rows.count, edited.splitRight.rows.count)
+        XCTAssertEqual(edited.unified.rows.compactMap(\.collapsed),
+                       edited.splitRight.rows.compactMap(\.collapsed))
+    }
+
     func testSeededUnicodeAndNewlineDiffsPreserveAllOriginalByteAndRowRanges() {
         var seed: UInt64 = 0x5A17E20261017
         func next(_ max: Int) -> Int {
@@ -60,7 +92,7 @@ final class DiffEngineTests: XCTestCase {
             XCTAssertEqual(oldCursor, core.oldLines.count, "case \(caseID)")
             XCTAssertEqual(newCursor, core.newLines.count, "case \(caseID)")
 
-            let display = DiffComputation.build(core: core, expansions: nil)
+            let display = DiffComputation.build(core: core, revealedLines: nil)
             XCTAssertEqual(display.splitLeft.rows.count, display.splitRight.rows.count)
             for document in [display.unified, display.splitLeft, display.splitRight] {
                 let documentLines = DiffLineSplitter.lines(of: document.text).lines
