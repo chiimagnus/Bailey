@@ -3542,6 +3542,46 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(readonly.new.map(\.name), direct.map(\.name))
     }
 
+    func testDisjointVisibleSyntaxQueryCostAndReuse() async throws {
+        let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
+        let context = try XCTUnwrap(resolved)
+        let source = (0..<24_000).map { "let value\($0) = \($0) // comment\n" }.joined()
+        let lines = DiffLineSplitter.lines(of: source).lines
+        XCTAssertEqual(lines.count, 24_000)
+        let disjoint = (0..<1_000).map { lines[$0 * 24].utf16Range }
+        let syntax = DiffSyntaxSource()
+        let independentCopy = String(decoding: Data(source.utf8), as: UTF8.self)
+        var equalityTimes: [Double] = []
+        for _ in 0..<17 {
+            let compared = CFAbsoluteTimeGetCurrent()
+            XCTAssertTrue(source.utf8.elementsEqual(independentCopy.utf8))
+            equalityTimes.append((CFAbsoluteTimeGetCurrent() - compared) * 1_000)
+        }
+        equalityTimes.sort()
+        print("AUDIT_DIFF_VISIBLE_QUERY byteComparisonMedianMs=\(equalityTimes[8])")
+        let initial = CFAbsoluteTimeGetCurrent()
+        let first = await syntax.captures(text: source, context: context, ranges: [disjoint[0]])
+        let cold = (CFAbsoluteTimeGetCurrent() - initial) * 1_000
+        XCTAssertFalse(first.isEmpty)
+        let initialParseCount = await syntax.parseCount
+        XCTAssertEqual(initialParseCount, 1)
+        for count in [1, 10, 100, 1_000] {
+            let start = CFAbsoluteTimeGetCurrent()
+            let current = await syntax.captures(
+                text: source, context: context, ranges: Array(disjoint.prefix(count))
+            )
+            let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+            let parseCount = await syntax.parseCount
+            XCTAssertEqual(parseCount, 1)
+            let shared = current.filter { $0.range.location < NSMaxRange(disjoint[0]) }
+            XCTAssertEqual(shared.map(\.range), first.map(\.range))
+            XCTAssertEqual(shared.map(\.name), first.map(\.name))
+            XCTAssertGreaterThanOrEqual(current.count, count)
+            print("AUDIT_DIFF_VISIBLE_QUERY ranges=\(count) warmMs=\(elapsed) captures=\(current.count)")
+        }
+        print("AUDIT_DIFF_VISIBLE_QUERY coldMs=\(cold) sourceBytes=\(source.utf8.count)")
+    }
+
     func testDiffSyntaxReusesParseTreeAcrossFoldExpansionAndInvalidatesOnByteChanges() async throws {
         let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
         let context = try XCTUnwrap(resolved)
