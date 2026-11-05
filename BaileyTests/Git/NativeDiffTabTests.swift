@@ -1559,6 +1559,118 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
     }
 
+    func testFoldedNativeCommandsMatchFullDocumentAndSaveExactBytes() async throws {
+        let original = (0..<320).map { "line \($0) 中文👋\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 160", with: "changed 160")
+        let source = modified as NSString
+        let visible = source.range(of: "changed 160")
+        let crossFold = NSRange(
+            location: source.range(of: "line 154").location,
+            length: NSMaxRange(visible) - source.range(of: "line 154").location
+        )
+        let hiddenMatch = source.range(of: "line 20 中文👋")
+        let commands: [(String, @MainActor (NSTextView) -> Void)] = [
+            ("visibleInsert", { $0.insertText("插入", replacementRange: NSRange(location: visible.location, length: 0)) }),
+            ("visiblePaste", { $0.insertText("粘贴\r\n👩🏽‍💻", replacementRange: visible) }),
+            ("visibleDelete", {
+                $0.setSelectedRange(NSRange(location: visible.location + 3, length: 0))
+                $0.deleteBackward(nil)
+            }),
+            ("composition", {
+                $0.setSelectedRange(visible)
+                $0.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0), replacementRange: .notFound)
+                $0.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
+                $0.insertText("你", replacementRange: .notFound)
+                $0.unmarkText()
+            }),
+            ("explicitCrossFoldReplacement", {
+                $0.setSelectedRange(crossFold)
+                $0.insertText("跨区替换", replacementRange: .notFound)
+            }),
+            ("explicitHiddenSearchReplacement", {
+                $0.setSelectedRange(hiddenMatch)
+                $0.insertText("找到的隐藏内容", replacementRange: .notFound)
+            }),
+            ("explicitSelectAll", {
+                $0.selectAll(nil)
+                $0.insertText("完整替换\r\n尾👋", replacementRange: .notFound)
+            }),
+            ("multipleSelections", {
+                $0.selectedRanges = [NSValue(range: visible),
+                                     NSValue(range: source.range(of: "line 161"))]
+                $0.insertText("多选区", replacementRange: .notFound)
+            })
+        ]
+        for (label, command) in commands {
+            let directory = try repository()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let path = directory.appendingPathComponent("folded-commands.txt")
+            try Data(original.utf8).write(to: path)
+            XCTAssertEqual(GitCommandExecution.run(["add", "--", path.lastPathComponent], in: directory.path).status, 0)
+            XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+            let indexBefore = GitCommandExecution.runData(["show", ":" + path.lastPathComponent], in: directory.path)
+            XCTAssertEqual(indexBefore.status, 0)
+            XCTAssertEqual(indexBefore.stdout, Data(original.utf8))
+            try Data(modified.utf8).write(to: path)
+            let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                               preferences: try isolatedPreferences())
+            diff.autoSaveSuspendedForClose = true
+            try await wait { diff.canPresentNativeContent && diff.editFoldsReady && !diff.editFolds.isEmpty }
+            XCTAssertTrue(diff.editFolds.contains { $0.range.contains(20) })
+            XCTAssertTrue(diff.editFolds.contains { $0.range.contains(154) })
+            XCTAssertFalse(diff.editFolds.contains { $0.range.contains(160) })
+
+            let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 800, height: 400),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let surface = DiffNativeSurface(diff: diff)
+            diff.nativeSurface = surface
+            window.contentView = surface
+            surface.render()
+            window.orderFront(nil)
+            surface.layoutSubtreeIfNeeded()
+            let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+            XCTAssertTrue(editor.window === window)
+            XCTAssertFalse(editor.editingFolds.isEmpty)
+            XCTAssertEqual(Data(editor.string.utf8), Data(modified.utf8))
+            let reference = NativeCodeTextView()
+            reference.text = modified
+            command(reference)
+            if label == "multipleSelections" {
+                XCTAssertEqual(Data(reference.string.utf8), Data(modified
+                    .replacingOccurrences(of: "changed 160", with: "多选区")
+                    .replacingOccurrences(of: "line 161", with: "多选区").utf8))
+            }
+            command(editor)
+            editor.breakUndoCoalescing()
+            let expected = Data(reference.string.utf8)
+            XCTAssertNotEqual(expected, Data(modified.utf8), label)
+            XCTAssertEqual(Data(editor.string.utf8), expected, label)
+            XCTAssertEqual(Data(diff.editedNewContent.utf8), expected, label)
+            XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8), label)
+            let undo = try XCTUnwrap(editor.undoManager)
+            XCTAssertTrue(undo.canUndo, label)
+            undo.undo()
+            XCTAssertEqual(Data(editor.string.utf8), Data(modified.utf8), label)
+            XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(modified.utf8), label)
+            XCTAssertFalse(diff.isDirty, label)
+            undo.redo()
+            XCTAssertEqual(Data(editor.string.utf8), expected, label)
+            XCTAssertEqual(Data(diff.editedNewContent.utf8), expected, label)
+            XCTAssertTrue(diff.isDirty, label)
+            await diff.save()
+            XCTAssertNil(diff.saveError, label)
+            XCTAssertEqual(try Data(contentsOf: path), expected, label)
+            let indexAfter = GitCommandExecution.runData(["show", ":" + path.lastPathComponent], in: directory.path)
+            XCTAssertEqual(indexAfter.status, 0)
+            XCTAssertEqual(indexAfter.stdout, indexBefore.stdout, label)
+            print("AUDIT_DIFF_FOLDED_COMMAND action=\(label) fullDocumentBytes=\(expected.count) undoRedoAndSave=true")
+        }
+    }
+
     func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
