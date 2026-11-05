@@ -873,6 +873,8 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
     func testLocalGitStagedAndUnstagedDiffReadyLatencyMatrix() async throws {
+        let font = TerminalFont.current()
+        print("AUDIT_DIFF_ENV system=\(ProcessInfo.processInfo.operatingSystemVersionString) font=\(font.fontName) size=\(font.pointSize) longLineWidth=\(AppSettings.shared.longLineDisplayWidth) scale=\(NSScreen.main?.backingScaleFactor ?? 0) scroller=\(NSScroller.preferredScrollerStyle.rawValue)")
         for lineCount in [1_000, 24_000] {
             let root = try repository()
             defer { try? FileManager.default.removeItem(at: root) }
@@ -889,7 +891,13 @@ final class NativeDiffTabTests: XCTestCase {
             try Data(lines.joined().utf8).write(to: file)
 
             let preferences = try isolatedPreferences()
-            func load(_ source: DiffTab.Source) async throws -> Double {
+            let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 900, height: 500),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.orderFront(nil)
+            func load(_ source: DiffTab.Source) async throws
+                -> (model: Double, native: Double, painted: Double) {
                 let start = CFAbsoluteTimeGetCurrent()
                 let diff = DiffTab(repoRoot: root.path, path: filename, source: source,
                                    untracked: false, origPath: nil,
@@ -899,10 +907,26 @@ final class NativeDiffTabTests: XCTestCase {
                                timeout: 25)
                 XCTAssertNil(diff.error)
                 XCTAssertTrue(diff.hasChanges)
-                return (CFAbsoluteTimeGetCurrent() - start) * 1_000
+                let model = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+                let surface = DiffNativeSurface(diff: diff)
+                diff.nativeSurface = surface
+                window.contentView = surface
+                surface.render()
+                surface.layoutSubtreeIfNeeded()
+                let native = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+                let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                XCTAssertGreaterThan(bitmap.pixelsWide, 0)
+                XCTAssertTrue(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                    .contains { !$0.isHidden && !$0.textView.string.isEmpty })
+                return (model, native, (CFAbsoluteTimeGetCurrent() - start) * 1_000)
             }
-            var staged: [Double] = []
-            var unstaged: [Double] = []
+            var staged: [(model: Double, native: Double, painted: Double)] = []
+            var unstaged: [(model: Double, native: Double, painted: Double)] = []
+            for (label, source) in [("staged", DiffTab.Source.staged), ("unstaged", .worktree)] {
+                let first = try await load(source)
+                print("AUDIT_GIT_DIFF_FIRST_TAB rows=\(lineCount) source=\(label) model=\(first.model) native=\(first.native) componentPixels=\(first.painted)")
+            }
             for run in 0..<30 {
                 if run.isMultiple(of: 2) {
                     staged.append(try await load(.staged))
@@ -912,9 +936,79 @@ final class NativeDiffTabTests: XCTestCase {
                     staged.append(try await load(.staged))
                 }
             }
-            staged.sort()
-            unstaged.sort()
-            print("AUDIT_GIT_DIFF_MODEL_READY rows=\(lineCount) samples=30 stagedMedian=\(staged[15]) stagedP95=\(staged[28]) unstagedMedian=\(unstaged[15]) unstagedP95=\(unstaged[28])")
+            for (source, samples) in [("staged", staged), ("unstaged", unstaged)] {
+                for (phase, durations) in [("model", samples.map(\.model)),
+                                            ("native", samples.map(\.native)),
+                                            ("componentPixels", samples.map(\.painted))] {
+                    let sorted = durations.sorted()
+                    print("AUDIT_GIT_DIFF_READY rows=\(lineCount) source=\(source) phase=\(phase) samples=30 median=\(sorted[15]) p95=\(sorted[28]) worst=\(sorted[29])")
+                }
+            }
+            XCTAssertEqual(try Data(contentsOf: file), Data(lines.joined().utf8))
+        }
+    }
+
+    func testNativeDiffInputCostsAndUndoByteIntegrityMatrix() async throws {
+        for lineCount in [1_000, 24_000, 100_000] {
+            for suffix in ["txt", "swift"] {
+                let directory = try repository()
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let name = "input-cost.\(suffix)"
+                let file = directory.appendingPathComponent(name)
+                let original = (0..<lineCount).map { "let row\($0) = \($0)\n" }.joined()
+                try Data(original.utf8).write(to: file)
+                let preferences = try isolatedPreferences()
+                let diff = DiffTab(repoRoot: directory.path, path: name, source: .worktree,
+                                   untracked: true, origPath: nil,
+                                   backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                                   preferences: preferences)
+                try await wait({ diff.canPresentNativeContent }, timeout: 30)
+                let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 800, height: 400),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                let surface = DiffNativeSurface(diff: diff)
+                diff.nativeSurface = surface
+                window.contentView = surface
+                surface.render()
+                window.orderFront(nil)
+                surface.layoutSubtreeIfNeeded()
+                let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+                let undo = try XCTUnwrap(editor.undoManager)
+                for (position, offset) in [("start", 0), ("middle", original.utf16.count / 2),
+                                            ("end", original.utf16.count)] {
+                    var samples: [Double] = []
+                    var getterSamples: [Double] = []
+                    var comparisonSamples: [Double] = []
+                    for _ in 0..<30 {
+                        let start = CFAbsoluteTimeGetCurrent()
+                        editor.insertText("x", replacementRange: NSRange(location: offset, length: 0))
+                        samples.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                        editor.breakUndoCoalescing()
+                        XCTAssertTrue(diff.isDirty)
+                        let getterStart = CFAbsoluteTimeGetCurrent()
+                        let snapshot = editor.string
+                        getterSamples.append((CFAbsoluteTimeGetCurrent() - getterStart) * 1_000)
+                        let compareStart = CFAbsoluteTimeGetCurrent()
+                        XCTAssertFalse(snapshot.utf8.elementsEqual(original.utf8))
+                        comparisonSamples.append((CFAbsoluteTimeGetCurrent() - compareStart) * 1_000)
+                        undo.undo()
+                        XCTAssertFalse(diff.isDirty)
+                        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+                    }
+                    for (phase, durations) in [("insert", samples), ("getter", getterSamples),
+                                                ("comparison", comparisonSamples)] {
+                        let sorted = durations.sorted()
+                        print("AUDIT_DIFF_INPUT rows=\(lineCount) syntax=\(suffix) position=\(position) phase=\(phase) samples=30 median=\(sorted[15]) p95=\(sorted[28]) worst=\(sorted[29])")
+                    }
+                }
+                editor.insertText("尾", replacementRange: NSRange(location: original.utf16.count, length: 0))
+                editor.breakUndoCoalescing()
+                await diff.save()
+                XCTAssertNil(diff.saveError)
+                XCTAssertEqual(try Data(contentsOf: file), Data((original + "尾").utf8))
+                XCTAssertEqual(GitCommandExecution.run(["ls-files", "-z"], in: directory.path).stdout, "")
+            }
         }
     }
 
