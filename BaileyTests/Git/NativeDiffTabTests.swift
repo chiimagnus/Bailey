@@ -119,6 +119,149 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class NativeDiffTabTests: XCTestCase {
+    func testWindowFindCommandsTargetNativeWritableAndStagedDiffPanes() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("find.swift")
+        let original = "let target = \"before\"\nlet stable = 1\n"
+        let changed = "let target = \"after\"\nlet stable = 1\n"
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "find.swift"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data(changed.utf8).write(to: file)
+
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        manager.openDiff(repoRoot: directory.path, path: "find.swift", staged: false,
+                         untracked: false, origPath: nil)
+        guard case .diff(let writable)? = manager.selectedProject?.focusedContent else {
+            return XCTFail("Worktree Diff must own the focused tab")
+        }
+        try await wait({ writable.canPresentNativeContent }, timeout: 15)
+        XCTAssertTrue(manager.canFind, "A native writable Diff must expose the existing Find menu")
+        XCTAssertTrue(manager.canReplace, "An editable Worktree must expose native Find and Replace")
+
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let surface = DiffNativeSurface(diff: writable)
+        writable.nativeSurface = surface
+        window.contentView = surface
+        window.orderFront(nil)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && $0.textView.isEditable })
+        manager.performFindAction(.show)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.replace)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+
+        writable.setDiffStyle(.split)
+        try await wait({ writable.editableBaseline != nil }, timeout: 15)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let baseline = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && $0 !== pane && !$0.textView.isEditable })
+        XCTAssertTrue(window.makeFirstResponder(baseline.textView))
+        XCTAssertTrue(window.firstResponder === baseline.textView)
+        manager.performFindAction(.show)
+        try await wait({ baseline.scrollView.isFindBarVisible }, timeout: 3)
+        XCTAssertFalse(pane.scrollView.isFindBarVisible)
+        manager.performFindAction(.replace)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        XCTAssertFalse(baseline.scrollView.isFindBarVisible,
+                       "Replace must move to the writable source without leaving a stale baseline Find bar")
+        manager.performFindAction(.hide)
+        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+        writable.setDiffStyle(.unified)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        manager.performFindAction(.show)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+
+        XCTAssertEqual(GitCommandExecution.run(["add", "find.swift"], in: directory.path).status, 0)
+        manager.openDiff(repoRoot: directory.path, path: "find.swift", staged: true,
+                         untracked: false, origPath: nil)
+        guard case .diff(let staged)? = manager.selectedProject?.focusedContent else {
+            return XCTFail("Staged Diff must own the focused tab")
+        }
+        try await wait({ staged.canPresentNativeContent }, timeout: 15)
+        XCTAssertTrue(manager.canFind, "Staged Diff must allow searching its read-only text")
+        XCTAssertFalse(manager.canReplace, "Staged content must never offer Replace")
+        let stagedWindow = NSWindow(contentRect: window.frame, styleMask: [.titled],
+                                    backing: .buffered, defer: false)
+        stagedWindow.isReleasedWhenClosed = false
+        defer { stagedWindow.close() }
+        let stagedSurface = DiffNativeSurface(diff: staged)
+        staged.nativeSurface = stagedSurface
+        stagedWindow.contentView = stagedSurface
+        stagedWindow.orderFront(nil)
+        stagedSurface.render()
+        stagedSurface.layoutSubtreeIfNeeded()
+        let readonly = try XCTUnwrap(stagedSurface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && !$0.textView.isEditable })
+        manager.performFindAction(.replace)
+        XCTAssertFalse(readonly.scrollView.isFindBarVisible,
+                       "Even direct commands cannot enable replacement on a Staged Diff")
+        manager.performFindAction(.show)
+        try await wait({ readonly.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        staged.setDiffStyle(.split)
+        stagedSurface.render()
+        stagedSurface.layoutSubtreeIfNeeded()
+        let readonlyPanes = stagedSurface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .filter { !$0.isHidden }
+        XCTAssertEqual(readonlyPanes.count, 2)
+        let right = try XCTUnwrap(readonlyPanes.max(by: { $0.frame.minX < $1.frame.minX }))
+        XCTAssertTrue(stagedWindow.makeFirstResponder(right.textView))
+        manager.performFindAction(.show)
+        try await wait({ right.scrollView.isFindBarVisible }, timeout: 3)
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        manager.performFindAction(.hide)
+        XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
+        XCTAssertNotEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"],
+                                               in: directory.path).status, 0)
+
+        let revision = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+        XCTAssertEqual(revision.status, 0)
+        let hash = revision.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        manager.selectedProject?.openHistoricalDiff(repoRoot: directory.path, path: "find.swift",
+                                                     source: .revision(hash: hash), origPath: nil)
+        guard case .diff(let historical)? = manager.selectedProject?.focusedContent else {
+            return XCTFail("A historical revision must own its own focused tab")
+        }
+        try await wait({ historical.canPresentNativeContent }, timeout: 15)
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        let historyWindow = NSWindow(contentRect: window.frame, styleMask: [.titled],
+                                     backing: .buffered, defer: false)
+        historyWindow.isReleasedWhenClosed = false
+        defer { historyWindow.close() }
+        let historySurface = DiffNativeSurface(diff: historical)
+        historical.nativeSurface = historySurface
+        historyWindow.contentView = historySurface
+        historyWindow.orderFront(nil)
+        historySurface.render()
+        historySurface.layoutSubtreeIfNeeded()
+        let historyText = try XCTUnwrap(historySurface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && !$0.textView.isEditable })
+        XCTAssertEqual(historyText.textView.string, original)
+        manager.performFindAction(.show)
+        try await wait({ historyText.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
+    }
+
     func testNativeDiffAccessibilityAllowsOnlyEditableTextChanges() {
         // AppKit API-level contract: XCUIApplication exercises the full user
         // interaction separately in GitHistoryUITests and WorkspaceGitUITests.

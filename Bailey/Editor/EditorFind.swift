@@ -16,8 +16,15 @@ extension FileTab {
 
     func performFindAction(_ action: FindAction) {
         guard let textView else { return }
+        action.perform(on: textView)
+    }
+}
+
+@MainActor
+extension FindAction {
+    func perform(on textView: NSTextView) {
         let finderAction: NSTextFinder.Action =
-            switch action {
+            switch self {
             case .show: .showFindInterface
             case .replace: .showReplaceInterface
             case .hide: .hideFindInterface
@@ -25,8 +32,6 @@ extension FileTab {
             case .previous: .previousMatch
             case .useSelection: .setSearchString
             }
-        // Asking for the next match before anything has been searched for, or
-        // for the selection with none, does nothing rather than beeping.
         let item = NSMenuItem()
         item.tag = finderAction.rawValue
         textView.performFindPanelAction(item)

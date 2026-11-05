@@ -27,6 +27,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     private var rightPane: DiffCodePaneView?
     private var divider: NSView?
     private var editPane: DiffCodePaneView?
+    private weak var focusedFindPane: DiffCodePaneView?
     private var renderedEditRevision: UInt?
     private var pendingAnchor: (oldLine: Int?, newLine: Int?)?
     private var didRevealInitialChange = false
@@ -286,10 +287,29 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         }
     }
 
+    func performFindAction(_ action: FindAction) {
+        if case .replace = action {
+            guard diff?.isEditing == true, diff?.isEditableNow == true,
+                  let editPane, !editPane.isHidden else { return }
+            if let focusedFindPane, focusedFindPane !== editPane,
+               focusedFindPane.scrollView.isFindBarVisible {
+                FindAction.hide.perform(on: focusedFindPane.textView)
+            }
+            focusedFindPane = editPane
+            action.perform(on: editPane.textView)
+            return
+        }
+        let visible = [editPane, rightPane, unifiedPane, leftPane]
+            .compactMap { $0 }.filter { !$0.isHidden }
+        guard let pane = visible.first(where: { $0 === focusedFindPane }) ?? visible.first else { return }
+        action.perform(on: pane.textView)
+    }
+
     private func makePane(mode: DiffCodePaneView.Mode, gutter: DiffGutterLayout) -> DiffCodePaneView {
         let pane = DiffCodePaneView(mode: mode, gutterLayout: gutter)
         pane.textView.onBecomeFirstResponder = { [weak self, weak pane] in
-            guard let self else { return }
+            guard let self, let pane else { return }
+            self.focusedFindPane = pane
             if pane === self.editPane { self.diff?.setEditorActive(true) }
             self.onFocused?()
         }

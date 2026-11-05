@@ -473,6 +473,15 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, original,
                        "Worktree Diff must expose the live worktree content, not the old Git revision")
+        let fieldsBeforeFind = window.textFields.count + window.searchFields.count
+        app.typeKey("f", modifierFlags: .command)
+        let findBar = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textFields.count + window.searchFields.count > fieldsBeforeFind
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [findBar], timeout: 10), .completed,
+                       "Command-F must open the native Find bar in the actual Worktree Diff")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(editor.value as? String, original)
         editor.click()
         app.typeKey("a", modifierFlags: .command)
         editor.typeText(updated)

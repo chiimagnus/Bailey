@@ -618,24 +618,25 @@ final class WorkspaceWindowModel {
         switch selectedProject?.focusedContent {
         case .session(let session): session.find.perform(action)
         case .file(let file): file.performFindAction(action)
-        case .browser, .diff, .none: break
+        case .diff(let diff): diff.nativeSurface?.performFindAction(action)
+        case .browser, .none: break
         }
     }
 
-    /// Whether the Find menu has something searchable on screen right now.
-    /// Diffs render their own views rather than a searchable text view.
+    /// Find uses the active pane's existing native text or terminal surface.
     var canFind: Bool {
         switch selectedProject?.focusedContent {
-        case .session, .file: return true
-        case .browser, .diff, .none: return false
+        case .session, .file, .diff: return true
+        case .browser, .none: return false
         }
     }
 
-    /// Whether Find and Replace has an editable pane to act on: terminal
-    /// output and diffs are read-only, so replace is only offered for a file.
     var canReplace: Bool {
-        if case .file? = selectedProject?.focusedContent { return true }
-        return false
+        switch selectedProject?.focusedContent {
+        case .file: return true
+        case .diff(let diff): return diff.isEditing && diff.isEditableNow
+        case .session, .browser, .none: return false
+        }
     }
 
     func closeActivePanelOrWindow() {
