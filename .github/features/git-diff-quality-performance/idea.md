@@ -1,7 +1,9 @@
 # Git Diff 正确性、原生体验与性能收敛
 
 本文件是需求、范围与验收的唯一真源；实施拆分见 `plan-p1.md` 至 `plan-p4.md`，
-实时状态只在 `todo.toml`。计划编制于 2026-11-05；本轮**只规划，不实施**。
+实时状态只在 `todo.toml`。计划编制于 2026-11-05；当前仍属执行前审查。
+已独立验证并提交一项确实冗余的生产字段清理（`a9fdb51b`）；
+其余根因优化、行为改变及跨环境实机验收均尚未实施。
 
 ## 背景与触发
 
@@ -27,15 +29,18 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
 | --- | --- | --- |
 | `GitFileEventWatcher → GitStatusModel.refresh → GitPanel.browseGitChange → Project.openDiff` | 本机事件通知合并等待约 400 ms；状态查询分别发布核心／详情，点击行还处理选择与焦点；历史与其它 Worktree 另走 Graph | 这与用户主动点击已显示行的 Diff 加载延迟是两条时间路径；不能混算或只测 `DiffTab.reload` |
 | `DiffCodePaneView.layout` | `ensureLayout(for: documentRange)` 首次全篇布局；24,000 行折叠样本约 206 ms（Debug） | 不能只去掉该调用；旧实验曾使末行不可达 |
-| `DiffRowGeometry.visibleRows / DiffTextView.hasNativeNonLFSeparators` | 非折叠、无只读行起点时会从文首枚举至视口；原生换行种类缓存每次字符编辑会失效，随后可能全篇扫描 | 需实测深处滚动与每键布局；优先复用已有 `NativeTextLineIndex`，不是搭第二套索引 |
+| `DiffRowGeometry.visibleRows / DiffTextView.hasNativeNonLFSeparators` | 非折叠、无只读行起点时会从文首枚举至视口；原生换行种类缓存每次字符编辑会失效，随后可能全篇扫描 | 需实测深处滚动与每键布局；优先复用与 Git LF 行号一致的现有 UTF-16 行起点，不把原生段落索引直接当 Git 行，也不新建第二套索引 |
 | `NativeCodeTextView.processStorageEdit` | 已获取 `editedRange`／替换文本并增量维护行索引，但对 Diff 只调用零参数 `onCharacterEdit` | 增量信息在进入 `DiffTab` 前丢失；必须以真实 AppKit 事件和全文保存语义检验最小改动接口 |
 | `DiffNativeSurface.editTextDidChange → DiffTab.updateEditedContent` | 每次编辑取 `textView.string`，随后比较保存基线并安排 Diff 刷新 | 不等于已测出输入 P95；必须分别量化取全文、比较、着色与布局 |
 | `DiffTab.reload → gitContent/gitComparisonBaseline` | Staged 双基线可并行；Unstaged 仍需有序 `hash-object` 与 Git patch 快照校验；24k 行 30 次热测模型就绪中位 Staged 199.1 ms、Unstaged 242.9 ms，P95 为 351.2／328.5 ms；1k 中位 69.8／102.3 ms | 这些数值不是可见首帧；必须区分不可并行的快照顺序与可压缩的 Git 启动／对象读取 |
+| `DiffTab.reload/invalidateReload/deinit → WorkspaceBackend.run` | `reload()` 用未保存句柄的 `Task` 等待独立 `Task.detached` 执行 Git／文件读取；`invalidateReload()` 仅推进代次，`deinit` 只取消 Diff／语法工作 | **旧结果不发布 ≠ 底层 Git/SSH 读取已取消**；需从关闭/切目标/编辑触发追到子进程实际结束，不为每层复制代次 |
+| `NativeTextLineIndex` 与 `TextCoordinateIndex` | 前者用 `NSString.getLineStart` 识别 AppKit 自然段落，后者仅以 LF 分行；`DiffDecorations` 另持有已构造的 UTF-16 Git 行起点 | 裸 CR／U+2028／U+2029 等下二者**不能互换**；修可视行前缀扫描时应复用匹配语义的现有行偏移，不能新造混用索引 |
+| `Project.remove/terminateAll → DiffTab.nativeSurface → DiffNativeRoot.dismantleNSView` | FileTab 关闭时明确 `retireNativeEditor`，但 DiffTab 分支仅清 `onSnapshotChange`；SwiftUI `dismantleNSView` 只撤销焦点回调，旧原生 pane 可仍被 AppKit 引用 | **已确认生命周期处理不对称，未证明实际泄漏**；需测试真关闭后旧 `NSView` 被缓存时的 NSTextStorage／Undo／语法保留，并只在真关闭退役，不在 Dock 重挂载退役 |
 | `GitCommandExecution.runData(stdoutLimit:) → WorkspaceBackend.run / ProcessRemoteCommandRunner.run` | 本地 stdout reader 限制保留字节，但 stderr 仍完整接收；SSH runner 的 stdout／stderr 都持续追加完整 Data，`backend.run()` 返回后才 `.prefix(limit)`；`hash-object` 另经无上限 `backend.run` | **远端输出上限并未约束传输与峰值内存**，截断也不自动标记失败；需在实际读取处设置调用者预算并验证 Git patch／状态输出完整性 |
 | `GitWorktreeComparison.resolve → DiffCore.fromVerifiedOperations` | 能复用已验证 Git hunk；不能映射时回退算法；实时编辑仍重新计算 | 不代表全部 Git 来源、特殊文本与并发路径都已完成跨界面验收 |
-| `DiffComputation.build` | 仍构造 Unified／Split 左右／编辑状态；既有样本投影中位约 0.17 ms | 没有证据支持优先大重构这一轻量阶段 |
+| `DiffComputation.build → DiffBlocks.blockEmphasis → DiffIntraline.myersTokens` | 稀疏改动样本投影中位约 0.17 ms；但每次 build 对成对修改行运行逐词 Myers，token 上限 400，回溯轨迹随编辑距离增长且内部无独立取消点 | 简单样本不能代表密集改动；需先测 399／400／401 token、百／千行成对改动、反复展开及取消时延，实测有问题才优化 |
 | `DiffSyntaxSource.captures` | 未变字节复用 Tree-sitter 树，修改侧 Worktree 由 Neon 着色；大于 2 MB 的源码不缓存树 | 未实现编辑增量解析，也尚未证明增量解析值得引入 |
-| 2026-11-05 测试日志 | 全量宿主 843 项、16 跳过、0 失败（16:15）；定点 105 项、1 跳过、0 失败（16:27）；5 项 Git GUI 曾因 `WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile` 的 ⌘S 事件合成超时失败，随后 5 项完整复测通过 | `5230f341` 在 16:27:58 提交；旧全量不是最终 HEAD 验收；一次复测通过**不能**认定 GUI 偶发超时根因已解决，16 项跳过也不能算通过 |
+| 2026-11-05 测试日志 | 独立清理提交 `a9fdb51b` 后的完整 `make test` 在 19:47 执行 843 项、16 项授权 SSH 跳过、0 失败；之前 105 项定点测试通过、5 项 Git GUI 一次 ⌘S 事件合成超时后复测通过 | 新全量证明**当前清理提交**未破坏宿主测试；不证明未来 P2/P3 优化或真实 GUI/Release/SSH 实机已验收。GUI 偶发超时根因仍未找到，16 项跳过均不可计作通过 |
 | `docs/testing.md` | 输入 P95、滚动帧、热视口几何和本地 Git 30 次热样本均有现行测量标准 | 模型准备时间不是文本真正显示或可交互时间 |
 
 ## 必须交付的产品结果
@@ -53,6 +58,9 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
 - 不恢复 Review/Edit 模式切换；同一工作区可写原文、选区、Undo、保存和 Native TextKit 身份只有一个真源。
 - 快速切文件、改变项目／机器、窗口重挂载、停止任务或重连，
   较早结果都不能覆盖较新目标／草稿；每个 Task 的停止与资源释放可证明。
+  **不仅**核对 `reloadGeneration` 阻止过期结果发布，还必须核对无消费者的 Git/SSH 读取
+  是否仍在运行、是否占据进程和连接；按现有任务拥有者取消与进程生命周期解决，
+  不新增无消费方的全局调度器。
 
 ### R2 首屏真实可见、滚动范围立即准确
 
@@ -86,6 +94,9 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
 
 - 以 Git 实际 OID／index、clean filter、`core.autocrlf`、`.gitattributes` 为准；
   Git 认定无文本变化时，不能显示整篇删增。
+  **Staged 并行读取 HEAD 和 Index 时**也要验证同一个用户动作的逻辑快照一致：
+  HEAD、Index 在两项元数据读取之间变化时不能错误拼接两代结果；
+  锁定 Blob OID 保证对象不变，**不能单独证明两个来源属于同一时点**。
 - 初始 Git patch 复用仅在旧／新 OID、hunk、行操作、原始 UTF-8 快照全部匹配时成立；
   比较不同步必须重试或报告错误，不用静默空文档冒充成功。
 - 多处修改、删除、新增、重命名／复制、冲突 index、无 HEAD、未跟踪、历史／Stash，
@@ -109,8 +120,10 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
   分类为：确实无生产消费者／可合并重复路径／不可删除的数据保护或原生行为边界。
   已证实多余的旧分支、重复投影、状态镜像、适配别名、无消费者参数和临时围栏，
   在替代链落地的**同一 task** 删除并迁移测试；不得移到 P4 或另起“终局清理”任务。
-- `DiffDisplay.hasCollapsedContext` 目前仅被一个宿主测试读取，生产代码没有读取者；
-  优先把断言直接指向真实 `DiffComputation.unified.rows` 后删除此测试专用派生字段。
+- 执行前清理已核对 `DiffDisplay.hasCollapsedContext` 仅有宿主测试读者，
+  用真实 `DiffComputation.unified.rows` 替换断言并删掉该字段；
+  独立提交 `a9fdb51b`，`NativeDiffTabTests` 84 项（1 项授权 SSH 跳过）及
+  相邻 37 项均 0 失败。该清理**不能冒充** P3-T3 整体完成或首屏性能改善。
   `DiffSyntaxHighlighter.captures` 全文件静态入口和 `highlightByteLimit` 也只被测试调用，
   只有确保独立 oracle 不丢失时才迁入测试并从生产删掉。
   现行源码没有 `afterGitAction` 和旧 Review/Edit 切换入口，**不能把不存在的旧代码
@@ -120,6 +133,13 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
   symlink 拒写、请求身份和取消边界目前均有真实业务消费方，**不能**当作旧 Review/Edit
   兼容代码或多余安全围栏直接删。具体删改必须有调用图和行为回归证据。
 - 工作与内存随标签生命周期结束；关闭后的文本、语法树、布局与旧计算不会被后台任务长期持有。
+  真实关闭 Diff 标签、整个项目、最后窗口和 App 退出，必须释放其独占 TextKit 正文；
+  即使系统仍缓存 `NSScrollView`，旧文档也不得继续接受编辑或保持 Undo／Neon 解析；
+  普通 Dock 重挂载和切标签则必须保留完全相同的编辑对象与 Undo，不能借机退役。
+  对可复用解析树的每次 `capture` 必须把全文 `utf8.elementsEqual`、每个可见片段重复构造查询游标、
+  Tree-sitter 解析成本分开计；真实热点才简化，不另起第二套解析器。
+  还需把大量成对改动行的逐词 Myers 回溯分配和内部取消点缺口单独实测；
+  不能拿稀疏改动的 `DiffComputation.build` 中位数证明所有输入都可忽略。
 - 优化必须有同机、同样本、同设置前后数据，既报告中位也报告 P95／最差与真实用户可见结果。
 - GUI 输入合成曾出现一次 ⌘S 超时后复测通过：要调查实际前台焦点、第一响应者、
   XCTest 注入与 AppKit 事件接收，分清产品缺陷、测试夹具与系统环境；
@@ -159,7 +179,7 @@ SSH 认证、Monaco／Electron／WebKit 编辑器替换、LSP、正式发布以�
 | Git 规则 | `core.autocrlf` true／false／input（按环境适用）、`text`／`-text`／`eol`、clean filter 改写内容／行数／工作区副作用、Git diff 头与 OID 不匹配、HEAD 切换、index 变化、零上下文 hunk、补丁无变更／mode-only／截断／异常退出、`working-tree-encoding` 不可解码条件 |
 | 显示与语言 | Unified／Split、编辑／只读、浅／深／高对比、中英文界面与中文输入法、系统两类滚动条、普通宽度／完整显示、窄／宽窗口、不同缩放／Retina 显示比例（环境具备时）、字体大小、视口顶／中／底、横纵滚动、拖动滑块、折叠点击、删除 ghost、行内色彩、AX 命中 |
 | 编辑 | 普通字符／中文 IME／粘贴／多选区／跨隐藏行选区／`⌘A`／Find Replace／Delete／Undo／Redo／`⌘S`、自动保存、编辑前方增删换行、连续快速点击折叠、编辑后保存重载、外部修改、同时保存 |
-| 异步与生命周期 | FSEvents（本机）／远端轮询刷新、首次挂载／重复打开／快速切文件／切 Git 来源／Split 切换／切主题／改字体／重挂载／标签关闭／窗口关闭／恢复、同仓库大量状态行（1／100／10k 级）与历史分页、旧任务取消、系统前台焦点干扰、读取中修改与索引切换、权限失败／超时／SSH 断线重连／流输出超预算；确认状态刷新与单文件打开分开测量 |
+| 异步与生命周期 | FSEvents（本机）／远端轮询刷新、首次挂载／重复打开／快速切文件／切 Git 来源／Split 切换／切主题／改字体／重挂载／标签关闭／项目及窗口关闭／恢复、AppKit **缓存已关闭 Diff 的旧 NSView**、同仓库大量状态行（1／100／10k 级）与历史分页、旧任务取消**及真实底层进程停止**、系统前台焦点干扰、读取中修改与索引切换（Staged HEAD 与 Index 交叉读取）、权限失败／超时／SSH 断线重连／流输出超预算；确认状态刷新与单文件打开分开测量 |
 | 性能和资源 | Debug／Release、冷／热、文件事件到 Changes 新状态／点击到首像素／可输入／语法色稳定分时、真实输入与滚动 P95、深处非折叠前缀扫描、长行折行、首次高度与最后一个 Ghost、30 次热样本、1／5／10／20 标签与 1／100／10k 级仓库状态项、Git 进程数／stdout 限额前后传输量／SSH RTT、峰值 RSS／heap、关闭后稳定内存和 CPU 唤醒 |
 
 每个适用且安全的取值都要有执行任务与最终结果证据；

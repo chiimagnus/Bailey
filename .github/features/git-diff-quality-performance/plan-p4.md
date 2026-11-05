@@ -45,6 +45,8 @@ Debug／Release 性能及内存、文档／删除代码审计与交付核销。
 `DiffCore.fromVerifiedOperations`、
 `GitHistoricalFileLocator.resolve`；
 `BaileyTests/Git/{NativeDiffTabTests,NativeGitHistoryFileTests,GitBrowsingRecoveryTests,GitStatusModelTests,GitExecutionTests}.swift`；
+`NativeGitHistoryFileTests.testSHA256RepositoryResolvesImmutableBlobsForHistoryIndexAndWorktree`
+已覆盖 SHA-256 基本 OID 流程，若扩大测试只补其不足，不重复造已有夹具；
 `BaileyUITests/Git/{GitChangesUITests,GitHistoryUITests,WorkspaceGitUITests}.swift`。
 
 **步骤：**
@@ -60,7 +62,8 @@ Debug／Release 性能及内存、文档／删除代码审计与交付核销。
    对照 Git 命令和 OID，检查显示结果、行号、折叠、行内高亮、无变更判断，
    对应源是否具有安全写入资格、点击保存是否只写 Worktree；
    真实 `git diff --cached`、`git diff`、Index／磁盘字节均核对。
-3. 逐项组合 `core.autocrlf` true／false／input（按系统适用）、
+3. 逐项组合 SHA-1／SHA-256 仓库对象（后者已有真实 Git 回归基础）、
+   `core.autocrlf` true／false／input（按系统适用）、
    `text/-text/eol`、clean filter、无末行 LF、LF／CRLF／裸 CR／Unicode 分隔符、
    UTF-8 BOM、代理对／组合字符／规范等价不同字节、空文件／仅换行、
    重复短行无唯一锚点／超长 SVG 行、多 hunk／全部删除、
@@ -68,7 +71,8 @@ Debug／Release 性能及内存、文档／删除代码审计与交付核销。
    真实 Git index stage 和文件原字节必须是测试已验证前提，
    不允许未经声明的空侧或错误状态冒充正常数据。
 4. 测“文件外部改写→正在读取→用户编辑→用户保存→旧请求返回”，
-   以及 HEAD/index 在 Git patch 读取期间变化、clean filter 修改实际文件、
+   以及 Staged HEAD/Index 在两路并行元数据读取期间变更、
+   HEAD/index 在 Git patch 读取期间变化、clean filter 修改实际文件、
    超大 Git stdout 被接收中断；旧结果不能影响当前项目、机器、路径和可写 buffer。
    核对关闭窗口后不向新窗口写入、脏草稿不被 Git 后台刷新抹除。
 
@@ -242,6 +246,7 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 **Files／入口：**
 `DiffCodePaneView.layout/applyContentHeightOverride`、
 `DiffNativeSurface.editTextDidChange/render`、
+`DiffTab.reload/invalidateReload/deinit` 与 `Project.remove/terminateAll` 的取消／退役，
 `DiffTab.reload/recomputeDisplay/refreshEditDecorations`、
 `DiffSyntaxSource.captures`；
 `BaileyTests/Git/NativeDiffTabTests.swift`、
@@ -269,6 +274,10 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 4. 以 Instruments Time Profiler、Allocations 在 1／5／10／20 标签负载
    下记录创建峰值、切换、折叠展开、语法重建、失焦自动保存、关闭后的稳定 RSS／heap、
    CPU／唤醒及 TextKit／Tree-sitter／NSAttributedString retained 对象；
+   使用已存在的文件编辑器退役测试做对照：**真关闭 Diff 后即使保留旧 NSView，
+   不再有完整正文和旧 Undo／语法任务；仅 Dock 重挂载不得触发退役。**
+   另外压测取消旧 Git/SSH 读取后进程数量／字节接收回落，
+   不以 `reloadGeneration` 变更或 Swift 弱引用释放代替底层进程实际退出；
    同时记录 Git stdout（含 stderr）大小／实际本机与 SSH 接收量／峰值缓冲，
    检查超过限额时没有临时接收完整大数据。
    不能仅证明 cache hit，必须证明独占资源可以释放。
@@ -311,7 +320,9 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
    也不能误删 Git OID、symlink、身份校验、保存队列等仍用于数据保护的可达路径。
 2. 对照 `idea.md` 的完整来源／状态／文本／显示／编辑／时序／性能矩阵，
    还必须核对本轮新增的 Changes／Graph 状态刷新、非折叠深处行号、
-   `stdoutLimit` 真实传输预算、文本变更前后回调与测试专用旧 API 删除。
+   `stdoutLimit` 真实传输预算、文本变更前后回调、
+   **Staged 跨代 HEAD/Index、取消后底层进程停止、Diff 原生文档真关闭退役**
+   与已清除的测试专用旧字段。
    所有适用值和极端条件有精确测试入口、有效前提、可见结果及环境证据；
    未执行者列原因、影响、替代证据与必需补验，
    无法完成必需路径则明确 **No-Go**。

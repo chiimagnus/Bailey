@@ -39,8 +39,9 @@
 `Bailey/Git/DiffTextView.swift` 的
 `DiffCodePaneView.invalidateDocumentLayout/layout/applyContentHeightOverride/applyGhostSpacing`、
 `DiffTextView.setEditingFolds/hasNativeNonLFSeparators/storageCharactersDidChange`、
-`DiffRowGeometry.visibleRows`；检查复用已有 `NativeTextLineIndex`、
-`DiffDecorations.lineStartOffsets/editSnapshotOffsets`，不另造新的行索引 owner；
+`DiffRowGeometry.visibleRows`；对照已有 `NativeTextLineIndex`（AppKit 自然段落）、
+`TextCoordinateIndex`（仅 LF）与 `DiffDecorations.lineStartOffsets/editSnapshotOffsets`
+（已存的 Git 行 UTF-16 起点）；**三者不能语义互换**，不另造新的行索引 owner；
 必要时调整现有 `Bailey/Editor/NativeCodeTextView.swift` 的共用 TextKit 几何，
 但必须先证明 Files 同根因和影响范围。
 测试主要在 `BaileyTests/Git/NativeDiffTabTests.swift`、
@@ -54,7 +55,9 @@
    而不是增加 SwiftUI 高度镜像。固定行高快路径不能套用到裸 CR、Unicode、折行、
    ghost 等可变几何；用 P1 已验证的准确路径处理。仅在对应布局失效时重算。
    **另一个同源热路径必须同时处理：**`DiffRowGeometry.visibleRows` 在无行起点且非折叠时
-   从文首枚举到 viewport；以已有原生行索引或 UTF-16 起点求可见行，不得每帧扫描前缀。
+   从文首枚举到 viewport；优先用当前 Diff 内容版本的 LF UTF-16 行起点反查 Git 行号，
+   `NativeTextLineIndex` 仅用于确定 AppKit 自然段落，不得把裸 CR／Unicode 段落算作 Git 行；
+   不得每帧扫描文首前缀。
    `hasNativeNonLFSeparators` 的编辑后全文扫描也应在相同任务依原生变化范围收敛，
    不增加第二套全文缓存。
 3. **仅在正确的新几何路径通过 Red→Green 后**，删除被替代的
@@ -72,7 +75,8 @@ LF／CRLF／裸 CR／Unicode 分隔符、无末尾 LF、长行完整显示／截
 窗口初装／缩放／改字体／折行、Split 纵横两轴、深处滚动／17 次远跳、
 两种系统滚动条样式，纯只读与可编辑两类 TextKit。
 对顶／中／末相同视口反复滚动记录前缀扫描长度、布局次数及 P95；
-单字符变更后核对换行类型缓存与实际 Git LF 行号。
+单字符变更后核对换行类型缓存与实际 Git LF 行号，
+特别是同一 Git 行里多个裸 CR／U+2028 段落；逐项断言原生片段、UTF-16 命中和写盘字节。
 必须检查滚动条比例、真实最后片段、选区、行号、滚动锚点和最后的磁盘字节；
 30 次热／冷与独立实际首屏数据对照 P1。
 
@@ -212,7 +216,8 @@ P4-T2 补验，禁止擅自改动用户剪贴板。
 ## P2-T4 收敛 Unified／Split 的滚动、视觉层级和真实坐标
 
 **结果：** 工作区、暂存、历史共享同一真实 Diff 行语义与渲染层，
-没有错位、高亮丢失、遮挡滚动条或切主题后延迟更新。
+没有错位、高亮丢失、遮挡滚动条或切主题后延迟更新；
+真正关闭 Diff 标签后不残留可编辑原生正文，Dock 重挂载则保留同一对象。
 
 **Files／实际路径：**
 `Bailey/Git/DiffNativeSurface.swift` 的
@@ -221,7 +226,10 @@ P4-T2 补验，禁止擅自改动用户剪贴板。
 `DiffCodePaneView.layout/setScrollOffset/setReviewDocument`、
 `DiffRowGeometry.visibleRows`、`DiffDecorationUnderlayView`、
 `DiffFoldOverlayView`、`DiffGutterView`；
-`DiffSyntaxHighlighter.attributedDocument`。
+`DiffSyntaxHighlighter.attributedDocument`；
+真实关闭链 `Project.remove/terminateAll`、`PaneTab`、`DiffTab.nativeSurface` 与
+`DiffNativeRoot.dismantleNSView`，对照 `FileTab.retireNativeEditor`，
+以及 `NativePaneRetentionIntegrationTests` 的旧 AppKit scroll view 保留用例。
 
 **步骤：**
 1. 以同一原文／变更样本对照四个可达原生 pane（Unified、Split 两侧、Worktree），
@@ -236,15 +244,29 @@ P4-T2 补验，禁止擅自改动用户剪贴板。
 4. 变更内容、字号／主题、Find bar、布局模式和多窗口后反复定位，
    彻查重复渲染、隐藏 pane 后仍计算及视图身份变化；
    若当前已经达到性能与像素不变量，只保留证明而不改生产代码。
+5. **对照 FileTab 的真实关闭资源归属，补 Diff 退役的 Red→Green：**
+   `Project.remove` 对文件调用 `retireNativeEditor`，对 Diff 只清快照回调；
+   `Project.terminateAll` 也只退役文件；`DiffNativeRoot.dismantleNSView` 当前只撤销焦点。
+   在真关闭 Diff 标签／项目／窗口后故意保留原 `NSScrollView` 强引用，
+   检查旧 `NSTextView` 是否仍可写、持有 Undo／解析器与全文缓冲。
+   若复现保留问题，只在**真正所有权结束**的最小 owner 退役旧原生内容，
+   解除 ScrollView documentView 强引用、禁用过期回调与 Undo／语法任务；
+   在替代链生效的同一 task 清理旧残留，不新增全局 native-resource manager。
+   SwiftUI 临时 `dismantleNSView`／Dock 重挂载**不得**触发退役，
+   切回时同一 TextKit/Undo/滚动原对象必须仍可操作。
 
 **验证：**
-`make test:NativeDiffTabTests,NativeSyntaxHighlightingTests,NativeContentIdentityIntegrationTests`；
+`make test:NativeDiffTabTests,NativeSyntaxHighlightingTests,NativeContentIdentityIntegrationTests,NativePaneRetentionIntegrationTests,WindowCloseIntegrationTests`；
 真实 Bailey Dev 截图像素与 AX（P2-T5 共用）核对。
 所有 Staged／Unstaged／历史、Unified／Split、亮暗及高对比、
 滚动条传统／浮动、窄／宽窗口、水平／竖直、主题／字体切换、
 长行、裸 CR、CRLF、Unicode、删除多块、可见中间和文件末尾。
 最终核对每一行色块／字形／原生滚动条相对层级和物理可视内容，
 原文及 Git 比较保持不变。
+另在 1／5／10／20 Diff 标签与长行／5 MiB 合法文本下真实关闭、整项目关闭、
+窗口关闭、保留旧 AppKit 宿主、重复开关、带未保存草稿取消关闭等条件，
+核对真正关闭后正文不再被旧 NativeView 保留、脏草稿确认前绝不提前清理，
+并测重新打开／撤销历史与当前标签身份。
 
 **Uncovered：**
 宿主位图不能单独证明 WindowServer 合成，P4-T2 复验真实 App 像素。

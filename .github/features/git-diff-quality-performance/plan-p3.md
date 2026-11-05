@@ -131,11 +131,17 @@ Git 无文本变化时不显示整篇删增，保存始终保留原始文件字�
 
 **步骤：**
 1. 在真实临时仓库建立 HEAD A→Index B→Worktree C、仅 index 变更、
+   **Staged 并行 `async let` 两侧读取时交错切换 HEAD 与 Index**、
    `core.autocrlf` 和 `.gitattributes` 的 `text`／`-text`／`eol`、
    clean filter 可逆／不可逆／改写文件副作用、加载期间 index 或工作区改写；
    夹具必须证明前后 OID 和原文确实发生预定变化。
-2. 追 `hash-object → git diff` 的必要顺序，
-   `GitWorktreeComparison.resolve` 的 hunk 坐标与规范化分支，
+2. 追 `hash-object → git diff` 的必要顺序，以及 `reload` 中
+   Staged `async let` 同时读取 HEAD tree／Index 时的跨代次风险：
+   选中两个不可变 OID 只锁住各自内容，并不保证这对 OID 是一次仓库状态。
+   用可控读屏障在二者的 metadata 阶段插入 Git 更新，先观察现实现是否会发布错配；
+   真发生才在负责读取的 `DiffTab.reload` 做最小同源快照校验／重试，
+   不造全局事务或锁。
+   同时核对 `GitWorktreeComparison.resolve` 的 hunk 坐标与规范化分支，
    `fromVerifiedOperations` 每个 equal/delete/insert 范围；
    无法逐行映射时保留 Git 规范化只读比较和独立真实 Worktree 编辑。
 3. 已经可复现的失效快照先 Red 后修；
@@ -150,7 +156,8 @@ Git 无文本变化时不显示整篇删增，保存始终保留原始文件字�
 **验证：**
 `make test:DiffEngineTests,NativeDiffTabTests,NativeGitHistoryFileTests,GitExecutionTests`；
 真实 Git 规范化与多 hunk、末行无 LF、空文件、完全删除、
-Unicode 规范等价、冲突、并发写入、保存失败和过期 reload；
+Unicode 规范等价、冲突、**Staged HEAD／Index 元数据交错变化**、并发写入、
+保存失败和过期 reload；
 再以 `WorkspaceGitUITests` 从完整 GUI 编辑和保存，核对磁盘原文、Git index
 和 Git `diff` 命令输出。不得通过模拟的无变化文件代替真正的 clean filter。
 
@@ -163,13 +170,17 @@ Unicode 规范等价、冲突、并发写入、保存失败和过期 reload；
 <a id="p3-t3"></a>
 ## P3-T3 收拢后台 Diff 计算与显示发布，消除实测的重复工作
 
-**结果：** 同一内容版本只发布对应的 Diff、折叠和着色，
-连续编辑、快速切文件或关闭标签时，旧计算退出且不阻塞新请求。
+**结果：** 同一内容版本只发布对应的 Diff、折叠和着色；
+连续编辑、快速切文件或关闭标签时，不仅**旧结果不发布**，
+无消费者的旧 Git／SSH 读取和 Diff 计算也应真实停止，且不阻塞新请求。
 
 **Files／实际路径：**
 `Bailey/Git/DiffViewerView.swift` 的
+`reload/invalidateReload/deinit/refreshWhenSelected`、
 `recomputeDisplay/refreshEditDecorations/expandRun/runBackgroundDiffWork`、
 `displayGeneration/editGeneration/reloadGeneration`；
+检查 `GitCommandExecution.runData`、`WorkspaceBackend.run` 的实际取消与进程退出边界，
+并复用 P3-T1 已有的受预算读取改动，避免再改同一个共享后端；
 `Bailey/Git/DiffEngine.swift` 的
 `DiffCore.computeIfActive`、`DiffComputation.build`；
 `Bailey/Git/DiffNativeSurface.swift` 的 `render`；
@@ -182,13 +193,27 @@ Unicode 规范等价、冲突、并发写入、保存失败和过期 reload；
 2. 复用现有 `DiffCore`、当前内容版本和取消 owner；
    只为正在展示的 Unified／Split／编辑态生成真正昂贵且被消费的派生结果。
    初次展开状态必须在第一帧正确，异步着色不应重新换掉整篇可写正文。
-3. 验证现有 `Task.detached`、结构化子任务和标签生命周期的取消传播。
-   被取消的 Myers／Patience、词级计算、语法查询及布局准备不得继续长期占用 CPU，
-   也不能将过期结果回写另一个机器／路径或已编辑缓冲。
-4. **同任务执行有消费者依据的删减：**`DiffDisplay.hasCollapsedContext`
-   目前无产品读者，仅 `NativeDiffTabTests` 一处读者；
-   将其断言迁移至 `display.computation.unified.rows` 的实际折叠结果，
-   删除测试专用缓存字段和构造时的 `contains` 全文扫描。
+3. **先证明当前读取取消缺口：**`DiffTab.reload()` 创建未保留句柄的 `Task`，
+   其中又等待独立 `Task.detached` 执行 Git 命令；`invalidateReload()` 仅推进
+   `reloadGeneration`，`deinit` 只取消展示／语法任务。
+   注入可控长读：打开 A→立刻切 B／编辑 A／关闭 A／断线再连，
+   记录旧命令实际何时退出、是否仍占用 SSH 连接、同时存活的任务和 RSS。
+   在**现有 DiffTab 生命周期 owner**最小化持有并取消读取任务，
+   将真正取消传播到 Git 子任务及其拥有的 `Process`（若后端不支持先查其最小边界），
+   **必须**在取消后尽快停止不再需要的 IO，而不只是 generation 阻止 publish。
+   保留现有旧结果身份校验用于防数据混写；不要重复添加第二／第三套代次。
+   被取消的 Myers／Patience、词级、语法查询和布局准备也不得长期占用 CPU。
+   **关注 `DiffComputation.build` 的另一种成本分布：**
+   `DiffBlocks.blockEmphasis` 对每个成对修改行执行 `DiffIntraline.myersTokens`，
+   400-token 内仍可能生成较大 Myers trace；反复展开会重新 build。
+   由 P1-T4 的 399／400／401 token、密集对行和取消时延实测决定，
+   是否应在现有 DiffCore／展示版本内复用稳定行内结果，或在实际长循环增加取消检查。
+   没有测到热点时保留纯算法，不新建词级缓存中心或额外 Diff 引擎。
+4. **立即删旧路径，而非追加兼容链：**
+   执行前已独立移除 `DiffDisplay.hasCollapsedContext` 的测试专用字段并将断言迁入
+   `display.computation.unified.rows`；本 task 不再重复计算此项收益。
+   实施可靠的读取取消后，检查不再需要的无句柄 `Task.detached` 与旧 wait path，
+   与其测试一起在本 task 删除，不能保留双轨以“兼容”。
    对 `displayInputs`、`displayCoreTask`、`editFoldsReady` 等状态先核对
    展开、取消和首帧真实调用者；仍必要的绝不删。
    不增生 coordinator、generation、fallback；新链路替代旧路径时同一提交清理。
@@ -197,8 +222,13 @@ Unicode 规范等价、冲突、并发写入、保存失败和过期 reload；
 `make test:DiffEngineTests,NativeDiffTabTests,NativeContentIdentityIntegrationTests,GitBrowsingRecoveryTests`。
 受控慢后端与真实临时 Git 仓库交错“慢 A→快 B→关闭 B→编辑 A”
 及 Staged／Unstaged／历史、Split 切换、快速点击、
-删除／新增大量行、取消中途 Myers/Patience、窗口重挂载；
-核对最终当前源、磁盘与 Index、已显示像素、取消完成时间和关闭后 RSS／heap。
+删除／新增大量行、取消中途 Myers/Patience、
+逐词 Myers 399／400／401 token 阈值与大量成对修改、反复展开及窗口重挂载；
+增加**真实在途 Git/SSH 读**的关闭／重开／改机器／断线／超时，
+以可控测试命令核对取消→底层退出→无旧结果／无错误写盘，
+对已有 `GitCommandExecution` 的管道与 `SSHWorkspaceBackend` 的取消支持做兼容回归。
+记录实际子进程结束时间、读到的字节、活跃任务数、最终当前源、
+磁盘与 Index、已显示像素和关闭后 RSS／heap。
 1k／24k／100k 行重复多次，记录 30 次热样本与真实首屏／输入时间。
 
 **Uncovered：**
@@ -227,7 +257,10 @@ clean filter 规范化对照均着色准确；
 
 **步骤：**
 1. 分别测冷解析、同树可见区查询、折叠展开、前方输入、语言切换、
-   主题／字体重绘、关闭标签与多标签累计 heap；特别拆开
+   主题／字体重绘、关闭标签与多标签累计 heap；
+   在 1／10／100／1000 个离散显示区间中确认
+   `DiffSyntaxHighlighter.queryCaptures` **每个区间都会重新执行 query cursor**，
+   区分真正命中的 capture 数量和游标初始化／排序成本；特别拆开
    `DiffSyntaxSource.captures` 每次的 `cachedText?.utf8.elementsEqual(text.utf8)`
    全文等价扫描与真正 Tree-sitter parse/capture 查询，不能把“复用树”当作零 CPU；
    不把约 1.5 秒的对照全文件解析称为当前 GUI 首屏。

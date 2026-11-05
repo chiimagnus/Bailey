@@ -22,7 +22,9 @@
 - P2／P3 具体实现路线与首帧预算在本阶段由实测固定，而非凭直觉选择。
 
 **Rules：**
-- 本轮授权**只写计划**，下述测试、原型和重构在后续执行时才进行。
+- 当前属于**执行前审查**，技术重构仍需经过 P1 准入；
+  已确认独立、可验证的死代码清理可以就地删除并单独提交，
+  不把完成这项清理等同于启动后续性能实施任务。
 - 遵守 `AGENTS.md`、`docs/testing.md` 的隔离、Red→Green、全条件覆盖和主线程约束。
 - 已有独立 `adaptive-large-files` 拥有 GB 级分页模型；本阶段只测当前有界 Diff，
   不建立另一个分页数据层。
@@ -34,24 +36,28 @@
 
 | 入口／所有者 | 当前源码与可观测结果 | 主要测试 |
 | --- | --- | --- |
-| `GitFileEventWatcher → GitStatusModel.refresh → GitPanel.browseGitChange → WorkspaceWindowModel/Project.openDiff` | 本机事件合并、Git 核心与详情、当前行焦点及标签复用；Graph 经 `RecentCommitsView` 进入 `Project.openCommitDiff/openHistoricalDiff` | `GitStatusModelTests`、`GitBrowsingRecoveryTests`、`GitChangesUITests`、`GitGraphUITests` |
-| `Project.openDiff → DiffTab.reload` | `Bailey/Workspace/Project.swift`、`Bailey/Git/DiffViewerView.swift`；打开、复用、读取和代次 | `NativeDiffTabTests`、`GitBrowsingRecoveryTests` |
+| `GitFileEventWatcher → GitStatusModel.refresh → GitPanel.browseGitChange → WorkspaceWindowModel/Project.openDiff` | 本机事件合并、Git 核心与详情、当前行焦点及标签复用；`GitStatusModel.refresh` 的超时 watchdog 和 `runGitStatus` 目前分别用未持有句柄的 Task／detached worker，只校验代次；Graph 经 `RecentCommitsView` 进入 `Project.openCommitDiff/openHistoricalDiff` | `GitStatusModelTests`、`GitRemoteRefreshIntegrationTests`、`GitBrowsingRecoveryTests`、`GitChangesUITests`、`GitGraphUITests` |
+| `Project.openDiff → DiffTab.reload/invalidateReload/deinit` | `Bailey/Workspace/Project.swift`、`Bailey/Git/DiffViewerView.swift`；打开／复用／读取，未持有句柄的 `Task` 中再启动 `Task.detached`，失效代次不取消 Git/SSH 子进程 | `NativeDiffTabTests`、`GitBrowsingRecoveryTests`、`SSHGitRecoveryLiveTests`，补宿主假慢命令取消／真实资源释放 |
 | `DiffTab.gitContent/gitComparisonBaseline` | 锁定 Blob OID、raw worktree 与 Git patch；clean filter 重读和重试 | `NativeDiffTabTests`、`NativeGitHistoryFileTests`、`GitExecutionTests` |
 | `GitCommandExecution.runData(stdoutLimit:) → SSHWorkspaceBackend.run` | 远端先完整接收输出再截取返回前缀；本地 `LocalWorkspaceBackend.runSync` 也有独立无输出限额的命令路径 | `GitExecutionTests`、`RemoteCommandsTests`，需补超量 stdout/stderr 和命令失败的传输／内存断言 |
 | `DiffCore.computeIfActive / fromVerifiedOperations` | 可取消行比较及已验证 Git hunk；`DiffComputation.build` 仍有三种投影 | `DiffEngineTests` |
 | `NativeCodeTextView.processStorageEdit → onCharacterEdit → DiffNativeSurface.editTextDidChange` | 原生层已有编辑范围、替换文本和增量行索引；零参回调使 Diff 逐键再取 `textView.string` 并全字节比较 | `NativeEditorCompositionTests`、`NativeDiffTabTests`、`WorkspaceGitUITests` |
 | `DiffCodePaneView.layout/applyContentHeightOverride` | 首次 `ensureLayout(documentRange)`，独立高度覆盖逻辑、折叠和 ghost；`applyGhostSpacing` 还会操作真实段落属性 | `NativeDiffTabTests` 中的滚动和长文件用例 |
 | `DiffRowGeometry.visibleRows` / `DiffTextView.hasNativeNonLFSeparators` | 非折叠编辑会从文首列举到当前 viewport，且换行扫描缓存随字符变更失效 | `NativeDiffTabTests`、`NativeEditorLayoutTests`，须补深处热视口开销断言 |
-| `DiffTextView.setEditingFolds / DiffRowGeometry.visibleRows` | TextKit 隐藏布局、LF／UTF-16 映射、可视片段绘制及 AX | `NativeDiffTabTests`、`NativeEditorLayoutTests` |
+| `DiffTextView.setEditingFolds / DiffRowGeometry.visibleRows` | TextKit 隐藏布局、LF／UTF-16 映射、可视片段绘制及 AX；`NativeTextLineIndex` 的自然段落与 `TextCoordinateIndex` 的 LF 行是**不同概念** | `NativeDiffTabTests`、`NativeEditorLayoutTests`、`TextCoordinateIndexTests`，必须覆盖裸 CR／Unicode 分隔符 |
 | `DiffNativeSurface.render` | 工作区可写、规范化只读比较、Split／Unified、滚动同步与原生生命周期 | `NativeContentIdentityIntegrationTests`、`WorkspaceGitUITests` |
+| `Project.remove/terminateAll → DiffNativeRoot.dismantleNSView` | FileTab 真实关闭时退役原生编辑器，但 DiffTab 仅清快照回调；SwiftUI 卸载只撤销焦点回调，AppKit 可缓存旧视图 | `NativePaneRetentionIntegrationTests`、`WindowCloseIntegrationTests`；P2-T4 须验证保留旧 NSView 时资源释放，不可在 Dock 重挂载清空 Undo |
 | `DiffTab.writeCurrentText` | 真实工作区保存与保存后重载；失联和目标身份校验 | `NativeDiffTabTests`、`GitUncommittedActionTests` |
 
 历史性能日志：`build/git-diff-verified-hunks-final-targeted.log`
 （24k 行模型 Staged 约 199 ms、Unstaged 约 243 ms，30 次中位）；
 `build/git-diff-cold-layout-before.log`（24k 行首次全文布局约 206 ms）；
-`build/git-diff-verified-hunks-full-host.log`（843 项，16 跳过、0 失败）；
-`build/git-diff-verified-hunks-ui-repeat.log`（5 项 GUI 复测通过）。
-这些日志只能用作**同机重测前的历史对照**，与最终合并验收严格分开。
+`build/git-diff-verified-hunks-full-host.log`（旧提交的 843 项，16 跳过、0 失败）；
+`build/git-diff-verified-hunks-ui-repeat.log`（5 项 GUI 复测通过）；
+`build/git-diff-preflight-full-host-after-cleanup.log`（`a9fdb51b` 清理后完整宿主
+843 项、16 SSH 跳过、0 失败、约 592 秒）；另有 `build/git-diff-preflight-dead-display-test.log`
+（84 项，1 SSH 跳过）和 `build/git-diff-preflight-dead-display-adjacent.log`（37 项）。
+以上只能证明对应代码提交和环境的当前结果，不是未来实施提交、独立 GUI／SSH／Release 的验收。
 
 ## 验证执行契约
 
@@ -97,6 +103,11 @@
    main actor 连续占用、Undo 和保存后原字节。
 4. 冷启动与重复打开分开；至少 30 次热测试记录中位／P95／最差，
    带样本 hash、system build、Debug／Release 配置及 CPU／RSS／heap。
+   附加打开慢仓库→马上切换／关闭→连续重开，分别观察
+   `DiffTab.reloadGeneration` 与 `GitStatusModel.statusRequestID` 已失效后，
+   实际 Git/SSH 进程仍运行的数量、传输字节和完成时间；
+   区分后台状态刷新仍被其它 Git 面板消费、与无人再需要的旧 Diff 读取，
+   不能因某一视图不显示就贸然取消共享状态任务。
    单独测非折叠 `DiffRowGeometry.visibleRows` 在远距滚动时的文首前缀枚举、
    普通输入后非 LF 换行标记扫描及 `applyGhostSpacing` 属性更新，
    对比视口顶／中／底，不能只测第一屏或折叠路径。
@@ -148,9 +159,13 @@
    不为了“完整设计”固定实现两套通用布局引擎，
    更不以尾端刷新／错误行数修正原生坐标。
    Apple SDK 契约不明时再查对应接口，避免自行发明布局规则。
-3. 优先验证是否能复用编辑器已有 `NativeTextLineIndex` 及 Diff 已维护的
-   UTF-16 行偏移来解析可视行，避免每帧从文首枚举原生段落；
-   非 LF 换行种类只随相关编辑范围变化而更新，不能另建全文缓存体系。
+3. 先辨清**自然段落与 Git LF 行是两种索引**：
+   `NativeTextLineIndex` 利用 `NSString.getLineStart` 计入原生段落分隔符，
+   `TextCoordinateIndex` 按 LF 计行；Diff 的 `lineStartOffsets/editSnapshotOffsets`
+   已经保存来源 UTF-16 行起点。验证采用哪个现有数据可正确反查当前片段的 Git 行号，
+   只在没有稳定起点的路径设计最小增量映射，绝不把裸 CR／U+2028 段落数直接当 Git 行号。
+   消除每帧从文首枚举原生段落；非 LF 换行种类只随相关编辑范围变化而更新，
+   不另建第二套全文索引。
    同时验证左右 Split 同步、深处点击折叠／AX、窗口宽度变化与整段插入删除、
    拖动滑块直接跳底、17 次远跳、恢复滚动锚点、修改字号与长行显示，
    真实光标和最后的删除 ghost 都可达到。
@@ -266,14 +281,22 @@
    是否对模型中位／P95 构成实质成本；若成立，在 P3-T1 的同一读取链中给出
    **可以实施的最短对象读取方案及其完整性反例**，不得只写“未来再研究”。
    Git batch／常驻进程只有收益超过自身资源和状态复杂度时才考虑。
-3. 复盘已验证 Git hunk 快路径是否在 0 上下文、重复行、CRLF、clean filter
-   及并发编辑时保持 `DiffCore.compute` 等价；
-   不改变 `hash-object → diff` 必须保持的顺序；
-   用可复现的 Git index／工作区并发改写证明重试安全。
+3. 复盘已验证 Git hunk 快路径在 0 上下文、重复行、CRLF、clean filter
+   及并发编辑时的字节和行号语义；`hash-object → git diff` 保持必需顺序。
+   **另设 Staged 反例**：在并行的 HEAD tree 与 Index blob 读取之间移动 HEAD／重写 Index，
+   测两侧虽各自 OID 完整但共同逻辑快照可能已过期；必须验证是否需要最小再校验，
+   不把两个独立不变 Blob 误称为一个原子仓库快照。
+   验证实际 index／工作区并发改写后的重试安全，不只断言某单个 Blob 不变。
 4. 测 `DiffComputation.build` 的全部投影和 `captureVisibleSyntax`／Neon，
    比较当前仅显示某一布局时真实新增分配、缓存版本、树重建、关闭标签后的 retained heap。
-   若三份行投影仍约 0.17 ms，**不因设计洁癖重构**；
-   若主线程富文本构造或过期解析大，记录具体输入和调用栈。
+   额外量化 `DiffSyntaxHighlighter.queryCaptures` 为每个离散可见区间重新创建 query cursor
+   的成本（1／10／100／1000 块）；验证解析复用不能只靠树缓存命中率。
+   **补独立高成本候选：**`DiffComputation.build → DiffBlocks.blockEmphasis`
+   会为每对修改行调用 `DiffIntraline.myersTokens`，它在 400-token 边界保存
+   Myers trace，内部缺少单独的任务取消点；分别测每行 399／400／401 token、
+   1／100／1000 对密集替换、重复折叠展开和中途取消的 CPU、峰值分配与结束时间。
+   简单稀疏改动投影约 0.17 ms，**不能直接推断极端行内差异也如此**；
+   只对实测高成本的重复计算与不可及时取消作最小修复，不为设计洁癖重构。
 
 **验证：** `make test:DiffEngineTests,NativeDiffTabTests,NativeGitHistoryFileTests,GitExecutionTests,RemoteCommandsTests`；
 真实 Git 临时仓库反复重跑包含 `core.autocrlf`、
