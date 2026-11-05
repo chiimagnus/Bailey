@@ -1466,7 +1466,10 @@ final class DiffCodePaneView: NSView {
         addSubview(underlay)
         addSubview(gutter)
         addSubview(scrollView)
-        addSubview(foldOverlay)
+        // The clipped document layer covers source glyphs, not native scrollers.
+        clipView.addSubview(foldOverlay, positioned: .above, relativeTo: textView)
+        foldOverlay.frame = clipView.bounds
+        foldOverlay.autoresizingMask = [.width, .height]
 
         // Repaint decorations after every viewport layout pass; scroll
         // movements are reported synchronously by DiffClipView above.
@@ -1474,6 +1477,8 @@ final class DiffCodePaneView: NSView {
 
     /// Repaint viewport decorations and synchronize both axes in split mode.
     private func handleScrolled() {
+        let viewport = scrollView.contentView.bounds
+        if foldOverlay.frame != viewport { foldOverlay.frame = viewport }
         underlay.needsDisplay = true
         gutter.needsDisplay = true
         foldOverlay.needsDisplay = true
@@ -1497,7 +1502,7 @@ final class DiffCodePaneView: NSView {
         scrollView.frame = contentFrame
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         underlay.frame = contentFrame
-        foldOverlay.frame = contentFrame
+        foldOverlay.frame = scrollView.contentView.bounds
         // Row rects span the current width; a resize must repaint them.
         underlay.needsDisplay = true
         gutter.needsDisplay = true

@@ -776,6 +776,113 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
 
+    func testFoldIndicatorIsClippedInsideScrollContentAndNeverCoversScroller() throws {
+        let before = (0..<320).map { "line \($0)\n" }.joined()
+        var after = before
+        for line in stride(from: 16, through: 304, by: 16) {
+            let replacement = line == 160
+                ? "changed " + String(repeating: "long ", count: 100)
+                : "changed \(line)"
+            after = after.replacingOccurrences(of: "line \(line)\n", with: replacement + "\n")
+        }
+        let core = DiffCore.compute(oldText: before, newText: after)
+        let compared = DiffComputation.build(core: core, expansions: [:])
+        let folds = DiffEditFold.sourceFolds(in: compared.unified, lineCount: core.newLines.count)
+        XCTAssertFalse(folds.isEmpty)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        var didScrollHorizontally = false
+
+        for dark in [false, true] {
+            for editable in [false, true] {
+                for style in [NSScroller.Style.legacy, .overlay] {
+                    let window = NSWindow(
+                        contentRect: NSRect(x: -900, y: -900, width: 820, height: 400),
+                        styleMask: [.titled], backing: .buffered, defer: false
+                    )
+                    window.isReleasedWhenClosed = false
+                    defer { window.close() }
+                    window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    let pane = DiffCodePaneView(mode: editable ? .edit : .review, gutterLayout: .single)
+                    window.contentView = pane
+                    window.orderFront(nil)
+                    pane.scrollView.scrollerStyle = style
+                    pane.scrollView.autohidesScrollers = false
+                    pane.applyTypography(
+                        font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                        textColor: Theme.terminal(dark: dark).foregroundNSColor
+                    )
+                    if editable {
+                        pane.setEditBufferText(after)
+                        let offsets = core.newLines.map(\.utf16Range.location)
+                        pane.setEditingFolds(
+                            folds, lineOffsets: offsets,
+                            baseDecorations: .edit(
+                                state: compared.editState, snapshotOffsets: offsets,
+                                lineCount: offsets.count, ghostBlocks: []
+                            ), revision: 1
+                        )
+                    } else {
+                        pane.setReviewDocument(
+                            NSAttributedString(string: compared.unified.text),
+                            decorations: .review(compared.unified)
+                        )
+                    }
+                    pane.layoutSubtreeIfNeeded()
+                    pane.scrollView.layoutSubtreeIfNeeded()
+                    XCTAssertTrue(DiffRowGeometry.visibleRows(
+                        textView: pane.textView, decorations: pane.decorations
+                    ).contains { $0.index < pane.decorations.rows.count
+                        && pane.decorations.rows[$0.index].collapsed != nil })
+                    let clip = pane.scrollView.contentView
+                    let verticalScroller = try XCTUnwrap(pane.scrollView.verticalScroller)
+                    let horizontalScroller = pane.scrollView.horizontalScroller
+                    let overlay = try XCTUnwrap(clip.subviews.first {
+                        String(describing: type(of: $0)) == "DiffFoldOverlayView"
+                    })
+                    XCTAssertTrue(pane.scrollView.documentView === pane.textView,
+                                  "The clipped overlay must not displace the editable document")
+                    XCTAssertFalse(pane.subviews.contains {
+                        String(describing: type(of: $0)) == "DiffFoldOverlayView"
+                    }, "Fold overlay must not cover the whole scroll view")
+                    let layers = pane.scrollView.subviews
+                    let clipIndex = try XCTUnwrap(layers.firstIndex(of: clip))
+                    let scrollerIndex = try XCTUnwrap(layers.firstIndex(of: verticalScroller))
+                    XCTAssertLessThan(clipIndex, scrollerIndex,
+                                      "The clipped content must remain behind native scrollers")
+                    if let horizontalScroller {
+                        let horizontalIndex = try XCTUnwrap(layers.firstIndex(of: horizontalScroller))
+                        XCTAssertLessThan(clipIndex, horizontalIndex,
+                                          "The clipped content must remain behind the horizontal scroller")
+                    }
+                    XCTAssertEqual(overlay.frame, clip.bounds,
+                                   "Fold label must be clipped to the visible document rectangle")
+                    if style == .legacy {
+                        XCTAssertLessThanOrEqual(clip.frame.maxX, verticalScroller.frame.minX + 1)
+                    }
+                    let requested = NSRect(origin: NSPoint(x: 90, y: 160), size: clip.bounds.size)
+                    let allowed = clip.constrainBoundsRect(requested).origin
+                    pane.setScrollOffset(requested.origin)
+                    XCTAssertEqual(clip.bounds.origin.x, allowed.x, accuracy: 1)
+                    didScrollHorizontally = didScrollHorizontally || clip.bounds.origin.x > 1
+                    XCTAssertGreaterThan(clip.bounds.origin.y, 0)
+                    XCTAssertEqual(overlay.frame, clip.bounds,
+                                   "Overlay must remain pinned to the viewport while scrolling")
+                    window.setContentSize(NSSize(width: 460, height: 300))
+                    pane.layoutSubtreeIfNeeded()
+                    pane.scrollView.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(overlay.frame, clip.bounds,
+                                   "Overlay must track viewport changes on resize")
+                    pane.scrollView.scrollerStyle = style == .legacy ? .overlay : .legacy
+                    pane.scrollView.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(overlay.frame, clip.bounds,
+                                   "Overlay must track the visible region when scrollbar style changes")
+                }
+            }
+        }
+        XCTAssertTrue(didScrollHorizontally,
+                      "At least one case must exercise actual horizontal scrolling")
+    }
+
     func testFoldIndicatorUsesTheSameForegroundPixelsInReviewAndEdit() throws {
         let before = (0..<320).map { "line \($0)\n" }.joined()
         let after = before.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
@@ -851,7 +958,9 @@ final class NativeDiffTabTests: XCTestCase {
             pane.textView.mouseDown(with: event)
             XCTAssertNotNil(expanded,
                             "Clicking the actual folded text row must expand in both modes")
-            let overlay = try XCTUnwrap(pane.subviews.last)
+            let overlay = try XCTUnwrap(pane.scrollView.contentView.subviews.first {
+                String(describing: type(of: $0)) == "DiffFoldOverlayView"
+            })
             let bitmap = try XCTUnwrap(
                 overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds)?
                     .retagging(with: .sRGB)
