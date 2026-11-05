@@ -32,6 +32,53 @@ private actor GitBackendFixture: WorkspaceBackend {
 }
 
 final class GitExecutionTests: XCTestCase {
+    func testGitObjectReadPhaseLatencyAndBatchCompleteness() async throws {
+        for lineCount in [1_000, 24_000] {
+            let directory = try makeRepository()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let name = "object-cost.swift"
+            let bytes = Data((0..<lineCount).map { "let row\($0) = \($0)\n" }.joined().utf8)
+            try bytes.write(to: directory.appendingPathComponent(name))
+            XCTAssertEqual(GitCommandExecution.run(["add", "--", name], in: directory.path).status, 0)
+            XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+            let selected = GitCommandExecution.run(["rev-parse", "HEAD:" + name], in: directory.path)
+            XCTAssertEqual(selected.status, 0, selected.stderr)
+            let oid = selected.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            var durations: [String: [Double]] = [:]
+            for _ in 0..<30 {
+                for (phase, arguments) in [
+                    ("metadata", ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name]),
+                    ("size", ["cat-file", "-s", oid]),
+                    ("blob", ["cat-file", "blob", oid])
+                ] {
+                    let start = CFAbsoluteTimeGetCurrent()
+                    let result = GitCommandExecution.runData(arguments, in: directory.path)
+                    durations[phase, default: []].append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                    XCTAssertEqual(result.status, 0, result.stderr)
+                    if phase == "blob" { XCTAssertEqual(result.stdout, bytes) }
+                    if phase == "size" {
+                        XCTAssertEqual(Int(String(decoding: result.stdout, as: UTF8.self)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)), bytes.count)
+                    }
+                }
+                let start = CFAbsoluteTimeGetCurrent()
+                let result = try await LocalWorkspaceBackend.shared.run(
+                    argv: ["/usr/bin/env", "git", "cat-file", "--batch"], cwd: directory.path,
+                    env: ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"],
+                    stdin: Data((oid + "\n").utf8), timeout: 10)
+                durations["batchViaBackend", default: []].append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+                let header = Data("\(oid) blob \(bytes.count)\n".utf8)
+                XCTAssertEqual(result.stdout, header + bytes + Data([10]))
+            }
+            for phase in durations.keys.sorted() {
+                let samples = try XCTUnwrap(durations[phase]).sorted()
+                print("AUDIT_GIT_OBJECT_PHASE rows=\(lineCount) phase=\(phase) samples=30 median=\(samples[15]) p95=\(samples[28]) worst=\(samples[29])")
+            }
+            XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(name)), bytes)
+        }
+    }
+
     private func makeRepository() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
