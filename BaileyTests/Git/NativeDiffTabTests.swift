@@ -637,6 +637,29 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, source)
     }
 
+    func testDenseIntralineProjectionCancellationLatency() async throws {
+        let lineCount = 100
+        let old = String(repeating: String(repeating: "+", count: 400) + "\n", count: lineCount)
+        let new = String(repeating: String(repeating: "-", count: 400) + "\n", count: lineCount)
+        let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: old, newText: new,
+            operations: [.delete(oldStart: 0, count: lineCount),
+                         .insert(newStart: 0, count: lineCount)]))
+        let entered = expectation(description: "Dense projection started in the real background owner")
+        let task = Task {
+            await DiffTab.runBackgroundDiffWork {
+                entered.fulfill()
+                return DiffComputation.build(core: core, revealedLines: [])
+            }
+        }
+        await fulfillment(of: [entered], timeout: 5)
+        let started = CFAbsoluteTimeGetCurrent()
+        task.cancel()
+        let result = await task.value
+        XCTAssertNil(result, "Cancelled projection must never publish a partial or stale result")
+        print("AUDIT_DIFF_DENSE_CANCELLATION tokens=400 pairs=100 elapsedMs=\((CFAbsoluteTimeGetCurrent() - started) * 1_000)")
+    }
+
     func testCancelledDiffTaskStopsItsBackgroundChild() async {
         let started = AsyncStream<Void>.makeStream()
         let gate = AsyncStream<Void>.makeStream()

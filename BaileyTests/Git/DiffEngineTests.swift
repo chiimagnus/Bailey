@@ -3,6 +3,30 @@ import XCTest
 @testable import Bailey
 
 final class DiffEngineTests: XCTestCase {
+    func testDenseIntralineProjectionTokenBoundaryCosts() throws {
+        for tokenCount in [399, 400, 401] {
+            for lineCount in [1, 100, 1_000] {
+                let old = String(repeating: String(repeating: "+", count: tokenCount) + "\n",
+                                 count: lineCount)
+                let new = String(repeating: String(repeating: "-", count: tokenCount) + "\n",
+                                 count: lineCount)
+                let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+                    oldText: old, newText: new,
+                    operations: [.delete(oldStart: 0, count: lineCount),
+                                 .insert(newStart: 0, count: lineCount)]))
+                let started = CFAbsoluteTimeGetCurrent()
+                let result = DiffComputation.build(core: core, revealedLines: [])
+                let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+                XCTAssertEqual(result.unified.rows.filter { $0.kind == .removed }.count, lineCount)
+                XCTAssertEqual(result.unified.rows.filter { $0.kind == .added }.count, lineCount)
+                XCTAssertEqual(result.splitLeft.rows.count, lineCount)
+                XCTAssertEqual(result.splitRight.rows.count, lineCount)
+                XCTAssertTrue(result.unified.rows.allSatisfy { $0.emphasis.isEmpty })
+                print("AUDIT_DIFF_DENSE_PROJECTION tokens=\(tokenCount) pairs=\(lineCount) elapsedMs=\(elapsed)")
+            }
+        }
+    }
+
     private func assertVerifiedHunksAgreeWithOriginalDiff(
         _ content: GitWorktreeComparison.Content,
         file: StaticString = #filePath, line: UInt = #line
