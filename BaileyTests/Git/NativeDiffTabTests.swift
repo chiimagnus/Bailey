@@ -377,6 +377,266 @@ final class NativeDiffTabTests: XCTestCase {
                              "Deep scrolling must locate the next virtual deletion block")
     }
 
+    func testFoldedNativeDiffScrollbarHasCompleteHeightBeforeDeepScrolling() throws {
+        var lines = (0..<24_000).map { "let row\($0) = \($0)\n" }
+        let original = lines.joined()
+        for index in stride(from: 120, to: lines.count, by: 200) {
+            lines[index] = "let row\(index) = -1\n"
+        }
+        let changed = lines.joined()
+        let core = DiffCore.compute(oldText: original, newText: changed)
+        let computation = DiffComputation.build(core: core, revealedLines: [])
+        let folds = DiffEditFold.sourceFolds(in: computation.unified,
+                                             lineCount: core.newLines.count)
+        let offsets = core.newLines.map(\.utf16Range.location)
+        let originalText = original as NSString
+        let ghosts = computation.editState.ghosts.map { block in
+            DiffDecorations.GhostBlock(
+                anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                lines: block.lines.map {
+                    NSAttributedString(string: originalText.substring(with: $0.sourceRange))
+                }
+            )
+        }
+        XCTAssertGreaterThan(folds.count, 50)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 800, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(changed)
+        pane.setEditingFolds(
+            folds, lineOffsets: offsets,
+            baseDecorations: .edit(state: computation.editState, snapshotOffsets: offsets,
+                                   lineCount: offsets.count, ghostBlocks: ghosts),
+            revision: 1
+        )
+        let visibleSourceRows = core.newLines.count - folds.reduce(0) {
+            $0 + max(0, $1.range.count - 1)
+        }
+        let expected = CGFloat(visibleSourceRows + ghosts.reduce(0) { $0 + $1.lines.count })
+            * rowHeight
+        func height() -> CGFloat {
+            pane.layoutSubtreeIfNeeded()
+            pane.scrollView.layoutSubtreeIfNeeded()
+            pane.textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+            return pane.scrollView.documentView?.frame.height ?? 0
+        }
+        let initial = height()
+        let initialKnob = pane.scrollView.verticalScroller?.knobProportion
+        var samples: [CGFloat] = []
+        for _ in 0..<8 {
+            pane.setVerticalScrollOffset(1_000_000)
+            samples.append(height())
+            XCTAssertEqual(pane.scrollView.verticalScroller?.knobProportion ?? -1,
+                           initialKnob ?? -1, accuracy: 0.001,
+                           "Scrolling must not make the native scrollbar thumb shorter")
+        }
+        XCTAssertEqual(initial, expected, accuracy: rowHeight * 2,
+                       "The native scroll range must already account for all folded and ghost rows")
+        for sample in samples {
+            XCTAssertEqual(sample, initial, accuracy: rowHeight,
+                           "Deep scrolling may not resize the document and shrink the scrollbar")
+        }
+        let bottomRows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                     decorations: pane.decorations)
+        XCTAssertTrue(bottomRows.contains { $0.index >= (folds.last?.range.lowerBound ?? Int.max) },
+                      "The complete scroll track must reach the final visible Git source row")
+        let next = DiffComputation.build(core: core, revealedLines:
+            try XCTUnwrap(computation.unified.rows.first(where: { $0.collapsed != nil })?.collapsed)
+                .revealNext()
+        )
+        let expandedFolds = DiffEditFold.sourceFolds(in: next.unified, lineCount: core.newLines.count)
+        pane.setEditingFolds(
+            expandedFolds, lineOffsets: offsets,
+            baseDecorations: .edit(state: next.editState, snapshotOffsets: offsets,
+                                   lineCount: offsets.count, ghostBlocks: ghosts),
+            revision: 2
+        )
+        pane.layoutSubtreeIfNeeded()
+        let expandedRows = core.newLines.count - expandedFolds.reduce(0) {
+            $0 + max(0, $1.range.count - 1)
+        }
+        let expandedHeight = CGFloat(expandedRows + ghosts.reduce(0) { $0 + $1.lines.count })
+            * rowHeight
+        XCTAssertEqual(pane.textView.frame.height, expandedHeight, accuracy: rowHeight,
+                       "Unfolding must update the full native scroll extent before scrolling")
+        pane.setVerticalScrollOffset(1_000_000)
+        XCTAssertTrue(DiffRowGeometry.visibleRows(textView: pane.textView,
+            decorations: pane.decorations).contains {
+                $0.index >= (expandedFolds.last?.range.lowerBound ?? Int.max)
+            }, "The expanded native scroll track must still reach the last visible source line")
+        XCTAssertEqual(pane.textView.string, changed)
+    }
+
+    func testFoldedEditorUpdatesSourceOffsetsWithoutRevealingHiddenParagraphs() throws {
+        let original = (0..<900).map { "line \($0)\n" }.joined()
+        let changed = original.replacingOccurrences(of: "line 500\n", with: "changed 500\n")
+        let core = DiffCore.compute(oldText: original, newText: changed)
+        let projection = DiffComputation.build(core: core, revealedLines: [])
+        let folds = DiffEditFold.sourceFolds(in: projection.unified,
+                                             lineCount: core.newLines.count)
+        let offsets = core.newLines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -940, y: -940, width: 760, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(changed)
+        pane.setEditingFolds(
+            folds, lineOffsets: offsets,
+            baseDecorations: .edit(state: projection.editState, snapshotOffsets: offsets,
+                                   lineCount: offsets.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let firstHeight = pane.textView.frame.height
+        let edited = changed.replacingOccurrences(of: "changed 500\n",
+                                                   with: "changed LARGER 500\n")
+        pane.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: offsets[500], length: "changed 500".utf16.count),
+            with: "changed LARGER 500"
+        )
+        let updatedCore = DiffCore.compute(oldText: original, newText: edited)
+        let updatedProjection = DiffComputation.build(core: updatedCore, revealedLines: [])
+        let updatedFolds = DiffEditFold.sourceFolds(in: updatedProjection.unified,
+                                                    lineCount: updatedCore.newLines.count)
+        XCTAssertEqual(updatedFolds.map(\.range), folds.map(\.range),
+                       "Editing inside a changed line shifts UTF-16 offsets, not collapsed Git ranges")
+        let nextOffsets = updatedCore.newLines.map(\.utf16Range.location)
+        XCTAssertNotEqual(offsets.last, nextOffsets.last)
+        pane.setEditingFolds(
+            updatedFolds, lineOffsets: nextOffsets,
+            baseDecorations: .edit(state: updatedProjection.editState, snapshotOffsets: nextOffsets,
+                                   lineCount: nextOffsets.count, ghostBlocks: []),
+            revision: 2
+        )
+        pane.layoutSubtreeIfNeeded()
+        let layout = pane.textView.nativeLayoutManager
+        layout.ensureLayout(for: layout.documentRange)
+        var renderedParagraphs: [String] = []
+        layout.enumerateTextLayoutFragments(in: layout.documentRange) { fragment in
+            renderedParagraphs.append(
+                (fragment.textElement as? NSTextParagraph)?.attributedString.string ?? ""
+            )
+            return true
+        }
+        XCTAssertTrue(renderedParagraphs.contains { $0.contains("changed LARGER 500") })
+        XCTAssertFalse(renderedParagraphs.contains { $0 == "line 20\n" },
+                       "Updating UTF-16 source offsets must not reveal a hidden paragraph")
+        XCTAssertEqual(pane.textView.frame.height, firstHeight, accuracy: 1)
+        pane.setVerticalScrollOffset(1_000_000)
+        XCTAssertEqual(pane.textView.frame.height, firstHeight, accuracy: 1)
+        XCTAssertEqual(pane.textView.string, edited)
+    }
+
+    func testUnfoldedGitDiffScrollbarReachesEndWithoutHeightGrowth() throws {
+        let source = (0..<5_000).map { "row \($0)\n" }.joined()
+        let split = DiffLineSplitter.lines(of: source).lines
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 750, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            [], lineOffsets: split.map(\.utf16Range.location),
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: split.map(\.utf16Range.location),
+                lineCount: split.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let initialHeight = pane.textView.frame.height
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+        let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                   decorations: pane.decorations)
+        XCTAssertEqual(initialHeight, CGFloat(split.count) * rowHeight, accuracy: rowHeight)
+        XCTAssertTrue(visible.contains { $0.index >= split.count - 1 },
+                      "An unfolded worktree diff must reach its last line on the first scroll")
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: rowHeight)
+
+        let added = "inserted\n"
+        pane.textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: added)
+        let edited = added + source
+        let next = DiffLineSplitter.lines(of: edited).lines
+        let nextOffsets = next.map(\.utf16Range.location)
+        pane.setEditingFolds(
+            [], lineOffsets: nextOffsets,
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: nextOffsets, lineCount: next.count, ghostBlocks: []),
+            revision: 2
+        )
+        pane.layoutSubtreeIfNeeded()
+        let revisedHeight = pane.textView.frame.height
+        XCTAssertEqual(revisedHeight, initialHeight + rowHeight, accuracy: rowHeight,
+                       "Adding a source line must update the complete scroll range")
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+        XCTAssertTrue(DiffRowGeometry.visibleRows(textView: pane.textView,
+            decorations: pane.decorations).contains { $0.index >= next.count - 1 },
+                      "Editing before the last line must not strand native content below the scrollbar")
+        XCTAssertEqual(pane.textView.frame.height, revisedHeight, accuracy: rowHeight)
+        XCTAssertEqual(pane.textView.string, edited)
+    }
+
+    func testNativeCRDiffScrollbarUsesFinalNativeParagraphHeight() throws {
+        let source = (0..<1_400).map { "part\($0)" }.joined(separator: "\r") + "\n"
+        let split = DiffLineSplitter.lines(of: source).lines
+        XCTAssertEqual(split.count, 1)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 750, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            [], lineOffsets: split.map(\.utf16Range.location),
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: split.map(\.utf16Range.location),
+                lineCount: split.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let initialHeight = pane.textView.frame.height
+        XCTAssertGreaterThan(initialHeight, 1_300 * rowHeight,
+                             "Git counts one LF row but TextKit must lay out 1400 native CR paragraphs")
+        for _ in 0..<5 {
+            pane.setVerticalScrollOffset(1_000_000)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: rowHeight,
+                           "Native CR paragraphs may not grow the scroll range during scrolling")
+        }
+        XCTAssertEqual(pane.textView.string, source)
+    }
+
     func testClosingDiffDuringSyntaxCaptureReleasesItsOwner() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1149,11 +1409,21 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(editor.textView.editingFolds, before,
                        "Moving the caret and focusing editable code must not unfold context")
         XCTAssertEqual(ObjectIdentifier(editor.textView), surfaceID)
+        let gutter = try XCTUnwrap(editor.subviews.compactMap { $0 as? DiffGutterView }.first)
+        func firstLabel() -> String? {
+            (gutter.accessibilityChildren()?.first as? NSAccessibilityElement)?
+                .accessibilityLabel()
+        }
+        let priorLabel = try XCTUnwrap(firstLabel())
         let previousDisplay = tab.display?.id
         tab.expandRun(try XCTUnwrap(before.first).separator)
         try await wait {
             host.layoutSubtreeIfNeeded()
             return tab.display?.id != previousDisplay
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return firstLabel() != nil && firstLabel() != priorLabel
         }
         XCTAssertEqual(ObjectIdentifier(editor.textView), surfaceID)
         XCTAssertEqual(editor.textView.string, modified)
@@ -1562,8 +1832,9 @@ final class NativeDiffTabTests: XCTestCase {
         review.layoutSubtreeIfNeeded()
         XCTAssertFalse(review.textView.truncatesLongLines)
         XCTAssertTrue(review.textView.wrapsLines)
-        XCTAssertNil(review.textView.overrideContentHeight,
-                     "Wrapped review cannot use a fixed height per Git row")
+        XCTAssertGreaterThan(review.textView.overrideContentHeight ?? 0,
+                             CGFloat(document.rows.count) * style.maximumLineHeight,
+                             "Wrapped review must use measured native layout height, not Git row count")
         XCTAssertEqual(review.textView.text, document.text)
         review.applyTypography(font: font, paragraphStyle: style, textColor: .black,
                                longLineDisplayWidth: .standard)
@@ -1574,7 +1845,9 @@ final class NativeDiffTabTests: XCTestCase {
                        "Returning to fixed lines must restore the split/unified row height")
         review.applyTypography(font: font, paragraphStyle: style, textColor: .black,
                                longLineDisplayWidth: .showAll)
-        XCTAssertNil(review.textView.overrideContentHeight)
+        review.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(review.textView.overrideContentHeight ?? 0,
+                             CGFloat(document.rows.count) * style.maximumLineHeight)
         XCTAssertEqual(review.textView.text, document.text)
     }
 
@@ -1595,10 +1868,21 @@ final class NativeDiffTabTests: XCTestCase {
         pane.setReviewDocument(NSAttributedString(string: document.text),
                                decorations: .review(document))
         pane.layoutSubtreeIfNeeded()
-        XCTAssertNil(pane.textView.overrideContentHeight)
+        XCTAssertGreaterThan(pane.textView.overrideContentHeight ?? 0,
+                             CGFloat(document.rows.count) * 15,
+                             "Long wrapped lines must have a stable native scroll range")
+        let initialHeight = pane.textView.frame.height
         pane.scrollToRow(1)
         XCTAssertGreaterThan(pane.scrollOffset.y, 80,
                              "Anchor must follow wrapped layout, not a one-row offset")
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 1,
+                       "Wrapped source must have its complete scroll range before scrolling")
+        let bottom = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                 decorations: pane.decorations)
+        XCTAssertTrue(bottom.contains { $0.index >= document.rows.count - 1 },
+                      "The final wrapped review line must remain reachable")
         XCTAssertEqual(pane.textView.text, document.text)
     }
 
@@ -1885,16 +2169,19 @@ final class NativeDiffTabTests: XCTestCase {
         )
         XCTAssertGreaterThan(elements.count, unusual.rows.count,
                              "Bare CR forms additional TextKit paragraphs within one Git LF line")
-        XCTAssertNil(pane.textView.overrideContentHeight,
-                     "Git LF-only row count must not clip additional native paragraphs")
+        XCTAssertGreaterThan(pane.textView.overrideContentHeight ?? 0,
+                             CGFloat(unusual.rows.count) * 15,
+                             "Native CR paragraph height must be measured, not inferred from Git LF rows")
         XCTAssertEqual(pane.textView.attributedText.string, unusual.text)
 
         let unicode = DiffComputation.compute(
             oldText: "before\u{2028}after\n", newText: "before\u{2028}updated\n"
         ).unified
         pane.setReviewDocument(NSAttributedString(string: unicode.text), decorations: .review(unicode))
-        XCTAssertNil(pane.textView.overrideContentHeight,
-                     "Unicode line separators also require native content height")
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(pane.textView.overrideContentHeight ?? 0,
+                             CGFloat(unicode.rows.count) * 12,
+                             "Unicode separators must use measured native content height")
     }
 
     func testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision() async throws {
@@ -2698,7 +2985,8 @@ final class NativeDiffTabTests: XCTestCase {
         let expectedHeight = CGFloat(compact.rows.count) * DiffTypography.lineHeight(for: font)
         XCTAssertGreaterThanOrEqual(pane.textView.frame.height, expectedHeight - 2)
         XCTAssertLessThanOrEqual(pane.textView.frame.height,
-                                 expectedHeight + DiffTypography.lineHeight(for: font) + 3)
+                                 max(expectedHeight, clip.bounds.height)
+                                     + DiffTypography.lineHeight(for: font) + 3)
         XCTAssertEqual(clip.bounds.minY, 0, accuracy: 2,
                        "Collapsing thousands of context lines must not leave an empty viewport")
         let layout = pane.textView.nativeLayoutManager
@@ -3613,11 +3901,74 @@ final class NativeDiffTabTests: XCTestCase {
         }
         let controls = try XCTUnwrap(gutter.accessibilityChildren())
         let first = try XCTUnwrap(controls.first as? NSAccessibilityElement)
+        let expectedRow = try XCTUnwrap(DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        ).first { $0.index < pane.decorations.rows.count
+            && pane.decorations.rows[$0.index].collapsed != nil })
+        let axFrame = first.accessibilityFrame()
+        let center = NSPoint(x: axFrame.midX, y: axFrame.midY)
+        let cursor = gutter.convert(window.convertPoint(fromScreen: center), from: nil)
+        let expectedY = expectedRow.frame.midY - pane.scrollView.contentView.bounds.origin.y
+        XCTAssertEqual(cursor.y, expectedY, accuracy: 2,
+                       "The actual center of an AX fold button must hit the native gutter separator")
         XCTAssertTrue(first.accessibilityPerformPress())
         let activated = try XCTUnwrap(expanded)
         XCTAssertTrue(compared.unified.rows.contains {
             $0.collapsed?.baselineRange == activated.baselineRange
         })
+    }
+
+    func testEditableFoldAccessibilityFrameMatchesActualClickAfterScrolling() throws {
+        let old = (0..<900).map { "line \($0)\n" }.joined()
+        let modified = old.replacingOccurrences(of: "line 594\n", with: "changed 594\n")
+            .replacingOccurrences(of: "line 617\n", with: "changed 617\n")
+        let core = DiffCore.compute(oldText: old, newText: modified)
+        let projection = DiffComputation.build(core: core, revealedLines: [])
+        let offsets = core.newLines.map(\.utf16Range.location)
+        let folds = DiffEditFold.sourceFolds(in: projection.unified, lineCount: offsets.count)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 750, height: 280),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.applyTypography(font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                             paragraphStyle: DiffTypography.paragraphStyle(
+                                 for: .monospacedSystemFont(ofSize: 12, weight: .regular)),
+                             textColor: .textColor)
+        pane.setEditBufferText(modified)
+        pane.setEditingFolds(
+            folds, lineOffsets: offsets,
+            baseDecorations: .edit(state: projection.editState, snapshotOffsets: offsets,
+                                   lineCount: offsets.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let gutter = try XCTUnwrap(pane.subviews.compactMap { $0 as? DiffGutterView }.first)
+        let scroll = pane.scrollView.contentView
+        for offset in [0.0, 50.0, 100.0] {
+            pane.setVerticalScrollOffset(offset)
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let rows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                   decorations: pane.decorations)
+            let folded = rows.filter { $0.index < pane.decorations.rows.count
+                && pane.decorations.rows[$0.index].collapsed != nil }
+            let children = gutter.accessibilityChildren() ?? []
+            XCTAssertEqual(children.count, folded.count)
+            for (row, child) in zip(folded, children) {
+                let button = try XCTUnwrap(child as? NSAccessibilityElement)
+                let frame = button.accessibilityFrame()
+                let cursor = gutter.convert(window.convertPoint(fromScreen: NSPoint(
+                    x: frame.midX, y: frame.midY
+                )), from: nil)
+                let expected = row.frame.midY - scroll.bounds.origin.y
+                XCTAssertEqual(cursor.y, expected, accuracy: 2,
+                               "A scrolled editable AX fold button must hit its actual separator")
+            }
+        }
+        XCTAssertEqual(pane.textView.string, modified)
     }
 
     func testNativeDiffSplitLayoutPreservesPaneIdentity() async throws {

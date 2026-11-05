@@ -327,8 +327,12 @@ final class WorkspaceGitUITests: XCTestCase {
                        "Clicking editable code must not unfold the hidden source lines")
         XCTAssertTrue(foldButtons.firstMatch.isHittable)
         foldButtons.firstMatch.click()
+        // Revealing the lines below the leading fold moves its button above
+        // the viewport; verify the remaining hidden count at the top rather
+        // than assuming the original AX element stays on screen.
+        editor.scroll(byDeltaX: 0, deltaY: -4_000)
         let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            foldButtons.firstMatch.exists && foldButtons.firstMatch.label != initialFold
+            foldButtons.allElementsBoundByIndex.contains { $0.label != initialFold }
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 15), .completed,
                        "Only the explicit unmodified-lines expander may reveal source lines")

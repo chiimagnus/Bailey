@@ -110,9 +110,12 @@ class NativeCodeTextView: NSTextView {
     var overrideContentHeight: CGFloat? {
         didSet {
             if let height = overrideContentHeight, height > 0 {
-                minSize.height = height
-                setFrameSize(NSSize(width: frame.width, height: height))
+                let requiredHeight = max(height, enclosingScrollView?.contentView.bounds.height ?? 0)
+                minSize.height = requiredHeight
+                maxSize.height = requiredHeight
+                setFrameSize(NSSize(width: frame.width, height: requiredHeight))
             } else {
+                maxSize.height = CGFloat.greatestFiniteMagnitude
                 minSize.height = 0
                 needsLayout = true
             }
@@ -326,12 +329,17 @@ class NativeCodeTextView: NSTextView {
     func setCodeWidth(_ width: CGFloat) {
         guard width.isFinite, width > 0 else { return }
         let visibleHeight = enclosingScrollView?.contentView.bounds.height ?? 0
-        let minimumHeight = overrideContentHeight ?? visibleHeight
+        let minimumHeight = max(overrideContentHeight ?? 0, visibleHeight)
+        if overrideContentHeight != nil, abs(maxSize.height - minimumHeight) > 0.5 {
+            maxSize.height = minimumHeight
+        }
         if abs(minSize.width - width) > 0.5 || abs(minSize.height - minimumHeight) > 0.5 {
             minSize = NSSize(width: width, height: minimumHeight)
         }
-        if abs(frame.width - width) > 0.5 || frame.height < minimumHeight {
-            setFrameSize(NSSize(width: width, height: max(frame.height, minimumHeight)))
+        if abs(frame.width - width) > 0.5 || frame.height < minimumHeight
+            || (overrideContentHeight != nil && abs(frame.height - minimumHeight) > 0.5) {
+            let height = overrideContentHeight == nil ? max(frame.height, minimumHeight) : minimumHeight
+            setFrameSize(NSSize(width: width, height: height))
         }
         if let container = textContainer, abs(container.size.width - width) > 0.5 {
             container.size.width = width
