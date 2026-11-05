@@ -44,7 +44,6 @@ enum DiffLayoutStyle: String {
 final class DiffDisplay {
     let id = UUID()
     let computation: DiffComputation
-    let hasCollapsedContext: Bool
     private let oldRuns: [DiffHighlightRun]
     private let newRuns: [DiffHighlightRun]
     private let baseAttributes: [NSAttributedString.Key: Any]
@@ -52,7 +51,6 @@ final class DiffDisplay {
     fileprivate init(computation: DiffComputation, inputs: DiffDisplayInputs,
          font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor) {
         self.computation = computation
-        hasCollapsedContext = computation.unified.rows.contains { $0.collapsed != nil }
         oldRuns = inputs.oldRuns
         newRuns = inputs.newRuns
         baseAttributes = [.font: font, .foregroundColor: textColor,

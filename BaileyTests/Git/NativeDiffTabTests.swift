@@ -969,7 +969,9 @@ final class NativeDiffTabTests: XCTestCase {
         window.orderFront(nil)
         XCTAssertFalse(diff.isLoading, "Mounting the selected diff must not restart its read")
         try await wait({ diff.display != nil }, timeout: 20)
-        XCTAssertTrue(try XCTUnwrap(diff.display).hasCollapsedContext)
+        XCTAssertTrue(try XCTUnwrap(diff.display).computation.unified.rows.contains {
+            $0.collapsed != nil
+        })
         let keyword = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
             for: "keyword", theme: SyntaxHighlighting.theme
         ))
