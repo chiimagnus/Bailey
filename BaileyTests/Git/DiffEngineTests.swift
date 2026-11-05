@@ -3,6 +3,40 @@ import XCTest
 @testable import Bailey
 
 final class DiffEngineTests: XCTestCase {
+    func testSharedTokenIntralineBoundaryKeepsExactEmphasis() throws {
+        for tokenCount in [399, 400, 401] {
+            let changedCount = tokenCount / 2
+            let commonCount = tokenCount - changedCount
+            let beforeLine = String(repeating: "+", count: changedCount)
+                + String(repeating: "=", count: commonCount) + "\n"
+            let afterLine = String(repeating: "-", count: changedCount)
+                + String(repeating: "=", count: commonCount) + "\n"
+            for lineCount in [1, 10, 100] {
+                let before = String(repeating: beforeLine, count: lineCount)
+                let after = String(repeating: afterLine, count: lineCount)
+                let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+                    oldText: before, newText: after,
+                    operations: [.delete(oldStart: 0, count: lineCount),
+                                 .insert(newStart: 0, count: lineCount)]))
+                let started = CFAbsoluteTimeGetCurrent()
+                let projection = DiffComputation.build(core: core, revealedLines: [])
+                let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+                let removed = projection.unified.rows.filter { $0.kind == .removed }
+                let added = projection.unified.rows.filter { $0.kind == .added }
+                XCTAssertEqual(removed.count, lineCount)
+                XCTAssertEqual(added.count, lineCount)
+                XCTAssertEqual(projection.splitLeft.rows.count, lineCount)
+                XCTAssertEqual(projection.splitRight.rows.count, lineCount)
+                let expected = tokenCount > 400 ? [] : [NSRange(location: 0, length: changedCount)]
+                for row in removed { XCTAssertEqual(row.emphasis, expected) }
+                for row in added { XCTAssertEqual(row.emphasis, expected) }
+                for row in projection.splitLeft.rows { XCTAssertEqual(row.emphasis, expected) }
+                for row in projection.splitRight.rows { XCTAssertEqual(row.emphasis, expected) }
+                print("AUDIT_DIFF_SHARED_TOKENS tokens=\(tokenCount) pairs=\(lineCount) elapsedMs=\(elapsed)")
+            }
+        }
+    }
+
     func testDenseIntralineProjectionTokenBoundaryCosts() throws {
         for tokenCount in [399, 400, 401] {
             for lineCount in [1, 100, 1_000] {
