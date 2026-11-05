@@ -227,9 +227,14 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 未获专属主机授权就**不能**执行实机写入；具体影响是 Windows EOL/filter、
 真实传输延迟与断线安全尚无闭环证据，
 仅有受控后端替代测试且该场景不得无保留验收。
-完整套件的 16 项原 SSH 跳过中包含非 Diff 项，应分别列明：
-本 feature 相关项是否阻塞 Git Diff 完成，
-无关 SSH Files/终端项只属于全仓额外缺口，不能混淆。
+在 2026-11-05 19:47 的完整宿主测试（`a9fdb51b`）中，16 项均因无授权 SSH 主机跳过。
+直接 Git Diff：`NativeDiffTabTests` 1 项，涉及 EOL、clean filter 与远端保存。
+Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecoveryLiveTests` 各 1 项，共 2 项。
+相邻 Git Worktree／Ref：`GitWorkspaceSSHTests` 2 项；项目索引 `ProjectFileIndexTests` 1 项。
+其它 10 项分别为交互式变基 1 项、SSH Files 4 项、Windows Files 事件 5 项，
+属于全仓实机缺口而非 Git Diff 单项的全部阻塞。
+合计 1+2+2+1+10=16；关联 Git Diff 的场景需在获准 Windows SSH 测试仓库补验，
+不可把 skipped 计为 passed。
 
 **文档：** `docs/features/diff.md` 与 `docs/features/ssh.md`
 只有生产契约改变时在对应实施 owner 更新；
@@ -327,11 +332,12 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
    未执行者列原因、影响、替代证据与必需补验，
    无法完成必需路径则明确 **No-Go**。
 3. 以**最终实现提交**运行完整 `make test`，核对 XCTest 总数、
-   跳过原因、完整 Make 命令状态。旧记录：843 项全量在 16:15 完成、
-   定点 105 项在 16:27:27 完成，均早于 `5230f341` 的 16:27:58 提交，
-   **不得视为最新 HEAD 的最终全量验收**。
-   逐项列出历史 16 项 SSH skipped 中属于 Git Diff／其它 SSH 的项目及其授权条件；
-   未执行的相关实机用例不能计入通过。
+   跳过原因、完整 Make 命令状态。
+   目前执行前清理提交 `a9fdb51b` 已完成新一次完整宿主测试：
+   `build/git-diff-preflight-full-host-after-cleanup.log`，843 项、16 项授权 SSH 跳过、
+   0 失败（2026-11-05 19:47 完成）；它有效证明此清理版本的宿主回归，
+   **不能代替 P2/P3 未来代码改动后的最终 HEAD 全量测试**。
+   16 项实际归属已在 P4-T3 逐项分类；未执行的相关 Windows SSH 实机不可计入通过。
    执行 `make build`、`make build:ui`、适用 `make test:ui`；
    独占 GUI 会话可用且不会破坏用户环境时运行完整 UI Test Target，
    否则记录未执行的方法与实际阻塞，受影响的 Git GUI 用户路径必须实际运行。
