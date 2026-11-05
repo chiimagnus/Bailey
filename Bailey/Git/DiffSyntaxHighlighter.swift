@@ -71,11 +71,6 @@ actor DiffSyntaxSource {
 }
 
 enum DiffSyntaxHighlighter {
-    /// Whole-file capture requests over multi-megabyte generated files are
-    /// skipped. Diff panes instead query their visible source ranges, even
-    /// when the underlying file is larger than this legacy full-pass budget.
-    nonisolated static let highlightByteLimit = 1_500_000
-
     /// Range-filter query captures to the source rows actually represented by
     /// the folded diff. Tree-sitter still parses the complete file for correct
     /// multiline syntax context; hidden source rows need no token attributes.
@@ -107,36 +102,14 @@ enum DiffSyntaxHighlighter {
         return DiffHighlightContext(grammarIndex: grammarIndex, query: query)
     }
 
-    /// Parse the real source for correct multiline syntax, but query only
-    /// source ranges projected into visible folded Git rows. Return Sendable
-    /// capture metadata without constructing a second colored document.
-    nonisolated static func captures(
-        text: String, context: DiffHighlightContext, ranges: [NSRange]? = nil
-    ) -> [DiffCaptureRun] {
-        guard !Task.isCancelled, !text.isEmpty,
-              ranges != nil || text.utf8.count <= highlightByteLimit else { return [] }
-        if let ranges, ranges.isEmpty { return [] }
-        let parser = Parser()
-        guard let grammar = SyntaxLanguage.parser(grammarIndex: context.grammarIndex) else {
-            return []
-        }
-        do {
-            try parser.setLanguage(grammar)
-        } catch {
-            return []
-        }
-        guard let tree = parser.parse(text), !Task.isCancelled else { return [] }
-        return queryCaptures(tree: tree, text: text, context: context, ranges: ranges)
-    }
-
     fileprivate nonisolated static func queryCaptures(
         tree: MutableTree, text: String, context: DiffHighlightContext,
-        ranges: [NSRange]?
+        ranges: [NSRange]
     ) -> [DiffCaptureRun] {
         guard !Task.isCancelled, let root = tree.rootNode else { return [] }
         let predicateContext = SwiftTreeSitter.Predicate.Context(string: text)
         var runs: [DiffCaptureRun] = []
-        for visible in ranges ?? [NSRange(location: 0, length: text.utf16.count)] {
+        for visible in ranges {
             guard !Task.isCancelled else { return [] }
             let cursor = context.query.execute(node: root, in: tree)
             cursor.setRange(visible)

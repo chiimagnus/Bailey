@@ -187,9 +187,9 @@ final class NativeSyntaxHighlightingTests: XCTestCase {
         let expected = SyntaxHighlightCoordinator.themeColor(for: "comment", theme: SyntaxHighlighting.theme)
         XCTAssertNotNil(expected)
         try await wait { self.color(second.editor, at: comment) == expected }
-        let captures = await Task.detached {
-            DiffSyntaxHighlighter.captures(text: source, context: context)
-        }.value
+        let captures = await DiffSyntaxSource().captures(
+            text: source, context: context,
+            ranges: [NSRange(location: 0, length: source.utf16.count)])
         let colors = DiffSyntaxHighlighter.colors(for: captures)
         XCTAssertTrue(colors.contains { NSLocationInRange(comment, $0.range) && $0.color == expected })
     }

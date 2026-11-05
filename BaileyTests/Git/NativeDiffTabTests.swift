@@ -766,8 +766,8 @@ final class NativeDiffTabTests: XCTestCase {
             start = CFAbsoluteTimeGetCurrent()
             let captured = await Task.detached(priority: .userInitiated) {
                 (
-                    DiffSyntaxHighlighter.captures(text: before, context: context),
-                    DiffSyntaxHighlighter.captures(text: after, context: context)
+                    DiffSyntaxOracle.captures(text: before, context: context),
+                    DiffSyntaxOracle.captures(text: after, context: context)
                 )
             }.value
             syntaxTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
@@ -3250,22 +3250,17 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(editable.textView.isEditable)
     }
 
-    func testVisibleSyntaxCapturesRemainAvailableBeyondWholeFileHighlightBudget() async throws {
+    func testLargeSourceVisibleSyntaxUsesProductionParser() async throws {
         let source = String(repeating: "let value = 42\n", count: 115_000)
-        XCTAssertGreaterThan(source.utf8.count, DiffSyntaxHighlighter.highlightByteLimit)
+        XCTAssertGreaterThan(source.utf8.count, 1_500_000)
         let resolved = await DiffSyntaxHighlighter.context(for: "large.swift")
         let context = try XCTUnwrap(resolved)
-        XCTAssertTrue(DiffSyntaxHighlighter.captures(text: source, context: context).isEmpty,
-                      "Unbounded captures should retain the existing whole-file resource limit")
         let started = CFAbsoluteTimeGetCurrent()
-        let visible = await Task.detached(priority: .userInitiated) {
-            DiffSyntaxHighlighter.captures(
-                text: source, context: context, ranges: [NSRange(location: 0, length: 30)]
-            )
-        }.value
+        let visible = await DiffSyntaxSource().captures(
+            text: source, context: context, ranges: [NSRange(location: 0, length: 30)])
         print("AUDIT_LARGE_DIFF_VISIBLE_SYNTAX bytes=\(source.utf8.count) milliseconds=\((CFAbsoluteTimeGetCurrent() - started) * 1_000)")
         XCTAssertFalse(visible.isEmpty,
-                       "Large files must still highlight the visible source even when full capture is skipped")
+                       "Large files must highlight the visible source through the production parser")
         XCTAssertTrue(visible.contains { NSLocationInRange(2, $0.range) })
     }
 
@@ -3305,7 +3300,7 @@ final class NativeDiffTabTests: XCTestCase {
         let afterReadonlyNewCount = await newParser.parseCount
         XCTAssertEqual(afterReadonlyOldCount, 1)
         XCTAssertEqual(afterReadonlyNewCount, 1)
-        let direct = DiffSyntaxHighlighter.captures(
+        let direct = DiffSyntaxOracle.captures(
             text: modified, context: context,
             ranges: DiffSyntaxHighlighter.visibleRanges(in: projection.splitRight, source: .new)
         )
@@ -3342,7 +3337,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(warm.isEmpty)
         let afterExpansion = await cached.parseCount
         XCTAssertEqual(afterExpansion, 1, "Unfolding may query new rows, but may not reparse source")
-        let direct = DiffSyntaxHighlighter.captures(
+        let direct = DiffSyntaxOracle.captures(
             text: source, context: context, ranges: expandedRanges
         )
         XCTAssertEqual(warm.map(\.range), direct.map(\.range))
@@ -3396,13 +3391,13 @@ final class NativeDiffTabTests: XCTestCase {
                     in: computation.splitRight, source: .new
                 )
                 let oldAll = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: source, context: context))
+                    DiffSyntaxOracle.captures(text: source, context: context))
                 let newAll = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: after, context: context))
-                let oldVisible = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: source, context: context, ranges: oldRanges))
-                let newVisible = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: after, context: context, ranges: newRanges))
+                    DiffSyntaxOracle.captures(text: after, context: context))
+                let oldVisible = DiffSyntaxHighlighter.colors(for: await DiffSyntaxSource().captures(
+                    text: source, context: context, ranges: oldRanges))
+                let newVisible = DiffSyntaxHighlighter.colors(for: await DiffSyntaxSource().captures(
+                    text: after, context: context, ranges: newRanges))
                 let plain: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.textColor]
                 for document in [computation.unified, computation.splitLeft, computation.splitRight] {
                     let full = DiffSyntaxHighlighter.attributedDocument(
@@ -3433,9 +3428,9 @@ final class NativeDiffTabTests: XCTestCase {
         ] {
             let resolved = await DiffSyntaxHighlighter.context(for: path)
             let context = try XCTUnwrap(resolved, "Missing grammar for \(path)")
-            let captures = await Task.detached(priority: .userInitiated) {
-                DiffSyntaxHighlighter.captures(text: source, context: context)
-            }.value
+            let captures = await DiffSyntaxSource().captures(
+                text: source, context: context,
+                ranges: [NSRange(location: 0, length: source.utf16.count)])
             XCTAssertFalse(captures.isEmpty, "Syntax parser returned no highlights for \(path)")
             XCTAssertTrue(captures.allSatisfy {
                 $0.range.length > 0 && NSMaxRange($0.range) <= source.utf16.count
