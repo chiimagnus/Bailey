@@ -136,8 +136,10 @@ Git 命令失败不能被替换成空内容。
 原生布局片段的字符范围用于识别文末虚拟空行：不能用整段富文本长度判断。
 Diff 与文件编辑共享 NSTextStorage 的 Undo 通知和只读辅助功能写保护；
 编辑态 Diff 还通过原生 `NSTextViewDelegate` 把自有 UndoManager 交给 AppKit。
-真实 App 的编辑／Undo／Redo／⌘S 已有独立 XCUITest，并核对实际工作区字节；
-宿主直接调用 UndoManager 不能替代该路径。
+`WorkspaceGitUITests` 通过完整 App 检查 Split／Unified 切换、键盘编辑和 ⌘S，
+并核对实际工作区字节。
+原生缓冲的 Undo／Redo 由 `NativeDiffTabTests` 检查；
+直接调用 UndoManager 的宿主结果不能代替 Diff 完整 App 的撤销／重做快捷键验收。
 核验入口见 [development.md](../development.md#依赖与本地补丁)。
 
 ## 保存与失败
