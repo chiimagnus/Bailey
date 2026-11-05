@@ -77,6 +77,10 @@ Bailey 复用 SwiftUI Observation、AppKit、现有 Dock/Tab 与后端，不机�
 `WorkspaceWindowModel` 保留单窗项目、选择、焦点与原生宿主。
 `Project`／`DockNode`／`PaneTab` 继续拥有项目布局、局部状态与长期原生内容；
 创建 SwiftUI View 的中间对象不会登记或提前认领窗口。
+隔离测试的首窗请求还需排除已登记、但尚未附着 `NSWindow` 的场景，
+以免在原生挂载前再次打开相同窗口。
+应用级窗口请求只查询本 `WorkspaceApplication` 登记的窗口，不遍历全局 `NSApp.windows` 猜测归属；
+在最后一个窗口关闭后，连续的 Finder 请求只触发一次新建窗口，并在真正挂载后交付。
 
 **领域接入：** Project 的 Files 同步只接收调用者提供的当前目标许可，
 GitStatusModel 接收选中的 Project 和项目仍有效的检查；窗口在 `syncGitStatus` 接入点提供事实，

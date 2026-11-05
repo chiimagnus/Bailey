@@ -81,15 +81,22 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 `make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与
 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
 `WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；
-不使用 `-ApplePersistenceIgnoreState YES`，该参数会阻止当前系统创建初始 WindowGroup 窗口。
+隔离测试抑制 SwiftUI 隐式首窗，由窗口命令唯一地请求首次挂载；测试夹具不得在超时后发送第二个新建窗口快捷键。
+不使用 `-ApplePersistenceIgnoreState YES`，该参数会干扰原生窗口生命周期与恢复。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
 真实 SSH 主题 GUI 回归要求显式提供 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_HOST` 和
 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_ROOT`，仅能使用获授权的主机及临时测试目录。
+远端测试创建的路径必须先验证完整绝对路径和随机文件名字符集，再用于 Shell 命令或递归清理；
+只检查目录前缀不能防止远端输出中的引号或换行变成命令。
 系统外观 GUI 回归默认跳过；仅在显式设置 `TEST_RUNNER_BAILEY_THEME_SYSTEM_TEST_ENABLED=1`
 并从测试进程外安全切换、恢复 macOS 外观时执行，不在普通测试中修改用户系统外观。
 公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
 避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
+完整 App GUI 测试须在能认证 XCUITest Runner 的独立 macOS 图形会话执行，
+避免系统设置、正式 Bailey 或用户输入抢占前台。
+辅助账户登录且有辅助功能权限仍可能在非 console 会话报 `Can't authenticate off console`；
+测试枚举为 0 不表示成功，不能为补测抢占当前桌面。
 在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
@@ -229,8 +236,8 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --ar
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
 仅隔离测试模式禁用 SwiftUI 系统场景恢复，防止继承上一轮测试的窗口；
-正常应用的窗口恢复不变。Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，
-共用启动辅助函数在窗口缺失时用现有 `⌘⇧N` 创建首窗，并断言启动后恰好一个窗口；
+正常应用的窗口恢复不变。隔离模式抑制系统隐式首窗，由应用级窗口开启动作唯一请求首窗；
+测试直接断言只有一个窗口，不允许在启动等待超时后补发 `⌘⇧N` 掩盖缺窗故障；
 不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。
 **开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；
 正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。
@@ -259,7 +266,8 @@ Git 夹具在自身仓库配置身份和不签名策略，不依赖用户的全�
 
 临时主目录不等于 UserDefaults／钥匙串全部隔离。语言持久化等设置仍须独立登录账户或明确的按键恢复；
 进程内组件测试继续显式使用临时配置与 UserDefaults suite，
-尤其 Diff 重载测试不得继承用户持久化的编辑模式。临时文件、Git 仓库和受控后端不得指向正式项目。
+Diff 重载测试只使用隔离布局偏好，直接验证工作区编辑状态和干净快照刷新。
+临时文件、Git 仓库和受控后端不得指向正式项目。
 
 需要保留不同构建产物时可指定独立 `DERIVED_DATA`，不得清理其他任务的目录；
 Dev 四入口仍须持有同一锁，换目录不能隔离同 Bundle ID 的应用、Runner 或桌面。
@@ -362,6 +370,14 @@ iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文
 | Diff | 数据读取、差异计算、TextKit 首屏、滚动与编辑 |
 | 多标签和空闲 | 冷开、重复切换、峰值内存、关闭后稳定内存、CPU 与唤醒 |
 
+编辑器性能验收目标（不是已达成结果）：普通输入 P95 不超过 16 ms，
+10 万行极端输入 P95 不超过 32 ms；折叠 Diff 热视口几何在 Debug 下 P95 不超过 32 ms。
+滚动帧与主线程连续占用的目标为 16.7 ms。
+本机真实 Git 的 1,000／24,000 行 Staged、Unstaged 至少各做 30 次热样本，
+独立测冷启动、语法颜色稳定时间、原生首帧，不把模型就绪时间当作实际绘制时间。
+多标签测试要记录 RSS／retained heap 峰值、关闭后的稳定占用，
+不保留看不到的富文本布局，也不以缓存命中取代内存释放证据。
+
 在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。
 Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、
 多标签和本机／SSH，包含受影响的空内容、Unicode、二进制和超限边界。
@@ -391,6 +407,9 @@ Files 容量由 `FileTreeTests` 在真实 1k／10k／100k 本机文件目录中�
   超长行显示宽度须在完整 App E2E 分别验收普通宽度和「完整显示」：自然宽度下
   TextKit 2 曾漏画 SVG 长行，完整显示必须在有限原生布局宽度内折行，核对
   实际窗口截图、连续行内容、键盘导航及原文件字节不变。
+  Git Diff 数据还须按 Git 实际结果验收：Windows `core.autocrlf=true`、LF／CRLF、
+  `.gitattributes` 的 `text`／`-text`／`eol`、clean filter、暂存区／历史来源与大量重复行；
+  Git 判断无修改时不得显示整篇增删，必须同时核对原文字节、编辑占位和保存结果。
   Git Review 还须验证已应用语法色在主题／字体变更时不被清除、长短行正文更新后的横向位置、
   保留横滚的折叠展开，以及长行折行与 CRLF／Unicode 段落混合时的纵向锚点；
   折叠上下文必须出现在真实窗口上缘，且对应的辅助功能按钮位置也必须一致；

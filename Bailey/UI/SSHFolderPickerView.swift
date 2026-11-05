@@ -30,6 +30,11 @@ struct SSHFolderPickerView: View {
             Color.black.opacity(0.15)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onCancel)
+                .accessibilityRepresentation {
+                    Button(String(localized: "Close SSH Folder Picker", table: "Terminal"),
+                           action: onCancel)
+                        .accessibilityIdentifier("bailey.sshFolderPicker.dismiss")
+                }
 
             panel
                 .padding(.horizontal, 12)

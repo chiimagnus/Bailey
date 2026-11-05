@@ -28,6 +28,31 @@ final class OverlayScrollbarView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override func isAccessibilityElement() -> Bool { active }
+    override func accessibilityRole() -> NSAccessibility.Role? { .scrollBar }
+    override func accessibilityIdentifier() -> String { "bailey.terminal.scrollbar" }
+    override func accessibilityLabel() -> String? {
+        String(localized: "Terminal scroll position", table: "Terminal")
+    }
+    override func accessibilityOrientation() -> NSAccessibilityOrientation { .vertical }
+    override func accessibilityMinValue() -> Any? { 0.0 }
+    override func accessibilityMaxValue() -> Any? { 1.0 }
+    override func accessibilityValue() -> Any? { position }
+    override func setAccessibilityValue(_ value: Any?) {
+        guard let number = value as? NSNumber else { return }
+        scroll(to: number.doubleValue)
+    }
+    override func accessibilityPerformIncrement() -> Bool {
+        guard active else { return false }
+        scroll(to: position + proportion)
+        return true
+    }
+    override func accessibilityPerformDecrement() -> Bool {
+        guard active else { return false }
+        scroll(to: position - proportion)
+        return true
+    }
+
     // MARK: - State pushed from the terminal
 
     func update(position: Double, proportion: Double, active: Bool) {
@@ -173,9 +198,15 @@ final class OverlayScrollbarView: NSView {
     private func moveThumb(toPointerY y: CGFloat) {
         let travel = trackLength - thumbLength
         guard travel > 0 else { return }
-        let newPosition = Double((y - dragOffset - edgeInset) / travel)
-        position = min(max(newPosition, 0), 1)
+        scroll(to: Double((y - dragOffset - edgeInset) / travel))
+    }
+
+    private func scroll(to value: Double) {
+        guard active else { return }
+        let next = min(max(value, 0), 1)
+        guard next != position else { return }
+        position = next
         needsDisplay = true
-        onScroll?(position)
+        onScroll?(next)
     }
 }

@@ -20,7 +20,7 @@ final class WorkspaceApplication {
     private var pendingRestores: [SessionSnapshot]
     private var pendingHistories: [String: String]
     private var windowOpener: (() -> Void)?
-    private var windowRequestScheduled = false
+    private var didAttachAnyWindow = false
     private var isOpeningWindow = false
     private var didReopenWindows = false
     private var pendingSave: Task<Void, Never>?
@@ -88,7 +88,8 @@ final class WorkspaceApplication {
     }
 
     func didAttach(_ manager: WorkspaceWindowModel) {
-        guard containsWindow(manager) else { return }
+        guard containsWindow(manager), manager.attachedWindow != nil else { return }
+        didAttachAnyWindow = true
         GitGraphScrollLog.record(
             "window-attached", detail: "window=\(manager.attachedWindow?.windowNumber ?? -1)"
         )
@@ -276,7 +277,7 @@ final class WorkspaceApplication {
         for content in gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths) {
             switch content {
             case .file(let file): file.reloadFromDiskIfClean()
-            case .diff(let diff): diff.reload(afterGitAction: true)
+            case .diff(let diff): diff.reload()
             case .session, .browser: break
             }
         }
@@ -567,34 +568,31 @@ final class WorkspaceApplication {
     func registerWindowOpener(_ open: @escaping () -> Void) {
         windowOpener = open
         deliverPendingExternalFiles()
-        requestWindowForPendingDirectories()
+        if BaileyInstanceMode.isIsolated && windows.isEmpty
+            && !didAttachAnyWindow && !isOpeningWindow {
+            // Isolated launch suppresses SwiftUI's implicit first scene. Open
+            // exactly one here, even if SwiftUI reevaluates Commands before attachment.
+            isOpeningWindow = true
+            open()
+        } else {
+            requestWindowForPendingDirectories()
+        }
     }
 
-    /// Wait one turn for WindowGroup to create its own initial window before
-    /// explicitly requesting another.
+    /// Ordinary launches leave the initial window to SwiftUI. After every
+    /// window closes, pending external items may request a new scene through
+    /// this application's own opener, never through a global NSApp window.
     private func requestWindowForPendingDirectories() {
-        guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
-              !windows.contains(where: { $0.attachedWindow != nil }),
-              !windowRequestScheduled, !isOpeningWindow
+        guard didAttachAnyWindow,
+              (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
+              windows.isEmpty,
+              !isOpeningWindow
         else { return }
-        windowRequestScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self else { return }
-            self.windowRequestScheduled = false
-            guard (!self.pendingDirectories.isEmpty || !self.pendingExternalFiles.isEmpty),
-                  !self.windows.contains(where: { $0.attachedWindow != nil }),
-                  !self.isOpeningWindow
-            else { return }
-            self.isOpeningWindow = true
-            if let window = NSApp.windows.first(where: {
-                $0.identifier?.rawValue.hasPrefix("main") == true
-            }) {
-                window.makeKeyAndOrderFront(nil)
-            } else if let windowOpener = self.windowOpener {
-                windowOpener()
-            } else {
-                self.isOpeningWindow = false
-            }
+        isOpeningWindow = true
+        if let windowOpener {
+            windowOpener()
+        } else {
+            isOpeningWindow = false
         }
     }
 

@@ -97,7 +97,7 @@ final class SyntaxHighlightCoordinator {
         highlightsData: Data,
         injectionsData: Data?
     ) {
-        let string = textView.nativeContentManager.attributedString(in: nil)?.string ?? ""
+        let string = textView.textStorage?.string ?? ""
         let coordinates = TextCoordinateIndex(string)
         self.coordinates = coordinates
         tsClient = try! TreeSitterClient(
@@ -127,11 +127,12 @@ final class SyntaxHighlightCoordinator {
         highlighter = Neon.Highlighter(textInterface: textInterface)
 
         // Parse the whole document once up front.
+        let initialLength = string.utf16.count
         tsClient.willChangeContent(in: .zero)
         tsClient.didChangeContent(
             in: .zero,
-            delta: textView.nativeContentManager.length,
-            limit: textView.nativeContentManager.length,
+            delta: initialLength,
+            limit: initialLength,
             readHandler: Parser.readFunction(for: string),
             completionHandler: {}
         )
@@ -185,29 +186,40 @@ final class SyntaxHighlightCoordinator {
         language: SyntaxLanguage, highlightsData: Data, injectionsData: Data?, textContentManager: NSTextContentManager
     ) {
         Task { @MainActor [weak self, weak textContentManager] in
-            guard let query = await HighlightQueryCache.shared.query(for: language, data: highlightsData) else { return }
-            let injectionsQuery: SwiftTreeSitter.Query?
             if let injectionsData {
-                injectionsQuery = await HighlightQueryCache.shared.query(
-                    for: language, kind: .injections, data: injectionsData
-                )
+                // Start both immutable query compilations before awaiting
+                // either one. Each task remains MainActor-isolated while the
+                // cache compiles on its own worker; no non-Sendable grammar
+                // crosses an additional concurrency boundary.
+                let root = Task { @MainActor in
+                    await HighlightQueryCache.shared.query(for: language, data: highlightsData)
+                }
+                let embedded = Task { @MainActor in
+                    await HighlightQueryCache.shared.query(
+                        for: language, kind: .injections, data: injectionsData
+                    )
+                }
+                guard let query = await root.value, let self, let textContentManager else { return }
+                if let injectionsQuery = await embedded.value {
+                    self.setInjectionTokenProvider(
+                        highlightsQuery: query, injectionsQuery: injectionsQuery,
+                        textContentManager: textContentManager
+                    )
+                } else {
+                    self.setTokenProvider(query: query, textContentManager: textContentManager)
+                }
             } else {
-                injectionsQuery = nil
-            }
-            guard let self, let textContentManager else { return }
-            if let injectionsQuery {
-                self.setInjectionTokenProvider(
-                    highlightsQuery: query, injectionsQuery: injectionsQuery, textContentManager: textContentManager
-                )
-            } else {
+                guard let query = await HighlightQueryCache.shared.query(
+                    for: language, data: highlightsData
+                ), let self, let textContentManager else { return }
                 self.setTokenProvider(query: query, textContentManager: textContentManager)
             }
         }
     }
 
     private func setTokenProvider(query: SwiftTreeSitter.Query, textContentManager: NSTextContentManager) {
-        let provider = tsClient.tokenProvider(with: query) { range, _ in
-            guard range.length > 0 else { return nil }
+        let provider = tsClient.tokenProvider(with: query) { [weak textContentManager] range, _ in
+            guard range.length > 0, let textContentManager else { return nil }
             return textContentManager.attributedString(in: NSTextRange(range, provider: textContentManager))?.string
         }
         highlighter?.tokenProvider = { [weak self] range, completion in
@@ -235,8 +247,8 @@ final class SyntaxHighlightCoordinator {
         injectionsQuery: SwiftTreeSitter.Query,
         textContentManager: NSTextContentManager
     ) {
-        let textProvider: SwiftTreeSitter.Predicate.TextProvider = { range, _ in
-            guard range.length > 0 else { return nil }
+        let textProvider: SwiftTreeSitter.Predicate.TextProvider = { [weak textContentManager] range, _ in
+            guard range.length > 0, let textContentManager else { return nil }
             return textContentManager.attributedString(in: NSTextRange(range, provider: textContentManager))?.string
         }
 
@@ -253,17 +265,23 @@ final class SyntaxHighlightCoordinator {
                     self.tsClient.executeInjectionsQuery(injectionsQuery, in: range, textProvider: textProvider) { [weak self] injectionResult in
                         guard let self, self.highlightRevision == revision else { return }
                         Task { @MainActor [weak self] in
-                            guard let self, self.highlightRevision == revision else { return }
+                            guard self?.highlightRevision == revision else { return }
                             var tokens = baseRanges.compactMap { capture -> Neon.Token? in
                                 let clipped = NSIntersectionRange(capture.range, range)
                                 return clipped.length > 0 ? Neon.Token(name: capture.name, range: clipped) : nil
                             }
                             if case .success(let injections) = injectionResult {
                                 for injection in injections {
-                                    let captures = await self.injectedCaptures(
-                                        for: injection, revision: revision, textProvider: textProvider
-                                    )
-                                    guard self.highlightRevision == revision else { return }
+                                    let pending: Task<[SwiftTreeSitter.NamedRange], Never>?
+                                    do {
+                                        guard let owner = self, owner.highlightRevision == revision else { return }
+                                        pending = owner.injectedCaptureTask(
+                                            for: injection, revision: revision, textProvider: textProvider
+                                        )
+                                    }
+                                    guard let pending else { continue }
+                                    let captures = await pending.value
+                                    guard self?.highlightRevision == revision else { return }
                                     for capture in captures {
                                         let shifted = NSRange(location: capture.range.location + injection.range.location,
                                                               length: capture.range.length)
@@ -274,7 +292,7 @@ final class SyntaxHighlightCoordinator {
                                     }
                                 }
                             }
-                            guard self.highlightRevision == revision else { return }
+                            guard self?.highlightRevision == revision else { return }
                             completion(.success(TokenApplication(tokens: tokens)))
                         }
                     }
@@ -284,21 +302,21 @@ final class SyntaxHighlightCoordinator {
         highlighter?.invalidate()
     }
 
-    private func injectedCaptures(
+    private func injectedCaptureTask(
         for injection: SwiftTreeSitter.NamedRange,
         revision: UInt,
         textProvider: SwiftTreeSitter.Predicate.TextProvider
-    ) async -> [SwiftTreeSitter.NamedRange] {
+    ) -> Task<[SwiftTreeSitter.NamedRange], Never>? {
         let injectionRange = injection.range
         guard highlightRevision == revision, injectionRange.length > 0,
               let language = SyntaxHighlighting.language(forInjectionName: injection.name),
               let query = injectedHighlightsQuery(for: language)
-        else { return [] }
-        if let task = injectedFragments[injection] { return await task.value }
+        else { return nil }
+        if let task = injectedFragments[injection] { return task }
         guard let grammarIndex = language.grammarIndex,
               let fragment = textProvider(injectionRange, Point.zero..<Point.zero),
               !fragment.isEmpty, highlightRevision == revision
-        else { return [] }
+        else { return nil }
         let task = Task.detached(priority: .userInitiated) { () -> [SwiftTreeSitter.NamedRange] in
             guard !Task.isCancelled, let grammar = SyntaxLanguage.parser(grammarIndex: grammarIndex) else { return [] }
             let parser = Parser()
@@ -310,7 +328,7 @@ final class SyntaxHighlightCoordinator {
             }
         }
         injectedFragments[injection] = task
-        return await task.value
+        return task
     }
 
     private func injectedHighlightsQuery(for language: SyntaxLanguage) -> SwiftTreeSitter.Query? {
@@ -355,8 +373,7 @@ final class SyntaxHighlightCoordinator {
         tsClient.willChangeContent(in: range)
     }
 
-    func didChangeContent(_ textContentManager: NSTextContentManager, in range: NSRange, replacementString: String) {
-        guard let string = textContentManager.attributedString(in: nil)?.string else { return }
+    func didChangeContent(_ string: String, in range: NSRange, replacementString: String) {
         coordinates.replace(in: range, with: replacementString)
         let delta = replacementString.utf16.count - range.length
         highlighter?.didChangeContent(in: range, delta: delta)

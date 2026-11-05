@@ -3,6 +3,214 @@ import XCTest
 @testable import Bailey
 
 final class DiffEngineTests: XCTestCase {
+    private func assertVerifiedHunksAgreeWithOriginalDiff(
+        _ content: GitWorktreeComparison.Content,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let ops = try XCTUnwrap(content.operations, file: file, line: line)
+        let reused = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: content.old, newText: content.new, operations: ops
+        ), file: file, line: line)
+        let original = DiffCore.compute(oldText: content.old, newText: content.new)
+        XCTAssertEqual(reused.ops, original.ops, file: file, line: line)
+        XCTAssertEqual(reused.oldMissingNewline, original.oldMissingNewline, file: file, line: line)
+        XCTAssertEqual(reused.newMissingNewline, original.newMissingNewline, file: file, line: line)
+    }
+
+    func testBaselineRevelationsSurviveNewEditsAndSplitUnchangedRunIntoTwoFolds() {
+        let original = (0..<1_200).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 150\n", with: "changed 150\n")
+            .replacingOccurrences(of: "line 1050\n", with: "changed 1050\n")
+        let core = DiffCore.compute(oldText: original, newText: modified)
+        let revealed = 500..<506
+        let projected = DiffComputation.build(core: core, revealedLines: [revealed])
+        let originalRanges = projected.unified.rows.compactMap(\.collapsed)
+            .map(\.baselineRange)
+        XCTAssertTrue(originalRanges.contains { $0.upperBound == revealed.lowerBound })
+        XCTAssertTrue(originalRanges.contains { $0.lowerBound == revealed.upperBound })
+        for line in revealed {
+            XCTAssertTrue(projected.unified.rows.contains { $0.oldLine == line + 1 },
+                          "Explicitly revealed original line \(line) must stay visible")
+        }
+        XCTAssertEqual(projected.splitLeft.rows.count, projected.splitRight.rows.count)
+        XCTAssertEqual(projected.unified.rows.compactMap(\.collapsed),
+                       projected.splitLeft.rows.compactMap(\.collapsed))
+
+        let updated = modified.replacingOccurrences(of: "line 300\n", with: "changed 300\n")
+        let edited = DiffComputation.build(
+            core: .compute(oldText: original, newText: updated), revealedLines: [revealed]
+        )
+        for line in revealed {
+            XCTAssertTrue(edited.unified.rows.contains { $0.oldLine == line + 1 })
+        }
+        XCTAssertTrue(edited.unified.rows.contains { $0.collapsed?.baselineRange.contains(900) == true })
+        XCTAssertEqual(edited.splitLeft.rows.count, edited.splitRight.rows.count)
+        XCTAssertEqual(edited.unified.rows.compactMap(\.collapsed),
+                       edited.splitRight.rows.compactMap(\.collapsed))
+    }
+
+    func testCancellableLineDiffStopsWithinLongRepeatedSourceWithoutChangingPureResults() {
+        let source = (0..<12_000).map { "let line\($0) = content\n" }.joined()
+        let modified = source.replacingOccurrences(of: "let line11000 = content\n",
+                                                    with: "let line11000 = changed\n")
+        let oldLines = DiffLineSplitter.lines(of: source).lines
+        let newLines = DiffLineSplitter.lines(of: modified).lines
+        let baseline = DiffEngine.lineOps(old: oldLines, new: newLines)
+        var checks = 0
+        let canceled = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) {
+            checks += 1
+            return checks >= 4
+        }
+        XCTAssertNil(canceled,
+                     "Cancelling in the middle of a long common prefix must stop the actual Diff engine")
+        XCTAssertGreaterThanOrEqual(checks, 4)
+        let active = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) { false }
+        XCTAssertEqual(active, baseline,
+                       "An active cancel-aware path must produce exactly the old pure diff")
+    }
+
+    func testCancellableCoreMatchesPureDiffForUnicodeNewlinesAndLargeFiles() {
+        let long = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
+        let cases = [
+            ("", ""),
+            ("", "added\n"),
+            ("gone", ""),
+            ("a\r\nb\r\nc", "a\r\nnew\r\nc\n"),
+            ("é\n👩‍🚀\nend", "e\u{301}\n👩‍🚀\nend\n"),
+            ("first\nsecond\nlast", "first\nchanged\nlast\n"),
+            (long, long.replacingOccurrences(of: "let value12000 = 12000\n",
+                                              with: "let value12000 = -1\n"))
+        ]
+        for (old, new) in cases {
+            let expected = DiffCore.compute(oldText: old, newText: new)
+            let active = DiffCore.computeIfActive(oldText: old, newText: new) { false }
+            XCTAssertEqual(active?.ops, expected.ops)
+            XCTAssertEqual(active?.oldMissingNewline, expected.oldMissingNewline)
+            XCTAssertEqual(active?.newMissingNewline, expected.newMissingNewline)
+            XCTAssertEqual(active?.oldLines.map(\.utf16Range), expected.oldLines.map(\.utf16Range))
+            XCTAssertEqual(active?.newLines.map(\.utf16Range), expected.newLines.map(\.utf16Range))
+        }
+        XCTAssertNil(DiffCore.computeIfActive(oldText: long, newText: long) { true },
+                     "An already-cancelled request must never return a partial DiffCore")
+    }
+
+    func testCancellableLineDiffInterruptsDenseMyersAndPatiencePaths() {
+        let cases = [
+            ((0..<1_600).map { _ in "old\n" }.joined(),
+             (0..<1_600).map { _ in "new\n" }.joined()),
+            ((0..<2_000).map { "old\($0)\n" }.joined(),
+             (0..<2_000).map { "new\($0)\n" }.joined())
+        ]
+        for (old, new) in cases {
+            let oldLines = DiffLineSplitter.lines(of: old).lines
+            let newLines = DiffLineSplitter.lines(of: new).lines
+            var totalChecks = 0
+            let active = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) {
+                totalChecks += 1
+                return false
+            }
+            XCTAssertEqual(active, DiffEngine.lineOps(old: oldLines, new: newLines))
+            XCTAssertGreaterThan(totalChecks, 10)
+            var canceledChecks = 0
+            let interrupted = DiffEngine.lineOpsIfActive(old: oldLines, new: newLines) {
+                canceledChecks += 1
+                return canceledChecks >= totalChecks / 2
+            }
+            XCTAssertNil(interrupted, "A canceled expensive diff cannot publish partial line ops")
+            XCTAssertGreaterThan(canceledChecks, 1)
+            XCTAssertLessThan(canceledChecks, totalChecks)
+        }
+    }
+
+    func testIntralineEmphasisAgreesAcrossUnifiedSplitAndEditableGhosts() {
+        let source = "start\n"
+            + (0..<180).map {
+                "let name\($0) = alpha beta gamma delta old🚀 // stable\n"
+            }.joined()
+            + "tail\n"
+        let changed = "start\n"
+            + (0..<180).map {
+                "let name\($0) = alpha beta gamma delta new👩‍🚀 // stable\n"
+            }.joined()
+            + "inserted extra\n" + "tail\n"
+        let variants = [
+            (source, changed),
+            ("a\r\nb🚀 old\r\nc", "a\r\nb👩‍🚀 new\r\nc\n"),
+            ("first\nsecond\nthird\n", "first\nreplaced\n"),
+        ]
+        for (before, after) in variants {
+            let core = DiffCore.compute(oldText: before, newText: after)
+            let projection = DiffComputation.build(core: core, revealedLines: nil)
+            let splitOld = Dictionary(uniqueKeysWithValues:
+                projection.splitLeft.rows.compactMap { row -> (Int, [NSRange])? in
+                    guard row.kind == .removed, let line = row.oldLine else { return nil }
+                    return (line, row.emphasis)
+                })
+            let splitNew = Dictionary(uniqueKeysWithValues:
+                projection.splitRight.rows.compactMap { row -> (Int, [NSRange])? in
+                    guard row.kind == .added, let line = row.newLine else { return nil }
+                    return (line, row.emphasis)
+                })
+            var ghostOld: [Int: [NSRange]] = [:]
+            for ghost in projection.editState.ghosts {
+                for (index, line) in ghost.lines.enumerated() {
+                    ghostOld[ghost.firstOldLine + index] = line.emphasis
+                }
+            }
+            var added: [Int] = []
+            for row in projection.unified.rows {
+                if row.kind == .removed, let line = row.oldLine {
+                    XCTAssertEqual(row.emphasis, splitOld[line])
+                    XCTAssertEqual(row.emphasis, ghostOld[line])
+                }
+                if row.kind == .added, let line = row.newLine {
+                    XCTAssertEqual(row.emphasis, splitNew[line])
+                    XCTAssertEqual(row.emphasis,
+                                   projection.editState.addedEmphasis[line - 1] ?? [])
+                    added.append(line - 1)
+                }
+            }
+            XCTAssertEqual(projection.editState.addedLines, added)
+        }
+
+        let core = DiffCore.compute(oldText: source, newText: changed)
+        var elapsed: [Double] = []
+        for _ in 0..<7 {
+            let start = CFAbsoluteTimeGetCurrent()
+            _ = DiffComputation.build(core: core, revealedLines: nil)
+            elapsed.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+        }
+        elapsed.sort()
+        print("AUDIT_DIFF_INTRA_BLOCK pairs=180 medianMs=\(elapsed[3]) worstMs=\(elapsed[6])")
+    }
+
+    func testEditableSplitPaddingMatchesTheFullSplitAcrossLineChanges() {
+        let long = (0..<900).map { "line \($0)\n" }.joined()
+        let variants: [(String, String)] = [
+            ("", ""),
+            ("", "added\n"),
+            ("first\nsecond\nthird\n", ""),
+            ("one\ntwo\n", "one\nnew\ntwo\n"),
+            ("one\ntwo\n", "one\n"),
+            ("one\ntwo\nthree\n", "one\nupdated\n"),
+            ("a\r\nb\r\nc", "a\r\nnew\r\nc\n"),
+            (long, long.replacingOccurrences(of: "line 400\n", with: "replacement\n")
+                .replacingOccurrences(of: "line 700\n", with: "")),
+        ]
+        for (old, new) in variants {
+            let core = DiffCore.compute(oldText: old, newText: new)
+            let original = DiffComputation.build(core: core, revealedLines: nil)
+            var offset = 0
+            var expected: [Int: Int] = [:]
+            for row in original.splitRight.rows {
+                if row.kind == .filler { expected[offset, default: 0] += 1 }
+                else { offset += 1 }
+            }
+            XCTAssertEqual(DiffComputation.editableSplitPadding(core: core), expected)
+            XCTAssertEqual(original.splitLeft.rows.count, original.splitRight.rows.count)
+        }
+    }
+
     func testSeededUnicodeAndNewlineDiffsPreserveAllOriginalByteAndRowRanges() {
         var seed: UInt64 = 0x5A17E20261017
         func next(_ max: Int) -> Int {
@@ -60,7 +268,7 @@ final class DiffEngineTests: XCTestCase {
             XCTAssertEqual(oldCursor, core.oldLines.count, "case \(caseID)")
             XCTAssertEqual(newCursor, core.newLines.count, "case \(caseID)")
 
-            let display = DiffComputation.build(core: core, expansions: nil)
+            let display = DiffComputation.build(core: core, revealedLines: nil)
             XCTAssertEqual(display.splitLeft.rows.count, display.splitRight.rows.count)
             for document in [display.unified, display.splitLeft, display.splitRight] {
                 let documentLines = DiffLineSplitter.lines(of: document.text).lines
@@ -94,6 +302,282 @@ final class DiffEngineTests: XCTestCase {
         let large = (0..<820).map { "same\($0)\n" }.joined()
         check(large, large.replacingOccurrences(of: "same", with: "changed"), caseID: 500)
         check(large, "first\n" + large + "last\n", caseID: 501)
+    }
+
+    func testLargeUTF8GitLineSplitterRetainsScalarAndUTF16Ranges() {
+        let source = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
+        var samples: [Double] = []
+        for _ in 0..<9 {
+            let start = CFAbsoluteTimeGetCurrent()
+            let lines = DiffLineSplitter.lines(of: source)
+            samples.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertEqual(lines.lines.count, 24_000)
+            XCTAssertTrue(lines.hasTrailingNewline)
+        }
+        samples.sort()
+        print("AUDIT_GIT_LINE_SPLIT lines=24000 medianMs=\(samples[4]) worstMs=\(samples[8])")
+        let special = "甲👩‍🚀\r\n你\u{2028}好\n孤\r独\n尾行"
+        let chunks = DiffLineSplitter.lines(of: special)
+        XCTAssertFalse(chunks.hasTrailingNewline)
+        XCTAssertEqual(chunks.lines.map { String($0.text) },
+                       ["甲👩‍🚀\r", "你\u{2028}好", "孤\r独", "尾行"])
+        let nsSpecial = special as NSString
+        for line in chunks.lines {
+            XCTAssertEqual(nsSpecial.substring(with: line.utf16Range), String(line.text))
+        }
+    }
+
+    func testVerifiedGitHunksSupplyCompleteReusableDiffOperations() throws {
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let old = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
+        var rows = (0..<24_000).map { "let value\($0) = \($0)\n" }
+        rows[12_000] = "let value12000 = -1\n"
+        rows[19_000] = "let value19000 = -2\n"
+        let modified = rows.joined()
+        let patch = """
+        diff --git a/large.swift b/large.swift
+        index \(oldOID)..\(newOID) 100644
+        --- a/large.swift
+        +++ b/large.swift
+        @@ -12001 +12001 @@
+        -let value12000 = 12000
+        +let value12000 = -1
+        @@ -19001 +19001 @@
+        -let value19000 = 19000
+        +let value19000 = -2
+        """
+        let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: modified, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        let reused = try XCTUnwrap(comparison.operations,
+                                   "Verified Git hunks should provide complete line operations")
+        let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: comparison.old, newText: comparison.new, operations: reused
+        ))
+        XCTAssertEqual(core.ops, DiffCore.compute(oldText: comparison.old,
+                                                   newText: comparison.new).ops)
+        XCTAssertEqual(core.newLines.count, 24_000)
+        XCTAssertEqual(DiffComputation.build(core: core, revealedLines: []).unified.rows
+            .filter { $0.kind == .added }.count, 2)
+    }
+
+    func testGitWorktreeProjectionKeepsOneBaselineAcrossReviewAndEditing() throws {
+        let old = "alpha\nold\nlast\n"
+        let edited = "alpha\r\nnew\r\nlast\r\n"
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let cleanCheckout = "alpha\r\nold\r\nlast\r\n"
+        XCTAssertEqual(GitWorktreeComparison.resolve(
+            old: old, worktree: cleanCheckout, patch: "",
+            oldOID: oldOID, newOID: oldOID
+        )?.old, cleanCheckout)
+        let patch = """
+        diff --git a/file b/file
+        index \(oldOID)..\(newOID) 100644
+        --- a/file
+        +++ b/file
+        @@ -2 +2 @@
+        -old
+        +new
+        """
+        let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: edited, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(comparison)
+        let baseline = comparison.old
+        XCTAssertEqual(baseline, "alpha\r\nold\nlast\r\n")
+        let expected: [DiffLineOp] = [
+            .equal(oldStart: 0, newStart: 0, count: 1),
+            .delete(oldStart: 1, count: 1),
+            .insert(newStart: 1, count: 1),
+            .equal(oldStart: 2, newStart: 2, count: 1),
+        ]
+        XCTAssertEqual(DiffCore.compute(oldText: baseline, newText: edited).ops, expected)
+        XCTAssertEqual(DiffCore.compute(
+            oldText: baseline, newText: "alpha\r\nnewer\r\nlast\r\n"
+        ).ops, expected, "Editing must reuse the exact same comparison baseline")
+        XCTAssertNil(GitWorktreeComparison.resolve(
+            old: old, worktree: edited, patch: patch,
+            oldOID: newOID, newOID: newOID
+        ), "Changing the index between reads must not reinterpret the old blob")
+        XCTAssertNil(GitWorktreeComparison.resolve(
+            old: old, worktree: edited, patch: patch,
+            oldOID: oldOID, newOID: oldOID
+        ), "Changing the worktree between reads must not reinterpret the patch")
+        XCTAssertEqual(old, "alpha\nold\nlast\n", "Original stored blob must stay untouched")
+    }
+
+    func testGitProjectionKeepsNonTextChangesAndCleanFilterEquivalence() throws {
+        let old = "first\nsecond\n"
+        let checkout = "first\r\nsecond\r\n"
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let patch = """
+        diff --git a/raw.txt b/raw.txt
+        index \(oldOID)..\(newOID) 100644
+        @@ -1,2 +1,2 @@
+        -first
+        -second
+        +first
+        +second
+        """
+        let comparison = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: checkout, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(comparison)
+        let baseline = comparison.old
+        XCTAssertEqual(baseline, old, "-text does not normalize CRLF")
+        let ops = DiffCore.compute(oldText: baseline, newText: checkout).ops
+        XCTAssertEqual(ops.filter { if case .equal = $0 { false } else { true } }.count, 2)
+        let filtered = "first\nTRANSIENT\nsecond\n"
+        XCTAssertEqual(GitWorktreeComparison.resolve(
+            old: old, worktree: filtered, patch: "",
+            oldOID: oldOID, newOID: oldOID
+        )?.old, filtered, "Git can clean entire lines without changing its stored blob")
+        XCTAssertNil(GitWorktreeComparison.resolve(
+            old: old, worktree: filtered, patch: "",
+            oldOID: oldOID, newOID: newOID
+        ))
+        XCTAssertNil(GitWorktreeComparison.resolve(
+            old: old, worktree: checkout,
+            patch: "diff --git a/a b/a\ndiff --git a/b b/b\n",
+            oldOID: oldOID, newOID: newOID
+        ))
+        let noninvertible = """
+        diff --git a/file b/file
+        index \(oldOID)..\(newOID) 100644
+        @@ -1 +1 @@
+        -first
+        +cleaned first
+        """
+        let canonical = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: old, patch: noninvertible,
+            oldOID: oldOID, newOID: newOID
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(canonical)
+        XCTAssertEqual(canonical.old, old)
+        XCTAssertEqual(canonical.new, "cleaned first\nsecond\n")
+        XCTAssertEqual(canonical.editBaseline, old,
+                       "Filtered Review must not silently change what Edit saves")
+    }
+
+    func testGitCanonicalReviewPatchHandlesMultipleHunksUnicodeAndNoFinalNewline() throws {
+        let old = "first\nmiddle\nlast"
+        let raw = "甲\nTRANSIENT\nmiddle\n乙"
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let patch = """
+        diff --git a/x b/x
+        index \(oldOID)..\(newOID) 100644
+        --- a/x
+        +++ b/x
+        @@ -1 +1 @@
+        -first
+        +甲
+        @@ -3 +3 @@
+        -last
+        \\ No newline at end of file
+        +乙
+        \\ No newline at end of file
+        """
+        let result = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: old, worktree: raw, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(result)
+        XCTAssertEqual(result.old, old)
+        XCTAssertEqual(result.new, "甲\nmiddle\n乙")
+        XCTAssertEqual(result.editBaseline, raw)
+        XCTAssertEqual(DiffCore.compute(oldText: result.old, newText: result.new)
+            .ops.filter { if case .equal = $0 { false } else { true } }.count, 4)
+    }
+
+    func testGitCanonicalReviewHandlesCompleteDeletionWithoutVirtualNewline() throws {
+        let oldOID = String(repeating: "a", count: 40)
+        let patch = """
+        diff --git a/file b/file
+        deleted file mode 100644
+        index \(oldOID)..\(String(repeating: "0", count: 40))
+        --- a/file
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -gone
+        """
+        let content = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: "gone\n", worktree: "", patch: patch,
+            oldOID: oldOID, newOID: String(repeating: "b", count: 40)
+        ))
+        try assertVerifiedHunksAgreeWithOriginalDiff(content)
+        XCTAssertEqual(content.old, "gone\n")
+        XCTAssertEqual(content.new, "", "Deleting the last line must not invent a trailing blank row")
+        XCTAssertEqual(DiffCore.compute(oldText: content.old, newText: content.new)
+            .ops.filter { if case .delete = $0 { true } else { false } }.count, 1)
+    }
+
+    func testGitModeOnlyPatchNeedsNoContentFallback() throws {
+        let oid = String(repeating: "c", count: 40)
+        let raw = "unchanged\r\n"
+        let patch = """
+        diff --git a/a.txt b/a.txt
+        old mode 100644
+        new mode 100755
+        """
+        let result = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: "unchanged\n", worktree: raw, patch: patch,
+            oldOID: oid, newOID: oid
+        ))
+        XCTAssertEqual(result.old, raw)
+        XCTAssertEqual(result.new, raw)
+        XCTAssertNil(result.editBaseline)
+    }
+
+    func testBinaryPatchMarkersInsideAddedTextDoNotRejectOrdinaryDiff() throws {
+        let oldOID = String(repeating: "a", count: 40)
+        let newOID = String(repeating: "b", count: 40)
+        let actual = "Binary files a/x and b/x differ\nGIT binary patch\n"
+        let patch = """
+        diff --git a/x b/x
+        index \(oldOID)..\(newOID) 100644
+        --- a/x
+        +++ b/x
+        @@ -1 +1,2 @@
+        -before
+        +Binary files a/x and b/x differ
+        +GIT binary patch
+        """
+        let content = try XCTUnwrap(GitWorktreeComparison.resolve(
+            old: "before\n", worktree: actual, patch: patch,
+            oldOID: oldOID, newOID: newOID
+        ))
+        XCTAssertEqual(content.old, "before\n")
+        XCTAssertEqual(content.new, actual)
+        XCTAssertNil(content.editBaseline)
+        XCTAssertNil(GitWorktreeComparison.resolve(
+            old: "before\n", worktree: actual,
+            patch: "diff --git a/x b/x\nindex \(oldOID)..\(newOID) 100644\n"
+                + "Binary files a/x and b/x differ\n",
+            oldOID: oldOID, newOID: newOID
+        ), "Actual binary metadata must still be rejected")
+    }
+
+    func testLargeRepeatedShiftStillProducesMinimalLineDiff() {
+        let old = (0..<800).map { $0.isMultiple(of: 2) ? "A" : "B" }.joined(separator: "\n") + "\n"
+        let new = (0..<800).map { $0.isMultiple(of: 2) ? "B" : "A" }.joined(separator: "\n") + "\n"
+        let ops = DiffCore.compute(oldText: old, newText: new).ops
+        let deleted = ops.reduce(0) { result, op in
+            if case .delete(_, let count) = op { return result + count }
+            return result
+        }
+        let inserted = ops.reduce(0) { result, op in
+            if case .insert(_, let count) = op { return result + count }
+            return result
+        }
+        XCTAssertEqual(deleted, 1)
+        XCTAssertEqual(inserted, 1)
     }
 
     func testLFAndCRLFHaveExactUTF16OffsetsWithoutChangingOriginalBytes() {

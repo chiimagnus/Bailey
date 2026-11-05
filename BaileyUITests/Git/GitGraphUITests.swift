@@ -1464,11 +1464,10 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(rows.element(boundBy: 1).isSelected)
         XCTAssertFalse(rows.element(boundBy: 0).isSelected,
                        "Changing Worktree file must not leave a second selected row")
-        let mode = window.radioGroups["bailey.diff.mode"]
-        XCTAssertTrue(mode.waitForExistence(timeout: 15))
-        mode.radioButtons.element(boundBy: 0).click()
-        layout.radioButtons.element(boundBy: 1).click()
-        requireDiff("index version\n", "working version\n")
+        XCTAssertFalse(window.radioGroups["bailey.diff.mode"].exists)
+        let editor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertEqual(editor.value as? String, "working version\n")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["-C", linked.path, "rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["-C", linked.path, "status", "--porcelain=v1"]),

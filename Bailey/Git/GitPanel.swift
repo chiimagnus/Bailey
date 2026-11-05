@@ -54,6 +54,7 @@ struct GitPanel: View {
         Binding(get: { model.commitMessage }, set: { model.commitMessage = $0 })
     }
     @FocusState private var isCommitFieldFocused: Bool
+    @State private var focusedCommitID = UUID()
     @State private var pendingDiscard: GitStatusModel.PendingDiscard?
     @State private var pendingDiscardAll: [GitStatusModel.PendingDiscard] = []
     @State private var pendingDiscardAllTrigger: OperationTrigger = .discardAll
@@ -1463,6 +1464,7 @@ struct GitPanel: View {
                         .fill(Color.primary.opacity(0.05))
                 )
                 .focused($isCommitFieldFocused)
+                .accessibilityIdentifier("bailey.git.commit.message")
                 .focusedValue(\.baileyGitCommit, focusedCommitAction)
 
             if !showSyncButton || canCommit(includeAll: false) {
@@ -1633,9 +1635,9 @@ struct GitPanel: View {
             && !model.isBusy
     }
 
-    private var focusedCommitAction: (() -> Void)? {
+    private var focusedCommitAction: FocusedGitCommitAction? {
         guard isGitActive, hasCurrentPanelTarget, canCommit(includeAll: false) else { return nil }
-        return {
+        return FocusedGitCommitAction(id: focusedCommitID) {
             guard isGitActive, hasCurrentPanelTarget else { return }
             performPrimaryAction()
         }

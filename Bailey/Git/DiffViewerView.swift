@@ -11,21 +11,11 @@ final class DiffViewPreferences {
     static let shared = DiffViewPreferences()
 
     private static let layoutKey = "diffView.layout"
-    private static let modeKey = "diffView.mode"
     @ObservationIgnored private let defaults: UserDefaults
 
     var diffStyle: DiffLayoutStyle {
         didSet {
             defaults.set(diffStyle.rawValue, forKey: Self.layoutKey)
-        }
-    }
-
-    var prefersEditing: Bool {
-        didSet {
-            defaults.set(
-                prefersEditing ? "edit" : "review",
-                forKey: Self.modeKey
-            )
         }
     }
 
@@ -37,7 +27,6 @@ final class DiffViewPreferences {
         } else {
             diffStyle = .unified
         }
-        prefersEditing = defaults.string(forKey: Self.modeKey) == "edit"
     }
 }
 
@@ -47,13 +36,48 @@ enum DiffLayoutStyle: String {
     case split
 }
 
-/// One native review artifact shared across the unified and split layouts.
-struct DiffDisplay {
+/// Compute a text layout only when a visible pane needs it. The editable
+/// worktree never displays these review documents unless Git requires a
+/// separate canonical comparison, so building all three on every load wastes
+/// main-thread time and memory.
+@MainActor
+final class DiffDisplay {
     let id = UUID()
     let computation: DiffComputation
-    let unifiedText: NSAttributedString
-    let leftText: NSAttributedString
-    let rightText: NSAttributedString
+    let hasCollapsedContext: Bool
+    private let oldRuns: [DiffHighlightRun]
+    private let newRuns: [DiffHighlightRun]
+    private let baseAttributes: [NSAttributedString.Key: Any]
+
+    fileprivate init(computation: DiffComputation, inputs: DiffDisplayInputs,
+         font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor) {
+        self.computation = computation
+        hasCollapsedContext = computation.unified.rows.contains { $0.collapsed != nil }
+        oldRuns = inputs.oldRuns
+        newRuns = inputs.newRuns
+        baseAttributes = [.font: font, .foregroundColor: textColor,
+                          .paragraphStyle: paragraphStyle]
+    }
+
+    lazy var unifiedText = DiffSyntaxHighlighter.attributedDocument(
+        computation.unified, oldRuns: oldRuns, newRuns: newRuns,
+        baseAttributes: baseAttributes
+    )
+    lazy var leftText = DiffSyntaxHighlighter.attributedDocument(
+        computation.splitLeft, oldRuns: oldRuns, newRuns: newRuns,
+        baseAttributes: baseAttributes
+    )
+    lazy var rightText = DiffSyntaxHighlighter.attributedDocument(
+        computation.splitRight, oldRuns: oldRuns, newRuns: newRuns,
+        baseAttributes: baseAttributes
+    )
+}
+
+/// The readonly split side, projected from the same live buffer as edit decorations.
+struct DiffEditableBaseline {
+    let id = UUID()
+    let document: DiffSideDocument
+    let text: NSAttributedString
 }
 
 private struct DiffDisplayInputs {
@@ -122,13 +146,38 @@ final class DiffTab: nonisolated Identifiable {
 
     let preferences: DiffViewPreferences
     private(set) var oldContent = ""
+    private var comparisonOld = ""
+    private var comparisonNew = ""
+    private var editComparisonOld: String?
     private(set) var newContent = ""
     private(set) var display: DiffDisplay?
     private(set) var editDecorations = DiffDecorations.empty
+    private(set) var editFolds: [DiffEditFold] = []
+    private(set) var editFoldsReady = false
+    @ObservationIgnored private(set) var editPresentationRevision: UInt = 0
+    private(set) var editableBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
-    var hasChanges: Bool { !oldContent.utf8.elementsEqual(newContent.utf8) }
-    var isEditing: Bool { isEditableNow && preferences.prefersEditing }
+    private(set) var hasChanges = false
+    /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
+    var isEditing: Bool { source == .worktree && isEditable }
+    /// Transient editing intent; the native editor remains the only text/Undo owner.
+    private(set) var editorActive = false
+
+    func setEditorActive(_ active: Bool) {
+        if editorActive != active { editorActive = active }
+    }
+
+    /// A changed file must not mount full source while its first diff is computing.
+    /// An already-active editor remains visible through saves and refreshes.
+    var canPresentNativeContent: Bool {
+        guard hasLoadedContent else { return false }
+        if source.isPlainRevision || isDirty { return true }
+        if isEditing && (editorActive || !hasChanges) { return true }
+        return display != nil && (!isEditing || editFoldsReady)
+    }
+    /// A non-invertible clean filter needs Git's canonical Review alongside the raw editor.
+    var showsCanonicalComparison: Bool { isEditing && editComparisonOld != nil }
 
     private nonisolated static let maxBytes = 5 << 20
     @ObservationIgnored private var savedNewContent = ""
@@ -136,8 +185,10 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private(set) var editBufferRevision: UInt = 0
     @ObservationIgnored private var displayGeneration: UInt = 0
     @ObservationIgnored private var displayTask: Task<Void, Never>?
+    @ObservationIgnored private var displayCoreTask: Task<DiffCore?, Never>?
+    @ObservationIgnored private var hasAppeared = false
     @ObservationIgnored private var displayInputs: DiffDisplayInputs?
-    @ObservationIgnored private var runExpansions: [Int: DiffRunExpansion] = [:]
+    @ObservationIgnored private var revealedOldLines: [Range<Int>] = []
     @ObservationIgnored private var editGeneration: UInt = 0
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
@@ -153,6 +204,9 @@ final class DiffTab: nonisolated Identifiable {
     /// follows the session onto another machine — and re-binds to a new
     /// connection to the same machine when one arrives.
     @ObservationIgnored private var backend: WorkspaceBackend
+    private let syntaxContextTask: Task<DiffHighlightContext?, Never>
+    @ObservationIgnored private let originalSyntax = DiffSyntaxSource()
+    @ObservationIgnored private let modifiedSyntax = DiffSyntaxSource()
     /// The workspace this diff belongs to: nil for this Mac, else the machine
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a diff opened locally is never read-only.
@@ -176,7 +230,17 @@ final class DiffTab: nonisolated Identifiable {
         self.source = source
         self.untracked = untracked
         self.origPath = origPath
+        // Compile the immutable syntax query while Git and file IO are
+        // running, rather than adding first-use compilation after the read.
+        syntaxContextTask = Task { await DiffSyntaxHighlighter.context(for: path) }
         reload()
+    }
+
+    deinit {
+        syntaxContextTask.cancel()
+        displayTask?.cancel()
+        displayCoreTask?.cancel()
+        editTask?.cancel()
     }
 
     /// Whether the file can be edited right now: a regular worktree file whose
@@ -227,7 +291,7 @@ final class DiffTab: nonisolated Identifiable {
         // the read-only diff instead of making the draft disappear on screen.
         if isReadOnly, isDirty, !newContent.utf8.elementsEqual(editedNewContent.utf8) {
             newContent = editedNewContent
-            runExpansions.removeAll()
+            revealedOldLines.removeAll()
             recomputeDisplay()
         }
         // An edit made before the connection dropped remains saveable once
@@ -274,11 +338,16 @@ final class DiffTab: nonisolated Identifiable {
         isLoading = false
     }
 
-    func reload(afterGitAction: Bool = false) {
+    func reload(snapshotAttempt: Int = 0) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
-        guard readOnlyReason == nil, (!isEditing || afterGitAction), !isDirty else { return }
+        guard readOnlyReason == nil, !isDirty else { return }
         invalidateReload()
+        displayGeneration &+= 1
+        displayTask?.cancel()
+        displayTask = nil
+        displayCoreTask?.cancel()
+        displayCoreTask = nil
         let generation = reloadGeneration
         isLoading = true
         error = nil
@@ -298,6 +367,8 @@ final class DiffTab: nonisolated Identifiable {
                 var newFromGit: String?
                 var worktreePath = path
                 var unmerged = false
+                var oldOID: String?
+                var oldFromIndex = false
                 func take(_ result: (text: String, error: String?)) -> String {
                     if let error = result.error { failure = error }
                     return result.text
@@ -305,8 +376,9 @@ final class DiffTab: nonisolated Identifiable {
                 switch source {
                 case .commit(let hash, let parent, let status):
                     if status != "A", let parent {
-                        old = take(await Self.requiredGitContent(
-                            .tree(revision: parent, path: oldPath), in: root, backend: backend))
+                        let previous = await Self.requiredGitContent(
+                            .tree(revision: parent, path: oldPath), in: root, backend: backend)
+                        old = take((previous.text, previous.error))
                     }
                     if status == "D" {
                         let deleted = await Self.firstGitContent(
@@ -314,15 +386,19 @@ final class DiffTab: nonisolated Identifiable {
                         )
                         newFromGit = take((deleted.text, deleted.error))
                     } else {
-                        newFromGit = take(await Self.requiredGitContent(
-                            .tree(revision: hash, path: path), in: root, backend: backend))
+                        let next = await Self.requiredGitContent(
+                            .tree(revision: hash, path: path), in: root, backend: backend)
+                        newFromGit = take((next.text, next.error))
                     }
                 case .revision(let hash):
-                    newFromGit = take(await Self.requiredGitContent(
-                        .tree(revision: hash, path: path), in: root, backend: backend))
+                    let revision = await Self.requiredGitContent(
+                        .tree(revision: hash, path: path), in: root, backend: backend)
+                    newFromGit = take((revision.text, revision.error))
                 case .revisionWorktree(let hash):
-                    old = take(await Self.requiredGitContent(
-                        .tree(revision: hash, path: path), in: root, backend: backend))
+                    let revision = await Self.requiredGitContent(
+                        .tree(revision: hash, path: path), in: root, backend: backend)
+                    old = take((revision.text, revision.error))
+                    oldOID = revision.oid
                     switch await GitHistoricalFileLocator.resolve(
                         root: root, path: path, revision: hash, backend: backend
                     ) {
@@ -331,13 +407,14 @@ final class DiffTab: nonisolated Identifiable {
                     case .failed(let message): failure = message
                     }
                 case .staged:
-                    let earlier = await Self.firstGitContent(
+                    async let previous = Self.firstGitContent(
                         [.tree(revision: "HEAD", path: oldPath)], in: root, backend: backend
                     )
-                    old = take((earlier.text, earlier.error))
-                    let staged = await Self.firstGitContent(
+                    async let indexed = Self.firstGitContent(
                         [.index(path: path, stages: [0])], in: root, backend: backend
                     )
+                    let (earlier, staged) = await (previous, indexed)
+                    old = take((earlier.text, earlier.error))
                     newFromGit = take((staged.text, staged.error))
                     unmerged = staged.isUnmerged
                     if staged.isUnmerged && staged.error == nil {
@@ -352,10 +429,13 @@ final class DiffTab: nonisolated Identifiable {
                         )
                         unmerged = earlier.isUnmerged
                         old = take((earlier.text, earlier.error))
+                        oldOID = earlier.oid
+                        oldFromIndex = earlier.fromIndex
                     }
                 }
                 return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
-                        failure: failure, unmerged: unmerged)
+                        failure: failure, unmerged: unmerged,
+                        oldOID: oldOID, oldFromIndex: oldFromIndex)
             }.value
 
             var failure = git.failure
@@ -368,20 +448,49 @@ final class DiffTab: nonisolated Identifiable {
                 new = ""
                 editable = false
             } else {
-                let worktree = await Self.readWorktreeFile(
-                    root: root, path: git.worktreePath, backend: backend
-                )
-                new = worktree.text
-                if let error = worktree.error { failure = error }
+                let worktree: (text: String, error: String?)
                 if case .worktree = source {
-                    editable = await Self.isEditableWorktreeFile(
+                    // File IO and metadata lookup are independent. On SSH,
+                    // serializing them adds an avoidable full round trip.
+                    async let fileIsEditable = Self.isEditableWorktreeFile(
                         root: root, path: git.worktreePath, backend: backend)
+                    worktree = await Self.readWorktreeFile(
+                        root: root, path: git.worktreePath, backend: backend)
+                    editable = await fileIsEditable
                 } else {
+                    worktree = await Self.readWorktreeFile(
+                        root: root, path: git.worktreePath, backend: backend)
                     editable = false
                 }
+                new = worktree.text
+                if let error = worktree.error { failure = error }
+            }
+            var baseline = git.old
+            var reviewNew = new
+            var editBaseline: String?
+            var verifiedCore: DiffCore?
+            var snapshotOutdated = false
+            if failure == nil, let oldOID = git.oldOID, !git.unmerged {
+                let projected = await Self.gitComparisonBaseline(
+                    source: source, oldPath: oldPath, path: path,
+                    worktreePath: git.worktreePath, oldFromIndex: git.oldFromIndex,
+                    root: root, oldOID: oldOID, old: git.old, worktree: new,
+                    backend: backend
+                )
+                if let content = projected.content {
+                    baseline = content.old
+                    reviewNew = content.new
+                    editBaseline = content.editBaseline
+                    verifiedCore = projected.core
+                }
+                if let error = projected.error { failure = error }
+                snapshotOutdated = projected.outdated
             }
             let result = (
-                old: git.old, new: new, failure: failure,
+                old: git.old, baseline: baseline, reviewNew: reviewNew,
+                editBaseline: editBaseline, verifiedCore: verifiedCore,
+                new: new, failure: failure,
+                snapshotOutdated: snapshotOutdated,
                 unmerged: git.unmerged, editable: editable,
                 resolvedPath: source.isLive ? git.worktreePath : nil
             )
@@ -390,8 +499,19 @@ final class DiffTab: nonisolated Identifiable {
             guard let self, self.reloadGeneration == generation,
                   self.readOnlyReason == nil
             else { return }
+            guard !self.isDirty else { return }
+            if result.snapshotOutdated {
+                if snapshotAttempt < 3 {
+                    try? await Task.sleep(for: .milliseconds(90))
+                    guard self.reloadGeneration == generation, !self.isDirty else { return }
+                    self.reload(snapshotAttempt: snapshotAttempt + 1)
+                    return
+                }
+                self.isLoading = false
+                self.error = String(localized: "Git file changed while loading. Refresh to retry.", table: "Git")
+                return
+            }
             self.isLoading = false
-            guard (!self.isEditing || afterGitAction), !self.isDirty else { return }
             self.error = result.failure
             guard result.failure == nil else {
                 // A broken repository must not erase a previously loaded review.
@@ -402,21 +522,48 @@ final class DiffTab: nonisolated Identifiable {
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
             self.resolvedWorktreePath = result.resolvedPath
-            let changed = !self.oldContent.utf8.elementsEqual(result.old.utf8)
+            let filteredBaselineChanged: Bool
+            switch (self.editComparisonOld, result.editBaseline) {
+            case (nil, nil): filteredBaselineChanged = false
+            case (let previous?, let current?):
+                filteredBaselineChanged = !previous.utf8.elementsEqual(current.utf8)
+            default: filteredBaselineChanged = true
+            }
+            let baselineChanged = !self.oldContent.utf8.elementsEqual(result.old.utf8)
+                || !self.comparisonOld.utf8.elementsEqual(result.baseline.utf8)
+                || filteredBaselineChanged
+            let changed = baselineChanged
+                || !self.comparisonNew.utf8.elementsEqual(result.reviewNew.utf8)
                 || !self.newContent.utf8.elementsEqual(result.new.utf8)
             self.oldContent = result.old
+            self.comparisonOld = result.baseline
+            self.comparisonNew = result.reviewNew
+            self.hasChanges = !result.baseline.utf8.elementsEqual(result.reviewNew.utf8)
+            self.editComparisonOld = result.editBaseline
             self.newContent = result.new
-            if changed { self.runExpansions.removeAll() }
-            if changed || (self.hasChanges && self.display == nil) {
-                self.recomputeDisplay()
+            if changed {
+                if baselineChanged { self.revealedOldLines.removeAll() }
+                self.editFoldsReady = false
+                self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
             }
-            self.editBufferRevision &+= 1
+            if changed || (self.hasChanges && self.display == nil) {
+                self.recomputeDisplay(core: result.verifiedCore)
+            }
+            if !self.editedNewContent.utf8.elementsEqual(result.new.utf8) {
+                self.editBufferRevision &+= 1
+            }
             self.savedNewContent = result.new
             self.editedNewContent = result.new
             if self.isEditing { self.refreshEditDecorations(immediate: true) }
             self.isDirty = false
             self.saveError = nil
         }
+    }
+
+    /// The initial read starts in init; a first view mount must not launch another read.
+    func refreshOnAppear() {
+        guard hasAppeared else { hasAppeared = true; return }
+        refreshWhenSelected()
     }
 
     /// Refreshes a live diff when navigation brings it back on screen.
@@ -429,13 +576,13 @@ final class DiffTab: nonisolated Identifiable {
             SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: repoRoot + "/" + path)
             return
         }
-        guard source.isLive, !isLoading else { return }
+        guard source.isLive, !isLoading, displayTask == nil else { return }
         reload()
     }
 
     /// Keep the native TextKit buffer as the editing source of truth.
     func updateEditedContent(_ contents: String) {
-        guard isEditable else { return }
+        guard isEditableNow else { return }
         editedNewContent = contents
         isDirty = !contents.utf8.elementsEqual(savedNewContent.utf8)
         if isDirty { invalidateReload() }
@@ -446,174 +593,278 @@ final class DiffTab: nonisolated Identifiable {
         guard preferences.diffStyle != style else { return }
         nativeSurface?.rememberScrollAnchor()
         preferences.diffStyle = style
+        if isEditing { refreshEditDecorations(immediate: true) }
     }
-
-    func setEditing(_ editing: Bool) {
-        guard isEditableNow, editing != isEditing else { return }
-        nativeSurface?.rememberScrollAnchor()
-        if !editing && !newContent.utf8.elementsEqual(editedNewContent.utf8) {
-            newContent = editedNewContent
-            runExpansions.removeAll()
-            recomputeDisplay()
-        }
-        preferences.prefersEditing = editing
-        if editing {
-            refreshEditDecorations(immediate: true)
-        } else {
-            autoSaveOnFocusLoss()
-        }
-    }
-
 
     /// Generate review rows and syntax tokens off the main actor. Superseded
     /// results never overwrite a newer local/remote target or edit.
-    func recomputeDisplay() {
+    func recomputeDisplay(core verifiedCore: DiffCore? = nil) {
         displayGeneration &+= 1
         let generation = displayGeneration
         displayInputs = nil
+        displayTask?.cancel()
+        displayTask = nil
+        displayCoreTask?.cancel()
+        displayCoreTask = nil
         guard !source.isPlainRevision, hasLoadedContent, hasChanges else {
             display = nil
             return
         }
-        let before = oldContent
-        let after = newContent
-        let path = path
-        let expansions = runExpansions
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let font = TerminalFont.current()
-        let paragraphStyle = DiffTypography.paragraphStyle(for: font)
-        let textColor = Theme.terminal(dark: dark).foregroundNSColor
-        displayTask?.cancel()
+        let before = comparisonOld
+        let after = comparisonNew
+        let revealedLines = revealedOldLines
+        let syntaxContextTask = syntaxContextTask
+        let originalSyntax = originalSyntax
+        let modifiedSyntax = modifiedSyntax
+        let highlightModified = !isEditing || showsCanonicalComparison
+        // The edit decorations and review projection use the same initial
+        // old/new snapshot. Share the expensive line diff instead of running
+        // Myers twice while the initial worktree pane waits to appear.
+        let coreTask = Task.detached(priority: .userInitiated) { () -> DiffCore? in
+            guard !Task.isCancelled else { return nil }
+            return verifiedCore ?? DiffCore.computeIfActive(
+                oldText: before, newText: after, cancellation: { Task.isCancelled }
+            )
+        }
+        displayCoreTask = coreTask
         displayTask = Task { [weak self] in
-            let context = await DiffSyntaxHighlighter.context(for: path)
-            // Parse/diff off-main; do not send NSColor or attributed strings
-            // across actors. Only immutable token names and ranges return.
-            let result = await Task.detached(priority: .userInitiated) {
-                let core = DiffCore.compute(oldText: before, newText: after)
-                // Both sides parse independent source snapshots.
-                async let oldCaptures: [DiffCaptureRun] = context.map {
-                    DiffSyntaxHighlighter.captures(text: before, context: $0)
-                } ?? []
-                async let newCaptures: [DiffCaptureRun] = context.map {
-                    DiffSyntaxHighlighter.captures(text: after, context: $0)
-                } ?? []
-                let computation = DiffComputation.build(core: core, expansions: expansions)
-                return (core, await oldCaptures, await newCaptures, computation)
-            }.value
-            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
-            let inputs = DiffDisplayInputs(
-                core: result.0,
-                oldRuns: DiffSyntaxHighlighter.colors(for: result.1),
-                newRuns: DiffSyntaxHighlighter.colors(for: result.2)
+            guard let core = await coreTask.value, !Task.isCancelled else { return }
+            let computed: DiffComputation? = await Self.runBackgroundDiffWork {
+                DiffComputation.build(core: core, revealedLines: revealedLines)
+            }
+            guard let computation = computed else { return }
+            do {
+                guard let self, !Task.isCancelled,
+                      self.displayGeneration == generation else { return }
+                let plain = DiffDisplayInputs(core: core, oldRuns: [], newRuns: [])
+                self.displayCoreTask = nil
+                // Do not retain the tab across a long syntax parse: a closed
+                // tab must be able to cancel and release its own work.
+                self.publishDisplay(computation, inputs: plain)
+                if self.isEditing && self.preferences.diffStyle == .split {
+                    self.refreshEditDecorations(immediate: true)
+                }
+            }
+            let context = await syntaxContextTask.value
+            let captures = await Self.captureVisibleSyntax(
+                before: before, after: after, computation: computation, context: context,
+                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax,
+                highlightModified: highlightModified
             )
-            self.displayInputs = inputs
-            self.display = Self.makeDisplay(
-                computation: result.3, inputs: inputs,
-                font: font, paragraphStyle: paragraphStyle, textColor: textColor
+            guard let self, !Task.isCancelled,
+                  self.displayGeneration == generation else { return }
+            let colored = DiffDisplayInputs(
+                core: core,
+                oldRuns: DiffSyntaxHighlighter.colors(for: captures.old),
+                newRuns: DiffSyntaxHighlighter.colors(for: captures.new)
             )
+            self.publishDisplay(computation, inputs: colored)
+            self.displayTask = nil
+            if self.isEditing && (!colored.oldRuns.isEmpty || self.preferences.diffStyle == .split) {
+                self.refreshEditDecorations(immediate: true)
+            }
         }
     }
 
-    private static func makeDisplay(
-        computation: DiffComputation, inputs: DiffDisplayInputs,
-        font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor
-    ) -> DiffDisplay {
-        let base: [NSAttributedString.Key: Any] = [
-            .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
-        ]
-        return DiffDisplay(
-            computation: computation,
-            unifiedText: DiffSyntaxHighlighter.attributedDocument(
-                computation.unified, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
-                baseAttributes: base
-            ),
-            leftText: DiffSyntaxHighlighter.attributedDocument(
-                computation.splitLeft, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
-                baseAttributes: base
-            ),
-            rightText: DiffSyntaxHighlighter.attributedDocument(
-                computation.splitRight, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
-                baseAttributes: base
-            )
+    private func publishDisplay(_ computation: DiffComputation, inputs: DiffDisplayInputs) {
+        displayInputs = inputs
+        let font = TerminalFont.current()
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        display = DiffDisplay(
+            computation: computation, inputs: inputs,
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: Theme.terminal(dark: dark).foregroundNSColor
         )
+    }
+
+    /// Structured child work inherits the owner task's cancellation instead
+    /// of continuing as an unrelated detached diff after its tab has moved on.
+    nonisolated static func runBackgroundDiffWork<Result: Sendable>(
+        _ work: @escaping @Sendable () async -> Result?
+    ) async -> Result? {
+        await withTaskGroup(of: Result?.self) { group in
+            group.addTask(priority: .userInitiated) {
+                guard !Task.isCancelled else { return nil }
+                let result = await work()
+                return Task.isCancelled ? nil : result
+            }
+            return await group.next() ?? nil
+        }
+    }
+
+    nonisolated static func captureVisibleSyntax(
+        before: String, after: String, computation: DiffComputation,
+        context: DiffHighlightContext?, originalSyntax: DiffSyntaxSource,
+        modifiedSyntax: DiffSyntaxSource, highlightModified: Bool
+    ) async -> (old: [DiffCaptureRun], new: [DiffCaptureRun]) {
+        guard let context else { return ([], []) }
+        let oldRanges = DiffSyntaxHighlighter.visibleRanges(
+            in: computation.splitLeft, source: .old
+        )
+        // The editable source is colored by Neon's live TextKit plugin.
+        // Only read-only/canonical views consume modified-side offline runs.
+        let newRanges = highlightModified
+            ? DiffSyntaxHighlighter.visibleRanges(in: computation.splitRight, source: .new)
+            : []
+        let captureTask = Task.detached(priority: .userInitiated) {
+            async let old = originalSyntax.captures(
+                text: before, context: context, ranges: oldRanges
+            )
+            async let new = modifiedSyntax.captures(
+                text: after, context: context, ranges: newRanges
+            )
+            return (await old, await new)
+        }
+        return await withTaskCancellationHandler {
+            await captureTask.value
+        } onCancel: {
+            captureTask.cancel()
+        }
     }
 
     func expandRun(_ fold: DiffCollapsedRun) {
         guard hasChanges, let inputs = displayInputs else { return }
-        var expansion = runExpansions[fold.runIndex] ?? DiffRunExpansion()
-        switch fold.direction {
-        case .revealUp: expansion.fromEnd += DiffCollapse.expansionLineCount
-        case .revealDown: expansion.fromStart += DiffCollapse.expansionLineCount
-        case .both:
-            expansion.fromStart += DiffCollapse.expansionLineCount
-            expansion.fromEnd += DiffCollapse.expansionLineCount
+        let next = fold.revealNext(excluding: revealedOldLines)
+        guard !next.isEmpty else { return }
+        revealedOldLines.append(contentsOf: next)
+        revealedOldLines.sort { $0.lowerBound < $1.lowerBound }
+        var merged: [Range<Int>] = []
+        for range in revealedOldLines {
+            if let last = merged.last, range.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                merged.append(range)
+            }
         }
-        runExpansions[fold.runIndex] = expansion
-        // Reuse only captures belonging to the current content, not a previous read.
+        revealedOldLines = merged
         displayGeneration &+= 1
         let generation = displayGeneration
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let font = TerminalFont.current()
-        let style = DiffTypography.paragraphStyle(for: font)
-        let color = Theme.terminal(dark: dark).foregroundNSColor
-        let expansions = runExpansions
+        let revealedLines = revealedOldLines
         let core = inputs.core
+        let before = comparisonOld
+        let after = comparisonNew
+        let syntaxContextTask = syntaxContextTask
+        let originalSyntax = originalSyntax
+        let modifiedSyntax = modifiedSyntax
+        let highlightModified = !isEditing || showsCanonicalComparison
         displayTask?.cancel()
         displayTask = Task { [weak self] in
-            let computation = await Task.detached(priority: .userInitiated) {
-                DiffComputation.build(core: core, expansions: expansions)
-            }.value
-            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
-            self.display = Self.makeDisplay(
-                computation: computation, inputs: inputs,
-                font: font, paragraphStyle: style, textColor: color
+            let computed: DiffComputation? = await Self.runBackgroundDiffWork {
+                DiffComputation.build(core: core, revealedLines: revealedLines)
+            }
+            guard let computation = computed else { return }
+            do {
+                guard let self, !Task.isCancelled,
+                      self.displayGeneration == generation else { return }
+                self.publishDisplay(computation, inputs: inputs)
+                if self.isEditing { self.refreshEditDecorations(immediate: true) }
+            }
+            let context = await syntaxContextTask.value
+            let captures = await Self.captureVisibleSyntax(
+                before: before, after: after, computation: computation, context: context,
+                originalSyntax: originalSyntax, modifiedSyntax: modifiedSyntax,
+                highlightModified: highlightModified
             )
+            guard let self, !Task.isCancelled,
+                  self.displayGeneration == generation else { return }
+            let updated = DiffDisplayInputs(
+                core: core,
+                oldRuns: DiffSyntaxHighlighter.colors(for: captures.old),
+                newRuns: DiffSyntaxHighlighter.colors(for: captures.new)
+            )
+            self.publishDisplay(computation, inputs: updated)
+            self.displayTask = nil
+            if self.isEditing { self.refreshEditDecorations(immediate: true) }
         }
     }
 
     func refreshEditDecorations(immediate: Bool = false) {
         editGeneration &+= 1
         let generation = editGeneration
-        let before = oldContent
+        let before = editComparisonOld ?? comparisonOld
         let after = editedNewContent
-        let oldRuns = displayInputs?.oldRuns ?? []
+        let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
+        let revealedLines = revealedOldLines
+        let prepareSplit = isEditing && preferences.diffStyle == .split
+            && editComparisonOld == nil
+        let matchingReviewSnapshot = !isDirty && editComparisonOld == nil
+        let inFlightCore = matchingReviewSnapshot ? displayCoreTask : nil
+        let cachedCore = matchingReviewSnapshot ? displayInputs?.core : nil
         let font = TerminalFont.current()
         let style = DiffTypography.paragraphStyle(for: font)
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let theme = Theme.terminal(dark: dark)
         let color = theme.foregroundNSColor
-        let emphasis = theme.backgroundNSColor.blended(
-            withFraction: 0.38, of: theme.paletteNSColor(1) ?? .systemRed
-        ) ?? .systemRed
+        let emphasis = DiffColorScheme.current(dark: dark).removedEmphasis
         editTask?.cancel()
         editTask = Task { [weak self] in
             if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
             guard !Task.isCancelled else { return }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
-            let (state, offsets, lineCount) = await Task.detached(priority: .userInitiated) {
-                let (oldLines, _) = DiffLineSplitter.lines(of: before)
-                let (newLines, _) = DiffLineSplitter.lines(of: after)
-                let ops = DiffEngine.lineOps(old: oldLines, new: newLines)
-                return (
-                    DiffComputation.editState(ops: ops, oldLines: oldLines, newLines: newLines),
-                    newLines.map(\.utf16Range.location), newLines.count
-                )
-            }.value
-            guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
+            let prepared: (DiffEditState, [Int], Int, [Int: Int]?, DiffComputation)? =
+                await Self.runBackgroundDiffWork {
+                    let core: DiffCore
+                    if let cachedCore {
+                        core = cachedCore
+                    } else if let inFlightCore {
+                        guard let active = await inFlightCore.value else { return nil }
+                        core = active
+                    } else {
+                        guard let active = DiffCore.computeIfActive(
+                            oldText: before, newText: after, cancellation: { Task.isCancelled }
+                        ) else { return nil }
+                        core = active
+                    }
+                    guard !Task.isCancelled else { return nil }
+                    let padding = prepareSplit ? DiffComputation.editableSplitPadding(core: core) : nil
+                    guard !Task.isCancelled else { return nil }
+                    let folded = DiffComputation.build(core: core, revealedLines: revealedLines)
+                    return (
+                        folded.editState,
+                        core.newLines.map(\.utf16Range.location), core.newLines.count, padding, folded
+                    )
+                }
+            guard let (state, offsets, lineCount, padding, folded) = prepared,
+                  let self, !Task.isCancelled, self.editGeneration == generation else { return }
             let base: [NSAttributedString.Key: Any] = [
                 .font: font, .foregroundColor: color, .paragraphStyle: style,
             ]
-            let ghosts = state.ghosts.map { block in
-                DiffDecorations.GhostBlock(
-                    anchorLine: block.anchorLine,
-                    firstOldLine: block.firstOldLine,
-                    lines: DiffSyntaxHighlighter.attributedGhostLines(
-                        oldText: before as NSString, block: block, runs: oldRuns,
-                        baseAttributes: base, emphasisColor: emphasis
+            let ghosts: [DiffDecorations.GhostBlock]
+            if var missing = padding {
+                if lineCount == 0, let count = missing.removeValue(forKey: 0), count > 1 {
+                    // The empty TextKit buffer already supplies the first filler row.
+                    missing[1] = count - 1
+                }
+                let empty = NSAttributedString(string: "")
+                ghosts = missing.sorted(by: { $0.key < $1.key }).map { anchor, count in
+                    DiffDecorations.GhostBlock(
+                        anchorLine: anchor, firstOldLine: 0,
+                        lines: Array(repeating: empty, count: count), kind: .filler
+                    )
+                }
+                self.editableBaseline = DiffEditableBaseline(
+                    document: folded.splitLeft,
+                    text: DiffSyntaxHighlighter.attributedDocument(
+                        folded.splitLeft, oldRuns: oldRuns, newRuns: [], baseAttributes: base
                     )
                 )
+            } else {
+                ghosts = state.ghosts.map { block in
+                    DiffDecorations.GhostBlock(
+                        anchorLine: block.anchorLine,
+                        firstOldLine: block.firstOldLine,
+                        lines: DiffSyntaxHighlighter.attributedGhostLines(
+                            oldText: before as NSString, block: block, runs: oldRuns,
+                            baseAttributes: base, emphasisColor: emphasis
+                        )
+                    )
+                }
+                self.editableBaseline = nil
             }
+            self.editFolds = DiffEditFold.sourceFolds(in: folded.unified, lineCount: lineCount)
+            self.editFoldsReady = true
+            self.editPresentationRevision &+= 1
             self.editDecorations = DiffDecorations.edit(
                 state: state, snapshotOffsets: offsets,
                 lineCount: lineCount, ghostBlocks: ghosts
@@ -623,7 +874,11 @@ final class DiffTab: nonisolated Identifiable {
 
     /// No parallel editor state: native NSTextView keeps selection and undo.
     func refreshNativeAppearance() {
-        recomputeDisplay()
+        if let display, let inputs = displayInputs {
+            publishDisplay(display.computation, inputs: inputs)
+        } else if displayTask == nil, hasChanges {
+            recomputeDisplay()
+        }
         if isEditing { refreshEditDecorations(immediate: true) }
     }
 
@@ -700,6 +955,7 @@ final class DiffTab: nonisolated Identifiable {
             // An edit landing while the write was in flight stays dirty.
             isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
             saveError = nil
+            if !isDirty { reload() }
         } catch {
             guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
@@ -708,7 +964,7 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated enum GitContent {
         case missing
-        case content(String)
+        case content(String, oid: String)
         case binary
         case tooLarge
         case failed(String)
@@ -723,33 +979,36 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated static func firstGitContent(
         _ locations: [GitLocation], in root: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?, isUnmerged: Bool) {
+    ) async -> (text: String, error: String?, isUnmerged: Bool,
+                 oid: String?, fromIndex: Bool) {
         var isUnmerged = false
         for location in locations {
             let result = await gitContent(location, in: root, backend: backend)
             isUnmerged = isUnmerged || result.isUnmerged
             switch result.content {
             case .missing: continue
-            case .content(let text): return (text, nil, isUnmerged)
-            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged)
-            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged)
-            case .failed(let message): return ("", message, isUnmerged)
+            case .content(let text, let oid):
+                if case .index = location { return (text, nil, isUnmerged, oid, true) }
+                return (text, nil, isUnmerged, oid, false)
+            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged, nil, false)
+            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged, nil, false)
+            case .failed(let message): return ("", message, isUnmerged, nil, false)
             }
         }
-        return ("", nil, isUnmerged)
+        return ("", nil, isUnmerged, nil, false)
     }
 
     private nonisolated static func requiredGitContent(
         _ location: GitLocation, in root: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?) {
+    ) async -> (text: String, error: String?, oid: String?) {
         let result = await gitContent(location, in: root, backend: backend)
         switch result.content {
-        case .content(let text): return (text, nil)
+        case .content(let text, let oid): return (text, nil, oid)
         case .missing:
-            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"))
-        case .binary: return ("", String(localized: "Binary file", table: "Git"))
-        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"))
-        case .failed(let message): return ("", message)
+            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"), nil)
+        case .binary: return ("", String(localized: "Binary file", table: "Git"), nil)
+        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), nil)
+        case .failed(let message): return ("", message, nil)
         }
     }
 
@@ -785,7 +1044,7 @@ final class DiffTab: nonisolated Identifiable {
         guard !blob.stdout.contains(0), let text = String(data: blob.stdout, encoding: .utf8) else {
             return (.binary, selection.isUnmerged)
         }
-        return (.content(text), selection.isUnmerged)
+        return (.content(text, oid: oid), selection.isUnmerged)
     }
 
     private nonisolated static func gitObject(
@@ -888,6 +1147,78 @@ final class DiffTab: nonisolated Identifiable {
         return !stat.isSymlink && stat.isRegular
     }
 
+    /// Git owns comparison semantics; Review uses canonical Git content when
+    /// a clean filter cannot map its line ranges back to raw worktree lines.
+    /// The actual blob and editable buffer are never rewritten.
+    private nonisolated static func gitComparisonBaseline(
+        source: Source, oldPath: String, path: String, worktreePath: String,
+        oldFromIndex: Bool, root: String, oldOID: String, old: String,
+        worktree: String, backend: WorkspaceBackend
+    ) async -> (content: GitWorktreeComparison.Content?, core: DiffCore?,
+                error: String?, outdated: Bool) {
+        let comparison: [String]
+        switch source {
+        case .worktree where oldPath == path:
+            comparison = oldFromIndex ? [] : ["HEAD"]
+        case .revisionWorktree(let revision) where worktreePath == path:
+            comparison = [revision]
+        default:
+            return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
+        }
+        let failure = String(localized: "Unable to read Git content", table: "Git")
+        let cleaned: WorkspaceRunResult
+        do {
+            cleaned = try await backend.run(
+                argv: ["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
+                       "LC_ALL=C", "git", "hash-object", "--path=" + worktreePath, "--stdin"],
+                cwd: root, env: nil, stdin: Data(worktree.utf8), timeout: 60
+            )
+        } catch {
+            return (nil, nil, error.localizedDescription, false)
+        }
+        guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
+            let detail = String(decoding: cleaned.stderr, as: UTF8.self)
+            return (nil, nil, detail.isEmpty ? failure : detail, false)
+        }
+        let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let patch = await GitCommandExecution.runData(
+            ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+             "--no-color", "--no-renames", "--full-index", "--unified=0",
+             "--inter-hunk-context=0"] + comparison + ["--", path],
+            in: root, stdoutLimit: maxBytes * 4 + 1, backend: backend
+        )
+        guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
+              let text = String(data: patch.stdout, encoding: .utf8) else {
+            return (nil, nil, patch.stderr.isEmpty ? failure : patch.stderr, false)
+        }
+        if let content = GitWorktreeComparison.resolve(
+            old: old, worktree: worktree, patch: text,
+            oldOID: oldOID, newOID: newOID
+        ) {
+            let core: DiffCore? = await Self.runBackgroundDiffWork {
+                guard let ops = content.operations else { return nil }
+                return DiffCore.fromVerifiedOperations(
+                    oldText: content.old, newText: content.new, operations: ops
+                )
+            }
+            return (content, core, nil, false)
+        }
+        // Git diff reads a live file. A different index OID or file content
+        // means the patch does not describe the snapshot we already loaded.
+        let refreshed = await readWorktreeFile(root: root, path: worktreePath, backend: backend)
+        let worktreeMoved = refreshed.error == nil
+            && !refreshed.text.utf8.elementsEqual(worktree.utf8)
+        let indexLine = DiffLineSplitter.lines(of: text).lines
+            .first(where: { $0.text.hasPrefix("index ") })?.text
+        let patchIDs = indexLine?.dropFirst(6).split(separator: " ").first?
+            .components(separatedBy: "..")
+        let gitMoved = patchIDs?.count == 2
+            && (patchIDs?[0] != oldOID || patchIDs?[1] != newOID)
+        let outdated = worktreeMoved || gitMoved
+        return (nil, nil, outdated ? nil : (patch.stderr.isEmpty ? failure : patch.stderr), outdated)
+    }
+
     private nonisolated static func readWorktreeFile(
         root: String, path: String, backend: WorkspaceBackend
     ) async -> (text: String, error: String?) {
@@ -947,9 +1278,11 @@ struct DiffViewerView: View {
 
     var body: some View {
         let _ = themeChanges.revision
-        let _ = preferences.prefersEditing
         let _ = preferences.diffStyle
+        let _ = diff.display
+        let _ = diff.showsCanonicalComparison
         let _ = diff.editDecorations
+        let _ = diff.editableBaseline
         VStack(spacing: 0) {
             if let reason = diff.readOnlyReason {
                 RemoteReadOnlyBanner(message: reason)
@@ -967,7 +1300,7 @@ struct DiffViewerView: View {
             Group {
                 if let error = diff.error, !diff.hasLoadedContent {
                     placeholder(icon: "exclamationmark.triangle", text: error)
-                } else if !diff.hasChanges && !diff.source.isPlainRevision {
+                } else if !diff.hasChanges && !diff.source.isPlainRevision && !diff.isEditing {
                     if diff.isLoading {
                         initialLoadingSkeleton
                     } else if diff.isUnmerged {
@@ -981,7 +1314,7 @@ struct DiffViewerView: View {
                 } else {
                     VStack(spacing: 0) {
                         if !diff.source.isPlainRevision { controlBar }
-                        if diff.source.isPlainRevision || diff.display != nil {
+                        if diff.canPresentNativeContent {
                             // Each tab retains its own TextKit document; never reuse another tab's NSView.
                             DiffNativeRoot(diff: diff, isFocused: isFocused,
                                            canFocus: canFocus, onFocused: onFocused)
@@ -995,12 +1328,16 @@ struct DiffViewerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
-            if isSelected {
-                diff.refreshWhenSelected()
-            }
+            if isSelected { diff.refreshOnAppear() }
         }
         .onChange(of: isSelected) {
             if isSelected { diff.refreshWhenSelected() }
+        }
+        .onChange(of: preferences.diffStyle) { _, style in
+            guard diff.isEditing, !diff.showsCanonicalComparison else { return }
+            if (style == .split) != (diff.editableBaseline != nil) {
+                diff.refreshEditDecorations(immediate: true)
+            }
         }
         .onChange(of: settings.fontFamily) { _, _ in diff.refreshNativeAppearance() }
         .onChange(of: settings.fontSize) { _, _ in diff.refreshNativeAppearance() }
@@ -1035,12 +1372,7 @@ struct DiffViewerView: View {
             diffStyle: Binding(
                 get: { preferences.diffStyle },
                 set: { diff.setDiffStyle($0) }
-            ),
-            isEditing: Binding(
-                get: { diff.isEditableNow && preferences.prefersEditing },
-                set: { diff.setEditing($0) }
-            ),
-            canEdit: diff.isEditableNow
+            )
         )
         .frame(height: DiffViewerLayout.controlsHeight)
     }
@@ -1049,10 +1381,8 @@ struct DiffViewerView: View {
     /// layout never jumps when the text panes become available.
     private var initialLoadingSkeleton: some View {
         VStack(spacing: 0) {
-            DiffControlsSkeletonBar(
-                showsModePlaceholder: diff.source == .worktree
-            )
-            .frame(height: DiffViewerLayout.controlsHeight)
+            DiffControlsSkeletonBar()
+                .frame(height: DiffViewerLayout.controlsHeight)
             DiffSkeletonView()
         }
     }
@@ -1098,21 +1428,13 @@ private enum DiffViewerLayout {
 /// AppKit diff controls mounted in the SwiftUI diff toolbar.
 private struct DiffControlsBar: NSViewRepresentable {
     @Binding var diffStyle: DiffLayoutStyle
-    @Binding var isEditing: Bool
-    let canEdit: Bool
 
     func makeNSView(context: Context) -> DiffControlsNSView {
         DiffControlsNSView()
     }
 
     func updateNSView(_ view: DiffControlsNSView, context: Context) {
-        view.update(
-            diffStyle: diffStyle,
-            isEditing: isEditing,
-            canEdit: canEdit,
-            onDiffStyleChange: { diffStyle = $0 },
-            onEditingChange: { isEditing = $0 }
-        )
+        view.update(diffStyle: diffStyle, onDiffStyleChange: { diffStyle = $0 })
     }
 }
 
@@ -1120,19 +1442,16 @@ private struct DiffControlsBar: NSViewRepresentable {
 /// Keeping this in AppKit gives the placeholder the same sizing and divider
 /// behavior as the toolbar that replaces it.
 private struct DiffControlsSkeletonBar: NSViewRepresentable {
-    let showsModePlaceholder: Bool
-
     func makeNSView(context: Context) -> DiffControlsSkeletonNSView {
         DiffControlsSkeletonNSView()
     }
 
     func updateNSView(_ view: DiffControlsSkeletonNSView, context: Context) {
-        view.update(showsModePlaceholder: showsModePlaceholder)
+        view.updateAppearanceColors()
     }
 }
 
 private final class DiffControlsSkeletonNSView: NSView {
-    private let modePlaceholder = NSView()
     private let layoutPlaceholder = NSView()
     private let divider = NSView()
 
@@ -1141,12 +1460,10 @@ private final class DiffControlsSkeletonNSView: NSView {
         wantsLayer = true
         setAccessibilityElement(false)
 
-        for placeholder in [modePlaceholder, layoutPlaceholder] {
-            placeholder.wantsLayer = true
-            placeholder.layer?.cornerRadius = 5
-            placeholder.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(placeholder)
-        }
+        layoutPlaceholder.wantsLayer = true
+        layoutPlaceholder.layer?.cornerRadius = 5
+        layoutPlaceholder.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(layoutPlaceholder)
 
         divider.wantsLayer = true
         divider.translatesAutoresizingMaskIntoConstraints = false
@@ -1157,12 +1474,6 @@ private final class DiffControlsSkeletonNSView: NSView {
             layoutPlaceholder.centerYAnchor.constraint(equalTo: centerYAnchor),
             layoutPlaceholder.widthAnchor.constraint(equalToConstant: 111),
             layoutPlaceholder.heightAnchor.constraint(equalToConstant: 20),
-            modePlaceholder.trailingAnchor.constraint(
-                equalTo: layoutPlaceholder.leadingAnchor, constant: -8
-            ),
-            modePlaceholder.centerYAnchor.constraint(equalTo: centerYAnchor),
-            modePlaceholder.widthAnchor.constraint(equalToConstant: 93),
-            modePlaceholder.heightAnchor.constraint(equalToConstant: 20),
             divider.leadingAnchor.constraint(equalTo: leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -1175,11 +1486,6 @@ private final class DiffControlsSkeletonNSView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(showsModePlaceholder: Bool) {
-        updateAppearanceColors()
-        modePlaceholder.isHidden = !showsModePlaceholder
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateAppearanceColors()
@@ -1190,27 +1496,16 @@ private final class DiffControlsSkeletonNSView: NSView {
         updateAppearanceColors()
     }
 
-    private func updateAppearanceColors() {
+    func updateAppearanceColors() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = Theme.background.cgColor
             divider.layer?.backgroundColor = Theme.divider.cgColor
-            let fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
-            modePlaceholder.layer?.backgroundColor = fill
-            layoutPlaceholder.layer?.backgroundColor = fill
+            layoutPlaceholder.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.05).cgColor
         }
     }
 }
 
 private final class DiffControlsNSView: NSView {
-    private let modeControl = NSSegmentedControl(
-        labels: [
-            String(localized: "Review", table: "Git", comment: "Read-only mode for a diff."),
-            String(localized: "Edit", table: "Git", comment: "Editable mode for a diff."),
-        ],
-        trackingMode: .selectOne,
-        target: nil,
-        action: nil
-    )
     private let layoutControl = NSSegmentedControl(
         labels: [
             String(localized: "Unified", table: "Git", comment: "A single-column diff layout."),
@@ -1222,21 +1517,14 @@ private final class DiffControlsNSView: NSView {
     )
     private let divider = NSView()
     private var onDiffStyleChange: ((DiffLayoutStyle) -> Void)?
-    private var onEditingChange: ((Bool) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
 
-        for control in [modeControl, layoutControl] {
-            control.controlSize = .small
-            control.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(control)
-        }
-        modeControl.target = self
-        modeControl.action = #selector(modeChanged)
-        modeControl.setAccessibilityLabel(String(localized: "Diff Mode", table: "Git"))
-        modeControl.setAccessibilityIdentifier("bailey.diff.mode")
+        layoutControl.controlSize = .small
+        layoutControl.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(layoutControl)
         layoutControl.target = self
         layoutControl.action = #selector(layoutChanged)
         layoutControl.setAccessibilityLabel(String(localized: "Diff Layout", table: "Git"))
@@ -1249,8 +1537,6 @@ private final class DiffControlsNSView: NSView {
         NSLayoutConstraint.activate([
             layoutControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             layoutControl.centerYAnchor.constraint(equalTo: centerYAnchor),
-            modeControl.trailingAnchor.constraint(equalTo: layoutControl.leadingAnchor, constant: -8),
-            modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
             divider.leadingAnchor.constraint(equalTo: leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -1263,21 +1549,10 @@ private final class DiffControlsNSView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(
-        diffStyle: DiffLayoutStyle,
-        isEditing: Bool,
-        canEdit: Bool,
-        onDiffStyleChange: @escaping (DiffLayoutStyle) -> Void,
-        onEditingChange: @escaping (Bool) -> Void
-    ) {
+    func update(diffStyle: DiffLayoutStyle, onDiffStyleChange: @escaping (DiffLayoutStyle) -> Void) {
         self.onDiffStyleChange = onDiffStyleChange
-        self.onEditingChange = onEditingChange
         updateAppearanceColors()
-
         layoutControl.selectedSegment = diffStyle == .split ? 1 : 0
-        modeControl.isHidden = !canEdit
-        modeControl.setEnabled(canEdit, forSegment: 1)
-        modeControl.selectedSegment = canEdit && isEditing ? 1 : 0
     }
 
     override func viewDidMoveToWindow() {
@@ -1288,7 +1563,6 @@ private final class DiffControlsNSView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateAppearanceColors()
-        modeControl.needsDisplay = true
         layoutControl.needsDisplay = true
     }
 
@@ -1297,10 +1571,6 @@ private final class DiffControlsNSView: NSView {
             layer?.backgroundColor = Theme.background.cgColor
             divider.layer?.backgroundColor = Theme.divider.cgColor
         }
-    }
-
-    @objc private func modeChanged() {
-        onEditingChange?(modeControl.selectedSegment == 1)
     }
 
     @objc private func layoutChanged() {

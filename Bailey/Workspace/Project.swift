@@ -472,7 +472,7 @@ final class Project: nonisolated Identifiable {
             let changed = diff.untracked != untracked || diff.origPath != origPath
             diff.untracked = untracked
             diff.origPath = origPath
-            if changed || !diff.isLoading { diff.reload() }
+            if changed { diff.reload() } else { diff.refreshWhenSelected() }
             selectTab(tab.id, activating: activating)
             return
         }

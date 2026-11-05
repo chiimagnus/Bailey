@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreServices
 import Darwin
 import Foundation
@@ -3170,6 +3171,115 @@ final class FileTreeTests: XCTestCase {
                        "An invalid drag must be rejected")
         XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .link), [],
                        "An unsupported Option-Command Link must not modify files")
+    }
+
+    func testSharedTreeRowsExposeNativeButtonRolesForFilesAndGit() async throws {
+        let file = TreeDisplayModel.Row(name: "file.swift", path: "/fixture/file.swift",
+                                        isDirectory: false, status: .modified)
+        let window = NSWindow(
+            contentRect: .init(x: -1500, y: -1500, width: 300, height: 85),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var opened = 0
+        let host = NSHostingView(rootView: TreeFileRow(
+            row: file, scale: 1, open: { opened += 1 }
+        ) { _ in EmptyView() })
+        host.frame = window.contentView?.bounds ?? .zero
+        window.contentView = host
+        window.orderFront(nil)
+
+        func attribute(_ element: NSObject, _ key: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(key)) else { return nil }
+            return element.value(forKey: key)
+        }
+        func flatten(_ element: NSObject) -> [NSObject] {
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            return [element] + children.flatMap(flatten)
+        }
+        func namedElement(_ id: String) -> NSObject? {
+            (host.accessibilityChildren() as? [NSObject] ?? [])
+                .flatMap(flatten)
+                .first { attribute($0, "accessibilityIdentifier") as? String == id }
+        }
+        func role(_ element: NSObject) -> String {
+            String(describing: attribute(element, "accessibilityRole") ?? "nil")
+        }
+        func press(_ element: NSObject) -> Bool {
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            guard element.responds(to: selector) else { return false }
+            typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+            let invoke = unsafeBitCast(element.method(for: selector), to: Press.self)
+            return invoke(element, selector)
+        }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let axAvailable = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(axAvailable, AXError.success.rawValue)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let target = try XCTUnwrap(namedElement("bailey.tree.file"))
+        XCTAssertEqual(role(target), "AXButton",
+                       "File and Git rows must expose an AXButton, not a scroll area")
+        XCTAssertTrue(press(target), "The accessibility button must perform the real open action")
+        XCTAssertEqual(opened, 1)
+
+        let folder = TreeDisplayModel.Row(name: "folder", path: "/fixture/folder",
+                                          isDirectory: true, isExpanded: false)
+        var toggled = 0
+        let folderHost = NSHostingView(rootView: TreeFolderRow(
+            row: folder, scale: 1, toggle: { toggled += 1 }
+        ))
+        folderHost.frame = host.frame
+        window.contentView = folderHost
+        folderHost.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let folderElement = try XCTUnwrap(
+            (folderHost.accessibilityChildren() as? [NSObject] ?? [])
+                .flatMap(flatten)
+                .first { attribute($0, "accessibilityIdentifier") as? String == "bailey.tree.folder" }
+        )
+        XCTAssertEqual(role(folderElement), "AXButton")
+        XCTAssertTrue(press(folderElement), "Accessibility must toggle the actual folder")
+        XCTAssertEqual(toggled, 1)
+
+        var pressedSegments: [Int] = []
+        let compact = TreeDisplayModel.Row(name: "leaf", path: "/fixture/root/leaf",
+                                           isDirectory: true, compactPrefix: ["root"])
+        let compactHost = NSHostingView(rootView: TreeFolderRow(
+            row: compact, scale: 1,
+            compactSegment: { component, index in
+                AnyView(TreeCompactSegment(
+                    component: component, index: index,
+                    onClick: { pressedSegments.append(index) },
+                    onContextClick: {}, onMenuClosed: {}
+                ) { EmptyView() })
+            }, toggle: {}
+        ))
+        compactHost.frame = host.frame
+        window.contentView = compactHost
+        compactHost.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let compactElements = (compactHost.accessibilityChildren() as? [NSObject] ?? [])
+            .flatMap(flatten)
+        let compactRow = try XCTUnwrap(compactElements.first {
+            attribute($0, "accessibilityIdentifier") as? String == "bailey.tree.folder"
+        })
+        let rowChildren = flatten(compactRow)
+        for index in 0..<2 {
+            let id = "bailey.tree.folder.component.\(index)"
+            let component = try XCTUnwrap(rowChildren.first {
+                attribute($0, "accessibilityIdentifier") as? String == id
+            }, "Compressed path components must remain children of their folder row")
+            XCTAssertEqual(role(component), "AXButton")
+            XCTAssertTrue(press(component), "Each compressed path must have its own action")
+        }
+        XCTAssertEqual(pressedSegments, [0, 1])
     }
 
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {

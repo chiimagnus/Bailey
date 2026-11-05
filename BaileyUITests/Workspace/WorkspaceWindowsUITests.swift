@@ -209,16 +209,9 @@ final class WorkspaceWindowsUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
-            // With AppKit state restoration intentionally disabled, obtain a
-            // real WindowGroup scene through the existing system menu command.
-            let newWindow = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
-            XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
-            newWindow.click()
-        }
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15),
-                      "The native New Window command must open the restored workspace")
+                      "Relaunch must restore the native window without a test-created fallback")
+        XCTAssertEqual(app.windows.count, 1)
         let restoredWindow = app.windows.firstMatch
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: restoredWindow)
             .waitForExistence(timeout: 20), "The restored session must retain its file tab")
@@ -226,6 +219,45 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertTrue((restoredWindow.textViews.firstMatch.value as? String)?
             .contains("RESTORED_MARKER") == true)
         XCTAssertEqual(try Data(contentsOf: file), savedBytes)
+    }
+
+    func testSystemPanelMenuUsesOnlyTheActualKeyWindow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("window-a/panel-a.txt", text: "window A bytes\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: file.deletingLastPathComponent()
+        )
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let firstID = app.windows.firstMatch.identifier
+        let windowA = app.windows.matching(identifier: firstID).firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: windowA)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: windowA)
+            .waitForExistence(timeout: 12))
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let secondID = try XCTUnwrap(app.windows.allElementsBoundByIndex
+            .first(where: { $0.identifier != firstID })?.identifier)
+        let windowB = app.windows.matching(identifier: secondID).firstMatch
+        XCTAssertNotEqual(windowA.identifier, windowB.identifier)
+        activate(windowB, in: app)
+        app.menuBarItems["Panel"].click()
+        let emptyMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Command Palette…"].exists
+        })
+        XCTAssertFalse(emptyMenu.menuItems[file.lastPathComponent].exists,
+                       "An empty key window must not expose another window's tab")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        activate(windowA, in: app)
+        app.menuBarItems["Panel"].click()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems[file.lastPathComponent].exists
+        })
+        menu.menuItems[file.lastPathComponent].click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: windowA).isSelected)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "window A bytes\n")
     }
 
     func testKeyboardFocusAndPaletteRestorationStayWithTheOwningWindow() throws {

@@ -422,7 +422,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 throw WorkspaceError.timedOut
             }
             if openFDs.isEmpty {
-                Thread.sleep(forTimeInterval: 0.05)
+                // The child may still be exiting after both pipes close.
+                // Wait on its termination signal, not an unconditional 50 ms sleep.
+                _ = exited.wait(timeout: .now() + .milliseconds(10))
                 continue
             }
             var fds = openFDs.sorted().map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }

@@ -59,6 +59,165 @@ nonisolated enum DiffLineSplitter {
     }
 }
 
+/// Git determines which lines change; the editor retains raw worktree bytes.
+/// Only use raw Review coordinates when its lines match Git's cleaned content.
+nonisolated enum GitWorktreeComparison {
+    nonisolated struct Content {
+        let old: String
+        let new: String
+        /// When a clean filter changes line structure, live editing compares
+        /// against the raw buffer captured at load rather than Git's blob.
+        let editBaseline: String?
+        /// Verified Git hunk coordinates, reusable for the first display snapshot.
+        var operations: [DiffLineOp]? = nil
+    }
+
+    static func resolve(
+        old: String, worktree: String, patch: String,
+        oldOID: String, newOID: String
+    ) -> Content? {
+        let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: old)
+        let (rawLines, rawTrailing) = DiffLineSplitter.lines(of: worktree)
+        if patch.isEmpty {
+            return oldOID == newOID
+                ? Content(old: worktree, new: worktree, editBaseline: nil)
+                : nil
+        }
+
+        var files = 0
+        var hunks = 0
+        var pair: (String, String)?
+        var oldCursor = 0
+        var newCursor = 0
+        var oldRemaining = 0
+        var newRemaining = 0
+        var projected = oldLines.map { String($0.text) }
+        var canonical: [String] = []
+        var lastChangedOldEnd = 0
+        var newTrailing = oldTrailing
+        var operations = DiffEngine.OpsBuilder()
+        var lastKind: Character?
+
+        func coordinate(_ token: Substring, prefix: Character) -> (start: Int, count: Int)? {
+            guard token.first == prefix else { return nil }
+            let parts = token.dropFirst().split(separator: ",", omittingEmptySubsequences: false)
+            guard (1...2).contains(parts.count),
+                  let start = Int(parts[0]), start >= 0,
+                  let count = parts.count == 2 ? Int(parts[1]) : 1,
+                  count >= 0, (count == 0 || start > 0) else { return nil }
+            return (count == 0 ? start : start - 1, count)
+        }
+
+        func unchanged(until oldEnd: Int, newEnd: Int) -> Bool {
+            guard oldEnd >= oldCursor, oldEnd <= oldLines.count,
+                  newEnd >= newCursor,
+                  oldEnd - oldCursor == newEnd - newCursor else { return false }
+            operations.equal(oldStart: oldCursor, newStart: newCursor,
+                             count: oldEnd - oldCursor)
+            for offset in 0..<(oldEnd - oldCursor) {
+                canonical.append(String(oldLines[oldCursor + offset].text))
+                if newCursor + offset < rawLines.count {
+                    projected[oldCursor + offset] = String(rawLines[newCursor + offset].text)
+                }
+            }
+            oldCursor = oldEnd
+            newCursor = newEnd
+            return true
+        }
+
+        for entry in DiffLineSplitter.lines(of: patch).lines {
+            let line = entry.text
+            if line.hasPrefix("diff --git ") {
+                files += 1
+                guard files == 1 else { return nil }
+            } else if line.hasPrefix("index ") {
+                let ids = line.dropFirst(6).split(separator: " ").first?
+                    .components(separatedBy: "..")
+                guard let ids, ids.count == 2 else { return nil }
+                pair = (ids[0], ids[1])
+            } else if hunks == 0,
+                      line.hasPrefix("Binary files ") || line == "GIT binary patch" {
+                return nil
+            } else if line.hasPrefix("@@ -") {
+                guard oldRemaining == 0, newRemaining == 0 else { return nil }
+                let parts = line.split(separator: " ", maxSplits: 3)
+                guard parts.count >= 3, parts[0] == "@@",
+                      let before = coordinate(parts[1], prefix: "-"),
+                      let after = coordinate(parts[2], prefix: "+"),
+                      unchanged(until: before.start, newEnd: after.start),
+                      before.start + before.count <= oldLines.count else { return nil }
+                hunks += 1
+                oldRemaining = before.count
+                newRemaining = after.count
+                lastChangedOldEnd = before.start + before.count
+                if lastChangedOldEnd == oldLines.count { newTrailing = true }
+                lastKind = nil
+            } else if hunks > 0, let kind = line.first, kind == "-" || kind == "+" || kind == " " {
+                let content = String(line.dropFirst())
+                switch kind {
+                case "-":
+                    guard oldRemaining > 0, oldCursor < oldLines.count,
+                          oldLines[oldCursor].text == content else { return nil }
+                    operations.delete(oldStart: oldCursor, count: 1)
+                    oldCursor += 1
+                    oldRemaining -= 1
+                case "+":
+                    guard newRemaining > 0 else { return nil }
+                    operations.insert(newStart: newCursor, count: 1)
+                    canonical.append(content)
+                    newCursor += 1
+                    newRemaining -= 1
+                default:
+                    guard oldRemaining > 0, newRemaining > 0,
+                          oldCursor < oldLines.count,
+                          oldLines[oldCursor].text == content else { return nil }
+                    operations.equal(oldStart: oldCursor, newStart: newCursor, count: 1)
+                    canonical.append(content)
+                    oldCursor += 1
+                    newCursor += 1
+                    oldRemaining -= 1
+                    newRemaining -= 1
+                }
+                lastKind = kind
+            } else if line.hasPrefix("\\ No newline at end of file") {
+                if lastKind == "+" || lastKind == " " { newTrailing = false }
+            } else if !line.isEmpty, hunks > 0 {
+                // Git itself produced the patch; unknown output must never be
+                // mistaken for an unchanged line.
+                return nil
+            }
+        }
+        if files == 1, hunks == 0, oldOID == newOID,
+           pair == nil || (pair?.0 == oldOID && pair?.1 == newOID) {
+            // A mode-only patch carries no text changes.
+            return Content(old: worktree, new: worktree, editBaseline: nil)
+        }
+        guard files == 1, hunks > 0, oldRemaining == 0, newRemaining == 0,
+              let pair, pair.0 == oldOID,
+              pair.1 == newOID || (worktree.isEmpty && pair.1.allSatisfy { $0 == "0" }),
+              unchanged(until: oldLines.count,
+                        newEnd: newCursor + oldLines.count - oldCursor) else { return nil }
+
+        let canonicalNew = canonical.joined(separator: "\n")
+            + (!canonical.isEmpty && newTrailing ? "\n" : "")
+        let projectedTrailing = lastChangedOldEnd < oldLines.count ? rawTrailing : oldTrailing
+        let projectedOld = projected.joined(separator: "\n") + (projectedTrailing ? "\n" : "")
+        let (cleanedLines, cleanedTrailing) = DiffLineSplitter.lines(of: canonicalNew)
+        let rawMatchesGit = rawTrailing == cleanedTrailing && rawLines.count == cleanedLines.count
+            && zip(rawLines, cleanedLines).allSatisfy { raw, cleaned in
+                raw.text == cleaned.text || raw.text == String(cleaned.text) + "\r"
+            }
+        if rawMatchesGit && !projectedOld.utf8.elementsEqual(worktree.utf8) {
+            return Content(old: projectedOld, new: worktree, editBaseline: nil,
+                           operations: operations.finish())
+        }
+        // Clean filters are not generally invertible (they can erase lines).
+        // Render the two canonical sides Git compared; edit the raw file.
+        return Content(old: old, new: canonicalNew, editBaseline: worktree,
+                       operations: operations.finish())
+    }
+}
+
 // MARK: - Line diff
 
 /// A run of consecutive lines with one fate. Offsets index the line arrays.
@@ -76,31 +235,50 @@ nonisolated enum DiffLineOp: Equatable {
 ///    each gap recurses. Bounded and fast even when the middle is huge (e.g.
 ///    a regenerated lockfile), and it produces the readable, structure-aware
 ///    splits patience diff is known for.
-/// 3. Myers for small gaps — optimal diffs where it's affordable; gaps too
-///    large for Myers *with no unique anchors* degrade to whole-block
-///    replace, which is also what such content (minified/generated text)
-///    reads best as.
+/// 3. Exact Myers for small gaps, and bounded Myers for large gaps with
+///    few changes. Large regions with neither cheap matches nor unique
+///    anchors become a single replace block.
 nonisolated enum DiffEngine {
-    /// Gaps at most this many lines per side go to Myers; larger anchor-free
-    /// gaps become a single replace block. Myers is O((N+M)·D), so the worst
-    /// case here stays around a few million steps.
+    /// Large repeated regions still get precise matches when edit distance
+    /// is small, without allowing unbounded quadratic work.
     private static let myersLimit = 700
+    private static let largeGapEditLimit = 96
 
     static func lineOps(old: [DiffSourceLine], new: [DiffSourceLine]) -> [DiffLineOp] {
+        // Only cancellation can throw; this synchronous API cannot cancel.
+        do {
+            return try computeLineOps(old: old, new: new, cancellation: { false })
+        } catch {
+            preconditionFailure("Non-cancellable diff unexpectedly aborted: \(error)")
+        }
+    }
+
+    static func lineOpsIfActive(
+        old: [DiffSourceLine], new: [DiffSourceLine], cancellation: @escaping () -> Bool
+    ) -> [DiffLineOp]? {
+        // CancellationError is the only thrown error; no partial ops escape.
+        try? computeLineOps(old: old, new: new, cancellation: cancellation)
+    }
+
+    private static func computeLineOps(
+        old: [DiffSourceLine], new: [DiffSourceLine], cancellation: @escaping () -> Bool
+    ) throws -> [DiffLineOp] {
+        guard !cancellation() else { throw CancellationError() }
         var builder = OpsBuilder()
         // Hash once: line equality during the diff is then integer comparison
         // with a rare full-text confirmation on hash collisions.
-        let oldHashes = old.map { $0.text.hashValue }
-        let newHashes = new.map { $0.text.hashValue }
+        let oldHashes = try hashes(for: old, cancellation: cancellation)
+        let newHashes = try hashes(for: new, cancellation: cancellation)
         let oldTexts = old.map(\.text)
         let newTexts = new.map(\.text)
         let context = Context(
             oldHashes: oldHashes, newHashes: newHashes,
-            oldTexts: oldTexts, newTexts: newTexts
+            oldTexts: oldTexts, newTexts: newTexts, cancellation: cancellation
         )
-        diffRegion(
+        try diffRegion(
             context, old: 0..<old.count, new: 0..<new.count, into: &builder
         )
+        try context.checkCancellation()
         let ops = builder.finish()
         #if DEBUG
         assertReconstructs(ops: ops, oldCount: old.count, newCount: new.count)
@@ -108,11 +286,28 @@ nonisolated enum DiffEngine {
         return ops
     }
 
+    private static func hashes(
+        for lines: [DiffSourceLine], cancellation: () -> Bool
+    ) throws -> [Int] {
+        var result: [Int] = []
+        result.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() {
+            if index.isMultiple(of: 256), cancellation() { throw CancellationError() }
+            result.append(line.text.hashValue)
+        }
+        return result
+    }
+
     private struct Context {
         let oldHashes: [Int]
         let newHashes: [Int]
         let oldTexts: [Substring]
         let newTexts: [Substring]
+        let cancellation: () -> Bool
+
+        func checkCancellation() throws {
+            if cancellation() { throw CancellationError() }
+        }
 
         func linesEqual(_ oldIndex: Int, _ newIndex: Int) -> Bool {
             oldHashes[oldIndex] == newHashes[newIndex]
@@ -122,7 +317,7 @@ nonisolated enum DiffEngine {
 
     /// Accumulates ops while merging adjacent runs of the same kind, so the
     /// recursive splits can emit freely.
-    private struct OpsBuilder {
+    fileprivate struct OpsBuilder {
         private var ops: [DiffLineOp] = []
 
         mutating func equal(oldStart: Int, newStart: Int, count: Int) {
@@ -178,7 +373,8 @@ nonisolated enum DiffEngine {
 
     private static func diffRegion(
         _ context: Context, old: Range<Int>, new: Range<Int>, into builder: inout OpsBuilder
-    ) {
+    ) throws {
+        try context.checkCancellation()
         var old = old
         var new = new
 
@@ -186,6 +382,7 @@ nonisolated enum DiffEngine {
         var prefixCount = 0
         while prefixCount < old.count, prefixCount < new.count,
               context.linesEqual(old.lowerBound + prefixCount, new.lowerBound + prefixCount) {
+            if prefixCount.isMultiple(of: 256) { try context.checkCancellation() }
             prefixCount += 1
         }
         if prefixCount > 0 {
@@ -199,6 +396,7 @@ nonisolated enum DiffEngine {
         var suffixCount = 0
         while suffixCount < old.count, suffixCount < new.count,
               context.linesEqual(old.upperBound - 1 - suffixCount, new.upperBound - 1 - suffixCount) {
+            if suffixCount.isMultiple(of: 256) { try context.checkCancellation() }
             suffixCount += 1
         }
         let suffixOldStart = old.upperBound - suffixCount
@@ -222,12 +420,14 @@ nonisolated enum DiffEngine {
             return
         }
 
-        if old.count <= myersLimit && new.count <= myersLimit {
-            myersDiff(context, old: old, new: new, into: &builder)
+        let smallGap = old.count <= myersLimit && new.count <= myersLimit
+        if try myersDiff(context, old: old, new: new,
+                         editLimit: smallGap ? old.count + new.count : largeGapEditLimit,
+                         into: &builder) {
             return
         }
 
-        let anchors = patienceAnchors(context, old: old, new: new)
+        let anchors = try patienceAnchors(context, old: old, new: new)
         guard !anchors.isEmpty else {
             // A huge region with no unique common line: generated content.
             // Optimal alignment is unaffordable and would not read better.
@@ -239,7 +439,7 @@ nonisolated enum DiffEngine {
         var oldCursor = old.lowerBound
         var newCursor = new.lowerBound
         for anchor in anchors {
-            diffRegion(
+            try diffRegion(
                 context,
                 old: oldCursor..<anchor.oldIndex,
                 new: newCursor..<anchor.newIndex,
@@ -249,7 +449,7 @@ nonisolated enum DiffEngine {
             oldCursor = anchor.oldIndex + 1
             newCursor = anchor.newIndex + 1
         }
-        diffRegion(
+        try diffRegion(
             context, old: oldCursor..<old.upperBound, new: newCursor..<new.upperBound, into: &builder
         )
     }
@@ -266,7 +466,7 @@ nonisolated enum DiffEngine {
     /// consistent.
     private static func patienceAnchors(
         _ context: Context, old: Range<Int>, new: Range<Int>
-    ) -> [Anchor] {
+    ) throws -> [Anchor] {
         struct Occurrence {
             var oldIndex = -1
             var oldCount = 0
@@ -279,18 +479,22 @@ nonisolated enum DiffEngine {
         var table: [Int: Occurrence] = [:]
         table.reserveCapacity(min(old.count + new.count, 4096))
         for index in old {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
             table[context.oldHashes[index], default: Occurrence()].oldCount += 1
             table[context.oldHashes[index]]?.oldIndex = index
         }
         for index in new {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
             table[context.newHashes[index], default: Occurrence()].newCount += 1
             table[context.newHashes[index]]?.newIndex = index
         }
 
         var candidates: [Anchor] = []
-        for occurrence in table.values
-        where occurrence.oldCount == 1 && occurrence.newCount == 1 {
-            guard context.linesEqual(occurrence.oldIndex, occurrence.newIndex) else { continue }
+        for (index, occurrence) in table.values.enumerated() {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
+            guard occurrence.oldCount == 1, occurrence.newCount == 1,
+                  context.linesEqual(occurrence.oldIndex, occurrence.newIndex)
+            else { continue }
             candidates.append(Anchor(oldIndex: occurrence.oldIndex, newIndex: occurrence.newIndex))
         }
         candidates.sort { $0.oldIndex < $1.oldIndex }
@@ -300,6 +504,7 @@ nonisolated enum DiffEngine {
         var pileTops: [Int] = [] // candidate index of the top of each pile
         var previous = [Int](repeating: -1, count: candidates.count)
         for (index, candidate) in candidates.enumerated() {
+            if index.isMultiple(of: 256) { try context.checkCancellation() }
             var lo = 0
             var hi = pileTops.count
             while lo < hi {
@@ -331,21 +536,21 @@ nonisolated enum DiffEngine {
 
     // MARK: Myers
 
-    /// Classic greedy O((N+M)·D) Myers over a small region, emitting ops by
-    /// backtracking the trace. Region sizes are capped by `myersLimit`.
+    /// Exact Myers within a bounded edit-distance budget.
     private static func myersDiff(
-        _ context: Context, old: Range<Int>, new: Range<Int>, into builder: inout OpsBuilder
-    ) {
+        _ context: Context, old: Range<Int>, new: Range<Int>,
+        editLimit: Int, into builder: inout OpsBuilder
+    ) throws -> Bool {
         let n = old.count
         let m = new.count
-        let maxD = n + m
-        let offset = maxD
-        // v[k + offset] = furthest x on diagonal k
-        var v = [Int](repeating: 0, count: 2 * maxD + 1)
+        let maxD = min(n + m, editLimit)
+        let offset = maxD + 1
+        var v = [Int](repeating: 0, count: 2 * maxD + 3)
         var trace: [[Int]] = []
 
         var foundD = -1
         outer: for d in 0...maxD {
+            try context.checkCancellation()
             trace.append(v)
             var k = -d
             while k <= d {
@@ -358,6 +563,7 @@ nonisolated enum DiffEngine {
                 var y = x - k
                 while x < n, y < m,
                       context.linesEqual(old.lowerBound + x, new.lowerBound + y) {
+                    if x.isMultiple(of: 256) { try context.checkCancellation() }
                     x += 1
                     y += 1
                 }
@@ -369,7 +575,7 @@ nonisolated enum DiffEngine {
                 k += 2
             }
         }
-        precondition(foundD >= 0, "Myers must terminate at d ≤ n+m")
+        guard foundD >= 0 else { return false }
 
         // Backtrack from (n, m) to (0, 0), collecting steps in reverse.
         enum Step { case equalOne, deleteOne, insertOne }
@@ -432,6 +638,7 @@ nonisolated enum DiffEngine {
                 newCursor += 1
             }
         }
+        return true
     }
 
     #if DEBUG
@@ -750,20 +957,67 @@ nonisolated struct DiffCollapsedRun: Equatable {
         case both
     }
 
-    /// How many unmodified lines the row still hides.
-    let hiddenLines: Int
-    /// Stable identity of the equal run within the diff (ordinal of the equal
-    /// run in the op stream), used to record expansion.
-    let runIndex: Int
+    /// Original-file coordinates survive editing on the modified side.
+    let baselineRange: Range<Int>
+    var hiddenLines: Int { baselineRange.count }
     let direction: Direction
+
+    func revealNext(excluding revealed: [Range<Int>] = []) -> [Range<Int>] {
+        // The tab keeps revealed intervals sorted and merged. Subtract them
+        // from this separator's original range so consecutive clicks on a
+        // still-rendered separator reveal new lines instead of the same ones.
+        var hidden: [Range<Int>] = []
+        var cursor = baselineRange.lowerBound
+        for range in revealed where range.upperBound > cursor
+            && range.lowerBound < baselineRange.upperBound {
+            let end = min(baselineRange.upperBound, range.lowerBound)
+            if cursor < end { hidden.append(cursor..<end) }
+            cursor = max(cursor, min(baselineRange.upperBound, range.upperBound))
+        }
+        if cursor < baselineRange.upperBound { hidden.append(cursor..<baselineRange.upperBound) }
+        guard let first = hidden.first, let last = hidden.last else { return [] }
+        switch direction {
+        case .revealUp:
+            return [(last.upperBound - min(last.count, DiffCollapse.expansionLineCount))..<last.upperBound]
+        case .revealDown:
+            return [first.lowerBound..<(first.lowerBound + min(first.count, DiffCollapse.expansionLineCount))]
+        case .both:
+            return [
+                first.lowerBound..<(first.lowerBound + min(first.count, DiffCollapse.expansionLineCount)),
+                (last.upperBound - min(last.count, DiffCollapse.expansionLineCount))..<last.upperBound,
+            ]
+        }
+    }
 }
 
-/// Lines a fold has revealed at each edge of its hidden range. Mirrors
-/// Pierre's `expandedHunks` entries: counters accumulate per click and the
-/// fold disappears once they cover the range.
-nonisolated struct DiffRunExpansion: Equatable {
-    var fromStart = 0
-    var fromEnd = 0
+/// Hidden original new-file paragraphs for a fold. TextKit skips their layout,
+/// never removes them from the editable text storage.
+nonisolated struct DiffEditFold: Equatable {
+    let range: Range<Int> // 0-based source lines; first line hosts the expander
+    let separator: DiffCollapsedRun
+
+    static func sourceFolds(in document: DiffSideDocument, lineCount: Int) -> [Self] {
+        let rows = document.rows
+        var following = Array(repeating: lineCount + 1, count: rows.count)
+        var next = lineCount + 1
+        for index in rows.indices.reversed() {
+            following[index] = next
+            if let line = rows[index].newLine { next = line }
+        }
+        var previous = 0
+        var result: [Self] = []
+        for (index, row) in rows.enumerated() {
+            if let separator = row.collapsed {
+                let end = min(lineCount, following[index] - 1)
+                if end > previous, end - previous == separator.hiddenLines {
+                    result.append(Self(range: previous..<end, separator: separator))
+                }
+            } else if let line = row.newLine {
+                previous = line
+            }
+        }
+        return result
+    }
 }
 
 /// A block of removed lines shown as read-only ghosts in edit mode, anchored
@@ -856,8 +1110,68 @@ nonisolated struct DiffCore {
     static func compute(oldText: String, newText: String) -> DiffCore {
         let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: oldText)
         let (newLines, newTrailing) = DiffLineSplitter.lines(of: newText)
-        var ops = DiffEngine.lineOps(old: oldLines, new: newLines)
+        return assemble(
+            oldLines: oldLines, newLines: newLines,
+            oldTrailing: oldTrailing, newTrailing: newTrailing,
+            ops: DiffEngine.lineOps(old: oldLines, new: newLines)
+        )
+    }
 
+    static func fromVerifiedOperations(
+        oldText: String, newText: String, operations: [DiffLineOp]
+    ) -> DiffCore? {
+        let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: oldText)
+        let (newLines, newTrailing) = DiffLineSplitter.lines(of: newText)
+        var oldCursor = 0
+        var newCursor = 0
+        for op in operations {
+            switch op {
+            case .equal(let old, let new, let count):
+                guard old == oldCursor, new == newCursor,
+                      count > 0, old + count <= oldLines.count,
+                      new + count <= newLines.count else { return nil }
+                // The Git patch verifier already constructed matching unchanged
+                // source rows; validating their indices here is sufficient.
+                oldCursor += count
+                newCursor += count
+            case .delete(let old, let count):
+                guard old == oldCursor, count > 0,
+                      old + count <= oldLines.count else { return nil }
+                oldCursor += count
+            case .insert(let new, let count):
+                guard new == newCursor, count > 0,
+                      new + count <= newLines.count else { return nil }
+                newCursor += count
+            }
+        }
+        guard oldCursor == oldLines.count, newCursor == newLines.count else { return nil }
+        return assemble(oldLines: oldLines, newLines: newLines,
+                        oldTrailing: oldTrailing, newTrailing: newTrailing,
+                        ops: operations)
+    }
+
+    static func computeIfActive(
+        oldText: String, newText: String, cancellation: @escaping () -> Bool
+    ) -> DiffCore? {
+        guard !cancellation() else { return nil }
+        let (oldLines, oldTrailing) = DiffLineSplitter.lines(of: oldText)
+        guard !cancellation() else { return nil }
+        let (newLines, newTrailing) = DiffLineSplitter.lines(of: newText)
+        guard !cancellation(),
+              let ops = DiffEngine.lineOpsIfActive(
+                  old: oldLines, new: newLines, cancellation: cancellation
+              ), !cancellation() else { return nil }
+        return assemble(
+            oldLines: oldLines, newLines: newLines,
+            oldTrailing: oldTrailing, newTrailing: newTrailing, ops: ops
+        )
+    }
+
+    private static func assemble(
+        oldLines: [DiffSourceLine], newLines: [DiffSourceLine],
+        oldTrailing: Bool, newTrailing: Bool, ops sourceOps: [DiffLineOp]
+    ) -> DiffCore {
+        var ops = sourceOps
         // A trailing-newline difference is a real change to the last line that
         // line-splitting hides. Convert the final shared line into a
         // removed/added pair so it surfaces.
@@ -897,75 +1211,84 @@ nonisolated struct DiffComputation {
     /// emphasis, and read-only deletion ghost blocks.
     let editState: DiffEditState
 
-    /// Builds the rendered documents. `expansions` carries how far each
-    /// folded run has been revealed (keyed by `DiffCollapsedRun.runIndex`);
-    /// pass nil to disable folding entirely and render every line.
-    static func build(core: DiffCore, expansions: [Int: DiffRunExpansion]?) -> DiffComputation {
-        let blocks = DiffBlocks(ops: core.ops)
+    /// Revealed ranges are anchored to the immutable original file.
+    /// Pass nil to disable folding entirely.
+    static func build(core: DiffCore, revealedLines: [Range<Int>]?) -> DiffComputation {
+        let blocks = DiffBlocks(ops: core.ops, oldLines: core.oldLines, newLines: core.newLines)
         let unified = buildUnified(
             blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
             oldMissingNewline: core.oldMissingNewline,
             newMissingNewline: core.newMissingNewline,
-            expansions: expansions
+            revealedLines: revealedLines
         )
         let (left, right) = buildSplit(
             blocks: blocks, oldLines: core.oldLines, newLines: core.newLines,
             oldMissingNewline: core.oldMissingNewline,
             newMissingNewline: core.newMissingNewline,
-            expansions: expansions
+            revealedLines: revealedLines
         )
 
         return DiffComputation(
             unified: unified,
             splitLeft: left,
             splitRight: right,
-            editState: editState(
-                ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
-            )
+            editState: editState(blocks: blocks, oldLines: core.oldLines)
         )
+    }
+
+    /// Extra blank rows on the editable side when old lines outnumber new
+    /// lines within a change block. No complete unfolded split document needed.
+    static func editableSplitPadding(core: DiffCore) -> [Int: Int] {
+        let blocks = DiffBlocks(ops: core.ops)
+        var padding: [Int: Int] = [:]
+        var newLine = 0
+        for item in blocks.items {
+            switch item {
+            case .equal(_, _, let count):
+                newLine += count
+            case .block(let block):
+                newLine += block.inserts.count
+                let excess = block.deletes.count - block.inserts.count
+                if excess > 0 { padding[newLine, default: 0] += excess }
+            }
+        }
+        return padding
     }
 
     /// Full render with no folding — the shape the invariant tests verify.
     static func compute(oldText: String, newText: String) -> DiffComputation {
-        build(core: .compute(oldText: oldText, newText: newText), expansions: nil)
+        build(core: .compute(oldText: oldText, newText: newText), revealedLines: nil)
     }
 
     // MARK: Collapse planning
 
-    /// How one equal run renders: visible line stretches interleaved with at
-    /// most one fold.
+    /// A previously revealed interval can lie in the middle of a new
+    /// equal run after editing, so one run may contain multiple folds.
     private enum EqualSegment {
-        /// Offsets within the run to render as context rows.
         case lines(Range<Int>)
-        /// Offsets within the run hidden behind a separator row.
-        case fold(hidden: Range<Int>, runIndex: Int, direction: DiffCollapsedRun.Direction)
+        case fold(hidden: Range<Int>, direction: DiffCollapsedRun.Direction)
     }
 
-    /// Ported from Pierre's `Wt`: the fold decision uses the *original* gap
-    /// size against the inline threshold, expansion counters are clamped to
-    /// the range, and counters that cover the range render everything.
     private static func equalSegments(
-        count: Int,
-        runIndex: Int,
-        hasChangeBefore: Bool,
-        hasChangeAfter: Bool,
-        expansions: [Int: DiffRunExpansion]?
+        oldStart: Int, count: Int, hasChangeBefore: Bool, hasChangeAfter: Bool,
+        revealedLines: [Range<Int>]?
     ) -> [EqualSegment] {
-        guard let expansions else {
+        guard let revealedLines else { return [.lines(0..<count)] }
+        let lead = hasChangeBefore ? min(count, DiffCollapse.contextLines) : 0
+        let trail = hasChangeAfter ? min(count - lead, DiffCollapse.contextLines) : 0
+        guard count - lead - trail > DiffCollapse.inlineGapThreshold else {
             return [.lines(0..<count)]
         }
-        let lead = hasChangeBefore ? DiffCollapse.contextLines : 0
-        let trail = hasChangeAfter ? DiffCollapse.contextLines : 0
-        let hidden = count - lead - trail
-        guard hidden > DiffCollapse.inlineGapThreshold else {
-            return [.lines(0..<count)]
+
+        var visible: [Range<Int>] = []
+        if lead > 0 { visible.append(0..<lead) }
+        for revealed in revealedLines {
+            let start = max(oldStart, revealed.lowerBound)
+            let end = min(oldStart + count, revealed.upperBound)
+            if start < end { visible.append((start - oldStart)..<(end - oldStart)) }
         }
-        let expansion = expansions[runIndex] ?? DiffRunExpansion()
-        let fromStart = min(max(expansion.fromStart, 0), hidden)
-        let fromEnd = min(max(expansion.fromEnd, 0), hidden)
-        guard fromStart + fromEnd < hidden else {
-            return [.lines(0..<count)]
-        }
+        if trail > 0 { visible.append((count - trail)..<count) }
+        visible.sort { $0.lowerBound < $1.lowerBound }
 
         let direction: DiffCollapsedRun.Direction
         switch (hasChangeBefore, hasChangeAfter) {
@@ -973,26 +1296,24 @@ nonisolated struct DiffComputation {
         case (_, false): direction = .revealDown
         default: direction = .both
         }
-
-        let headVisible = lead + fromStart
-        let tailVisible = trail + fromEnd
         var segments: [EqualSegment] = []
-        if headVisible > 0 {
-            segments.append(.lines(0..<headVisible))
+        var position = 0
+        for range in visible where range.upperBound > position {
+            if range.lowerBound > position {
+                segments.append(.fold(hidden: position..<range.lowerBound, direction: direction))
+            }
+            let start = max(position, range.lowerBound)
+            segments.append(.lines(start..<range.upperBound))
+            position = range.upperBound
         }
-        segments.append(.fold(
-            hidden: headVisible..<(count - tailVisible),
-            runIndex: runIndex,
-            direction: direction
-        ))
-        if tailVisible > 0 {
-            segments.append(.lines((count - tailVisible)..<count))
+        if position < count {
+            segments.append(.fold(hidden: position..<count, direction: direction))
         }
         return segments
     }
 
     private static func collapsedRow(
-        hidden: Int, runIndex: Int, direction: DiffCollapsedRun.Direction
+        baselineRange: Range<Int>, direction: DiffCollapsedRun.Direction
     ) -> DiffRow {
         DiffRow(
             kind: .collapsed,
@@ -1002,9 +1323,7 @@ nonisolated struct DiffComputation {
             sourceRange: NSRange(location: 0, length: 0),
             emphasis: [],
             missingNewline: false,
-            collapsed: DiffCollapsedRun(
-                hiddenLines: hidden, runIndex: runIndex, direction: direction
-            )
+            collapsed: DiffCollapsedRun(baselineRange: baselineRange, direction: direction)
         )
     }
 
@@ -1016,62 +1335,40 @@ nonisolated struct DiffComputation {
     static func editState(
         ops: [DiffLineOp], oldLines: [DiffSourceLine], newLines: [DiffSourceLine]
     ) -> DiffEditState {
+        editState(blocks: DiffBlocks(ops: ops, oldLines: oldLines, newLines: newLines),
+                  oldLines: oldLines)
+    }
+
+    private static func editState(blocks: DiffBlocks, oldLines: [DiffSourceLine]) -> DiffEditState {
         var added: [Int] = []
         var addedEmphasis: [Int: [NSRange]] = [:]
         var ghosts: [DiffEditGhostBlock] = []
         var newCursor = 0
-
-        var pendingDeletes: [Int] = []
-        var pendingInserts: [Int] = []
-        func flushBlock() {
-            guard !pendingDeletes.isEmpty || !pendingInserts.isEmpty else { return }
-            // Word-level pairing, same index-wise rule the review documents use.
-            var ghostEmphasis: [Int: [NSRange]] = [:]
-            for pair in 0..<min(pendingDeletes.count, pendingInserts.count) {
-                let oldIndex = pendingDeletes[pair]
-                let newIndex = pendingInserts[pair]
-                if let result = DiffIntraline.diff(
-                    old: oldLines[oldIndex].text, new: newLines[newIndex].text
-                ) {
-                    ghostEmphasis[oldIndex] = result.oldRanges
-                    addedEmphasis[newIndex] = result.newRanges
-                }
-            }
-            if !pendingDeletes.isEmpty {
-                let anchor = pendingInserts.first ?? newCursor
-                ghosts.append(DiffEditGhostBlock(
-                    anchorLine: anchor,
-                    firstOldLine: pendingDeletes[0] + 1,
-                    lines: pendingDeletes.map { index in
-                        DiffEditGhostBlock.Line(
-                            sourceRange: oldLines[index].utf16Range,
-                            emphasis: ghostEmphasis[index] ?? []
-                        )
-                    }
-                ))
-            }
-            pendingDeletes.removeAll(keepingCapacity: true)
-            pendingInserts.removeAll(keepingCapacity: true)
-        }
-
-        for op in ops {
-            switch op {
+        for item in blocks.items {
+            switch item {
             case .equal(_, _, let count):
-                flushBlock()
                 newCursor += count
-            case .delete(let oldStart, let count):
-                pendingDeletes.append(contentsOf: oldStart..<(oldStart + count))
-            case .insert(let newStart, let count):
-                pendingInserts.append(contentsOf: newStart..<(newStart + count))
-                added.append(contentsOf: newStart..<(newStart + count))
-                newCursor += count
+            case .block(let block):
+                added.append(contentsOf: block.inserts)
+                for index in block.inserts {
+                    if let ranges = block.newEmphasis[index] { addedEmphasis[index] = ranges }
+                }
+                if let first = block.deletes.first {
+                    ghosts.append(DiffEditGhostBlock(
+                        anchorLine: block.inserts.first ?? newCursor,
+                        firstOldLine: first + 1,
+                        lines: block.deletes.map { index in
+                            DiffEditGhostBlock.Line(
+                                sourceRange: oldLines[index].utf16Range,
+                                emphasis: block.oldEmphasis[index] ?? []
+                            )
+                        }
+                    ))
+                }
+                newCursor += block.inserts.count
             }
         }
-        flushBlock()
-
-        return DiffEditState(
-            addedLines: added, addedEmphasis: addedEmphasis, ghosts: ghosts
-        )
+        return DiffEditState(addedLines: added, addedEmphasis: addedEmphasis, ghosts: ghosts)
     }
 
     /// Change blocks: consecutive delete+insert ops between equal runs, with
@@ -1080,6 +1377,8 @@ nonisolated struct DiffComputation {
         struct Block {
             var deletes: [Int] = []   // old line indexes
             var inserts: [Int] = []   // new line indexes
+            var oldEmphasis: [Int: [NSRange]] = [:]
+            var newEmphasis: [Int: [NSRange]] = [:]
         }
         /// Ordered walk items: either an equal run or a change block.
         enum Item {
@@ -1088,10 +1387,18 @@ nonisolated struct DiffComputation {
         }
         var items: [Item] = []
 
-        init(ops: [DiffLineOp]) {
+        init(ops: [DiffLineOp], oldLines: [DiffSourceLine]? = nil,
+             newLines: [DiffSourceLine]? = nil) {
             var pending = Block()
             func flush() {
                 if !pending.deletes.isEmpty || !pending.inserts.isEmpty {
+                    if let oldLines, let newLines {
+                        let ranges = DiffComputation.blockEmphasis(
+                            pending, oldLines: oldLines, newLines: newLines
+                        )
+                        pending.oldEmphasis = ranges.old
+                        pending.newEmphasis = ranges.new
+                    }
                     items.append(.block(pending))
                     pending = Block()
                 }
@@ -1157,20 +1464,17 @@ nonisolated struct DiffComputation {
     private static func buildUnified(
         blocks: DiffBlocks, oldLines: [DiffSourceLine], newLines: [DiffSourceLine],
         oldMissingNewline: Bool, newMissingNewline: Bool,
-        expansions: [Int: DiffRunExpansion]?
+        revealedLines: [Range<Int>]?
     ) -> DiffSideDocument {
         var builder = DocumentBuilder()
-        var runIndex = -1
         for (itemIndex, item) in blocks.items.enumerated() {
             switch item {
             case .equal(let oldStart, let newStart, let count):
-                runIndex += 1
                 let segments = equalSegments(
-                    count: count,
-                    runIndex: runIndex,
+                    oldStart: oldStart, count: count,
                     hasChangeBefore: itemIndex > 0,
                     hasChangeAfter: itemIndex < blocks.items.count - 1,
-                    expansions: expansions
+                    revealedLines: revealedLines
                 )
                 for segment in segments {
                     switch segment {
@@ -1190,17 +1494,17 @@ nonisolated struct DiffComputation {
                                 text: newLines[newIndex].text
                             )
                         }
-                    case .fold(let hidden, let run, let direction):
+                    case .fold(let hidden, let direction):
                         builder.append(
                             collapsedRow(
-                                hidden: hidden.count, runIndex: run, direction: direction
+                                baselineRange: (oldStart + hidden.lowerBound)..<(oldStart + hidden.upperBound),
+                                direction: direction
                             ),
                             text: ""
                         )
                     }
                 }
             case .block(let block):
-                let emphasis = blockEmphasis(block, oldLines: oldLines, newLines: newLines)
                 for oldIndex in block.deletes {
                     builder.append(
                         DiffRow(
@@ -1209,7 +1513,7 @@ nonisolated struct DiffComputation {
                             newLine: nil,
                             source: .old,
                             sourceRange: oldLines[oldIndex].utf16Range,
-                            emphasis: emphasis.old[oldIndex] ?? [],
+                            emphasis: block.oldEmphasis[oldIndex] ?? [],
                             missingNewline: oldMissingNewline && oldIndex == oldLines.count - 1
                         ),
                         text: oldLines[oldIndex].text
@@ -1223,7 +1527,7 @@ nonisolated struct DiffComputation {
                             newLine: newIndex + 1,
                             source: .new,
                             sourceRange: newLines[newIndex].utf16Range,
-                            emphasis: emphasis.new[newIndex] ?? [],
+                            emphasis: block.newEmphasis[newIndex] ?? [],
                             missingNewline: newMissingNewline && newIndex == newLines.count - 1
                         ),
                         text: newLines[newIndex].text
@@ -1237,7 +1541,7 @@ nonisolated struct DiffComputation {
     private static func buildSplit(
         blocks: DiffBlocks, oldLines: [DiffSourceLine], newLines: [DiffSourceLine],
         oldMissingNewline: Bool, newMissingNewline: Bool,
-        expansions: [Int: DiffRunExpansion]?
+        revealedLines: [Range<Int>]?
     ) -> (left: DiffSideDocument, right: DiffSideDocument) {
         var left = DocumentBuilder()
         var right = DocumentBuilder()
@@ -1250,17 +1554,14 @@ nonisolated struct DiffComputation {
             )
         }
 
-        var runIndex = -1
         for (itemIndex, item) in blocks.items.enumerated() {
             switch item {
             case .equal(let oldStart, let newStart, let count):
-                runIndex += 1
                 let segments = equalSegments(
-                    count: count,
-                    runIndex: runIndex,
+                    oldStart: oldStart, count: count,
                     hasChangeBefore: itemIndex > 0,
                     hasChangeAfter: itemIndex < blocks.items.count - 1,
-                    expansions: expansions
+                    revealedLines: revealedLines
                 )
                 for segment in segments {
                     switch segment {
@@ -1293,25 +1594,17 @@ nonisolated struct DiffComputation {
                                 text: newLines[newIndex].text
                             )
                         }
-                    case .fold(let hidden, let run, let direction):
-                        // Same separator on both sides at the same row index,
-                        // preserving the split alignment invariant.
-                        left.append(
-                            collapsedRow(
-                                hidden: hidden.count, runIndex: run, direction: direction
-                            ),
-                            text: ""
+                    case .fold(let hidden, let direction):
+                        // Both sides share the exact original-file interval.
+                        let separator = collapsedRow(
+                            baselineRange: (oldStart + hidden.lowerBound)..<(oldStart + hidden.upperBound),
+                            direction: direction
                         )
-                        right.append(
-                            collapsedRow(
-                                hidden: hidden.count, runIndex: run, direction: direction
-                            ),
-                            text: ""
-                        )
+                        left.append(separator, text: "")
+                        right.append(separator, text: "")
                     }
                 }
             case .block(let block):
-                let emphasis = blockEmphasis(block, oldLines: oldLines, newLines: newLines)
                 let rowCount = max(block.deletes.count, block.inserts.count)
                 for rowOffset in 0..<rowCount {
                     if rowOffset < block.deletes.count {
@@ -1323,7 +1616,7 @@ nonisolated struct DiffComputation {
                                 newLine: nil,
                                 source: .old,
                                 sourceRange: oldLines[oldIndex].utf16Range,
-                                emphasis: emphasis.old[oldIndex] ?? [],
+                                emphasis: block.oldEmphasis[oldIndex] ?? [],
                                 missingNewline: oldMissingNewline && oldIndex == oldLines.count - 1
                             ),
                             text: oldLines[oldIndex].text
@@ -1340,7 +1633,7 @@ nonisolated struct DiffComputation {
                                 newLine: newIndex + 1,
                                 source: .new,
                                 sourceRange: newLines[newIndex].utf16Range,
-                                emphasis: emphasis.new[newIndex] ?? [],
+                                emphasis: block.newEmphasis[newIndex] ?? [],
                                 missingNewline: newMissingNewline && newIndex == newLines.count - 1
                             ),
                             text: newLines[newIndex].text

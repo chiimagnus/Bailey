@@ -100,6 +100,71 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testPanelItemsDoNotReconfigureUnrelatedEditShortcut() throws {
+        let main = try XCTUnwrap(NSApp.mainMenu)
+        let panel = try XCTUnwrap(main.items.first {
+            $0.title == String(localized: "Panel", table: "Interface")
+        }?.submenu)
+        let edit = try XCTUnwrap(main.items.compactMap(\.submenu).first { menu in
+            menu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
+                && menu.items.contains { $0.action == #selector(TreeKeyboardView.paste(_:)) }
+        })
+        let delete = try XCTUnwrap(edit.items.first {
+            $0.action == #selector(TreeKeyboardView.delete(_:))
+        })
+        let originalKey = delete.keyEquivalent
+        let originalMask = delete.keyEquivalentModifierMask
+        defer {
+            delete.keyEquivalent = originalKey
+            delete.keyEquivalentModifierMask = originalMask
+        }
+        delete.keyEquivalentModifierMask = .command
+        XCTAssertEqual(delete.keyEquivalentModifierMask, .command)
+
+        let unrelated = NSMenuItem(title: "Panel Probe", action: nil, keyEquivalent: "")
+        panel.addItem(unrelated)
+        defer { panel.removeItem(unrelated) }
+        XCTAssertEqual(delete.keyEquivalentModifierMask, .command,
+                       "Adding a Panel row must not reconfigure the unrelated Edit menu")
+
+        let editChange = NSMenuItem(title: "Edit Probe", action: #selector(TreeKeyboardView.copy(_:)),
+                                    keyEquivalent: "")
+        edit.addItem(editChange)
+        defer { edit.removeItem(editChange) }
+        XCTAssertEqual(delete.keyEquivalent, originalKey,
+                       "Edit changes must still restore the native Delete shortcut")
+        XCTAssertTrue(delete.keyEquivalentModifierMask.isEmpty)
+    }
+
+    @MainActor
+    func testSystemMenuTrackingPinsPresentationUntilEndNotification() throws {
+        let appDelegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
+        let mainMenu = try XCTUnwrap(NSApp.mainMenu)
+        let presentation = appDelegate.menuPresentation
+        XCTAssertNil(presentation.tracked)
+
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
+        XCTAssertNotNil(presentation.tracked)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
+        XCTAssertNotNil(presentation.tracked,
+                        "Unrelated popup tracking must not release the system menu snapshot")
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
+        XCTAssertNil(presentation.tracked)
+    }
+
+    @MainActor
+    func testSystemPanelMenuDoesNotReceiveContextShortcutFormatting() throws {
+        let panel = try XCTUnwrap(NSApp.mainMenu?.items.first {
+            $0.title == String(localized: "Panel", table: "Interface")
+        }?.submenu)
+        let item = NSMenuItem(title: "Example\t⌃1", action: nil, keyEquivalent: "")
+        panel.addItem(item)
+        defer { panel.removeItem(item) }
+        XCTAssertNil(item.attributedTitle,
+                     "The app's context-menu formatter must never rewrite a system Panel entry")
+    }
+
+    @MainActor
     func testContextMenuShortcutHintsAreDisplayOnly() throws {
         let menu = NSHostingMenu(rootView: VStack {
             Button(action: {}) { Text(verbatim: "Copy\t⌘C") }
@@ -108,9 +173,15 @@ final class AppIdentityTests: XCTestCase {
                 .accessibilityLabel("Close Panel")
             Button(action: {}) { Text(verbatim: "Close\t⌘W") }
                 .accessibilityLabel("Close")
-            Button("Other action", action: {})
+            Button("Close Tabs to the Right", action: {})
         })
         menu.update()
+        XCTAssertNil(menu.items.first?.attributedTitle,
+                     "Formatting belongs to native popup tracking, not incremental menu construction")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        defer {
+            NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        }
 
         let copy = try XCTUnwrap(menu.items.first)
         let paste = try XCTUnwrap(menu.items.dropFirst().first)
@@ -145,6 +216,7 @@ final class AppIdentityTests: XCTestCase {
                                  "Shortcut alignment must fit content instead of reserving 250pt")
         XCTAssertTrue(copy.keyEquivalent.isEmpty)
         XCTAssertTrue(paste.keyEquivalent.isEmpty)
+        XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
         XCTAssertNil(menu.items.last?.attributedTitle)
     }
 

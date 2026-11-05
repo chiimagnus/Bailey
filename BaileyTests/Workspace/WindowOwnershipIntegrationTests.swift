@@ -789,6 +789,85 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: bURL, encoding: .utf8), "window B")
     }
 
+    func testAlreadyRegisteredInitialSceneDoesNotRequestAnotherWindowBeforeNativeAttachment() throws {
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        var extraWindows = 0
+        application.openRestoredWindows { extraWindows += 1 }
+        XCTAssertEqual(application.windowCount, 1)
+        XCTAssertEqual(extraWindows, 0,
+                       "A scene already registered before native attachment must not launch a duplicate window")
+    }
+
+    func testOneExplicitInitialSceneOwnsPendingFoldersWithoutDuplicateWindowRequests() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let application = WorkspaceApplication()
+        var extraWindows = 0
+        application.openDirectories([folder.path])
+        application.registerWindowOpener { extraWindows += 1 }
+        XCTAssertEqual(extraWindows, 1,
+                       "The suppressed initial WindowGroup needs exactly one explicit opening request")
+        application.registerWindowOpener { extraWindows += 1 }
+        XCTAssertEqual(extraWindows, 1,
+                       "Reevaluating the menu or scene must not create a second initial window")
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        XCTAssertEqual(manager.selectedProject?.name, folder.lastPathComponent)
+        XCTAssertEqual(application.windowCount, 1)
+    }
+
+    func testExternalFolderAfterClosingLastWindowRequestsOneReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let next = root.appendingPathComponent("next")
+        let extra = root.appendingPathComponent("extra")
+        try FileManager.default.createDirectory(at: next, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: extra, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let application = WorkspaceApplication()
+        var requests = 0
+        application.registerWindowOpener { requests += 1 }
+        XCTAssertEqual(requests, 1)
+        let first = application.makeWindow()
+        let firstWindow = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 300, height: 200),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        firstWindow.isReleasedWhenClosed = false
+        firstWindow.identifier = NSUserInterfaceItemIdentifier("fixture-first")
+        defer { firstWindow.close() }
+        first.attach(to: firstWindow)
+        XCTAssertTrue(first.attachedWindow === firstWindow)
+        first.windowClosed()
+        XCTAssertEqual(application.windowCount, 0)
+
+        // Another application owner can have a native main window. It must
+        // never consume this application's replacement-window request.
+        let foreignWindow = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 300, height: 200),
+                                     styleMask: [.titled], backing: .buffered, defer: false)
+        foreignWindow.isReleasedWhenClosed = false
+        foreignWindow.identifier = NSUserInterfaceItemIdentifier("main-foreign-owner")
+        defer { foreignWindow.close() }
+        XCTAssertTrue(NSApp.windows.contains { $0 === foreignWindow })
+
+        application.openDirectories([next.path])
+        application.openDirectories([extra.path])
+        XCTAssertEqual(requests, 2,
+                       "An unrelated native main window cannot consume the one replacement request")
+        let second = application.makeWindow()
+        defer { second.windowClosed() }
+        let secondWindow = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 300, height: 200),
+                                    styleMask: [.titled], backing: .buffered, defer: false)
+        secondWindow.isReleasedWhenClosed = false
+        secondWindow.identifier = NSUserInterfaceItemIdentifier("fixture-second")
+        defer { secondWindow.close() }
+        second.attach(to: secondWindow)
+        XCTAssertEqual(application.windowCount, 1)
+        XCTAssertTrue(second.projects.contains { $0.name == next.lastPathComponent })
+        XCTAssertTrue(second.projects.contains { $0.name == extra.lastPathComponent })
+    }
+
     func testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows() throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let saved = SessionStore.load()

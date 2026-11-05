@@ -491,6 +491,8 @@ struct TreeCompactSegment<MenuContent: View>: View {
             .accessibilityLabel(component.name)
             .accessibilityValue(component.path)
             .accessibilityIdentifier("bailey.tree.folder.component.\(index)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default) { onClick() }
     }
 }
 
@@ -573,14 +575,16 @@ struct TreeFolderRow<Accessory: View>: View {
                              compactSegment: compactSegment)
                     .modifier(layout)
                     .onTapGesture { if !nativeClickOwner { toggle() } }
-                    .accessibilityAction(.default) { toggle() }
                     .help(row.accessibilityLabel + "\n" + row.path)
-                .accessibilityLabel(row.accessibilityLabel)
-                .accessibilityIdentifier("bailey.tree.folder")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-                .accessibilityValue(row.isExpanded
-                    ? String(localized: "Expanded", table: "Sidebar")
-                    : String(localized: "Collapsed", table: "Sidebar"))
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(row.accessibilityLabel)
+                    .accessibilityIdentifier("bailey.tree.folder")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityAction(.default) { toggle() }
+                    .accessibilityValue(row.isExpanded
+                        ? String(localized: "Expanded", table: "Sidebar")
+                        : String(localized: "Collapsed", table: "Sidebar"))
                 accessory(hovering || focusRing)
             }
         }
@@ -636,12 +640,13 @@ struct TreeFileRow<Accessory: View>: View {
                     .simultaneousGesture(TapGesture(count: 2).onEnded {
                         if !nativeClickOwner { activate?() }
                     })
-                    .accessibilityAction(.default) { open() }
                     .help(row.accessibilityLabel + "\n" + row.path)
-                .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
-                .accessibilityIdentifier(accessibilityID)
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-                .accessibilityHint(accessibilityHint)
+                    .accessibilityRepresentation {
+                        Button(row.accessibilityLabel + ", " + row.path, action: open)
+                            .accessibilityIdentifier(accessibilityID)
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
+                            .accessibilityHint(accessibilityHint)
+                    }
                 accessory(hovering || focusRing)
             }
         }

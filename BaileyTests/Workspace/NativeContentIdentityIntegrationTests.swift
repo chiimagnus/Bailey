@@ -166,6 +166,180 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         XCTAssertEqual(tab.displayTitle, "新的标签标题")
     }
 
+    func testCommandPaletteBackdropCanDismissThroughAccessibility() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.toggleCommandPalette()
+        XCTAssertTrue(manager.isCommandPaletteVisible)
+
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 900, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: CommandPaletteView(manager: manager))
+        host.frame = window.contentView?.bounds ?? .zero
+        window.contentView = host
+        window.orderFront(nil)
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let ax = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(ax, AXError.success.rawValue)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        func attribute(_ element: NSObject, _ name: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(name)) else { return nil }
+            return element.value(forKey: name)
+        }
+        func descendants(_ element: NSObject) -> [NSObject] {
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            return [element] + children.flatMap(descendants)
+        }
+        let accessibility = (host.accessibilityChildren() as? [NSObject] ?? [])
+            .flatMap(descendants)
+        let dismiss = try XCTUnwrap(accessibility.first {
+            attribute($0, "accessibilityIdentifier") as? String == "bailey.commandPalette.dismiss"
+        }, "A tappable modal backdrop needs a keyboard-independent accessibility close action")
+        XCTAssertEqual(attribute(dismiss, "accessibilityRole") as? String, "AXButton")
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(dismiss.responds(to: selector))
+        typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+        let invoke = unsafeBitCast(dismiss.method(for: selector), to: Action.self)
+        XCTAssertTrue(invoke(dismiss, selector))
+        XCTAssertFalse(manager.isCommandPaletteVisible)
+    }
+
+    func testSSHFolderPickerBackdropExposesNativeCancelPress() async throws {
+        var canceled = 0
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 900, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SSHFolderPickerView(
+            hosts: ["test-server"],
+            onCancel: { canceled += 1 },
+            onChoose: { _, _ in }
+        ))
+        host.frame = window.contentView?.bounds ?? .zero
+        window.contentView = host
+        window.orderFront(nil)
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let ax = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(ax, AXError.success.rawValue)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        func attribute(_ element: NSObject, _ name: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(name)) else { return nil }
+            return element.value(forKey: name)
+        }
+        func descendants(_ element: NSObject) -> [NSObject] {
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            return [element] + children.flatMap(descendants)
+        }
+        let elements = (host.accessibilityChildren() as? [NSObject] ?? [])
+            .flatMap(descendants)
+        let dismiss = try XCTUnwrap(elements.first {
+            attribute($0, "accessibilityIdentifier") as? String == "bailey.sshFolderPicker.dismiss"
+        }, "The tappable SSH picker backdrop must expose its own cancel action")
+        XCTAssertEqual(attribute(dismiss, "accessibilityRole") as? String, "AXButton")
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(dismiss.responds(to: selector))
+        typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+        let invoke = unsafeBitCast(dismiss.method(for: selector), to: Action.self)
+        XCTAssertTrue(invoke(dismiss, selector))
+        XCTAssertEqual(canceled, 1)
+    }
+
+    func testTerminalOverlayScrollbarOffersNativeAccessibleScrollActions() {
+        let scroll = OverlayScrollbarView(frame: CGRect(x: 0, y: 0, width: 14, height: 250))
+        var requests: [Double] = []
+        scroll.onScroll = { requests.append($0) }
+        scroll.update(position: 0.4, proportion: 0.2, active: true)
+        XCTAssertTrue(scroll.isAccessibilityElement())
+        XCTAssertEqual(scroll.accessibilityRole(), .scrollBar)
+        XCTAssertEqual(scroll.accessibilityOrientation(), .vertical)
+        XCTAssertEqual(scroll.accessibilityValue() as? Double, 0.4)
+        XCTAssertEqual(scroll.accessibilityMinValue() as? Double, 0)
+        XCTAssertEqual(scroll.accessibilityMaxValue() as? Double, 1)
+
+        XCTAssertTrue(scroll.accessibilityPerformIncrement())
+        XCTAssertEqual(requests.last ?? -1, 0.6, accuracy: 0.0001)
+        XCTAssertTrue(scroll.accessibilityPerformDecrement())
+        XCTAssertEqual(requests.last ?? -1, 0.4, accuracy: 0.0001)
+        scroll.setAccessibilityValue(NSNumber(value: 0.9))
+        XCTAssertEqual(requests.last ?? -1, 0.9, accuracy: 0.0001)
+        scroll.update(position: 0.9, proportion: 0.2, active: false)
+        XCTAssertFalse(scroll.isAccessibilityElement(),
+                       "A terminal without scrollback must not expose an inert scrollbar")
+    }
+
+    func testTabSwitcherCardsExposeNativePressToSelectTheirRealTabs() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "Switcher AX", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let target = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        target.customName = "AX target tab"
+        let other = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        other.customName = "Other tab"
+        project.append(target)
+        project.append(other)
+        XCTAssertEqual(project.selectedTabID, other.id)
+        XCTAssertTrue(manager.tabSwitcher.cycle(in: manager, reverse: false))
+
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 1000, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: TabSwitcherOverlay(project: project,
+                                                               controller: manager.tabSwitcher))
+        host.frame = window.contentView?.bounds ?? .zero
+        window.contentView = host
+        window.orderFront(nil)
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let ax = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(ax, AXError.success.rawValue)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        func attribute(_ node: NSObject, _ name: String) -> Any? {
+            guard node.responds(to: NSSelectorFromString(name)) else { return nil }
+            return node.value(forKey: name)
+        }
+        func all(_ node: NSObject) -> [NSObject] {
+            let children = attribute(node, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(node, "accessibilityChildren") as? [NSObject] ?? []
+            return [node] + children.flatMap(all)
+        }
+        let buttons = (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(all)
+        let candidate = try XCTUnwrap(buttons.first { node in
+            (attribute(node, "accessibilityLabel") as? String ?? "").contains("AX target tab")
+        })
+        XCTAssertEqual(attribute(candidate, "accessibilityRole") as? String, "AXButton")
+        let press = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(candidate.responds(to: press))
+        typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+        let invoke = unsafeBitCast(candidate.method(for: press), to: Action.self)
+        XCTAssertTrue(invoke(candidate, press))
+        XCTAssertEqual(project.selectedTabID, target.id,
+                       "Native accessibility must select the same tab as the pointer")
+    }
+
     func testDisplayedTabExposesRealAccessibilitySelection() async throws {
         let host = NSHostingView(rootView: TabItemChrome(
             systemImage: "doc", title: "Selected document", isDisplayed: true,
@@ -393,7 +567,8 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         }.first)
         try await wait {
             host.layoutSubtreeIfNeeded()
-            return diff.display != nil && self.find(DiffNativeSurface.self, in: host) === diff.nativeSurface
+            guard diff.display != nil, let surface = diff.nativeSurface else { return false }
+            return self.find(DiffNativeSurface.self, in: host) === surface
         }
         let originalDiffSurface = try XCTUnwrap(diff.nativeSurface)
         XCTAssertEqual(diff.newContent, "let identity = \"worktree A\"\n")

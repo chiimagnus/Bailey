@@ -103,11 +103,8 @@ enum WorkspaceUITestSupport {
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
-        // Allow the initial SwiftUI WindowGroup to attach before requesting a new window.
-        // A one-second probe raced scene creation and opened a duplicate test window.
-        if !app.windows.firstMatch.waitForExistence(timeout: 15) {
-            app.typeKey("n", modifierFlags: [.command, .shift])
-        }
+        // The isolated app explicitly requests one initial scene. Do not hide
+        // a failed attachment by sending a second new-window shortcut.
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         XCTAssertEqual(app.windows.count, 1,
                        "An isolated launch must not inherit windows from other UI tests")

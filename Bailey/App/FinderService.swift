@@ -6,6 +6,7 @@ import Carbon
 @MainActor
 final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     let workspace = WorkspaceApplication(loadSavedState: true)
+    let menuPresentation = MainMenuPresentation()
     private var preparingToQuit = false
 
     /// Let AppKit finish quitting only after all edited files were written.
@@ -46,6 +47,14 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(mainMenuItemAdded(_:)),
             name: NSMenu.didAddItemNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuDidBeginTracking(_:)),
+            name: NSMenu.didBeginTrackingNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuDidEndTracking(_:)),
+            name: NSMenu.didEndTrackingNotification, object: nil
+        )
         removeUnusedViewMenu()
         configureDeleteShortcut()
     }
@@ -55,14 +64,37 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         configureDeleteShortcut()
     }
 
+    @objc private func menuDidBeginTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu else { return }
+        if menu === NSApp.mainMenu {
+            let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
+            menuPresentation.beginTracking(
+                project: owner?.selectedProject, projects: owner?.projects ?? []
+            )
+        } else {
+            var root = menu
+            while let parent = root.supermenu { root = parent }
+            if root !== NSApp.mainMenu { Self.formatShortcutHints(in: menu) }
+        }
+    }
+
+    @objc private func menuDidEndTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu,
+              menu === NSApp.mainMenu else { return }
+        menuPresentation.endTracking()
+    }
+
     @objc private func mainMenuItemAdded(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
-        if menu.items.last?.title.contains("\t") == true {
-            Self.formatShortcutHints(in: menu)
-        }
-        if menu === NSApp.mainMenu { removeUnusedViewMenu() }
-        if menu === NSApp.mainMenu
-            || NSApp.mainMenu?.items.contains(where: { $0.submenu === menu }) == true {
+        if menu === NSApp.mainMenu {
+            removeUnusedViewMenu()
+            configureDeleteShortcut()
+        } else if menu.supermenu === NSApp.mainMenu,
+                  let index = notification.userInfo?["NSMenuItemIndex"] as? Int,
+                  let action = menu.item(at: index)?.action,
+                  action == #selector(TreeKeyboardView.copy(_:))
+                      || action == #selector(TreeKeyboardView.paste(_:))
+                      || action == #selector(TreeKeyboardView.delete(_:)) {
             configureDeleteShortcut()
         }
     }
@@ -109,8 +141,9 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         }), let delete = edit.items.first(where: {
             $0.action == #selector(TreeKeyboardView.delete(_:))
         }) else { return }
-        delete.keyEquivalent = String(UnicodeScalar(NSBackspaceCharacter)!)
-        delete.keyEquivalentModifierMask = []
+        let shortcut = String(UnicodeScalar(NSBackspaceCharacter)!)
+        if delete.keyEquivalent != shortcut { delete.keyEquivalent = shortcut }
+        if !delete.keyEquivalentModifierMask.isEmpty { delete.keyEquivalentModifierMask = [] }
     }
 
     private func removeUnusedViewMenu() {

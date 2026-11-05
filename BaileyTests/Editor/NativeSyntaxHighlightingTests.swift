@@ -164,8 +164,10 @@ final class NativeSyntaxHighlightingTests: XCTestCase {
             mounted.window.contentView = nil
             mounted.window.close()
         }
-        try await startAndClose()
-        try await wait { editor == nil && coordinator == nil }
+        for _ in 0..<6 {
+            try await startAndClose()
+            try await wait { editor == nil && coordinator == nil }
+        }
     }
 
     func testClosingFirstEditorDoesNotPreventSecondEditorAndDiffColors() async throws {

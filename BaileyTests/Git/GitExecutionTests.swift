@@ -74,6 +74,31 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertEqual(environment.stdout, "0:0:C")
     }
 
+    func testLocalBackendHashStdinLatencyAndSnapshot() async throws {
+        let root = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "latency.swift"
+        let content = Data((0..<24_000).map { "let value\($0) = \($0)\n" }.joined().utf8)
+        try content.write(to: root.appendingPathComponent(name))
+        let expected = GitCommandExecution.run(["hash-object", "--", name], in: root.path)
+        XCTAssertEqual(expected.status, 0)
+        let backend = LocalWorkspaceBackend.shared
+        var times: [Double] = []
+        for _ in 0..<17 {
+            let start = CFAbsoluteTimeGetCurrent()
+            let result = try await backend.run(
+                argv: ["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
+                       "LC_ALL=C", "git", "hash-object", "--path=" + name, "--stdin"],
+                cwd: root.path, env: nil, stdin: content, timeout: 60
+            )
+            times.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertEqual(result.status, 0)
+            XCTAssertEqual(String(data: result.stdout, encoding: .utf8), expected.stdout)
+        }
+        times.sort()
+        print("AUDIT_GIT_BACKEND_HASH_STDIN rows=24000 medianMs=\(times[8]) p95Ms=\(times[15])")
+    }
+
     func testTimeoutReturnsPartialOutputWithoutHanging() throws {
         let directory = try makeRepository()
         defer { try? FileManager.default.removeItem(at: directory) }
