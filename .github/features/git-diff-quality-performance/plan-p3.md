@@ -83,6 +83,10 @@ Blob 选择和 Git patch 保留锁定 OID、尺寸和真实错误语义。
    若实测开销不足以构成瓶颈，保留现有实现并明确证据，
    不创建 Git batch daemon、进程池或无实际消费的替代接口。
    Staged HEAD/Index 当前已并行；不能把既有优化重复计算为收益。
+   P1 本机 24k 行 30 次测量：size／blob 各约 23 ms，
+   一次性 `cat-file --batch` 约 18.21 ms（P95 20.35 ms），完整输出字节已核对。
+   同条件可消除的启动已证实，采用锁定 OID 后的一次性 batch 作为实施候选，
+   仍须先核销类型、缺失对象、短读、超限、异常退出和取消；不引入常驻进程。
 4. 在 `gitContent` 已锁定 OID 之后接入经验证的最小实现；
    同时覆盖 `gitComparisonBaseline` 的 Git patch 输出（其预算不同于 Blob 5 MiB），
    保留 index／tree 原始 NUL path 解析、冲突阶段、无效提交、权限、
@@ -208,7 +212,10 @@ Unicode 规范等价、冲突、**Staged HEAD／Index 元数据交错变化**、
    400-token 内仍可能生成较大 Myers trace；反复展开会重新 build。
    由 P1-T4 的 399／400／401 token、密集对行和取消时延实测决定，
    是否应在现有 DiffCore／展示版本内复用稳定行内结果，或在实际长循环增加取消检查。
-   没有测到热点时保留纯算法，不新建词级缓存中心或额外 Diff 引擎。
+   P1 已测 399／400 token 的 1000 对替换约 37 秒（Debug），
+   401 token 则约 160 ms；该热点已证实，不再将其作为可忽略的小投影。
+   补齐 Release、取消时延与分配证据后在现有算法内最小修复，
+   不新建词级缓存中心或额外 Diff 引擎。
 4. **立即删旧路径，而非追加兼容链：**
    执行前已独立移除 `DiffDisplay.hasCollapsedContext` 的测试专用字段并将断言迁入
    `display.computation.unified.rows`；本 task 不再重复计算此项收益。

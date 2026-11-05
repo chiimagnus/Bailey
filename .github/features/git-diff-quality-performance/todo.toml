@@ -1,37 +1,37 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T4"
 
 [[tasks]]
 id = "P1-T1"
 title = "建立 Git Diff 全链路体验与性能基线"
-status = "pending"
+status = "blocked"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "已提交分阶段基线2dc1a37a及挂载修复9eb27356；最新65152f3d全量849项0失败、16 SSH跳过，Debug/Release构建验签及Release四项通过。完整App基线被系统Automation Mode交互认证阻塞；授权Windows实测连接超时，非缺少用户授权。详见evidence-p1.md。"
 
 [[tasks]]
 id = "P1-T2"
 title = "验证 TextKit 完整滚动范围与快速首屏的可行路线"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "原生布局候选实验进行中，尚未取得技术准入"
 
 [[tasks]]
 id = "P1-T3"
 title = "实证编辑事件与隐藏区间编辑语义"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t3"
 commit = ""
-note = ""
+note = "fe777a29固定21阶段原生事件与字节；65152f3d新增8种折叠命令/Undo/Redo/磁盘/Index，15项相关测试通过。未把显式设置选区冒充Find UI、Shift扩选、跨折叠拖选或系统IME候选；其余边界仍待核销。"
 
 [[tasks]]
 id = "P1-T4"
 title = "分析 Git 快照子进程与语法派生真实成本"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t4"
 commit = ""
-note = ""
+note = "b0320924对象读取各30次及batch完整性；644d2aa9密集399/400/401×1/100/1000投影与真实取消，Debug约3.7秒、Release约277ms。已证实热点并更新P3，不代表生产修复；输出预算、Staged交叉快照、分配与离散高亮仍未全部核销。"
 
 [[tasks]]
 id = "P1-T5"
@@ -152,3 +152,11 @@ status = "pending"
 plan = "plan-p4.md#p4-t5"
 commit = ""
 note = ""
+
+[[tasks]]
+id = "P1-T6"
+title = "移除生产语法高亮中的测试专用全量入口"
+status = "completed"
+plan = "plan-p1.md#p1-t6"
+commit = "8ce6d0da"
+note = "CodeGraph与引用确认只被测试消费；删除生产静态全文入口、1.5MB旧预算及nil区间回退，完整oracle独立迁入测试。最新65152f3d完整宿主849项0失败、16 SSH跳过；Debug/Release构建验签0。此清理不等于P3-T4或性能问题整体完成。"

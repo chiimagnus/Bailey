@@ -22,7 +22,8 @@ Debug／Release 性能及内存、文档／删除代码审计与交付核销。
   无未解释回归、旧双轨、临时调试改动和无主文档状态。
 
 **Rules：**
-- 当前授权仅写计划；将来执行 GUI 时必须独占键盘焦点，只启动 Bailey Dev。
+- 用户已授权执行本计划、独占焦点运行隔离 Bailey Dev GUI，以及使用现有 Windows SSH 测试。
+  授权不等于系统认证或网络已经可用，实际阻塞证据见 `evidence-p1.md`；不重复申请同一授权。
 - Windows SSH 测试只针对明确授权的专属目标、独立临时仓库；
   测试不借 SSH master，不操作工作中用户文件。
 - 缺少必需条件必须分项说明影响及补验，不能用 `XCTSkip`、“反正主机测试通过”掩盖。
@@ -197,8 +198,8 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 这些文件／方法已在源码核对，不留“执行时再找类名”的占位。
 
 **步骤：**
-1. 先取得**明确授权**的独立 SSH 测试主机及测试目录，
-   通过既有 `BAILEY_P4_TEST_SSH_HOST` 完整列出将写入的临时 Git 路径，
+1. 先复核现有获授权的 `windows` 目标可达，
+   通过既有 `BAILEY_P4_TEST_SSH_HOST` 选择目标，由 live fixture 创建并严格校验自有临时 Git 路径，
    不借用用户活跃 master 或后台会话，最后只清理测试持有物。
 2. 在真实 Windows Git 上创建有 staged 和 unstaged 的同一文件，
    设置 `core.autocrlf=true`、`.gitattributes` 的 LF／CRLF／text/eol 及专用 clean filter；
@@ -224,10 +225,13 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 多标签切换与取消后旧结果不得发布。
 
 **Uncovered：**
-未获专属主机授权就**不能**执行实机写入；具体影响是 Windows EOL/filter、
+现有 Windows SSH 已获授权，但独立连接和显式 live test 均在连接阶段超时；
+不得改动用户网络配置或借用活跃 master 来绕过，新增目标仍须相应授权。
+具体影响是 Windows EOL/filter、
 真实传输延迟与断线安全尚无闭环证据，
 仅有受控后端替代测试且该场景不得无保留验收。
-在 2026-11-05 19:47 的完整宿主测试（`a9fdb51b`）中，16 项均因无授权 SSH 主机跳过。
+在 2026-11-05 19:47 的完整宿主测试（`a9fdb51b`）中，16 项因未传 SSH 目标参数跳过；
+本轮显式提供授权目标的 Diff live test 实际执行后失败，不得改写成通过或跳过。
 直接 Git Diff：`NativeDiffTabTests` 1 项，涉及 EOL、clean filter 与远端保存。
 Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecoveryLiveTests` 各 1 项，共 2 项。
 相邻 Git Worktree／Ref：`GitWorkspaceSSHTests` 2 项；项目索引 `ProjectFileIndexTests` 1 项。
@@ -368,7 +372,7 @@ Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecove
 阶段审计实际开始才生成 `audit-p4.md`。
 
 **Uncovered：**
-真实旧系统、未授权 Windows SSH、无法取得独占图形会话、
+真实旧系统、Windows SSH 可达性、系统 GUI 自动化认证、
 资源安全上限、其它项目仍执行的大文件分段功能，
 必须分别说明是阻塞当前 Diff 本身还是跨 feature 非目标；
 不能用“宿主 0 失败”统一抹掉。

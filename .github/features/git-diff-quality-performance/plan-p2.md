@@ -58,6 +58,9 @@
    从文首枚举到 viewport；优先用当前 Diff 内容版本的 LF UTF-16 行起点反查 Git 行号，
    `NativeTextLineIndex` 仅用于确定 AppKit 自然段落，不得把裸 CR／Unicode 段落算作 Git 行；
    不得每帧扫描文首前缀。
+   P1 主线程采样还发现 `NSTextContentStorage.updateRangesForTextElement` 的大量占用，
+   与整篇布局后缓存的段落维护有关；须核对消除全文布局后普通编辑的实际变化，
+   不能只移走 `ensureLayout` 调用而保留同等规模的缓存维护。
    `hasNativeNonLFSeparators` 的编辑后全文扫描也应在相同任务依原生变化范围收敛，
    不增加第二套全文缓存。
 3. **仅在正确的新几何路径通过 Red→Green 后**，删除被替代的
@@ -116,6 +119,8 @@ P2-T4 和 P4-T2 仍须真实 Bailey Dev。
    测试旧路径的零参 `onCharacterEdit` 如何迫使 `DiffNativeSurface.editTextDidChange`
    读取 `textView.string` 和 `DiffTab.updateEditedContent` 进行全 UTF-8 比较；
    不预断 getter 一定复制内存，要分别测桥接、扫描、分配与触发次数。
+   P1 已测 getter 约微秒级，100k 行文末完整 UTF-8 比较约 136 ms（Debug）；
+   此任务应消除已证实的整串判定，而不是宣称已证明 getter 大块复制。
    断言必须从真实原生存储变化进入，不能只直接调用 ViewModel 方法。
 2. 在有前置通知时复用文件编辑器已验证的
    `shouldChangeTextIn(range,replacement)` 采样与变更后回调；
