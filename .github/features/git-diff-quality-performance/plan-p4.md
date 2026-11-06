@@ -154,6 +154,10 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
    若是产品或测试代码问题，回对应 owner 做 Red→Green 并重跑；
    如果只有系统合成失败证据，不修改产品添加 sleep、盲目重发或强制抢焦点。
    无法归因且仍不稳定时明确留作阻塞，绝不能因下一次绿色而抹去。
+   P1 另有一次 Peekaboo `⌘Z` 回执成功但后续部分 AX 正文出现 `Q z`、
+   未观察到撤销的现象，且之前 `type` 回执失败但输入实际生效；
+   需用独立 XCTest 验证真实命令键、第一响应者与完整正文／Undo／Redo，
+   排除自动化注入及输入法因素，证据见 `evidence-p1-status-events.md`。
 
 **验证：**
 `make build:ui` 仅负责确认 target 可编译，随后使用
@@ -268,13 +272,20 @@ Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecove
    重新跑完整性能测量；只在相同硬件和同参数下比较改动前后。
 2. **分别**记录文件事件→Git 状态核心→详情→Changes 行出现，
    以及鼠标／键盘点击已显示行→Diff 首像素→真实可输入→语法色稳定。
-   同时按最早 24k 行基线重新核对模型 Staged 199.1 ms／Unstaged 242.9 ms、
-   P95 351.2／328.5 ms 是否在同硬件相同快照下改善，
+   原始 24k 模型基线 Staged 199.1 ms／Unstaged 242.9 ms、
+   P95 351.2／328.5 ms 是旧版本的参考，不得跨配置直接比较。
+   P1 同机 Release 24k 各 30 次热态组件像素 P95 为 Staged 199.9 ms、
+   Unstaged 933.1 ms；100k 各 30 次为 228.3／2634.9 ms。
+   必须固定与对应 P1 记录相同的文件内容、构建、字体、布局和窗口重新测，
    不以 Git 进程少了却实际可见时间不变冒充成功。
    `GitStatusModel.refresh`、Changes 选择计算、Git IO、DiffCore、投影、
    TextKit 布局、WindowServer 显示分开计时；
    1／100／10k 级状态项，1k／24k Staged／Unstaged 至少 30 次热，
    冷启动、首次挂载、历史与 SSH 分开统计，不能把 400 ms 事件 debounce 算进单击耗时。
+   P1 真实冷 Dev 窗口仅有 5–7 FPS 的采样区间，
+   不能据此声称精确首像素／首次可输入；同一二进制的 Split 新组仅
+   Staged 16、Unstaged 15 次独占有效采样，旧组各 29 次且版本不同。
+   P4 应取得独立可靠帧时间与键盘可用证据，避免混算不兼容样本。
 3. 输入文首／中／末、不同折叠数量、普通字符与换行、Undo、IME、
    有/无 Neon、主题重绘、窗口改变、滑块拖动、17 次远跳、
    **无变更非折叠深处滚动的前缀枚举、编辑后非 LF 标记全篇扫描**、

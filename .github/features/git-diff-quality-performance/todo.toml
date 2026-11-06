@@ -1,13 +1,14 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = "P2-T3"
 
 [[tasks]]
 id = "P1-T1"
 title = "建立 Git Diff 全链路体验与性能基线"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "P1 1k/24k Staged/Unstaged 30次模型/Native布局/像素、100k输入和24k隔离Dev窗口首帧/折叠已实测；2026-11-06真GUI WorkspaceGitUITests 7项6通过1项SSH跳过、0失败，Find E2E通过。windows/wincrh均禁用master独立连接超时，Mac Tailscale已停止；剩余冷/Release真实首帧、可输入分时及进程/heap证据，见evidence-p1.md。"
+no_commit_reason = "该任务是隔离基线测量：常规可维护测试已在前期提交；新100k实验与GUI帧捕获仅保留本地feature证据和忽略的build补丁，未修改产品代码"
+note = "2026-11-06 技术基线已交付：Debug/Release各1k、24k Staged/Unstaged 30次热态，以及100k各30次模型/原生/组件绘制，FSEvents 1/100/10k状态项各30次、5MiB±1真实读取、20标签原生内存、真实Git子进程滞留与授权Windows IO/GUI/恢复独立证据。GUI冷进程旧独占Split各29次，新同二进制Split Staged16/Unstaged15，5–7 FPS只可作首个完整像素采样区间；不等于精确WindowServer首像素/首次可输入，明确移交P4-T2/T4。原生准确快速几何尚未Go，P2-T1保留全文保护，见idea.md技术准入与evidence-p1*.md。当前HEAD make build验签及make test 856项0失败16跳过（同构建配置）。"
 
 [[tasks]]
 id = "P1-T2"
@@ -16,7 +17,7 @@ status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = ""
 no_commit_reason = "探索任务仅更新本地feature计划与证据；失败原型已保存于忽略的build目录并从测试目标移除；生产代码无变更"
-note = "24k LF真实固定15pt高，TextKit估算481215pt、真实360000pt；系统scrollRangeToVisible及单段ensureLayout均4/17准确14/17可见，layoutQueue等待后4/17准确；CodeGraph/SDK、折叠跳段、CR/Unicode ghost和单段owner失败输入已归档，No-Go，P2-T1实施前需先建立同一布局所有者的17远跳正确原型。现有4项滚动宿主测试通过0失败，见evidence-p1.md。"
+note = "24k LF真实固定15pt高，TextKit估算481215pt、真实360000pt；系统直接定位和单段布局未达标。原生重定位17/17准确但最差83ms；同一storage临时跳过前缀、恢复前后调整和局部布局均仅16/17准确，最差155–163ms。No-Go，P2-T1需先证明17次深跳且满足预算；见evidence-p1.md与evidence-p1-textkit-transient.md。"
 
 [[tasks]]
 id = "P1-T3"
@@ -32,39 +33,40 @@ title = "分析 Git 快照子进程与语法派生真实成本"
 status = "completed"
 plan = "plan-p1.md#p1-t4"
 commit = "9111b61a"
-note = "已完成真实1k/24k元数据、size/blob/batch各30次延迟与字节校验；HEAD/Index跨代读取反例b2d63928；密集399/400/401词元1/100/1000对耗时，1000对400词元38.17秒，宿主峰值RSS181680KiB，取消后约3.7秒才退出644d2aa9；可见语法区间缓存全篇校验36ms；Git stdout本机/SSH假后端8MiB在1KiB限额仍完整接收、stderr1MiB无界，10项测试通过；见evidence-p1.md。Windows实际SSH RTT不可达，P4-T3核销；P3-T1/T3/T4实施和独占heap分配由各任务负责。"
+note = "已测真实Git对象读取、跨代Staged反例、密集逐词投影与取消、语法缓存成本，以及本机/假远端输出预算缺口；详见evidence-p1.md。windows现已连接，状态刷新另见evidence-p1-process-lifetime.md；真实SSH对象延迟、P3实施和独占heap由后续任务核销。"
 
 [[tasks]]
 id = "P1-T5"
 title = "固定预算技术决定与生产阶段准入"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t5"
 commit = ""
-note = ""
+no_commit_reason = "仅修改feature需求与实施计划，按executing-plans约定保留本地，不单独提交Git；无生产代码变动"
+note = "2026-11-06 技术决策已写入idea.md及P2/P3/P4：TextKit现有快速几何No-Go；增量编辑有条件Go；Git远端输出预算/交错Staged/取消与TextKit真关闭释放必须修；一次性cat-file batch按真实测试做；记录Debug/Release的24k/100k模型/组件分时与冷窗口采样限制。P2-T1未经准确17跳+100k成本证明不得删除全文布局。验证todo validate、git diff --check；前一轮当前HEAD make build及856项host 0失败16跳过。"
 
 [[tasks]]
 id = "P2-T1"
 title = "修复原生首帧布局和滚动几何的共同根因"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = ""
+note = "技术准入尚未满足：TextKit估算滚动仅4/17准确，relocateViewport在100k最慢310ms，折叠隐藏元素原型只证局部布局。未证明单一TextKit owner能同时满足17次深跳+真实完整滚动范围+100k热视口32ms；按plan-p2.md Gate保留全文布局，先推进独立P2-T2。"
 
 [[tasks]]
 id = "P2-T2"
 title = "消除逐键正文全量回读及重复判定"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "ee85f511"
+note = "2026-11-06 Git Diff原生编辑通过UTF-16真实前后变更判脏并推迟全文快照到防抖/保存；程序化Git正文载入不再误触发用户编辑；移除updateEditedContent旧整篇路径。make test共857项/16远端跳过/0失败，Make退出0；make build严格验签通过；真实Bailey Dev WorkspaceGitUITests键盘编辑/⌘Z/⌘⇧Z/⌘S 1项通过，退出0。100k Swift文首输入P95 560.67ms仍不达标，几何优化P2-T1保持No-Go，不归功于本任务。见evidence-p2.md。"
 
 [[tasks]]
 id = "P2-T3"
 title = "统一实时折叠编辑坐标和手动展开行为"
-status = "pending"
+status = "in_progress"
 plan = "plan-p2.md#p2-t3"
 commit = ""
-note = ""
+note = "2026-11-06 先用CodeGraph审查DiffTab.editGeneration、editBufferRevision、editPresentationRevision、DiffNativeSurface.render及DiffTextView.setEditingFolds，构造编辑前方新行/跨隐藏区域Undo/点击交错120ms防抖的原生失败前提；只针对证实的错误修复，旧坐标映射同提交删除。"
 
 [[tasks]]
 id = "P2-T4"

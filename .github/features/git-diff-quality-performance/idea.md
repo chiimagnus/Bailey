@@ -170,6 +170,87 @@ SSH 认证、Monaco／Electron／WebKit 编辑器替换、LSP、正式发布以�
   仓库最低部署目标不变。没有 macOS 15.6 实机时标明未覆盖，不能声称已实机通过。
 - 纯优化零外观和语义变化；确需改变可见编辑的边界时，以 R3 的用户安全契约和真实测试为依据作出显式决定。
 
+## P1 技术准入与性能预算（2026-11-06）
+
+本节只冻结已验证的技术路线和实施门禁，不表示生产性能问题已解决。
+分阶段原始数据见 `evidence-p1.md`、
+`evidence-p1-100k-hot.md`、
+`evidence-p1-process-lifetime.md` 和 `evidence-p1-textkit-transient.md`。
+
+**基线分开比较：**
+
+| 条件 | Staged 模型／组件像素中位 | Unstaged 模型／组件像素中位 |
+| --- | --- | --- |
+| 24k Release，30 次热态 | 178.9／187.6 ms | 278.7／797.7 ms |
+| 100k Debug，30 次热态 | 432.2／440.1 ms | 531.3／5393.0 ms |
+| 100k Release，30 次热态 | 163.5／171.2 ms | 280.7／2502.2 ms |
+
+24k Release Unstaged 组件 P95 为 933.1 ms，100k Release 为 2634.9 ms。
+它们是**离屏 NSWindow 的组件像素**，不是 WindowServer 的实际首像素。
+真实冷进程 Split GUI 旧组因构建重叠剔除 3 次后各 29 次；
+新同二进制组 Staged 16 次、Unstaged 15 次，低帧率采集只有上下界。
+不同二进制、Unified 与 Split 不得合并计算 P95；
+高帧率真实首像素、首次可输入、语法色稳定另由 P4-T2／T4 核销。
+不凭不准确的捕获上界发明绝对首像素预算。
+首屏必须在**相同二进制配置、Git 夹具和真实窗口**下同时改善中位与 P95，
+不得牺牲完整滚动几何；首次展示不能再同步布局整篇。
+
+**TextKit 方案：当前 No-Go，先证明再换。**
+纯 LF 24k 行固定 15 pt 时，未布局全文的原生估算高度 481,215 pt，
+实际应为 360,000 pt；系统直接滚动或单段布局仅 4/17 次准确。
+`relocateViewport` 虽能在 17/17 次恢复位置，
+100k 行单次重定位中位约 181 ms、最慢约 310 ms，仍达不到热视口 32 ms。
+折叠时跳过隐藏 `NSTextElement` 的单一存储实验把
+24k 布局从约 253 ms 降为 50 ms，但没有覆盖未折叠末行、
+Undo、IME、Find、Ghost 和 100k 反复远跳。
+P2-T1 先在现有 TextKit 所有者验证全部 17 次深跳、
+完整滑块范围和真实末行，再测 100k 热视口／编辑；
+通过前保留 `ensureLayout(documentRange)`，不引入第二个文本缓冲或定时补全。
+P1 的 No-Go 是**已有快路径不可放行**，不是 Apple TextKit 2 一概不可行。
+
+**可进入实现的已有证据与否决边界：**
+
+- **编辑增量：有条件 Go（P2-T2／T3）**。原生编辑已有替换范围；
+  Worktree 零参事件将它丢失，导致每次输入再次取全文并比较。
+  100k Swift Debug 文首输入 P95 约 469 ms；Release 仍约 489 ms，
+  高于 32 ms 目标。复用现有原生变更入口，Undo/IME/保存失败保持完整字节。
+  普通点击不展开；显式 `⌘A`、Find／Replace 可以操作隐藏原文，
+  不能擅自改成“只选择可见字符”或禁止系统命令。
+- **Git 输出完整性：必须修复（P3-T1）**。
+  `stdoutLimit` 的远端后截断在源码和受控实验中证实；
+  超限需要接收端拒绝并报告错误，不能发布残缺 Blob／patch。
+  锁定 OID 后的 size + blob 本机中位合计约 47 ms，
+  一次性 `cat-file --batch` 约 19 ms；可验证后替代两次启动，
+  但不能跳过 HEAD/Index 元数据或不可并行的 hash→diff。
+- **Git 快照／后台资源：必须修复（P3-T2／T3）**。
+  交错读取完整的 HEAD／Index OID 可拼接出虚假的 Staged 变化。
+  关闭慢 Worktree Diff 后，五个独立 Git/filter 仍可继续运行，
+  不可只靠 `reloadGeneration` 阻止结果写回。
+- **高亮／投影：按已证热点收敛（P3-T3／T4）**。
+  1000 对 400-token 密集逐词替换约 37 秒，取消仍有延迟；
+  24k Swift 可见捕获热查询一次约 37 ms，
+  主要是重复整篇 `utf8.elementsEqual`（独立中位约 36 ms）。
+  稀疏约 0.17 ms 不代表密集；不重建第二套解析器。
+- **内存／退役：必须修复（P2-T4、P4-T4）**。
+  人为缓存旧原生滚动视图时仍持有已关闭 Diff 正文和语法资源；
+  对确认真正关闭的布局管理器做 detach 消融后，
+  五标签宿主在用 malloc 约 386→65 MiB。
+  退役只发生在关闭所有权时；Dock 临时重挂载必须保留 Undo。
+- **不删除的边界**：`showsCanonicalComparison`、OID/patch 校验、
+  symlink 拒写、失联只读、保存队列和任务身份都有现实消费者。
+  已删除的 `hasCollapsedContext`、`afterGitAction`、旧 Review/Edit
+  不能再列为待清理任务；只在新路径取代老路径时同任务删除冗余。
+
+**后续归属与门禁：** P2 独占原生布局／编辑／折叠／AX／真关闭；
+P3 独占 Git IO、快照、取消及语法成本；P4 核销
+`idea.md` 的全部来源、文本、环境、UX、失败与生命周期组合，
+以及当前 HEAD 的 Release／Debug、整机 GUI／Windows SSH 验收。
+当前 `adaptive-large-files` 只有规划授权，
+不复用其尚未落地的代码，也不在本 feature 自行实现 GB 数据模型。
+原生输入 P95 ≤16／100k P95 ≤32 ms、折叠热视口 Debug P95 ≤32 ms、
+滚动帧和主线程连续占用目标 16.7 ms 均沿用 `docs/testing.md`；
+**未达标时不能因为宿主测试全绿就放行生产。**
+
 ## 验证条件全集（所有任务分摊核销）
 
 | 维度 | 必须识别并尽可能执行的取值与组合 |

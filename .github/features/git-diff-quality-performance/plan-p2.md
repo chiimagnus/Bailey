@@ -1,7 +1,8 @@
 # P2：原生首屏、可写缓冲与折叠交互收敛
 
-**Goal：** 以 P1 验证过的原生路线消除首次全文同步布局和每键全文搬运，
-同时保持工作区唯一可编辑缓冲、折叠手动展开与完整原生交互。
+**Goal：** 先在同一 TextKit 2 所有者中证明可放行的准确快速几何，
+再消除首次全文同步布局和每键全文搬运，保持唯一可编辑缓冲、
+手动折叠展开与完整原生交互。P1-T2 尚未找到可放行的布局快路径。
 
 **Non-goals：** 不重建 Monaco／STTextView，不删除底层 Git 快照校验，
 不改动通用 Files／Dock 风格，不在此 phase 把 GB 文件引入内存。
@@ -21,7 +22,9 @@
   AX、两轴滚动一致；重挂载后仍是同一原生对象。
 
 **Rules：**
-- P1-T2、P1-T3 未有合格的实验决定前，对应实现 task 不准开始。
+- P1-T2 已对现有原生视口估算／单段布局／重定位路线判定 No-Go；
+  P2-T1 不得直接删全文布局保护。P1-T3 的原生增量通知已有 Go 证据，
+  但 P2-T2／T3 仍须独立 Red→Green。
 - 纯性能改造不得改颜色、字体、文本／选区语义；需要可见行为决定时依据 `idea.md`。
 - 正式 Bailey 不在开发测试期间启动、停止或替换；只用 Bailey Dev 与隔离 Git 文件。
 - 每个 task 以当前适用的源码/测试 Red→Green→Refactor，
@@ -52,12 +55,20 @@
    未完成全篇布局时估算内容高度约 481,215 pt，真实高度 360,000 pt；
    `scrollRangeToVisible` 与单段 `ensureLayout` 仅 4/17 次全局坐标准确，
    `layoutQueue` 不能恢复准确性。不得再把这些路线直接接入生产。
+   同一 storage 在重定位时临时跳过前缀的反证也仅 16/17 次坐标及可见性正确，
+   恢复枚举前后调整 viewport 或局部布局均未修复首个远跳；见
+   `evidence-p1-textkit-transient.md`，不得当作已通过的新路线。
    先在同一个 TextKit 布局所有者内，证明可同时给出准确的滚动高度、
    视口片段、17 次远跳和尾行真实命中，最小原型用纯 LF 无 ghost 的 24k 行。
    未取得可验证原型时，保留现有全文布局保护，暂停该实现 task，
    其它不依赖几何改造的任务继续；不能制造第二个可写缓冲或以定时补全冒充正确。
    原型通过后再扩展 CR／Unicode／折行／ghost 等可变几何，
    不预先搭建两套布局引擎。
+   已有跳过折叠隐藏 NSTextElement 的受控实验只有
+   24k／120 折叠时 253→50 ms 的布局收益；该方案仅能作为原型入口，
+   不得当成未折叠路径或 Undo／IME／Find 已验证。
+   将 100k 重定位最差约 310 ms 与热视口 32 ms 目标直接对照，
+   不接受把 O(文档规模) 等待从首帧转移到首次远跳。
    先写宿主 Red：首次可见前时间、未滚动时已完整的原生滚动范围、
    滚动条多次直达末尾后不缩短、末项正文与删除 ghost 的真实命中。
 2. 把可测的高度／折叠／行片段尺寸归属保持在 `DiffCodePaneView` 与原生 TextKit，
@@ -178,7 +189,7 @@ P2-T4 和 P4-T2 仍须真实 Bailey Dev。
 也不因旧坐标误删或误着色隐藏段落。
 
 **Files／实际路径：**
-`DiffTab.expandRun/refreshEditDecorations/updateEditedContent`、
+`DiffTab.expandRun/refreshEditDecorations/nativeTextDidChange`、
 `DiffEditFold.sourceFolds`、
 `DiffTextView.setEditingFolds`、
 `DiffCodePaneView.setEditingFolds/applyGhostSpacing`。
@@ -272,6 +283,11 @@ P4-T2 补验，禁止擅自改动用户剪贴板。
    若复现保留问题，只在**真正所有权结束**的最小 owner 退役旧原生内容，
    解除 ScrollView documentView 强引用、禁用过期回调与 Undo／语法任务；
    在替代链生效的同一 task 清理旧残留，不新增全局 native-resource manager。
+   P1 的 5 标签反证还发现：旧编辑器已释放 60 秒后，原始 TextKit 布局 manager
+   仍全部存活；受控实验在真正关闭后从原 content storage 移除 manager，
+   可以释放它们及相应在用内存。不能只断言旧 NSTextView 已释放就算完成。
+   须沿 `NativeCodeTextView` 共享创建链验证生命周期和 Files 编辑器影响，
+   用原生对象弱引用与内存证据确认释放，不直接把实验性拆解顺序当成生产实现。
    SwiftUI 临时 `dismantleNSView`／Dock 重挂载**不得**触发退役，
    切回时同一 TextKit/Undo/滚动原对象必须仍可操作。
 

@@ -126,8 +126,88 @@ Unstaged 原生布局和组件绘制仍主导等待；本表不等于 WindowServ
 两次捕获的帧率实际只有 4.34／3.99 fps 且出现 `lowFps` 警告；
 **它们是初次点击后观察到完整绘制的时间上界，不是精确首次像素或 P95**。
 它们确认真实完整窗口绘制明显慢于宿主“模型可用”。
-仍需使用无漏帧的高频手段和至少 30 次重复测量；
-此项未核销 P1-T1 的真实用户可见 P95，更不能据此声称性能达标。
+原始单次样本无法形成用户可见 P95；同机补充的 61 次来源正确的冷会话中，
+有 3 次与另一轮构建／测试重叠，不能计作独占性能样本。
+下面分别记录真正的有效样本和采样误差，不将上界冒充精确首帧或输入就绪。
+
+**真实窗口独立冷 Dev 会话完整补测（2026-11-06）：**
+每次以新进程启动隔离 `Bailey Dev` 和同一 24k 行一次性 Git 仓库，
+先进入 Git，再点击 Changes 中 Staged 或 Unstaged 的 `latency.swift`。
+使用 Peekaboo `capture action --no-remote --capture-engine cg` 的
+原始帧时间戳，分别以真实 AX `bailey.diff.readonly-new`／
+`bailey.diff.worktree` 确认最终打开的来源。
+后两轮采集使用明确的进程 PID，测试期间排斥共用 Dev 构建锁，
+并固定／检查每轮 App 二进制指纹；四轮的来源正确样本为 8、15、4、34。
+经 `evidence-p1-status-events.md` 的实际命令启动时刻交叉核对，
+其中第二轮 `sample-01` 至 `sample-03` 与构建／测试重叠。
+剔除后旧组有 **58 次独占采样，Staged／Unstaged 各 29 次**：
+
+| 来源 | 有效样本 | 首次完整正文采样帧上界中位数 | P95 上界 | 最差上界 | P95 前一帧下界 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Staged | 29 | 721 ms | 821 ms | 824 ms | 670 ms |
+| Unstaged | 29 | 1544 ms | 1640 ms | 1647 ms | 1502 ms |
+
+**本轮独立补测（当前 Dev 二进制指纹 `7a1ded05...`）：**
+按原样重建 24,000 行 `let rowN = N` 文件、Git Index 第 100 行改动、
+Worktree 第 12,000 行改动；磁盘基线／Index／Worktree 分别为
+481780／481779／481776 UTF-8 字节，Worktree 的 AX 字节长度与旧组一致。
+用仅限 Bailey Dev 的布局偏好临时选择 Split，并在测试结束后明确恢复
+测试前的 `unified`；正式 Bailey 偏好没有修改。
+首段 4 次脚本本身输出 `COMPLETED=4`，但其外层 zsh 包装命令误用只读
+`status` 变量，最终退出 1；保留四行原始 CSV，不把外层命令误写成退出 0。
+随后同一二进制、同一夹具的 60 次任务在第 28 次遇到 Peekaboo 报错：
+`Window not found: live capture window changed identity before frame capture`。
+点击在派发前被拒绝；不作为性能或产品失败，不盲目重试。
+两段实际得到 **Staged 16 次、Unstaged 15 次**，同二进制指纹一致：
+
+| 来源 | 有效样本 | 上界中位数 | P95 上界 | 最差上界 | P95 前一帧下界 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Staged | 16 | 758 ms | 873 ms | 873 ms | 732 ms |
+| Unstaged | 15 | 1549 ms | 1760 ms | 1760 ms | 1609 ms |
+
+另外 6 次默认 Unified 夹具（各来源 3 次，来源／截图正确）
+由于布局、正文变更位置不同，不混入以上 Split 数值。
+旧、新 Split 组的二进制指纹也不同，尽管生产源码未修改，
+不将两个组强行合并伪造单二进制 30 次 P95。
+当前需要每个 Split 来源再各补至少 14／15 次独占有效采样。
+
+采样帧率实际约 4.64–6.99 FPS（新组约 6.04–6.91 FPS），
+以首帧 PNG 与当前帧的正文大小变化确定首次完整 Diff 采样帧；
+已人工核查 Staged 与 Unstaged 代表样本的前一帧确实仅为加载骨架，
+后一帧真实显示修改代码、正确折叠标记及行号。
+因此旧组 P95 的**可观察采样区间**分别约为 670–821 ms、
+1502–1640 ms，新组分别约为 732–873 ms、1609–1760 ms，
+而不是毫秒精确的真实首帧时间；新组样本不足计划的每来源 30 次。
+未暂存 Diff 的显示时间明显高于已暂存，并且在不同冷会话中稳定复现；
+这不是 `DiffTab` 模型或宿主像素就绪时间，
+也不证明真实键盘可输入或最终语法色稳定。
+
+有一次第 16 次启动仅通过 AX 取得菜单栏
+（`semantic_scope=application_partial`，无 `snapshot_id` 和 Dock），
+窗口仍在清单；该次**无效样本已排除**，
+同期存在独立 Dev XCTest，是否是竞争造成仍未证实，
+不得据此判定产品必然发生启动故障。
+所有有效会话逐次核对了来源，异常没有被伪造为慢样本或正常通过。
+
+原始旧组结果 `build/git-diff-p1-30gui-cold-{1793936787,1793936862,1793937267,1793937336}/results.csv`；
+新组 Split 为 `1793946373`／`1793946471`，Unified 为 `1793946148`，
+均具有单独的 `results.csv` 与 `capture/` 原始窗口 PNG。
+第 28 次拒绝的回执在 `1793946471/sample-28/capture-output.txt`。
+每个目录含实际 `action.json`、`metadata.json` 及可核对的完整结果。
+第 16 次无效记录见第二轮 `sample-16/home-ax.json`。
+测量脚本位于忽略的 `build/git-diff-p1-30gui-cold-bench.sh`，
+未变更生产代码或正式 Bailey。
+仍需以更高帧率补全精确首次像素／可输入时点、
+独立 GUI 多标签内存、关闭后资源及特殊文本组合；
+不得把本次 P95 采样上界当作产品性能达标。
+P1-T1 仍在进行中，尤其缺少高帧率 WindowServer 首像素／可输入分时。
+
+**十万行 Debug／Release 独立热态补测：**
+在 100k 行真实 Swift Git 临时仓库按 Staged／Unstaged 各做 30 次，
+原生组件像素累计中位数分别为 Debug 440／5393 ms、
+Release 171／2502 ms；两种构建均实际执行 1 项、0 失败、退出 0。
+原始每组中位／P95／最差、字节条件和一次性测试源码保存位置详见
+`evidence-p1-100k-hot.md`；本实验不是 WindowServer 首像素。
 
 ## 原生输入与 Undo 的真实副作用
 
@@ -650,8 +730,23 @@ Release 并未使文首输入恢复预算，不能用优化构建掩盖 TextKit 
 随后路径校验拒绝继续，未创建或清理任何远端用户目录。
 1 项、2 处失败，Xcode 退出 65，Make 退出 2。
 日志：`build/git-diff-p1-windows-live-attempt.log`。
-因此 Windows 的 Git／clean／保存语义未被实机验证；
-已经获授权，实际缺少的是可达连接，不再要求用户重复授权。
+因此**在当次连接超时的时间点**，Windows 的 Git／clean／保存语义未被实机验证；
+已经获授权，不再要求用户重复授权。
+
+**后续实机恢复与独立验收（同日）：** 用户明确授权开启 Tailscale 后，
+禁用 SSH master 的 `windows` 连接恢复，`wincrh` 仍超时。
+独立 Windows Diff／clean filter／原文写盘和 Git 字节测试 1 项通过，
+`build/git-diff-p1-windows-live-connected.log`；
+完整 `WorkspaceGitUITests` 在独占桌面下 7 项通过、无跳过，
+`build/git-diff-p1-windows-ui-full-class-exclusive.log`；
+真实远端故障注入与快照恢复 1 项通过，
+`build/git-diff-p1-windows-recovery-benchmark.log`；
+真实远端轮询／外部提交及取消验证 3 项通过，
+`build/git-diff-p1-remote-refresh-windows-class.log`。
+相关 GUI 与 SSH 夹具修复提交为 `33348f07`、`3c98b438`、`82d17ea8`。
+完整测试前提、先前失败、隔离清理和实测范围见
+`evidence-p1-process-lifetime.md`；这些成功**不等于**物理网络断连、
+所有 SSH 来源、在途旧 Git 子进程取消或高帧率 GUI 已验收。
 
 ## GUI 认证历史失败与最新恢复
 
@@ -688,15 +783,22 @@ Runner 采样停在 `enableAutomationModeWithError`；
   不以组件像素或一次 GUI 通过代替 WindowServer 首帧与完整用户路径性能验收。
 - 最低 macOS 15.6 和其它显示比例：本机没有相应系统／显示硬件；
   只保留最低部署目标，不声称旧系统实机通过。
-- Windows SSH 的真实 OID／保存、传输预算、RTT、断线恢复：
-  已授权但现有两条独立连接超时；本机／受控后端不能替代，阻塞对应远端验收。
-- Debug／Release 已完成 1k／24k Staged／Unstaged 的各 30 次组件热态基线，
+- Windows SSH：`windows` 已恢复独立连接，真实 Git clean／原始字节保存、
+  完整 Git GUI 7 项、受控故障恢复和轮询测试各有独立通过证据；
+  `wincrh` 仍不可达，真实物理断线、在途 Git/SSH 进程取消、全来源与传输预算
+  仍未验证。连接成功不能替代这些远端验收。
+- Debug／Release 已完成 1k／24k 及额外 100k Staged／Unstaged 的各 30 次组件热态基线，
   1／100／10k 未跟踪状态项已分别实测核心和详情；
-  冷进程真实首屏、100k 折叠与长行、5 MiB 边界、全部来源／混合换行、
+  真实冷进程窗口已有低帧率分组记录，但同二进制 Split 每来源少于 30 次，
+  高帧率首像素／可输入、100k 多折叠与长行、5 MiB 边界、全部来源／混合换行、
   17 次**准确**远跳、字体／主题／滚动条组合仍未核销。
   不能用单次状态事件、失败原型或当前全量宿主通过冒充这些条件已通过。
-- 1／5／10／20 标签长期 heap／RSS、真实关闭后缓存旧 NSView、底层进程取消：
-  已沿 owner 读到源码不对称，尚未完成新的资源断言与 Allocations 验收。
+- 1／5／10／20 标签：20 个 24k 行独立原生 Diff 的瞬时 malloc／RSS
+  已实测；关闭后故意保留 `NSScrollView` 时仍持有文本／Neon，
+  原始布局 manager 在视图释放后仍可存活，针对性 detach 消融成功释放。
+  尚未完成产品真正关闭、重挂载与持续时间的 retained heap／Allocations 验收；
+  旧 Git 子进程取消已复现五次关闭可堆积，不表示已修复。
+  详细结果见 `evidence-p1-process-lifetime.md`。
 - Staged HEAD／Index 交叉变化、缓慢超预算 stdout／stderr、编辑前方换行与隐藏选区：
   原有测试不等于新前提已建立，仍需分别构造，不能先宣称恢复不变量。
 
@@ -704,9 +806,11 @@ P1-T5 的预算和生产准入尚未冻结；P2／P3／P4 没有实施完成。
 
 ### 16 项 SSH 跳过的具体归属
 
-本机完整套件没有注入离线远端参数，跳过不是未获用户授权。
-已授权目标的独立连接超时，故以下各自的远端副作用均不能由本机绿色替代。
-补验统一前提是专用连接实际可用，再传 `BAILEY_P4_TEST_SSH_HOST=windows`；
+本机完整套件没有注入远端测试主机变量，跳过不是未获用户授权。
+`windows` 现可独立连接，部分指定测试已另外通过；
+**未指定主机的全套件中其余跳过仍是跳过**，不能直接算通过。
+补验需核对每种测试的专用远端目录校验和清理后，
+明确传入 `BAILEY_P4_TEST_SSH_HOST=windows`；
 每项均保留在对应任务验收中，不算完整通过。
 
 - `GitInteractiveRebaseIntegrationTests.testAuthorizedSSHInteractiveRebaseUsesIndependentHandshakeForPinnedAndAutomaticProjects`：独立握手与远端交互重排。
