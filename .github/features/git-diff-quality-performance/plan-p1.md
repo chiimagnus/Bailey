@@ -231,11 +231,19 @@
    区分隐含“只改看得见的东西”和用户显式发出的全文命令；
    保持系统 `⌘A`、Find、Undo 的基本习惯，
    不以粗暴禁止全部隐藏区内容换取一条测试变绿。
-4. 记录 Red 的真实磁盘和隐藏原文字节及折叠状态；
+4. 实机与窗口级源码共同确认：`WorkspaceWindowModel.canFind/canReplace`
+   仍按旧“Diff 只读”模型禁用原生 Find，`performFindAction` 也忽略 `.diff`。
+   这使 P1 无法验证真实 Find/Replace 输入语义；将**现有原生查找栏的菜单接线**
+   作为本任务必要的测试前提先 Red→Green 修复，复用 FileTab 的
+   `NSTextFinder` 行为和当前可见 Diff TextKit pane，
+   覆盖 Staged／历史只读、Worktree 可编辑、Split 焦点和切回隐藏 pane。
+   不在此重写折叠坐标或另造查找引擎；新的可达 Find 的复杂隐藏区作用域
+   仍归 P2-T3。测试及生产的最小改动原子提交并同步实际文档。
+5. 记录 Red 的真实磁盘和隐藏原文字节及折叠状态；
    P2-T2／P2-T3 按事实分别收敛输入成本与编辑边界。
    若原生 API 无法提供足够变更信息，说明替代成本和数据竞争边界，不先复制整套 buffer。
 
-**验证：** `make test:NativeDiffTabTests,NativeEditorCompositionTests,TextCoordinateIndexTests`；
+**验证：** `make test:NativeDiffTabTests,NativeEditorCompositionTests,TextCoordinateIndexTests,WindowOwnershipIntegrationTests,FileTabPersistenceTests`；
 组合窗口内光标、不同插入位置、折叠状态、Undo、失败保存的真实输出。
 100k 短行须在当前 5 MiB 内构造；
 对照 Debug／Release 输入 P95 与正文字节不变性。
@@ -336,8 +344,7 @@
    `DiffComputation.build` 约 0.17 ms 时不得投入大重构。
    远端无效 `stdoutLimit` 属**已由源码证明的正确性缺口**，不能与可选的 `cat-file` 优化同级。
    同时交付 CodeGraph 调用者核对后的删改分类：
-   例如 `DiffDisplay.hasCollapsedContext` 仅有一个宿主测试读者，
-   可在相关实现 task 直接以 `DiffComputation.unified.rows` 断言替代；
+   当前 `DiffDisplay` 已没有 `hasCollapsedContext`，不再把已删除的旧字段列为待清理；
    `showsCanonicalComparison`、OID 校验、symlink 拒写及保存／请求代次必须保留。
    仅有想象的性能收益或尚未复现的问题不得强制产生生产改造。
 5. 分配 `idea.md` 覆盖全集的每个适用值给 P2／P3／P4，

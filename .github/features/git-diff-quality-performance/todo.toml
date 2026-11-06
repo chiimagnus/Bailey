@@ -1,37 +1,38 @@
 version = 1
-current_task_id = "P1-T4"
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "建立 Git Diff 全链路体验与性能基线"
-status = "blocked"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "已提交分阶段基线2dc1a37a及挂载修复9eb27356；最新65152f3d全量849项0失败、16 SSH跳过，Debug/Release构建验签及Release四项通过。完整App基线被系统Automation Mode交互认证阻塞；授权Windows实测连接超时，非缺少用户授权。详见evidence-p1.md。"
+note = "P1 1k/24k Staged/Unstaged 30次模型/Native布局/像素、100k输入和24k隔离Dev窗口首帧/折叠已实测；2026-11-06真GUI WorkspaceGitUITests 7项6通过1项SSH跳过、0失败，Find E2E通过。windows/wincrh均禁用master独立连接超时，Mac Tailscale已停止；剩余冷/Release真实首帧、可输入分时及进程/heap证据，见evidence-p1.md。"
 
 [[tasks]]
 id = "P1-T2"
 title = "验证 TextKit 完整滚动范围与快速首屏的可行路线"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "原生布局候选实验进行中，尚未取得技术准入"
+no_commit_reason = "探索任务仅更新本地feature计划与证据；失败原型已保存于忽略的build目录并从测试目标移除；生产代码无变更"
+note = "24k LF真实固定15pt高，TextKit估算481215pt、真实360000pt；系统scrollRangeToVisible及单段ensureLayout均4/17准确14/17可见，layoutQueue等待后4/17准确；CodeGraph/SDK、折叠跳段、CR/Unicode ghost和单段owner失败输入已归档，No-Go，P2-T1实施前需先建立同一布局所有者的17远跳正确原型。现有4项滚动宿主测试通过0失败，见evidence-p1.md。"
 
 [[tasks]]
 id = "P1-T3"
 title = "实证编辑事件与隐藏区间编辑语义"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = "fe777a29固定21阶段原生事件与字节；65152f3d新增8种折叠命令/Undo/Redo/磁盘/Index，15项相关测试通过。未把显式设置选区冒充Find UI、Shift扩选、跨折叠拖选或系统IME候选；其余边界仍待核销。"
+commit = "7874801e1643badc16f6d8f885a2b42230af0c05"
+note = "fe777a29/65152f3d固定真实编辑通知与8类折叠编辑/Undo/字节；7874801e接通Diff Native Find/Replace并覆盖只读/焦点；宿主166项0失败1 SSH跳过，真实WorkspaceGitUITests 7项6通过1 SSH跳过。实际Split Git Diff⌘F/⌘⌥F查找栏可达；跨隐藏查找的选区可视、真正中文候选与全文替换仍由P2-T3/P4-T2验收，见evidence-p1.md。"
 
 [[tasks]]
 id = "P1-T4"
 title = "分析 Git 快照子进程与语法派生真实成本"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t4"
-commit = ""
-note = "b0320924对象读取各30次及batch完整性；644d2aa9密集399/400/401×1/100/1000投影与真实取消，Debug约3.7秒、Release约277ms。已证实热点并更新P3，不代表生产修复；输出预算、Staged交叉快照、分配与离散高亮仍未全部核销。"
+commit = "9111b61a"
+note = "已完成真实1k/24k元数据、size/blob/batch各30次延迟与字节校验；HEAD/Index跨代读取反例b2d63928；密集399/400/401词元1/100/1000对耗时，1000对400词元38.17秒，宿主峰值RSS181680KiB，取消后约3.7秒才退出644d2aa9；可见语法区间缓存全篇校验36ms；Git stdout本机/SSH假后端8MiB在1KiB限额仍完整接收、stderr1MiB无界，10项测试通过；见evidence-p1.md。Windows实际SSH RTT不可达，P4-T3核销；P3-T1/T3/T4实施和独占heap分配由各任务负责。"
 
 [[tasks]]
 id = "P1-T5"
