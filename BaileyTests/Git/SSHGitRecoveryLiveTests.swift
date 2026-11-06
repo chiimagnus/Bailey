@@ -23,37 +23,90 @@ private actor InterruptibleSSHRunner: RemoteCommandRunner {
 
 @MainActor
 final class SSHGitRecoveryLiveTests: XCTestCase {
+    private func fixtureRoot(_ result: WorkspaceRunResult) -> String? {
+        guard result.status == 0 else { return nil }
+        let root = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let match = root.range(of: #"^/tmp/bailey-git-recovery-[A-Za-z0-9]{6}$"#,
+                                     options: .regularExpression),
+              match.lowerBound == root.startIndex, match.upperBound == root.endIndex else { return nil }
+        return root
+    }
+
+    func testRemoteRecoveryFixtureRejectsUnownedPathsAndFailedCreation() {
+        func result(_ output: String, status: Int32 = 0) -> WorkspaceRunResult {
+            WorkspaceRunResult(status: status, stdout: Data(output.utf8), stderr: Data())
+        }
+        XCTAssertEqual(fixtureRoot(result("/tmp/bailey-git-recovery-a0B1c2\n")),
+                       "/tmp/bailey-git-recovery-a0B1c2")
+        XCTAssertEqual(fixtureRoot(result("/tmp/bailey-git-recovery-A1b2C3\r\n")),
+                       "/tmp/bailey-git-recovery-A1b2C3")
+        for suffix in ["000000", "zzzzzz", "ZZZZZZ"] {
+            let root = "/tmp/bailey-git-recovery-" + suffix
+            XCTAssertEqual(fixtureRoot(result(root)), root)
+        }
+        for output in [
+            "", "/tmp/bailey-git-recovery-", "/tmp/bailey-git-recovery-abcde",
+            "/tmp/bailey-git-recovery-abcdefg", "/tmp/bailey-git-recovery-abc def",
+            "/tmp/bailey-git-recovery-ab'cde", "/tmp/bailey-git-recovery-ab$cde",
+            "/tmp/bailey-git-recovery-ab\ncde", "/tmp/bailey-git-recovery-ab\u{0}cde",
+            "/tmp/bailey-git-recovery-中文1234",
+            "/tmp/bailey-git-recovery-abcdef/child", "/tmp/../tmp/bailey-git-recovery-abcdef",
+            "/elsewhere/bailey-git-recovery-abcdef", "tmp/bailey-git-recovery-abcdef",
+        ] {
+            XCTAssertNil(fixtureRoot(result(output)), output)
+        }
+        for status in [Int32(-2), -1, 1, 2, 128, 255] {
+            XCTAssertNil(fixtureRoot(result("/tmp/bailey-git-recovery-a0B1c2\n", status: status)))
+        }
+        var invalidUTF8 = Data("/tmp/bailey-git-recovery-abcde".utf8)
+        invalidUTF8.append(0xff)
+        XCTAssertNil(fixtureRoot(WorkspaceRunResult(status: 0, stdout: invalidUTF8, stderr: Data())))
+    }
+
     func testAuthorizedWindowsGitSnapshotSurvivesTransportFailureAndCanWriteOnlyAfterRecovery() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
         }
-        let socket = "/tmp/bailey-git-recovery-\(UUID().uuidString.prefix(8)).sock"
-        let runner = InterruptibleSSHRunner(host: host, socket: socket)
-        let backend = SSHWorkspaceBackend(runner: runner, timeout: 25)
-        let created = try await backend.run(
-            argv: ["mktemp", "-d", "/tmp/bailey-git-recovery-XXXXXX"],
-            cwd: nil, env: nil, stdin: nil, timeout: 25
-        )
-        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
-        let root = String(decoding: created.stdout, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (root as NSString).deletingLastPathComponent == "/tmp",
-              (root as NSString).lastPathComponent.hasPrefix("bailey-git-recovery-") else {
+        let socket = "/tmp/bailey-git-recovery-\(UUID().uuidString).sock"
+        guard !FileManager.default.fileExists(atPath: socket) else {
+            XCTFail("Refusing to reuse an existing SSH socket")
             throw WorkspaceError.notFound
         }
-        func cleanup() async {
+        let runner = InterruptibleSSHRunner(host: host, socket: socket)
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 25)
+        func cleanup(_ root: String?) async {
             await runner.setUnavailable(false)
-            do { try await backend.delete(paths: [root]) }
-            catch { XCTFail("Unable to delete test-owned Windows repository: \(error)") }
-            do {
-                let result = try await Task.detached {
-                    try ProcessRemoteCommandRunner.launch(
-                        sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
-                        stdin: nil, timeout: 10
-                    )
-                }.value
-                XCTAssertEqual(result.status, 0, "Unable to stop test-owned SSH master")
-            } catch { XCTFail("Unable to stop test-owned SSH master: \(error)") }
+            if let root {
+                do { try await backend.delete(paths: [root]) }
+                catch { XCTFail("Unable to delete test-owned Windows repository: \(error)") }
+            }
+            if FileManager.default.fileExists(atPath: socket) {
+                do {
+                    let result = try await Task.detached {
+                        try ProcessRemoteCommandRunner.launch(
+                            sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                            stdin: nil, timeout: 10
+                        )
+                    }.value
+                    XCTAssertEqual(result.status, 0, "Unable to stop test-owned SSH master")
+                } catch { XCTFail("Unable to stop test-owned SSH master: \(error)") }
+            }
+        }
+        let created: WorkspaceRunResult
+        do {
+            created = try await backend.run(
+                argv: ["mktemp", "-d", "/tmp/bailey-git-recovery-XXXXXX"],
+                cwd: nil, env: nil, stdin: nil, timeout: 25
+            )
+        } catch {
+            await cleanup(nil)
+            throw error
+        }
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        guard let root = fixtureRoot(created) else {
+            await cleanup(nil)
+            throw WorkspaceError.notFound
         }
         do {
             func git(_ arguments: [String]) async throws -> String {
@@ -146,9 +199,9 @@ final class SSHGitRecoveryLiveTests: XCTestCase {
                              (sorted[14] + sorted[15]) / 2, sorted[28], sorted[29]))
             }
         } catch {
-            await cleanup()
+            await cleanup(root)
             throw error
         }
-        await cleanup()
+        await cleanup(root)
     }
 }
