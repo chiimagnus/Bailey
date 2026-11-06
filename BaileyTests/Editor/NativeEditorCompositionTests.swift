@@ -52,7 +52,7 @@ final class NativeEditorCompositionTests: XCTestCase {
             editor.delegate = delegate
             var previous = original
             var callbacks = 0
-            editor.onCharacterEdit = { [weak editor] in
+            editor.onCharacterEdit = { [weak editor] previousRange, replacement in
                 guard let editor, let storage = editor.textStorage else { return }
                 callbacks += 1
                 let range = storage.editedRange
@@ -63,10 +63,11 @@ final class NativeEditorCompositionTests: XCTestCase {
                     XCTFail("Invalid native post-edit metadata for \(label)")
                     return
                 }
+                XCTAssertEqual(previousRange, NSRange(location: range.location,
+                                                     length: priorLength))
+                XCTAssertEqual(replacement, storage.attributedSubstring(from: range).string)
                 let reconstructed = NSMutableString(string: previous)
-                reconstructed.replaceCharacters(
-                    in: NSRange(location: range.location, length: priorLength),
-                    with: storage.attributedSubstring(from: range).string)
+                reconstructed.replaceCharacters(in: previousRange, with: replacement)
                 XCTAssertEqual(Data((reconstructed as String).utf8), Data(editor.string.utf8), label)
                 previous = editor.string
             }

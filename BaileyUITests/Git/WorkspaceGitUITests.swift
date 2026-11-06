@@ -494,9 +494,18 @@ final class WorkspaceGitUITests: XCTestCase {
         app.typeKey("a", modifierFlags: .command)
         editor.typeText(updated)
         XCTAssertEqual(editor.value as? String, updated)
-        // Real native Undo/Redo is tested against this retained NSTextView in
-        // NativeDiffTabTests. This UI test verifies the Split/Unified path,
-        // keyboard editing and save without repeating synthetic Cmd-Z input.
+        app.typeKey("z", modifierFlags: .command)
+        let undone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.exists && (editor.value as? String) != updated
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [undone], timeout: 10), .completed,
+                       "Actual Command-Z must change the worktree editor buffer")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        let redone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.exists && (editor.value as? String) == updated
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [redone], timeout: 10), .completed,
+                       "Actual Command-Shift-Z must restore the original edit")
         app.typeKey("s", modifierFlags: .command)
 
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

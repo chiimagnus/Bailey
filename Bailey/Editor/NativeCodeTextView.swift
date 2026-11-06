@@ -149,7 +149,7 @@ class NativeCodeTextView: NSTextView {
 
     /// Called for actual character mutations, including Undo/Redo, which do
     /// not necessarily emit NSTextViewDelegate.textDidChange.
-    var onCharacterEdit: (() -> Void)?
+    var onCharacterEdit: ((NSRange, String) -> Void)?
     private var textEditObserver: (any NSObjectProtocol)?
     private struct CompositionSnapshot {
         let text: String
@@ -646,7 +646,7 @@ class NativeCodeTextView: NSTextView {
             configureWrapping(false, viewportWidth: width)
         }
         storageCharactersDidChange()
-        onCharacterEdit?()
+        onCharacterEdit?(previousRange, replacement)
     }
 
     /// Subclasses can invalidate presentation caches on every storage change,

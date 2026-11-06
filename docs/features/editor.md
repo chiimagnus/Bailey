@@ -117,8 +117,11 @@ Tree-sitter 的 LF 行列索引独立于 TextKit 的自然段落。
 普通文件的行号栏是独立的原生 `NSView`，与正文 `NSScrollView` 并列：行号固定在左侧，正文横向滚动，
 `textContainerInset.width` 为零。行号栏按字体和行数调整宽度，纵向滚动同步重绘；
 绘制裁剪到自身边界，不能覆盖正文。验收检查文字像素、行号位置与往返横滚后的固定边界。
-从 `NSTextStorage.didProcessEditing` 得到真实编辑范围，避免系统 Undo/Redo
-绕过 `NSTextViewDelegate.textDidChange` 导致脏状态和语法解析不同步。
+从 `NSTextStorage.didProcessEditing` 得到真实编辑范围和替换后的文字，
+避免系统 Undo/Redo 绕过 `NSTextViewDelegate.textDidChange` 导致脏状态和语法解析不同步。
+Files／Git 接收同一原生后置事件；有前置替换通知时须按 UTF-16 范围及原始字节
+确认两次事件对应，缺失或不一致时走真实字节比较，不把旧前置通知套用到下一次编辑。
+初次安装 Git 原文不是用户修改；仅后台 Diff 快照和保存需要读取整篇可写正文。
 组合输入保持一条 Undo 事务；离屏追加也必须拥有独立可撤销操作。
 不能引入多段合并占位、无效缓存清理或丢全文的内容管理器来冒充优化。
 

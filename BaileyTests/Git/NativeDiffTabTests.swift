@@ -1638,7 +1638,7 @@ final class NativeDiffTabTests: XCTestCase {
 
         let priorRevision = tab.editPresentationRevision
         let next = modified.replacingOccurrences(of: "line 180\n", with: "changed 180\n")
-        tab.updateEditedContent(next)
+        try replaceNativeDiffText(tab, with: next)
         try await wait { tab.editPresentationRevision > priorRevision }
         XCTAssertTrue(tab.isDirty)
         XCTAssertFalse(tab.editFolds.contains { $0.range.contains(720) },
@@ -2852,10 +2852,10 @@ final class NativeDiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults))
         try await wait { !diff.isLoading }
-        diff.updateEditedContent("café")
+        try replaceNativeDiffText(diff, with: "café")
         let saving = Task { await diff.save() }
         try await wait { await backend.writing }
-        diff.updateEditedContent("cafe\u{301}")
+        try replaceNativeDiffText(diff, with: "cafe\u{301}")
         await backend.finishWrite()
         await saving.value
         let stored = await backend.stored()
@@ -2915,7 +2915,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(tab.newContent, changed)
         XCTAssertTrue(tab.hasChanges)
         XCTAssertTrue(tab.isEditing)
-        tab.updateEditedContent(changed + "saved\n")
+        try replaceNativeDiffText(tab, with: changed + "saved\n")
         await tab.save()
         XCTAssertNil(tab.saveError)
         XCTAssertEqual(try Data(contentsOf: path), Data((changed + "saved\n").utf8))
@@ -2972,6 +2972,63 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
     }
 
+    func testNativeDiffDirtyTrackerDistinguishesInitialLoadManualRevertAndUnicode() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("native-dirty.swift")
+        let original = "LEFT_A RIGHT_B café\n"
+            + (0..<1_000).map { "let line\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: path)
+        let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                           source: .worktree, untracked: true, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        try await wait({ diff.canPresentNativeContent }, timeout: 15)
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+        XCTAssertFalse(diff.isDirty, "Loading the Git snapshot is not a native user edit")
+
+        let source = original as NSString
+        let first = source.range(of: "LEFT_A").location + "LEFT_".utf16.count
+        let second = source.range(of: "RIGHT_B").location + "RIGHT_".utf16.count
+        for (location, content, dirty) in [
+            (first, "X", true), (second, "Y", true),
+            (first, "A", true), (second, "B", false),
+        ] {
+            editor.insertText(content, replacementRange: NSRange(location: location, length: 1))
+            editor.breakUndoCoalescing()
+            XCTAssertEqual(diff.isDirty, dirty, "Manual reversals must match original bytes")
+        }
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+
+        editor.textStorage?.replaceCharacters(in: NSRange(location: first, length: 1), with: "Q")
+        XCTAssertTrue(diff.isDirty, "Direct TextKit edits can bypass shouldChangeTextIn")
+        editor.textStorage?.replaceCharacters(in: NSRange(location: first, length: 1), with: "A")
+        XCTAssertFalse(diff.isDirty)
+
+        let composed = (editor.string as NSString).range(of: "café")
+        editor.insertText("cafe\u{301}", replacementRange: composed)
+        XCTAssertTrue(diff.isDirty, "Canonical equality must not imply byte equality")
+        XCTAssertFalse(diff.editedNewContent.utf8.elementsEqual(original.utf8))
+        editor.insertText("café", replacementRange: NSRange(location: composed.location,
+                                                             length: "cafe\u{301}".utf16.count))
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+
+        editor.insertText("saved", replacementRange: NSRange(location: original.utf16.count,
+                                                              length: 0))
+        XCTAssertTrue(diff.isDirty)
+        await diff.save()
+        XCTAssertNil(diff.saveError)
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data(editor.string.utf8))
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "-z"], in: directory.path).stdout, "")
+    }
+
     private func clickDiffSourceRow(_ pane: DiffCodePaneView, in window: NSWindow) async throws {
         try await wait {
             pane.layoutSubtreeIfNeeded()
@@ -3001,6 +3058,27 @@ final class NativeDiffTabTests: XCTestCase {
             clickCount: 1, pressure: 1
         ))
         pane.textView.mouseDown(with: click)
+    }
+
+    /// Exercise the storage event path even when the test does not mount SwiftUI.
+    private func replaceNativeDiffText(_ diff: DiffTab, with text: String,
+                                       file: StaticString = #filePath,
+                                       line: UInt = #line) throws {
+        let surface: DiffNativeSurface
+        if let existing = diff.nativeSurface {
+            surface = existing
+        } else {
+            surface = DiffNativeSurface(diff: diff)
+            surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+            diff.nativeSurface = surface
+        }
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true),
+                                   file: file, line: line)
+        editor.insertText(text, replacementRange: NSRange(location: 0,
+                                                          length: editor.string.utf16.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data(editor.string.utf8), Data(text.utf8), file: file, line: line)
     }
 
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {
@@ -3129,12 +3207,12 @@ final class NativeDiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
         try await wait { !diff.isLoading && diff.isEditable }
-        diff.updateEditedContent("first 中文😀")
+        try replaceNativeDiffText(diff, with: "first 中文😀")
         let writesBeforeFocusLoss = await backend.writes
         XCTAssertEqual(writesBeforeFocusLoss, 0, "Editing alone must not automatically write")
         diff.autoSaveOnFocusLoss()
         try await wait { await backend.writing }
-        diff.updateEditedContent("second 中文🪨")
+        try replaceNativeDiffText(diff, with: "second 中文🪨")
         diff.autoSaveOnFocusLoss()
         await backend.finishWrite()
         try await wait {
@@ -3148,7 +3226,7 @@ final class NativeDiffTabTests: XCTestCase {
         let latest = await backend.stored()
         XCTAssertEqual(latest, Data("second 中文🪨".utf8))
 
-        diff.updateEditedContent("unsaved during outage")
+        try replaceNativeDiffText(diff, with: "unsaved during outage")
         diff.autoSaveOnFocusLoss()
         try await wait { await backend.writing }
         await backend.finishWrite(failing: true)
@@ -3199,7 +3277,7 @@ final class NativeDiffTabTests: XCTestCase {
         let pane = PaneTab(content: .diff(worktree))
         let dirty = expectation(description: "Diff dirty propagates through the existing pane")
         withObservationTracking({ _ = pane.content.isDirty }) { dirty.fulfill() }
-        worktree.updateEditedContent("saved😀\r\n")
+        try replaceNativeDiffText(worktree, with: "saved😀\r\n")
         await fulfillment(of: [dirty], timeout: 1)
         XCTAssertEqual(worktree.newContent, worktreeText)
         await worktree.save()
@@ -3227,10 +3305,10 @@ final class NativeDiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
         try await wait { !diff.isLoading }
-        diff.updateEditedContent("first😀\r\n")
+        try replaceNativeDiffText(diff, with: "first😀\r\n")
         let saving = Task { await diff.save() }
         try await wait { await backend.writing }
-        diff.updateEditedContent("second🪨\r\n")
+        try replaceNativeDiffText(diff, with: "second🪨\r\n")
         await backend.finishWrite()
         await saving.value
         XCTAssertTrue(diff.isDirty)
@@ -3940,7 +4018,7 @@ final class NativeDiffTabTests: XCTestCase {
         normal.autoSaveSuspendedForClose = true
         try await wait { normal.editDecorations.rows.filter { $0.kind == .added }.count == 1 }
         let edited = "alpha\r\n中文👋 edited again\r\nlast\r\n"
-        normal.updateEditedContent(edited)
+        try replaceNativeDiffText(normal, with: edited)
         try await wait {
             normal.editDecorations.rows.filter { $0.kind == .added }.count == 1
                 && normal.editedNewContent == edited
@@ -4258,7 +4336,7 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(review.computation.unified.rows.filter { $0.kind == .added }.count, 1)
 
             XCTAssertTrue(filtered.isEditing)
-            filtered.updateEditedContent("changed again\nTRANSIENT\n")
+            try replaceNativeDiffText(filtered, with: "changed again\nTRANSIENT\n")
             await filtered.save()
             XCTAssertNil(filtered.saveError)
             let persisted = try await backend.read(path: root + "/filtered.txt", maxBytes: 128)
@@ -4300,7 +4378,7 @@ final class NativeDiffTabTests: XCTestCase {
                           preferences: try isolatedPreferences())
         try await wait { !tab.isLoading }
         XCTAssertFalse(tab.hasChanges)
-        tab.updateEditedContent(canonical)
+        try replaceNativeDiffText(tab, with: canonical)
         await tab.save()
         XCTAssertNil(tab.saveError)
         XCTAssertEqual(try Data(contentsOf: path), Data(canonical.utf8))
@@ -4310,7 +4388,7 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { !tab.isLoading && !tab.hasChanges }
         XCTAssertNil(tab.display, "Review must converge to Git's clean state after saving")
 
-        tab.updateEditedContent(checkedOut)
+        try replaceNativeDiffText(tab, with: checkedOut)
         tab.autoSaveOnFocusLoss()
         try await wait {
             !tab.isLoading && !tab.isDirty && !tab.hasChanges
@@ -4668,7 +4746,7 @@ final class NativeDiffTabTests: XCTestCase {
         await backend.pauseOneRead()
         diff.reload()
         try await wait { await backend.reading }
-        diff.updateEditedContent("editing during read")
+        try replaceNativeDiffText(diff, with: "editing during read")
         await backend.finishRead(with: Data("stale result".utf8))
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertTrue(diff.isDirty)
@@ -4676,7 +4754,8 @@ final class NativeDiffTabTests: XCTestCase {
 
         XCTAssertFalse(diff.isLoading, "Invalidated read must release its loading state")
 
-        diff.updateEditedContent(baseline)
+        try replaceNativeDiffText(diff, with: baseline)
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(baseline.utf8))
         XCTAssertFalse(diff.isDirty)
         await backend.pauseOneRead()
         diff.reload()
@@ -4819,7 +4898,7 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { await backend.reading }
         XCTAssertTrue(diff.preferences === preferences)
         XCTAssertTrue(diff.isEditing, "A regular worktree is directly editable")
-        diff.updateEditedContent("current buffer")
+        try replaceNativeDiffText(diff, with: "current buffer")
         XCTAssertTrue(diff.isDirty)
         await backend.finishRead(with: Data("stale before editor appeared".utf8))
         try await wait { !diff.isLoading }

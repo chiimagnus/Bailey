@@ -179,7 +179,12 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated static let maxBytes = 5 << 20
     @ObservationIgnored private var savedNewContent = ""
-    @ObservationIgnored private(set) var editedNewContent = ""
+    @ObservationIgnored private var editableSnapshot = ""
+    var editedNewContent: String { nativeSurface?.editedText ?? editableSnapshot }
+    @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int] = [:]
+    @ObservationIgnored private var reversibleEdit: (
+        range: NSRange, removed: String, inserted: String, wasClean: Bool
+    )?
     @ObservationIgnored private(set) var editBufferRevision: UInt = 0
     @ObservationIgnored private var displayGeneration: UInt = 0
     @ObservationIgnored private var displayTask: Task<Void, Never>?
@@ -551,7 +556,9 @@ final class DiffTab: nonisolated Identifiable {
                 self.editBufferRevision &+= 1
             }
             self.savedNewContent = result.new
-            self.editedNewContent = result.new
+            self.editableSnapshot = result.new
+            self.nativeCodeUnitDelta = [:]
+            self.reversibleEdit = nil
             if self.isEditing { self.refreshEditDecorations(immediate: true) }
             self.isDirty = false
             self.saveError = nil
@@ -578,13 +585,52 @@ final class DiffTab: nonisolated Identifiable {
         reload()
     }
 
-    /// Keep the native TextKit buffer as the editing source of truth.
-    func updateEditedContent(_ contents: String) {
+    /// The native storage is the only writable text; ordinary edits update
+    /// a small difference tally instead of rereading the entire document.
+    func nativeTextDidChange(previousRange: NSRange, removed: String?, replacement: String) {
         guard isEditableNow else { return }
-        editedNewContent = contents
-        isDirty = !contents.utf8.elementsEqual(savedNewContent.utf8)
-        if isDirty { invalidateReload() }
+        let previouslyClean = !isDirty
+        let reverted = reversibleEdit.map { previous in
+            previous.wasClean && previous.range.location == previousRange.location
+                && previousRange.length == previous.inserted.utf16.count
+                && replacement.utf8.elementsEqual(previous.removed.utf8)
+        } ?? false
+        let dirty: Bool
+        if reverted {
+            nativeCodeUnitDelta = [:]
+            reversibleEdit = nil
+            dirty = false
+        } else if let removed {
+            Self.adjustCodeUnits(removed, by: -1, delta: &nativeCodeUnitDelta)
+            Self.adjustCodeUnits(replacement, by: 1, delta: &nativeCodeUnitDelta)
+            dirty = !nativeCodeUnitDelta.isEmpty
+                || !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            reversibleEdit = (previousRange, removed, replacement, previouslyClean)
+        } else {
+            reversibleEdit = nil
+            dirty = resynchronizeNativeDelta()
+        }
+        if isDirty != dirty { isDirty = dirty }
+        if previouslyClean && dirty { invalidateReload() }
         refreshEditDecorations()
+    }
+
+    private func resynchronizeNativeDelta() -> Bool {
+        let current = editedNewContent
+        var delta: [UInt16: Int] = [:]
+        Self.adjustCodeUnits(savedNewContent, by: -1, delta: &delta)
+        Self.adjustCodeUnits(current, by: 1, delta: &delta)
+        nativeCodeUnitDelta = delta
+        return !delta.isEmpty || !current.utf8.elementsEqual(savedNewContent.utf8)
+    }
+
+    private static func adjustCodeUnits(_ text: String, by direction: Int,
+                                        delta: inout [UInt16: Int]) {
+        for unit in text.utf16 {
+            let next = (delta[unit] ?? 0) + direction
+            if next == 0 { delta.removeValue(forKey: unit) }
+            else { delta[unit] = next }
+        }
     }
 
     func setDiffStyle(_ style: DiffLayoutStyle) {
@@ -780,7 +826,6 @@ final class DiffTab: nonisolated Identifiable {
         editGeneration &+= 1
         let generation = editGeneration
         let before = editComparisonOld ?? comparisonOld
-        let after = editedNewContent
         let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
         let revealedLines = revealedOldLines
         let prepareSplit = isEditing && preferences.diffStyle == .split
@@ -797,7 +842,12 @@ final class DiffTab: nonisolated Identifiable {
         editTask?.cancel()
         editTask = Task { [weak self] in
             if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
-            guard !Task.isCancelled else { return }
+            let after: String
+            do {
+                guard let current = self, !Task.isCancelled,
+                      current.editGeneration == generation else { return }
+                after = current.editedNewContent
+            }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
             let prepared: (DiffEditState, [Int], Int, [Int: Int]?, DiffComputation)? =
@@ -951,7 +1001,11 @@ final class DiffTab: nonisolated Identifiable {
             guard generation == targetGeneration, readOnlyReason == nil else { return }
             savedNewContent = written
             // An edit landing while the write was in flight stays dirty.
-            isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            let dirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            if isDirty != dirty { isDirty = dirty }
+            if dirty { _ = resynchronizeNativeDelta() }
+            else { nativeCodeUnitDelta = [:] }
+            reversibleEdit = nil
             saveError = nil
             if !isDirty { reload() }
         } catch {
