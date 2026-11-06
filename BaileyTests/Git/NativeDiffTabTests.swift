@@ -119,6 +119,292 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class NativeDiffTabTests: XCTestCase {
+    func testClosingDiffRetiresCachedNativeDocumentAfterActualTabClose() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("cached.swift")
+        let original = (0..<2_000).map { "let row\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        let project = Project(fallbackName: "Retained Diff", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        project.openDiff(repoRoot: directory.path, path: file.lastPathComponent, staged: false,
+                         untracked: true, origPath: nil, activating: false)
+        weak var oldDiff: DiffTab?
+        weak var retiredEditor: DiffTextView?
+        weak var retiredLayout: NSTextLayoutManager?
+        let cachedScroll: NSScrollView
+        do {
+            guard case .diff(let diff)? = project.selectedTab?.content else {
+                return XCTFail("Expected an owned worktree Diff")
+            }
+            oldDiff = diff
+            try await wait({ diff.canPresentNativeContent }, timeout: 30)
+            XCTAssertNil(diff.error)
+            let surface = DiffNativeSurface(diff: diff)
+            diff.nativeSurface = surface
+            surface.frame = NSRect(x: 0, y: 0, width: 800, height: 450)
+            surface.render()
+            let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .first { $0.mode == .edit })
+            XCTAssertTrue(pane.textView.isEditable)
+            XCTAssertEqual(Data(pane.textView.string.utf8), Data(original.utf8))
+            XCTAssertNotNil(pane.textView.syntaxCoordinator)
+            retiredEditor = pane.textView
+            retiredLayout = pane.textView.textLayoutManager
+            cachedScroll = pane.scrollView
+            XCTAssertTrue(cachedScroll.documentView === pane.textView)
+        }
+        project.closeDiffs()
+        try await wait({ oldDiff == nil }, timeout: 10)
+        XCTAssertTrue(project.tabs.isEmpty)
+        let retained = cachedScroll.documentView as? DiffTextView
+        XCTAssertNil(cachedScroll.documentView,
+                     "A true Diff close must detach its obsolete native document")
+        XCTAssertFalse(retained?.isEditable ?? false)
+        XCTAssertNil(retained?.syntaxCoordinator)
+        try await wait({ retiredEditor == nil && retiredLayout == nil }, timeout: 10)
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+    }
+
+    func testProjectShutdownRetiresDiffWithoutRetiringTemporaryMount() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("remount.swift")
+        let original = (0..<1_500).map { "let value\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        let project = Project(fallbackName: "Remounted Diff", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        project.openDiff(repoRoot: directory.path, path: file.lastPathComponent, staged: false,
+                         untracked: true, origPath: nil, activating: false)
+        let diff: DiffTab
+        guard case .diff(let opened)? = project.selectedTab?.content else {
+            return XCTFail("Expected an owned editable Diff")
+        }
+        diff = opened
+        try await wait({ diff.canPresentNativeContent }, timeout: 20)
+        let surface = DiffNativeSurface(diff: diff)
+        diff.nativeSurface = surface
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        surface.render()
+        let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { $0.mode == .edit })
+        let cachedScroll = pane.scrollView
+        let editor = pane.textView
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+        DiffNativeRoot.dismantleNSView(surface, coordinator: DiffNativeRoot.Coordinator())
+        XCTAssertTrue(diff.nativeSurface === surface,
+                      "SwiftUI dismantle must not destroy the tab-owned editor")
+        XCTAssertTrue(cachedScroll.documentView === editor)
+        editor.insertText("temporary\n", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(diff.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+        surface.render()
+        XCTAssertTrue(cachedScroll.documentView === editor,
+                      "Native remount must retain the same TextKit and Undo owner")
+        project.terminateAll()
+        XCTAssertNil(diff.nativeSurface)
+        XCTAssertNil(cachedScroll.documentView)
+        XCTAssertFalse(editor.isEditable)
+        XCTAssertNil(editor.syntaxCoordinator)
+        XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+        XCTAssertFalse(editor.undoManager?.canRedo ?? true)
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+    }
+
+    func testMountedSplitDiffCloseReleasesBothPanesWithoutWindowTeardown() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("mounted.swift")
+        let original = (0..<1_200).map { "let source\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", file.lastPathComponent],
+                                               in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                               in: directory.path).status, 0)
+        let changed = original.replacingOccurrences(of: "let source600 = 600",
+                                                     with: "let source600 = -600")
+        try Data(changed.utf8).write(to: file)
+
+        let preferences = try isolatedPreferences()
+        preferences.diffStyle = .split
+        let project = Project(fallbackName: "Native Close", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        let diff = DiffTab(repoRoot: directory.path, path: file.lastPathComponent,
+                           source: .worktree, untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: preferences)
+        project.append(PaneTab(content: .diff(diff)))
+        try await wait({ diff.canPresentNativeContent && diff.editableBaseline != nil },
+                       timeout: 20)
+        let surface = DiffNativeSurface(diff: diff)
+        diff.nativeSurface = surface
+        surface.frame = NSRect(x: 0, y: 0, width: 840, height: 500)
+        let window = NSWindow(contentRect: surface.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = surface
+        window.orderFront(nil)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+        let edit = try XCTUnwrap(panes.first { $0.mode == .edit })
+        let baseline = try XCTUnwrap(panes.first { $0.mode == .review && !$0.isHidden })
+        XCTAssertTrue(edit.textView.isEditable)
+        XCTAssertFalse(baseline.textView.isEditable)
+        let cachedScrolls = [edit.scrollView, baseline.scrollView]
+        XCTAssertTrue(window.makeFirstResponder(edit.textView))
+        XCTAssertTrue(window.firstResponder === edit.textView)
+        XCTAssertEqual(Data(edit.textView.string.utf8), Data(changed.utf8))
+
+        project.closeDiffs()
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(diff.nativeSurface)
+        XCTAssertTrue(window.contentView === surface,
+                      "A cached SwiftUI/AppKit window can still hold the retired Diff surface")
+        XCTAssertTrue(surface.subviews.isEmpty)
+        for scroll in cachedScrolls {
+            XCTAssertNil(scroll.documentView,
+                         "All split panes must detach their text storage on true close")
+        }
+        XCTAssertFalse(edit.textView.isEditable)
+        XCTAssertNil(edit.textView.syntaxCoordinator)
+        XCTAssertFalse(edit.textView.undoManager?.canUndo ?? true)
+        XCTAssertFalse(baseline.textView.isEditable)
+        // AppKit can still hold or lay out this retired pane until it releases
+        // the old NSView. Keep its TextKit manager valid for that whole lifetime.
+        XCTAssertNotNil(edit.textView.textLayoutManager)
+        XCTAssertNotNil(baseline.textView.textLayoutManager)
+        edit.needsLayout = true
+        baseline.needsLayout = true
+        edit.layoutSubtreeIfNeeded()
+        baseline.layoutSubtreeIfNeeded()
+        edit.textView.insertText("late event", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertFalse(diff.isDirty, "A retired native view must ignore late input")
+        XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
+        let index = GitCommandExecution.runData(["show", ":" + file.lastPathComponent],
+                                                in: directory.path)
+        XCTAssertEqual(index.status, 0)
+        XCTAssertEqual(index.stdout, Data(original.utf8))
+    }
+
+    func testTwentyTrueDiffClosesReleaseLayoutsEvenWithCachedScrollViews() async throws {
+        final class WeakNativeResource {
+            weak var editor: DiffTextView?
+            weak var layout: NSTextLayoutManager?
+            init(editor: DiffTextView) {
+                self.editor = editor
+                layout = editor.textLayoutManager
+            }
+        }
+
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let project = Project(fallbackName: "Twenty Diffs", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        let initial = (0..<1_000).map { "let value\($0) = \($0) // 中文 🪨\n" }.joined()
+        var scrollViews: [NSScrollView] = []
+        var weakResources: [WeakNativeResource] = []
+        var retainedEditors: [DiffTextView] = []
+        var lateHighlightChecks: [() -> Void] = []
+        for number in 0..<20 {
+            let fileName = "source\(number).swift"
+            try Data(initial.utf8).write(to: directory.appendingPathComponent(fileName))
+            project.openDiff(repoRoot: directory.path, path: fileName, staged: false,
+                             untracked: true, origPath: nil, activating: false)
+            guard case .diff(let diff)? = project.selectedTab?.content else {
+                return XCTFail("Expected the Diff tab \(number)")
+            }
+            try await wait({ diff.canPresentNativeContent }, timeout: 20)
+            let surface = DiffNativeSurface(diff: diff)
+            diff.nativeSurface = surface
+            surface.frame = NSRect(x: 0, y: 0, width: 840, height: 480)
+            surface.render()
+            let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .first { $0.mode == .edit })
+            XCTAssertNotNil(pane.textView.syntaxCoordinator)
+            XCTAssertEqual(Data(pane.textView.string.utf8), Data(initial.utf8))
+            scrollViews.append(pane.scrollView)
+            weakResources.append(WeakNativeResource(editor: pane.textView))
+            retainedEditors.append(pane.textView)
+            let highlighter = try XCTUnwrap(pane.textView.syntaxCoordinator?.highlighter)
+            lateHighlightChecks.append {
+                XCTAssertEqual(highlighter.textInterface.length, 0)
+                XCTAssertEqual(highlighter.textInterface.visibleRange, .zero)
+                highlighter.visibleContentDidChange()
+            }
+        }
+        XCTAssertEqual(project.tabs.count, 20)
+        XCTAssertEqual(weakResources.count, 20)
+        project.closeDiffs()
+        XCTAssertTrue(project.tabs.isEmpty)
+        for scrollView in scrollViews {
+            XCTAssertNil(scrollView.documentView,
+                         "Old cached NSScrollViews must not retain their retired content")
+        }
+        // Neon can schedule a main-queue token request before retirement and
+        // execute it afterwards, while AppKit still strongly holds the view.
+        // Those requests must never touch an already detached TextKit layout.
+        for check in lateHighlightChecks { check() }
+        retainedEditors.removeAll()
+        try await wait({
+            weakResources.allSatisfy { $0.editor == nil && $0.layout == nil }
+        }, timeout: 15)
+        for number in 0..<20 {
+            XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("source\(number).swift")),
+                           Data(initial.utf8))
+        }
+    }
+
+    func testSplitHorizontalScrollKeepsLongPaneOffsetWhenShortSiblingClamps() {
+        let left = DiffCodePaneView(mode: .review, gutterLayout: .oldOnly)
+        let right = DiffCodePaneView(mode: .review, gutterLayout: .newOnly)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 840, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let container = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        window.contentView = container
+        left.frame = CGRect(x: 0, y: 0, width: 420, height: 400)
+        right.frame = CGRect(x: 420, y: 0, width: 420, height: 400)
+        container.addSubview(left)
+        container.addSubview(right)
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        for pane in [left, right] {
+            pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: .textColor)
+        }
+        left.setReviewDocument(NSAttributedString(string: String(repeating: "wide-", count: 200)),
+                               decorations: .empty)
+        right.setReviewDocument(NSAttributedString(string: "short\n"), decorations: .empty)
+        container.layoutSubtreeIfNeeded()
+        left.layoutSubtreeIfNeeded()
+        right.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(left.textView.frame.width, left.scrollView.contentView.bounds.width)
+        XCTAssertEqual(right.textView.frame.width, right.scrollView.contentView.bounds.width,
+                       accuracy: 1)
+        var feedback = 0
+        left.onScroll = { origin in
+            feedback += 1
+            right.setScrollOffset(origin)
+        }
+        right.onScroll = { origin in
+            feedback += 1
+            left.setScrollOffset(origin)
+        }
+        left.setScrollOffset(NSPoint(x: 250, y: 0))
+        let sourceX = left.scrollOffset.x
+        XCTAssertGreaterThan(sourceX, 100)
+        left.onScroll?(left.scrollOffset)
+        XCTAssertEqual(right.scrollOffset.x, 0, accuracy: 1)
+        XCTAssertEqual(left.scrollOffset.x, sourceX, accuracy: 1,
+                       "Clamping the short pane must never bounce its origin back to the long pane")
+        XCTAssertEqual(feedback, 1, "Follower scroll must not echo the original event")
+    }
+
     func testWindowFindCommandsTargetNativeWritableAndStagedDiffPanes() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

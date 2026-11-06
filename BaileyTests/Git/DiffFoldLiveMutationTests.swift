@@ -69,6 +69,77 @@ final class DiffFoldLiveMutationTests: XCTestCase {
         XCTAssertEqual(pane.decorations.rows.count, starts.count + 1)
     }
 
+    func testLeadingDeletionGhostNeverOverlapsEditableGlyphsAfterNewlineEdit() throws {
+        let original = "let value = 2\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -900, y: -900, width: 700, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(original)
+        let initialOffsets = [0]
+        let ghost = DiffDecorations.GhostBlock(
+            anchorLine: 0, firstOldLine: 1,
+            lines: [NSAttributedString(string: "let value = 1")]
+        )
+        let state = DiffEditState(addedLines: [0], addedEmphasis: [:], ghosts: [])
+        pane.setEditingFolds([], lineOffsets: initialOffsets,
+                             baseDecorations: .edit(state: state, snapshotOffsets: initialOffsets,
+                                                    lineCount: 1, ghostBlocks: [ghost]),
+                             revision: 1)
+        pane.layoutSubtreeIfNeeded()
+
+        func assertNoOverlap(_ phase: String) {
+            let first = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                     decorations: pane.decorations)
+                .first { $0.index == 0 && !$0.isContinuation }
+            let row = try? XCTUnwrap(first)
+            let lineHeight = DiffTypography.lineHeight(for: pane.textView.font
+                ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular))
+            XCTAssertGreaterThanOrEqual(row?.frame.minY ?? -1, lineHeight - 1,
+                                        "\(phase): source glyphs must start below the deleted row")
+            let screenRect = pane.textView.firstRect(
+                forCharacterRange: NSRange(location: 0, length: 1), actualRange: nil
+            )
+            let nativeRect = pane.textView.convert(window.convertFromScreen(screenRect), from: nil)
+            XCTAssertGreaterThanOrEqual(nativeRect.minY, lineHeight - 1,
+                                        "\(phase): actual TextKit glyph must stay outside the removed ghost")
+        }
+
+        assertNoOverlap("initial")
+        let insertion = NSRange(location: original.utf16.count, length: 0)
+        pane.textView.textStorage?.replaceCharacters(
+            in: insertion, with: "let value = 3 // 中文 👋\n")
+        pane.applyLiveNativeEdit(previousRange: insertion,
+                                 replacement: "let value = 3 // 中文 👋\n")
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(pane.decorations.ghostsByAnchor[0],
+                        "An append must not lose an unrelated deletion at the start")
+        XCTAssertEqual(pane.textView.textContainerInset.height,
+                       DiffTypography.lineHeight(for: font), accuracy: 1,
+                       "An unchanged leading ghost still reserves its native top inset")
+        assertNoOverlap("after append")
+        XCTAssertEqual(pane.textView.string,
+                       original + "let value = 3 // 中文 👋\n")
+        let larger = NSFont.monospacedSystemFont(ofSize: 19, weight: .regular)
+        pane.applyTypography(font: larger,
+                             paragraphStyle: DiffTypography.paragraphStyle(for: larger),
+                             textColor: .textColor)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.textContainerInset.height,
+                       DiffTypography.lineHeight(for: larger), accuracy: 1,
+                       "Font changes must resize the ghost's actual native text gap")
+        assertNoOverlap("after font change")
+        pane.decorations = .empty
+        XCTAssertEqual(pane.textView.textContainerInset.height, 0, accuracy: 0.5,
+                       "Removing the last leading deletion must remove its top inset")
+    }
+
     func testLineBoundaryInsertAndDeleteDoNotAttachOldColorsToWrongSourceRows() {
         let text = "row 0\nrow 1\nrow 2\nrow 3\n"
         for (line, deletedRows, replacement, expectedColoredLine) in [

@@ -448,6 +448,46 @@ final class WorkspaceGitUITests: XCTestCase {
                           "Split divider must restore its light color after dark-to-light")
     }
 
+    func testClosedWorktreeDiffReopensWithFreshOriginalDocument() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("reopen-diff.swift",
+                                    text: "let original = 1\nlet emoji = \"中文 🪨\"\n")
+        try fixture.initializeGit()
+        let updated = "let original = 2\nlet emoji = \"中文 🪨\"\n"
+        try updated.write(to: file, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let gitDock = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(gitDock.waitForExistence(timeout: 20))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            gitDock.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        row.click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        XCTAssertEqual(editor.value as? String, updated)
+        editor.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 15),
+                      "Closing the actual Diff tab must retire the editable native surface")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), updated)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        XCTAssertEqual(editor.value as? String, updated,
+                       "Reopening must read a new clean original document, not a retired buffer")
+        editor.click()
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, updated,
+                       "The closed tab's Undo stack must never become the reopened tab's history")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), updated)
+    }
+
     func testFoldedWorktreeFindNextReplacesHiddenMatchWithoutChangingOtherLines() throws {
         let findBoard = NSPasteboard(name: .find)
         let originalFindItems = try (findBoard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
@@ -581,6 +621,10 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, original,
                        "Worktree Diff must expose the live worktree content, not the old Git revision")
+        let firstFrame = XCTAttachment(screenshot: window.screenshot())
+        firstFrame.name = "Worktree editor with first-line deletion ghost"
+        firstFrame.lifetime = .keepAlways
+        add(firstFrame)
         let fieldsBeforeFind = window.textFields.count + window.searchFields.count
         app.typeKey("f", modifierFlags: .command)
         let findBar = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

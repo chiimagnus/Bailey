@@ -156,6 +156,12 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var editableBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
+
+    func retireNativeSurface() {
+        nativeSurface?.retireNativeDocument()
+        nativeSurface = nil
+    }
+
     private(set) var hasChanges = false
     /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
     var isEditing: Bool { source == .worktree && isEditable }

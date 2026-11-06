@@ -304,16 +304,9 @@ struct SourceTextEditor: NSViewRepresentable {
                 self.scrollObserver = nil
             }
             if let editor = textView as? FocusReportingTextView {
-                // A retired native document must not create new Undo actions or
-                // retain the old NSTextStorage through obsolete Undo targets.
-                editor.isEditable = false
-                editor.undoManager?.removeAllActions()
-                editor.syntaxCoordinator?.deactivate()
-                editor.syntaxCoordinator = nil
-                editor.delegate = nil
-                editor.onCharacterEdit = nil
                 editor.onBecomeFirstResponder = nil
                 editor.onResignFirstResponder = nil
+                editor.retireNativeDocument()
             }
             // The prior SwiftUI host can outlive a file generation while
             // AppKit finishes its layout. Its scroll view must not keep the

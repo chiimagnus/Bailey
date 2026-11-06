@@ -341,9 +341,18 @@ final class DiffTextView: NativeCodeTextView, NSTextContentStorageDelegate {
         guard let storage = textStorage,
               let originalCount = foldedGitLines?.lineCount,
               NSMaxRange(previousRange) <= (foldedGitLines?.length ?? -1) else { return nil }
-        let first = foldedGitLines?.row(at: previousRange.location) ?? 0
-        let last = foldedGitLines?.row(at: NSMaxRange(previousRange)) ?? 0
-        let endAtLineStart = foldedGitLines?.offset(atLine: last) == NSMaxRange(previousRange)
+        // A zero-width insertion after the final LF starts a new Git line,
+        // even though the line index clamps EOF to the preceding row.
+        let afterFinalLF = previousRange.length == 0
+            && previousRange.location == foldedGitLines?.length
+            && previousRange.location > 0
+            && storage.mutableString.character(at: previousRange.location - 1) == 10
+        let first = afterFinalLF ? originalCount
+            : (foldedGitLines?.row(at: previousRange.location) ?? 0)
+        let last = afterFinalLF ? originalCount
+            : (foldedGitLines?.row(at: NSMaxRange(previousRange)) ?? 0)
+        let endAtLineStart = afterFinalLF
+            || foldedGitLines?.offset(atLine: last) == NSMaxRange(previousRange)
         foldedGitLines?.replace(in: previousRange,
                                 replacementLength: replacement.utf16.count,
                                 text: storage.mutableString)
@@ -572,7 +581,8 @@ enum DiffRowGeometry {
                     index: rowIndex,
                     frame: CGRect(
                         x: fragmentFrame.origin.x,
-                        y: fragmentFrame.origin.y + bounds.minY,
+                        y: fragmentFrame.origin.y + bounds.minY
+                            + textView.textContainerInset.height,
                         width: fragmentFrame.width,
                         height: bounds.height
                     ),
@@ -625,7 +635,10 @@ private enum DiffGhostGeometry {
         guard rowHeight > 0 else { return [] }
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
-        let inset = textView.textContainerInset.height
+        // A leading deletion occupies the native text container's top inset.
+        // Draw that ghost in the reserved gap, not on top of the first glyph.
+        let leading = CGFloat(decorations.ghostsByAnchor[0]?.lines.count ?? 0) * rowHeight
+        let inset = textView.textContainerInset.height - leading
         // Both the gutter and underlay query this on every scroll frame.
         // Skip blocks ending before the viewport instead of walking the file.
         var low = 0
@@ -1444,10 +1457,30 @@ final class DiffCodePaneView: NSView {
         var rowsAfter = 0
     }
 
+    /// Called only after the owning Diff tab is permanently closed.
+    func retireNativeDocument() {
+        onScroll = nil
+        onExpandCollapsedRun = nil
+        textView.handleCollapsedClick = nil
+        textView.onBecomeFirstResponder = nil
+        textView.onResignFirstResponder = nil
+        textView.retireNativeDocument()
+        // A closed Diff has no remaining native owner. Detach its document
+        // before removing the TextKit layout manager, which otherwise keeps
+        // the content storage and paragraph cache alive after view disposal.
+        let storage = textView.textContentStorage
+        let layout = textView.textLayoutManager
+        scrollView.documentView = nil
+        if let storage, let layout { storage.removeTextLayoutManager(layout) }
+        foldOverlay.decorations = .empty
+        appliedGhostSpacing = [:]
+    }
+
     /// Replaces the edit buffer's text, resetting the spacing bookkeeping
     /// that referred to the previous document.
     func setEditBufferText(_ text: String) {
         appliedGhostSpacing = [:]
+        textView.textContainerInset = .zero
         invalidateDocumentLayout()
         textView.invalidateFoldSourceIndex()
         textView.text = text
@@ -1533,6 +1566,14 @@ final class DiffCodePaneView: NSView {
             } else {
                 wanted[anchor, default: GhostSpacing()].rowsBefore = block.lines.count
             }
+        }
+        // TextKit ignores paragraphSpacingBefore on the first paragraph.
+        // Reserve the leading deletion's rows as a native document top inset;
+        // other ghost blocks continue to use per-paragraph spacing.
+        let leadingHeight = CGFloat(decorations.ghostsByAnchor[0]?.lines.count ?? 0) * rowHeight
+        if abs(textView.textContainerInset.height - leadingHeight) > 0.5 {
+            textView.textContainerInset = NSSize(width: 0, height: leadingHeight)
+            invalidateDocumentLayout()
         }
         guard wanted != appliedGhostSpacing else { return }
 
@@ -1894,7 +1935,14 @@ final class DiffCodePaneView: NSView {
         if foldOverlay.labelFont != labelFont {
             foldOverlay.labelFont = labelFont
         }
+        let oldRowHeight = rowHeight
         rowHeight = paragraphStyle.maximumLineHeight
+        if mode == .edit && (previousFont != font || abs(oldRowHeight - rowHeight) > 0.5) {
+            // Existing deletion gaps are sized in rows, not absolute points.
+            // Reapply their paragraph styles and leading inset on a font change.
+            appliedGhostSpacing = [:]
+            applyGhostSpacing()
+        }
         if mode == .review, !decorations.rows.isEmpty {
             fixedRowCount = textView.wrapsLines || textView.hasNativeNonLFSeparators
                 ? nil : decorations.rows.count
@@ -1925,6 +1973,7 @@ final class DiffCodePaneView: NSView {
                     if let fragment = layout.textLayoutFragment(for: target.location) {
                         scrollView.layoutSubtreeIfNeeded()
                         return fragment.layoutFragmentFrame.minY
+                            + textView.textContainerInset.height
                     }
                 }
             }

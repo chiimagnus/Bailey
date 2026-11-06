@@ -35,6 +35,28 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         guard let diff, renderedEditRevision == diff.editBufferRevision else { return nil }
         return editPane?.textView.string
     }
+
+    /// True tab/project closure, never a temporary SwiftUI dismantle.
+    func retireNativeDocument() {
+        onFocused = nil
+        canFocus = { false }
+        pendingFocus = false
+        pendingViewportOffsets = []
+        pendingAnchor = nil
+        pendingEdit = nil
+        focusedFindPane = nil
+        for pane in [editPane, unifiedPane, leftPane, rightPane].compactMap({ $0 }) {
+            pane.retireNativeDocument()
+            pane.removeFromSuperview()
+        }
+        divider?.removeFromSuperview()
+        editPane = nil
+        unifiedPane = nil
+        leftPane = nil
+        rightPane = nil
+        divider = nil
+        diff = nil
+    }
     private var pendingAnchor: (oldLine: Int?, newLine: Int?)?
     private var didRevealInitialChange = false
     private var pendingFirstChangeRow: Int?

@@ -107,6 +107,22 @@ class NativeCodeTextView: NSTextView {
     }
 
     var syntaxCoordinator: SyntaxHighlightCoordinator?
+    private var nativeDocumentRetired = false
+
+    /// Only a true content-owner retirement may detach this TextKit document.
+    /// SwiftUI mount/dismantle and Dock reparenting must never call this.
+    func retireNativeDocument() {
+        guard !nativeDocumentRetired else { return }
+        nativeDocumentRetired = true
+        isEditable = false
+        isSelectable = false
+        undoManager?.removeAllActions()
+        syntaxCoordinator?.deactivate()
+        syntaxCoordinator = nil
+        delegate = nil
+        onCharacterEdit = nil
+    }
+
     var overrideContentHeight: CGFloat? {
         didSet {
             if let height = overrideContentHeight, height > 0 {
