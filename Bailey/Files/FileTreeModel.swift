@@ -82,6 +82,7 @@ final class FileTreeModel {
 
     let settings: AppSettings
     private(set) var showExcluded = false
+    @ObservationIgnored private var interactionRevision: UInt64 = 0
 
     init(settings: AppSettings = .shared) {
         self.settings = settings
@@ -89,11 +90,13 @@ final class FileTreeModel {
 
     func setShowExcluded(_ visible: Bool) async {
         guard visible != showExcluded else { return }
+        interactionRevision &+= 1
         showExcluded = visible
         await rebuild()
     }
 
     func refreshVisibility() async {
+        interactionRevision &+= 1
         await rebuild()
     }
 
@@ -107,6 +110,7 @@ final class FileTreeModel {
         let scope = workspaceScope
         let epoch = treeEpoch
         let backend = self.backend
+        let requestRevision = interactionRevision
         let normalized = (path as NSString).standardizingPath
         guard !root.isEmpty, path == normalized, path != root,
               LocalPathScope.contains(path, in: root), isCurrentTarget()
@@ -116,6 +120,7 @@ final class FileTreeModel {
         guard !parts.isEmpty, parts.count <= 32,
               !automatically || showExcluded || Self.isVisible(path, in: root, excluding: settings.filesExclude)
         else { return false }
+        if !automatically { interactionRevision &+= 1 }
         do {
             let physicalRoot = try await Self.physicalDirectory(
                 root, backend: backend, scope: scope
@@ -137,6 +142,8 @@ final class FileTreeModel {
         } catch { return false }
         guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
               isCurrentTarget() else { return false }
+        // A stale automatic reveal must not undo newer keyboard, pointer or menu actions.
+        guard !automatically || interactionRevision == requestRevision else { return false }
 
         var ancestor = root
         for segment in parts.dropLast() {
@@ -163,6 +170,7 @@ final class FileTreeModel {
               isCurrentTarget(),
               let item = items.first(where: { !$0.isDraft && $0.path == path })
         else { return false }
+        guard !automatically || interactionRevision == requestRevision else { return false }
         select(item)
         return true
     }
@@ -279,6 +287,7 @@ final class FileTreeModel {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
+        interactionRevision &+= 1
         selectedCompactPath = extending || toggling ? nil : componentPath
         if extending {
             selectRange(to: item.path)
@@ -299,6 +308,7 @@ final class FileTreeModel {
     func focus(_ item: Item) {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path })
         else { return }
+        interactionRevision &+= 1
         selectedPath = item.path
         selectedCompactPath = nil
         selectionAnchorPath = item.path
@@ -310,12 +320,16 @@ final class FileTreeModel {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
+        interactionRevision &+= 1
         contextMenuTargetPath = componentPath ?? item.path
         activeDrag = nil
     }
 
     func dismissContextMenu(target: String) {
-        if contextMenuTargetPath == target { contextMenuTargetPath = nil }
+        if contextMenuTargetPath == target {
+            interactionRevision &+= 1
+            contextMenuTargetPath = nil
+        }
     }
 
     var contextDirectoryPath: String? {
@@ -334,6 +348,7 @@ final class FileTreeModel {
         let current = selectedPath.flatMap { path in visible.firstIndex { $0.path == path } }
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
+        interactionRevision &+= 1
         if extending {
             if current != next {
                 if selectedPaths.contains(visible[next].path) {
@@ -367,6 +382,7 @@ final class FileTreeModel {
     }
 
     func clearExplicitSelection() {
+        interactionRevision &+= 1
         selectedPaths.removeAll()
         selectionAnchorPath = nil
         contextMenuTargetPath = nil
@@ -375,6 +391,7 @@ final class FileTreeModel {
 
     func selectAllVisible() {
         let visible = items.filter { !$0.isDraft }.map(\.path)
+        interactionRevision &+= 1
         selectedPaths = Set(visible)
         if let selectedPath {
             if !selectedPaths.contains(selectedPath) { self.selectedPath = visible.first }
@@ -402,12 +419,16 @@ final class FileTreeModel {
         }) else { return nil }
         let paths = displayed.path == item.path ? contextSelection(for: displayed) : [item.path]
         let record = (nonce: UUID(), paths: paths)
+        interactionRevision &+= 1
         activeDrag = record
         return record
     }
 
     func cancelDrag(nonce: UUID) {
-        if activeDrag?.nonce == nonce { activeDrag = nil }
+        if activeDrag?.nonce == nonce {
+            interactionRevision &+= 1
+            activeDrag = nil
+        }
     }
 
     func consumeDrag(nonce: UUID, paths: [String]) -> Bool {
@@ -417,11 +438,13 @@ final class FileTreeModel {
                       || ($0.isDirectory && $0.compactComponents.contains { $0.path == path }))
               } })
         else { return false }
+        interactionRevision &+= 1
         self.activeDrag = nil
         return true
     }
 
     func clearSelection() {
+        interactionRevision &+= 1
         selectedPath = nil
         selectedCompactPath = nil
         selectedPaths.removeAll()
@@ -764,6 +787,7 @@ final class FileTreeModel {
 
     func toggle(_ item: Item) async {
         guard item.isDirectory, items.contains(where: { $0.path == item.path && $0.isDirectory }) else { return }
+        interactionRevision &+= 1
         if !expanded.insert(item.path).inserted {
             expanded.remove(item.path)
         }

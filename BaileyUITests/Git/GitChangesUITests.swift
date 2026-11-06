@@ -233,7 +233,8 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertTrue(fileLast.waitForExistence(timeout: 20))
         fileFirst.click()
         XCUIElement.perform(withKeyModifiers: .command) { fileLast.click() }
-        XCTAssertTrue(fileFirst.isSelected && fileLast.isSelected && !fileMiddle.isSelected)
+        XCTAssertTrue(fileFirst.isSelected && fileLast.isSelected && !fileMiddle.isSelected,
+                      "Modifier click must retain the prior Files selection")
         fileMiddle.rightClick()
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(fileFirst.isSelected && fileLast.isSelected && !fileMiddle.isSelected,

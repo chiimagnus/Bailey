@@ -15,6 +15,9 @@ private actor CountingFileBackend: WorkspaceBackend {
     private var delayedPath: String?
     private var gate: CheckedContinuation<Void, Never>?
     private(set) var awaitingDirectory = false
+    private var delayedStatPath: String?
+    private var statGate: CheckedContinuation<Void, Never>?
+    private(set) var awaitingStat = false
     private let base = LocalWorkspaceBackend.shared
     private var beforeCopy: (@Sendable () throws -> Void)?
 
@@ -22,6 +25,12 @@ private actor CountingFileBackend: WorkspaceBackend {
 
     func setUnavailable(_ value: Bool) { unavailable = value }
     func delay(_ path: String) { delayedPath = path }
+    func delayStat(_ path: String) { delayedStatPath = path }
+    func releaseStat() {
+        statGate?.resume()
+        statGate = nil
+        awaitingStat = false
+    }
     func release() {
         gate?.resume()
         gate = nil
@@ -45,7 +54,14 @@ private actor CountingFileBackend: WorkspaceBackend {
         }
         return result
     }
-    func stat(path: String) async throws -> WorkspaceStat? { try await base.stat(path: path) }
+    func stat(path: String) async throws -> WorkspaceStat? {
+        if delayedStatPath == path {
+            delayedStatPath = nil
+            awaitingStat = true
+            await withCheckedContinuation { statGate = $0 }
+        }
+        return try await base.stat(path: path)
+    }
     func readSymlinkDestination(path: String) async throws -> String? { try await base.readSymlinkDestination(path: path) }
     func read(path: String, maxBytes: Int) async throws -> Data { try await base.read(path: path, maxBytes: maxBytes) }
     func write(path: String, data: Data) async throws { try await base.write(path: path, data: data) }
@@ -1251,6 +1267,129 @@ final class FileTreeTests: XCTestCase {
         let succeeded = await reveal.value
         XCTAssertTrue(succeeded)
         XCTAssertEqual(tree.selectedPath, file.path)
+    }
+
+    func testAutomaticFileRevealCannotReplaceNewerManualMultiSelection() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.swift")
+        let last = root.appendingPathComponent("last.swift")
+        for file in [first, last] { try Data("source\n".utf8).write(to: file) }
+
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let firstRow = try XCTUnwrap(tree.items.first { $0.path == first.path })
+        let lastRow = try XCTUnwrap(tree.items.first { $0.path == last.path })
+        tree.select(firstRow)
+        await backend.delayStat(first.path)
+        let pending = Task { await tree.revealFile(first.path, automatically: true) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingStat { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let awaiting = await backend.awaitingStat
+        XCTAssertTrue(awaiting, "Auto Reveal must have started before the user changes selection")
+        tree.select(lastRow, toggling: true)
+        XCTAssertEqual(tree.selectedPaths, [first.path, last.path])
+        XCTAssertEqual(tree.selectedPath, last.path)
+        await backend.releaseStat()
+        let completed = await pending.value
+        XCTAssertFalse(completed, "Stale automatic navigation was cancelled, not performed")
+        XCTAssertEqual(tree.selectedPaths, [first.path, last.path],
+                       "A completed older automatic reveal cannot clear newer manual selection")
+        XCTAssertEqual(tree.selectedPath, last.path)
+        let explicitlyRevealed = await tree.revealFile(first.path)
+        XCTAssertTrue(explicitlyRevealed,
+                      "An explicitly requested reveal must still move selection")
+        XCTAssertEqual(tree.selectedPaths, [first.path])
+    }
+
+    func testAutomaticRevealCannotOverrideSelectionAfterUserReturnsToSameState() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.swift")
+        let last = root.appendingPathComponent("last.swift")
+        for file in [first, last] { try Data("source\n".utf8).write(to: file) }
+
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let firstRow = try XCTUnwrap(tree.items.first { $0.path == first.path })
+        let lastRow = try XCTUnwrap(tree.items.first { $0.path == last.path })
+        tree.select(firstRow)
+        await backend.delayStat(last.path)
+        let pending = Task { await tree.revealFile(last.path, automatically: true) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingStat { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let suspended = await backend.awaitingStat
+        XCTAssertTrue(suspended)
+        tree.select(lastRow)
+        tree.select(firstRow)
+        XCTAssertEqual(tree.selectedPath, first.path)
+        XCTAssertEqual(tree.selectedPaths, [first.path])
+        await backend.releaseStat()
+        let applied = await pending.value
+        XCTAssertFalse(applied, "An intervening user action must supersede stale auto reveal even after returning to its prior state")
+        XCTAssertEqual(tree.selectedPath, first.path)
+        XCTAssertEqual(tree.selectedPaths, [first.path])
+    }
+
+    func testStaleAutomaticRevealCannotClearNewerContextMenuOrActiveDrag() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.swift")
+        let last = root.appendingPathComponent("last.swift")
+        for file in [first, last] { try Data("source\n".utf8).write(to: file) }
+
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let firstRow = try XCTUnwrap(tree.items.first { $0.path == first.path })
+        let lastRow = try XCTUnwrap(tree.items.first { $0.path == last.path })
+        tree.select(firstRow)
+
+        func delayedReveal() async -> Task<Bool, Never> {
+            await backend.delayStat(first.path)
+            let request = Task { await tree.revealFile(first.path, automatically: true) }
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if await backend.awaitingStat { break }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            let pending = await backend.awaitingStat
+            XCTAssertTrue(pending, "The old automatic reveal must be waiting on real stat")
+            return request
+        }
+
+        let menuRequest = await delayedReveal()
+        tree.selectForContextMenu(lastRow)
+        XCTAssertEqual(tree.contextMenuTargetPath, last.path)
+        await backend.releaseStat()
+        let menuResult = await menuRequest.value
+        XCTAssertFalse(menuResult, "A new context target must cancel stale navigation")
+        XCTAssertEqual(tree.contextMenuTargetPath, last.path,
+                       "The old automatic reveal must not dismiss the user's menu")
+        XCTAssertEqual(tree.selectedPath, first.path)
+        tree.dismissContextMenu(target: last.path)
+
+        let dragRequest = await delayedReveal()
+        let drag = try XCTUnwrap(tree.beginDrag(for: lastRow))
+        XCTAssertTrue(tree.hasActiveDrag)
+        await backend.releaseStat()
+        let dragResult = await dragRequest.value
+        XCTAssertFalse(dragResult, "A new drag must cancel stale navigation")
+        XCTAssertTrue(tree.hasActiveDrag,
+                      "The old automatic reveal must not cancel a newer file drag")
+        XCTAssertTrue(tree.consumeDrag(nonce: drag.nonce, paths: drag.paths),
+                      "The active drag must still be valid for its actual target")
     }
 
     func testFilesPanelSelectsFirstVisibleRowAfterAsyncListingWithoutOpeningIt() async throws {

@@ -4960,13 +4960,23 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
     func testEditableFoldAccessibilityFrameMatchesActualClickAfterScrolling() throws {
-        let old = (0..<900).map { "line \($0)\n" }.joined()
-        let modified = old.replacingOccurrences(of: "line 594\n", with: "changed 594\n")
+        let unchanged = (0..<900).map { "line \($0)\n" }.joined()
+        let old = "deleted before first line\n" + unchanged
+        let modified = unchanged.replacingOccurrences(of: "line 594\n", with: "changed 594\n")
             .replacingOccurrences(of: "line 617\n", with: "changed 617\n")
         let core = DiffCore.compute(oldText: old, newText: modified)
         let projection = DiffComputation.build(core: core, revealedLines: [])
         let offsets = core.newLines.map(\.utf16Range.location)
         let folds = DiffEditFold.sourceFolds(in: projection.unified, lineCount: offsets.count)
+        let oldText = old as NSString
+        let ghosts = projection.editState.ghosts.map { block in
+            DiffDecorations.GhostBlock(
+                anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                lines: block.lines.map { NSAttributedString(string: oldText.substring(with: $0.sourceRange)) }
+            )
+        }
+        XCTAssertTrue(ghosts.contains { $0.anchorLine == 0 },
+                      "The AX regression must include a genuine leading deletion")
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 750, height: 280),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -4982,12 +4992,16 @@ final class NativeDiffTabTests: XCTestCase {
         pane.setEditingFolds(
             folds, lineOffsets: offsets,
             baseDecorations: .edit(state: projection.editState, snapshotOffsets: offsets,
-                                   lineCount: offsets.count, ghostBlocks: []),
+                                   lineCount: offsets.count, ghostBlocks: ghosts),
             revision: 1
         )
         pane.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(pane.textView.textContainerInset.height, 0,
+                             "The leading removed row must offset the native body")
         let gutter = try XCTUnwrap(pane.subviews.compactMap { $0 as? DiffGutterView }.first)
         let scroll = pane.scrollView.contentView
+        var expanded: DiffCollapsedRun?
+        pane.onExpandCollapsedRun = { expanded = $0 }
         for offset in [0.0, 50.0, 100.0] {
             pane.setVerticalScrollOffset(offset)
             pane.layoutSubtreeIfNeeded()
@@ -5007,8 +5021,16 @@ final class NativeDiffTabTests: XCTestCase {
                 let expected = row.frame.midY - scroll.bounds.origin.y
                 XCTAssertEqual(cursor.y, expected, accuracy: 2,
                                "A scrolled editable AX fold button must hit its actual separator")
+                XCTAssertEqual(button.accessibilityRole(), .button)
+                if expanded == nil {
+                    XCTAssertTrue(button.accessibilityPerformPress())
+                    XCTAssertEqual(expanded?.baselineRange,
+                                   pane.decorations.rows[row.index].collapsed?.baselineRange,
+                                   "AX Press must expand the same visible folded row")
+                }
             }
         }
+        XCTAssertNotNil(expanded, "At least one real folded row must have an AX Press action")
         XCTAssertEqual(pane.textView.string, modified)
     }
 

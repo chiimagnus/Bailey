@@ -126,6 +126,44 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(git.expandedCommitIDs.isEmpty)
     }
 
+    func testGitChangeSelectionProjectionCostsAtOneHundredAndTenThousandRows() {
+        func p95(_ values: [Double]) -> Double {
+            let sorted = values.sorted()
+            return sorted[Int(Double(sorted.count - 1) * 0.95)]
+        }
+        for count in [1, 100, 10_000] {
+            let rows = (0..<count).map { index in
+                TreeDisplayModel.Row(
+                    name: "entry\(index).swift", path: "dir/entry\(index).swift",
+                    isDirectory: false, status: .init("M")
+                )
+            }
+            let model = GitStatusModel()
+            var projectionCosts: [Double] = []
+            var selectionCosts: [Double] = []
+            for sample in 0..<30 {
+                let t0 = CFAbsoluteTimeGetCurrent()
+                let visible = rows.map {
+                    GitStatusModel.ChangeSelection(
+                        scope: "local", repository: "/fixture",
+                        section: "unstaged", path: $0.path
+                    )
+                }
+                let t1 = CFAbsoluteTimeGetCurrent()
+                let position = [0, count / 2, count - 1][sample % 3]
+                model.selectChange(visible[position], visible: visible,
+                                   extending: sample % 3 == 2,
+                                   toggling: sample % 3 == 1)
+                let t2 = CFAbsoluteTimeGetCurrent()
+                projectionCosts.append((t1 - t0) * 1_000)
+                selectionCosts.append((t2 - t1) * 1_000)
+                XCTAssertEqual(visible.count, count)
+                XCTAssertTrue(visible.contains(model.changeCursor ?? visible[position]))
+            }
+            print("AUDIT_P2_T5_GIT_SELECTION rows=\(count) samples=30 projection_p95_ms=\(p95(projectionCosts)) selection_p95_ms=\(p95(selectionCosts))")
+        }
+    }
+
     func testGitResourceSelectionPreservesIslandsAndSeparatesIndexSections() {
         let model = GitStatusModel()
         func row(_ path: String, section: String = "unstaged") -> GitStatusModel.ChangeSelection {
