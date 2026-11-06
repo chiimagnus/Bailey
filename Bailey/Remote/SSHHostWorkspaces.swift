@@ -33,7 +33,6 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
         let arguments = [
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes",
-            "-o", "ConnectTimeout=8",
             "-o", "Compression=yes",
         ] + multiplexOptions + ["-T", "--", host] + argv
         do {

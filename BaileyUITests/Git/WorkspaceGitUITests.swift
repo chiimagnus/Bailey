@@ -94,7 +94,7 @@ final class WorkspaceGitUITests: XCTestCase {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
             process.arguments = [
                 "-T", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-                "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", host, "sh -s",
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "--", host, "sh -s",
             ]
             let input = Pipe()
             let output = Pipe()

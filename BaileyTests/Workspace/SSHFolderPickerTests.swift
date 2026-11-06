@@ -7,6 +7,7 @@ private actor PickerBackend: WorkspaceBackend {
     let directories: [String: [WorkspaceEntry]]
     let files: Set<String>
     private(set) var runCount = 0
+    private(set) var startupTimeout: TimeInterval?
     private(set) var statCounts: [String: Int] = [:]
     private var heldPaths = Set<String>()
     private var blocked: [String: CheckedContinuation<WorkspaceStat?, Error>] = [:]
@@ -65,6 +66,7 @@ private actor PickerBackend: WorkspaceBackend {
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult {
         runCount += 1
+        startupTimeout = timeout
         return WorkspaceRunResult(status: 0, stdout: startup, stderr: Data())
     }
 
@@ -112,6 +114,9 @@ final class SSHFolderPickerTests: XCTestCase {
         XCTAssertEqual(model.host, "windows")
         XCTAssertEqual(model.directory, "/")
         XCTAssertEqual(model.rows, ["c", "d"])
+        let startupTimeout = await backend.startupTimeout
+        XCTAssertEqual(startupTimeout, 30,
+                       "First SSH connection must allow for an authenticated proxy handshake")
         XCTAssertTrue(model.folders.isEmpty, "Virtual disks are not duplicate folder entries")
         XCTAssertNil(model.addPath, "The virtual disk overview is not a remote project")
         model.selectedName = "d"

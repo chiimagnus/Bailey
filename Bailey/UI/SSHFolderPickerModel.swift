@@ -173,7 +173,7 @@ final class SSHFolderPickerModel {
                 + "done ;; esac"
             let result = try await backendForHost(alias).run(
                 argv: ["/bin/sh", "-c", command],
-                cwd: nil, env: nil, stdin: nil, timeout: 12
+                cwd: nil, env: nil, stdin: nil, timeout: 30
             )
             guard result.status == 0 else {
                 throw RemoteCommandFailure(
