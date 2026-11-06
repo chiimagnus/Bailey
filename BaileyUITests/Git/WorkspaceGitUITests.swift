@@ -120,14 +120,14 @@ final class WorkspaceGitUITests: XCTestCase {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         // The remote output is reused in shell commands, including cleanup.
         // Accept only the exact mktemp name so it cannot become shell input.
-        guard root.range(of: #"^/tmp/bailey-git-ui-[A-Za-z0-9]{6}$"#,
-                         options: .regularExpression) != nil else {
+        guard let match = root.range(of: #"^/tmp/bailey-git-ui-[A-Za-z0-9]{6}$"#,
+                                     options: .regularExpression),
+              match.lowerBound == root.startIndex, match.upperBound == root.endIndex else {
             throw NSError(domain: "WindowsSSHGuiFixture", code: 1)
         }
-        defer {
-            WorkspaceUITestSupport.finishSession()
-            // The generated path is checked against the fixed owned prefix.
-            try? ssh("rm -r -- '\(root)'\n")
+        addTeardownBlock { @MainActor in
+            do { _ = try ssh("rm -r -- '\(root)'\n") }
+            catch { XCTFail("Could not delete test-owned SSH fixture: \(error)") }
         }
 
         let status = try ssh("""
@@ -188,24 +188,32 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 40), .completed)
         confirmButton.click()
 
-        let addPanel = window.buttons["Add Panel"]
-        XCTAssertTrue(addPanel.waitForExistence(timeout: 40),
-                      "The selected SSH project must mount its workspace")
-        addPanel.click()
-        let gitAction = app.buttons.matching(
-            NSPredicate(format: "label == %@", "Git Manager")
-        ).firstMatch
-        XCTAssertTrue(gitAction.waitForExistence(timeout: 15))
-        gitAction.click()
+        let projectLabel = (root as NSString).lastPathComponent + ", SSH · " + host
+        let project = window.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", projectLabel))
+            .firstMatch
+        let projectSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in project.exists && project.isSelected }, object: nil
+        )
+        guard XCTWaiter.wait(for: [projectSelected], timeout: 40) == .completed else {
+            return XCTFail("The authorized SSH project must be selected")
+        }
+        app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
-        XCTAssertTrue(git.waitForExistence(timeout: 40))
+        let gitSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in git.exists && git.isSelected }, object: nil
+        )
+        guard XCTWaiter.wait(for: [gitSelected], timeout: 40) == .completed else {
+            return XCTFail("The Git Manager must be selected before browsing changes")
+        }
         let remoteURL = URL(fileURLWithPath: root + "/filtered.txt")
         let rootURL = URL(fileURLWithPath: root)
         let change = WorkspaceUITestSupport.fileRow(
             remoteURL, in: window, relativeTo: rootURL
         )
-        XCTAssertTrue(change.waitForExistence(timeout: 90),
-                      "Actual Windows SSH project must show its changed file")
+        guard change.waitForExistence(timeout: 90) else {
+            return XCTFail("Actual Windows SSH project must show its changed file")
+        }
         change.click()
         let review = window.textViews["bailey.diff.canonical"]
         XCTAssertTrue(review.waitForExistence(timeout: 40))
