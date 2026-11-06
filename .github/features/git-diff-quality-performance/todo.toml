@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T3"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -63,10 +63,10 @@ note = "2026-11-06 Git Diff原生编辑通过UTF-16真实前后变更判脏并�
 [[tasks]]
 id = "P2-T3"
 title = "统一实时折叠编辑坐标和手动展开行为"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = "2026-11-06 先用CodeGraph审查DiffTab.editGeneration、editBufferRevision、editPresentationRevision、DiffNativeSurface.render及DiffTextView.setEditingFolds，构造编辑前方新行/跨隐藏区域Undo/点击交错120ms防抖的原生失败前提；只针对证实的错误修复，旧坐标映射同提交删除。"
+commit = "4127eead"
+note = "2026-11-06 实时Git-LF原生行索引和唯一折叠源坐标，修复隐藏内部编辑误展开、无折叠换行行号滞后、删除ghost及高亮在完整行首插删时错位；Red→Green见evidence-p2.md。make test最终864项/16 SSH条件跳过/0失败退出0，make build严格签名通过，独立Bailey Dev三条真实900行折叠/Find Replace/Undo Redo Save GUI测试通过。100k Swift Debug文首P95约457.51ms仍不达标，P2-T1保持blocked，不冒充性能完成。"
 
 [[tasks]]
 id = "P2-T4"
