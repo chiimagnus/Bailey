@@ -53,6 +53,51 @@ final class TextCoordinateIndexTests: XCTestCase {
         }
     }
 
+    func testGitLFNativeLineIndexTracksMixedSeparatorsAndUnicodeEdits() throws {
+        func starts(_ text: String) -> [Int] {
+            var result = [0]
+            for (index, unit) in text.utf16.enumerated() where unit == 10 {
+                result.append(index + 1)
+            }
+            return result
+        }
+        var seed: UInt64 = 0xC1A0F01D
+        func next(_ limit: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 32) % UInt64(limit))
+        }
+        let replacements = ["", "\r", "\n", "\r\n", "👋", "\u{2028}",
+                            "\u{2029}", "abc", "x\n\n", "中文\n👋"]
+        for original in ["", "\r\n", "a\rb\n", "中文👋\u{2028}e\u{301}\u{2029}\n",
+                         String(repeating: "x\r\n", count: 1_000)] {
+            var text = original
+            var index = NativeTextLineIndex(
+                gitLineStarts: starts(text), textLength: text.utf16.count)
+            for _ in 0..<300 {
+                let oldStarts = starts(text)
+                XCTAssertEqual((0..<index.lineCount).map(index.offset(atLine:)), oldStarts)
+                var boundaries = [0]
+                for scalar in text.unicodeScalars {
+                    boundaries.append(boundaries[boundaries.count - 1] + scalar.utf16.count)
+                }
+                let first = next(boundaries.count)
+                let last = first + next(boundaries.count - first)
+                let range = NSRange(location: boundaries[first],
+                                    length: boundaries[last] - boundaries[first])
+                let replacement = replacements[next(replacements.count)]
+                text = (text as NSString).replacingCharacters(in: range, with: replacement)
+                index.replace(in: range, replacementLength: replacement.utf16.count,
+                              text: text as NSString)
+                let updated = starts(text)
+                XCTAssertEqual(index.length, text.utf16.count)
+                XCTAssertEqual((0..<index.lineCount).map(index.offset(atLine:)), updated)
+                for (row, offset) in updated.enumerated() {
+                    XCTAssertEqual(index.row(at: offset), row)
+                }
+            }
+        }
+    }
+
     func testLargeDocumentEditCosts() throws {
         for rows in [382, 1_000, 10_000, 100_000] {
             let source = String(repeating: "struct Item { let value = 123 } // 中文 👋\n", count: rows)

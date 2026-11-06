@@ -1611,6 +1611,132 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testFoldCoordinatesFollowNativeNewlinesBeforeDebouncedDiffArrives() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<1_200).map { "line \($0)\n" }.joined()
+        let modified = original
+            .replacingOccurrences(of: "line 400\n", with: "changed 400\n")
+            .replacingOccurrences(of: "line 700\n", with: "changed 700\n")
+        let path = directory.appendingPathComponent("live-fold-lines.txt")
+        try Data(original.utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", path.lastPathComponent],
+                                            in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                            in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: path)
+
+        let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                           source: .worktree, untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        diff.autoSaveSuspendedForClose = true
+        try await wait { diff.isEditing && diff.editFoldsReady && diff.editFolds.count >= 3 }
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let textView = try XCTUnwrap(findNativeTextView(in: surface, editable: true)
+                                      as? DiffTextView)
+        let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first(where: { $0.textView === textView }))
+        let originalFolds = textView.editingFolds
+        let foldIndex = try XCTUnwrap(originalFolds.firstIndex {
+            $0.range.lowerBound > 400 && $0.range.lowerBound < 700
+        })
+        let originalOffsets = pane.decorations.editSnapshotOffsets
+        XCTAssertFalse(originalOffsets.isEmpty)
+        XCTAssertEqual(Data(textView.string.utf8), Data(modified.utf8))
+        let oldRevision = diff.editPresentationRevision
+        let editLocation = (modified as NSString).range(of: "changed 400\n").location
+            + "changed 400".utf16.count
+        textView.insertText("\n", replacementRange: NSRange(location: editLocation, length: 0))
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(diff.editPresentationRevision, oldRevision,
+                       "This test must inspect the live 120 ms debounce interval")
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + 1,
+                       "An inserted LF before the fold must shift the native hidden-range mapping immediately")
+        XCTAssertEqual(pane.decorations.editSnapshotOffsets.count, originalOffsets.count + 1,
+                       "The currently displayed fold geometry must refer to the edited source")
+        textView.breakUndoCoalescing()
+        textView.insertText("\n", replacementRange: NSRange(location: editLocation, length: 0))
+        textView.breakUndoCoalescing()
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + 2)
+        XCTAssertEqual(pane.decorations.rows.count, originalOffsets.count + 2)
+        let undo = try XCTUnwrap(textView.undoManager)
+        undo.undo()
+        let remainingNewlines = textView.string.utf16.count - modified.utf16.count
+        XCTAssertTrue((0...1).contains(remainingNewlines),
+                      "Native Undo may group adjacent edits, but must undo at least one")
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + remainingNewlines)
+        XCTAssertEqual(pane.decorations.rows.count,
+                       originalOffsets.count + remainingNewlines)
+        if remainingNewlines == 0 {
+            XCTAssertEqual(Data(textView.string.utf8), Data(modified.utf8))
+            XCTAssertFalse(diff.isDirty)
+        }
+        undo.redo()
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + 2)
+        XCTAssertEqual(pane.decorations.rows.count, originalOffsets.count + 2)
+        XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8),
+                       "Editing and Undo during debounce must not save or rewrite the Git file")
+    }
+
+    func testHiddenEditBecomesVisibleAfterDiffWithoutExpandingOtherContext() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<320).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let file = directory.appendingPathComponent("hidden-live.txt")
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", file.lastPathComponent],
+                                               in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                               in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: file)
+        let diff = DiffTab(repoRoot: directory.path, path: file.lastPathComponent,
+                           source: .worktree, untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        diff.autoSaveSuspendedForClose = true
+        try await wait { diff.isEditing && diff.editFoldsReady
+            && diff.editFolds.contains { $0.range.contains(40) }
+        }
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true)
+                                    as? DiffTextView)
+        XCTAssertTrue(editor.editingFolds.contains { $0.range.contains(8) })
+        let revision = diff.editPresentationRevision
+        let change = (modified as NSString).range(of: "line 40")
+        editor.insertText("UPDATED 40", replacementRange: change)
+        let expected = modified.replacingOccurrences(of: "line 40", with: "UPDATED 40")
+        XCTAssertEqual(Data(editor.string.utf8), Data(expected.utf8))
+        XCTAssertTrue(editor.editingFolds.contains { $0.range.contains(8) },
+                      "Unrelated hidden lines must stay collapsed before Diff recomputation")
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+        try await wait { diff.editPresentationRevision > revision
+            && !diff.editFolds.contains { $0.range.contains(40) }
+        }
+        XCTAssertTrue(diff.editFolds.contains { $0.range.contains(8) },
+                      "An unrelated range must remain folded after async Diff")
+        surface.render()
+        XCTAssertEqual(Data(editor.string.utf8), Data(expected.utf8))
+        await diff.save()
+        try await wait { !diff.isLoading && !diff.isDirty }
+        XCTAssertEqual(try Data(contentsOf: file), Data(expected.utf8))
+        let index = GitCommandExecution.runData(["show", ":" + file.lastPathComponent],
+                                                in: directory.path)
+        XCTAssertEqual(index.status, 0)
+        XCTAssertEqual(index.stdout, Data(original.utf8))
+    }
+
     func testEditingBeforeExpandedContextRetainsItsSourceLinesWithoutOpeningOtherFolds() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

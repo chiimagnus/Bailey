@@ -434,6 +434,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             removed = previousRange.length == 0 ? "" : nil
         }
         pendingEdit = nil
+        editPane?.applyLiveNativeEdit(previousRange: previousRange, replacement: replacement)
         diff.nativeTextDidChange(previousRange: previousRange, removed: removed,
                                  replacement: replacement)
     }

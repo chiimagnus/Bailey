@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import XCTest
 
@@ -445,6 +446,105 @@ final class WorkspaceGitUITests: XCTestCase {
         let restored = try capture("Native split diff, restored Ayu Light")
         XCTAssertLessThan(difference(restored.splitDivider, before.splitDivider), 0.04,
                           "Split divider must restore its light color after dark-to-light")
+    }
+
+    func testFoldedWorktreeFindNextReplacesHiddenMatchWithoutChangingOtherLines() throws {
+        let findBoard = NSPasteboard(name: .find)
+        let originalFindItems = try (findBoard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                guard let data = item.data(forType: type), copy.setData(data, forType: type) else {
+                    throw NSError(domain: "BaileyUITestFind", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "Cannot preserve Find pasteboard contents"
+                    ])
+                }
+            }
+            return copy
+        }
+        let originalFindVersion = findBoard.changeCount
+        addTeardownBlock { @MainActor in
+            guard findBoard.changeCount != originalFindVersion else { return }
+            findBoard.clearContents()
+            if !originalFindItems.isEmpty {
+                XCTAssertTrue(findBoard.writeObjects(originalFindItems))
+            }
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        var lines = (0..<320).map { "line \($0)\n" }
+        lines[20] = "line 20 UNIQUE_HIDDEN_FINDER\n"
+        let original = lines.joined()
+        let changed = original.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let file = try fixture.file("folded-find.txt", text: original)
+        try fixture.initializeGit()
+        try changed.write(to: file, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let gitDock = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(gitDock.waitForExistence(timeout: 20))
+        let gitHittable = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            gitDock.exists && gitDock.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [gitHittable], timeout: 12), .completed,
+                       "Wait for the Git Manager panel layout before querying Changes")
+        let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(row.waitForExistence(timeout: 25))
+        row.click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        XCTAssertEqual(editor.value as? String, changed)
+        let folded = window.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "unmodified lines")
+        )
+        XCTAssertTrue(folded.firstMatch.waitForExistence(timeout: 15))
+        editor.click()
+        let before = window.textFields.count + window.searchFields.count
+        app.typeKey("f", modifierFlags: .command)
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textFields.count + window.searchFields.count > before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 10), .completed)
+        let find = window.searchFields.firstMatch.exists
+            ? window.searchFields.firstMatch
+            : window.textFields.element(boundBy: window.textFields.count - 1)
+        XCTAssertTrue(find.exists)
+        find.click()
+        find.typeKey("a", modifierFlags: .command)
+        find.typeText("UNIQUE_HIDDEN_FINDER")
+        XCTAssertEqual(find.value as? String, "UNIQUE_HIDDEN_FINDER",
+                       "Native Find can inherit the user's prior search; the fixture must replace it")
+        app.typeKey("g", modifierFlags: .command)
+        app.typeKey("g", modifierFlags: .command)
+        app.typeKey("f", modifierFlags: [.command, .option])
+        let replace = window.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Replace")
+        ).firstMatch
+        XCTAssertTrue(replace.waitForExistence(timeout: 10),
+                      "Native Replace must be available without leaving the folded editor")
+        replace.click()
+        replace.typeKey("a", modifierFlags: .command)
+        replace.typeText("FOUND20")
+        let replaceAll = window.buttons.matching(
+            NSPredicate(format: "label == %@", "All")
+        ).firstMatch
+        XCTAssertTrue(replaceAll.waitForExistence(timeout: 10))
+        replaceAll.click()
+        let expected = changed.replacingOccurrences(of: "UNIQUE_HIDDEN_FINDER", with: "FOUND20")
+        let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.exists && (editor.value as? String) == expected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 10), .completed,
+                       "Find Next must select the hidden original text without replacing other lines")
+        XCTAssertTrue(folded.firstMatch.exists,
+                      "Replacing one hidden match must keep other unchanged context folded")
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: file, encoding: .utf8)) == expected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "The real file must contain precisely the Find replacement")
+        XCTAssertEqual(editor.value as? String, expected)
     }
 
     func testWorktreeDiffEditsAndPersistsRealGitFile() throws {

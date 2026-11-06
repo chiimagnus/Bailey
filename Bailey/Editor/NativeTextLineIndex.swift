@@ -4,17 +4,33 @@ import Foundation
 
 /// UTF-16 line breaks with a Fenwick index; not a rendering engine.
 struct NativeTextLineIndex {
+    enum BreakMode { case native, gitLF }
+
     private var lineLengths: [Int]
     private var lengths: PrefixSums
+    private let breakMode: BreakMode
     private(set) var length: Int
 
     var lineCount: Int { lineLengths.count }
 
-    init(_ text: NSString) {
+    init(_ text: NSString, breakMode: BreakMode = .native) {
+        self.breakMode = breakMode
         length = text.length
-        let positions = Self.starts(in: text, from: 0, to: text.length)
+        let positions = Self.starts(in: text, from: 0, to: text.length,
+                                    breakMode: breakMode)
         lineLengths = positions.enumerated().map { index, start in
             (index + 1 < positions.count ? positions[index + 1] : text.length) - start
+        }
+        lengths = PrefixSums(lineLengths)
+    }
+
+    init(gitLineStarts: [Int], textLength: Int) {
+        breakMode = .gitLF
+        length = textLength
+        let starts = gitLineStarts.isEmpty ? [0] : gitLineStarts
+        precondition(starts[0] == 0 && starts[starts.count - 1] <= textLength)
+        lineLengths = starts.enumerated().map { index, start in
+            (index + 1 < starts.count ? starts[index + 1] : textLength) - start
         }
         lengths = PrefixSums(lineLengths)
     }
@@ -33,7 +49,8 @@ struct NativeTextLineIndex {
         let delta = replacementLength - range.length
         let end = oldEnd + delta
         let inserted = Self.starts(in: text, from: offset(atLine: first), to: end,
-                                   includesEnd: last == originalCount)
+                                   includesEnd: last == originalCount,
+                                   breakMode: breakMode)
         let newLengths = inserted.enumerated().map { index, start in
             (index + 1 < inserted.count ? inserted[index + 1] : end) - start
         }
@@ -106,8 +123,19 @@ struct NativeTextLineIndex {
         }
     }
 
-    private static func starts(in text: NSString, from start: Int, to end: Int, includesEnd: Bool = true) -> [Int] {
+    private static func starts(in text: NSString, from start: Int, to end: Int,
+                               includesEnd: Bool = true,
+                               breakMode: BreakMode) -> [Int] {
         var result = [start]
+        if breakMode == .gitLF {
+            for offset in start..<end where text.character(at: offset) == 10 {
+                let following = offset + 1
+                if following < end || (includesEnd && following == text.length) {
+                    result.append(following)
+                }
+            }
+            return result
+        }
         var offset = start
         while offset < end {
             var lineEnd = 0
