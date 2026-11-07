@@ -28,16 +28,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertTrue(graphCommit.isHittable,
                       "Previewing the Git historical Diff must keep Git Graph active")
         openHistoricalMenu(file, fixture: fixture, window: window)
-        let viewRevision = app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["View File at Revision", "查看此提交中的文件"]
-        )).firstMatch
-        guard viewRevision.waitForExistence(timeout: 5) else {
-            XCTFail("Historical context menu item missing. AX tree:\n"
-                + String(app.debugDescription.prefix(16000)))
-            return
-        }
-        XCTAssertTrue(viewRevision.isEnabled)
-        viewRevision.click()
+        activateHistoricalMenu(.viewRevision, in: app)
 
         let native = window.textViews.firstMatch
         XCTAssertTrue(native.waitForExistence(timeout: 15))
@@ -75,10 +66,7 @@ final class GitHistoryUITests: XCTestCase {
         let window = app.windows.firstMatch
         try showHistoricalFile(old, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(old, fixture: fixture, window: window)
-        let compare = app.menuItems.matching(NSPredicate(format: "title IN %@",
-            ["Compare with Working File", "与工作区文件比较"])).firstMatch
-        XCTAssertTrue(compare.waitForExistence(timeout: 10))
-        compare.click()
+        activateHistoricalMenu(.compareWorktree, in: app)
         let comparison = window.textViews.firstMatch
         XCTAssertTrue(comparison.waitForExistence(timeout: 15))
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -91,10 +79,7 @@ final class GitHistoryUITests: XCTestCase {
                        "Unified and split historical Diff must read both renamed file versions")
 
         openHistoricalMenu(old, fixture: fixture, window: window)
-        let open = app.menuItems.matching(NSPredicate(format: "title IN %@",
-            ["Open Working File", "打开工作区文件"])).firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 10))
-        open.click()
+        activateHistoricalMenu(.openWorkingFile, in: app)
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(renamed, in: window)
             .waitForExistence(timeout: 15), "Git history must open the renamed path, not a nonexistent old path")
         let live = window.textViews.firstMatch
@@ -123,22 +108,19 @@ final class GitHistoryUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(binary, commit: "E2E fixture history", fixture: fixture, app: app)
-        openHistoricalMenu(binary, fixture: fixture, window: window)
-        let view = app.menuItems.matching(NSPredicate(format: "title IN %@",
-            ["View File at Revision", "查看此提交中的文件"])).firstMatch
-        XCTAssertTrue(view.waitForExistence(timeout: 10))
-        let metadata = XCTNSPredicateExpectation(predicate: NSPredicate(
-            format: "enabled == NO"), object: view)
-        XCTAssertEqual(XCTWaiter.wait(for: [metadata], timeout: 15), .completed,
-                       "Binary Git blobs must not be offered as editable native text")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        // This XCTest Runner cannot enumerate native context-menu items.
+        // Open the actual binary Git Diff and assert a visible read restriction,
+        // rather than incorrectly treating the missing AX item as disabled.
+        historicalFileRow(binary, fixture: fixture, window: window).click()
+        let binaryErrors = ["Binary file", "二进制文件"]
+        let binaryError = window.staticTexts.matching(NSPredicate(
+            format: "label IN %@ OR value IN %@", binaryErrors, binaryErrors
+        )).firstMatch
+        XCTAssertTrue(binaryError.waitForExistence(timeout: 15),
+                      "Binary Git revisions must display a read restriction instead of editable text")
 
         openHistoricalMenu(large, fixture: fixture, window: window)
-        let largeAction = app.menuItems.matching(NSPredicate(format: "title IN %@",
-            ["View File at Revision", "查看此提交中的文件"])).firstMatch
-        XCTAssertTrue(largeAction.waitForExistence(timeout: 10))
-        XCTAssertTrue(largeAction.isEnabled)
-        largeAction.click()
+        activateHistoricalMenu(.viewRevision, in: app)
         let errors = ["File is too large to diff", "文件过大，无法显示 diff"]
         let tooLarge = window.staticTexts.matching(NSPredicate(
             format: "label IN %@ OR value IN %@", errors, errors)).firstMatch
@@ -165,10 +147,7 @@ final class GitHistoryUITests: XCTestCase {
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(file, fixture: fixture, window: window)
-        let reset = app.menuItems.matching(NSPredicate(format: "title IN %@",
-            ["Reset File to Revision…", "恢复到此版本…"])).firstMatch
-        XCTAssertTrue(reset.waitForExistence(timeout: 10))
-        reset.click()
+        activateHistoricalMenu(.resetFile, in: app)
         let alert = window.sheets.firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 15))
         let confirm = alert.buttons.matching(NSPredicate(format: "title IN %@",
@@ -236,16 +215,7 @@ final class GitHistoryUITests: XCTestCase {
 
         func confirm(reset: Bool) throws {
             openHistoricalMenu(file, fixture: fixture, window: window)
-            let resetOption = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["Reset File to Revision…", "恢复到此版本…"]
-            )).firstMatch
-            guard resetOption.waitForExistence(timeout: 5) else {
-                XCTFail("Historical reset menu item missing. AX tree:\n"
-                    + String(app.debugDescription.prefix(16000)))
-                return
-            }
-            XCTAssertTrue(resetOption.isEnabled)
-            resetOption.click()
+            activateHistoricalMenu(.resetFile, in: app)
             let alert = window.sheets.firstMatch
             XCTAssertTrue(alert.waitForExistence(timeout: 15),
                           "Reset requires a native, window-owned confirmation sheet")
@@ -275,6 +245,23 @@ final class GitHistoryUITests: XCTestCase {
                        "Historical file reset must not move HEAD")
         XCTAssertEqual(try Data(contentsOf: sibling), Data("unrelated file\n".utf8),
                        "Historical reset must not touch other tracked files")
+    }
+
+    private enum HistoricalMenuAction: Int {
+        case viewRevision = 2
+        case compareWorktree = 3
+        case openWorkingFile = 4
+        case resetFile = 5
+    }
+
+    private func activateHistoricalMenu(_ action: HistoricalMenuAction, in app: XCUIApplication) {
+        // Native context-menu items are visually present but omitted by this
+        // XCTest Runner's AX snapshot. Keyboard navigation exercises the
+        // actual NSMenu; callers verify the resulting view or Git bytes.
+        for _ in 0..<action.rawValue {
+            app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        }
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
     }
 
     private func revision(in fixture: WorkspaceUITestFixture) throws -> String {
