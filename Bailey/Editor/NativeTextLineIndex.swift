@@ -24,17 +24,6 @@ struct NativeTextLineIndex {
         lengths = PrefixSums(lineLengths)
     }
 
-    init(gitLineStarts: [Int], textLength: Int) {
-        breakMode = .gitLF
-        length = textLength
-        let starts = gitLineStarts.isEmpty ? [0] : gitLineStarts
-        precondition(starts[0] == 0 && starts[starts.count - 1] <= textLength)
-        lineLengths = starts.enumerated().map { index, start in
-            (index + 1 < starts.count ? starts[index + 1] : textLength) - start
-        }
-        lengths = PrefixSums(lineLengths)
-    }
-
     func offset(atLine row: Int) -> Int { lengths.sum(before: row) }
     func row(at offset: Int) -> Int { min(lengths.containing(offset), lineCount - 1) }
 

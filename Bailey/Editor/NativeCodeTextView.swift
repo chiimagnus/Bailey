@@ -661,13 +661,12 @@ class NativeCodeTextView: NSTextView {
         if !isWrappingLines, let width = enclosingScrollView?.contentView.bounds.width {
             configureWrapping(false, viewportWidth: width)
         }
-        storageCharactersDidChange()
+        storageCharactersDidChange(in: previousRange, replacement: replacement)
         onCharacterEdit?(previousRange, replacement)
     }
 
-    /// Subclasses can invalidate presentation caches on every storage change,
-    /// including Undo/Redo which bypass NSTextView.didChangeText.
-    func storageCharactersDidChange() {}
+    /// Subclasses receive the actual change, including Undo/Redo and IME edits.
+    func storageCharactersDidChange(in previousRange: NSRange, replacement: String) {}
 }
 
 /// Cached natural line widths, updated only for the rows affected by an edit.

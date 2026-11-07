@@ -71,8 +71,7 @@ final class TextCoordinateIndexTests: XCTestCase {
         for original in ["", "\r\n", "a\rb\n", "中文👋\u{2028}e\u{301}\u{2029}\n",
                          String(repeating: "x\r\n", count: 1_000)] {
             var text = original
-            var index = NativeTextLineIndex(
-                gitLineStarts: starts(text), textLength: text.utf16.count)
+            var index = NativeTextLineIndex(text as NSString, breakMode: .gitLF)
             for _ in 0..<300 {
                 let oldStarts = starts(text)
                 XCTAssertEqual((0..<index.lineCount).map(index.offset(atLine:)), oldStarts)

@@ -15,7 +15,8 @@ final class DiffFoldLiveMutationTests: XCTestCase {
                 range: 5..<23,
                 separator: DiffCollapsedRun(baselineRange: 5..<23, direction: .both)
             )
-            XCTAssertTrue(editor.setEditingFolds([originalFold], lineOffsets: starts))
+            editor.resetLiveGitLineIndex(text)
+            XCTAssertTrue(editor.setEditingFolds([originalFold]))
             let range = (text as NSString).range(of: "line 14")
             XCTAssertNotEqual(range.location, NSNotFound)
 
@@ -44,7 +45,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         pane.setEditBufferText(after)
         pane.setEditingFolds(
-            folds, lineOffsets: starts,
+            folds,
             baseDecorations: .edit(
                 state: projection.editState, snapshotOffsets: starts,
                 lineCount: starts.count,
@@ -64,7 +65,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
         XCTAssertNotNil(pane.decorations.ghostsByAnchor[newAnchor],
                         "A deleted row must follow its source line without waiting for Diff")
         XCTAssertNil(pane.decorations.ghostsByAnchor[ghost.anchorLine])
-        XCTAssertEqual(pane.decorations.editSnapshotOffsets[newAnchor],
+        XCTAssertEqual(pane.textView.liveGitOffset(forLine: newAnchor),
                        (pane.textView.string as NSString).range(of: "changed 40").location)
         XCTAssertEqual(pane.decorations.rows.count, starts.count + 1)
     }
@@ -88,7 +89,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
             lines: [NSAttributedString(string: "let value = 1")]
         )
         let state = DiffEditState(addedLines: [0], addedEmphasis: [:], ghosts: [])
-        pane.setEditingFolds([], lineOffsets: initialOffsets,
+        pane.setEditingFolds([],
                              baseDecorations: .edit(state: state, snapshotOffsets: initialOffsets,
                                                     lineCount: 1, ghostBlocks: [ghost]),
                              revision: 1)
@@ -151,7 +152,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
             let index = NativeTextLineIndex(text as NSString, breakMode: .gitLF)
             let starts = (0..<index.lineCount).map(index.offset(atLine:))
             pane.setEditingFolds(
-                [], lineOffsets: starts,
+                [],
                 baseDecorations: .edit(
                     state: DiffEditState(addedLines: [deletedRows == 0 ? 2 : 3],
                                          addedEmphasis: [:], ghosts: []),
@@ -173,15 +174,209 @@ final class DiffFoldLiveMutationTests: XCTestCase {
         }
     }
 
+    func testFoldedTextKitEnumeratesOnlyVisibleSourceInBothDirections() throws {
+        let source = (0..<100).map { "row \($0)" }.joined(separator: "\n")
+        let starts = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let collapsed = [10..<45, 60..<94]
+        let folds = collapsed.map {
+            DiffEditFold(range: $0,
+                         separator: DiffCollapsedRun(baselineRange: $0, direction: .both))
+        }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            folds, baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+            revision: 1
+        )
+        let content = pane.textView.nativeContentManager
+        let base = content.documentRange.location
+        let wanted = (0..<100).filter { row in
+            !collapsed.contains { $0.contains(row) && $0.lowerBound != row }
+        }
+        for reverse in [false, true] {
+            var actual: [Int] = []
+            let edge = content.enumerateTextElements(
+                from: nil, options: reverse ? .reverse : []
+            ) { element in
+                if let range = element.elementRange {
+                    let offset = content.offset(from: base, to: range.location)
+                    actual.append(pane.textView.liveGitLine(atUTF16: offset) ?? -1)
+                }
+                return true
+            }
+            XCTAssertEqual(actual, reverse ? Array(wanted.reversed()) : wanted)
+            XCTAssertEqual(content.offset(from: base, to: try XCTUnwrap(edge)),
+                           reverse ? 0 : (source as NSString).length)
+        }
+        let hiddenOffset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 30))
+        let hiddenLocation = try XCTUnwrap(content.location(base, offsetBy: hiddenOffset))
+        for (reverse, nextExpected) in [(false, 45), (true, 10)] {
+            var first: Int?
+            _ = content.enumerateTextElements(
+                from: hiddenLocation, options: reverse ? .reverse : []
+            ) { element in
+                guard let range = element.elementRange else { return true }
+                let offset = content.offset(from: base, to: range.location)
+                first = pane.textView.liveGitLine(atUTF16: offset)
+                return false
+            }
+            XCTAssertEqual(first, nextExpected,
+                           "Enumeration starting inside hidden text must reach a visible row")
+        }
+    }
+
+    func testNewSourceRetiresOldFoldsGhostsAndPresentationRevision() {
+        let oldText = (0..<200).map { "old \($0)" }.joined(separator: "\n")
+        let oldStarts = DiffLineSplitter.lines(of: oldText).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        pane.setEditBufferText(oldText)
+        let range = 50..<150
+        pane.setEditingFolds(
+            [DiffEditFold(range: range,
+                          separator: DiffCollapsedRun(baselineRange: range, direction: .both))],
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: oldStarts, lineCount: oldStarts.count,
+                ghostBlocks: [.init(anchorLine: 175, firstOldLine: 175,
+                                    lines: [NSAttributedString(string: "old deletion")])]),
+            revision: 1
+        )
+        XCTAssertFalse(pane.textView.editingFolds.isEmpty)
+        XCTAssertNotNil(pane.decorations.ghostsByAnchor[175])
+
+        let replacement = "fresh\ncontent\n"
+        pane.setEditBufferText(replacement)
+        XCTAssertEqual(pane.textView.string, replacement)
+        XCTAssertTrue(pane.textView.editingFolds.isEmpty)
+        XCTAssertTrue(pane.decorations.rows.isEmpty)
+        XCTAssertTrue(pane.decorations.ghostsByAnchor.isEmpty)
+        XCTAssertNil(pane.textView.overrideContentHeight)
+
+        let newStarts = DiffLineSplitter.lines(of: replacement).lines.map(\.utf16Range.location)
+        pane.setEditingFolds(
+            [], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [1], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: newStarts, lineCount: newStarts.count, ghostBlocks: []),
+            revision: 1
+        )
+        XCTAssertEqual(pane.decorations.rows.count, 2,
+                       "A new source must accept its first presentation despite reused version")
+        XCTAssertEqual(pane.decorations.rows[1].kind, .added)
+        XCTAssertEqual(pane.textView.liveGitOffset(forLine: 1), 6)
+    }
+
+    func testLiveGhostSpacingSwitchesBetweenVirtualLFAndNativeCR() throws {
+        let text = "first\nsecond\n"
+        let second = (text as NSString).range(of: "second").location
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(text)
+        pane.setEditingFolds(
+            [], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: [0, second], lineCount: 2,
+                ghostBlocks: [.init(anchorLine: 1, firstOldLine: 1,
+                                    lines: [NSAttributedString(string: "removed")])]),
+            revision: 1
+        )
+        pane.textView.isEditable = true
+        pane.textView.onCharacterEdit = { [weak pane] range, replacement in
+            pane?.applyLiveNativeEdit(previousRange: range, replacement: replacement)
+        }
+        func ghostGap() throws -> CGFloat {
+            let attributes = try XCTUnwrap(pane.textView.attributedText)
+            let style = attributes.attribute(.paragraphStyle, at: second,
+                                             effectiveRange: nil) as? NSParagraphStyle
+            return style?.paragraphSpacingBefore ?? 0
+        }
+        XCTAssertEqual(try ghostGap(), 0, accuracy: 0.5,
+                       "Fixed LF uses virtual deletion geometry, not native paragraph spacing")
+        pane.textView.insertText("\r", replacementRange: NSRange(location: second + 3, length: 0))
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+        XCTAssertEqual(try ghostGap(), DiffTypography.lineHeight(for: font), accuracy: 0.5,
+                       "A new CR paragraph must switch the same ghost to measured native spacing")
+        pane.textView.insertText("", replacementRange: NSRange(location: second + 3, length: 1))
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+        XCTAssertEqual(try ghostGap(), 0, accuracy: 0.5,
+                       "Restoring LF-only text must remove stale native ghost spacing")
+        XCTAssertEqual(pane.textView.string, text)
+        XCTAssertEqual(pane.textView.liveGitSourceLineCount, 2)
+    }
+
+    func testEmphasisKeepsItsSourceCharacterAcrossAnEarlierStructuralEdit() {
+        let source = "first\nabcXdef\nthird\n"
+        let starts = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            [], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [1],
+                                     addedEmphasis: [1: [NSRange(location: 3, length: 1)]],
+                                     ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+            revision: 1
+        )
+        XCTAssertEqual(pane.decorations.rows[1].emphasis,
+                       [NSRange(location: 3, length: 1)])
+        pane.textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0),
+                                                     with: "inserted\n")
+        pane.applyLiveNativeEdit(previousRange: NSRange(location: 0, length: 0),
+                                 replacement: "inserted\n")
+        XCTAssertEqual(pane.decorations.rows[2].kind, .added)
+        XCTAssertEqual(pane.decorations.rows[2].emphasis,
+                       [NSRange(location: 3, length: 1)])
+        let offset = pane.textView.liveGitOffset(forLine: 2) ?? -1
+        XCTAssertEqual((pane.textView.string as NSString).substring(
+            with: NSRange(location: offset + 3, length: 1)), "X")
+    }
+
+    func testLiveGitRowsExcludeTerminalEmptyParagraphAcrossEOFEdits() {
+        let cases: [(text: String, range: NSRange, replacement: String)] = [
+            ("first\nsecond\n", NSRange(location: 0, length: 0), "\n"),
+            ("one\n", NSRange(location: 4, length: 0), "tail"),
+            ("one\n", NSRange(location: 4, length: 0), "tail\n"),
+            ("one", NSRange(location: 3, length: 0), "\n"),
+            ("one\n", NSRange(location: 3, length: 1), ""),
+            ("one\n", NSRange(location: 0, length: 4), ""),
+            ("", NSRange(location: 0, length: 0), "one\n"),
+            ("one\n", NSRange(location: 4, length: 0), "\n"),
+        ]
+        for item in cases {
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+            pane.setEditBufferText(item.text)
+            let originalLines = DiffLineSplitter.lines(of: item.text).lines
+            let starts = originalLines.map(\.utf16Range.location)
+            pane.setEditingFolds(
+                [], baseDecorations: .edit(
+                    state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                    snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+                revision: 1
+            )
+            let changed = (item.text as NSString).replacingCharacters(in: item.range,
+                                                                       with: item.replacement)
+            pane.textView.textStorage?.replaceCharacters(in: item.range, with: item.replacement)
+            pane.applyLiveNativeEdit(previousRange: item.range, replacement: item.replacement)
+            let actualLines = DiffLineSplitter.lines(of: changed).lines
+            XCTAssertEqual(pane.textView.liveGitSourceLineCount, actualLines.count,
+                           "Git source line count must exclude TextKit's terminal empty paragraph")
+            XCTAssertEqual(pane.decorations.rows.count, max(1, actualLines.count),
+                           "Live Diff rows must track Git line count after EOF changes")
+            XCTAssertEqual(pane.textView.string, changed)
+        }
+    }
+
     func testUnfoldedEditableDiffRowsTrackInsertedLFBeforeBackgroundProjection() {
         let text = "first\nsecond\n"
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         pane.setEditBufferText(text)
-        let index = NativeTextLineIndex(text as NSString, breakMode: .gitLF)
-        let starts = (0..<index.lineCount).map(index.offset(atLine:))
+        let starts = DiffLineSplitter.lines(of: text).lines.map(\.utf16Range.location)
         let state = DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: [])
         pane.setEditingFolds(
-            [], lineOffsets: starts,
+            [],
             baseDecorations: .edit(state: state, snapshotOffsets: starts,
                                    lineCount: starts.count, ghostBlocks: []),
             revision: 1
@@ -191,6 +386,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
         pane.applyLiveNativeEdit(previousRange: insertion, replacement: "\n")
         XCTAssertEqual(pane.decorations.rows.count, starts.count + 1,
                        "An unfolded editable Diff must not display stale row numbers during debounce")
-        XCTAssertEqual(pane.decorations.editSnapshotOffsets.count, starts.count + 1)
+        XCTAssertEqual(pane.textView.liveGitSourceLineCount, starts.count + 1)
+        XCTAssertEqual(pane.decorations.rows.count, starts.count + 1)
     }
 }

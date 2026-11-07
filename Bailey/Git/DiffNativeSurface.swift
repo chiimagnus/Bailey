@@ -136,13 +136,9 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             restorePendingViewports()
             if let row = pendingFirstChangeRow, let pane = editPane, !pane.isHidden {
                 pane.layoutSubtreeIfNeeded()
-                pane.scrollView.layoutSubtreeIfNeeded()
-                pane.textView.layoutSubtreeIfNeeded()
                 pane.scrollToRow(row)
                 if let leftPane, !leftPane.isHidden {
                     leftPane.layoutSubtreeIfNeeded()
-                    leftPane.scrollView.layoutSubtreeIfNeeded()
-                    leftPane.textView.layoutSubtreeIfNeeded()
                     leftPane.setScrollOffset(pane.scrollOffset)
                 }
                 let rowHeight = DiffTypography.paragraphStyle(for: TerminalFont.current())
@@ -212,9 +208,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                 loadSourceText(diff.editedNewContent, revision: diff.editBufferRevision,
                                path: diff.path, into: pane)
             }
-            let lineOffsets = diff.editDecorations.editSnapshotOffsets
-            pane.setEditingFolds(folds, lineOffsets: lineOffsets,
-                                 baseDecorations: diff.editDecorations,
+            pane.setEditingFolds(folds, baseDecorations: diff.editDecorations,
                                  revision: diff.editPresentationRevision)
             if let display = diff.display {
                 if diff.showsCanonicalComparison {
