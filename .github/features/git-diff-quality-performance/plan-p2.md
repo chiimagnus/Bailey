@@ -43,8 +43,9 @@
 `DiffCodePaneView.invalidateDocumentLayout/layout/applyContentHeightOverride/applyGhostSpacing`、
 `DiffTextView.setEditingFolds/hasNativeNonLFSeparators/storageCharactersDidChange`、
 `DiffRowGeometry.visibleRows`；对照已有 `NativeTextLineIndex`（AppKit 自然段落）、
-`TextCoordinateIndex`（仅 LF）与 `DiffDecorations.lineStartOffsets/editSnapshotOffsets`
-（已存的 Git 行 UTF-16 起点）；**三者不能语义互换**，不另造新的行索引 owner；
+`TextCoordinateIndex`（仅 LF）与只读 `DiffDecorations.lineStartOffsets`
+（已存的 Git 行 UTF-16 起点）。编辑态已移除过期快照偏移字段，
+仅复用唯一实时 Git-LF 索引；**原生段落与 Git 行不能语义互换**，不另造行索引 owner；
 必要时调整现有 `Bailey/Editor/NativeCodeTextView.swift` 的共用 TextKit 几何，
 但必须先证明 Files 同根因和影响范围。
 测试主要在 `BaileyTests/Git/NativeDiffTabTests.swift`、

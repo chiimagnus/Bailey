@@ -47,10 +47,10 @@ note = "2026-11-06 技术决策已写入idea.md及P2/P3/P4：TextKit现有快速
 [[tasks]]
 id = "P2-T1"
 title = "修复原生首帧布局和滚动几何的共同根因"
-status = "blocked"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = "技术准入尚未满足：TextKit估算滚动仅4/17准确，relocateViewport在100k最慢310ms，折叠隐藏元素原型只证局部布局。未证明单一TextKit owner能同时满足17次深跳+真实完整滚动范围+100k热视口32ms；按plan-p2.md Gate保留全文布局，先推进独立P2-T2。"
+commit = "c8d92f1a"
+note = "2026-11-07 根因修复折叠原生元素枚举、实时Git-LF索引、冷远跳及ghost几何；24k Unstaged组件位图P95约899→603ms，100k 500折叠+500ghost冷远跳P95约3.79ms，结构编辑P95文首/中/末约29.61/28.72/27.03ms。make test 887项16条件跳过0失败退出0，make build与make build:release及验签成功；Bailey Dev WorkspaceGitUITests 8通过1 SSH跳过。另行扩大执行的GitHistoryUITests 5项冷启动/右键AX未通过，已留evidence-p2.md供GUI交互任务跟进，不冒称全量GUI通过。原子提交c8d92f1a，正式Bailey未替换/重启。"
 
 [[tasks]]
 id = "P2-T2"
@@ -71,18 +71,18 @@ note = "2026-11-06 实时Git-LF原生行索引和唯一折叠源坐标，修复�
 [[tasks]]
 id = "P2-T4"
 title = "收敛 Unified Split 滚动与原生绘制"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
+commit = "036873d5b216e7b946dc2385990fb1cc6f23e309"
+note = "修复首行删除ghost占位与EOF实时行边界，并对字号重新计算；共享TextKit真实退役与Neon晚到回调去活，重挂载保留状态。完整make test 870项16条件跳过0失败；真实GUI 4项及新增截图1项通过，原生字形位置测试通过；make build严格验签，正式App整包安装并二次验签且未重启。见evidence-p2.md。P2-T1仍No-Go。"
 
 [[tasks]]
 id = "P2-T5"
 title = "验证 Git 行浏览、折叠 AX 与焦点动作"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t5"
-commit = ""
-note = ""
+commit = "a9e41fc178ec9f48625526e477249913b602d01e"
+note = "2026-11-06 根因修复 Files 单一交互代次拒绝跨 await 过期 Auto Reveal，防止 ABA、右键目标与拖动被清空；Git 10k 模型选择 P95 4.26ms，折叠 AX 正确。最新 make test 879项/16 SSH 条件跳过/0失败，受影响宿主285项/1条件跳过/0失败，Bailey Dev 8项真实 GUI 全通过，make build 严格验签成功。原子提交 a9e41fc1，P2-T1 实验另留工作区。"
 
 [[tasks]]
 id = "P3-T1"
