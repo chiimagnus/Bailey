@@ -1076,30 +1076,34 @@ final class DiffTab: nonisolated Identifiable {
         let selection = await gitObject(location, in: root, backend: backend)
         if let error = selection.error { return (.failed(error), selection.isUnmerged) }
         guard let oid = selection.oid else { return (.missing, selection.isUnmerged) }
-        let size = await GitCommandExecution.run(
-            ["cat-file", "-s", oid], in: root, backend: backend
+        // Read the immutable OID through the same Git environment as metadata.
+        // One bounded --batch exchange returns type, size and complete bytes.
+        let result = await GitCommandExecution.runData(
+            ["cat-file", "--batch"], in: root, timeout: 60,
+            stdoutLimit: maxBytes + 128, stdin: Data((oid + "\n").utf8), backend: backend
         )
-        guard size.status == 0 else {
-            return (.failed(size.stderr.isEmpty
-                ? String(localized: "Unable to read Git content", table: "Git") : size.stderr), selection.isUnmerged)
+        if result.status == -3 { return (.tooLarge, selection.isUnmerged) }
+        let failure = String(localized: "Unable to read Git content", table: "Git")
+        guard result.status == 0 else {
+            return (.failed(result.stderr.isEmpty ? failure : result.stderr), selection.isUnmerged)
         }
-        guard let byteCount = Int(size.stdout.trimmingCharacters(in: .whitespacesAndNewlines)),
-              byteCount >= 0 else {
-            return (.failed(String(localized: "Unable to read Git content", table: "Git")), selection.isUnmerged)
+        let data = result.stdout
+        guard let headerEnd = data.firstIndex(of: 10), headerEnd <= 128,
+              let header = String(bytes: data[..<headerEnd], encoding: .utf8) else {
+            return (.failed(failure), selection.isUnmerged)
+        }
+        let fields = header.split(separator: " ")
+        guard fields.count == 3, fields[0] == oid, fields[1] == "blob",
+              let byteCount = Int(fields[2]), byteCount >= 0 else {
+            return (.failed(failure), selection.isUnmerged)
         }
         guard byteCount <= maxBytes else { return (.tooLarge, selection.isUnmerged) }
-        let blob = await GitCommandExecution.runData(
-            ["cat-file", "blob", oid], in: root, stdoutLimit: maxBytes + 1, backend: backend
-        )
-        guard blob.status == 0 else {
-            return (.failed(blob.stderr.isEmpty
-                ? String(localized: "Unable to read Git content", table: "Git") : blob.stderr), selection.isUnmerged)
-        }
-        guard blob.stdout.count <= maxBytes else { return (.tooLarge, selection.isUnmerged) }
-        guard blob.stdout.count == byteCount else {
+        let start = headerEnd + 1
+        guard data.count == start + byteCount + 1, data.last == 10 else {
             return (.failed(String(localized: "Incomplete Git content", table: "Git")), selection.isUnmerged)
         }
-        guard !blob.stdout.contains(0), let text = String(data: blob.stdout, encoding: .utf8) else {
+        let blob = Data(data[start..<(start + byteCount)])
+        guard !blob.contains(0), let text = String(data: blob, encoding: .utf8) else {
             return (.binary, selection.isUnmerged)
         }
         return (.content(text, oid: oid), selection.isUnmerged)
@@ -1120,23 +1124,26 @@ final class DiffTab: nonisolated Identifiable {
         }
         let limit = 1 << 16
         let metadata = await GitCommandExecution.runData(
-            args, in: root, stdoutLimit: limit + 1, backend: backend
+            args, in: root, timeout: 60, stdoutLimit: limit + 1, backend: backend
         )
         if metadata.status != 0 {
             if case .tree("HEAD", _) = location {
                 // A verified unborn HEAD has no tree. An arbitrary bad ref,
                 // missing repository or failed command must not masquerade as one.
                 let head = await GitCommandExecution.run(
-                    ["rev-parse", "-q", "--verify", "HEAD^{commit}"], in: root, backend: backend
+                    ["rev-parse", "-q", "--verify", "HEAD^{commit}"],
+                    in: root, timeout: 60, backend: backend
                 )
                 if head.status == 1 {
                     let symbolic = await GitCommandExecution.run(
-                        ["symbolic-ref", "-q", "HEAD"], in: root, backend: backend
+                        ["symbolic-ref", "-q", "HEAD"],
+                        in: root, timeout: 60, backend: backend
                     )
                     if symbolic.status == 0 {
                         let branch = symbolic.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
                         let ref = await GitCommandExecution.run(
-                            ["show-ref", "--verify", "--quiet", branch], in: root, backend: backend
+                            ["show-ref", "--verify", "--quiet", branch],
+                            in: root, timeout: 60, backend: backend
                         )
                         if ref.status == 1 { return (nil, false, nil) }
                     }
@@ -1224,19 +1231,13 @@ final class DiffTab: nonisolated Identifiable {
             return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
         }
         let failure = String(localized: "Unable to read Git content", table: "Git")
-        let cleaned: WorkspaceRunResult
-        do {
-            cleaned = try await backend.run(
-                argv: ["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
-                       "LC_ALL=C", "git", "hash-object", "--path=" + worktreePath, "--stdin"],
-                cwd: root, env: nil, stdin: Data(worktree.utf8), timeout: 60
-            )
-        } catch {
-            return (nil, nil, error.localizedDescription, false)
-        }
+        let cleaned = await GitCommandExecution.runData(
+            ["hash-object", "--path=" + worktreePath, "--stdin"],
+            in: root, timeout: 60, stdoutLimit: 128,
+            stdin: Data(worktree.utf8), backend: backend
+        )
         guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
-            let detail = String(decoding: cleaned.stderr, as: UTF8.self)
-            return (nil, nil, detail.isEmpty ? failure : detail, false)
+            return (nil, nil, cleaned.stderr.isEmpty ? failure : cleaned.stderr, false)
         }
         let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1244,7 +1245,7 @@ final class DiffTab: nonisolated Identifiable {
             ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
              "--no-color", "--no-renames", "--full-index", "--unified=0",
              "--inter-hunk-context=0"] + comparison + ["--", path],
-            in: root, stdoutLimit: maxBytes * 4 + 1, backend: backend
+            in: root, timeout: 60, stdoutLimit: maxBytes * 4 + 1, backend: backend
         )
         guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
               let text = String(data: patch.stdout, encoding: .utf8) else {

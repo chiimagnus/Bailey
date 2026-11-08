@@ -13,13 +13,19 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private(set) var writing = false
     private(set) var reading = false
     private(set) var writes = 0
-    private var mutateIndexAfterSize = false
+    private var mutateIndexDuringBatch = false
     private var indexMoved = false
     private var shortGitBlob = false
+    private var batchOverride: Data?
 
-    func simulateIndexChangeAfterSize() { mutateIndexAfterSize = true }
+    func simulateBatchResponse(_ bytes: Data) {
+        mutateIndexDuringBatch = true
+        batchOverride = bytes
+    }
+
+    func simulateIndexChangeDuringBatch() { mutateIndexDuringBatch = true }
     func simulateIncompleteGitBlob() {
-        mutateIndexAfterSize = true
+        mutateIndexDuringBatch = true
         shortGitBlob = true
     }
 
@@ -50,7 +56,7 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
-        guard mutateIndexAfterSize else {
+        guard mutateIndexDuringBatch else {
             return .init(status: 0, stdout: Data(), stderr: Data())
         }
         let headID = String(repeating: "a", count: 40)
@@ -69,19 +75,15 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
             let id = indexMoved ? newID : indexID
             return result(Data("100644 \(id) 0\tstable.txt\0".utf8))
         }
-        if argv.contains("cat-file"), argv.count >= 4 {
-            let id = argv.last ?? ""
-            let bytes = id == headID || id == "HEAD:stable.txt" ? head
-                : id == indexID ? index
-                : id == newID || id == ":stable.txt" ? (indexMoved ? moved : index)
-                : Data()
-            if argv.contains("-s") {
-                if id == indexID || id == ":stable.txt" { indexMoved = true }
-                return result(Data("\(bytes.count)\n".utf8))
-            }
-            if argv.contains("blob") {
-                return result(shortGitBlob && id == indexID ? Data(bytes.dropLast()) : bytes)
-            }
+        if argv.contains("cat-file"), argv.contains("--batch"), let stdin {
+            let id = String(decoding: stdin, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if id == indexID, let batchOverride { return result(batchOverride) }
+            let bytes = id == headID ? head : id == indexID ? index
+                : id == newID ? moved : Data()
+            if id == indexID { indexMoved = true }
+            let body = shortGitBlob && id == indexID ? Data(bytes.dropLast()) : bytes
+            return result(Data("\(id) blob \(bytes.count)\n".utf8) + body + Data([10]))
         }
         return .init(status: 128, stdout: Data(), stderr: Data("unexpected Git command".utf8))
     }
@@ -3838,6 +3840,33 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(tab.newContent, "")
     }
 
+    func testSelectedGitBatchRejectsInvalidTypeMissingOIDAndOverLimitHeader() async throws {
+        let indexOID = String(repeating: "b", count: 40)
+        let cases: [(String, Data, String)] = [
+            ("wrong type", Data("\(indexOID) tree 7\nindexA\n\n".utf8),
+             String(localized: "Unable to read Git content", table: "Git")),
+            ("missing OID", Data("\(indexOID) missing\n".utf8),
+             String(localized: "Unable to read Git content", table: "Git")),
+            ("mismatched OID", Data("\(String(repeating: "e", count: 40)) blob 7\nindexA\n\n".utf8),
+             String(localized: "Unable to read Git content", table: "Git")),
+            ("over 5MiB", Data("\(indexOID) blob \(5 * 1024 * 1024 + 1)\n".utf8),
+             String(localized: "File is too large to diff", table: "Git")),
+            ("trailing bytes", Data("\(indexOID) blob 7\nindexA\n\nextra".utf8),
+             String(localized: "Incomplete Git content", table: "Git")),
+        ]
+        for (name, bytes, expected) in cases {
+            let backend = DiffWorkspaceFixture()
+            await backend.simulateBatchResponse(bytes)
+            let tab = DiffTab(repoRoot: "/fixture", path: "stable.txt", source: .staged,
+                              untracked: false, origPath: nil, backend: backend,
+                              workspaceIdentity: nil, preferences: try isolatedPreferences())
+            try await wait({ !tab.isLoading }, timeout: 5)
+            XCTAssertEqual(tab.error, expected, name)
+            XCTAssertFalse(tab.hasLoadedContent, name)
+            XCTAssertFalse(tab.hasChanges, name)
+        }
+    }
+
     func testFoldingPreviousDisplayCannotOverrideNewLoadedDiff() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -3876,7 +3905,7 @@ final class NativeDiffTabTests: XCTestCase {
 
     func testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob() async throws {
         let backend = DiffWorkspaceFixture()
-        await backend.simulateIndexChangeAfterSize()
+        await backend.simulateIndexChangeDuringBatch()
         let domain = "bailey-diff-index-race-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
