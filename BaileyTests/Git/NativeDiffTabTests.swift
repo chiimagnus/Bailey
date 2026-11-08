@@ -16,6 +16,7 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private var mutateIndexDuringBatch = false
     private var indexMoved = false
     private var shortGitBlob = false
+    private var batchOIDs: [String] = []
     private var batchOverride: Data?
 
     func simulateBatchResponse(_ bytes: Data) {
@@ -23,6 +24,7 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         batchOverride = bytes
     }
 
+    func selectedBatchOIDs() -> [String] { batchOIDs }
     func simulateIndexChangeDuringBatch() { mutateIndexDuringBatch = true }
     func simulateIncompleteGitBlob() {
         mutateIndexDuringBatch = true
@@ -78,6 +80,7 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         if argv.contains("cat-file"), argv.contains("--batch"), let stdin {
             let id = String(decoding: stdin, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            batchOIDs.append(id)
             if id == indexID, let batchOverride { return result(batchOverride) }
             let bytes = id == headID ? head : id == indexID ? index
                 : id == newID ? moved : Data()
@@ -105,6 +108,83 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
+}
+
+/// Deterministically interleaves real HEAD and index metadata across a real
+/// reset. Both repository states are clean; only a mixed snapshot has a diff.
+private actor StagedTransitionBackend: WorkspaceBackend {
+    private let root: String
+    private let nextCommit: String
+    private var switched = false
+    private var waitingIndex: [CheckedContinuation<Void, Never>] = []
+
+    init(root: String, nextCommit: String) {
+        self.root = root
+        self.nextCommit = nextCommit
+    }
+
+    func didSwitch() -> Bool { switched }
+
+    func run(argv: [String], cwd: String?, env: [String: String]?,
+             stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        if argv.contains("ls-files"), argv.contains("--stage"), !switched {
+            await withCheckedContinuation { waitingIndex.append($0) }
+        }
+        if argv.contains("ls-tree"), argv.contains("HEAD"), !switched {
+            let old = try await execute(argv: argv, cwd: cwd, env: env,
+                                        stdin: stdin, timeout: timeout)
+            let reset = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/usr/bin/git", "reset", "--hard", nextCommit],
+                cwd: root, env: nil, stdin: nil, timeout: 15
+            )
+            switched = true
+            for continuation in waitingIndex { continuation.resume() }
+            waitingIndex.removeAll()
+            guard reset.status == 0 else { throw WorkspaceError.notFound }
+            return old
+        }
+        return try await execute(argv: argv, cwd: cwd, env: env,
+                                 stdin: stdin, timeout: timeout)
+    }
+
+    private func execute(argv: [String], cwd: String?, env: [String: String]?,
+                         stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        let executable = argv.first == "git" ? ["/usr/bin/git"] + argv.dropFirst() : argv
+        return try await LocalWorkspaceBackend.shared.run(
+            argv: executable, cwd: cwd, env: env, stdin: stdin, timeout: timeout
+        )
+    }
+
+    func list(directory: String) async throws -> [WorkspaceEntry] {
+        try await LocalWorkspaceBackend.shared.list(directory: directory)
+    }
+    func stat(path: String) async throws -> WorkspaceStat? {
+        try await LocalWorkspaceBackend.shared.stat(path: path)
+    }
+    func readSymlinkDestination(path: String) async throws -> String? {
+        try await LocalWorkspaceBackend.shared.readSymlinkDestination(path: path)
+    }
+    func read(path: String, maxBytes: Int) async throws -> Data {
+        try await LocalWorkspaceBackend.shared.read(path: path, maxBytes: maxBytes)
+    }
+    func write(path: String, data: Data) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data)
+    }
+    func createFile(path: String) async throws {
+        try await LocalWorkspaceBackend.shared.createFile(path: path)
+    }
+    func createDirectory(path: String) async throws {
+        try await LocalWorkspaceBackend.shared.createDirectory(path: path)
+    }
+    func copy(from: String, to: String) async throws {
+        try await LocalWorkspaceBackend.shared.copy(from: from, to: to)
+    }
+    func rename(from: String, to: String) async throws {
+        try await LocalWorkspaceBackend.shared.rename(from: from, to: to)
+    }
+    func delete(paths: [String]) async throws {
+        try await LocalWorkspaceBackend.shared.delete(paths: paths)
+    }
 }
 
 @MainActor
@@ -3740,6 +3820,43 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testConcurrentStagedHeadIndexMetadataUsesOneRepositorySnapshot() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "staged-snapshot.txt"
+        let path = root.appendingPathComponent(name)
+        func command(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try Data("before\n".utf8).write(to: path)
+        _ = command(["add", "--", name])
+        _ = command(["commit", "-qm", "before"])
+        let beforeCommit = command(["rev-parse", "HEAD"])
+        try Data("after\n".utf8).write(to: path)
+        _ = command(["add", "--", name])
+        _ = command(["commit", "-qm", "after"])
+        let afterCommit = command(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(beforeCommit, afterCommit)
+        _ = command(["reset", "--hard", beforeCommit])
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"], in: root.path).status, 0)
+
+        let backend = StagedTransitionBackend(root: root.path, nextCommit: afterCommit)
+        let tab = DiffTab(repoRoot: root.path, path: name, source: .staged,
+                          untracked: false, origPath: nil, backend: backend,
+                          workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait({ !tab.isLoading }, timeout: 20)
+        let didSwitch = await backend.didSwitch()
+        XCTAssertTrue(didSwitch)
+        XCTAssertEqual(command(["rev-parse", "HEAD"]), afterCommit)
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"], in: root.path).status, 0)
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.oldContent, "after\n", "The old HEAD must be rejected after the reset")
+        XCTAssertEqual(tab.newContent, "after\n")
+        XCTAssertFalse(tab.hasChanges, "Neither clean repository state has a staged diff")
+    }
+
     func testStagedConflictWithoutStageZeroIsNotADeletion() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -3917,8 +4034,13 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { !tab.isLoading }
         XCTAssertNil(tab.error)
         XCTAssertEqual(tab.oldContent, "head\n")
-        XCTAssertEqual(tab.newContent, "indexA\n",
-                       "One stage read must keep the OID captured by metadata despite a later index mutation")
+        XCTAssertEqual(tab.newContent, "indexB\n",
+                       "A moved index must reload rather than publish the prior staged generation")
+        let selected = await backend.selectedBatchOIDs()
+        XCTAssertTrue(selected.contains(String(repeating: "b", count: 40)),
+                      "The original read must still resolve the immutable first-stage OID")
+        XCTAssertTrue(selected.contains(String(repeating: "c", count: 40)),
+                      "The coherent reload must consume the final index OID")
     }
 
     func testCanonicalEquivalentEditDuringDiffWriteRemainsDirty() async throws {

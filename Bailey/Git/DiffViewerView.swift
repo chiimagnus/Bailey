@@ -378,6 +378,7 @@ final class DiffTab: nonisolated Identifiable {
                 var unmerged = false
                 var oldOID: String?
                 var oldFromIndex = false
+                var stagedOutdated = false
                 func take(_ result: (text: String, error: String?)) -> String {
                     if let error = result.error { failure = error }
                     return result.text
@@ -429,6 +430,25 @@ final class DiffTab: nonisolated Identifiable {
                     if staged.isUnmerged && staged.error == nil {
                         failure = String(localized: "Unresolved merge conflict", table: "Git")
                     }
+                    if failure == nil {
+                        // Parallel HEAD/index reads lock each object's bytes,
+                        // not the repository generation. Recheck both selected
+                        // OIDs before publishing a potentially mixed snapshot.
+                        async let currentHead = Self.gitObject(
+                            .tree(revision: "HEAD", path: oldPath), in: root, backend: backend
+                        )
+                        async let currentIndex = Self.gitObject(
+                            .index(path: path, stages: [0]), in: root, backend: backend
+                        )
+                        let (headNow, indexNow) = await (currentHead, currentIndex)
+                        if let issue = headNow.error ?? indexNow.error {
+                            failure = issue
+                        } else {
+                            stagedOutdated = headNow.oid != earlier.oid
+                                || indexNow.oid != staged.oid
+                                || indexNow.isUnmerged != staged.isUnmerged
+                        }
+                    }
                 case .worktree:
                     if !untracked {
                         let earlier = await Self.firstGitContent(
@@ -443,7 +463,7 @@ final class DiffTab: nonisolated Identifiable {
                     }
                 }
                 return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
-                        failure: failure, unmerged: unmerged,
+                        failure: failure, unmerged: unmerged, stagedOutdated: stagedOutdated,
                         oldOID: oldOID, oldFromIndex: oldFromIndex)
             }.value
 
@@ -478,8 +498,8 @@ final class DiffTab: nonisolated Identifiable {
             var reviewNew = new
             var editBaseline: String?
             var verifiedCore: DiffCore?
-            var snapshotOutdated = false
-            if failure == nil, let oldOID = git.oldOID, !git.unmerged {
+            var snapshotOutdated = git.stagedOutdated
+            if failure == nil, !snapshotOutdated, let oldOID = git.oldOID, !git.unmerged {
                 let projected = await Self.gitComparisonBaseline(
                     source: source, oldPath: oldPath, path: path,
                     worktreePath: git.worktreePath, oldFromIndex: git.oldFromIndex,
