@@ -382,9 +382,10 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     static func runSync(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int? = nil, stderrLimit: Int? = nil,
-        preservePartialOnTimeout: Bool = false
+        preservePartialOnTimeout: Bool = false,
+        honorTaskCancellation: Bool = true
     ) throws -> WorkspaceRunResult {
-        try Task.checkCancellation()
+        if honorTaskCancellation { try Task.checkCancellation() }
         guard let executable = argv.first else { throw WorkspaceError.notFound }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -444,7 +445,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         var errData = Data()
         var buffer = [UInt8](repeating: 0, count: 8_192)
         while !openFDs.isEmpty || process.isRunning {
-            try Task.checkCancellation()
+            if honorTaskCancellation { try Task.checkCancellation() }
             if let deadline, ProcessInfo.processInfo.systemUptime >= deadline {
                 if process.isRunning {
                     _ = Darwin.kill(process.processIdentifier, SIGTERM)
@@ -495,7 +496,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 }
             }
         }
-        try Task.checkCancellation()
+        if honorTaskCancellation { try Task.checkCancellation() }
         process.waitUntilExit()
         if let error = writer?.finish(), process.terminationStatus == 0 { throw error }
         return WorkspaceRunResult(

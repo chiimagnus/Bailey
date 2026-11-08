@@ -34,6 +34,15 @@ private actor GitBackendFixture: WorkspaceBackend {
 }
 
 final class GitExecutionTests: XCTestCase {
+    func testFirstLoginEnvironmentLoadCannotCacheCancelledRequest() async {
+        let result = await Task.detached(priority: .utility) {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return GitCommandExecution.loadLoginEnvironment()
+        }.value
+        XCTAssertEqual(result.status, 0, result.stderr)
+        XCTAssertFalse((result.values["PATH"] ?? "").isEmpty)
+    }
+
     func testGitObjectReadPhaseLatencyAndBatchCompleteness() async throws {
         for lineCount in [1_000, 24_000] {
             let directory = try makeRepository()

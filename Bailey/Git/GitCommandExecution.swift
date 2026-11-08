@@ -17,7 +17,8 @@ nonisolated enum GitCommandExecution {
         let result = runProcess(
             ["-ilc", "/usr/bin/printf '\\0\(marker.dropFirst().dropLast())\\0'; exec /usr/bin/env -0"],
             executable: shell, in: NSHomeDirectory(), environment: environment,
-            timeout: timeout, stdoutLimit: 1024 * 1024 + 1
+            timeout: timeout, stdoutLimit: 1024 * 1024 + 1,
+            honorTaskCancellation: false
         )
         let error = String(localized: "Could not load the login shell environment. Check your shell startup files and restart Bailey.", table: "Git")
         guard result.status == 0,
@@ -64,7 +65,7 @@ nonisolated enum GitCommandExecution {
     private static func runProcess(
         _ args: [String], executable: String, in dir: String,
         environment: [String: String], timeout: TimeInterval?, stdoutLimit: Int?,
-        stdin: Data? = nil
+        stdin: Data? = nil, honorTaskCancellation: Bool = true
     ) -> (status: Int32, stdout: Data, stderr: String) {
         // Use the same cancellable, bounded FD-polling process owner as local
         // workspace commands. The former Git-only reader threads could stay
@@ -74,7 +75,8 @@ nonisolated enum GitCommandExecution {
                 argv: [executable] + args, cwd: dir, env: environment,
                 stdin: stdin, timeout: timeout, stdoutLimit: stdoutLimit,
                 stderrLimit: stdoutLimit == nil ? nil : gitErrorBytes,
-                preservePartialOnTimeout: true
+                preservePartialOnTimeout: true,
+                honorTaskCancellation: honorTaskCancellation
             )
             let detail = String(decoding: result.stderr, as: UTF8.self)
             if result.status == -2 {
