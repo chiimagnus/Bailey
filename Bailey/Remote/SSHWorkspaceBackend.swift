@@ -350,6 +350,7 @@ nonisolated enum ProcessRemoteCommandRunner {
                          timeout: timeout, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
         if result.status == -2 { throw WorkspaceError.timedOut }
         if result.status == -3 { throw WorkspaceError.tooLarge }
+        if result.status == -4 { throw CancellationError() }
         if result.status == -1 {
             throw RemoteConnectionError.commandFailed(
                 status: result.status, message: String(decoding: result.stderr, as: UTF8.self)
@@ -362,6 +363,7 @@ nonisolated enum ProcessRemoteCommandRunner {
         sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval,
         stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) -> (status: Int32, stdout: Data, stderr: Data) {
+        if Task.isCancelled { return (-4, Data(), Data()) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sshPath)
         process.arguments = arguments
@@ -401,7 +403,12 @@ nonisolated enum ProcessRemoteCommandRunner {
         let deadline = Date().addingTimeInterval(timeout)
         var timedOut = false
         var outputExceeded = false
+        var wasCancelled = false
         while true {
+            if Task.isCancelled {
+                wasCancelled = true
+                break
+            }
             if Date() >= deadline {
                 timedOut = true
                 break
@@ -440,7 +447,7 @@ nonisolated enum ProcessRemoteCommandRunner {
             }
             if outputExceeded { break }
         }
-        if timedOut || outputExceeded {
+        if timedOut || outputExceeded || wasCancelled {
             if process.isRunning {
                 process.terminate()
                 if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
@@ -448,6 +455,7 @@ nonisolated enum ProcessRemoteCommandRunner {
                     _ = exited.wait(timeout: .now() + .seconds(1))
                 }
             }
+            if wasCancelled { return (-4, outData, errData) }
             if outputExceeded { return (-3, outData, errData) }
             errData.append(Data("\nssh did not respond in time.\n".utf8))
             return (-2, outData, errData)

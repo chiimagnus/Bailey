@@ -50,20 +50,27 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
             "-o", "StrictHostKeyChecking=yes",
             "-o", "Compression=yes",
         ] + multiplexOptions + ["-T", "--", host] + argv
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/usr/bin/ssh", arguments: arguments,
+                stdin: stdin, timeout: timeout,
+                stdoutLimit: limits?.stdout, stderrLimit: limits?.stderr
+            )
+        }
         do {
-            let result = try await Task.detached(priority: .utility) {
-                try ProcessRemoteCommandRunner.launch(
-                    sshPath: "/usr/bin/ssh", arguments: arguments,
-                    stdin: stdin, timeout: timeout,
-                    stdoutLimit: limits?.stdout, stderrLimit: limits?.stderr
-                )
-            }.value
+            let result = try await withTaskCancellationHandler {
+                try await command.value
+            } onCancel: {
+                command.cancel()
+            }
             await MainActor.run {
                 SSHHostWorkspaces.setConnected(result.status != 255, for: host)
             }
             return result
         } catch WorkspaceError.tooLarge {
             throw WorkspaceError.tooLarge
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             await MainActor.run { SSHHostWorkspaces.setConnected(false, for: host) }
             throw error

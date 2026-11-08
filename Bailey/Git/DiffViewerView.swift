@@ -201,6 +201,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var editGeneration: UInt = 0
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
     @ObservationIgnored private var fileMutationHeld = false
     @ObservationIgnored private var saveDeferredUntilMutation = false
@@ -247,6 +248,7 @@ final class DiffTab: nonisolated Identifiable {
 
     deinit {
         syntaxContextTask.cancel()
+        reloadTask?.cancel()
         displayTask?.cancel()
         displayCoreTask?.cancel()
         editTask?.cancel()
@@ -344,6 +346,8 @@ final class DiffTab: nonisolated Identifiable {
 
     private func invalidateReload() {
         reloadGeneration &+= 1
+        reloadTask?.cancel()
+        reloadTask = nil
         isLoading = false
     }
 
@@ -368,9 +372,10 @@ final class DiffTab: nonisolated Identifiable {
 
         let backend = self.backend
 
-        Task { [weak self] in
-            // Git first, on its own thread, exactly as before.
-            let git = await Task.detached(priority: .userInitiated) {
+        reloadTask = Task { [weak self] in
+            // Run Git on a cancellable child owned by this reload, not an
+            // untracked detached task that survives tab close or selection.
+            guard let git = await Self.runBackgroundDiffWork({
                 var failure: String?
                 var old = ""
                 var newFromGit: String?
@@ -465,7 +470,7 @@ final class DiffTab: nonisolated Identifiable {
                 return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
                         failure: failure, unmerged: unmerged, stagedOutdated: stagedOutdated,
                         oldOID: oldOID, oldFromIndex: oldFromIndex)
-            }.value
+            }), !Task.isCancelled else { return }
 
             var failure = git.failure
             let new: String
@@ -526,8 +531,11 @@ final class DiffTab: nonisolated Identifiable {
             // The connection may have dropped while these reads were in
             // flight; their failure must not become the tab's content.
             guard let self, self.reloadGeneration == generation,
-                  self.readOnlyReason == nil
+                  self.readOnlyReason == nil, !Task.isCancelled
             else { return }
+            defer {
+                if self.reloadGeneration == generation { self.reloadTask = nil }
+            }
             guard !self.isDirty else { return }
             if result.snapshotOutdated {
                 if snapshotAttempt < 3 {

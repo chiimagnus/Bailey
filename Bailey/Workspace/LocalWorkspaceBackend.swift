@@ -352,27 +352,39 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         // Waiting on pipe readers blocks, which an async function may not do,
         // so the whole launch runs on a background thread — where the panels
         // ran their `ps` and `lsof` calls before the seam existed.
-        try await Task.detached(priority: .utility) {
-            try Self.runSync(
-                argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout
-            )
-        }.value
+        let command = Task.detached(priority: .utility) {
+            try Self.runSync(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
+        }
+        return try await withTaskCancellationHandler {
+            try await command.value
+        } onCancel: {
+            command.cancel()
+        }
     }
 
     func runLimited(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
     ) async throws -> WorkspaceRunResult {
-        try await Task.detached(priority: .utility) {
+        let command = Task.detached(priority: .utility) {
             try Self.runSync(argv: argv, cwd: cwd, env: env, stdin: stdin,
                              timeout: timeout, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await command.value
+        } onCancel: {
+            command.cancel()
+        }
     }
 
-    private static func runSync(
+    /// Shared synchronous pipe owner for workspace and Git commands.
+    /// It is always called off the main actor and polls for task cancellation.
+    static func runSync(
         argv: [String], cwd: String?, env: [String: String]?,
-        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int? = nil, stderrLimit: Int? = nil
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int? = nil, stderrLimit: Int? = nil,
+        preservePartialOnTimeout: Bool = false
     ) throws -> WorkspaceRunResult {
+        try Task.checkCancellation()
         guard let executable = argv.first else { throw WorkspaceError.notFound }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -432,6 +444,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         var errData = Data()
         var buffer = [UInt8](repeating: 0, count: 8_192)
         while !openFDs.isEmpty || process.isRunning {
+            try Task.checkCancellation()
             if let deadline, ProcessInfo.processInfo.systemUptime >= deadline {
                 if process.isRunning {
                     _ = Darwin.kill(process.processIdentifier, SIGTERM)
@@ -440,6 +453,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                         _ = Darwin.kill(process.processIdentifier, SIGKILL)
                         _ = exited.wait(timeout: .now() + .milliseconds(250))
                     }
+                }
+                if preservePartialOnTimeout {
+                    return WorkspaceRunResult(status: -2, stdout: outData, stderr: errData)
                 }
                 throw WorkspaceError.timedOut
             }
@@ -479,6 +495,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 }
             }
         }
+        try Task.checkCancellation()
         process.waitUntilExit()
         if let error = writer?.finish(), process.terminationStatus == 0 { throw error }
         return WorkspaceRunResult(

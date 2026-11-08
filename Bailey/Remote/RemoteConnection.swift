@@ -200,13 +200,23 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
         // below prevent a new transport even if the master exits next.
         let started = ProcessInfo.processInfo.systemUptime
         guard timeout > 0 else { throw WorkspaceError.timedOut }
-        guard controlSocketExists, await check(timeout: min(5, timeout)) else {
+        let reachable: Bool
+        if controlSocketExists {
+            reachable = await check(timeout: min(5, timeout))
+        } else {
+            reachable = false
+        }
+        // An abandoned Diff read must not mark a healthy shared SSH channel
+        // disconnected just because its own liveness probe was cancelled.
+        try Task.checkCancellation()
+        guard reachable else {
             await MainActor.run {
                 markDisconnected(reason: "control socket is gone")
             }
             throw RemoteConnectionError.notConnected
         }
         let remaining = timeout - (ProcessInfo.processInfo.systemUptime - started)
+        try Task.checkCancellation()
         guard remaining > 0 else { throw WorkspaceError.timedOut }
         let result = await Self.runSSH(
             arguments: controlArguments + ["-o", "BatchMode=yes", destination, "--"] + argv,
@@ -214,6 +224,7 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
             stdoutLimit: limits?.stdout, stderrLimit: limits?.stderr
         )
         if result.status == -3 { throw WorkspaceError.tooLarge }
+        if result.status == -4 { throw CancellationError() }
         return result
     }
 
@@ -237,16 +248,17 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
         stdin: Data?, timeout: TimeInterval,
         stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) async -> (status: Int32, stdout: Data, stderr: Data) {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(
-                    returning: ProcessRemoteCommandRunner.run(
-                        sshPath: "/usr/bin/ssh", arguments: arguments,
-                        stdin: stdin, timeout: timeout,
-                        stdoutLimit: stdoutLimit, stderrLimit: stderrLimit
-                    )
-                )
-            }
+        let command = Task.detached(priority: .userInitiated) {
+            ProcessRemoteCommandRunner.run(
+                sshPath: "/usr/bin/ssh", arguments: arguments,
+                stdin: stdin, timeout: timeout,
+                stdoutLimit: stdoutLimit, stderrLimit: stderrLimit
+            )
+        }
+        return await withTaskCancellationHandler {
+            await command.value
+        } onCancel: {
+            command.cancel()
         }
     }
 

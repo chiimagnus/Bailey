@@ -16,6 +16,9 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private var mutateIndexDuringBatch = false
     private var indexMoved = false
     private var shortGitBlob = false
+    private var holdOneGitTree = false
+    private var activeHeldGit = 0
+    private var cancelledHeldGit = 0
     private var batchOIDs: [String] = []
     private var batchOverride: Data?
 
@@ -24,6 +27,10 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         batchOverride = bytes
     }
 
+    func holdNextGitTree() { holdOneGitTree = true }
+    func heldGitStats() -> (active: Int, cancelled: Int) {
+        (activeHeldGit, cancelledHeldGit)
+    }
     func selectedBatchOIDs() -> [String] { batchOIDs }
     func simulateIndexChangeDuringBatch() { mutateIndexDuringBatch = true }
     func simulateIncompleteGitBlob() {
@@ -58,6 +65,16 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        if holdOneGitTree, argv.contains("ls-tree") {
+            holdOneGitTree = false
+            activeHeldGit += 1
+            defer { activeHeldGit -= 1 }
+            do { try await Task.sleep(for: .seconds(8)) }
+            catch is CancellationError {
+                cancelledHeldGit += 1
+                throw CancellationError()
+            }
+        }
         guard mutateIndexDuringBatch else {
             return .init(status: 0, stdout: Data(), stderr: Data())
         }
@@ -3818,6 +3835,41 @@ final class NativeDiffTabTests: XCTestCase {
             self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == display.unifiedText.string
         }
+    }
+
+    func testSupersededGitReadCancelsActualBackendWork() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.holdNextGitTree()
+        let tab = DiffTab(repoRoot: "/fixture", path: "paused.txt", source: .staged,
+                          untracked: false, origPath: nil, backend: backend,
+                          workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait({ await backend.heldGitStats().active == 1 }, timeout: 3)
+        let started = Date()
+        tab.reload()
+        try await wait({ await backend.heldGitStats().cancelled == 1 }, timeout: 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "Superseded Git I/O must stop, not just discard the eventual result")
+        try await wait({ !tab.isLoading }, timeout: 3)
+        let stats = await backend.heldGitStats()
+        XCTAssertEqual(stats.active, 0)
+        XCTAssertNil(tab.error)
+    }
+
+    func testClosingDiffCancelsActualBackendReadWithoutRetainingTab() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.holdNextGitTree()
+        weak var weakTab: DiffTab?
+        do {
+            let tab = DiffTab(repoRoot: "/fixture", path: "paused.txt", source: .staged,
+                              untracked: false, origPath: nil, backend: backend,
+                              workspaceIdentity: nil, preferences: try isolatedPreferences())
+            weakTab = tab
+            try await wait({ await backend.heldGitStats().active == 1 }, timeout: 3)
+        }
+        let started = Date()
+        try await wait({ await backend.heldGitStats().cancelled == 1 }, timeout: 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        XCTAssertNil(weakTab, "A closed Diff tab must release its owner and background work")
     }
 
     func testConcurrentStagedHeadIndexMetadataUsesOneRepositorySnapshot() async throws {

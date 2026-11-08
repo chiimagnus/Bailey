@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 import XCTest
@@ -49,6 +50,59 @@ final class RemoteLifetimeTests: XCTestCase {
             }
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.4)
+    }
+
+    func testCancelStopsTheActualRemoteCommandRunnerProcess() async throws {
+        let started = Date()
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sleep", arguments: ["8"], stdin: nil, timeout: 4,
+                stdoutLimit: 32, stderrLimit: 32
+            )
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        command.cancel()
+        do {
+            _ = try await command.value
+            XCTFail("Cancelled SSH process must not return a successful result")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Cancelled SSH process returned the wrong failure: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testCancelledRemoteRunnerReapsItsExactPID() async throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-cancel-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let path = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sh",
+                arguments: ["-c", "echo $$ > \(path); exec /bin/sleep 8"],
+                stdin: nil, timeout: 5, stdoutLimit: 128, stderrLimit: 128
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidURL.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pidText = try String(contentsOf: pidURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(pid_t(pidText))
+        XCTAssertEqual(Darwin.kill(pid, 0), 0)
+        command.cancel()
+        do {
+            _ = try await command.value
+            XCTFail("Cancelled child must not succeed")
+        } catch is CancellationError {
+        }
+        var exited = false
+        for _ in 0..<50 {
+            if Darwin.kill(pid, 0) == -1 && errno == ESRCH { exited = true; break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(exited, "An abandoned SSH command must not leave its process running")
     }
 
     func testBoundedRemotePipeStopsBeforeLargeOutputIsCollected() throws {

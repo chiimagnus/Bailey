@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import Bailey
@@ -168,6 +169,76 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertEqual(channels.stderr, "err")
         let environment = GitCommandExecution.run(["-c", "alias.environment=!printf '%s:%s:%s' \"$GIT_OPTIONAL_LOCKS\" \"$GIT_TERMINAL_PROMPT\" \"$LC_ALL\"", "environment"], in: directory.path)
         XCTAssertEqual(environment.stdout, "0:0:C")
+    }
+
+    func testCancelActuallyStopsInFlightLocalWorkspaceAndGitCommands() async throws {
+        let started = Date()
+        let workspace = Task.detached(priority: .utility) {
+            try await LocalWorkspaceBackend.shared.runLimited(
+                argv: ["/bin/sleep", "8"], cwd: nil, env: nil, stdin: nil,
+                timeout: 4, stdoutLimit: 32, stderrLimit: 32
+            )
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        workspace.cancel()
+        do {
+            _ = try await workspace.value
+            XCTFail("Cancelled workspace command must throw cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Cancellation must not become a timeout: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "Cancellation must release the actual process within one second")
+
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gitStarted = Date()
+        let git = Task.detached(priority: .utility) {
+            await GitCommandExecution.runData(
+                ["-c", "alias.pause=!exec /bin/sleep 8", "pause"],
+                in: directory.path, timeout: 4, stdoutLimit: 32,
+                backend: LocalWorkspaceBackend.shared
+            )
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        git.cancel()
+        let response = await git.value
+        XCTAssertEqual(response.status, -4, "Cancelled Git must not report a timeout or success")
+        XCTAssertLessThan(Date().timeIntervalSince(gitStarted), 1)
+    }
+
+    func testCancellingLocalProcessReapsItsExactPID() async throws {
+        let repository = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let pidURL = repository.appendingPathComponent("cancelled-local.pid")
+        let path = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let child = Task.detached(priority: .utility) {
+            try await LocalWorkspaceBackend.shared.runLimited(
+                argv: ["/bin/sh", "-c", "echo $$ > \(path); exec /bin/sleep 8"],
+                cwd: repository.path, env: nil, stdin: nil, timeout: 5,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidURL.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pidText = try String(contentsOf: pidURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(pid_t(pidText))
+        XCTAssertEqual(Darwin.kill(pid, 0), 0)
+        child.cancel()
+        do {
+            _ = try await child.value
+            XCTFail("Cancelled child must not succeed")
+        } catch is CancellationError {
+        }
+        var exited = false
+        for _ in 0..<50 {
+            if Darwin.kill(pid, 0) == -1 && errno == ESRCH { exited = true; break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(exited, "The owned PID must be reaped; cancelling its Task is insufficient")
     }
 
     func testExactGitStdoutBudgetAndLocalWorkspacePipeBoundary() async throws {
