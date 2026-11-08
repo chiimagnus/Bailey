@@ -211,6 +211,9 @@ Git 内容先通过原始 NUL 分隔的 index／tree metadata 匹配字面路径
 其它文件清单及 Git 状态命令不受此限制。
 Staged 两侧先并行读取 HEAD 与 Index 的不可变 Blob，发布前重新核对两侧当前 OID；
 仓库在并行读取中切换时，不发布任何混合旧／新代次的虚假修改，沿既有快照重试路径重载。
+Worktree／Revision ↔ Worktree 的 Git patch 即使 OID 完全匹配，也须在发布前再次读取原始工作区字节；
+clean filter 可能在 Git 执行期间改写原始文件，但把不同原文映射成相同 OID。
+原文变化沿同一代次重试，不能把过期编辑缓冲当作最新文件。
 冲突取 index 0／2／1；只有 HEAD 所指分支引用确实不存在，才允许首次提交的空旧侧；
 暂存删除文件的空 index 和有效历史删除提交的空 tree 可以是空侧。
 悬空分支、无效删除提交、仅有冲突阶段却没有 stage 0 的 index，以及无效 revision、损坏 metadata、

@@ -1283,6 +1283,17 @@ final class DiffTab: nonisolated Identifiable {
             old: old, worktree: worktree, patch: text,
             oldOID: oldOID, newOID: newOID
         ) {
+            // Git's normalized OID cannot distinguish different raw files
+            // when a clean filter discards or rewrites their bytes. The filter
+            // itself may have replaced the worktree during hash-object/diff.
+            // Confirm the editable source, not just the canonical Git patch.
+            let current = await readWorktreeFile(
+                root: root, path: worktreePath, backend: backend
+            )
+            if let error = current.error { return (nil, nil, error, false) }
+            guard current.text.utf8.elementsEqual(worktree.utf8) else {
+                return (nil, nil, nil, true)
+            }
             let core: DiffCore? = await Self.runBackgroundDiffWork {
                 guard let ops = content.operations else { return nil }
                 return DiffCore.fromVerifiedOperations(

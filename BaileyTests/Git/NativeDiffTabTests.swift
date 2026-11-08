@@ -5591,6 +5591,48 @@ final class NativeDiffTabTests: XCTestCase {
         }.count, 1)
     }
 
+    func testGitCleanFilterCannotPublishStaleRawBytesWhenCanonicalOIDIsUnchanged() async throws {
+        for source: DiffTab.Source in [.worktree, .revisionWorktree(hash: "HEAD")] {
+            let root = try repository()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let file = root.appendingPathComponent("filtered.txt")
+            let script = root.appendingPathComponent("clean-once.sh")
+            let marker = root.appendingPathComponent(".git/clean-ran")
+            try Data("original\n".utf8).write(to: file)
+            try Data("filtered.txt filter=rewrite\n".utf8)
+                .write(to: root.appendingPathComponent(".gitattributes"))
+            for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+                let result = GitCommandExecution.run(args, in: root.path)
+                XCTAssertEqual(result.status, 0, result.stderr)
+            }
+            try Data("first raw\n".utf8).write(to: file)
+            try Data("""
+            #!/bin/sh
+            if [ ! -e '\(marker.path)' ]; then
+                : > '\(marker.path)'
+                printf 'second raw\\n' > '\(file.path)'
+            fi
+            printf 'same canonical\\n'
+            """.utf8).write(to: script)
+            let configured = GitCommandExecution.run(
+                ["config", "filter.rewrite.clean", "sh '\(script.path)'"], in: root.path
+            )
+            XCTAssertEqual(configured.status, 0, configured.stderr)
+
+            let tab = DiffTab(repoRoot: root.path, path: "filtered.txt", source: source,
+                              untracked: false, origPath: nil,
+                              backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                              preferences: try isolatedPreferences())
+            try await wait({ !tab.isLoading && tab.display != nil }, timeout: 30)
+            XCTAssertNil(tab.error)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path),
+                          "The clean filter must actually rewrite the source during reload")
+            XCTAssertEqual(try Data(contentsOf: file), Data("second raw\n".utf8))
+            XCTAssertEqual(tab.newContent, "second raw\n",
+                           "A matching canonical Git OID cannot validate older raw worktree bytes")
+        }
+    }
+
     func testAuthorizedWindowsSSHGitReviewAndRawSaveMatchGitCleanRules() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Real SSH Git Review requires an explicitly selected test host")
