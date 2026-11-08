@@ -5015,6 +5015,122 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(readonly.new.map(\.name), direct.map(\.name))
     }
 
+    func testVisibleSyntaxOver2MBReusesOneTreeAcrossThirtyFoldQueries() async throws {
+        let resolved = await DiffSyntaxHighlighter.context(for: "large.swift")
+        let context = try XCTUnwrap(resolved)
+        let line = "let value = 123 // comment\n"
+        let bytesPerLine = line.utf8.count
+        for targetBytes in [1_999_998, 2_000_010, 5 << 20] {
+            let lines = targetBytes / bytesPerLine
+            let source = String(repeating: line, count: lines)
+                + String(repeating: " ", count: targetBytes - lines * bytesPerLine)
+            XCTAssertEqual(source.utf8.count, targetBytes)
+            let spacing = max(1, lines / 100)
+            let disjoint = (0..<100).map { index in
+                NSRange(location: index * spacing * line.utf16.count,
+                        length: line.utf16.count - 1)
+            }
+            let syntax = DiffSyntaxSource()
+            let started = CFAbsoluteTimeGetCurrent()
+            let first = await syntax.captures(text: source, context: context,
+                                              ranges: [disjoint[0]])
+            let coldMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            XCTAssertFalse(first.isEmpty)
+            let initialParseCount = await syntax.parseCount
+            XCTAssertEqual(initialParseCount, 1)
+            for count in [1, 10, 100] {
+                let ranges = Array(disjoint.prefix(count))
+                let began = CFAbsoluteTimeGetCurrent()
+                let result = await syntax.captures(text: source, context: context, ranges: ranges)
+                let seen = await syntax.parseCount
+                guard seen == 1 else {
+                    XCTFail("Repeated unfold reparsed \(targetBytes) bytes: parseCount=\(seen)")
+                    return
+                }
+                for _ in 1..<30 {
+                    _ = await syntax.captures(text: source, context: context, ranges: ranges)
+                }
+                let elapsed = (CFAbsoluteTimeGetCurrent() - began) * 1_000 / 30
+                XCTAssertFalse(result.isEmpty)
+                let warmParseCount = await syntax.parseCount
+                XCTAssertEqual(warmParseCount, 1)
+                print("AUDIT_DIFF_SYNTAX_2MB bytes=\(targetBytes) ranges=\(count) coldMs=\(coldMs) warmMeanMs=\(elapsed) parseCount=1")
+            }
+            // An independent copy has different storage but identical source
+            // bytes, so it must reuse exactly the same tree too.
+            let independent = String(decoding: Data(source.utf8), as: UTF8.self)
+            _ = await syntax.captures(text: independent, context: context,
+                                      ranges: [disjoint[0]])
+            let copyParseCount = await syntax.parseCount
+            XCTAssertEqual(copyParseCount, 1)
+        }
+    }
+
+    func testThirtyColdParsesAndTenSyntaxOwnersReleaseTheirTrees() async throws {
+        final class WeakSource {
+            weak var value: DiffSyntaxSource?
+            init(_ value: DiffSyntaxSource) { self.value = value }
+        }
+        func residentKiB() throws -> Int {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/ps")
+            process.arguments = ["-o", "rss=", "-p", String(getpid())]
+            let stdout = Pipe()
+            process.standardOutput = stdout
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let result = stdout.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+            return Int(String(decoding: result, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
+        func allocatedKiB() -> Int {
+            var stats = malloc_statistics_t()
+            malloc_zone_statistics(malloc_default_zone(), &stats)
+            return Int(stats.size_in_use) / 1_024
+        }
+        let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
+        let context = try XCTUnwrap(resolved)
+        let source = String(repeating: "let value = 123 // comment\n", count: 77_000)
+        XCTAssertGreaterThan(source.utf8.count, 2_000_000)
+        let firstLine = [NSRange(location: 0, length: 25)]
+        let baseline = try residentKiB()
+        let baselineAllocated = allocatedKiB()
+        var owners: [DiffSyntaxSource] = []
+        var weakOwners: [WeakSource] = []
+        var coldTimes: [Double] = []
+        for i in 0..<30 {
+            let syntax = DiffSyntaxSource()
+            let started = CFAbsoluteTimeGetCurrent()
+            let matches = await syntax.captures(text: source, context: context, ranges: firstLine)
+            coldTimes.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+            XCTAssertFalse(matches.isEmpty)
+            let count = await syntax.parseCount
+            XCTAssertEqual(count, 1)
+            if i < 10 {
+                // Each tab holds a distinct parser owner, not a global cache.
+                owners.append(syntax)
+                weakOwners.append(WeakSource(syntax))
+            }
+        }
+        XCTAssertEqual(owners.count, 10)
+        XCTAssertTrue(weakOwners.allSatisfy { $0.value != nil })
+        let retained = try residentKiB()
+        let retainedAllocated = allocatedKiB()
+        owners.removeAll()
+        XCTAssertTrue(weakOwners.allSatisfy { $0.value == nil },
+                      "Closing all ten tabs must release their parser trees and bytes")
+        let released = try residentKiB()
+        let releasedAllocated = allocatedKiB()
+        XCTAssertGreaterThan(retainedAllocated - baselineAllocated, 128 * 1_024,
+                             "Ten actual syntax owners must retain observable live heap")
+        XCTAssertLessThan(releasedAllocated - baselineAllocated, 32 * 1_024,
+                          "Closing tabs must release tree allocations, not merely weak references")
+        coldTimes.sort()
+        print("AUDIT_DIFF_SYNTAX_10_OWNERS bytes=\(source.utf8.count) coldSamples=30 coldMedianMs=\(coldTimes[15]) coldP95Ms=\(coldTimes[28]) rssBaselineKiB=\(baseline) rssTenOwnersKiB=\(retained) rssAfterReleaseKiB=\(released) mallocBaselineKiB=\(baselineAllocated) mallocTenOwnersKiB=\(retainedAllocated) mallocAfterReleaseKiB=\(releasedAllocated) releasedOwners=10")
+    }
+
     func testDisjointVisibleSyntaxQueryCostAndReuse() async throws {
         let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
         let context = try XCTUnwrap(resolved)

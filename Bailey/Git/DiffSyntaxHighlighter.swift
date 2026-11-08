@@ -35,22 +35,38 @@ actor DiffSyntaxSource {
     private var cachedGrammar: Int?
     private var cachedTree: MutableTree?
     private(set) var parseCount = 0
+    // The Diff viewer never accepts text beyond 5 MiB. One tree per side
+    // lives only as long as its tab, avoiding full reparses on every unfold.
+    private let maxCachedTextBytes = 5 << 20
+
+    /// Shared Swift String storage proves byte identity in O(1). Unrelated
+    /// buffers still compare every UTF-8 byte: Swift String equality itself
+    /// can equate canonically equivalent but differently encoded Unicode.
+    private func matchesCachedBytes(_ text: String) -> Bool {
+        guard let cachedText else { return false }
+        let sameStorage = cachedText.utf8.withContiguousStorageIfAvailable { cached in
+            text.utf8.withContiguousStorageIfAvailable { current in
+                cached.baseAddress == current.baseAddress && cached.count == current.count
+            } ?? false
+        } ?? false
+        return sameStorage || cachedText.utf8.elementsEqual(text.utf8)
+    }
 
     func captures(
         text: String, context: DiffHighlightContext, ranges: [NSRange]
     ) -> [DiffCaptureRun] {
         guard !Task.isCancelled, !text.isEmpty, !ranges.isEmpty else { return [] }
         let unchanged = cachedGrammar == context.grammarIndex
-            && (cachedText?.utf8.elementsEqual(text.utf8) ?? false)
+            && matchesCachedBytes(text)
         if !unchanged {
             let parser = Parser()
             guard let grammar = SyntaxLanguage.parser(grammarIndex: context.grammarIndex),
                   (try? parser.setLanguage(grammar)) != nil,
                   let parsed = parser.parse(text), !Task.isCancelled else { return [] }
             parseCount += 1
-            // Retain bounded snapshots only. Large files still get visible
-            // highlights without keeping two multi-megabyte trees per tab.
-            if text.utf8.count <= 2_000_000 {
+            // Keep one bounded, tab-owned tree up to the viewer's actual
+            // 5 MiB text cap; above that, do not retain a syntax snapshot.
+            if text.utf8.count <= maxCachedTextBytes {
                 cachedText = text
                 cachedGrammar = context.grammarIndex
                 cachedTree = parsed
