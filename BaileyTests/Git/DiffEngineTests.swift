@@ -61,6 +61,31 @@ final class DiffEngineTests: XCTestCase {
         }
     }
 
+    func testCancelledDenseTokenMyersStopsBeforeCompletingAllPairs() async throws {
+        // Half the tokens remain equal, so the provably-noisy shortcut must
+        // not suppress legitimate emphasis; cancellation must stop its Myers.
+        let beforeLine = String(repeating: "+", count: 200)
+            + String(repeating: "=", count: 199) + "\n"
+        let afterLine = String(repeating: "-", count: 200)
+            + String(repeating: "=", count: 199) + "\n"
+        let count = 1_000
+        let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: String(repeating: beforeLine, count: count),
+            newText: String(repeating: afterLine, count: count),
+            operations: [.delete(oldStart: 0, count: count),
+                         .insert(newStart: 0, count: count)]
+        ))
+        let compute = Task.detached(priority: .utility) {
+            DiffComputation.build(core: core, revealedLines: [])
+        }
+        try await Task.sleep(for: .milliseconds(40))
+        let cancelledAt = Date()
+        compute.cancel()
+        _ = await compute.value
+        XCTAssertLessThan(Date().timeIntervalSince(cancelledAt), 0.8,
+                          "Cancelled dense intraline Myers must not consume seconds of stale CPU")
+    }
+
     private func assertVerifiedHunksAgreeWithOriginalDiff(
         _ content: GitWorktreeComparison.Content,
         file: StaticString = #filePath, line: UInt = #line

@@ -723,15 +723,30 @@ nonisolated enum DiffIntraline {
         let oldTokens = tokenize(old)
         let newTokens = tokenize(new)
         guard oldTokens.count <= tokenLimit, newTokens.count <= tokenLimit,
-              !oldTokens.isEmpty, !newTokens.isEmpty
+              !oldTokens.isEmpty, !newTokens.isEmpty, !Task.isCancelled
         else { return nil }
 
+        let oldTexts = oldTokens.map(\.text)
+        let newTexts = newTokens.map(\.text)
+        // Tokens absent from the opposite line must be edited in any matching.
+        // When that minimal cost already exceeds both noise thresholds,
+        // Myers cannot produce useful emphasis even with optimal alignment.
+        let oldSet = Set(oldTexts)
+        let newSet = Set(newTexts)
+        let unavoidableOld = oldTokens.reduce(0) {
+            $0 + (newSet.contains($1.text) ? 0 : $1.range.length)
+        }
+        let unavoidableNew = newTokens.reduce(0) {
+            $0 + (oldSet.contains($1.text) ? 0 : $1.range.length)
+        }
+        if Double(unavoidableOld) / Double(max(1, old.utf16.count)) > noiseThreshold,
+           Double(unavoidableNew) / Double(max(1, new.utf16.count)) > noiseThreshold {
+            return nil
+        }
+
         var builder = TokenOpsBuilder()
-        myersTokens(
-            oldTexts: oldTokens.map(\.text),
-            newTexts: newTokens.map(\.text),
-            into: &builder
-        )
+        guard myersTokens(oldTexts: oldTexts, newTexts: newTexts, into: &builder)
+        else { return nil }
         let ops = builder.ops
 
         var oldRanges: [NSRange] = []
@@ -819,7 +834,7 @@ nonisolated enum DiffIntraline {
     private static func myersTokens(
         oldTexts: [Substring], newTexts: [Substring],
         into builder: inout TokenOpsBuilder
-    ) {
+    ) -> Bool {
         func equalTokens(_ oldIndex: Int, _ newIndex: Int) -> Bool {
             oldTexts[oldIndex].utf8.elementsEqual(newTexts[newIndex].utf8)
         }
@@ -833,9 +848,11 @@ nonisolated enum DiffIntraline {
 
         var foundD = -1
         outer: for d in 0...maxD {
+            if Task.isCancelled { return false }
             trace.append(v)
             var k = -d
             while k <= d {
+                if Task.isCancelled { return false }
                 var x: Int
                 if k == -d || (k != d && v[k - 1 + offset] < v[k + 1 + offset]) {
                     x = v[k + 1 + offset]
@@ -844,6 +861,7 @@ nonisolated enum DiffIntraline {
                 }
                 var y = x - k
                 while x < n, y < m, equalTokens(x, y) {
+                    if Task.isCancelled { return false }
                     x += 1
                     y += 1
                 }
@@ -902,6 +920,7 @@ nonisolated enum DiffIntraline {
             case .insertOne: builder.insert(1)
             }
         }
+        return true
     }
 
     private static func unionRange(_ ranges: [NSRange]) -> NSRange {
@@ -1404,6 +1423,7 @@ nonisolated struct DiffComputation {
                 }
             }
             for op in ops {
+                if Task.isCancelled { break }
                 switch op {
                 case .equal(let oldStart, let newStart, let count):
                     flush()
@@ -1425,6 +1445,7 @@ nonisolated struct DiffComputation {
         var old: [Int: [NSRange]] = [:]
         var new: [Int: [NSRange]] = [:]
         for pair in 0..<min(block.deletes.count, block.inserts.count) {
+            if Task.isCancelled { break }
             let oldIndex = block.deletes[pair]
             let newIndex = block.inserts[pair]
             if let result = DiffIntraline.diff(
