@@ -5015,7 +5015,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(readonly.new.map(\.name), direct.map(\.name))
     }
 
-    func testVisibleSyntaxOver2MBReusesOneTreeAcrossThirtyFoldQueries() async throws {
+    func testVisibleSyntaxUpToFiveMiBReusesOneTreeAcrossThirtyFoldQueries() async throws {
         let resolved = await DiffSyntaxHighlighter.context(for: "large.swift")
         let context = try XCTUnwrap(resolved)
         let line = "let value = 123 // comment\n"
@@ -5054,7 +5054,7 @@ final class NativeDiffTabTests: XCTestCase {
                 XCTAssertFalse(result.isEmpty)
                 let warmParseCount = await syntax.parseCount
                 XCTAssertEqual(warmParseCount, 1)
-                print("AUDIT_DIFF_SYNTAX_2MB bytes=\(targetBytes) ranges=\(count) coldMs=\(coldMs) warmMeanMs=\(elapsed) parseCount=1")
+                print("AUDIT_DIFF_SYNTAX_FIVE_MIB bytes=\(targetBytes) ranges=\(count) coldMs=\(coldMs) warmMeanMs=\(elapsed) parseCount=1")
             }
             // An independent copy has different storage but identical source
             // bytes, so it must reuse exactly the same tree too.
@@ -5064,6 +5064,16 @@ final class NativeDiffTabTests: XCTestCase {
             let copyParseCount = await syntax.parseCount
             XCTAssertEqual(copyParseCount, 1)
         }
+        let overLimit = String(repeating: line, count: ((5 << 20) / bytesPerLine) + 1)
+        XCTAssertGreaterThan(overLimit.utf8.count, 5 << 20)
+        let uncached = DiffSyntaxSource()
+        _ = await uncached.captures(text: overLimit, context: context,
+                                    ranges: [NSRange(location: 0, length: line.utf16.count - 1)])
+        _ = await uncached.captures(text: overLimit, context: context,
+                                    ranges: [NSRange(location: 0, length: line.utf16.count - 1)])
+        let uncachedParseCount = await uncached.parseCount
+        XCTAssertEqual(uncachedParseCount, 2,
+                       "Above the viewer's 5 MiB limit, no syntax tree is retained")
     }
 
     func testThirtyColdParsesAndTenSyntaxOwnersReleaseTheirTrees() async throws {
