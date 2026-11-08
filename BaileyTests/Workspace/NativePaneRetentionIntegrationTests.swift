@@ -996,7 +996,9 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let cachedScroll = try XCTUnwrap(file.editorView as? NSScrollView)
         var editor: FocusReportingTextView? = try XCTUnwrap(
             cachedScroll.documentView as? FocusReportingTextView)
-        weak var retiredEditor = editor
+        // Keep the obsolete view alive on purpose: AppKit may cache it even
+        // though the owning FileTab has retired its document.
+        let cachedRetiredEditor = try XCTUnwrap(editor)
         XCTAssertEqual(editor?.text, oldText)
         let initialRevision = file.reloadRevision
         // A successful refresh of byte-identical content must not retire the
@@ -1016,7 +1018,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertNil(file.editorView, "The file must not expose a stale native editor after reload")
         XCTAssertNil(cachedScroll.documentView,
                      "A retired file generation must not keep its obsolete native text document")
-        try await settle { retiredEditor == nil }
+        XCTAssertNil(cachedRetiredEditor.superview)
+        XCTAssertNil(cachedRetiredEditor.syntaxCoordinator)
+        XCTAssertNil(cachedRetiredEditor.delegate)
+        XCTAssertFalse(cachedRetiredEditor.isEditable)
+        XCTAssertFalse(cachedRetiredEditor.isSelectable)
+        XCTAssertFalse(cachedRetiredEditor.undoManager?.canUndo ?? true)
+        XCTAssertFalse(cachedRetiredEditor.undoManager?.canRedo ?? true)
+        XCTAssertEqual(cachedRetiredEditor.textStorage?.length ?? 0, 0,
+                       "A cached obsolete view must release its text immediately")
 
         let replacementHost = NSHostingView(rootView: FileViewerView(file: file))
         window.contentView = replacementHost
@@ -1027,7 +1037,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let freshScroll = try XCTUnwrap(file.editorView as? NSScrollView)
         var freshEditor: FocusReportingTextView? = try XCTUnwrap(
             freshScroll.documentView as? FocusReportingTextView)
-        weak var retiredReplacement = freshEditor
+        let cachedReplacementEditor = try XCTUnwrap(freshEditor)
         XCTAssertEqual(freshEditor?.text, newText)
         XCTAssertFalse(freshEditor?.undoManager?.canUndo ?? true)
         XCTAssertFalse(file.isDirty)
@@ -1046,7 +1056,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         }
         freshEditor = nil
         XCTAssertNil(freshScroll.documentView)
-        try await settle { retiredReplacement == nil }
+        XCTAssertNil(cachedReplacementEditor.superview)
+        XCTAssertNil(cachedReplacementEditor.syntaxCoordinator)
+        XCTAssertNil(cachedReplacementEditor.delegate)
+        XCTAssertFalse(cachedReplacementEditor.isEditable)
+        XCTAssertFalse(cachedReplacementEditor.isSelectable)
+        XCTAssertFalse(cachedReplacementEditor.undoManager?.canUndo ?? true)
+        XCTAssertFalse(cachedReplacementEditor.undoManager?.canRedo ?? true)
+        XCTAssertEqual(cachedReplacementEditor.textStorage?.length ?? 0, 0,
+                       "Switching to binary must retire the old text without waiting for AppKit")
         XCTAssertTrue(file.text.isEmpty)
         XCTAssertFalse(file.isDirty)
         XCTAssertEqual(try Data(contentsOf: path), binary)
