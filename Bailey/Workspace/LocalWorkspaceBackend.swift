@@ -2,11 +2,25 @@ import Darwin
 import Foundation
 
 /// Writes complete stdin or returns an error. Nonblocking IO lets the writer
-/// honor a deadline even when a child exits but its descendant keeps the
-/// read end of the pipe open without consuming bytes.
+/// honor deadlines and owner cancellation even when a child exits but a
+/// descendant holds the pipe's read end without consuming bytes.
 nonisolated final class ProcessStdinWriter: @unchecked Sendable {
     private let completion = DispatchGroup()
+    private let cancellationLock = NSLock()
+    private var stopRequested = false
     private var writeError: Error?
+
+    func cancel() {
+        cancellationLock.lock()
+        stopRequested = true
+        cancellationLock.unlock()
+    }
+
+    private func shouldStop() -> Bool {
+        cancellationLock.lock()
+        defer { cancellationLock.unlock() }
+        return stopRequested
+    }
 
     init(data: Data, pipe: Pipe, timeout: TimeInterval?) {
         completion.enter()
@@ -26,11 +40,13 @@ nonisolated final class ProcessStdinWriter: @unchecked Sendable {
                     guard let base = bytes.baseAddress else { return }
                     var offset = 0
                     while offset < bytes.count {
+                        if self.shouldStop() { throw CancellationError() }
                         if let deadline, ProcessInfo.processInfo.systemUptime >= deadline {
                             throw WorkspaceError.timedOut
                         }
                         var ready = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
                         let count = poll(&ready, 1, 100)
+                        if self.shouldStop() { throw CancellationError() }
                         if count == 0 || (count < 0 && errno == EINTR) { continue }
                         if count < 0 {
                             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
@@ -54,7 +70,9 @@ nonisolated final class ProcessStdinWriter: @unchecked Sendable {
     }
 
     func finish() -> Error? {
-        completion.wait()
+        while completion.wait(timeout: .now() + .milliseconds(100)) == .timedOut {
+            if Task.isCancelled { cancel() }
+        }
         return writeError
     }
 }
@@ -424,6 +442,10 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         let writer = input.flatMap { pipe in
             stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
         }
+        defer {
+            writer?.cancel()
+            _ = writer?.finish()
+        }
 
         // Drain stdout and stderr concurrently without waiting for inherited
         // pipe handles to reach EOF after the direct child has exited.
@@ -498,7 +520,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         if honorTaskCancellation { try Task.checkCancellation() }
         process.waitUntilExit()
-        if let error = writer?.finish(), process.terminationStatus == 0 { throw error }
+        let writingError = writer?.finish()
+        if honorTaskCancellation { try Task.checkCancellation() }
+        if let writingError, process.terminationStatus == 0 { throw writingError }
         return WorkspaceRunResult(
             status: process.terminationStatus,
             stdout: outData,

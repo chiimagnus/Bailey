@@ -250,6 +250,39 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertTrue(exited, "The owned PID must be reaped; cancelling its Task is insufficient")
     }
 
+    func testCancelInterruptsStdinWriterWhenChildExitsButDescendantHoldsInput() async throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pidURL = directory.appendingPathComponent("inherited-stdin.pid")
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let started = Date()
+        let task = Task.detached(priority: .utility) {
+            try await LocalWorkspaceBackend.shared.runLimited(
+                argv: ["/bin/sh", "-c",
+                       "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                cwd: directory.path, env: nil,
+                stdin: Data(repeating: 0x61, count: 2 * 1024 * 1024), timeout: 3,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidURL.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pid = try XCTUnwrap(pid_t(String(contentsOf: pidURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { if Darwin.kill(pid, 0) == 0 { _ = Darwin.kill(pid, SIGTERM) } }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Cancellation must not wait for an inherited stdin pipe")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Cancelled stdin writer returned the wrong error: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "The input writer must stop with its owning process request")
+    }
+
     func testExactGitStdoutBudgetAndLocalWorkspacePipeBoundary() async throws {
         let directory = try makeRepository()
         defer { try? FileManager.default.removeItem(at: directory) }

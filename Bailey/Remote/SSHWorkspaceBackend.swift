@@ -390,6 +390,10 @@ nonisolated enum ProcessRemoteCommandRunner {
         let writer = stdinPipe.flatMap { pipe in
             stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
         }
+        defer {
+            writer?.cancel()
+            _ = writer?.finish()
+        }
         let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
         let errFD = stderrPipe.fileHandleForReading.fileDescriptor
         for descriptor in [outFD, errFD] {
@@ -460,8 +464,10 @@ nonisolated enum ProcessRemoteCommandRunner {
             errData.append(Data("\nssh did not respond in time.\n".utf8))
             return (-2, outData, errData)
         }
-        if let error = writer?.finish(), process.terminationStatus == 0 {
-            errData.append(Data(error.localizedDescription.utf8))
+        let writingError = writer?.finish()
+        if Task.isCancelled { return (-4, outData, errData) }
+        if let writingError, process.terminationStatus == 0 {
+            errData.append(Data(writingError.localizedDescription.utf8))
             return (-1, outData, errData)
         }
         return (process.terminationStatus, outData, errData)

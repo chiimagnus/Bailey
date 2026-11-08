@@ -72,6 +72,38 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 1)
     }
 
+    func testCancelledRemoteInputWriterDoesNotWaitForInheritedPipeTimeout() async throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-stdin-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let started = Date()
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sh",
+                arguments: ["-c", "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                stdin: Data(repeating: 0x62, count: 2 * 1024 * 1024), timeout: 3,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidURL.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pid = try XCTUnwrap(pid_t(String(contentsOf: pidURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { if Darwin.kill(pid, 0) == 0 { _ = Darwin.kill(pid, SIGTERM) } }
+        command.cancel()
+        do {
+            _ = try await command.value
+            XCTFail("Cancelled remote stdin writer must not report success")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Cancelled remote stdin writer returned the wrong error: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "Remote stdout completion cannot conceal a stuck stdin writer")
+    }
+
     func testCancelledRemoteRunnerReapsItsExactPID() async throws {
         let pidURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-remote-cancel-\(UUID().uuidString).pid")
