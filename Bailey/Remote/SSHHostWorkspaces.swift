@@ -30,6 +30,21 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
     func run(
         _ argv: [String], stdin: Data?, timeout: TimeInterval
     ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        try await execute(argv, stdin: stdin, timeout: timeout, limits: nil)
+    }
+
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        try await execute(argv, stdin: stdin, timeout: timeout,
+                          limits: (stdout: stdoutLimit, stderr: stderrLimit))
+    }
+
+    private func execute(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        limits: (stdout: Int, stderr: Int)?
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
         let arguments = [
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes",
@@ -39,13 +54,16 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
             let result = try await Task.detached(priority: .utility) {
                 try ProcessRemoteCommandRunner.launch(
                     sshPath: "/usr/bin/ssh", arguments: arguments,
-                    stdin: stdin, timeout: timeout
+                    stdin: stdin, timeout: timeout,
+                    stdoutLimit: limits?.stdout, stderrLimit: limits?.stderr
                 )
             }.value
             await MainActor.run {
                 SSHHostWorkspaces.setConnected(result.status != 255, for: host)
             }
             return result
+        } catch WorkspaceError.tooLarge {
+            throw WorkspaceError.tooLarge
         } catch {
             await MainActor.run { SSHHostWorkspaces.setConnected(false, for: host) }
             throw error

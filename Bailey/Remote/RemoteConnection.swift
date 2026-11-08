@@ -175,6 +175,21 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
         stdin: Data? = nil,
         timeout: TimeInterval = 20
     ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        try await execute(argv, stdin: stdin, timeout: timeout, limits: nil)
+    }
+
+    nonisolated func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        try await execute(argv, stdin: stdin, timeout: timeout,
+                          limits: (stdout: stdoutLimit, stderr: stderrLimit))
+    }
+
+    private nonisolated func execute(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        limits: (stdout: Int, stderr: Int)?
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
         // Deliberately not gated on `.connected`: the liveness probe has to
         // keep running while the connection is disconnected, or nothing could
         // ever notice it coming back.
@@ -193,11 +208,13 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
         }
         let remaining = timeout - (ProcessInfo.processInfo.systemUptime - started)
         guard remaining > 0 else { throw WorkspaceError.timedOut }
-        return await Self.runSSH(
+        let result = await Self.runSSH(
             arguments: controlArguments + ["-o", "BatchMode=yes", destination, "--"] + argv,
-            stdin: stdin,
-            timeout: remaining
+            stdin: stdin, timeout: remaining,
+            stdoutLimit: limits?.stdout, stderrLimit: limits?.stderr
         )
+        if result.status == -3 { throw WorkspaceError.tooLarge }
+        return result
     }
 
 
@@ -217,15 +234,16 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
     /// client here, never the bundle's helper symlink, which would recurse.
     nonisolated static func runSSH(
         arguments: [String],
-        stdin: Data?,
-        timeout: TimeInterval
+        stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) async -> (status: Int32, stdout: Data, stderr: Data) {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(
                     returning: ProcessRemoteCommandRunner.run(
                         sshPath: "/usr/bin/ssh", arguments: arguments,
-                        stdin: stdin, timeout: timeout
+                        stdin: stdin, timeout: timeout,
+                        stdoutLimit: stdoutLimit, stderrLimit: stderrLimit
                     )
                 )
             }

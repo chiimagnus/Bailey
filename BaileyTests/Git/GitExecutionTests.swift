@@ -156,7 +156,10 @@ final class GitExecutionTests: XCTestCase {
         let bytes = GitCommandExecution.runData(["cat-file", "blob", "HEAD:" + name], in: directory.path)
         XCTAssertEqual(bytes.status, 0)
         XCTAssertEqual(bytes.stdout, binary)
-        XCTAssertEqual(GitCommandExecution.runData(["cat-file", "blob", "HEAD:large.txt"], in: directory.path, stdoutLimit: 5).stdout, large.prefix(5))
+        let limited = GitCommandExecution.runData(["cat-file", "blob", "HEAD:large.txt"], in: directory.path, stdoutLimit: 5)
+        XCTAssertEqual(limited.status, -3, "Truncated stdout cannot be a successful Git object")
+        XCTAssertLessThanOrEqual(limited.stdout.count, 5)
+        XCTAssertEqual(limited.stderr, String(localized: "Git output exceeded the allowed size.", table: "Git"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("SHOULD_NOT_EXIST").path))
 
         let channels = GitCommandExecution.run(["-c", "alias.channels=!printf out; printf err >&2; exit 7", "channels"], in: directory.path)
@@ -165,6 +168,86 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertEqual(channels.stderr, "err")
         let environment = GitCommandExecution.run(["-c", "alias.environment=!printf '%s:%s:%s' \"$GIT_OPTIONAL_LOCKS\" \"$GIT_TERMINAL_PROMPT\" \"$LC_ALL\"", "environment"], in: directory.path)
         XCTAssertEqual(environment.stdout, "0:0:C")
+    }
+
+    func testExactGitStdoutBudgetAndLocalWorkspacePipeBoundary() async throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let args = ["-c", "alias.bytes=!printf 12345", "bytes"]
+        let exact = GitCommandExecution.runData(args, in: directory.path, stdoutLimit: 5)
+        XCTAssertEqual(exact.status, 0, exact.stderr)
+        XCTAssertEqual(exact.stdout, Data("12345".utf8))
+        for limit in [0, 4] {
+            let exceeded = GitCommandExecution.runData(args, in: directory.path, stdoutLimit: limit)
+            XCTAssertEqual(exceeded.status, -3)
+            XCTAssertLessThanOrEqual(exceeded.stdout.count, limit)
+            XCTAssertEqual(exceeded.stderr, String(localized: "Git output exceeded the allowed size.", table: "Git"))
+        }
+        let stdout = try await LocalWorkspaceBackend.shared.runLimited(
+            argv: ["/bin/sh", "-c", "printf out; printf err >&2"],
+            cwd: nil, env: nil, stdin: nil, timeout: 2,
+            stdoutLimit: 3, stderrLimit: 3
+        )
+        XCTAssertEqual(stdout.status, 0)
+        XCTAssertEqual(stdout.stdout, Data("out".utf8))
+        XCTAssertEqual(stdout.stderr, Data("err".utf8))
+        for (outLimit, errLimit) in [(2, 3), (3, 2)] {
+            do {
+                _ = try await LocalWorkspaceBackend.shared.runLimited(
+                    argv: ["/bin/sh", "-c", "printf out; printf err >&2"],
+                    cwd: nil, env: nil, stdin: nil, timeout: 2,
+                    stdoutLimit: outLimit, stderrLimit: errLimit
+                )
+                XCTFail("Output over the exact boundary must fail")
+            } catch WorkspaceError.tooLarge {
+            }
+        }
+    }
+
+    func testNativeGitBatchReceiverChecksFiveMiBBoundaryBeforeAllocating() async throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let maxBytes = 5 * 1024 * 1024
+        for count in [maxBytes, maxBytes + 1] {
+            let data = Data(repeating: 0x41, count: count)
+            let name = "batch-\(count).txt"
+            try data.write(to: directory.appendingPathComponent(name))
+            let hashed = GitCommandExecution.run(["hash-object", "-w", "--", name], in: directory.path)
+            XCTAssertEqual(hashed.status, 0, hashed.stderr)
+            let oid = hashed.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            XCTAssertEqual(oid.count, 40)
+            let budget = maxBytes + Data("\(oid) blob \(maxBytes)\n".utf8).count + 1
+            let batch = await GitCommandExecution.runData(
+                ["cat-file", "--batch"], in: directory.path, timeout: 10,
+                stdoutLimit: budget, stdin: Data((oid + "\n").utf8),
+                backend: LocalWorkspaceBackend.shared
+            )
+            if count == maxBytes {
+                XCTAssertEqual(batch.status, 0, batch.stderr)
+                XCTAssertEqual(batch.stdout, Data("\(oid) blob \(count)\n".utf8) + data + Data([10]))
+            } else {
+                XCTAssertEqual(batch.status, -3, "One byte beyond the pipe budget must fail")
+                XCTAssertLessThanOrEqual(batch.stdout.count, budget)
+            }
+        }
+    }
+
+    func testLocalBoundedGitReaderEndsEndlessStdoutAndStderr() throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for (alias, stream) in [
+            ("streamout", "printf 0123456789"),
+            ("streamerr", "printf 0123456789 >&2"),
+        ] {
+            let started = Date()
+            let result = GitCommandExecution.runData(
+                ["-c", "alias.\(alias)=!while :; do \(stream); done", alias],
+                in: directory.path, timeout: 3, stdoutLimit: 512
+            )
+            XCTAssertEqual(result.status, -3, "Limit violations must stop Git, not time out")
+            XCTAssertLessThanOrEqual(result.stdout.count, 512)
+            XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+        }
     }
 
     func testLocalBackendHashStdinLatencyAndSnapshot() async throws {
@@ -207,7 +290,7 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
     }
 
-    func testRemoteOutputLimitDoesNotBoundBackendTransmission() async {
+    func testRemoteOutputLimitNeverReturnsPartialSuccess() async {
         let backend = GitBackendFixture()
         let payload = Data(repeating: 65, count: 8 * 1_024 * 1_024)
         let errorOutput = Data(repeating: 66, count: 1_024 * 1_024)
@@ -219,10 +302,9 @@ final class GitExecutionTests: XCTestCase {
             ["cat-file", "blob", "012345"], in: "/repo", stdoutLimit: limit,
             backend: backend
         )
-        XCTAssertEqual(result.status, 7)
-        XCTAssertEqual(result.stdout, payload.prefix(limit))
-        XCTAssertEqual(result.stderr.utf8.count, errorOutput.count)
-        print("AUDIT_GIT_REMOTE_OUTPUT requestedLimit=\(limit) backendBytes=\(payload.count) returnedBytes=\(result.stdout.count) unboundedStderrBytes=\(result.stderr.utf8.count)")
+        XCTAssertEqual(result.status, -3)
+        XCTAssertLessThanOrEqual(result.stdout.count, limit)
+        XCTAssertEqual(result.stderr, String(localized: "Git output exceeded the allowed size.", table: "Git"))
     }
 
     func testRemoteBackendMapping() async {

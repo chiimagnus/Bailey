@@ -9,6 +9,24 @@ nonisolated protocol RemoteCommandRunner: Sendable {
     func run(
         _ argv: [String], stdin: Data?, timeout: TimeInterval
     ) async throws -> (status: Int32, stdout: Data, stderr: Data)
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data)
+}
+
+extension RemoteCommandRunner {
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        // Test runners have in-memory output; real SSH runners constrain pipes.
+        let result = try await run(argv, stdin: stdin, timeout: timeout)
+        guard result.stdout.count <= stdoutLimit, result.stderr.count <= stderrLimit else {
+            throw WorkspaceError.tooLarge
+        }
+        return result
+    }
 }
 
 /// A remote command that failed, carrying the remote's own message so the
@@ -266,6 +284,22 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult {
+        try await execute(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout,
+                          limits: nil)
+    }
+
+    func runLimited(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> WorkspaceRunResult {
+        try await execute(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout,
+                          limits: (stdout: stdoutLimit, stderr: stderrLimit))
+    }
+
+    private func execute(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, limits: (stdout: Int, stderr: Int)?
+    ) async throws -> WorkspaceRunResult {
         guard !argv.isEmpty else { throw WorkspaceError.notFound }
         var command = ""
         if let cwd { command += "cd \(RemoteCommands.doubleQuote(cwd)) && " }
@@ -277,9 +311,15 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         }
         command += argv.map(RemoteCommands.doubleQuote).joined(separator: " ")
 
-        let result = try await runner.run(
-            [command], stdin: stdin, timeout: timeout ?? self.timeout
-        )
+        let result: (status: Int32, stdout: Data, stderr: Data)
+        if let limits {
+            result = try await runner.runLimited(
+                [command], stdin: stdin, timeout: timeout ?? self.timeout,
+                stdoutLimit: limits.stdout, stderrLimit: limits.stderr
+            )
+        } else {
+            result = try await runner.run([command], stdin: stdin, timeout: timeout ?? self.timeout)
+        }
         return WorkspaceRunResult(
             status: result.status, stdout: result.stdout, stderr: result.stderr
         )
@@ -303,10 +343,13 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
 nonisolated enum ProcessRemoteCommandRunner {
 
     static func launch(
-        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
+        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) throws -> (status: Int32, stdout: Data, stderr: Data) {
-        let result = run(sshPath: sshPath, arguments: arguments, stdin: stdin, timeout: timeout)
+        let result = run(sshPath: sshPath, arguments: arguments, stdin: stdin,
+                         timeout: timeout, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
         if result.status == -2 { throw WorkspaceError.timedOut }
+        if result.status == -3 { throw WorkspaceError.tooLarge }
         if result.status == -1 {
             throw RemoteConnectionError.commandFailed(
                 status: result.status, message: String(decoding: result.stderr, as: UTF8.self)
@@ -316,7 +359,8 @@ nonisolated enum ProcessRemoteCommandRunner {
     }
 
     static func run(
-        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
+        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) -> (status: Int32, stdout: Data, stderr: Data) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sshPath)
@@ -356,6 +400,7 @@ nonisolated enum ProcessRemoteCommandRunner {
         var openDescriptors: Set<Int32> = [outFD, errFD]
         let deadline = Date().addingTimeInterval(timeout)
         var timedOut = false
+        var outputExceeded = false
         while true {
             if Date() >= deadline {
                 timedOut = true
@@ -377,16 +422,25 @@ nonisolated enum ProcessRemoteCommandRunner {
                 let count = Darwin.read(entry.fd, &buffer, buffer.count)
                 if count > 0 {
                     if entry.fd == outFD {
+                        if let stdoutLimit, count > stdoutLimit - outData.count {
+                            outputExceeded = true
+                            break
+                        }
                         outData.append(buffer, count: count)
                     } else {
+                        if let stderrLimit, count > stderrLimit - errData.count {
+                            outputExceeded = true
+                            break
+                        }
                         errData.append(buffer, count: count)
                     }
                 } else if count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR) {
                     openDescriptors.remove(entry.fd)
                 }
             }
+            if outputExceeded { break }
         }
-        if timedOut {
+        if timedOut || outputExceeded {
             if process.isRunning {
                 process.terminate()
                 if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
@@ -394,6 +448,7 @@ nonisolated enum ProcessRemoteCommandRunner {
                     _ = exited.wait(timeout: .now() + .seconds(1))
                 }
             }
+            if outputExceeded { return (-3, outData, errData) }
             errData.append(Data("\nssh did not respond in time.\n".utf8))
             return (-2, outData, errData)
         }

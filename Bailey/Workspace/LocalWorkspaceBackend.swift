@@ -359,9 +359,19 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }.value
     }
 
+    func runLimited(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> WorkspaceRunResult {
+        try await Task.detached(priority: .utility) {
+            try Self.runSync(argv: argv, cwd: cwd, env: env, stdin: stdin,
+                             timeout: timeout, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
+        }.value
+    }
+
     private static func runSync(
         argv: [String], cwd: String?, env: [String: String]?,
-        stdin: Data?, timeout: TimeInterval?
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) throws -> WorkspaceRunResult {
         guard let executable = argv.first else { throw WorkspaceError.notFound }
         let process = Process()
@@ -386,6 +396,18 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         try process.run()
+        defer {
+            // A failed bounded read must not leave its command consuming CPU
+            // or holding pipes after the caller has received an error.
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGTERM)
+                if exited.wait(timeout: .now() + .milliseconds(250)) == .timedOut,
+                   process.isRunning {
+                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    _ = exited.wait(timeout: .now() + .milliseconds(250))
+                }
+            }
+        }
         let writer = input.flatMap { pipe in
             stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
         }
@@ -439,8 +461,17 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             for entry in fds where entry.revents != 0 {
                 let count = Darwin.read(entry.fd, &buffer, buffer.count)
                 if count > 0 {
-                    if entry.fd == outFD { outData.append(buffer, count: count) }
-                    else { errData.append(buffer, count: count) }
+                    if entry.fd == outFD {
+                        if let stdoutLimit, count > stdoutLimit - outData.count {
+                            throw WorkspaceError.tooLarge
+                        }
+                        outData.append(buffer, count: count)
+                    } else {
+                        if let stderrLimit, count > stderrLimit - errData.count {
+                            throw WorkspaceError.tooLarge
+                        }
+                        errData.append(buffer, count: count)
+                    }
                 } else if count == 0 {
                     openFDs.remove(entry.fd)
                 } else if errno != EAGAIN && errno != EINTR {

@@ -5,8 +5,15 @@ nonisolated enum GitCommandExecution {
     private static let localEnvironment = loadLoginEnvironment()
 
     private final class PipeData: @unchecked Sendable {
+        // Read and written by one pipe thread, observed only after readers.wait().
         var value = Data()
+        var exceeded = false
     }
+
+    private static let gitErrorBytes = 64 * 1024
+    private static let outputExceededMessage = String(
+        localized: "Git output exceeded the allowed size.", table: "Git"
+    )
 
     static func loadLoginEnvironment(
         shell: String = LocalWorkspaceBackend.loginShell,
@@ -43,7 +50,7 @@ nonisolated enum GitCommandExecution {
     /// readers back onto the shared pool can starve every pipe drain.
     static func runData(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        stdoutLimit: Int? = nil
+        stdoutLimit: Int? = nil, stdin: Data? = nil
     ) -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
         let started = ProcessInfo.processInfo.systemUptime
@@ -59,13 +66,14 @@ nonisolated enum GitCommandExecution {
         env["LC_ALL"] = "C"
         return runProcess(
             ["git"] + args, executable: "/usr/bin/env", in: dir,
-            environment: env, timeout: remaining, stdoutLimit: stdoutLimit
+            environment: env, timeout: remaining, stdoutLimit: stdoutLimit, stdin: stdin
         )
     }
 
     private static func runProcess(
         _ args: [String], executable: String, in dir: String,
-        environment: [String: String], timeout: TimeInterval?, stdoutLimit: Int?
+        environment: [String: String], timeout: TimeInterval?, stdoutLimit: Int?,
+        stdin: Data? = nil
     ) -> (status: Int32, stdout: Data, stderr: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -77,7 +85,11 @@ nonisolated enum GitCommandExecution {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
-        process.standardInput = FileHandle.nullDevice
+        let input: Pipe? = stdin == nil ? nil : Pipe()
+        if let input, fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != 0 {
+            return (-1, Data(), String(cString: strerror(errno)))
+        }
+        process.standardInput = input ?? FileHandle.nullDevice
         let processExited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in processExited.signal() }
 
@@ -85,6 +97,9 @@ nonisolated enum GitCommandExecution {
             try process.run()
         } catch {
             return (-1, Data(), error.localizedDescription)
+        }
+        let writer = input.flatMap { pipe in
+            stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
         }
         let ownsProcessGroup = getpgid(process.processIdentifier) == process.processIdentifier
         let outData = PipeData()
@@ -106,9 +121,12 @@ nonisolated enum GitCommandExecution {
                     break
                 }
                 let remaining = (stdoutLimit ?? .max) - outData.value.count
-                if remaining > 0 {
-                    outData.value.append(chunk.prefix(remaining))
+                if chunk.count > remaining {
+                    outData.exceeded = true
+                    if process.isRunning { process.terminate() }
+                    break
                 }
+                if remaining > 0 { outData.value.append(chunk) }
             }
             readers.leave()
         }
@@ -116,7 +134,17 @@ nonisolated enum GitCommandExecution {
         stdoutReader.start()
         readers.enter()
         let stderrReader = Thread {
-            errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
+            while let chunk = try? stderr.fileHandleForReading.read(upToCount: 64 * 1024),
+                  !chunk.isEmpty {
+                let remaining = (stdoutLimit == nil ? Int.max : Self.gitErrorBytes)
+                    - errData.value.count
+                if chunk.count > remaining {
+                    errData.exceeded = true
+                    if process.isRunning { process.terminate() }
+                    break
+                }
+                if remaining > 0 { errData.value.append(chunk) }
+            }
             readers.leave()
         }
         stderrReader.qualityOfService = readerQualityOfService
@@ -144,6 +172,7 @@ nonisolated enum GitCommandExecution {
             process.waitUntilExit()
         }
         readers.wait()
+        let inputError = writer?.finish()
         let output = outData.value
         var errorOutput = String(data: errData.value, encoding: .utf8) ?? ""
         if timedOut {
@@ -153,6 +182,12 @@ nonisolated enum GitCommandExecution {
             }
             errorOutput += timeoutMessage
             return (-2, output, errorOutput)
+        }
+        if outData.exceeded || errData.exceeded {
+            return (-3, output, Self.outputExceededMessage)
+        }
+        if let inputError, process.terminationStatus == 0 {
+            return (-1, output, inputError.localizedDescription)
         }
         return (
             process.terminationStatus,
@@ -178,20 +213,30 @@ nonisolated enum GitCommandExecution {
 
     @concurrent static func runData(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        stdoutLimit: Int? = nil, backend: WorkspaceBackend
+        stdoutLimit: Int? = nil, stdin: Data? = nil, backend: WorkspaceBackend
     ) async -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
         if backend is LocalWorkspaceBackend {
-            return runData(args, in: dir, timeout: timeout, stdoutLimit: stdoutLimit)
+            return runData(args, in: dir, timeout: timeout,
+                           stdoutLimit: stdoutLimit, stdin: stdin)
         }
         do {
-            let result = try await backend.run(
-                argv: ["git"] + args, cwd: dir,
-                env: ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"],
-                stdin: nil, timeout: timeout
-            )
-            let output = stdoutLimit.map { Data(result.stdout.prefix($0)) } ?? result.stdout
-            return (result.status, output, String(data: result.stderr, encoding: .utf8) ?? "")
+            let argv = ["git"] + args
+            let env = ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"]
+            let result: WorkspaceRunResult
+            if let stdoutLimit {
+                result = try await backend.runLimited(
+                    argv: argv, cwd: dir, env: env, stdin: stdin, timeout: timeout,
+                    stdoutLimit: stdoutLimit, stderrLimit: gitErrorBytes
+                )
+            } else {
+                result = try await backend.run(
+                    argv: argv, cwd: dir, env: env, stdin: stdin, timeout: timeout
+                )
+            }
+            return (result.status, result.stdout, String(data: result.stderr, encoding: .utf8) ?? "")
+        } catch WorkspaceError.tooLarge {
+            return (-3, Data(), outputExceededMessage)
         } catch WorkspaceError.timedOut {
             return (-2, Data(), String(localized: "Git did not respond in time.", table: "Git"))
         } catch {

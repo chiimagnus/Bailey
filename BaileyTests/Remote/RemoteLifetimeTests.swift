@@ -51,6 +51,50 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.4)
     }
 
+    func testBoundedRemotePipeStopsBeforeLargeOutputIsCollected() throws {
+        let exact = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/bin/sh", arguments: ["-c", "printf abcde; printf err >&2"],
+            stdin: nil, timeout: 2, stdoutLimit: 5, stderrLimit: 3
+        )
+        XCTAssertEqual(exact.status, 0)
+        XCTAssertEqual(exact.stdout, Data("abcde".utf8))
+        XCTAssertEqual(exact.stderr, Data("err".utf8))
+
+        let scripts = [
+            "print STDOUT 'x' x (16 * 1024 * 1024)",
+            "print STDERR 'e' x (16 * 1024 * 1024)",
+            "$|=1; while (1) { print STDOUT 'a' x 4096; print STDERR 'b' x 4096 }",
+        ]
+        for script in scripts {
+            let start = Date()
+            let output = ProcessRemoteCommandRunner.run(
+                sshPath: "/usr/bin/perl", arguments: ["-e", script],
+                stdin: nil, timeout: 4, stdoutLimit: 4_096, stderrLimit: 4_096
+            )
+            XCTAssertEqual(output.status, -3, "An oversized stream must not publish success")
+            XCTAssertLessThanOrEqual(output.stdout.count, 4_096)
+            XCTAssertLessThanOrEqual(output.stderr.count, 4_096)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 2,
+                              "A rejected command must stop rather than drain the full stream")
+            XCTAssertThrowsError(try ProcessRemoteCommandRunner.launch(
+                sshPath: "/usr/bin/perl", arguments: ["-e", script],
+                stdin: nil, timeout: 4, stdoutLimit: 4_096, stderrLimit: 4_096
+            )) { error in
+                guard case WorkspaceError.tooLarge = error else {
+                    return XCTFail("Expected output limit, got \(error)")
+                }
+            }
+        }
+
+        let abnormal = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/bin/sh", arguments: ["-c", "printf abc; printf warning >&2; exit 7"],
+            stdin: nil, timeout: 2, stdoutLimit: 8, stderrLimit: 16
+        )
+        XCTAssertEqual(abnormal.status, 7)
+        XCTAssertEqual(abnormal.stdout, Data("abc".utf8))
+        XCTAssertEqual(abnormal.stderr, Data("warning".utf8))
+    }
+
     func testPrivateSSHSocketHandoffCompletesAcrossWorkerAndMainActor() async throws {
         let path = "/tmp/bailey-ssh-test-\(UUID().uuidString.prefix(8)).sock"
         let listener = try BaileySSHSocketServer(path: path) { request, reply in
