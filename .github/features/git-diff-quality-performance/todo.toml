@@ -87,34 +87,34 @@ note = "2026-11-06 根因修复 Files 单一交互代次拒绝跨 await 过期 A
 [[tasks]]
 id = "P3-T1"
 title = "修复 Git 输出预算与对象完整性"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "ad1e8a07"
+note = "输出限流97b8f6be+Batch ad1e8a07；227项0失败2 SSH跳过，124项0失败1 SSH跳过；真实Mac SSH待P4补验"
 
 [[tasks]]
 id = "P3-T2"
 title = "验证 Git patch 与原始工作区快照一致性"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "753e8b98"
+note = "真实 Git A/B reset 跨代次 Red/Green；9 项定向通过、127 项完整 Diff/History 0 失败（1 项无授权 SSH 跳过）；Git 原文与 clean filter 行为保持"
 
 [[tasks]]
 id = "P3-T3"
 title = "收拢可取消 Diff 计算和展示发布"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t3"
-commit = ""
-note = ""
+commit = "fd3a3f84"
+note = "d70ea53e: 399/400 token 1000对约37s→0.42s，24项DiffEngine通过；fd3a3f84: 4项取消Red→Green、20项Git/SSH通过、5项真实PID/取消通过；其他145项0失败1真实SSH跳过；清理冗余Git reader线程并保留超时部分输出"
 
 [[tasks]]
 id = "P3-T4"
 title = "核实可见语法着色缓存与释放"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t4"
-commit = ""
-note = ""
+commit = "d93ccc0e"
+note = "2 MiB+-5 MiB 30次可见语法复用、30次冷解析和10标签堆内存实际释放；148项0失败1 SSH跳过、最终2项变更复测0失败；Git超时输出回归通过，正式GUI与实机SSH由P4补验"
 
 [[tasks]]
 id = "P4-T1"
