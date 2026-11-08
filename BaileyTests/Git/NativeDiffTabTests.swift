@@ -5591,6 +5591,55 @@ final class NativeDiffTabTests: XCTestCase {
         }.count, 1)
     }
 
+    func testConcurrentGitStatusAndNestedMarkdownDiffReachNativeContent() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = ".github/features/git-diff-quality-performance/audit-p3.md"
+        let file = root.appendingPathComponent(name)
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("# Audit P3\n\nInitial decision.\n".utf8).write(to: file)
+        for args in [["add", "--", name], ["commit", "-qm", "baseline"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        for revision in 0..<31 {
+            let result = GitCommandExecution.run(
+                ["commit", "--allow-empty", "-qm", "history-\(revision)"], in: root.path
+            )
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let changed = "# Audit P3\n\nInitial decision.\n"
+            + (0..<75).map { "Finding \($0): verified.\n" }.joined()
+        try Data(changed.utf8).write(to: file)
+
+        let status = GitStatusModel()
+        status.sync(root: root.path)
+        status.refresh()
+        let diff = DiffTab(repoRoot: root.path, path: name, source: .worktree,
+                           untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        try await wait({
+            status.hasResolvedStatus && status.isRepo && !status.isRefreshing
+                && diff.canPresentNativeContent
+        }, timeout: 10)
+        XCTAssertNil(diff.error)
+        XCTAssertTrue(diff.hasChanges)
+        XCTAssertEqual(diff.newContent, changed)
+        XCTAssertTrue(status.changedEntries.contains { $0.path == name })
+
+        let surface = DiffNativeSurface(diff: diff)
+        diff.nativeSurface = surface
+        surface.frame = CGRect(x: 0, y: 0, width: 850, height: 550)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        XCTAssertTrue(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .contains { !$0.isHidden && $0.textView.string.contains("Finding 74: verified.") })
+        diff.retireNativeSurface()
+    }
+
     func testGitCleanFilterCannotPublishStaleRawBytesWhenCanonicalOIDIsUnchanged() async throws {
         for source: DiffTab.Source in [.worktree, .revisionWorktree(hash: "HEAD")] {
             let root = try repository()

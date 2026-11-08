@@ -363,113 +363,28 @@ nonisolated enum ProcessRemoteCommandRunner {
         sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval,
         stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) -> (status: Int32, stdout: Data, stderr: Data) {
-        if Task.isCancelled { return (-4, Data(), Data()) }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: sshPath)
-        process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["LC_ALL"] = "C"
-        process.environment = environment
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        let stdinPipe: Pipe? = stdin == nil ? nil : Pipe()
-        if let stdinPipe, fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != 0 {
-            return (-1, Data(), Data(String(cString: strerror(errno)).utf8))
-        }
-        process.standardInput = stdinPipe ?? FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
         do {
-            try process.run()
+            let result = try LocalWorkspaceBackend.runSync(
+                argv: [sshPath] + arguments, cwd: nil, env: environment,
+                stdin: stdin, timeout: timeout,
+                stdoutLimit: stdoutLimit, stderrLimit: stderrLimit,
+                preservePartialOnTimeout: true
+            )
+            var details = result.stderr
+            if result.status == -2 {
+                details.append(Data("\nssh did not respond in time.\n".utf8))
+            }
+            return (result.status, result.stdout, details)
+        } catch is CancellationError {
+            return (-4, Data(), Data())
+        } catch WorkspaceError.tooLarge {
+            return (-3, Data(), Data())
+        } catch WorkspaceError.timedOut {
+            return (-2, Data(), Data("\nssh did not respond in time.\n".utf8))
         } catch {
             return (-1, Data(), Data(error.localizedDescription.utf8))
         }
-        let writer = stdinPipe.flatMap { pipe in
-            stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
-        }
-        defer {
-            writer?.cancel()
-            _ = writer?.finish()
-        }
-        let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
-        let errFD = stderrPipe.fileHandleForReading.fileDescriptor
-        for descriptor in [outFD, errFD] {
-            let flags = fcntl(descriptor, F_GETFL, 0)
-            if flags >= 0 { _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) }
-        }
-        var outData = Data()
-        var errData = Data()
-        var buffer = [UInt8](repeating: 0, count: 8_192)
-        var openDescriptors: Set<Int32> = [outFD, errFD]
-        let deadline = Date().addingTimeInterval(timeout)
-        var timedOut = false
-        var outputExceeded = false
-        var wasCancelled = false
-        while true {
-            if Task.isCancelled {
-                wasCancelled = true
-                break
-            }
-            if Date() >= deadline {
-                timedOut = true
-                break
-            }
-            var fds = openDescriptors.sorted().map { descriptor in
-                pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-            }
-            if fds.isEmpty {
-                if exited.wait(timeout: .now() + .milliseconds(200)) == .success { break }
-                continue
-            }
-            let ready = poll(&fds, nfds_t(fds.count), 100)
-            if ready < 0 {
-                if errno == EINTR { continue }
-                break
-            }
-            for entry in fds where entry.revents != 0 {
-                let count = Darwin.read(entry.fd, &buffer, buffer.count)
-                if count > 0 {
-                    if entry.fd == outFD {
-                        if let stdoutLimit, count > stdoutLimit - outData.count {
-                            outputExceeded = true
-                            break
-                        }
-                        outData.append(buffer, count: count)
-                    } else {
-                        if let stderrLimit, count > stderrLimit - errData.count {
-                            outputExceeded = true
-                            break
-                        }
-                        errData.append(buffer, count: count)
-                    }
-                } else if count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR) {
-                    openDescriptors.remove(entry.fd)
-                }
-            }
-            if outputExceeded { break }
-        }
-        if timedOut || outputExceeded || wasCancelled {
-            if process.isRunning {
-                process.terminate()
-                if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
-                    Darwin.kill(process.processIdentifier, SIGKILL)
-                    _ = exited.wait(timeout: .now() + .seconds(1))
-                }
-            }
-            if wasCancelled { return (-4, outData, errData) }
-            if outputExceeded { return (-3, outData, errData) }
-            errData.append(Data("\nssh did not respond in time.\n".utf8))
-            return (-2, outData, errData)
-        }
-        let writingError = writer?.finish()
-        if Task.isCancelled { return (-4, outData, errData) }
-        if let writingError, process.terminationStatus == 0 {
-            errData.append(Data(writingError.localizedDescription.utf8))
-            return (-1, outData, errData)
-        }
-        return (process.terminationStatus, outData, errData)
     }
 }

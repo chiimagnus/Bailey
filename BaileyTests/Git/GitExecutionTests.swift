@@ -250,6 +250,34 @@ final class GitExecutionTests: XCTestCase {
         XCTAssertTrue(exited, "The owned PID must be reaped; cancelling its Task is insufficient")
     }
 
+    func testCompletedLocalCommandFailsPromptlyWhenDescendantHoldsUnwrittenInput() async throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pidURL = directory.appendingPathComponent("unread-input.pid")
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        defer {
+            if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGTERM)
+            }
+        }
+        let started = Date()
+        do {
+            _ = try await LocalWorkspaceBackend.shared.runLimited(
+                argv: ["/bin/sh", "-c",
+                       "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                cwd: directory.path, env: nil,
+                stdin: Data(repeating: 0x61, count: 2 * 1024 * 1024), timeout: 2,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+            XCTFail("A child cannot report success without consuming the requested stdin")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, NSPOSIXErrorDomain)
+            XCTAssertEqual((error as NSError).code, Int(EPIPE))
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
     func testCancelInterruptsStdinWriterWhenChildExitsButDescendantHoldsInput() async throws {
         let directory = try makeRepository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -259,7 +287,7 @@ final class GitExecutionTests: XCTestCase {
         let task = Task.detached(priority: .utility) {
             try await LocalWorkspaceBackend.shared.runLimited(
                 argv: ["/bin/sh", "-c",
-                       "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                       "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); /bin/sleep 0.5; exit 0"],
                 cwd: directory.path, env: nil,
                 stdin: Data(repeating: 0x61, count: 2 * 1024 * 1024), timeout: 3,
                 stdoutLimit: 128, stderrLimit: 128
@@ -281,6 +309,31 @@ final class GitExecutionTests: XCTestCase {
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 1,
                           "The input writer must stop with its owning process request")
+    }
+
+    func testCompletedLocalCommandDoesNotWaitForInheritedOutputPipes() async throws {
+        let directory = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pidURL = directory.appendingPathComponent("output-descendant.pid")
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        defer {
+            if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGTERM)
+            }
+        }
+        let started = Date()
+        let output = try await LocalWorkspaceBackend.shared.runLimited(
+            argv: ["/bin/sh", "-c",
+                   "/bin/sleep 4 & echo $! > \(escaped); printf out; printf err >&2"],
+            cwd: directory.path, env: nil, stdin: nil, timeout: 2,
+            stdoutLimit: 3, stderrLimit: 3
+        )
+        XCTAssertEqual(output.status, 0)
+        XCTAssertEqual(output.stdout, Data("out".utf8))
+        XCTAssertEqual(output.stderr, Data("err".utf8))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "A descendant's inherited output pipes cannot extend the completed command")
     }
 
     func testExactGitStdoutBudgetAndLocalWorkspacePipeBoundary() async throws {

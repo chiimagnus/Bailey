@@ -84,7 +84,7 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
 }
 
 final class RemoteCommandsTests: XCTestCase {
-    func testLocalCommandTimeoutDoesNotWaitForInheritedOutputPipe() async throws {
+    func testLocalCommandCompletionAndTimeoutIgnoreInheritedOutputPipe() async throws {
         for descriptor in [1, 2] {
             for parentExitsImmediately in [false, true] {
                 let fixture = """
@@ -97,15 +97,25 @@ final class RemoteCommandsTests: XCTestCase {
                     \(parentExitsImmediately ? "os._exit(0)" : "time.sleep(0.6)")
                     """
                 let started = ProcessInfo.processInfo.systemUptime
-                do {
-                    _ = try await LocalWorkspaceBackend.shared.run(
+                if parentExitsImmediately {
+                    let completed = try await LocalWorkspaceBackend.shared.run(
                         argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
                         stdin: nil, timeout: 0.2
                     )
-                    XCTFail("Inherited output pipe must not bypass the command deadline")
-                } catch WorkspaceError.timedOut {}
+                    XCTAssertEqual(completed.status, 0)
+                    XCTAssertTrue(completed.stdout.isEmpty)
+                    XCTAssertTrue(completed.stderr.isEmpty)
+                } else {
+                    do {
+                        _ = try await LocalWorkspaceBackend.shared.run(
+                            argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+                            stdin: nil, timeout: 0.2
+                        )
+                        XCTFail("A still-running command must honor its deadline")
+                    } catch WorkspaceError.timedOut {}
+                }
                 XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 0.85,
-                                  "Descendant-held pipes cannot extend the command timeout")
+                                  "A descendant-held pipe cannot extend a completed or timed-out command")
             }
         }
     }

@@ -39,17 +39,37 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertEqual(failure.status, 7)
 
         let started = Date()
-        XCTAssertThrowsError(try ProcessRemoteCommandRunner.launch(
+        let completed = try ProcessRemoteCommandRunner.launch(
             sshPath: "/bin/sh",
-            arguments: ["-c", "(sleep 0.5) & printf retained"],
-            stdin: nil,
-            timeout: 0.05
-        )) { error in
-            guard case WorkspaceError.timedOut = error else {
-                return XCTFail("Expected timeout, got \(error)")
+            arguments: ["-c", "(sleep 2) & printf retained"],
+            stdin: nil, timeout: 1
+        )
+        XCTAssertEqual(completed.status, 0)
+        XCTAssertEqual(completed.stdout, Data("retained".utf8))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testCompletedSSHRunnerDoesNotWaitForInheritedOutputPipes() throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-output-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        defer {
+            if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGTERM)
             }
         }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.4)
+        let started = Date()
+        let result = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 4 & echo $! > \(escaped); printf out; printf err >&2"],
+            stdin: nil, timeout: 2, stdoutLimit: 3, stderrLimit: 3
+        )
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, Data("out".utf8))
+        XCTAssertEqual(result.stderr, Data("err".utf8))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
     }
 
     func testCancelStopsTheActualRemoteCommandRunnerProcess() async throws {
@@ -72,6 +92,35 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 1)
     }
 
+    func testCompletedSSHCommandFailsPromptlyWhenDescendantHoldsUnwrittenInput() throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-unread-input-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        defer {
+            if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGTERM)
+            }
+        }
+        let started = Date()
+        do {
+            _ = try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sh",
+                arguments: ["-c", "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                stdin: Data(repeating: 0x62, count: 2 * 1024 * 1024), timeout: 2,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+            XCTFail("An SSH command cannot succeed with unwritten input")
+        } catch RemoteConnectionError.commandFailed(let status, let message) {
+            XCTAssertEqual(status, -1)
+            XCTAssertFalse(message.isEmpty)
+        } catch {
+            XCTFail("Expected an incomplete-input command error, got \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
     func testCancelledRemoteInputWriterDoesNotWaitForInheritedPipeTimeout() async throws {
         let pidURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-remote-stdin-\(UUID().uuidString).pid")
@@ -81,7 +130,7 @@ final class RemoteLifetimeTests: XCTestCase {
         let command = Task.detached(priority: .utility) {
             try ProcessRemoteCommandRunner.launch(
                 sshPath: "/bin/sh",
-                arguments: ["-c", "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                arguments: ["-c", "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); /bin/sleep 0.5; exit 0"],
                 stdin: Data(repeating: 0x62, count: 2 * 1024 * 1024), timeout: 3,
                 stdoutLimit: 128, stderrLimit: 128
             )
