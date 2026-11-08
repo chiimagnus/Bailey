@@ -121,6 +121,16 @@ class NativeCodeTextView: NSTextView {
         syntaxCoordinator = nil
         delegate = nil
         onCharacterEdit = nil
+        if let textEditObserver {
+            NotificationCenter.default.removeObserver(textEditObserver)
+            self.textEditObserver = nil
+        }
+        // AppKit can retain a detached NSTextView after a tab is closed.
+        // Retirement must release the old document bytes now, independently
+        // of when the view object itself is eventually deallocated.
+        textStorage?.setAttributedString(NSAttributedString(string: ""))
+        resetDocumentIndex("")
+        undoManager?.removeAllActions()
     }
 
     var overrideContentHeight: CGFloat? {

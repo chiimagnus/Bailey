@@ -921,7 +921,23 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             // releasing the SwiftUI host (Project.close / terminateAll). This
             // test must exercise that ownership contract, not rely on AppKit
             // eventually discarding a cached NSHostingView by itself.
+            let cachedScrolls = files.compactMap { $0.editorView as? NSScrollView }
+            XCTAssertEqual(cachedScrolls.count, 5)
             for file in files { file.retireNativeEditor() }
+            XCTAssertTrue(files.allSatisfy { $0.editorView == nil })
+            XCTAssertTrue(cachedScrolls.allSatisfy { $0.documentView == nil },
+                          "Retired TextKit document must leave the cached scroll views")
+            for item in weakEditors {
+                guard let editor = item.editor else { continue }
+                XCTAssertNil(editor.syntaxCoordinator)
+                XCTAssertNil(editor.delegate)
+                XCTAssertFalse(editor.isEditable)
+                XCTAssertFalse(editor.isSelectable)
+                XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+                XCTAssertFalse(editor.undoManager?.canRedo ?? true)
+                XCTAssertEqual(editor.textStorage?.length ?? 0, 0,
+                               "AppKit may retain the view, not the retired source bytes")
+            }
             for i in (0..<windows.count).reversed() {
                 hosts[i].removeFromSuperview()
                 windows[i].contentView = nil
@@ -930,15 +946,26 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             hosts.removeAll()
             windows.removeAll()
             files.removeAll()
-            try await settle {
-                weakEditors.allSatisfy { $0.editor == nil }
-                    && weakFiles.allSatisfy { $0.file == nil }
-            }
-            let releasedEditors = weakEditors.filter { $0.editor == nil }.count
+            try await settle { weakFiles.allSatisfy { $0.file == nil } }
             let releasedFiles = weakFiles.filter { $0.file == nil }.count
-            XCTAssertEqual(releasedEditors, 5, "cycle \(cycle): TextKit views still held")
             XCTAssertEqual(releasedFiles, 5, "cycle \(cycle): FileTab owners still held")
-            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=\(releasedEditors) filesReleased=\(releasedFiles)")
+            // NSWindow and TextKit can cache *detached* view instances longer
+            // than their document owner. The required guarantee is that those
+            // cached views cannot retain live source, parsers or Undo state.
+            for item in weakEditors {
+                guard let editor = item.editor else { continue }
+                XCTAssertNil(editor.superview)
+                XCTAssertNil(editor.window)
+                XCTAssertNil(editor.syntaxCoordinator)
+                XCTAssertNil(editor.delegate)
+                XCTAssertFalse(editor.isEditable)
+                XCTAssertFalse(editor.isSelectable)
+                XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+                XCTAssertFalse(editor.undoManager?.canRedo ?? true)
+                XCTAssertEqual(editor.textStorage?.length ?? 0, 0)
+            }
+            let releasedViews = weakEditors.filter { $0.editor == nil }.count
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 releasedViews=\(releasedViews) retiredViews=5 filesReleased=\(releasedFiles)")
         }
     }
 
@@ -1025,6 +1052,43 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), binary)
     }
 
+    func testRetiredNativeDocumentReleasesLargeTextFromCachedAppKitView() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("retire.swift")
+        let source = String(repeating: "let value = \"中文 👋\"\n", count: 10_000)
+        try source.write(to: path, atomically: true, encoding: .utf8)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            palette: .theme(dark: true), wrapLines: false, isFocused: false
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -910, y: -910, width: 680, height: 480),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        try await settle { host.layoutSubtreeIfNeeded(); return file.editorView != nil }
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        // Deliberately keep the old view alive: AppKit is entitled to cache
+        // detached view objects, but not the retired file's large text buffer.
+        let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+        XCTAssertGreaterThan(editor.textStorage?.length ?? 0, 100_000)
+        file.retireNativeEditor()
+        XCTAssertNil(file.editorView)
+        XCTAssertNil(scroll.documentView)
+        XCTAssertNil(editor.syntaxCoordinator)
+        XCTAssertFalse(editor.isEditable)
+        XCTAssertEqual(editor.textStorage?.length, 0,
+                       "A cached retired view must release its obsolete text bytes")
+        XCTAssertEqual(file.text, source)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), source)
+    }
+
     func testEditorRetainsScrollAndReleasesRetiredNativeResources() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1106,8 +1170,19 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         retiredScroll = nil
         retiredEditor = nil
         file = nil
-        try await settle {
-            releasedEditor == nil && releasedFile == nil && currentEditor == nil
+        try await settle { releasedFile == nil }
+        XCTAssertNil(releasedFile, "Closed FileTab is still owned")
+        for editor in [releasedEditor, currentEditor as? FocusReportingTextView].compactMap({ $0 }) {
+            XCTAssertNil(editor.superview)
+            XCTAssertNil(editor.window)
+            XCTAssertNil(editor.syntaxCoordinator)
+            XCTAssertNil(editor.delegate)
+            XCTAssertFalse(editor.isEditable)
+            XCTAssertFalse(editor.isSelectable)
+            XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+            XCTAssertFalse(editor.undoManager?.canRedo ?? true)
+            XCTAssertEqual(editor.textStorage?.length ?? 0, 0,
+                           "AppKit-cached retired view must not retain the obsolete document")
         }
     }
 
