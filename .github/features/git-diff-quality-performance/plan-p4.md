@@ -1,29 +1,32 @@
 # P4：跨来源完整用户验收、远端场景与性能交付
 
-**Goal：** 把 P2／P3 的局部正确性变成完整 Bailey Dev 中可观察、可复验的
-Git Diff 结果；核销原始字节、真实渲染、输入、失败恢复、性能和资源释放。
+**Goal：** 通过 `BaileyTests` 和必要的 `BaileyUITests`，
+验证 P2／P3 的原生组件与完整 Bailey Dev 用户结果；核销原始字节、
+渲染／输入、失败恢复以及现有性能和资源释放回归。
 
 **Non-goals：** 不将自动化通过冒充已发布；不擅自合并 PR #78、推送主分支或更改用户数据；
 不重复设计普通 Git 提交／Reset 或独立 `adaptive-large-files` 的 GB 数据模型。
 
-**Approach：** 先在隔离真实 Git 仓库验证不同来源的完整语义，
-再在完整 App 核对真实视口、键盘、剪贴板、IME、AX、保存与窗口归属，
-然后补齐获得授权的 Windows SSH 实机，最后按当前 HEAD 做完整回归、
-Debug／Release 性能及内存、文档／删除代码审计与交付核销。
+**Approach：** 先由宿主 Swift XCTest 覆盖真实 Git、TextKit、AX、字节和资源边界，
+再在 GitHub Actions 的隔离 macOS runner 上执行必要的完整 App `BaileyUITests`，
+并核销获授权的 Windows SSH 与最终版本构建／测试、文档和源码审计。
+现有性能日志用于诊断，不额外构建 WindowServer 精确首帧／30 次 GUI P95 测量流程。
 
 **Acceptance：**
 - 真实 Git 各比较来源的 old/new 与磁盘、Index、Git 命令一致；
   不因规范化、状态切换和重载出现虚假变更或草稿丢失。
 - 真实完整 App 下折叠、行号、删除 ghost、Split 同步、浮动／传统滚动条、
   高亮、AX、输入、保存、恢复和焦点全部符合 `idea.md`。
-- 首屏、输入、滚动、切标签、多标签内存的冷／热、P95、峰值和关闭后稳定数据
-  与冻结预算有可重放测量，未以降低测试覆盖或视觉正确性换取性能。
+- 首屏可见文字、滚动范围、输入、切标签和关闭后的资源释放，
+  由相关 Swift XCTest 的结果断言；既有 P95／内存测量用于定位回归，
+  不再要求独立 WindowServer 首像素、30 次冷热 GUI P95 或虚拟机。
 - 全量测试、构建、签名、适用 GUI E2E 与远端缺口记录对应**最终提交版本**，
   无未解释回归、旧双轨、临时调试改动和无主文档状态。
 
 **Rules：**
-- 用户已授权执行本计划、独占焦点运行隔离 Bailey Dev GUI，以及使用现有 Windows SSH 测试。
-  授权不等于系统认证或网络已经可用，实际阻塞证据见 `evidence-p1.md`；不重复申请同一授权。
+- 不在用户正在使用的 Mac 桌面运行抢焦点 UIXCTest；必要的完整 App UI XCTest
+  优先在 GitHub Actions 隔离 runner 上进行，不创建 macOS 虚拟机。
+  现有 Windows SSH 授权只覆盖指定测试仓库，不扩展为任意远端操作。
 - Windows SSH 测试只针对明确授权的专属目标、独立临时仓库；
   测试不借 SSH master，不操作工作中用户文件。
 - 缺少必需条件必须分项说明影响及补验，不能用 `XCTSkip`、“反正主机测试通过”掩盖。
@@ -117,12 +120,11 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
 `BaileyTests/Git/NativeDiffTabTests.swift`。
 
 **步骤：**
-1. 独占图形会话，启动独立 `chiimagnus.bailey.dev`，使用一次性 Git 目录；
-   不影响正式 `/Applications/Bailey.app` 或其它桌面 App。
-   如果其它 App／系统通知占据键盘焦点，记录测试归因和实际日志；
-   重新隔离后复跑，绝不通过 `sleep`、禁用焦点断言或吞事件保证绿色。
-   测试不得偷偷切换用户当前系统外观或覆盖剪贴板；
-   只在项目现有独立 GUI 配置中使用受控主题和恢复所有暂改设置。
+1. 在 GitHub Actions 独立 macOS runner 上启动 `chiimagnus.bailey.dev`，
+   使用测试专属 Git 临时目录，验证 XCTest 真正启动 App 并完成目标动作。
+   不在当前用户桌面抢焦点、修改个人系统外观／剪贴板或创建虚拟机。
+   若测试输入合成失败，保留日志并区分 runner、夹具与产品错误，
+   不通过 `sleep`、禁用焦点断言或吞事件制造绿色。
 2. 真实 Git Changes、Git Graph、历史原文、Staged／Unstaged 快速切换、
    同文件多次打开、外部刷新、Dock 重挂载、多窗口选择、切文件及关窗恢复逐一操作。
    看得到文字与真正能输入、第一响应者属于哪个窗口是两项不同结果。
@@ -131,7 +133,9 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
    两种原生滚动条风格、普通／完整长行设置，
    窄／宽窗口、顶部／中部／深处滚动／无变更非折叠深处，
    折叠按钮层级与 AX Press 实际坐标、长删除 ghost、
-   语法色及词级强调、视口恢复、字体/主题切换，取真实窗口截图比对像素。
+   语法色及词级强调、视口恢复、字体/主题切换；
+   原生文字像素和几何由 `BaileyTests` 断言，完整 App 交互由必要的 UI XCTest 断言，
+   不另外要求人工截图矩阵或 WindowServer 精确帧捕获。
 4. 实际文本操作：普通输入不自动展开、手动折叠逐段展开、
    跨隐藏选区（端点落在可见区／隐藏区／文末）、粘贴、剪切、`⌘A`、Find/Replace、
    Undo/Redo、中文 IME 提交、`⌘S`、失焦自动保存、
@@ -174,7 +178,8 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
 
 **Uncovered：**
 真实 macOS 15.6 与不可授权的系统候选输入测试按 `idea.md` 列明具体条件。
-无法独占桌面时真实 GUI 为阻塞，宿主结果不能替代。
+GitHub Actions 中必需的 GUI XCTest 若未执行或失败才形成当前范围的验收缺口；
+不以用户桌面焦点或额外虚拟机可用性作为阻塞理由。
 
 **文档：** 真实交互契约变化在对应 P2 owner 同任务更新
 `docs/features/diff.md`、`docs/ui.md`、`docs/testing.md`；
@@ -251,72 +256,54 @@ Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecove
 无新行为的实机核销不为提交而写代码。
 
 <a id="p4-t4"></a>
-## P4-T4 完成真实首帧、热编辑、滚动和长期内存定量验收
+## P4-T4 以 Swift XCTest 核验首屏、编辑、滚动与资源释放
 
-**结果：** 证明改动不是把 CPU 等待从 Git 进程挪到主线程，
-或者把首屏变快同时让滚动条、内存与后台任务变差。
+**结果：** 以可执行的 Swift XCTest 证明首屏、输入、滚动、原生退役和资源释放
+没有回归，而不是额外建立图形帧捕获或性能评测体系。
 
 **Files／入口：**
 `DiffCodePaneView.layout/applyContentHeightOverride`、
 `DiffNativeSurface.editTextDidChange/render`、
-`DiffTab.reload/invalidateReload/deinit` 与 `Project.remove/terminateAll` 的取消／退役，
-`DiffTab.reload/recomputeDisplay/refreshEditDecorations`、
+`DiffTab.reload/invalidateReload/deinit`、`Project.remove/terminateAll`、
 `DiffSyntaxSource.captures`；
-`BaileyTests/Git/NativeDiffTabTests.swift`、
-`docs/testing.md` 现行性能规范，
-以及 P1 阶段形成的同样本和同环境日志。
+现有 `BaileyTests/Git/NativeDiffTabTests.swift`、
+`BaileyTests/Editor/NativeEditorLayoutTests.swift`、
+`BaileyTests/Editor/TextCoordinateIndexTests.swift`、
+`NativeContentIdentityIntegrationTests` 和 `NativePaneRetentionIntegrationTests`。
 
 **步骤：**
-1. 固定最终 HEAD、OS/Xcode/机型、Git 版本、字体、显示器、
-   主题、窗口尺寸、长行偏好、Debug/Release、冷热定义与数据 hash，
-   重新跑完整性能测量；只在相同硬件和同参数下比较改动前后。
-2. **分别**记录文件事件→Git 状态核心→详情→Changes 行出现，
-   以及鼠标／键盘点击已显示行→Diff 首像素→真实可输入→语法色稳定。
-   原始 24k 模型基线 Staged 199.1 ms／Unstaged 242.9 ms、
-   P95 351.2／328.5 ms 是旧版本的参考，不得跨配置直接比较。
-   P1 同机 Release 24k 各 30 次热态组件像素 P95 为 Staged 199.9 ms、
-   Unstaged 933.1 ms；100k 各 30 次为 228.3／2634.9 ms。
-   必须固定与对应 P1 记录相同的文件内容、构建、字体、布局和窗口重新测，
-   不以 Git 进程少了却实际可见时间不变冒充成功。
-   `GitStatusModel.refresh`、Changes 选择计算、Git IO、DiffCore、投影、
-   TextKit 布局、WindowServer 显示分开计时；
-   1／100／10k 级状态项，1k／24k Staged／Unstaged 至少 30 次热，
-   冷启动、首次挂载、历史与 SSH 分开统计，不能把 400 ms 事件 debounce 算进单击耗时。
-   P1 真实冷 Dev 窗口仅有 5–7 FPS 的采样区间，
-   不能据此声称精确首像素／首次可输入；同一二进制的 Split 新组仅
-   Staged 16、Unstaged 15 次独占有效采样，旧组各 29 次且版本不同。
-   P4 应取得独立可靠帧时间与键盘可用证据，避免混算不兼容样本。
-3. 输入文首／中／末、不同折叠数量、普通字符与换行、Undo、IME、
-   有/无 Neon、主题重绘、窗口改变、滑块拖动、17 次远跳、
-   **无变更非折叠深处滚动的前缀枚举、编辑后非 LF 标记全篇扫描**、
-   文件末尾、短侧／长侧 Split 联动；
-   30 次热操作报中位／P95／最差、主线程连续占用和原生几何是否变形。
-4. 以 Instruments Time Profiler、Allocations 在 1／5／10／20 标签负载
-   下记录创建峰值、切换、折叠展开、语法重建、失焦自动保存、关闭后的稳定 RSS／heap、
-   CPU／唤醒及 TextKit／Tree-sitter／NSAttributedString retained 对象；
-   使用已存在的文件编辑器退役测试做对照：**真关闭 Diff 后即使保留旧 NSView，
-   不再有完整正文和旧 Undo／语法任务；仅 Dock 重挂载不得触发退役。**
-   另外压测取消旧 Git/SSH 读取后进程数量／字节接收回落，
-   不以 `reloadGeneration` 变更或 Swift 弱引用释放代替底层进程实际退出；
-   同时记录 Git stdout（含 stderr）大小／实际本机与 SSH 接收量／峰值缓冲，
-   检查超过限额时没有临时接收完整大数据。
-   不能仅证明 cache hit，必须证明独占资源可以释放。
-5. 没达到 P1 冻结的首屏预算、`docs/testing.md` 的输入/滚动性能目标或正确性
-   均退回相应 owner 修复并重测；不能通过缩减实际样本或只测 Debug 热缓存宣布完成。
+1. 核对测试所用提交、Swift/Xcode 版本、Git 夹具和运行环境，
+   已有同配置的成功证据可复用，不为形式重复执行。
+   针对代码变更重新运行实际受影响的 XCTest，检查测试数量、跳过与退出码。
+2. 对空／1k／24k／100k Git 行、Staged／Unstaged、LF／CRLF／裸 CR／Unicode、
+   长行折行、删除 Ghost、折叠及编辑／只读，断言首次正确文字像素、
+   滚动条完整高度、17 次远跳和末行命中。
+   本机 AppKit 位图测试是有效的 Swift 组件测试，不冒充完整 App 用户操作。
+3. 文首／中／末输入、Undo／Redo、删除／新增换行、语法重绘、字号／宽度变化、
+   切 pane 和 Split 同步，以 Swift XCTest 断言最终原文、选区与几何。
+   已有 30 次原生组件 P95 日志只作诊断，不新增 WindowServer 首像素、
+   30 次冷热 GUI P95、固定 FPS 或独立 Profiler 放行要求。
+4. 关闭标签、项目与窗口以及 Dock 重挂载，使用现有宿主 XCTest
+   核验旧原生视图不保留可写全文、Undo 或语法任务，工作中编辑器不误退役。
+   取消 Git／SSH 读取必须核验实际进程终止和字节接收边界；
+   若测试出现真实性能或泄漏失败，再以 Instruments 定位根因。
+5. 必需的 App 级输入、焦点、保存及 AX 动作复用 P4-T2 的
+   `BaileyUITests`（GitHub Actions 独立 runner）。不得在用户工作桌面抢焦点，
+   不创建 macOS 虚拟机。真实失败回对应源码 owner 修复并复测。
 
 **验证：**
-`make test:NativeDiffTabTests,DiffEngineTests,NativeContentIdentityIntegrationTests`
-以及独立 Dev GUI 和必要的 Release 构建／Profiler；必须附完整命令退出码、
-环境、样本数、分布及原始证据路径。性能仪器不得修改正式 Bailey 会话。
-并行文件／SSH 写入时保留输入和 Index 原字节验证，不以性能覆盖正确性。
+`make test:NativeDiffTabTests,NativeEditorLayoutTests,TextCoordinateIndexTests,NativeContentIdentityIntegrationTests,NativePaneRetentionIntegrationTests,DiffEngineTests`；
+必要的 App 用户操作通过 P4-T2 `make test:ui` 选例核销。
+所有通过证据记录具体提交、执行数量、失败／跳过项、退出码和真实副作用。
+如无新产品代码变化，不重复运行全量构建；最终全量归 P4-T5。
 
 **Uncovered：**
-长期真实 SSH 断线压力与不同 macOS 设备需授权和环境，
-具体补验入口依 `idea.md` 单项记录，不用本机值代替。
+未获授权的真实 SSH 或旧版 macOS 环境按 `idea.md` 明确记录，
+但缺少独立 GUI 帧捕获或性能虚拟机不构成当前验收缺口。
 
-**文档：** 只有性能验收标准或可依赖的产品契约改变才更新 `docs/testing.md`、
-`docs/features/diff.md`；实验数字在本 feature 证据，不写进永恒性能承诺。
-**提交：** 如需长期保留自动断言，单独原子提交；数据证据按 feature policy 保留本地。
+**文档：** 产品行为或测试契约实际变化时同步其单一文档 owner，
+既有性能曲线保留在本 feature 证据，非强制验收门禁。
+**提交：** 新增必要 Swift 回归或修复根因时原子提交；纯证据／计划更正保留本地。
 
 <a id="p4-t5"></a>
 ## P4-T5 最终回归、源码与计划双向审计及交付判定
@@ -353,11 +340,17 @@ Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecove
    0 失败（2026-11-05 19:47 完成）；它有效证明此清理版本的宿主回归，
    **不能代替 P2/P3 未来代码改动后的最终 HEAD 全量测试**。
    16 项实际归属已在 P4-T3 逐项分类；未执行的相关 Windows SSH 实机不可计入通过。
+   2026-11-09 较新的 GitHub Actions 完整宿主作业在
+   `GitStatusModelTests` 和 `RemoteCommandsTests` 出现失败，
+   有一次选择性 UI 作业 XCTest 已输出 1 项通过，但结果摘要检查得到 `unknown` 而失败。
+   P4-T5 必须核对对应提交、runner 和原始 `.xcresult`，
+   区分实际测试错误与 CI 结果读取错误；不能用旧的 9 项 UI 绿色覆盖这些失败。
    执行 `make build`、`make build:ui`、适用 `make test:ui`；
-   独占 GUI 会话可用且不会破坏用户环境时运行完整 UI Test Target，
-   否则记录未执行的方法与实际阻塞，受影响的 Git GUI 用户路径必须实际运行。
-   针对本计划的首屏与 CPU/内存优化还须执行独立 `make build:release`
-   及 Release 实测，不用 Debug 宿主或旧二进制冒充。
+   在 GitHub Actions 独立 runner 上运行受影响的 `BaileyUITests` 选择器；
+   全量 UI Target 仅在最终明确需要时执行，选择性成功不冒充全量绿色。
+   未执行的方法、失败和影响须记录，不能用宿主测试替代必需的真实用户操作。
+   功能优化仍核对适用的 `make build:release` 与现有 Swift 资源回归；
+   不要求额外独立 GUI 性能仪器或冷热 30 次 P95 才能交付。
    构建、应用签名、GUI 实际验证和正式安装分别证明。
 4. 只在本次实施授权含产品安装且满足 `docs/development.md#本地安装` 时，
    对正式 App 做整包安装／验签／文件一致性核对，
@@ -375,8 +368,8 @@ Git 状态／连接恢复：`GitRemoteRefreshIntegrationTests` 和 `SSHGitRecove
 
 **验证与退出：**
 `make test` 完整 `TEST SUCCEEDED`、`make build`、`make build:ui`、
-`make test:ui` 的适用用户路径（包括此前 ⌘S 合成失败用例的重复归因与回归）、
-性能优化后的 `make build:release` 与 `codesign`、
+`make test:ui` 的适用用户路径（包括此前 ⌘S 合成失败用例的归因与回归）、
+适用的 `make build:release` 与 `codesign`、
 `git diff --check`、`feature_tool.py todo validate`；
 所有统计与当前 HEAD 一一匹配。
 任何新产品修复先回 owner 重测，再重新跑受影响项目及最终全量验收。

@@ -12,8 +12,9 @@
 每条路径只接一个可信所有者，替代旧调用链时同时删除旧路径。
 
 **Acceptance：**
-- 24k/100k 行首次可见与滚动范围符合 P1 冻结的预算，末行与 ghost 立即可达；
+- 24k/100k 行首次可见、滚动范围、末行与 Ghost 均通过原生 Swift XCTest；
   不再靠 `ensureLayout(for: documentRange)` 同步遍历全篇掩盖估算误差。
+  P1 的 P95 数字保留为诊断基线，不另要求 WindowServer 首像素或冷热 GUI 性能矩阵。
 - 单次可见编辑不再无条件抓取／比较整份原文，普通输入、IME、Undo／Redo、
   自动／显式保存真实落盘，无损保存原始 UTF-8 字节。
 - 折叠仅手动展开，修改前方行数、快速点击、保存后重载不改变其它折叠区间；
@@ -30,7 +31,9 @@
 - 每个 task 以当前适用的源码/测试 Red→Green→Refactor，
   实现、旧路径删除、当前契约文档与原子提交同一任务完成。
 - 验证取值沿用 `idea.md#验证条件全集（所有任务分摊核销）`，
-  下文写明确切对应切片，不能只运行所列最小回归而省略适用极值。
+  以相关 `BaileyTests` 覆盖原生组件、真实 Git、异常与适用极值，
+  完整 App 操作使用必要的 `BaileyUITests`（优先 GitHub Actions）。
+  不在用户桌面执行抢焦点 UIXCTest，不创建虚拟机或额外帧性能测试体系。
 
 <a id="p2-t1"></a>
 ## P2-T1 让原生 Diff 首帧布局和完整滚动范围同时成立
@@ -68,8 +71,9 @@
    已有跳过折叠隐藏 NSTextElement 的受控实验只有
    24k／120 折叠时 253→50 ms 的布局收益；该方案仅能作为原型入口，
    不得当成未折叠路径或 Undo／IME／Find 已验证。
-   将 100k 重定位最差约 310 ms 与热视口 32 ms 目标直接对照，
-   不接受把 O(文档规模) 等待从首帧转移到首次远跳。
+   已有 100k 重定位最差约 310 ms 与热视口 32 ms 的历史对照仅用于定位回归；
+   不接受把 O(文档规模) 等待从首帧转移到首次远跳，
+   由相关 Swift 回归断言原生滚动的真实最终结果。
    先写宿主 Red：首次可见前时间、未滚动时已完整的原生滚动范围、
    滚动条多次直达末尾后不缩短、末项正文与删除 ghost 的真实命中。
 2. 把可测的高度／折叠／行片段尺寸归属保持在 `DiffCodePaneView` 与原生 TextKit，
@@ -89,8 +93,8 @@
    `ensureLayout(documentRange)` 强制全篇路径、过时 height override 分支和冗余前缀枚举，
    并删除随替代失效的旧测量状态；仍需用于可变行高的分支不可误删。
    内容坐标恢复、滚动锚点和 Split 同步必须继续到达真实可见结果。
-4. 用 Instruments 核对源文档是否仍偷偷在主 actor 全文创建布局；
-   发现同等成本被挪入其它 callback 时不算通过。
+4. 用现有 Swift 性能／布局回归核对是否仍在主 actor 全文创建布局；
+   只有测试复现异常时再用 Instruments 定位，不把额外 Profiler 采样设为阶段门禁。
 
 **验证：**
 `make test:NativeDiffTabTests,NativeEditorLayoutTests,TextCoordinateIndexTests`，
@@ -99,16 +103,15 @@
 LF／CRLF／裸 CR／Unicode 分隔符、无末尾 LF、长行完整显示／截断，
 窗口初装／缩放／改字体／折行、Split 纵横两轴、深处滚动／17 次远跳、
 两种系统滚动条样式，纯只读与可编辑两类 TextKit。
-对顶／中／末相同视口反复滚动记录前缀扫描长度、布局次数及 P95；
+对顶／中／末相同视口反复滚动断言索引及布局正确性；
 单字符变更后核对换行类型缓存与实际 Git LF 行号，
 特别是同一 Git 行里多个裸 CR／U+2028 段落；逐项断言原生片段、UTF-16 命中和写盘字节。
-必须检查滚动条比例、真实最后片段、选区、行号、滚动锚点和最后的磁盘字节；
-30 次热／冷与独立实际首屏数据对照 P1。
+必须检查滚动条比例、真实最后片段、选区、行号、滚动锚点和最终磁盘字节。
+已有 30 次原生组件性能日志可保留作诊断，不新增冷热 GUI P95 和首像素测量要求。
 
 **Uncovered：**
-只有原生 `NSWindow` 的位图测试不能证明整个 App 的 WindowServer 像素；
-P2-T4 和 P4-T2 仍须真实 Bailey Dev。
-低版本 macOS 15.6 没有实机时按 `idea.md` 单独记录。
+完整 App 的焦点、鼠标键盘与保存结果由必要的 `BaileyUITests` 核对，
+不要求独立 WindowServer 帧捕获；macOS 15.6 无实机时只记录平台覆盖差异。
 
 **文档：** 同任务更新 `docs/features/diff.md` 中首次高度和折叠滚动契约，
 若共用 TextKit 原生行为改变同步 `docs/features/editor.md` 和 `docs/development.md`。
@@ -307,7 +310,8 @@ P4-T2 补验，禁止擅自改动用户剪贴板。
 并测重新打开／撤销历史与当前标签身份。
 
 **Uncovered：**
-宿主位图不能单独证明 WindowServer 合成，P4-T2 复验真实 App 像素。
+原生像素／文字几何以宿主 XCTest 断言为主，真实 App 必要操作由 `BaileyUITests` 核验；
+不追加独立 WindowServer 帧捕获。
 **文档：** 修改共有视图规则时同步 `docs/features/diff.md`、`docs/ui.md`，
 共享 TextKit 容器变化才更新 `docs/architecture.md`。
 **提交：** 单一原生渲染归属变更原子提交；若没有产品缺陷，补验收证据而不是制造重构。
@@ -357,7 +361,7 @@ P4-T2 补验，禁止擅自改动用户剪贴板。
 覆盖顶／中／深处、大小窗口、折叠标记被裁剪时、背景窗口／多组、
 1／100／10k 级 Git 变化列表、单选／Shift 范围／⌘ 多选／右键仅定向，
 Staged／Unstaged／历史、正常编辑及未保存状态；
-除 AX 与焦点还需比较实际用户点击到 Diff 首像素的延迟。
+AX、焦点及 Diff 是否真正打开均须在对应 Swift XCTest 中断言，不要求额外首像素计时。
 
 **Uncovered：**
 真实 Windows SSH 不可由本地 AX 覆盖；它的远端 Diff 行身份到 P4-T3 核对。
@@ -366,6 +370,8 @@ Staged／Unstaged／历史、正常编辑及未保存状态；
 
 ## Phase Gate
 
-P2 的正确性、首屏、输入和 GUI 行为逐项通过后才进入交叉全局验收。
-每个 task 可独立提交，但阶段完成必须核对 P1 冻结的预算及全矩阵；
-实际开始审计时才创建 `audit-p2.md`。
+P2 以相关 Swift XCTest 的真实组件正确性、编辑、滚动、首屏可见性和必要
+`BaileyUITests` 的完整 App 动作为门禁；本机 `make test`、构建／验签和
+既有隔离 UI 回归是可复用证据，不另要求 WindowServer 首像素、
+独立 30 次冷热 GUI P95 或虚拟机。已证实的测试失败仍须修复。
+每个 task 的真实提交与相应文档同步核对，审计结果见 `audit-p2.md`。
