@@ -264,4 +264,3 @@
 - 本机最终闭环：`build/p123-final-post-windows-host.log`，完整 `make test` **923 项、0 失败、16 项真实 Windows SSH 条件跳过、退出 0**；这些 16 项在另一轮启用授权主机的 `build/p123-authorized-windows-final-contract.log` **16 项、0 失败、0 跳过、退出 0**，不以跳过冒充执行。`build/p123-final-post-windows-build.log` 的 `make build` 为 `BUILD SUCCEEDED`，后置 `codesign --verify --deep --strict` 退出 0。完整隔离 Bailey Dev GUI `build/p123-audit-20261109-git-ui-final.log` 55 项、0 失败、0 跳过。
 - 提交：`1f3987d3`（Git 状态与历史详情的可取消任务所有权），`5dc33923`（两项 Windows SSH 实机验收契约校正及租约真实取消断言）。只提交对应生产／测试源码和同步功能文档；本 Feature `idea.md`／`todo.toml`／`plan-p2.md`／`audit-p*.md` 依 Skill 规范保留本地作为真源与证据，不误入 Git 提交。
 - **当前 P3 Gate：Go**。逐项实现、老旧路径清理、真实副作用、Red→Green、完整宿主、正式构建与签名、55 项完整 App GUI，以及全部 16 项授权 Windows SSH 实机测试均已实际核对。F-17／19／20／21／22 已解决，无剩余 Open finding；首次失败及中途 SSH 255 日志仍保留。正式 Bailey 未替换或重启。**此结论只针对 P3：P2-T1 的可变高度首帧／滚动几何仍为 `blocked`（P2 Gate No-Go），P4 的额外精确窗口像素／IME 条件未在本轮验收，不得宣称 P1–P4 全部交付。**
-
