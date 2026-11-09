@@ -1,37 +1,49 @@
-name: Bailey UI XCTest (isolated tag)
+name: Bailey XCTest (host and UI)
 
 on:
   push:
     tags:
       - 'ci-ui-*'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: bailey-ui-tag
+  group: bailey-xctest-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  ui:
+  host:
+    name: Complete BaileyTests
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
-      - name: Checkout exact test revision
+      - name: Checkout exact revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Verify Xcode and revision
+      - name: Verify runner and Xcode
         run: |
+          set -euo pipefail
           sw_vers -productVersion
           xcodebuild -version
           test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Execute real Bailey Dev UI regression
+      - name: Execute all BaileyTests
+        run: make test SIGNING=adhoc
+      - name: Inspect XCTest results
+        if: success()
         run: |
-          make test:ui SIGNING=adhoc ONLY_TESTING="BaileyUITests/WorkspaceSmokeUITests/testIsolatedLaunchAndPaletteKeyboardFocus BaileyUITests/WorkspaceFilesUITests/testAddFolderAndOpenFileThroughRealFileTree BaileyUITests/WorkspaceFilesUITests/testCommandPaletteRestoresFileTreeKeyboardAfterDismissal BaileyUITests/WorkspaceFilesUITests/testOpeningTheSameFileFromMenuReusesItsExistingTab BaileyUITests/WorkspaceGitUITests/testGitChangesAreScopedToTheOpenedRepository BaileyUITests/GitGraphUITests/testGraphArrowNavigationKeepsRealCommitVisible BaileyUITests/WorkspaceWindowsUITests/testTwoEmptyWindowsHaveIndependentNativeLifecycle BaileyUITests/WorkspaceWindowsUITests/testCancelingFolderPickerDoesNotCreateAnEmptyProject BaileyUITests/EditorNavigationUITests/testUnicodeReplacementUndoRedoAndRealSave"
+          set -euo pipefail
+          bundles=(build/DerivedData-Dev/Logs/Test/*.xcresult)
+          test -d "${bundles[0]}"
+          for bundle in "${bundles[@]}"; do
+            xcrun xcresulttool get test-results summary --path "$bundle" --compact |
+              python3 -c 'import json,sys; j=json.load(sys.stdin); print({k:j[k] for k in ("result","totalTestCount","passedTests","failedTests","skippedTests")}); assert j["result"] == "Passed" and j["passedTests"] > 0'
+          done
       - name: Pack XCTest diagnostics
         if: always()
         run: |
@@ -41,7 +53,55 @@ jobs:
             test -d "$bundle" || continue
             ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
           done
-      - name: Upload XCTest diagnostics
+      - name: Upload host XCTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bailey-host-xcresult
+          path: test-results/*.zip
+          if-no-files-found: warn
+          retention-days: 7
+
+  ui:
+    name: Complete BaileyUITests
+    runs-on: xcode-27
+    timeout-minutes: 240
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify runner and Xcode
+        run: |
+          set -euo pipefail
+          sw_vers -productVersion
+          xcodebuild -version
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Execute all BaileyUITests
+        run: make test:ui SIGNING=adhoc
+      - name: Inspect XCTest results
+        if: success()
+        run: |
+          set -euo pipefail
+          bundles=(build/DerivedData-Dev/Logs/Test/*.xcresult)
+          test -d "${bundles[0]}"
+          for bundle in "${bundles[@]}"; do
+            xcrun xcresulttool get test-results summary --path "$bundle" --compact |
+              python3 -c 'import json,sys; j=json.load(sys.stdin); print({k:j[k] for k in ("result","totalTestCount","passedTests","failedTests","skippedTests")}); assert j["result"] == "Passed" and j["passedTests"] > 0'
+          done
+      - name: Pack XCTest diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          for bundle in build/DerivedData-Dev/Logs/Test/*.xcresult; do
+            test -d "$bundle" || continue
+            ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
+          done
+      - name: Upload UI XCTest diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
