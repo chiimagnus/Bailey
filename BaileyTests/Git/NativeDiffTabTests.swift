@@ -1723,6 +1723,61 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, source)
     }
 
+    func testLargeNativeCRAndUnicodeParagraphsKeepExactScrollEnd() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let rowHeight = style.maximumLineHeight
+        for (name, separator, count) in [
+            ("CR-24k", "\r", 24_000),
+            ("UnicodeLS-24k", "\u{2028}", 24_000),
+            ("UnicodePS-24k", "\u{2029}", 24_000),
+            ("CR-100k", "\r", 100_000),
+        ] {
+            let source = (0..<count).map { "part\($0)" }.joined(separator: separator) + "\n"
+            let lines = DiffLineSplitter.lines(of: source).lines
+            XCTAssertEqual(lines.count, 1, "Git LF and native paragraph counts differ")
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+            let window = NSWindow(
+                contentRect: NSRect(x: -950, y: -950, width: 750, height: 300),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = pane
+            window.orderFront(nil)
+            defer { window.close() }
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+            pane.setEditBufferText(source)
+            pane.setEditingFolds([], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: lines.map(\.utf16Range.location),
+                lineCount: lines.count, ghostBlocks: []), revision: 1)
+            let started = CFAbsoluteTimeGetCurrent()
+            pane.layoutSubtreeIfNeeded()
+            let initialHeight = pane.textView.frame.height
+            let layoutMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            XCTAssertGreaterThan(initialHeight, CGFloat(count - 100) * rowHeight)
+            pane.setVerticalScrollOffset(1_000_000_000)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(pane.scrollOffset.y, initialHeight - 600)
+            XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: rowHeight)
+            let content = pane.textView.nativeContentManager
+            let target = try XCTUnwrap(content.location(
+                content.documentRange.location, offsetBy: source.utf16.count - 2
+            ))
+            let fragment = try XCTUnwrap(pane.textView.nativeLayoutManager.textLayoutFragment(
+                for: target
+            ))
+            let paragraph = try XCTUnwrap(fragment.textElement as? NSTextParagraph)
+            XCTAssertTrue(paragraph.attributedString.string.contains("part\(count - 1)"))
+            XCTAssertEqual(pane.textView.string, source)
+            print("AUDIT_P2_VARIABLE_NATIVE name=\(name) sourceBytes=\(source.utf8.count) "
+                  + "nativeParagraphs=\(count) initialLayoutMs=\(layoutMs) "
+                  + "documentHeight=\(initialHeight) offset=\(pane.scrollOffset.y)")
+            XCTAssertLessThan(layoutMs, 200,
+                              "Native fixed-height paragraphs must not force whole-document layout")
+        }
+    }
+
     func testDenseIntralineProjectionCancellationLatency() async throws {
         let lineCount = 100
         let old = String(repeating: String(repeating: "+", count: 400) + "\n", count: lineCount)
@@ -3701,8 +3756,10 @@ final class NativeDiffTabTests: XCTestCase {
         pane.textView.insertText("x", replacementRange: NSRange(location: 6, length: 1))
         pane.layoutSubtreeIfNeeded()
         XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
-        XCTAssertNil(pane.textView.nativeLayoutManager.delegate,
-                     "Actual native text edits must invalidate obsolete fixed-row geometry")
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Unwrapped native CR paragraphs must reuse the exact native line index")
+        XCTAssertEqual(pane.textView.lineNumber(atUTF16Offset: 6), 2,
+                       "A bare CR creates an additional native paragraph, not another Git LF line")
 
         pane.textView.undoManager?.undo()
         pane.layoutSubtreeIfNeeded()

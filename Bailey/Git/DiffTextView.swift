@@ -1571,7 +1571,16 @@ final class DiffCodePaneView: NSView {
         return visibleRow + last.startRow - last.block.anchorLine + last.block.lines.count
     }
 
+    private var usesNativeParagraphFixedLayout: Bool {
+        rowHeight > 0 && !textView.wrapsLines && textView.hasNativeNonLFSeparators
+            && (mode == .review || (textView.editingFolds.isEmpty
+                && decorations.ghostsByAnchor.isEmpty))
+    }
+
     private func fixedFragmentRow(atUTF16 offset: Int) -> Int {
+        if usesNativeParagraphFixedLayout {
+            return textView.lineNumber(atUTF16Offset: offset) - 1
+        }
         let sourceRow = mode == .review
             ? (decorations.rowIndex(forUTF16Offset: offset) ?? 0)
             : (textView.liveGitLine(atUTF16: offset) ?? textView.lineNumber(atUTF16Offset: offset) - 1)
@@ -1909,9 +1918,10 @@ final class DiffCodePaneView: NSView {
             let fixedLF = rowHeight > 0 && !textView.wrapsLines
                 && !textView.hasNativeNonLFSeparators
                 && !decorations.rows.isEmpty
-            textView.setFixedLayoutRowHeight(fixedLF ? rowHeight : nil)
-            if !fixedLF {
-                // Variable-height native paragraphs still require measured
+            let fixedNative = usesNativeParagraphFixedLayout
+            textView.setFixedLayoutRowHeight(fixedLF || fixedNative ? rowHeight : nil)
+            if !fixedLF && !fixedNative {
+                // Wrapped or ghost-spaced native paragraphs require measured
                 // geometry before their full-range scrollbar can be trusted.
                 let layout = textView.nativeLayoutManager
                 layout.ensureLayout(for: layout.documentRange)
@@ -2059,7 +2069,10 @@ final class DiffCodePaneView: NSView {
 
     private func applyContentHeightOverride() {
         var height = fixedRowCount.map { CGFloat($0) * rowHeight }
-        if textView.wrapsLines || textView.hasNativeNonLFSeparators
+        if usesNativeParagraphFixedLayout {
+            let length = textView.textStorage?.length ?? 0
+            height = CGFloat(textView.lineNumber(atUTF16Offset: length)) * rowHeight
+        } else if textView.wrapsLines || textView.hasNativeNonLFSeparators
             || (mode == .edit && decorations.rows.isEmpty) {
             height = measuredDocumentHeight
         } else if mode == .edit {
