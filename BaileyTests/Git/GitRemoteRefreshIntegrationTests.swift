@@ -6,6 +6,45 @@ import XCTest
 final class GitRemoteRefreshIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    private func fixtureRoot(_ result: WorkspaceRunResult) -> String? {
+        guard result.status == 0, let output = String(data: result.stdout, encoding: .utf8) else { return nil }
+        let root = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let match = root.range(of: #"^/tmp/bailey-issue2-refresh-[A-Za-z0-9]{6}$"#,
+                                     options: .regularExpression),
+              match.lowerBound == root.startIndex, match.upperBound == root.endIndex else { return nil }
+        return root
+    }
+
+    func testRemoteRefreshFixtureRejectsUnownedPathsAndFailedCreation() {
+        func result(_ output: String, status: Int32 = 0) -> WorkspaceRunResult {
+            WorkspaceRunResult(status: status, stdout: Data(output.utf8), stderr: Data())
+        }
+        XCTAssertEqual(fixtureRoot(result("/tmp/bailey-issue2-refresh-a0B1c2\n")),
+                       "/tmp/bailey-issue2-refresh-a0B1c2")
+        XCTAssertEqual(fixtureRoot(result("/tmp/bailey-issue2-refresh-A1b2C3\r\n")),
+                       "/tmp/bailey-issue2-refresh-A1b2C3")
+        for suffix in ["000000", "zzzzzz", "ZZZZZZ"] {
+            let root = "/tmp/bailey-issue2-refresh-" + suffix
+            XCTAssertEqual(fixtureRoot(result(root)), root)
+        }
+        for output in [
+            "", "/tmp/bailey-issue2-refresh-", "/tmp/bailey-issue2-refresh-abcde",
+            "/tmp/bailey-issue2-refresh-abcdefg", "/tmp/bailey-issue2-refresh-abc def",
+            "/tmp/bailey-issue2-refresh-ab'cde", "/tmp/bailey-issue2-refresh-ab$cde",
+            "/tmp/bailey-issue2-refresh-ab\ncde", "/tmp/bailey-issue2-refresh-ab\u{0}cde",
+            "/tmp/bailey-issue2-refresh-中文1234", "/tmp/bailey-issue2-refresh-abcdef/child",
+            "/tmp/../tmp/bailey-issue2-refresh-abcdef", "/elsewhere/bailey-issue2-refresh-abcdef",
+        ] {
+            XCTAssertNil(fixtureRoot(result(output)), output)
+        }
+        for status in [Int32(-1), 1, 2, 128, 255] {
+            XCTAssertNil(fixtureRoot(result("/tmp/bailey-issue2-refresh-a0B1c2\n", status: status)))
+        }
+        var invalidUTF8 = Data("/tmp/bailey-issue2-refresh-abcde".utf8)
+        invalidUTF8.append(0xff)
+        XCTAssertNil(fixtureRoot(WorkspaceRunResult(status: 0, stdout: invalidUTF8, stderr: Data())))
+    }
+
     private func wait(
         seconds: TimeInterval = 10, until condition: () -> Bool
     ) async throws {
@@ -105,7 +144,11 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             throw XCTSkip("Real SSH refresh requires an authorized test host")
         }
         let backend = SSHHostWorkspaces.backend(for: host)
-        let externalSocket = "/tmp/bailey-issue2-\(UUID().uuidString.prefix(8)).sock"
+        let externalSocket = "/tmp/bailey-issue2-\(UUID().uuidString).sock"
+        guard !FileManager.default.fileExists(atPath: externalSocket) else {
+            XCTFail("Refusing to reuse an existing SSH socket")
+            throw WorkspaceError.notFound
+        }
         let external = SSHWorkspaceBackend(
             runner: SSHHostCommandRunner(host: host, socket: externalSocket), timeout: 25
         )
@@ -114,11 +157,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             cwd: nil, env: nil, stdin: nil, timeout: 25
         )
         XCTAssertEqual(created.status, 0)
-        let root = String(decoding: created.stdout, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (root as NSString).deletingLastPathComponent == "/tmp",
-              (root as NSString).lastPathComponent.hasPrefix("bailey-issue2-refresh-")
-        else { throw WorkspaceError.notFound }
+        guard let root = fixtureRoot(created) else { throw WorkspaceError.notFound }
 
         func remote(_ command: String, via workspace: SSHWorkspaceBackend) async throws {
             let result = try await workspace.run(
@@ -182,7 +221,16 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
                 throw error
             }
             XCTAssertEqual(model.currentScope, "ssh:" + host)
-            let originalHead = try XCTUnwrap(model.recentCommits.first?.hash)
+            let originalHead = try XCTUnwrap(model.headOID,
+                "The verified core Git snapshot must identify the initial HEAD")
+            if model.hasCurrentHistory {
+                XCTAssertEqual(model.recentCommits.first?.hash, originalHead)
+            } else {
+                // Core state may succeed while an optional remote detail query fails.
+                // A visible error and subsequent polling must recover the real Graph.
+                XCTAssertNotNil(model.detailError,
+                                "Missing history must report a detail failure")
+            }
 
             var polling = Task { await model.runRemoteRefreshLoop() }
             defer { polling.cancel() }

@@ -13,13 +13,28 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private(set) var writing = false
     private(set) var reading = false
     private(set) var writes = 0
-    private var mutateIndexAfterSize = false
+    private var mutateIndexDuringBatch = false
     private var indexMoved = false
     private var shortGitBlob = false
+    private var holdOneGitTree = false
+    private var activeHeldGit = 0
+    private var cancelledHeldGit = 0
+    private var batchOIDs: [String] = []
+    private var batchOverride: Data?
 
-    func simulateIndexChangeAfterSize() { mutateIndexAfterSize = true }
+    func simulateBatchResponse(_ bytes: Data) {
+        mutateIndexDuringBatch = true
+        batchOverride = bytes
+    }
+
+    func holdNextGitTree() { holdOneGitTree = true }
+    func heldGitStats() -> (active: Int, cancelled: Int) {
+        (activeHeldGit, cancelledHeldGit)
+    }
+    func selectedBatchOIDs() -> [String] { batchOIDs }
+    func simulateIndexChangeDuringBatch() { mutateIndexDuringBatch = true }
     func simulateIncompleteGitBlob() {
-        mutateIndexAfterSize = true
+        mutateIndexDuringBatch = true
         shortGitBlob = true
     }
 
@@ -50,7 +65,17 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
-        guard mutateIndexAfterSize else {
+        if holdOneGitTree, argv.contains("ls-tree") {
+            holdOneGitTree = false
+            activeHeldGit += 1
+            defer { activeHeldGit -= 1 }
+            do { try await Task.sleep(for: .seconds(8)) }
+            catch is CancellationError {
+                cancelledHeldGit += 1
+                throw CancellationError()
+            }
+        }
+        guard mutateIndexDuringBatch else {
             return .init(status: 0, stdout: Data(), stderr: Data())
         }
         let headID = String(repeating: "a", count: 40)
@@ -69,19 +94,16 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
             let id = indexMoved ? newID : indexID
             return result(Data("100644 \(id) 0\tstable.txt\0".utf8))
         }
-        if argv.contains("cat-file"), argv.count >= 4 {
-            let id = argv.last ?? ""
-            let bytes = id == headID || id == "HEAD:stable.txt" ? head
-                : id == indexID ? index
-                : id == newID || id == ":stable.txt" ? (indexMoved ? moved : index)
-                : Data()
-            if argv.contains("-s") {
-                if id == indexID || id == ":stable.txt" { indexMoved = true }
-                return result(Data("\(bytes.count)\n".utf8))
-            }
-            if argv.contains("blob") {
-                return result(shortGitBlob && id == indexID ? Data(bytes.dropLast()) : bytes)
-            }
+        if argv.contains("cat-file"), argv.contains("--batch"), let stdin {
+            let id = String(decoding: stdin, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            batchOIDs.append(id)
+            if id == indexID, let batchOverride { return result(batchOverride) }
+            let bytes = id == headID ? head : id == indexID ? index
+                : id == newID ? moved : Data()
+            if id == indexID { indexMoved = true }
+            let body = shortGitBlob && id == indexID ? Data(bytes.dropLast()) : bytes
+            return result(Data("\(id) blob \(bytes.count)\n".utf8) + body + Data([10]))
         }
         return .init(status: 128, stdout: Data(), stderr: Data("unexpected Git command".utf8))
     }
@@ -105,6 +127,83 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
 }
 
+/// Deterministically interleaves real HEAD and index metadata across a real
+/// reset. Both repository states are clean; only a mixed snapshot has a diff.
+private actor StagedTransitionBackend: WorkspaceBackend {
+    private let root: String
+    private let nextCommit: String
+    private var switched = false
+    private var waitingIndex: [CheckedContinuation<Void, Never>] = []
+
+    init(root: String, nextCommit: String) {
+        self.root = root
+        self.nextCommit = nextCommit
+    }
+
+    func didSwitch() -> Bool { switched }
+
+    func run(argv: [String], cwd: String?, env: [String: String]?,
+             stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        if argv.contains("ls-files"), argv.contains("--stage"), !switched {
+            await withCheckedContinuation { waitingIndex.append($0) }
+        }
+        if argv.contains("ls-tree"), argv.contains("HEAD"), !switched {
+            let old = try await execute(argv: argv, cwd: cwd, env: env,
+                                        stdin: stdin, timeout: timeout)
+            let reset = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/usr/bin/git", "reset", "--hard", nextCommit],
+                cwd: root, env: nil, stdin: nil, timeout: 15
+            )
+            switched = true
+            for continuation in waitingIndex { continuation.resume() }
+            waitingIndex.removeAll()
+            guard reset.status == 0 else { throw WorkspaceError.notFound }
+            return old
+        }
+        return try await execute(argv: argv, cwd: cwd, env: env,
+                                 stdin: stdin, timeout: timeout)
+    }
+
+    private func execute(argv: [String], cwd: String?, env: [String: String]?,
+                         stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        let executable = argv.first == "git" ? ["/usr/bin/git"] + argv.dropFirst() : argv
+        return try await LocalWorkspaceBackend.shared.run(
+            argv: executable, cwd: cwd, env: env, stdin: stdin, timeout: timeout
+        )
+    }
+
+    func list(directory: String) async throws -> [WorkspaceEntry] {
+        try await LocalWorkspaceBackend.shared.list(directory: directory)
+    }
+    func stat(path: String) async throws -> WorkspaceStat? {
+        try await LocalWorkspaceBackend.shared.stat(path: path)
+    }
+    func readSymlinkDestination(path: String) async throws -> String? {
+        try await LocalWorkspaceBackend.shared.readSymlinkDestination(path: path)
+    }
+    func read(path: String, maxBytes: Int) async throws -> Data {
+        try await LocalWorkspaceBackend.shared.read(path: path, maxBytes: maxBytes)
+    }
+    func write(path: String, data: Data) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data)
+    }
+    func createFile(path: String) async throws {
+        try await LocalWorkspaceBackend.shared.createFile(path: path)
+    }
+    func createDirectory(path: String) async throws {
+        try await LocalWorkspaceBackend.shared.createDirectory(path: path)
+    }
+    func copy(from: String, to: String) async throws {
+        try await LocalWorkspaceBackend.shared.copy(from: from, to: to)
+    }
+    func rename(from: String, to: String) async throws {
+        try await LocalWorkspaceBackend.shared.rename(from: from, to: to)
+    }
+    func delete(paths: [String]) async throws {
+        try await LocalWorkspaceBackend.shared.delete(paths: paths)
+    }
+}
+
 @MainActor
 @Observable
 private final class DiffSelectionFixture {
@@ -119,6 +218,435 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class NativeDiffTabTests: XCTestCase {
+    func testClosingDiffRetiresCachedNativeDocumentAfterActualTabClose() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("cached.swift")
+        let original = (0..<2_000).map { "let row\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        let project = Project(fallbackName: "Retained Diff", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        project.openDiff(repoRoot: directory.path, path: file.lastPathComponent, staged: false,
+                         untracked: true, origPath: nil, activating: false)
+        weak var oldDiff: DiffTab?
+        weak var retiredEditor: DiffTextView?
+        weak var retiredLayout: NSTextLayoutManager?
+        let cachedScroll: NSScrollView
+        do {
+            guard case .diff(let diff)? = project.selectedTab?.content else {
+                return XCTFail("Expected an owned worktree Diff")
+            }
+            oldDiff = diff
+            try await wait({ diff.canPresentNativeContent }, timeout: 30)
+            XCTAssertNil(diff.error)
+            let surface = DiffNativeSurface(diff: diff)
+            diff.nativeSurface = surface
+            surface.frame = NSRect(x: 0, y: 0, width: 800, height: 450)
+            surface.render()
+            let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .first { $0.mode == .edit })
+            XCTAssertTrue(pane.textView.isEditable)
+            XCTAssertEqual(Data(pane.textView.string.utf8), Data(original.utf8))
+            XCTAssertNotNil(pane.textView.syntaxCoordinator)
+            retiredEditor = pane.textView
+            retiredLayout = pane.textView.textLayoutManager
+            cachedScroll = pane.scrollView
+            XCTAssertTrue(cachedScroll.documentView === pane.textView)
+        }
+        project.closeDiffs()
+        try await wait({ oldDiff == nil }, timeout: 10)
+        XCTAssertTrue(project.tabs.isEmpty)
+        let retained = cachedScroll.documentView as? DiffTextView
+        XCTAssertNil(cachedScroll.documentView,
+                     "A true Diff close must detach its obsolete native document")
+        XCTAssertFalse(retained?.isEditable ?? false)
+        XCTAssertNil(retained?.syntaxCoordinator)
+        try await wait({ retiredEditor == nil && retiredLayout == nil }, timeout: 10)
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+    }
+
+    func testProjectShutdownRetiresDiffWithoutRetiringTemporaryMount() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("remount.swift")
+        let original = (0..<1_500).map { "let value\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        let project = Project(fallbackName: "Remounted Diff", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        project.openDiff(repoRoot: directory.path, path: file.lastPathComponent, staged: false,
+                         untracked: true, origPath: nil, activating: false)
+        let diff: DiffTab
+        guard case .diff(let opened)? = project.selectedTab?.content else {
+            return XCTFail("Expected an owned editable Diff")
+        }
+        diff = opened
+        try await wait({ diff.canPresentNativeContent }, timeout: 20)
+        let surface = DiffNativeSurface(diff: diff)
+        diff.nativeSurface = surface
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        surface.render()
+        let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { $0.mode == .edit })
+        let cachedScroll = pane.scrollView
+        let editor = pane.textView
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+        DiffNativeRoot.dismantleNSView(surface, coordinator: DiffNativeRoot.Coordinator())
+        XCTAssertTrue(diff.nativeSurface === surface,
+                      "SwiftUI dismantle must not destroy the tab-owned editor")
+        XCTAssertTrue(cachedScroll.documentView === editor)
+        editor.insertText("temporary\n", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(diff.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+        surface.render()
+        XCTAssertTrue(cachedScroll.documentView === editor,
+                      "Native remount must retain the same TextKit and Undo owner")
+        project.terminateAll()
+        XCTAssertNil(diff.nativeSurface)
+        XCTAssertNil(cachedScroll.documentView)
+        XCTAssertFalse(editor.isEditable)
+        XCTAssertNil(editor.syntaxCoordinator)
+        XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+        XCTAssertFalse(editor.undoManager?.canRedo ?? true)
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+    }
+
+    func testMountedSplitDiffCloseReleasesBothPanesWithoutWindowTeardown() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("mounted.swift")
+        let original = (0..<1_200).map { "let source\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", file.lastPathComponent],
+                                               in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                               in: directory.path).status, 0)
+        let changed = original.replacingOccurrences(of: "let source600 = 600",
+                                                     with: "let source600 = -600")
+        try Data(changed.utf8).write(to: file)
+
+        let preferences = try isolatedPreferences()
+        preferences.diffStyle = .split
+        let project = Project(fallbackName: "Native Close", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        let diff = DiffTab(repoRoot: directory.path, path: file.lastPathComponent,
+                           source: .worktree, untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: preferences)
+        project.append(PaneTab(content: .diff(diff)))
+        try await wait({ diff.canPresentNativeContent && diff.editableBaseline != nil },
+                       timeout: 20)
+        let surface = DiffNativeSurface(diff: diff)
+        diff.nativeSurface = surface
+        surface.frame = NSRect(x: 0, y: 0, width: 840, height: 500)
+        let window = NSWindow(contentRect: surface.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = surface
+        window.orderFront(nil)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+        let edit = try XCTUnwrap(panes.first { $0.mode == .edit })
+        let baseline = try XCTUnwrap(panes.first { $0.mode == .review && !$0.isHidden })
+        XCTAssertTrue(edit.textView.isEditable)
+        XCTAssertFalse(baseline.textView.isEditable)
+        let cachedScrolls = [edit.scrollView, baseline.scrollView]
+        XCTAssertTrue(window.makeFirstResponder(edit.textView))
+        XCTAssertTrue(window.firstResponder === edit.textView)
+        XCTAssertEqual(Data(edit.textView.string.utf8), Data(changed.utf8))
+
+        project.closeDiffs()
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(diff.nativeSurface)
+        XCTAssertTrue(window.contentView === surface,
+                      "A cached SwiftUI/AppKit window can still hold the retired Diff surface")
+        XCTAssertTrue(surface.subviews.isEmpty)
+        for scroll in cachedScrolls {
+            XCTAssertNil(scroll.documentView,
+                         "All split panes must detach their text storage on true close")
+        }
+        XCTAssertFalse(edit.textView.isEditable)
+        XCTAssertNil(edit.textView.syntaxCoordinator)
+        XCTAssertFalse(edit.textView.undoManager?.canUndo ?? true)
+        XCTAssertFalse(baseline.textView.isEditable)
+        // AppKit can still hold or lay out this retired pane until it releases
+        // the old NSView. Keep its TextKit manager valid for that whole lifetime.
+        XCTAssertNotNil(edit.textView.textLayoutManager)
+        XCTAssertNotNil(baseline.textView.textLayoutManager)
+        edit.needsLayout = true
+        baseline.needsLayout = true
+        edit.layoutSubtreeIfNeeded()
+        baseline.layoutSubtreeIfNeeded()
+        edit.textView.insertText("late event", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertFalse(diff.isDirty, "A retired native view must ignore late input")
+        XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
+        let index = GitCommandExecution.runData(["show", ":" + file.lastPathComponent],
+                                                in: directory.path)
+        XCTAssertEqual(index.status, 0)
+        XCTAssertEqual(index.stdout, Data(original.utf8))
+    }
+
+    func testTwentyTrueDiffClosesReleaseLayoutsEvenWithCachedScrollViews() async throws {
+        final class WeakNativeResource {
+            weak var editor: DiffTextView?
+            weak var layout: NSTextLayoutManager?
+            init(editor: DiffTextView) {
+                self.editor = editor
+                layout = editor.textLayoutManager
+            }
+        }
+
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let project = Project(fallbackName: "Twenty Diffs", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        let initial = (0..<1_000).map { "let value\($0) = \($0) // 中文 🪨\n" }.joined()
+        var scrollViews: [NSScrollView] = []
+        var weakResources: [WeakNativeResource] = []
+        var retainedEditors: [DiffTextView] = []
+        var lateHighlightChecks: [() -> Void] = []
+        for number in 0..<20 {
+            let fileName = "source\(number).swift"
+            try Data(initial.utf8).write(to: directory.appendingPathComponent(fileName))
+            project.openDiff(repoRoot: directory.path, path: fileName, staged: false,
+                             untracked: true, origPath: nil, activating: false)
+            guard case .diff(let diff)? = project.selectedTab?.content else {
+                return XCTFail("Expected the Diff tab \(number)")
+            }
+            try await wait({ diff.canPresentNativeContent }, timeout: 20)
+            let surface = DiffNativeSurface(diff: diff)
+            diff.nativeSurface = surface
+            surface.frame = NSRect(x: 0, y: 0, width: 840, height: 480)
+            surface.render()
+            let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                .first { $0.mode == .edit })
+            XCTAssertNotNil(pane.textView.syntaxCoordinator)
+            XCTAssertEqual(Data(pane.textView.string.utf8), Data(initial.utf8))
+            scrollViews.append(pane.scrollView)
+            weakResources.append(WeakNativeResource(editor: pane.textView))
+            retainedEditors.append(pane.textView)
+            let highlighter = try XCTUnwrap(pane.textView.syntaxCoordinator?.highlighter)
+            lateHighlightChecks.append {
+                XCTAssertEqual(highlighter.textInterface.length, 0)
+                XCTAssertEqual(highlighter.textInterface.visibleRange, .zero)
+                highlighter.visibleContentDidChange()
+            }
+        }
+        XCTAssertEqual(project.tabs.count, 20)
+        XCTAssertEqual(weakResources.count, 20)
+        project.closeDiffs()
+        XCTAssertTrue(project.tabs.isEmpty)
+        for scrollView in scrollViews {
+            XCTAssertNil(scrollView.documentView,
+                         "Old cached NSScrollViews must not retain their retired content")
+        }
+        // Neon can schedule a main-queue token request before retirement and
+        // execute it afterwards, while AppKit still strongly holds the view.
+        // Those requests must never touch an already detached TextKit layout.
+        for check in lateHighlightChecks { check() }
+        retainedEditors.removeAll()
+        try await wait({
+            weakResources.allSatisfy { $0.editor == nil && $0.layout == nil }
+        }, timeout: 15)
+        for number in 0..<20 {
+            XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("source\(number).swift")),
+                           Data(initial.utf8))
+        }
+    }
+
+    func testSplitHorizontalScrollKeepsLongPaneOffsetWhenShortSiblingClamps() {
+        let left = DiffCodePaneView(mode: .review, gutterLayout: .oldOnly)
+        let right = DiffCodePaneView(mode: .review, gutterLayout: .newOnly)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 840, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let container = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        window.contentView = container
+        left.frame = CGRect(x: 0, y: 0, width: 420, height: 400)
+        right.frame = CGRect(x: 420, y: 0, width: 420, height: 400)
+        container.addSubview(left)
+        container.addSubview(right)
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        for pane in [left, right] {
+            pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: .textColor)
+        }
+        left.setReviewDocument(NSAttributedString(string: String(repeating: "wide-", count: 200)),
+                               decorations: .empty)
+        right.setReviewDocument(NSAttributedString(string: "short\n"), decorations: .empty)
+        container.layoutSubtreeIfNeeded()
+        left.layoutSubtreeIfNeeded()
+        right.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(left.textView.frame.width, left.scrollView.contentView.bounds.width)
+        XCTAssertEqual(right.textView.frame.width, right.scrollView.contentView.bounds.width,
+                       accuracy: 1)
+        var feedback = 0
+        left.onScroll = { origin in
+            feedback += 1
+            right.setScrollOffset(origin)
+        }
+        right.onScroll = { origin in
+            feedback += 1
+            left.setScrollOffset(origin)
+        }
+        left.setScrollOffset(NSPoint(x: 250, y: 0))
+        let sourceX = left.scrollOffset.x
+        XCTAssertGreaterThan(sourceX, 100)
+        left.onScroll?(left.scrollOffset)
+        XCTAssertEqual(right.scrollOffset.x, 0, accuracy: 1)
+        XCTAssertEqual(left.scrollOffset.x, sourceX, accuracy: 1,
+                       "Clamping the short pane must never bounce its origin back to the long pane")
+        XCTAssertEqual(feedback, 1, "Follower scroll must not echo the original event")
+    }
+
+    func testWindowFindCommandsTargetNativeWritableAndStagedDiffPanes() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("find.swift")
+        let original = "let target = \"before\"\nlet stable = 1\n"
+        let changed = "let target = \"after\"\nlet stable = 1\n"
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "find.swift"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data(changed.utf8).write(to: file)
+
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        manager.openDiff(repoRoot: directory.path, path: "find.swift", staged: false,
+                         untracked: false, origPath: nil)
+        guard case .diff(let writable)? = manager.selectedProject?.focusedContent else {
+            return XCTFail("Worktree Diff must own the focused tab")
+        }
+        try await wait({ writable.canPresentNativeContent }, timeout: 15)
+        XCTAssertTrue(manager.canFind, "A native writable Diff must expose the existing Find menu")
+        XCTAssertTrue(manager.canReplace, "An editable Worktree must expose native Find and Replace")
+
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let surface = DiffNativeSurface(diff: writable)
+        writable.nativeSurface = surface
+        window.contentView = surface
+        window.orderFront(nil)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && $0.textView.isEditable })
+        manager.performFindAction(.show)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.replace)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+
+        writable.setDiffStyle(.split)
+        try await wait({ writable.editableBaseline != nil }, timeout: 15)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let baseline = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && $0 !== pane && !$0.textView.isEditable })
+        XCTAssertTrue(window.makeFirstResponder(baseline.textView))
+        XCTAssertTrue(window.firstResponder === baseline.textView)
+        manager.performFindAction(.show)
+        try await wait({ baseline.scrollView.isFindBarVisible }, timeout: 3)
+        XCTAssertFalse(pane.scrollView.isFindBarVisible)
+        manager.performFindAction(.replace)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        XCTAssertFalse(baseline.scrollView.isFindBarVisible,
+                       "Replace must move to the writable source without leaving a stale baseline Find bar")
+        manager.performFindAction(.hide)
+        try await wait({ !pane.scrollView.isFindBarVisible }, timeout: 3)
+        writable.setDiffStyle(.unified)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        manager.performFindAction(.show)
+        try await wait({ pane.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+
+        XCTAssertEqual(GitCommandExecution.run(["add", "find.swift"], in: directory.path).status, 0)
+        manager.openDiff(repoRoot: directory.path, path: "find.swift", staged: true,
+                         untracked: false, origPath: nil)
+        guard case .diff(let staged)? = manager.selectedProject?.focusedContent else {
+            return XCTFail("Staged Diff must own the focused tab")
+        }
+        try await wait({ staged.canPresentNativeContent }, timeout: 15)
+        XCTAssertTrue(manager.canFind, "Staged Diff must allow searching its read-only text")
+        XCTAssertFalse(manager.canReplace, "Staged content must never offer Replace")
+        let stagedWindow = NSWindow(contentRect: window.frame, styleMask: [.titled],
+                                    backing: .buffered, defer: false)
+        stagedWindow.isReleasedWhenClosed = false
+        defer { stagedWindow.close() }
+        let stagedSurface = DiffNativeSurface(diff: staged)
+        staged.nativeSurface = stagedSurface
+        stagedWindow.contentView = stagedSurface
+        stagedWindow.orderFront(nil)
+        stagedSurface.render()
+        stagedSurface.layoutSubtreeIfNeeded()
+        let readonly = try XCTUnwrap(stagedSurface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && !$0.textView.isEditable })
+        manager.performFindAction(.replace)
+        XCTAssertFalse(readonly.scrollView.isFindBarVisible,
+                       "Even direct commands cannot enable replacement on a Staged Diff")
+        manager.performFindAction(.show)
+        try await wait({ readonly.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        staged.setDiffStyle(.split)
+        stagedSurface.render()
+        stagedSurface.layoutSubtreeIfNeeded()
+        let readonlyPanes = stagedSurface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .filter { !$0.isHidden }
+        XCTAssertEqual(readonlyPanes.count, 2)
+        let right = try XCTUnwrap(readonlyPanes.max(by: { $0.frame.minX < $1.frame.minX }))
+        XCTAssertTrue(stagedWindow.makeFirstResponder(right.textView))
+        manager.performFindAction(.show)
+        try await wait({ right.scrollView.isFindBarVisible }, timeout: 3)
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        manager.performFindAction(.hide)
+        XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
+        XCTAssertNotEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"],
+                                               in: directory.path).status, 0)
+
+        let revision = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+        XCTAssertEqual(revision.status, 0)
+        let hash = revision.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        manager.selectedProject?.openHistoricalDiff(repoRoot: directory.path, path: "find.swift",
+                                                     source: .revision(hash: hash), origPath: nil)
+        guard case .diff(let historical)? = manager.selectedProject?.focusedContent else {
+            return XCTFail("A historical revision must own its own focused tab")
+        }
+        try await wait({ historical.canPresentNativeContent }, timeout: 15)
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        let historyWindow = NSWindow(contentRect: window.frame, styleMask: [.titled],
+                                     backing: .buffered, defer: false)
+        historyWindow.isReleasedWhenClosed = false
+        defer { historyWindow.close() }
+        let historySurface = DiffNativeSurface(diff: historical)
+        historical.nativeSurface = historySurface
+        historyWindow.contentView = historySurface
+        historyWindow.orderFront(nil)
+        historySurface.render()
+        historySurface.layoutSubtreeIfNeeded()
+        let historyText = try XCTUnwrap(historySurface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && !$0.textView.isEditable })
+        XCTAssertEqual(historyText.textView.string, original)
+        manager.performFindAction(.show)
+        try await wait({ historyText.scrollView.isFindBarVisible }, timeout: 3)
+        manager.performFindAction(.hide)
+        XCTAssertEqual(try Data(contentsOf: file), Data(changed.utf8))
+    }
+
     func testNativeDiffAccessibilityAllowsOnlyEditableTextChanges() {
         // AppKit API-level contract: XCUIApplication exercises the full user
         // interaction separately in GitHistoryUITests and WorkspaceGitUITests.
@@ -152,6 +680,28 @@ final class NativeDiffTabTests: XCTestCase {
                            green: CGFloat(pixel[1]) / maximum,
                            blue: CGFloat(pixel[2]) / maximum, alpha: 1)
         }
+    }
+
+    private func sourceGlyphPixelVariety(_ bitmap: NSBitmapImageRep,
+                                         in surface: NSView, at point: NSPoint) -> Int {
+        let scale = CGFloat(bitmap.pixelsWide) / surface.bounds.width
+        let startX = Int(point.x * scale)
+        let centerY = Int(point.y * scale)
+        func distinctColors(at y: Int) -> Int {
+            guard (0..<bitmap.pixelsHigh).contains(y) else { return 0 }
+            var colors = Set<String>()
+            for x in stride(from: max(0, startX),
+                            to: min(bitmap.pixelsWide, startX + Int(140 * scale)),
+                            by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y)?
+                    .usingColorSpace(.sRGB) else { continue }
+                colors.insert(String(format: "%.2f:%.2f:%.2f",
+                    color.redComponent, color.greenComponent, color.blueComponent))
+            }
+            return colors.count
+        }
+        return max(distinctColors(at: centerY),
+                   distinctColors(at: bitmap.pixelsHigh - 1 - centerY))
     }
 
     func testDiffShortDocumentsDoNotExposePhantomHorizontalScroll() {
@@ -377,6 +927,272 @@ final class NativeDiffTabTests: XCTestCase {
                              "Deep scrolling must locate the next virtual deletion block")
     }
 
+    func testHundredThousandLineFoldedColdScrollbarJumpsKeepSourceAndExtentAligned() {
+        let count = 100_000
+        let source = (0..<count).map { "let row\($0) = \($0)" }.joined(separator: "\n")
+        let starts = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let folds = stride(from: 50, to: count - 200, by: 200).map { start in
+            let hidden = start..<(start + 120)
+            return DiffEditFold(range: hidden,
+                                separator: DiffCollapsedRun(baselineRange: hidden,
+                                                            direction: .both))
+        }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 800, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            folds,
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let visibleLines = count - folds.reduce(0) { $0 + $1.range.count - 1 }
+        let originalHeight = pane.textView.frame.height
+        let originalKnob = pane.scrollView.verticalScroller?.knobProportion
+        XCTAssertEqual(originalHeight, CGFloat(visibleLines) * rowHeight, accuracy: rowHeight)
+
+        let targets = [75_220, 23_220, 92_220, 1_220, 55_220, 30_220, 80_220,
+                       9_220, 61_220, 43_220, 95_220, 3_220, 70_220, 11_220,
+                       99_220, 21_220, 86_220]
+        var durations: [Double] = []
+        for target in targets {
+            let hiddenBefore = folds.reduce(0) { count, fold in
+                count + (fold.range.upperBound <= target ? fold.range.count - 1 : 0)
+            }
+            let start = CFAbsoluteTimeGetCurrent()
+            pane.setVerticalScrollOffset(CGFloat(target - hiddenBefore) * rowHeight)
+            let viewport = pane.scrollView.contentView.bounds
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            durations.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertTrue(visible.contains { $0.index == target && $0.frame.intersects(viewport) },
+                          "Cold folded scrollbar jump must show actual source row \(target)")
+            XCTAssertEqual(pane.textView.frame.height, originalHeight, accuracy: rowHeight)
+            XCTAssertEqual(pane.scrollView.verticalScroller?.knobProportion ?? -1,
+                           originalKnob ?? -1, accuracy: 0.001)
+        }
+        durations.sort()
+        print("AUDIT_T1_100K_FOLDED_COLD_JUMPS tested=\(durations.count) median=\(durations[8]) p95=\(durations[15]) worst=\(durations[16])")
+        XCTAssertEqual(pane.textView.string, source)
+
+        // Use a fresh TextKit owner for the edit case: visiting 17 other
+        // source rows first would prewarm the paragraph cache and mask a bad
+        // stale-snapshot offset in the first native jump after editing.
+        let editedPane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let editedWindow = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 800, height: 330),
+                                    styleMask: [.titled], backing: .buffered, defer: false)
+        editedWindow.isReleasedWhenClosed = false
+        defer { editedWindow.close() }
+        editedWindow.contentView = editedPane
+        editedWindow.orderFront(nil)
+        editedPane.applyTypography(font: font,
+                                   paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                   textColor: .textColor)
+        editedPane.setEditBufferText(source)
+        editedPane.setEditingFolds(
+            folds,
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+            revision: 1
+        )
+        editedPane.layoutSubtreeIfNeeded()
+        // An in-line edit moves every later source offset but leaves the
+        // last published Diff snapshot in place until background recompute.
+        let prefix = String(repeating: "inserted", count: 1_000)
+        let insertion = NSRange(location: 0, length: 0)
+        editedPane.textView.textStorage?.replaceCharacters(in: insertion, with: prefix)
+        editedPane.applyLiveNativeEdit(previousRange: insertion, replacement: prefix)
+        // A later presentation-only revision can still carry the previously
+        // published Diff offsets; it must never replace the live text index.
+        editedPane.setEditingFolds(
+            folds,
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+            revision: 2
+        )
+        let editedTarget = 48_220
+        XCTAssertEqual(editedPane.textView.liveGitOffset(forLine: editedTarget),
+                       starts[editedTarget] + prefix.utf16.count)
+        let editedHidden = folds.reduce(0) { count, fold in
+            count + (fold.range.upperBound <= editedTarget ? fold.range.count - 1 : 0)
+        }
+        editedPane.setVerticalScrollOffset(CGFloat(editedTarget - editedHidden) * rowHeight)
+        let editedViewport = editedPane.scrollView.contentView.bounds
+        let editedRows = DiffRowGeometry.visibleRows(textView: editedPane.textView,
+                                                     decorations: editedPane.decorations)
+        XCTAssertTrue(editedRows.contains {
+            $0.index == editedTarget && $0.frame.intersects(editedViewport)
+        }, "First folded scrollbar jump after an in-line edit must use live source offsets")
+        var literalVisibleText = ""
+        if let range = editedPane.textView.nativeLayoutManager
+            .textViewportLayoutController.viewportRange {
+            editedPane.textView.nativeLayoutManager.enumerateTextLayoutFragments(in: range) {
+                fragment in
+                if fragment.layoutFragmentFrame.intersects(editedViewport),
+                   let paragraph = fragment.textElement as? NSTextParagraph {
+                    literalVisibleText += paragraph.attributedString.string
+                }
+                return true
+            }
+        }
+        XCTAssertTrue(literalVisibleText.contains("let row\(editedTarget) = \(editedTarget)"),
+                      "Actual native glyph text must match the scrolled-to source line")
+        XCTAssertEqual(editedPane.textView.string, prefix + source)
+    }
+
+    func testHundredThousandLineFoldedGhostsKeepColdScrollGeometryConsistent() {
+        let count = 100_000
+        let text = (0..<count).map { "row \($0)" }.joined(separator: "\n")
+        let starts = DiffLineSplitter.lines(of: text).lines.map(\.utf16Range.location)
+        let folds = stride(from: 50, to: count - 200, by: 200).map { start in
+            let hidden = start..<(start + 120)
+            return DiffEditFold(range: hidden,
+                                separator: DiffCollapsedRun(baselineRange: hidden,
+                                                            direction: .both))
+        }
+        let ghosts = stride(from: 10, to: count, by: 200).map { anchor in
+            DiffDecorations.GhostBlock(anchorLine: anchor, firstOldLine: anchor,
+                                       lines: [NSAttributedString(string: "deleted \(anchor)")])
+        }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 800, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(text)
+        pane.setEditingFolds(
+            folds,
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: count, ghostBlocks: ghosts),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        let sourceRows = count - folds.reduce(0) { $0 + $1.range.count - 1 }
+        let expectedHeight = CGFloat(sourceRows + ghosts.count) * rowHeight
+        XCTAssertEqual(pane.textView.frame.height, expectedHeight, accuracy: rowHeight)
+        let initialKnob = pane.scrollView.verticalScroller?.knobProportion
+
+        let targets = [75_220, 23_220, 92_220, 1_220, 55_220, 30_220, 80_220,
+                       9_220, 61_220, 43_220, 95_220, 3_220, 70_220, 11_220,
+                       99_220, 21_220, 86_220]
+        var times: [Double] = []
+        for target in targets {
+            let hidden = folds.reduce(0) {
+                $0 + ($1.range.upperBound <= target ? $1.range.count - 1 : 0)
+            }
+            let deleted = ghosts.reduce(0) {
+                $0 + ($1.anchorLine <= target ? $1.lines.count : 0)
+            }
+            let start = CFAbsoluteTimeGetCurrent()
+            pane.setVerticalScrollOffset(CGFloat(target - hidden + deleted) * rowHeight)
+            let viewport = pane.scrollView.contentView.bounds
+            let rows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                   decorations: pane.decorations)
+            times.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertTrue(rows.contains { $0.index == target && $0.frame.intersects(viewport) },
+                          "Folded scroll must preserve the real source row with ghost blocks")
+            XCTAssertEqual(pane.textView.frame.height, expectedHeight, accuracy: rowHeight)
+            XCTAssertEqual(pane.scrollView.verticalScroller?.knobProportion ?? -1,
+                           initialKnob ?? -1, accuracy: 0.001)
+        }
+        times.sort()
+        print("AUDIT_T1_100K_FOLDED_GHOST_JUMPS blocks=\(ghosts.count) median=\(times[8]) p95=\(times[15]) worst=\(times[16])")
+        XCTAssertEqual(pane.textView.string, text)
+    }
+
+    func testHundredThousandLineStructuralInputKeepsFoldGhostAndSourceAligned() {
+        let count = 100_000
+        let source = (0..<count).map { "row \($0)" }.joined(separator: "\n")
+        let starts = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let folds = stride(from: 50, to: count - 200, by: 200).map { start in
+            DiffEditFold(range: start..<(start + 120),
+                         separator: DiffCollapsedRun(baselineRange: start..<(start + 120),
+                                                     direction: .both))
+        }
+        let ghosts = stride(from: 10, to: count, by: 200).map { anchor in
+            DiffDecorations.GhostBlock(anchorLine: anchor, firstOldLine: anchor,
+                                       lines: [NSAttributedString(string: "deleted \(anchor)")])
+        }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 800, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            folds, baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: ghosts),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        pane.textView.isEditable = true
+        var callbackTimes: [Double] = []
+        pane.textView.onCharacterEdit = { [weak pane] range, replacement in
+            let start = CFAbsoluteTimeGetCurrent()
+            pane?.applyLiveNativeEdit(previousRange: range, replacement: replacement)
+            callbackTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+        }
+        for (position, row) in [("start", 0), ("middle", 50_000), ("end", 99_990)] {
+            var times: [Double] = []
+            callbackTimes.removeAll()
+            for _ in 0..<30 {
+                guard let offset = pane.textView.liveGitOffset(forLine: row) else {
+                    XCTFail("Missing live Git source row")
+                    return
+                }
+                let start = CFAbsoluteTimeGetCurrent()
+                pane.textView.insertText("👋\n", replacementRange: NSRange(location: offset, length: 0))
+                times.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                XCTAssertEqual(pane.textView.liveGitSourceLineCount, count + 1)
+                XCTAssertEqual(pane.decorations.rows.count, count + 1)
+                if let ghost = ghosts.first(where: { $0.anchorLine >= row }) {
+                    XCTAssertNotNil(pane.decorations.ghostsByAnchor[ghost.anchorLine + 1])
+                }
+                if let fold = folds.first(where: { $0.range.lowerBound >= row }) {
+                    XCTAssertTrue(pane.textView.editingFolds.contains {
+                        $0.range.lowerBound == fold.range.lowerBound + 1
+                    })
+                }
+                pane.textView.insertText("", replacementRange: NSRange(location: offset, length: 3))
+                XCTAssertEqual(pane.textView.liveGitSourceLineCount, count)
+                XCTAssertEqual(pane.decorations.rows.count, count)
+                XCTAssertEqual(pane.textView.editingFolds, folds)
+                XCTAssertEqual(pane.decorations.ghostsByAnchor.keys.sorted(),
+                               ghosts.map(\.anchorLine))
+            }
+            times.sort()
+            callbackTimes.sort()
+            print("AUDIT_T1_100K_FOLDED_GHOST_STRUCTURAL_INPUT position=\(position) samples=30 median=\(times[15]) p95=\(times[28]) worst=\(times[29]) callbackP95=\(callbackTimes[callbackTimes.count * 95 / 100 - 1])")
+        }
+        XCTAssertEqual(pane.textView.string, source)
+    }
+
     func testFoldedNativeDiffScrollbarHasCompleteHeightBeforeDeepScrolling() throws {
         var lines = (0..<24_000).map { "let row\($0) = \($0)\n" }
         let original = lines.joined()
@@ -412,7 +1228,7 @@ final class NativeDiffTabTests: XCTestCase {
                              textColor: .textColor)
         pane.setEditBufferText(changed)
         pane.setEditingFolds(
-            folds, lineOffsets: offsets,
+            folds,
             baseDecorations: .edit(state: computation.editState, snapshotOffsets: offsets,
                                    lineCount: offsets.count, ghostBlocks: ghosts),
             revision: 1
@@ -422,6 +1238,60 @@ final class NativeDiffTabTests: XCTestCase {
         }
         let expected = CGFloat(visibleSourceRows + ghosts.reduce(0) { $0 + $1.lines.count })
             * rowHeight
+        pane.layoutSubtreeIfNeeded()
+        // Verify a fresh native viewport without warming its paragraph cache
+        // through explicit source-row navigation first.
+        let firstSourceRow = 12_120
+        let foldedBeforeFirst = folds.filter { $0.range.upperBound <= firstSourceRow }.reduce(0) {
+            $0 + max(0, $1.range.count - 1)
+        }
+        let ghostsBeforeFirst = ghosts.filter { $0.anchorLine <= firstSourceRow }.reduce(0) {
+            $0 + $1.lines.count
+        }
+        pane.setVerticalScrollOffset(CGFloat(firstSourceRow - foldedBeforeFirst + ghostsBeforeFirst)
+                                     * rowHeight)
+        let coldRows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                   decorations: pane.decorations)
+        XCTAssertTrue(coldRows.contains { $0.index == firstSourceRow &&
+            $0.frame.intersects(pane.scrollView.contentView.bounds) },
+            "First direct scrollbar jump must resolve native text without prior cache warming")
+        let sourceTargets = [120, 12_120, 23_920, 5_120, 18_120, 2_120, 22_120,
+                             9_120, 14_120, 7_120, 16_120, 1_120, 20_120, 3_120,
+                             23_120, 10_120, 19_120]
+        var sourceJumpTimes: [Double] = []
+        for sourceRow in sourceTargets {
+            let started = CFAbsoluteTimeGetCurrent()
+            pane.scrollToRow(sourceRow)
+            let rows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                   decorations: pane.decorations)
+            let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            let frame = rows.first { $0.index == sourceRow }?.frame
+            XCTAssertNotNil(frame, "A folded source-row jump must show the requested real line")
+            if let frame {
+                XCTAssertTrue(frame.intersects(pane.scrollView.contentView.bounds))
+            }
+            sourceJumpTimes.append(elapsed)
+        }
+        sourceJumpTimes.sort()
+        print("AUDIT_T1_FOLDED_SOURCE_JUMPS tested=17 median=\(sourceJumpTimes[8]) p95=\(sourceJumpTimes[15]) worst=\(sourceJumpTimes[16])")
+        // These are 17 cold, nonadjacent jumps. The 32 ms P95 budget applies
+        // to the separately measured 30-sample hot viewport geometry.
+        for sourceRow in sourceTargets {
+            let hidden = folds.filter { $0.range.upperBound <= sourceRow }.reduce(0) {
+                $0 + max(0, $1.range.count - 1)
+            }
+            let deleted = ghosts.filter { $0.anchorLine <= sourceRow }.reduce(0) {
+                $0 + $1.lines.count
+            }
+            let y = CGFloat(sourceRow - hidden + deleted) * rowHeight
+            pane.setVerticalScrollOffset(y)
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            let hasTarget = visible.contains { $0.index == sourceRow &&
+                $0.frame.intersects(pane.scrollView.contentView.bounds) }
+            XCTAssertTrue(hasTarget,
+                "Direct scrollbar navigation must show source row \(sourceRow) at y \(y)")
+        }
         func height() -> CGFloat {
             pane.layoutSubtreeIfNeeded()
             pane.scrollView.layoutSubtreeIfNeeded()
@@ -448,13 +1318,26 @@ final class NativeDiffTabTests: XCTestCase {
                                                      decorations: pane.decorations)
         XCTAssertTrue(bottomRows.contains { $0.index >= (folds.last?.range.lowerBound ?? Int.max) },
                       "The complete scroll track must reach the final visible Git source row")
+        let originalStyle = pane.scrollView.scrollerStyle
+        for style: NSScroller.Style in [.overlay, .legacy] {
+            pane.scrollView.scrollerStyle = style
+            pane.layoutSubtreeIfNeeded()
+            pane.setVerticalScrollOffset(0)
+            pane.setVerticalScrollOffset(1_000_000)
+            let styledRows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                        decorations: pane.decorations)
+            XCTAssertTrue(styledRows.contains {
+                $0.index >= (folds.last?.range.lowerBound ?? Int.max)
+            }, "Both native scroller styles must reach the final folded source row")
+        }
+        pane.scrollView.scrollerStyle = originalStyle
         let next = DiffComputation.build(core: core, revealedLines:
             try XCTUnwrap(computation.unified.rows.first(where: { $0.collapsed != nil })?.collapsed)
                 .revealNext()
         )
         let expandedFolds = DiffEditFold.sourceFolds(in: next.unified, lineCount: core.newLines.count)
         pane.setEditingFolds(
-            expandedFolds, lineOffsets: offsets,
+            expandedFolds,
             baseDecorations: .edit(state: next.editState, snapshotOffsets: offsets,
                                    lineCount: offsets.count, ghostBlocks: ghosts),
             revision: 2
@@ -468,8 +1351,9 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.frame.height, expandedHeight, accuracy: rowHeight,
                        "Unfolding must update the full native scroll extent before scrolling")
         pane.setVerticalScrollOffset(1_000_000)
-        XCTAssertTrue(DiffRowGeometry.visibleRows(textView: pane.textView,
-            decorations: pane.decorations).contains {
+        let expandedBottom = DiffRowGeometry.visibleRows(textView: pane.textView,
+            decorations: pane.decorations)
+        XCTAssertTrue(expandedBottom.contains {
                 $0.index >= (expandedFolds.last?.range.lowerBound ?? Int.max)
             }, "The expanded native scroll track must still reach the last visible source line")
         XCTAssertEqual(pane.textView.string, changed)
@@ -495,7 +1379,7 @@ final class NativeDiffTabTests: XCTestCase {
                              textColor: .textColor)
         pane.setEditBufferText(changed)
         pane.setEditingFolds(
-            folds, lineOffsets: offsets,
+            folds,
             baseDecorations: .edit(state: projection.editState, snapshotOffsets: offsets,
                                    lineCount: offsets.count, ghostBlocks: []),
             revision: 1
@@ -517,7 +1401,7 @@ final class NativeDiffTabTests: XCTestCase {
         let nextOffsets = updatedCore.newLines.map(\.utf16Range.location)
         XCTAssertNotEqual(offsets.last, nextOffsets.last)
         pane.setEditingFolds(
-            updatedFolds, lineOffsets: nextOffsets,
+            updatedFolds,
             baseDecorations: .edit(state: updatedProjection.editState, snapshotOffsets: nextOffsets,
                                    lineCount: nextOffsets.count, ghostBlocks: []),
             revision: 2
@@ -541,6 +1425,62 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, edited)
     }
 
+    func testNativeDiffSwitchingBetweenFullAndFoldedLayoutNeverLosesTheLastRow() throws {
+        let original = (0..<2_000).map { "source \($0)\n" }.joined()
+        let changed = original.replacingOccurrences(of: "source 1000\n", with: "changed 1000\n")
+        let core = DiffCore.compute(oldText: original, newText: changed)
+        let projection = DiffComputation.build(core: core, revealedLines: [])
+        let folds = DiffEditFold.sourceFolds(in: projection.unified,
+                                             lineCount: core.newLines.count)
+        XCTAssertFalse(folds.isEmpty)
+        let starts = core.newLines.map(\.utf16Range.location)
+        let decorations = DiffDecorations.edit(state: projection.editState,
+                                                snapshotOffsets: starts,
+                                                lineCount: starts.count, ghostBlocks: [])
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 750, height: 330),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let lineHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(changed)
+        pane.setEditingFolds([],
+                             baseDecorations: decorations, revision: 1)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate)
+        pane.setVerticalScrollOffset(1_000_000)
+        XCTAssertTrue(DiffRowGeometry.visibleRows(textView: pane.textView,
+            decorations: pane.decorations).contains { $0.index == starts.count - 1 })
+
+        pane.setEditingFolds(folds,
+                             baseDecorations: decorations, revision: 2)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Fixed Git LF geometry must remain active while context is folded")
+        pane.setVerticalScrollOffset(1_000_000)
+        XCTAssertTrue(DiffRowGeometry.visibleRows(textView: pane.textView,
+            decorations: pane.decorations).contains {
+                $0.index >= (folds.last?.range.lowerBound ?? Int.max)
+            }, "Native folded viewport must still reach the last visible context")
+
+        pane.setEditingFolds([],
+                             baseDecorations: decorations, revision: 3)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Returning to full source must resume native fixed-fragment layout")
+        XCTAssertEqual(pane.textView.frame.height, CGFloat(starts.count) * lineHeight,
+                       accuracy: lineHeight)
+        pane.setVerticalScrollOffset(1_000_000)
+        XCTAssertTrue(DiffRowGeometry.visibleRows(textView: pane.textView,
+            decorations: pane.decorations).contains { $0.index == starts.count - 1 })
+        XCTAssertEqual(pane.textView.string, changed)
+    }
+
     func testUnfoldedGitDiffScrollbarReachesEndWithoutHeightGrowth() throws {
         let source = (0..<5_000).map { "row \($0)\n" }.joined()
         let split = DiffLineSplitter.lines(of: source).lines
@@ -557,7 +1497,7 @@ final class NativeDiffTabTests: XCTestCase {
                              textColor: .textColor)
         pane.setEditBufferText(source)
         pane.setEditingFolds(
-            [], lineOffsets: split.map(\.utf16Range.location),
+            [],
             baseDecorations: .edit(
                 state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
                 snapshotOffsets: split.map(\.utf16Range.location),
@@ -581,7 +1521,7 @@ final class NativeDiffTabTests: XCTestCase {
         let next = DiffLineSplitter.lines(of: edited).lines
         let nextOffsets = next.map(\.utf16Range.location)
         pane.setEditingFolds(
-            [], lineOffsets: nextOffsets,
+            [],
             baseDecorations: .edit(
                 state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
                 snapshotOffsets: nextOffsets, lineCount: next.count, ghostBlocks: []),
@@ -598,6 +1538,174 @@ final class NativeDiffTabTests: XCTestCase {
                       "Editing before the last line must not strand native content below the scrollbar")
         XCTAssertEqual(pane.textView.frame.height, revisedHeight, accuracy: rowHeight)
         XCTAssertEqual(pane.textView.string, edited)
+    }
+
+    func testHundredThousandLineUnfoldedViewportRowsAreNotEnumeratedFromDocumentStart() throws {
+        let count = 100_000
+        let source = String(repeating: "let value = 42\n", count: count)
+        let offsets = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 790, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            [],
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: offsets, lineCount: offsets.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, CGFloat(count) * rowHeight,
+                       accuracy: rowHeight)
+        pane.setVerticalScrollOffset(CGFloat(count - 16) * rowHeight)
+        var costs = [Double]()
+        for _ in 0..<12 {
+            let start = CFAbsoluteTimeGetCurrent()
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            costs.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            XCTAssertTrue(visible.contains { $0.index >= count - 16 },
+                          "Deep native text viewport must resolve its actual Git LF row")
+        }
+        costs.sort()
+        print("AUDIT_T1_VISIBLE_INDEX lines=\(count) median=\(costs[6]) p95=\(costs[11])")
+        XCTAssertLessThanOrEqual(costs[11], 32,
+                                 "Viewport row lookup must be bounded by visible fragments, not the file prefix")
+    }
+
+    func testHundredThousandLineNativeDiffSeventeenFarJumpsKeepTextAndCaretHitCorrect() throws {
+        let count = 100_000
+        let source = (0..<count).map { String(format: "let row %05d\n", $0) }.joined()
+        let offsets = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 790, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let height = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(
+            [],
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: offsets, lineCount: offsets.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, CGFloat(count) * height, accuracy: height)
+        let targets = [0, 50_000, 99_999, 12_500, 87_500, 100, 75_000, 500, 62_500,
+                       33_333, 91_666, 2_000, 81_818, 12, 99_990, 45_833, 99_999]
+        var durations = [Double]()
+        for row in targets {
+            let start = CFAbsoluteTimeGetCurrent()
+            pane.setVerticalScrollOffset(CGFloat(row) * height)
+            let rendered = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                       decorations: pane.decorations)
+            let matchingRow = rendered.first { $0.index == row }
+            XCTAssertNotNil(matchingRow, "Native TextKit viewport must contain row \(row)")
+            if let matchingRow {
+                XCTAssertTrue(matchingRow.frame.intersects(pane.scrollView.contentView.bounds),
+                              "Target row must really intersect native viewport")
+            }
+            let content = pane.textView.nativeContentManager
+            let target = try XCTUnwrap(content.location(content.documentRange.location,
+                                                        offsetBy: offsets[row]))
+            let fragment = try XCTUnwrap(pane.textView.nativeLayoutManager.textLayoutFragment(for: target))
+            let paragraph = try XCTUnwrap(fragment.textElement as? NSTextParagraph)
+            XCTAssertTrue(paragraph.attributedString.string.hasPrefix(String(format: "let row %05d", row)))
+            let local = CGPoint(x: 25, y: CGFloat(row) * height + height / 2)
+            let screen = window.convertPoint(toScreen: pane.textView.convert(local, to: nil))
+            let hitOffset = pane.textView.characterIndex(for: screen)
+            XCTAssertEqual(pane.textView.liveGitLine(atUTF16: hitOffset), row,
+                           "Native character hit testing must resolve its actual Git LF row")
+            durations.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+        }
+        durations.sort()
+        print("AUDIT_T1_NATIVE_JUMPS lines=\(count) tested=\(targets.count) median=\(durations[8]) p95=\(durations[15]) worst=\(durations[16])")
+        XCTAssertLessThanOrEqual(durations[15], 32,
+                                 "Far jumps, text fragments and caret hit must all remain fast")
+        XCTAssertEqual(pane.textView.string, source)
+    }
+
+    func testHundredThousandLineReadonlyReviewUsesTheSameNativeFastGeometry() throws {
+        let count = 100_000
+        let sample = "let row 00000\n"
+        let source = (0..<count).map { String(format: "let row %05d\n", $0) }.joined()
+        let length = sample.utf16.count
+        let starts = (0..<count).map { $0 * length }
+        let rows = (0..<count).map { index in
+            DiffRow(kind: .context, oldLine: nil, newLine: index + 1,
+                    source: .new,
+                    sourceRange: NSRange(location: starts[index], length: length - 1),
+                    emphasis: [], missingNewline: false)
+        }
+        let document = DiffSideDocument(text: source, rows: rows, lineStartOffsets: starts)
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 790, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let height = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setReviewDocument(NSAttributedString(string: source, attributes: [
+            .font: font,
+            .foregroundColor: NSColor.textColor,
+            .paragraphStyle: DiffTypography.paragraphStyle(for: font),
+        ]), decorations: .review(document))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertFalse(pane.textView.isEditable)
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate)
+        XCTAssertEqual(pane.textView.frame.height, CGFloat(count) * height, accuracy: height)
+        let targets = [0, 50_000, 99_999, 12_500, 87_500, 100, 75_000, 500, 62_500,
+                       33_333, 91_666, 2_000, 81_818, 12, 99_990, 45_833, 99_999]
+        var durations = [Double]()
+        for row in targets {
+            let start = CFAbsoluteTimeGetCurrent()
+            pane.setVerticalScrollOffset(CGFloat(row) * height)
+            let afterScroll = CFAbsoluteTimeGetCurrent()
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            let afterRows = CFAbsoluteTimeGetCurrent()
+            XCTAssertTrue(visible.contains { $0.index == row },
+                          "Review native text must reach actual row \(row)")
+            let content = pane.textView.nativeContentManager
+            let location = try XCTUnwrap(content.location(content.documentRange.location,
+                                                         offsetBy: starts[row]))
+            let fragment = try XCTUnwrap(pane.textView.nativeLayoutManager.textLayoutFragment(for: location))
+            let paragraph = try XCTUnwrap(fragment.textElement as? NSTextParagraph)
+            XCTAssertTrue(paragraph.attributedString.string.hasPrefix(String(format: "let row %05d", row)))
+            let afterFragment = CFAbsoluteTimeGetCurrent()
+            let screen = window.convertPoint(toScreen: pane.textView.convert(
+                CGPoint(x: 25, y: CGFloat(row) * height + height / 2), to: nil
+            ))
+            XCTAssertEqual(pane.decorations.rowIndex(
+                forUTF16Offset: pane.textView.characterIndex(for: screen)), row)
+            let afterHit = CFAbsoluteTimeGetCurrent()
+            print("AUDIT_T1_REVIEW_DETAIL row=\(row) scroll=\((afterScroll-start)*1000) rows=\((afterRows-afterScroll)*1000) fragment=\((afterFragment-afterRows)*1000) hit=\((afterHit-afterFragment)*1000) viewport=\(String(describing: pane.textView.nativeLayoutManager.textViewportLayoutController.viewportRange))")
+            durations.append((afterHit - start) * 1_000)
+        }
+        durations.sort()
+        print("AUDIT_T1_READONLY_JUMPS lines=\(count) median=\(durations[8]) p95=\(durations[15]) worst=\(durations[16])")
+        XCTAssertLessThanOrEqual(durations[15], 32)
+        XCTAssertEqual(pane.textView.string, source)
     }
 
     func testNativeCRDiffScrollbarUsesFinalNativeParagraphHeight() throws {
@@ -617,7 +1725,7 @@ final class NativeDiffTabTests: XCTestCase {
                              textColor: .textColor)
         pane.setEditBufferText(source)
         pane.setEditingFolds(
-            [], lineOffsets: split.map(\.utf16Range.location),
+            [],
             baseDecorations: .edit(
                 state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
                 snapshotOffsets: split.map(\.utf16Range.location),
@@ -635,6 +1743,661 @@ final class NativeDiffTabTests: XCTestCase {
                            "Native CR paragraphs may not grow the scroll range during scrolling")
         }
         XCTAssertEqual(pane.textView.string, source)
+    }
+
+    func testLargeNativeCRAndUnicodeParagraphsKeepExactScrollEnd() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let rowHeight = style.maximumLineHeight
+        for (name, separator, count) in [
+            ("CR-24k", "\r", 24_000),
+            ("UnicodeLS-24k", "\u{2028}", 24_000),
+            ("UnicodePS-24k", "\u{2029}", 24_000),
+            ("CR-100k", "\r", 100_000),
+        ] {
+            let source = (0..<count).map { "part\($0)" }.joined(separator: separator) + "\n"
+            let lines = DiffLineSplitter.lines(of: source).lines
+            XCTAssertEqual(lines.count, 1, "Git LF and native paragraph counts differ")
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+            let window = NSWindow(
+                contentRect: NSRect(x: -950, y: -950, width: 750, height: 300),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = pane
+            window.orderFront(nil)
+            defer { window.close() }
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+            pane.setEditBufferText(source)
+            pane.setEditingFolds([], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: lines.map(\.utf16Range.location),
+                lineCount: lines.count, ghostBlocks: []), revision: 1)
+            let started = CFAbsoluteTimeGetCurrent()
+            pane.layoutSubtreeIfNeeded()
+            let initialHeight = pane.textView.frame.height
+            let layoutMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            XCTAssertGreaterThan(initialHeight, CGFloat(count - 100) * rowHeight)
+            pane.setVerticalScrollOffset(1_000_000_000)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(pane.scrollOffset.y, initialHeight - 600)
+            XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: rowHeight)
+            let content = pane.textView.nativeContentManager
+            let target = try XCTUnwrap(content.location(
+                content.documentRange.location, offsetBy: source.utf16.count - 2
+            ))
+            let fragment = try XCTUnwrap(pane.textView.nativeLayoutManager.textLayoutFragment(
+                for: target
+            ))
+            let paragraph = try XCTUnwrap(fragment.textElement as? NSTextParagraph)
+            XCTAssertTrue(paragraph.attributedString.string.contains("part\(count - 1)"))
+            XCTAssertEqual(pane.textView.string, source)
+            print("AUDIT_P2_VARIABLE_NATIVE name=\(name) sourceBytes=\(source.utf8.count) "
+                  + "nativeParagraphs=\(count) initialLayoutMs=\(layoutMs) "
+                  + "documentHeight=\(initialHeight) offset=\(pane.scrollOffset.y)")
+            XCTAssertLessThan(layoutMs, 200,
+                              "Native fixed-height paragraphs must not force whole-document layout")
+        }
+    }
+
+    func testHistoricalPlainRevisionColdLayoutAndDeepRowAreNativeAndBounded() throws {
+        let count = 100_000
+        let source = (0..<count).map { "revision \($0)" }.joined(separator: "\n") + "\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 740, height: 310),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .standard)
+        pane.setEditBufferText(source)
+        pane.textView.isEditable = false
+        pane.decorations = .empty // Historical plain source has no diff rows.
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let layoutMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("AUDIT_P2_PLAIN_REVISION rows=\(count) layoutMs=\(layoutMs) "
+              + "height=\(pane.textView.overrideContentHeight ?? -1)")
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "A plain historical source must not force full TextKit document layout")
+        XCTAssertLessThan(layoutMs, 300)
+        XCTAssertEqual(pane.textView.overrideContentHeight ?? -1,
+                       CGFloat(count + 1) * style.maximumLineHeight, accuracy: style.maximumLineHeight)
+
+        for row in [count - 4, 100, count / 2, count - 4] {
+            pane.scrollToRow(row)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertLessThan(abs(pane.scrollOffset.y - CGFloat(row) * style.maximumLineHeight),
+                              pane.scrollView.contentView.bounds.height + style.maximumLineHeight,
+                              "Historical plain source must reach row \(row) directly")
+        }
+        let target = try XCTUnwrap(NSTextRange(
+            NSRange(location: source.utf16.count - 2, length: 1),
+            in: pane.textView.nativeContentManager
+        ))
+        pane.textView.nativeLayoutManager.ensureLayout(for: target)
+        let last = try XCTUnwrap(pane.textView.nativeLayoutManager.textLayoutFragment(for: target.location))
+        XCTAssertTrue((last.textElement as? NSTextParagraph)?.attributedString.string
+            .contains("revision \(count - 1)") == true)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testNativeCRGhostsKeepExactHeightWithoutWholeDocumentLayout() throws {
+        let count = 24_000
+        let source = (0..<count).map { "part\($0)" }.joined(separator: "\r") + "\nlast\n"
+        let gitLines = DiffLineSplitter.lines(of: source).lines
+        XCTAssertEqual(gitLines.count, 2)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: gitLines.map(\.utf16Range.location), lineCount: gitLines.count,
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1,
+                      lines: [NSAttributedString(string: "leading deletion")]),
+                .init(anchorLine: 1, firstOldLine: 2,
+                      lines: [NSAttributedString(string: "middle deletion")]),
+                .init(anchorLine: 2, firstOldLine: 3,
+                      lines: [NSAttributedString(string: "end deletion")])
+            ]
+        )
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        let rowHeight = style.maximumLineHeight
+        let expected = CGFloat(pane.textView.lineNumber(atUTF16Offset: source.utf16.count) + 3)
+            * rowHeight
+        print("AUDIT_P2_NATIVE_GHOST count=\(count) initialLayoutMs=\(elapsed) "
+              + "height=\(pane.textView.frame.height) expected=\(expected)")
+        XCTAssertLessThan(elapsed, 300,
+                          "Native CR paragraphs with deleted rows must not trigger full layout")
+        XCTAssertEqual(pane.textView.frame.height, expected, accuracy: rowHeight)
+        let initialHeight = pane.textView.frame.height
+        pane.setVerticalScrollOffset(1_000_000_000)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 0.5)
+        XCTAssertGreaterThan(pane.scrollOffset.y, initialHeight - 500)
+        let rows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                               decorations: pane.decorations)
+        XCTAssertTrue(rows.contains { $0.index == 1 && $0.frame.intersects(
+            pane.scrollView.contentView.bounds) }, "The last Git row must remain reachable")
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testFoldedNativeCRParagraphsAndGhostsKeepExactColdScrollGeometry() {
+        let gitCount = 1_200
+        let partsPerLine = 8
+        let source = (0..<gitCount).map { row in
+            (0..<partsPerLine).map { "part\(row)-\($0)" }.joined(separator: "\r")
+        }.joined(separator: "\n") + "\n"
+        let gitLines = DiffLineSplitter.lines(of: source).lines
+        let folds = [50..<70, 400..<420, 1_000..<1_020].map { range in
+            DiffEditFold(range: range, separator: DiffCollapsedRun(
+                baselineRange: range, direction: .both))
+        }
+        let ghostAnchors = [0, 80, 500, gitCount]
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(folds, baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: gitLines.map(\.utf16Range.location), lineCount: gitCount,
+            ghostBlocks: ghostAnchors.map { .init(anchorLine: $0, firstOldLine: $0 + 1,
+                lines: [NSAttributedString(string: "deleted")]) }), revision: 1)
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        let hidden = folds.reduce(0) { $0 + $1.range.count * partsPerLine - 1 }
+        let expected = CGFloat(gitCount * partsPerLine + 1 - hidden + ghostAnchors.count)
+            * style.maximumLineHeight
+        print("AUDIT_P2_NATIVE_FOLD_GHOST layoutMs=\(elapsed) "
+              + "height=\(pane.textView.frame.height) expected=\(expected)")
+        XCTAssertLessThan(elapsed, 300)
+        XCTAssertEqual(pane.textView.frame.height, expected, accuracy: 1)
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate)
+        for sourceRow in [1, 85, 510, 1_000, 1_100, 1_199] {
+            pane.scrollToRow(sourceRow)
+            let viewport = pane.scrollView.contentView.bounds
+            let visible = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations)
+            XCTAssertTrue(visible.contains { $0.index == sourceRow && $0.frame.intersects(viewport) },
+                          "Cold native fold+ghost scroll must hit Git row \(sourceRow)")
+            XCTAssertEqual(pane.textView.frame.height, expected, accuracy: 1)
+        }
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, expected, accuracy: 1)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testShowAllSparseLongLinesAndGhostsAvoidFullTextKitLayout() throws {
+        let lineCount = 24_000
+        let oversized = String(repeating: "longword_", count: 8_000)
+        let source = (0..<lineCount).map { row in
+            [9, 12_000, 23_990].contains(row) ? oversized : "short row \(row)"
+        }.joined(separator: "\n") + "\n"
+        let lines = DiffLineSplitter.lines(of: source).lines
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .showAll)
+        pane.setEditBufferText(source)
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: lines.map(\.utf16Range.location), lineCount: lineCount,
+            ghostBlocks: [
+                .init(anchorLine: 20, firstOldLine: 20,
+                      lines: [NSAttributedString(string: "one deletion")]),
+                .init(anchorLine: lineCount, firstOldLine: lineCount,
+                      lines: [NSAttributedString(string: "end deletion")])
+            ]
+        )
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("AUDIT_P2_SPARSE_WRAPS count=\(lineCount) initialLayoutMs=\(elapsed)")
+        XCTAssertTrue(pane.textView.wrapsLines)
+        XCTAssertLessThan(elapsed, 350,
+                          "Only the three oversized paragraphs need native wrap layout")
+        let initialHeight = pane.textView.frame.height
+        let native = pane.textView.nativeContentManager
+        let layout = pane.textView.nativeLayoutManager
+        var extraLines = 0
+        for row in [9, 12_000, 23_990] {
+            let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+            let paragraph = try XCTUnwrap(pane.textView.textStorage?.mutableString.paragraphRange(
+                for: NSRange(location: offset, length: 0)))
+            let range = try XCTUnwrap(NSTextRange(paragraph, in: native))
+            layout.ensureLayout(for: range)
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+            let bodyLines = fragment.textLineFragments.filter {
+                $0.characterRange.length > 0
+            }.count
+            XCTAssertGreaterThan(bodyLines, 1)
+            extraLines += bodyLines - 1
+        }
+        let expectedHeight = CGFloat(lineCount + 1 + extraLines + 2)
+            * style.maximumLineHeight
+        XCTAssertEqual(initialHeight, expectedHeight, accuracy: style.maximumLineHeight)
+        for row in [22_000, 10, 23_999] {
+            pane.scrollToRow(row)
+            let visible = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations)
+            let hit = visible.contains { $0.index == row && $0.frame.intersects(
+                pane.scrollView.contentView.bounds) }
+            if !hit {
+                let offset = pane.textView.liveGitOffset(forLine: row) ?? 0
+                let loc = NSTextRange(NSRange(location: offset, length: 1), in: native)
+                if let loc {
+                    layout.ensureLayout(for: loc)
+                    let fragment = layout.textLayoutFragment(for: loc.location)
+                    print("AUDIT_P2_TARGET_FRAGMENT row=\(row) y=\(String(describing: fragment?.layoutFragmentFrame.minY)) "
+                          + "height=\(String(describing: fragment?.layoutFragmentFrame.height)) "
+                          + "lines=\(fragment?.textLineFragments.count ?? -1)")
+                }
+                print("AUDIT_P2_WRAP_JUMP_MISS target=\(row) offset=\(pane.scrollOffset.y) "
+                      + "viewport=\(pane.scrollView.contentView.bounds) "
+                      + "visibleCount=\(visible.count) last=\(visible.last?.index ?? -1):\(visible.last?.frame.minY ?? -1) "
+                      + "nativeRange=\(String(describing: layout.textViewportLayoutController.viewportRange))")
+            }
+            XCTAssertTrue(hit, "Wrapped deep jump must hit row \(row)")
+            XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 1)
+        }
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testSparseWrapsWithNativeSeparatorsFoldsAndGhostsRetainGeometryAcrossTypography() throws {
+        let gitCount = 2_400
+        let oversized = String(repeating: "abcdef0123456789", count: 4_000)
+        let longRows = [9, 1_203, 2_388]
+        let source = (0..<gitCount).map { row in
+            "head\(row)\r" + (longRows.contains(row) ? oversized : "middle\(row)")
+                + "\u{2028}tail\(row)"
+        }.joined(separator: "\n") + "\n"
+        let lines = DiffLineSplitter.lines(of: source).lines
+        let folds = [50..<70, 400..<420, 2_000..<2_020].map { range in
+            DiffEditFold(range: range, separator: DiffCollapsedRun(
+                baselineRange: range, direction: .both))
+        }
+        let ghosts = [0, 85, 1_250, gitCount].map { anchor in
+            DiffDecorations.GhostBlock(anchorLine: anchor, firstOldLine: anchor + 1,
+                                       lines: [NSAttributedString(string: "deleted")])
+        }
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(folds, baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: lines.map(\.utf16Range.location), lineCount: gitCount,
+            ghostBlocks: ghosts
+        ), revision: 1)
+
+        let nativeParagraphs = gitCount * 3 + 1
+        let hiddenParagraphs = folds.reduce(0) { $0 + $1.range.count * 3 - 1 }
+        for (fontSize, windowWidth) in [(12.0, 720.0), (15.0, 380.0), (12.0, 900.0)] {
+            let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            let style = DiffTypography.paragraphStyle(for: font)
+            window.setContentSize(NSSize(width: windowWidth, height: 300))
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .showAll)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.wrapsLines)
+            XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+            let fragmentRow = try XCTUnwrap(pane.textView.layoutRowForUTF16)
+            let separator = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 50))
+            let hidden = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 55))
+            let nextVisible = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 70))
+            XCTAssertEqual(fragmentRow(hidden), fragmentRow(separator),
+                           "Every hidden native paragraph must project to the fold separator")
+            XCTAssertGreaterThan(fragmentRow(nextVisible), fragmentRow(separator))
+
+            let content = pane.textView.nativeContentManager
+            let layout = pane.textView.nativeLayoutManager
+            var extraWrapped = 0
+            for row in longRows {
+                let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+                let next = (source as NSString).range(
+                    of: "\r", options: [], range: NSRange(location: offset,
+                                                            length: min(100, content.length - offset))
+                ).location + 1
+                let paragraph = try XCTUnwrap(pane.textView.textStorage?.mutableString.paragraphRange(
+                    for: NSRange(location: next, length: 0)))
+                let range = try XCTUnwrap(NSTextRange(paragraph, in: content))
+                layout.ensureLayout(for: range)
+                let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+                let bodyLines = fragment.textLineFragments.filter {
+                    $0.characterRange.length > 0
+                }.count
+                XCTAssertGreaterThan(bodyLines, 1)
+                extraWrapped += bodyLines - 1
+            }
+            let expectedHeight = CGFloat(nativeParagraphs - hiddenParagraphs + ghosts.count
+                                         + extraWrapped) * style.maximumLineHeight
+            XCTAssertEqual(pane.textView.frame.height, expectedHeight,
+                           accuracy: style.maximumLineHeight,
+                           "Font \(fontSize), width \(windowWidth) must retain complete geometry")
+            for row in [0, 9, 85, 1_200, 1_203, 2_388, 2_399] {
+                pane.scrollToRow(row)
+                let visible = DiffRowGeometry.visibleRows(
+                    textView: pane.textView, decorations: pane.decorations)
+                XCTAssertTrue(visible.contains {
+                    $0.index == row && $0.frame.intersects(pane.scrollView.contentView.bounds)
+                }, "Font \(fontSize), width \(windowWidth), cold jump to row \(row)")
+                XCTAssertEqual(pane.textView.frame.height, expectedHeight,
+                               accuracy: style.maximumLineHeight)
+            }
+        }
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testHundredThousandGitRowsWithWrappedNativeParagraphsAndGhostsStayReachable() throws {
+        let gitCount = 100_000
+        let oversized = String(repeating: "abcdef0123456789", count: 4_000)
+        let longRows = [9, 50_100, 99_990]
+        let source = (0..<gitCount).map { row in
+            "head\(row)\r" + (longRows.contains(row) ? oversized : "middle\(row)")
+                + "\u{2028}tail\(row)"
+        }.joined(separator: "\n") + "\n"
+        let folds = [20..<50, 50_000..<50_020, 99_000..<99_040].map { range in
+            DiffEditFold(range: range, separator: DiffCollapsedRun(
+                baselineRange: range, direction: .both))
+        }
+        let ghostAnchors = [0, 60, 50_200, gitCount]
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .showAll)
+        pane.setEditBufferText(source)
+        let lines = DiffLineSplitter.lines(of: source).lines
+        let ghosts = ghostAnchors.map { anchor in
+            DiffDecorations.GhostBlock(anchorLine: anchor, firstOldLine: anchor + 1,
+                                       lines: [NSAttributedString(string: "deleted")])
+        }
+        pane.setEditingFolds(folds, baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: lines.map(\.utf16Range.location), lineCount: gitCount,
+            ghostBlocks: ghosts
+        ), revision: 1)
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("AUDIT_P2_100K_MIXED_NATIVE firstLayoutMs=\(elapsed)")
+        XCTAssertTrue(pane.textView.wrapsLines)
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+
+        let projected = try XCTUnwrap(pane.textView.layoutRowForUTF16)
+        for fold in folds {
+            let separator = try XCTUnwrap(
+                pane.textView.liveGitOffset(forLine: fold.range.lowerBound))
+            let firstHidden = try XCTUnwrap(
+                pane.textView.liveGitOffset(forLine: fold.range.lowerBound + 1))
+            let lastHidden = try XCTUnwrap(
+                pane.textView.liveGitOffset(forLine: fold.range.upperBound - 1))
+            let afterFold = try XCTUnwrap(
+                pane.textView.liveGitOffset(forLine: fold.range.upperBound))
+            XCTAssertEqual(projected(firstHidden), projected(separator))
+            XCTAssertEqual(projected(lastHidden), projected(separator))
+            XCTAssertGreaterThan(projected(afterFold), projected(separator))
+        }
+        let hidden = folds.reduce(0) { $0 + $1.range.count * 3 - 1 }
+        let content = pane.textView.nativeContentManager
+        let layout = pane.textView.nativeLayoutManager
+        var extraWrapped = 0
+        for row in longRows {
+            let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+            let next = (source as NSString).range(
+                of: "\r", options: [], range: NSRange(location: offset, length: 100)
+            ).location + 1
+            let paragraph = try XCTUnwrap(pane.textView.textStorage?.mutableString.paragraphRange(
+                for: NSRange(location: next, length: 0)))
+            let range = try XCTUnwrap(NSTextRange(paragraph, in: content))
+            layout.ensureLayout(for: range)
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+            let bodyLines = fragment.textLineFragments.filter { $0.characterRange.length > 0 }.count
+            XCTAssertGreaterThan(bodyLines, 1)
+            extraWrapped += bodyLines - 1
+        }
+        let expectedHeight = CGFloat(gitCount * 3 + 1 - hidden + ghosts.count + extraWrapped)
+            * style.maximumLineHeight
+        XCTAssertEqual(pane.textView.frame.height, expectedHeight, accuracy: style.maximumLineHeight)
+        let targets = [0, 9, 51, 1_000, 45_000, 50_100, 98_500, 99_990, 99_999,
+                       1_500, 75_000, 50, 50_021, 99_041, 200, 90_000, 51,
+                       10, 75, 2_000, 49_998, 50_020, 50_030, 55_000,
+                       90_000, 98_999, 99_040, 99_050, 99_998, 51]
+        var jumpCosts: [(Int, Double)] = []
+        var hitCosts: [(Int, Double)] = []
+        for row in targets {
+            let startedJump = CFAbsoluteTimeGetCurrent()
+            pane.scrollToRow(row)
+            let visible = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations)
+            let target = visible.first {
+                $0.index == row && $0.frame.intersects(pane.scrollView.contentView.bounds)
+            }
+            XCTAssertNotNil(target, "100k mixed native jump must display Git row \(row)")
+            jumpCosts.append((row, (CFAbsoluteTimeGetCurrent() - startedJump) * 1_000))
+            if let target, [51, 50_100, 99_999].contains(row) {
+                let startedHit = CFAbsoluteTimeGetCurrent()
+                let local = NSPoint(x: 20, y: target.frame.midY)
+                let screen = window.convertPoint(toScreen: pane.textView.convert(local, to: nil))
+                let hit = pane.textView.characterIndex(for: screen)
+                XCTAssertEqual(pane.textView.liveGitLine(atUTF16: hit), row,
+                               "Visible source glyph hit must resolve the real Git row")
+                hitCosts.append((row, (CFAbsoluteTimeGetCurrent() - startedHit) * 1_000))
+            }
+            XCTAssertEqual(pane.textView.frame.height, expectedHeight,
+                           accuracy: style.maximumLineHeight)
+        }
+        let sortedJumpCosts = jumpCosts.map { $0.1 }.sorted()
+        let p95 = sortedJumpCosts[28]
+        print("AUDIT_P2_100K_MIXED_JUMPS samples=\(sortedJumpCosts.count) "
+              + "p95Ms=\(p95) worstMs=\(sortedJumpCosts[29]) "
+              + jumpCosts.map { "row=\($0.0):\(String(format: "%.1f", $0.1))ms" }
+                  .joined(separator: " "))
+        XCTAssertLessThanOrEqual(p95, 32, "30 mixed-layout deep jumps must meet the P2 hot viewport budget")
+        print("AUDIT_P2_100K_MIXED_HITS " + hitCosts.map {
+            "row=\($0.0):\(String(format: "%.1f", $0.1))ms"
+        }.joined(separator: " "))
+        // Do not warm the target via scrollToRow before the user-scroller path.
+        let coldManualRow = 61_234
+        let coldOffset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: coldManualRow))
+        let expectedManualY = CGFloat(projected(coldOffset)) * style.maximumLineHeight
+            + pane.textView.textContainerInset.height
+        pane.setVerticalScrollOffset(0)
+        let clip = pane.scrollView.contentView
+        clip.scroll(to: NSPoint(x: 0, y: expectedManualY))
+        pane.scrollView.reflectScrolledClipView(clip)
+        let manual = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations)
+        let manualTarget = try XCTUnwrap(manual.first {
+            $0.index == coldManualRow && $0.frame.intersects(clip.bounds)
+        }, "A cold native scroller jump must show its actual target on the first frame")
+        let manualPoint = NSPoint(x: 20, y: manualTarget.frame.midY)
+        let manualScreen = window.convertPoint(
+            toScreen: pane.textView.convert(manualPoint, to: nil))
+        let manualHit = pane.textView.characterIndex(for: manualScreen)
+        XCTAssertEqual(pane.textView.liveGitLine(atUTF16: manualHit), coldManualRow,
+                       "Cold scroller glyph hit must resolve to the actual source row")
+        window.displayIfNeeded()
+        let raster = try XCTUnwrap(
+            pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?.retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: raster)
+        let rasterPoint = pane.textView.convert(
+            NSPoint(x: 16, y: manualTarget.frame.midY), to: pane)
+        XCTAssertGreaterThan(sourceGlyphPixelVariety(raster, in: pane, at: rasterPoint), 4,
+                             "A cold 100k mixed native scroller jump must rasterize its glyphs")
+        pane.setVerticalScrollOffset(0)
+        pane.setVerticalScrollOffset(expectedHeight)
+        let bottom = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations)
+        XCTAssertTrue(bottom.contains { $0.index == gitCount - 1
+            && $0.frame.intersects(pane.scrollView.contentView.bounds) },
+            "A direct scrollbar jump must not omit the source's final row or EOF ghost")
+        XCTAssertEqual(pane.textView.frame.height, expectedHeight,
+                       accuracy: style.maximumLineHeight)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testWrappedNativeSeparatorEditsSurviveSwitchToBoundedDisplay() {
+        let longLine = String(repeating: "longword", count: 10_000)
+        let source = longLine + "\nsecond line\n"
+        let gitLines = DiffLineSplitter.lines(of: source).lines
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let editOffset = longLine.utf16.count + 1 + 3
+
+        func verify(_ separator: String) {
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+            let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = pane
+            window.orderFront(nil)
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .showAll)
+            pane.setEditBufferText(source)
+            pane.setEditingFolds([], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: gitLines.map(\.utf16Range.location),
+                lineCount: gitLines.count, ghostBlocks: []), revision: 1)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.wrapsLines)
+            XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+
+            let insertedRange = NSRange(location: editOffset, length: 0)
+            pane.textView.insertText(separator, replacementRange: insertedRange)
+            pane.applyLiveNativeEdit(previousRange: insertedRange, replacement: separator)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.hasNativeNonLFSeparators,
+                          "An inserted native separator must remain visible to the layout owner")
+
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .standard)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertFalse(pane.textView.wrapsLines)
+            XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+            let nativeCount = pane.textView.lineNumber(atUTF16Offset: pane.textView.string.utf16.count)
+            XCTAssertGreaterThan(nativeCount, gitLines.count)
+            XCTAssertEqual(pane.textView.overrideContentHeight ?? -1,
+                           CGFloat(nativeCount) * style.maximumLineHeight,
+                           accuracy: style.maximumLineHeight)
+
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .showAll)
+            pane.layoutSubtreeIfNeeded()
+            let removedRange = NSRange(location: editOffset, length: separator.utf16.count)
+            pane.textView.insertText("", replacementRange: removedRange)
+            pane.applyLiveNativeEdit(previousRange: removedRange, replacement: "")
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertFalse(pane.textView.hasNativeNonLFSeparators,
+                           "Deleting the last native separator must clear the layout mode")
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .standard)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertFalse(pane.textView.wrapsLines)
+            XCTAssertEqual(pane.textView.text, source)
+        }
+        for separator in ["\r", "\u{0085}", "\u{2028}", "\u{2029}"] {
+            verify(separator)
+        }
+    }
+
+    func testShowAllShortLinesUseNativeFixedLayoutWithoutUnnecessaryWrapping() {
+        let count = 24_000
+        let source = (0..<count).map { "short row \($0)" }.joined(separator: "\n") + "\n"
+        let lines = DiffLineSplitter.lines(of: source).lines
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 700, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .showAll)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds([], baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: lines.map(\.utf16Range.location), lineCount: lines.count,
+            ghostBlocks: []), revision: 1)
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        XCTAssertFalse(pane.textView.wrapsLines,
+                       "Show All must not force wrapping after the actual window width is known")
+        print("AUDIT_P2_SHOW_ALL_SHORT count=\(count) initialLayoutMs=\(elapsed)")
+        XCTAssertLessThan(elapsed, 300)
+        let initialHeight = pane.textView.frame.height
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 0.5)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testDenseIntralineProjectionCancellationLatency() async throws {
+        let lineCount = 100
+        let old = String(repeating: String(repeating: "+", count: 400) + "\n", count: lineCount)
+        let new = String(repeating: String(repeating: "-", count: 400) + "\n", count: lineCount)
+        let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: old, newText: new,
+            operations: [.delete(oldStart: 0, count: lineCount),
+                         .insert(newStart: 0, count: lineCount)]))
+        let entered = expectation(description: "Dense projection started in the real background owner")
+        let task = Task {
+            await DiffTab.runBackgroundDiffWork {
+                entered.fulfill()
+                return DiffComputation.build(core: core, revealedLines: [])
+            }
+        }
+        await fulfillment(of: [entered], timeout: 5)
+        let started = CFAbsoluteTimeGetCurrent()
+        task.cancel()
+        let result = await task.value
+        XCTAssertNil(result, "Cancelled projection must never publish a partial or stale result")
+        print("AUDIT_DIFF_DENSE_CANCELLATION tokens=400 pairs=100 elapsedMs=\((CFAbsoluteTimeGetCurrent() - started) * 1_000)")
     }
 
     func testCancelledDiffTaskStopsItsBackgroundChild() async {
@@ -716,14 +2479,20 @@ final class NativeDiffTabTests: XCTestCase {
         defer { window.close() }
         window.contentView = pane
         window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
         pane.setEditBufferText(updated)
         pane.setEditingFolds(
-            folds, lineOffsets: starts,
+            folds,
             baseDecorations: .edit(state: presentation.editState, snapshotOffsets: starts,
                                    lineCount: starts.count, ghostBlocks: ghosts),
             revision: 1
         )
         pane.layoutSubtreeIfNeeded()
+        print("AUDIT_T1_FOLDED_OWNER wraps=\(pane.textView.wrapsLines) nonLF=\(pane.textView.hasNativeNonLFSeparators) rows=\(pane.decorations.rows.count) height=\(pane.textView.frame.height) delegate=\(pane.textView.nativeLayoutManager.delegate != nil)")
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Pure Git LF folds must use exact native row geometry without full-range layout")
         var samples: [Double] = []
         for index in 0..<30 {
             pane.setVerticalScrollOffset(CGFloat((index * 347) % 9_000))
@@ -766,8 +2535,8 @@ final class NativeDiffTabTests: XCTestCase {
             start = CFAbsoluteTimeGetCurrent()
             let captured = await Task.detached(priority: .userInitiated) {
                 (
-                    DiffSyntaxHighlighter.captures(text: before, context: context),
-                    DiffSyntaxHighlighter.captures(text: after, context: context)
+                    DiffSyntaxOracle.captures(text: before, context: context),
+                    DiffSyntaxOracle.captures(text: after, context: context)
                 )
             }.value
             syntaxTimes.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
@@ -850,7 +2619,9 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
     func testLocalGitStagedAndUnstagedDiffReadyLatencyMatrix() async throws {
-        for lineCount in [1_000, 24_000] {
+        let font = TerminalFont.current()
+        print("AUDIT_DIFF_ENV system=\(ProcessInfo.processInfo.operatingSystemVersionString) font=\(font.fontName) size=\(font.pointSize) longLineWidth=\(AppSettings.shared.longLineDisplayWidth) scale=\(NSScreen.main?.backingScaleFactor ?? 0) scroller=\(NSScroller.preferredScrollerStyle.rawValue)")
+        for lineCount in [1_000, 24_000, 100_000] {
             let root = try repository()
             defer { try? FileManager.default.removeItem(at: root) }
             let filename = "latency-\(lineCount).swift"
@@ -866,7 +2637,13 @@ final class NativeDiffTabTests: XCTestCase {
             try Data(lines.joined().utf8).write(to: file)
 
             let preferences = try isolatedPreferences()
-            func load(_ source: DiffTab.Source) async throws -> Double {
+            let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 900, height: 500),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.orderFront(nil)
+            func load(_ source: DiffTab.Source) async throws
+                -> (model: Double, native: Double, painted: Double) {
                 let start = CFAbsoluteTimeGetCurrent()
                 let diff = DiffTab(repoRoot: root.path, path: filename, source: source,
                                    untracked: false, origPath: nil,
@@ -876,10 +2653,52 @@ final class NativeDiffTabTests: XCTestCase {
                                timeout: 25)
                 XCTAssertNil(diff.error)
                 XCTAssertTrue(diff.hasChanges)
-                return (CFAbsoluteTimeGetCurrent() - start) * 1_000
+                let model = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+                let installedAt = CFAbsoluteTimeGetCurrent()
+                let surface = DiffNativeSurface(diff: diff)
+                diff.nativeSurface = surface
+                window.contentView = surface
+                let renderStart = CFAbsoluteTimeGetCurrent()
+                surface.render()
+                let layoutStart = CFAbsoluteTimeGetCurrent()
+                surface.layoutSubtreeIfNeeded()
+                let bitmapStart = CFAbsoluteTimeGetCurrent()
+                let native = (bitmapStart - start) * 1_000
+                let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                if lineCount >= 24_000, case .worktree = source {
+                    let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                        .first(where: { !$0.isHidden && $0.mode == .edit }))
+                    let viewport = pane.scrollView.contentView.bounds
+                    let sourceRows = DiffRowGeometry.visibleRows(
+                        textView: pane.textView, decorations: pane.decorations)
+                    let firstChange = sourceRows.first {
+                        $0.index == lineCount / 2 + 1 && $0.frame.intersects(viewport)
+                    }
+                    let change = try XCTUnwrap(firstChange,
+                        "First paint must contain source row \(lineCount / 2 + 1); "
+                        + "viewport=\(viewport), visible=\(sourceRows.map(\.index))")
+                    let origin = pane.textView.convert(
+                        NSPoint(x: 16, y: change.frame.midY), to: surface)
+                    XCTAssertGreaterThan(
+                        sourceGlyphPixelVariety(bitmap, in: surface, at: origin), 4,
+                        "First cached native paint must contain source glyph pixels "
+                        + "at Git row \(lineCount / 2 + 1)")
+                }
+                if lineCount >= 24_000 {
+                    print("AUDIT_GIT_DIFF_NATIVE_PHASES source=\(source) mountMs=\((renderStart - installedAt) * 1_000) renderMs=\((layoutStart - renderStart) * 1_000) layoutMs=\((bitmapStart - layoutStart) * 1_000) rasterMs=\((CFAbsoluteTimeGetCurrent() - bitmapStart) * 1_000)")
+                }
+                XCTAssertGreaterThan(bitmap.pixelsWide, 0)
+                XCTAssertTrue(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+                    .contains { !$0.isHidden && !$0.textView.string.isEmpty })
+                return (model, native, (CFAbsoluteTimeGetCurrent() - start) * 1_000)
             }
-            var staged: [Double] = []
-            var unstaged: [Double] = []
+            var staged: [(model: Double, native: Double, painted: Double)] = []
+            var unstaged: [(model: Double, native: Double, painted: Double)] = []
+            for (label, source) in [("staged", DiffTab.Source.staged), ("unstaged", .worktree)] {
+                let first = try await load(source)
+                print("AUDIT_GIT_DIFF_FIRST_TAB rows=\(lineCount) source=\(label) model=\(first.model) native=\(first.native) componentPixels=\(first.painted)")
+            }
             for run in 0..<30 {
                 if run.isMultiple(of: 2) {
                     staged.append(try await load(.staged))
@@ -889,9 +2708,79 @@ final class NativeDiffTabTests: XCTestCase {
                     staged.append(try await load(.staged))
                 }
             }
-            staged.sort()
-            unstaged.sort()
-            print("AUDIT_GIT_DIFF_MODEL_READY rows=\(lineCount) samples=30 stagedMedian=\(staged[15]) stagedP95=\(staged[28]) unstagedMedian=\(unstaged[15]) unstagedP95=\(unstaged[28])")
+            for (source, samples) in [("staged", staged), ("unstaged", unstaged)] {
+                for (phase, durations) in [("model", samples.map(\.model)),
+                                            ("native", samples.map(\.native)),
+                                            ("componentPixels", samples.map(\.painted))] {
+                    let sorted = durations.sorted()
+                    print("AUDIT_GIT_DIFF_READY rows=\(lineCount) source=\(source) phase=\(phase) samples=30 median=\(sorted[15]) p95=\(sorted[28]) worst=\(sorted[29])")
+                }
+            }
+            XCTAssertEqual(try Data(contentsOf: file), Data(lines.joined().utf8))
+        }
+    }
+
+    func testNativeDiffInputCostsAndUndoByteIntegrityMatrix() async throws {
+        for lineCount in [1_000, 24_000, 100_000] {
+            for suffix in ["txt", "swift"] {
+                let directory = try repository()
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let name = "input-cost.\(suffix)"
+                let file = directory.appendingPathComponent(name)
+                let original = (0..<lineCount).map { "let row\($0) = \($0)\n" }.joined()
+                try Data(original.utf8).write(to: file)
+                let preferences = try isolatedPreferences()
+                let diff = DiffTab(repoRoot: directory.path, path: name, source: .worktree,
+                                   untracked: true, origPath: nil,
+                                   backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                                   preferences: preferences)
+                try await wait({ diff.canPresentNativeContent }, timeout: 30)
+                let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 800, height: 400),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                let surface = DiffNativeSurface(diff: diff)
+                diff.nativeSurface = surface
+                window.contentView = surface
+                surface.render()
+                window.orderFront(nil)
+                surface.layoutSubtreeIfNeeded()
+                let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+                let undo = try XCTUnwrap(editor.undoManager)
+                for (position, offset) in [("start", 0), ("middle", original.utf16.count / 2),
+                                            ("end", original.utf16.count)] {
+                    var samples: [Double] = []
+                    var getterSamples: [Double] = []
+                    var comparisonSamples: [Double] = []
+                    for _ in 0..<30 {
+                        let start = CFAbsoluteTimeGetCurrent()
+                        editor.insertText("x", replacementRange: NSRange(location: offset, length: 0))
+                        samples.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                        editor.breakUndoCoalescing()
+                        XCTAssertTrue(diff.isDirty)
+                        let getterStart = CFAbsoluteTimeGetCurrent()
+                        let snapshot = editor.string
+                        getterSamples.append((CFAbsoluteTimeGetCurrent() - getterStart) * 1_000)
+                        let compareStart = CFAbsoluteTimeGetCurrent()
+                        XCTAssertFalse(snapshot.utf8.elementsEqual(original.utf8))
+                        comparisonSamples.append((CFAbsoluteTimeGetCurrent() - compareStart) * 1_000)
+                        undo.undo()
+                        XCTAssertFalse(diff.isDirty)
+                        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+                    }
+                    for (phase, durations) in [("insert", samples), ("getter", getterSamples),
+                                                ("comparison", comparisonSamples)] {
+                        let sorted = durations.sorted()
+                        print("AUDIT_DIFF_INPUT rows=\(lineCount) syntax=\(suffix) position=\(position) phase=\(phase) samples=30 median=\(sorted[15]) p95=\(sorted[28]) worst=\(sorted[29])")
+                    }
+                }
+                editor.insertText("尾", replacementRange: NSRange(location: original.utf16.count, length: 0))
+                editor.breakUndoCoalescing()
+                await diff.save()
+                XCTAssertNil(diff.saveError)
+                XCTAssertEqual(try Data(contentsOf: file), Data((original + "尾").utf8))
+                XCTAssertEqual(GitCommandExecution.run(["ls-files", "-z"], in: directory.path).stdout, "")
+            }
         }
     }
 
@@ -969,7 +2858,9 @@ final class NativeDiffTabTests: XCTestCase {
         window.orderFront(nil)
         XCTAssertFalse(diff.isLoading, "Mounting the selected diff must not restart its read")
         try await wait({ diff.display != nil }, timeout: 20)
-        XCTAssertTrue(try XCTUnwrap(diff.display).hasCollapsedContext)
+        XCTAssertTrue(try XCTUnwrap(diff.display).computation.unified.rows.contains {
+            $0.collapsed != nil
+        })
         let keyword = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
             for: "keyword", theme: SyntaxHighlighting.theme
         ))
@@ -1041,45 +2932,6 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
     }
 
-    func testTextKitContentDelegateCanCollapseLayoutWithoutChangingEditableStorage() async throws {
-        final class Filter: NSObject, NSTextContentStorageDelegate {
-            func textContentManager(_ textContentManager: NSTextContentManager,
-                                    shouldEnumerate textElement: NSTextElement,
-                                    options: NSTextContentManager.EnumerationOptions) -> Bool {
-                !((textElement as? NSTextParagraph)?.attributedString.string
-                    .hasPrefix("hidden ") ?? false)
-            }
-        }
-        let filter = Filter()
-        let source = "first visible\n"
-            + (0..<120).map { "hidden \($0)\n" }.joined()
-            + "last visible\n"
-        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 440),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
-        window.contentView = pane
-        window.orderFront(nil)
-        pane.setEditBufferText(source)
-        pane.textView.nativeContentManager.delegate = filter
-        pane.textView.nativeLayoutManager.invalidateLayout(
-            for: pane.textView.nativeLayoutManager.documentRange)
-        pane.layoutSubtreeIfNeeded()
-        var shown: [String] = []
-        pane.textView.nativeLayoutManager.enumerateTextLayoutFragments(
-            in: pane.textView.nativeLayoutManager.documentRange) { fragment in
-            shown.append((fragment.textElement as? NSTextParagraph)?.attributedString.string ?? "")
-            return true
-        }
-        XCTAssertEqual(pane.textView.string, source)
-        XCTAssertTrue(pane.textView.isEditable)
-        XCTAssertTrue(shown.contains { $0.contains("first visible") })
-        XCTAssertTrue(shown.contains { $0.contains("last visible") })
-        XCTAssertFalse(shown.contains { $0.contains("hidden ") },
-                       "Native TextKit can skip layout of unchanged paragraphs without altering source")
-    }
-
     func testFoldedGitLineHidesAllItsNativeCRParagraphsExceptSeparator() throws {
         let original = "head\rtail\n" + (0..<240).map { "line \($0)\n" }.joined()
         let modified = original.replacingOccurrences(of: "line 170\n", with: "changed 170\n")
@@ -1099,7 +2951,7 @@ final class NativeDiffTabTests: XCTestCase {
         window.orderFront(nil)
         pane.setEditBufferText(modified)
         pane.setEditingFolds(
-            folds, lineOffsets: offsets,
+            folds,
             baseDecorations: .edit(
                 state: DiffComputation.editState(ops: core.ops, oldLines: core.oldLines,
                                                  newLines: core.newLines),
@@ -1123,7 +2975,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(collapsed.contains { $0.contains("tail") },
                        "A bare CR cannot expose a second paragraph inside a hidden Git LF line")
         XCTAssertEqual(pane.textView.string, modified)
-        pane.setEditingFolds([], lineOffsets: offsets, baseDecorations: .empty, revision: 2)
+        pane.setEditingFolds([], baseDecorations: .empty, revision: 2)
         XCTAssertTrue(laidOutParagraphs().contains { $0.contains("tail") })
         XCTAssertEqual(pane.textView.string, modified)
     }
@@ -1168,7 +3020,7 @@ final class NativeDiffTabTests: XCTestCase {
                         pane.setEditBufferText(after)
                         let offsets = core.newLines.map(\.utf16Range.location)
                         pane.setEditingFolds(
-                            folds, lineOffsets: offsets,
+                            folds,
                             baseDecorations: .edit(
                                 state: compared.editState, snapshotOffsets: offsets,
                                 lineCount: offsets.count, ghostBlocks: []
@@ -1271,7 +3123,7 @@ final class NativeDiffTabTests: XCTestCase {
                 pane.setEditBufferText(after)
                 let offsets = core.newLines.map(\.utf16Range.location)
                 pane.setEditingFolds(
-                    folds, lineOffsets: offsets,
+                    folds,
                     baseDecorations: .edit(state: compared.editState,
                                            snapshotOffsets: offsets,
                                            lineCount: offsets.count, ghostBlocks: ghostBlocks),
@@ -1349,6 +3201,132 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testFoldCoordinatesFollowNativeNewlinesBeforeDebouncedDiffArrives() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<1_200).map { "line \($0)\n" }.joined()
+        let modified = original
+            .replacingOccurrences(of: "line 400\n", with: "changed 400\n")
+            .replacingOccurrences(of: "line 700\n", with: "changed 700\n")
+        let path = directory.appendingPathComponent("live-fold-lines.txt")
+        try Data(original.utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", path.lastPathComponent],
+                                            in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                            in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: path)
+
+        let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                           source: .worktree, untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        diff.autoSaveSuspendedForClose = true
+        try await wait { diff.isEditing && diff.editFoldsReady && diff.editFolds.count >= 3 }
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let textView = try XCTUnwrap(findNativeTextView(in: surface, editable: true)
+                                      as? DiffTextView)
+        let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first(where: { $0.textView === textView }))
+        let originalFolds = textView.editingFolds
+        let foldIndex = try XCTUnwrap(originalFolds.firstIndex {
+            $0.range.lowerBound > 400 && $0.range.lowerBound < 700
+        })
+        let originalOffsets = DiffLineSplitter.lines(of: modified).lines.map(\.utf16Range.location)
+        XCTAssertFalse(originalOffsets.isEmpty)
+        XCTAssertEqual(Data(textView.string.utf8), Data(modified.utf8))
+        let oldRevision = diff.editPresentationRevision
+        let editLocation = (modified as NSString).range(of: "changed 400\n").location
+            + "changed 400".utf16.count
+        textView.insertText("\n", replacementRange: NSRange(location: editLocation, length: 0))
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(diff.editPresentationRevision, oldRevision,
+                       "This test must inspect the live 120 ms debounce interval")
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + 1,
+                       "An inserted LF before the fold must shift the native hidden-range mapping immediately")
+        XCTAssertEqual(textView.liveGitSourceLineCount, originalOffsets.count + 1,
+                       "The live fold geometry must refer to the edited source")
+        textView.breakUndoCoalescing()
+        textView.insertText("\n", replacementRange: NSRange(location: editLocation, length: 0))
+        textView.breakUndoCoalescing()
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + 2)
+        XCTAssertEqual(pane.decorations.rows.count, originalOffsets.count + 2)
+        let undo = try XCTUnwrap(textView.undoManager)
+        undo.undo()
+        let remainingNewlines = textView.string.utf16.count - modified.utf16.count
+        XCTAssertTrue((0...1).contains(remainingNewlines),
+                      "Native Undo may group adjacent edits, but must undo at least one")
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + remainingNewlines)
+        XCTAssertEqual(pane.decorations.rows.count,
+                       originalOffsets.count + remainingNewlines)
+        if remainingNewlines == 0 {
+            XCTAssertEqual(Data(textView.string.utf8), Data(modified.utf8))
+            XCTAssertFalse(diff.isDirty)
+        }
+        undo.redo()
+        XCTAssertEqual(textView.editingFolds[foldIndex].range.lowerBound,
+                       originalFolds[foldIndex].range.lowerBound + 2)
+        XCTAssertEqual(pane.decorations.rows.count, originalOffsets.count + 2)
+        XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8),
+                       "Editing and Undo during debounce must not save or rewrite the Git file")
+    }
+
+    func testHiddenEditBecomesVisibleAfterDiffWithoutExpandingOtherContext() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = (0..<320).map { "line \($0)\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let file = directory.appendingPathComponent("hidden-live.txt")
+        try Data(original.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", file.lastPathComponent],
+                                               in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                               in: directory.path).status, 0)
+        try Data(modified.utf8).write(to: file)
+        let diff = DiffTab(repoRoot: directory.path, path: file.lastPathComponent,
+                           source: .worktree, untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        diff.autoSaveSuspendedForClose = true
+        try await wait { diff.isEditing && diff.editFoldsReady
+            && diff.editFolds.contains { $0.range.contains(40) }
+        }
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true)
+                                    as? DiffTextView)
+        XCTAssertTrue(editor.editingFolds.contains { $0.range.contains(8) })
+        let revision = diff.editPresentationRevision
+        let change = (modified as NSString).range(of: "line 40")
+        editor.insertText("UPDATED 40", replacementRange: change)
+        let expected = modified.replacingOccurrences(of: "line 40", with: "UPDATED 40")
+        XCTAssertEqual(Data(editor.string.utf8), Data(expected.utf8))
+        XCTAssertTrue(editor.editingFolds.contains { $0.range.contains(8) },
+                      "Unrelated hidden lines must stay collapsed before Diff recomputation")
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+        try await wait { diff.editPresentationRevision > revision
+            && !diff.editFolds.contains { $0.range.contains(40) }
+        }
+        XCTAssertTrue(diff.editFolds.contains { $0.range.contains(8) },
+                      "An unrelated range must remain folded after async Diff")
+        surface.render()
+        XCTAssertEqual(Data(editor.string.utf8), Data(expected.utf8))
+        await diff.save()
+        try await wait { !diff.isLoading && !diff.isDirty }
+        XCTAssertEqual(try Data(contentsOf: file), Data(expected.utf8))
+        let index = GitCommandExecution.runData(["show", ":" + file.lastPathComponent],
+                                                in: directory.path)
+        XCTAssertEqual(index.status, 0)
+        XCTAssertEqual(index.stdout, Data(original.utf8))
+    }
+
     func testEditingBeforeExpandedContextRetainsItsSourceLinesWithoutOpeningOtherFolds() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1376,7 +3354,7 @@ final class NativeDiffTabTests: XCTestCase {
 
         let priorRevision = tab.editPresentationRevision
         let next = modified.replacingOccurrences(of: "line 180\n", with: "changed 180\n")
-        tab.updateEditedContent(next)
+        try replaceNativeDiffText(tab, with: next)
         try await wait { tab.editPresentationRevision > priorRevision }
         XCTAssertTrue(tab.isDirty)
         XCTAssertFalse(tab.editFolds.contains { $0.range.contains(720) },
@@ -1440,6 +3418,118 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
     }
 
+    func testFoldedNativeCommandsMatchFullDocumentAndSaveExactBytes() async throws {
+        let original = (0..<320).map { "line \($0) 中文👋\n" }.joined()
+        let modified = original.replacingOccurrences(of: "line 160", with: "changed 160")
+        let source = modified as NSString
+        let visible = source.range(of: "changed 160")
+        let crossFold = NSRange(
+            location: source.range(of: "line 154").location,
+            length: NSMaxRange(visible) - source.range(of: "line 154").location
+        )
+        let hiddenMatch = source.range(of: "line 20 中文👋")
+        let commands: [(String, @MainActor (NSTextView) -> Void)] = [
+            ("visibleInsert", { $0.insertText("插入", replacementRange: NSRange(location: visible.location, length: 0)) }),
+            ("visiblePaste", { $0.insertText("粘贴\r\n👩🏽‍💻", replacementRange: visible) }),
+            ("visibleDelete", {
+                $0.setSelectedRange(NSRange(location: visible.location + 3, length: 0))
+                $0.deleteBackward(nil)
+            }),
+            ("composition", {
+                $0.setSelectedRange(visible)
+                $0.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0), replacementRange: .notFound)
+                $0.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
+                $0.insertText("你", replacementRange: .notFound)
+                $0.unmarkText()
+            }),
+            ("explicitCrossFoldReplacement", {
+                $0.setSelectedRange(crossFold)
+                $0.insertText("跨区替换", replacementRange: .notFound)
+            }),
+            ("explicitHiddenSearchReplacement", {
+                $0.setSelectedRange(hiddenMatch)
+                $0.insertText("找到的隐藏内容", replacementRange: .notFound)
+            }),
+            ("explicitSelectAll", {
+                $0.selectAll(nil)
+                $0.insertText("完整替换\r\n尾👋", replacementRange: .notFound)
+            }),
+            ("multipleSelections", {
+                $0.selectedRanges = [NSValue(range: visible),
+                                     NSValue(range: source.range(of: "line 161"))]
+                $0.insertText("多选区", replacementRange: .notFound)
+            })
+        ]
+        for (label, command) in commands {
+            let directory = try repository()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let path = directory.appendingPathComponent("folded-commands.txt")
+            try Data(original.utf8).write(to: path)
+            XCTAssertEqual(GitCommandExecution.run(["add", "--", path.lastPathComponent], in: directory.path).status, 0)
+            XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+            let indexBefore = GitCommandExecution.runData(["show", ":" + path.lastPathComponent], in: directory.path)
+            XCTAssertEqual(indexBefore.status, 0)
+            XCTAssertEqual(indexBefore.stdout, Data(original.utf8))
+            try Data(modified.utf8).write(to: path)
+            let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                               preferences: try isolatedPreferences())
+            diff.autoSaveSuspendedForClose = true
+            try await wait { diff.canPresentNativeContent && diff.editFoldsReady && !diff.editFolds.isEmpty }
+            XCTAssertTrue(diff.editFolds.contains { $0.range.contains(20) })
+            XCTAssertTrue(diff.editFolds.contains { $0.range.contains(154) })
+            XCTAssertFalse(diff.editFolds.contains { $0.range.contains(160) })
+
+            let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 800, height: 400),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let surface = DiffNativeSurface(diff: diff)
+            diff.nativeSurface = surface
+            window.contentView = surface
+            surface.render()
+            window.orderFront(nil)
+            surface.layoutSubtreeIfNeeded()
+            let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+            XCTAssertTrue(editor.window === window)
+            XCTAssertFalse(editor.editingFolds.isEmpty)
+            XCTAssertEqual(Data(editor.string.utf8), Data(modified.utf8))
+            let reference = NativeCodeTextView()
+            reference.text = modified
+            command(reference)
+            if label == "multipleSelections" {
+                XCTAssertEqual(Data(reference.string.utf8), Data(modified
+                    .replacingOccurrences(of: "changed 160", with: "多选区")
+                    .replacingOccurrences(of: "line 161", with: "多选区").utf8))
+            }
+            command(editor)
+            editor.breakUndoCoalescing()
+            let expected = Data(reference.string.utf8)
+            XCTAssertNotEqual(expected, Data(modified.utf8), label)
+            XCTAssertEqual(Data(editor.string.utf8), expected, label)
+            XCTAssertEqual(Data(diff.editedNewContent.utf8), expected, label)
+            XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8), label)
+            let undo = try XCTUnwrap(editor.undoManager)
+            XCTAssertTrue(undo.canUndo, label)
+            undo.undo()
+            XCTAssertEqual(Data(editor.string.utf8), Data(modified.utf8), label)
+            XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(modified.utf8), label)
+            XCTAssertFalse(diff.isDirty, label)
+            undo.redo()
+            XCTAssertEqual(Data(editor.string.utf8), expected, label)
+            XCTAssertEqual(Data(diff.editedNewContent.utf8), expected, label)
+            XCTAssertTrue(diff.isDirty, label)
+            await diff.save()
+            XCTAssertNil(diff.saveError, label)
+            XCTAssertEqual(try Data(contentsOf: path), expected, label)
+            let indexAfter = GitCommandExecution.runData(["show", ":" + path.lastPathComponent], in: directory.path)
+            XCTAssertEqual(indexAfter.status, 0)
+            XCTAssertEqual(indexAfter.stdout, indexBefore.stdout, label)
+            print("AUDIT_DIFF_FOLDED_COMMAND action=\(label) fullDocumentBytes=\(expected.count) undoRedoAndSave=true")
+        }
+    }
+
     func testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1483,7 +3573,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(tab.isDirty)
         XCTAssertFalse(tab.showsCanonicalComparison)
         XCTAssertFalse(editor.textView.editingFolds.isEmpty,
-                       "native fold mapping: \(foldMapping.count), dirty: \(tab.isDirty), editing: \(tab.isEditing), canonical: \(tab.showsCanonicalComparison), source: \(tab.editDecorations.editSnapshotOffsets.count)")
+                       "native fold mapping: \(foldMapping.count), dirty: \(tab.isDirty), editing: \(tab.isEditing), canonical: \(tab.showsCanonicalComparison), source: \(tab.editDecorations.rows.count)")
         XCTAssertTrue(editor.decorations.rows.contains { $0.collapsed != nil })
         editor.layoutSubtreeIfNeeded()
         editor.scrollView.layoutSubtreeIfNeeded()
@@ -1571,7 +3661,7 @@ final class NativeDiffTabTests: XCTestCase {
                           "Only the editable source owns all physical lines")
         XCTAssertEqual(editor.textView.string, modified)
         let content = editor.textView.nativeContentManager
-        let offset = tab.editDecorations.editSnapshotOffsets[599]
+        let offset = try XCTUnwrap(editor.textView.liveGitOffset(forLine: 599))
         let sourceRange = try XCTUnwrap(NSTextRange(NSRange(location: offset, length: 1), in: content))
         let layout = editor.textView.nativeLayoutManager
         layout.ensureLayout(for: sourceRange)
@@ -1730,7 +3820,7 @@ final class NativeDiffTabTests: XCTestCase {
                       ])]),
             ]
         )
-        pane.setEditingFolds(folds, lineOffsets: offsets, baseDecorations: base, revision: 1)
+        pane.setEditingFolds(folds, baseDecorations: base, revision: 1)
         pane.layoutSubtreeIfNeeded()
         pane.scrollToRow(250)
         pane.layoutSubtreeIfNeeded()
@@ -1780,7 +3870,7 @@ final class NativeDiffTabTests: XCTestCase {
         pane.setEditBufferText(after)
         let starts = core.newLines.map(\.utf16Range.location)
         pane.setEditingFolds(
-            folds, lineOffsets: starts,
+            folds,
             baseDecorations: .edit(state: state, snapshotOffsets: starts,
                                    lineCount: starts.count, ghostBlocks: [
                 .init(anchorLine: 400, firstOldLine: 401,
@@ -1853,7 +3943,11 @@ final class NativeDiffTabTests: XCTestCase {
             .paragraphStyle, at: starts[1], effectiveRange: nil
         ) as? NSParagraphStyle)
         XCTAssertEqual(lastStyle.lineBreakMode, .byTruncatingTail)
-        XCTAssertGreaterThan(lastStyle.paragraphSpacingBefore, 0)
+        XCTAssertEqual(lastStyle.paragraphSpacingBefore, 0, accuracy: 0.5,
+                       "Fixed LF draws deleted rows using the same virtual row coordinates")
+        XCTAssertEqual(pane.decorations.positionedGhosts.first?.visibleStartRow, 1)
+        XCTAssertGreaterThanOrEqual(editor.overrideContentHeight ?? 0,
+                                    CGFloat(pane.decorations.rows.count + 1) * style.maximumLineHeight)
 
         pane.applyTypography(font: font, paragraphStyle: style, textColor: .black)
         XCTAssertEqual(editor.defaultParagraphStyle?.lineBreakMode, .byTruncatingTail)
@@ -1893,7 +3987,10 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(editor.frame.width, 12_288, accuracy: 1)
         let before = try XCTUnwrap(editor.textStorage?.attribute(
             .paragraphStyle, at: 9_001, effectiveRange: nil) as? NSParagraphStyle)
-        XCTAssertGreaterThan(before.paragraphSpacingBefore, 0)
+        XCTAssertEqual(before.paragraphSpacingBefore, 0, accuracy: 0.5,
+                       "Fixed LF must reserve removed rows through virtual geometry")
+        XCTAssertEqual(pane.decorations.positionedGhosts.first?.visibleStartRow, 1,
+                       "Virtual deletion must retain its original source position")
         for mode in [LongLineDisplayWidth.expanded, .showAll, .compact, .standard] {
             pane.applyTypography(font: font, paragraphStyle: style, textColor: .black,
                                  longLineDisplayWidth: mode)
@@ -1903,8 +4000,10 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertLessThanOrEqual(editor.frame.width, max(680, actual) + 1)
             let after = try XCTUnwrap(editor.textStorage?.attribute(
                 .paragraphStyle, at: 9_001, effectiveRange: nil) as? NSParagraphStyle)
-            XCTAssertEqual(after.paragraphSpacingBefore, before.paragraphSpacingBefore,
-                           "Ghost spacing must survive \(mode)")
+            XCTAssertEqual(after.paragraphSpacingBefore, 0, accuracy: 0.5,
+                           "Deleted rows belong to virtual geometry, not paragraph styles")
+            XCTAssertEqual(pane.decorations.positionedGhosts.first?.visibleStartRow, 1,
+                           "Changing line width must not move the removed source row")
             XCTAssertEqual(editor.text, full)
             if mode == .showAll {
                 XCTAssertTrue(editor.wrapsLines)
@@ -2101,14 +4200,18 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.text, "")
         pane.setEditBufferText("restored\n")
         XCTAssertNil(pane.textView.overrideContentHeight,
-                     "Typing into the empty editor must remove its virtual ghost height")
+                     "Replacing source bytes must retire the previous file's ghost height")
+        XCTAssertTrue(pane.decorations.rows.isEmpty)
+        XCTAssertTrue(pane.decorations.ghostsByAnchor.isEmpty)
+        XCTAssertTrue(pane.textView.editingFolds.isEmpty)
         pane.setEditBufferText("")
-        XCTAssertNotNil(pane.textView.overrideContentHeight)
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "A second blank document must not resurrect the previous file's ghosts")
         pane.decorations = .empty
         XCTAssertNil(pane.textView.overrideContentHeight)
     }
 
-    func testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR() throws {
+    func testNativeCRGhostSpacingUsesVirtualRowsWithoutMutatingParagraphs() throws {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         pane.applyTypography(
@@ -2137,9 +4240,9 @@ final class NativeDiffTabTests: XCTestCase {
         let secondStyle = try XCTUnwrap(
             attributed.attribute(.paragraphStyle, at: 6, effectiveRange: nil) as? NSParagraphStyle
         )
-        XCTAssertGreaterThan(firstStyle.paragraphSpacingBefore, 0)
+        XCTAssertEqual(firstStyle.paragraphSpacingBefore, 0)
         XCTAssertEqual(secondStyle.paragraphSpacingBefore, 0,
-                       "One Git deletion must not insert ghost spacing into every native CR paragraph")
+                       "Native fixed geometry must reserve ghost rows without paragraph spacing")
 
         pane.decorations = .edit(
             state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
@@ -2158,7 +4261,8 @@ final class NativeDiffTabTests: XCTestCase {
         )
         XCTAssertEqual(firstAtEnd.paragraphSpacingBefore, 0)
         XCTAssertEqual(firstAtEnd.paragraphSpacing, 0)
-        XCTAssertGreaterThan(lastAtEnd.paragraphSpacing, 0)
+        XCTAssertEqual(lastAtEnd.paragraphSpacing, 0,
+                       "End-of-file deletion must use virtual fixed rows, not native spacing")
 
         pane.decorations = .edit(
             state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
@@ -2225,6 +4329,86 @@ final class NativeDiffTabTests: XCTestCase {
         pane.textView.undoManager?.undo()
         XCTAssertFalse(pane.textView.hasNativeNonLFSeparators,
                        "Undo must restore the ordinary LF layout mapping")
+    }
+
+    func testLiveCRLFBoundaryChangeSwitchesBetweenFixedAndNativeParagraphGeometry() throws {
+        let source = "alpha\r\nbeta\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 740, height: 310),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        let starts = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        pane.setEditingFolds(
+            [],
+            baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+            revision: 1
+        )
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Pure LF and CRLF text should use fixed native fragment geometry")
+
+        // Replacing the LF after CR creates a bare CR native paragraph.
+        pane.textView.insertText("x", replacementRange: NSRange(location: 6, length: 1))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Unwrapped native CR paragraphs must reuse the exact native line index")
+        XCTAssertEqual(pane.textView.lineNumber(atUTF16Offset: 6), 2,
+                       "A bare CR creates an additional native paragraph, not another Git LF line")
+
+        pane.textView.undoManager?.undo()
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.string, source)
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "Undo must restore the fast, accurate LF/CRLF layout owner")
+    }
+
+    func testRemovingBareCRWhileOtherNativeSeparatorsRemainUpdatesScrollExtent() {
+        let source = (0..<80).map { "part\($0)" }.joined(separator: "\r") + "\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 740, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let rowHeight = DiffTypography.paragraphStyle(for: font).maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        pane.setEditBufferText(source)
+        let starts = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        pane.setEditingFolds([],
+                             baseDecorations: .edit(
+                                 state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                                 snapshotOffsets: starts, lineCount: starts.count, ghostBlocks: []),
+                             revision: 1)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+        let initialHeight = pane.textView.frame.height
+        XCTAssertGreaterThan(initialHeight, 70 * rowHeight)
+
+        pane.textView.insertText("", replacementRange: NSRange(location: 5, length: 1))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators,
+                      "Other bare CR paragraphs still require native geometry")
+        XCTAssertLessThan(pane.textView.frame.height, initialHeight - rowHeight / 2,
+                          "Deleting a bare CR must invalidate the measured native height")
+        pane.textView.undoManager?.undo()
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.string, source)
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: rowHeight)
     }
 
     func testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight() {
@@ -2313,6 +4497,78 @@ final class NativeDiffTabTests: XCTestCase {
             self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == display.unifiedText.string
         }
+    }
+
+    func testSupersededGitReadCancelsActualBackendWork() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.holdNextGitTree()
+        let tab = DiffTab(repoRoot: "/fixture", path: "paused.txt", source: .staged,
+                          untracked: false, origPath: nil, backend: backend,
+                          workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait({ await backend.heldGitStats().active == 1 }, timeout: 3)
+        let started = Date()
+        tab.reload()
+        try await wait({ await backend.heldGitStats().cancelled == 1 }, timeout: 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "Superseded Git I/O must stop, not just discard the eventual result")
+        try await wait({ !tab.isLoading }, timeout: 3)
+        let stats = await backend.heldGitStats()
+        XCTAssertEqual(stats.active, 0)
+        XCTAssertNil(tab.error)
+    }
+
+    func testClosingDiffCancelsActualBackendReadWithoutRetainingTab() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.holdNextGitTree()
+        weak var weakTab: DiffTab?
+        do {
+            let tab = DiffTab(repoRoot: "/fixture", path: "paused.txt", source: .staged,
+                              untracked: false, origPath: nil, backend: backend,
+                              workspaceIdentity: nil, preferences: try isolatedPreferences())
+            weakTab = tab
+            try await wait({ await backend.heldGitStats().active == 1 }, timeout: 3)
+        }
+        let started = Date()
+        try await wait({ await backend.heldGitStats().cancelled == 1 }, timeout: 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        XCTAssertNil(weakTab, "A closed Diff tab must release its owner and background work")
+    }
+
+    func testConcurrentStagedHeadIndexMetadataUsesOneRepositorySnapshot() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "staged-snapshot.txt"
+        let path = root.appendingPathComponent(name)
+        func command(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try Data("before\n".utf8).write(to: path)
+        _ = command(["add", "--", name])
+        _ = command(["commit", "-qm", "before"])
+        let beforeCommit = command(["rev-parse", "HEAD"])
+        try Data("after\n".utf8).write(to: path)
+        _ = command(["add", "--", name])
+        _ = command(["commit", "-qm", "after"])
+        let afterCommit = command(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(beforeCommit, afterCommit)
+        _ = command(["reset", "--hard", beforeCommit])
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"], in: root.path).status, 0)
+
+        let backend = StagedTransitionBackend(root: root.path, nextCommit: afterCommit)
+        let tab = DiffTab(repoRoot: root.path, path: name, source: .staged,
+                          untracked: false, origPath: nil, backend: backend,
+                          workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait({ !tab.isLoading }, timeout: 20)
+        let didSwitch = await backend.didSwitch()
+        XCTAssertTrue(didSwitch)
+        XCTAssertEqual(command(["rev-parse", "HEAD"]), afterCommit)
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--quiet"], in: root.path).status, 0)
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.oldContent, "after\n", "The old HEAD must be rejected after the reset")
+        XCTAssertEqual(tab.newContent, "after\n")
+        XCTAssertFalse(tab.hasChanges, "Neither clean repository state has a staged diff")
     }
 
     func testStagedConflictWithoutStageZeroIsNotADeletion() async throws {
@@ -2415,6 +4671,33 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(tab.newContent, "")
     }
 
+    func testSelectedGitBatchRejectsInvalidTypeMissingOIDAndOverLimitHeader() async throws {
+        let indexOID = String(repeating: "b", count: 40)
+        let cases: [(String, Data, String)] = [
+            ("wrong type", Data("\(indexOID) tree 7\nindexA\n\n".utf8),
+             String(localized: "Unable to read Git content", table: "Git")),
+            ("missing OID", Data("\(indexOID) missing\n".utf8),
+             String(localized: "Unable to read Git content", table: "Git")),
+            ("mismatched OID", Data("\(String(repeating: "e", count: 40)) blob 7\nindexA\n\n".utf8),
+             String(localized: "Unable to read Git content", table: "Git")),
+            ("over 5MiB", Data("\(indexOID) blob \(5 * 1024 * 1024 + 1)\n".utf8),
+             String(localized: "File is too large to diff", table: "Git")),
+            ("trailing bytes", Data("\(indexOID) blob 7\nindexA\n\nextra".utf8),
+             String(localized: "Incomplete Git content", table: "Git")),
+        ]
+        for (name, bytes, expected) in cases {
+            let backend = DiffWorkspaceFixture()
+            await backend.simulateBatchResponse(bytes)
+            let tab = DiffTab(repoRoot: "/fixture", path: "stable.txt", source: .staged,
+                              untracked: false, origPath: nil, backend: backend,
+                              workspaceIdentity: nil, preferences: try isolatedPreferences())
+            try await wait({ !tab.isLoading }, timeout: 5)
+            XCTAssertEqual(tab.error, expected, name)
+            XCTAssertFalse(tab.hasLoadedContent, name)
+            XCTAssertFalse(tab.hasChanges, name)
+        }
+    }
+
     func testFoldingPreviousDisplayCannotOverrideNewLoadedDiff() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2453,7 +4736,7 @@ final class NativeDiffTabTests: XCTestCase {
 
     func testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob() async throws {
         let backend = DiffWorkspaceFixture()
-        await backend.simulateIndexChangeAfterSize()
+        await backend.simulateIndexChangeDuringBatch()
         let domain = "bailey-diff-index-race-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
@@ -2465,8 +4748,13 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { !tab.isLoading }
         XCTAssertNil(tab.error)
         XCTAssertEqual(tab.oldContent, "head\n")
-        XCTAssertEqual(tab.newContent, "indexA\n",
-                       "One stage read must keep the OID captured by metadata despite a later index mutation")
+        XCTAssertEqual(tab.newContent, "indexB\n",
+                       "A moved index must reload rather than publish the prior staged generation")
+        let selected = await backend.selectedBatchOIDs()
+        XCTAssertTrue(selected.contains(String(repeating: "b", count: 40)),
+                      "The original read must still resolve the immutable first-stage OID")
+        XCTAssertTrue(selected.contains(String(repeating: "c", count: 40)),
+                      "The coherent reload must consume the final index OID")
     }
 
     func testCanonicalEquivalentEditDuringDiffWriteRemainsDirty() async throws {
@@ -2478,10 +4766,10 @@ final class NativeDiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults))
         try await wait { !diff.isLoading }
-        diff.updateEditedContent("café")
+        try replaceNativeDiffText(diff, with: "café")
         let saving = Task { await diff.save() }
         try await wait { await backend.writing }
-        diff.updateEditedContent("cafe\u{301}")
+        try replaceNativeDiffText(diff, with: "cafe\u{301}")
         await backend.finishWrite()
         await saving.value
         let stored = await backend.stored()
@@ -2541,7 +4829,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(tab.newContent, changed)
         XCTAssertTrue(tab.hasChanges)
         XCTAssertTrue(tab.isEditing)
-        tab.updateEditedContent(changed + "saved\n")
+        try replaceNativeDiffText(tab, with: changed + "saved\n")
         await tab.save()
         XCTAssertNil(tab.saveError)
         XCTAssertEqual(try Data(contentsOf: path), Data((changed + "saved\n").utf8))
@@ -2598,6 +4886,63 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
     }
 
+    func testNativeDiffDirtyTrackerDistinguishesInitialLoadManualRevertAndUnicode() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("native-dirty.swift")
+        let original = "LEFT_A RIGHT_B café\n"
+            + (0..<1_000).map { "let line\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: path)
+        let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                           source: .worktree, untracked: true, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        try await wait({ diff.canPresentNativeContent }, timeout: 15)
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+        XCTAssertFalse(diff.isDirty, "Loading the Git snapshot is not a native user edit")
+
+        let source = original as NSString
+        let first = source.range(of: "LEFT_A").location + "LEFT_".utf16.count
+        let second = source.range(of: "RIGHT_B").location + "RIGHT_".utf16.count
+        for (location, content, dirty) in [
+            (first, "X", true), (second, "Y", true),
+            (first, "A", true), (second, "B", false),
+        ] {
+            editor.insertText(content, replacementRange: NSRange(location: location, length: 1))
+            editor.breakUndoCoalescing()
+            XCTAssertEqual(diff.isDirty, dirty, "Manual reversals must match original bytes")
+        }
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+
+        editor.textStorage?.replaceCharacters(in: NSRange(location: first, length: 1), with: "Q")
+        XCTAssertTrue(diff.isDirty, "Direct TextKit edits can bypass shouldChangeTextIn")
+        editor.textStorage?.replaceCharacters(in: NSRange(location: first, length: 1), with: "A")
+        XCTAssertFalse(diff.isDirty)
+
+        let composed = (editor.string as NSString).range(of: "café")
+        editor.insertText("cafe\u{301}", replacementRange: composed)
+        XCTAssertTrue(diff.isDirty, "Canonical equality must not imply byte equality")
+        XCTAssertFalse(diff.editedNewContent.utf8.elementsEqual(original.utf8))
+        editor.insertText("café", replacementRange: NSRange(location: composed.location,
+                                                             length: "cafe\u{301}".utf16.count))
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(Data(editor.string.utf8), Data(original.utf8))
+
+        editor.insertText("saved", replacementRange: NSRange(location: original.utf16.count,
+                                                              length: 0))
+        XCTAssertTrue(diff.isDirty)
+        await diff.save()
+        XCTAssertNil(diff.saveError)
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data(editor.string.utf8))
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "-z"], in: directory.path).stdout, "")
+    }
+
     private func clickDiffSourceRow(_ pane: DiffCodePaneView, in window: NSWindow) async throws {
         try await wait {
             pane.layoutSubtreeIfNeeded()
@@ -2627,6 +4972,27 @@ final class NativeDiffTabTests: XCTestCase {
             clickCount: 1, pressure: 1
         ))
         pane.textView.mouseDown(with: click)
+    }
+
+    /// Exercise the storage event path even when the test does not mount SwiftUI.
+    private func replaceNativeDiffText(_ diff: DiffTab, with text: String,
+                                       file: StaticString = #filePath,
+                                       line: UInt = #line) throws {
+        let surface: DiffNativeSurface
+        if let existing = diff.nativeSurface {
+            surface = existing
+        } else {
+            surface = DiffNativeSurface(diff: diff)
+            surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+            diff.nativeSurface = surface
+        }
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true),
+                                   file: file, line: line)
+        editor.insertText(text, replacementRange: NSRange(location: 0,
+                                                          length: editor.string.utf16.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data(editor.string.utf8), Data(text.utf8), file: file, line: line)
     }
 
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {
@@ -2730,13 +5096,18 @@ final class NativeDiffTabTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
-        try await wait { diff.nativeSurface != nil }
-        let surface = try XCTUnwrap(diff.nativeSurface)
-        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.findNativeTextView(in: host, editable: true)?.window === window
+        }
+        let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        XCTAssertTrue(editor.window === window)
         XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(window.firstResponder === editor)
         editor.insertText("new🙂", replacementRange: NSRange(location: 0, length: 0))
         try await wait { diff.isDirty }
         XCTAssertTrue(window.makeFirstResponder(nil))
+        XCTAssertFalse(window.firstResponder === editor)
         try await wait { await backend.writing }
         await backend.finishWrite()
         try await wait { !diff.isDirty }
@@ -2750,12 +5121,12 @@ final class NativeDiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
         try await wait { !diff.isLoading && diff.isEditable }
-        diff.updateEditedContent("first 中文😀")
+        try replaceNativeDiffText(diff, with: "first 中文😀")
         let writesBeforeFocusLoss = await backend.writes
         XCTAssertEqual(writesBeforeFocusLoss, 0, "Editing alone must not automatically write")
         diff.autoSaveOnFocusLoss()
         try await wait { await backend.writing }
-        diff.updateEditedContent("second 中文🪨")
+        try replaceNativeDiffText(diff, with: "second 中文🪨")
         diff.autoSaveOnFocusLoss()
         await backend.finishWrite()
         try await wait {
@@ -2769,7 +5140,7 @@ final class NativeDiffTabTests: XCTestCase {
         let latest = await backend.stored()
         XCTAssertEqual(latest, Data("second 中文🪨".utf8))
 
-        diff.updateEditedContent("unsaved during outage")
+        try replaceNativeDiffText(diff, with: "unsaved during outage")
         diff.autoSaveOnFocusLoss()
         try await wait { await backend.writing }
         await backend.finishWrite(failing: true)
@@ -2820,7 +5191,7 @@ final class NativeDiffTabTests: XCTestCase {
         let pane = PaneTab(content: .diff(worktree))
         let dirty = expectation(description: "Diff dirty propagates through the existing pane")
         withObservationTracking({ _ = pane.content.isDirty }) { dirty.fulfill() }
-        worktree.updateEditedContent("saved😀\r\n")
+        try replaceNativeDiffText(worktree, with: "saved😀\r\n")
         await fulfillment(of: [dirty], timeout: 1)
         XCTAssertEqual(worktree.newContent, worktreeText)
         await worktree.save()
@@ -2848,10 +5219,10 @@ final class NativeDiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
         try await wait { !diff.isLoading }
-        diff.updateEditedContent("first😀\r\n")
+        try replaceNativeDiffText(diff, with: "first😀\r\n")
         let saving = Task { await diff.save() }
         try await wait { await backend.writing }
-        diff.updateEditedContent("second🪨\r\n")
+        try replaceNativeDiffText(diff, with: "second🪨\r\n")
         await backend.finishWrite()
         await saving.value
         XCTAssertTrue(diff.isDirty)
@@ -3219,7 +5590,7 @@ final class NativeDiffTabTests: XCTestCase {
         let folds = DiffEditFold.sourceFolds(in: projection.unified,
                                               lineCount: core.newLines.count)
         editable.setEditingFolds(
-            folds, lineOffsets: offsets,
+            folds,
             baseDecorations: .edit(state: state, snapshotOffsets: offsets,
                                    lineCount: offsets.count, ghostBlocks: ghosts),
             revision: 1
@@ -3248,22 +5619,17 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(editable.textView.isEditable)
     }
 
-    func testVisibleSyntaxCapturesRemainAvailableBeyondWholeFileHighlightBudget() async throws {
+    func testLargeSourceVisibleSyntaxUsesProductionParser() async throws {
         let source = String(repeating: "let value = 42\n", count: 115_000)
-        XCTAssertGreaterThan(source.utf8.count, DiffSyntaxHighlighter.highlightByteLimit)
+        XCTAssertGreaterThan(source.utf8.count, 1_500_000)
         let resolved = await DiffSyntaxHighlighter.context(for: "large.swift")
         let context = try XCTUnwrap(resolved)
-        XCTAssertTrue(DiffSyntaxHighlighter.captures(text: source, context: context).isEmpty,
-                      "Unbounded captures should retain the existing whole-file resource limit")
         let started = CFAbsoluteTimeGetCurrent()
-        let visible = await Task.detached(priority: .userInitiated) {
-            DiffSyntaxHighlighter.captures(
-                text: source, context: context, ranges: [NSRange(location: 0, length: 30)]
-            )
-        }.value
+        let visible = await DiffSyntaxSource().captures(
+            text: source, context: context, ranges: [NSRange(location: 0, length: 30)])
         print("AUDIT_LARGE_DIFF_VISIBLE_SYNTAX bytes=\(source.utf8.count) milliseconds=\((CFAbsoluteTimeGetCurrent() - started) * 1_000)")
         XCTAssertFalse(visible.isEmpty,
-                       "Large files must still highlight the visible source even when full capture is skipped")
+                       "Large files must highlight the visible source through the production parser")
         XCTAssertTrue(visible.contains { NSLocationInRange(2, $0.range) })
     }
 
@@ -3303,12 +5669,178 @@ final class NativeDiffTabTests: XCTestCase {
         let afterReadonlyNewCount = await newParser.parseCount
         XCTAssertEqual(afterReadonlyOldCount, 1)
         XCTAssertEqual(afterReadonlyNewCount, 1)
-        let direct = DiffSyntaxHighlighter.captures(
+        let direct = DiffSyntaxOracle.captures(
             text: modified, context: context,
             ranges: DiffSyntaxHighlighter.visibleRanges(in: projection.splitRight, source: .new)
         )
         XCTAssertEqual(readonly.new.map(\.range), direct.map(\.range))
         XCTAssertEqual(readonly.new.map(\.name), direct.map(\.name))
+    }
+
+    func testVisibleSyntaxUpToFiveMiBReusesOneTreeAcrossThirtyFoldQueries() async throws {
+        let resolved = await DiffSyntaxHighlighter.context(for: "large.swift")
+        let context = try XCTUnwrap(resolved)
+        let line = "let value = 123 // comment\n"
+        let bytesPerLine = line.utf8.count
+        for targetBytes in [1_999_998, 2_000_010, 5 << 20] {
+            let lines = targetBytes / bytesPerLine
+            let source = String(repeating: line, count: lines)
+                + String(repeating: " ", count: targetBytes - lines * bytesPerLine)
+            XCTAssertEqual(source.utf8.count, targetBytes)
+            let spacing = max(1, lines / 100)
+            let disjoint = (0..<100).map { index in
+                NSRange(location: index * spacing * line.utf16.count,
+                        length: line.utf16.count - 1)
+            }
+            let syntax = DiffSyntaxSource()
+            let started = CFAbsoluteTimeGetCurrent()
+            let first = await syntax.captures(text: source, context: context,
+                                              ranges: [disjoint[0]])
+            let coldMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            XCTAssertFalse(first.isEmpty)
+            let initialParseCount = await syntax.parseCount
+            XCTAssertEqual(initialParseCount, 1)
+            for count in [1, 10, 100] {
+                let ranges = Array(disjoint.prefix(count))
+                let began = CFAbsoluteTimeGetCurrent()
+                let result = await syntax.captures(text: source, context: context, ranges: ranges)
+                let seen = await syntax.parseCount
+                guard seen == 1 else {
+                    XCTFail("Repeated unfold reparsed \(targetBytes) bytes: parseCount=\(seen)")
+                    return
+                }
+                for _ in 1..<30 {
+                    _ = await syntax.captures(text: source, context: context, ranges: ranges)
+                }
+                let elapsed = (CFAbsoluteTimeGetCurrent() - began) * 1_000 / 30
+                XCTAssertFalse(result.isEmpty)
+                let warmParseCount = await syntax.parseCount
+                XCTAssertEqual(warmParseCount, 1)
+                print("AUDIT_DIFF_SYNTAX_FIVE_MIB bytes=\(targetBytes) ranges=\(count) coldMs=\(coldMs) warmMeanMs=\(elapsed) parseCount=1")
+            }
+            // An independent copy has different storage but identical source
+            // bytes, so it must reuse exactly the same tree too.
+            let independent = String(decoding: Data(source.utf8), as: UTF8.self)
+            _ = await syntax.captures(text: independent, context: context,
+                                      ranges: [disjoint[0]])
+            let copyParseCount = await syntax.parseCount
+            XCTAssertEqual(copyParseCount, 1)
+        }
+        let overLimit = String(repeating: line, count: ((5 << 20) / bytesPerLine) + 1)
+        XCTAssertGreaterThan(overLimit.utf8.count, 5 << 20)
+        let uncached = DiffSyntaxSource()
+        _ = await uncached.captures(text: overLimit, context: context,
+                                    ranges: [NSRange(location: 0, length: line.utf16.count - 1)])
+        _ = await uncached.captures(text: overLimit, context: context,
+                                    ranges: [NSRange(location: 0, length: line.utf16.count - 1)])
+        let uncachedParseCount = await uncached.parseCount
+        XCTAssertEqual(uncachedParseCount, 2,
+                       "Above the viewer's 5 MiB limit, no syntax tree is retained")
+    }
+
+    func testThirtyColdParsesAndTenSyntaxOwnersReleaseTheirTrees() async throws {
+        final class WeakSource {
+            weak var value: DiffSyntaxSource?
+            init(_ value: DiffSyntaxSource) { self.value = value }
+        }
+        func residentKiB() throws -> Int {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/ps")
+            process.arguments = ["-o", "rss=", "-p", String(getpid())]
+            let stdout = Pipe()
+            process.standardOutput = stdout
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let result = stdout.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+            return Int(String(decoding: result, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
+        func allocatedKiB() -> Int {
+            var stats = malloc_statistics_t()
+            malloc_zone_statistics(malloc_default_zone(), &stats)
+            return Int(stats.size_in_use) / 1_024
+        }
+        let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
+        let context = try XCTUnwrap(resolved)
+        let source = String(repeating: "let value = 123 // comment\n", count: 77_000)
+        XCTAssertGreaterThan(source.utf8.count, 2_000_000)
+        let firstLine = [NSRange(location: 0, length: 25)]
+        let baseline = try residentKiB()
+        let baselineAllocated = allocatedKiB()
+        var owners: [DiffSyntaxSource] = []
+        var weakOwners: [WeakSource] = []
+        var coldTimes: [Double] = []
+        for i in 0..<30 {
+            let syntax = DiffSyntaxSource()
+            let started = CFAbsoluteTimeGetCurrent()
+            let matches = await syntax.captures(text: source, context: context, ranges: firstLine)
+            coldTimes.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+            XCTAssertFalse(matches.isEmpty)
+            let count = await syntax.parseCount
+            XCTAssertEqual(count, 1)
+            if i < 10 {
+                // Each tab holds a distinct parser owner, not a global cache.
+                owners.append(syntax)
+                weakOwners.append(WeakSource(syntax))
+            }
+        }
+        XCTAssertEqual(owners.count, 10)
+        XCTAssertTrue(weakOwners.allSatisfy { $0.value != nil })
+        let retained = try residentKiB()
+        let retainedAllocated = allocatedKiB()
+        owners.removeAll()
+        XCTAssertTrue(weakOwners.allSatisfy { $0.value == nil },
+                      "Closing all ten tabs must release their parser trees and bytes")
+        let released = try residentKiB()
+        let releasedAllocated = allocatedKiB()
+        XCTAssertGreaterThan(retainedAllocated - baselineAllocated, 128 * 1_024,
+                             "Ten actual syntax owners must retain observable live heap")
+        XCTAssertLessThan(releasedAllocated - baselineAllocated, 32 * 1_024,
+                          "Closing tabs must release tree allocations, not merely weak references")
+        coldTimes.sort()
+        print("AUDIT_DIFF_SYNTAX_10_OWNERS bytes=\(source.utf8.count) coldSamples=30 coldMedianMs=\(coldTimes[15]) coldP95Ms=\(coldTimes[28]) rssBaselineKiB=\(baseline) rssTenOwnersKiB=\(retained) rssAfterReleaseKiB=\(released) mallocBaselineKiB=\(baselineAllocated) mallocTenOwnersKiB=\(retainedAllocated) mallocAfterReleaseKiB=\(releasedAllocated) releasedOwners=10")
+    }
+
+    func testDisjointVisibleSyntaxQueryCostAndReuse() async throws {
+        let resolved = await DiffSyntaxHighlighter.context(for: "fixture.swift")
+        let context = try XCTUnwrap(resolved)
+        let source = (0..<24_000).map { "let value\($0) = \($0) // comment\n" }.joined()
+        let lines = DiffLineSplitter.lines(of: source).lines
+        XCTAssertEqual(lines.count, 24_000)
+        let disjoint = (0..<1_000).map { lines[$0 * 24].utf16Range }
+        let syntax = DiffSyntaxSource()
+        let independentCopy = String(decoding: Data(source.utf8), as: UTF8.self)
+        var equalityTimes: [Double] = []
+        for _ in 0..<17 {
+            let compared = CFAbsoluteTimeGetCurrent()
+            XCTAssertTrue(source.utf8.elementsEqual(independentCopy.utf8))
+            equalityTimes.append((CFAbsoluteTimeGetCurrent() - compared) * 1_000)
+        }
+        equalityTimes.sort()
+        print("AUDIT_DIFF_VISIBLE_QUERY byteComparisonMedianMs=\(equalityTimes[8])")
+        let initial = CFAbsoluteTimeGetCurrent()
+        let first = await syntax.captures(text: source, context: context, ranges: [disjoint[0]])
+        let cold = (CFAbsoluteTimeGetCurrent() - initial) * 1_000
+        XCTAssertFalse(first.isEmpty)
+        let initialParseCount = await syntax.parseCount
+        XCTAssertEqual(initialParseCount, 1)
+        for count in [1, 10, 100, 1_000] {
+            let start = CFAbsoluteTimeGetCurrent()
+            let current = await syntax.captures(
+                text: source, context: context, ranges: Array(disjoint.prefix(count))
+            )
+            let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+            let parseCount = await syntax.parseCount
+            XCTAssertEqual(parseCount, 1)
+            let shared = current.filter { $0.range.location < NSMaxRange(disjoint[0]) }
+            XCTAssertEqual(shared.map(\.range), first.map(\.range))
+            XCTAssertEqual(shared.map(\.name), first.map(\.name))
+            XCTAssertGreaterThanOrEqual(current.count, count)
+            print("AUDIT_DIFF_VISIBLE_QUERY ranges=\(count) warmMs=\(elapsed) captures=\(current.count)")
+        }
+        print("AUDIT_DIFF_VISIBLE_QUERY coldMs=\(cold) sourceBytes=\(source.utf8.count)")
     }
 
     func testDiffSyntaxReusesParseTreeAcrossFoldExpansionAndInvalidatesOnByteChanges() async throws {
@@ -3340,7 +5872,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(warm.isEmpty)
         let afterExpansion = await cached.parseCount
         XCTAssertEqual(afterExpansion, 1, "Unfolding may query new rows, but may not reparse source")
-        let direct = DiffSyntaxHighlighter.captures(
+        let direct = DiffSyntaxOracle.captures(
             text: source, context: context, ranges: expandedRanges
         )
         XCTAssertEqual(warm.map(\.range), direct.map(\.range))
@@ -3394,13 +5926,13 @@ final class NativeDiffTabTests: XCTestCase {
                     in: computation.splitRight, source: .new
                 )
                 let oldAll = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: source, context: context))
+                    DiffSyntaxOracle.captures(text: source, context: context))
                 let newAll = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: after, context: context))
-                let oldVisible = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: source, context: context, ranges: oldRanges))
-                let newVisible = DiffSyntaxHighlighter.colors(for:
-                    DiffSyntaxHighlighter.captures(text: after, context: context, ranges: newRanges))
+                    DiffSyntaxOracle.captures(text: after, context: context))
+                let oldVisible = DiffSyntaxHighlighter.colors(for: await DiffSyntaxSource().captures(
+                    text: source, context: context, ranges: oldRanges))
+                let newVisible = DiffSyntaxHighlighter.colors(for: await DiffSyntaxSource().captures(
+                    text: after, context: context, ranges: newRanges))
                 let plain: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.textColor]
                 for document in [computation.unified, computation.splitLeft, computation.splitRight] {
                     let full = DiffSyntaxHighlighter.attributedDocument(
@@ -3431,9 +5963,9 @@ final class NativeDiffTabTests: XCTestCase {
         ] {
             let resolved = await DiffSyntaxHighlighter.context(for: path)
             let context = try XCTUnwrap(resolved, "Missing grammar for \(path)")
-            let captures = await Task.detached(priority: .userInitiated) {
-                DiffSyntaxHighlighter.captures(text: source, context: context)
-            }.value
+            let captures = await DiffSyntaxSource().captures(
+                text: source, context: context,
+                ranges: [NSRange(location: 0, length: source.utf16.count)])
             XCTAssertFalse(captures.isEmpty, "Syntax parser returned no highlights for \(path)")
             XCTAssertTrue(captures.allSatisfy {
                 $0.range.length > 0 && NSMaxRange($0.range) <= source.utf16.count
@@ -3526,7 +6058,7 @@ final class NativeDiffTabTests: XCTestCase {
         normal.autoSaveSuspendedForClose = true
         try await wait { normal.editDecorations.rows.filter { $0.kind == .added }.count == 1 }
         let edited = "alpha\r\n中文👋 edited again\r\nlast\r\n"
-        normal.updateEditedContent(edited)
+        try replaceNativeDiffText(normal, with: edited)
         try await wait {
             normal.editDecorations.rows.filter { $0.kind == .added }.count == 1
                 && normal.editedNewContent == edited
@@ -3731,6 +6263,97 @@ final class NativeDiffTabTests: XCTestCase {
         }.count, 1)
     }
 
+    func testConcurrentGitStatusAndNestedMarkdownDiffReachNativeContent() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = ".github/features/git-diff-quality-performance/audit-p3.md"
+        let file = root.appendingPathComponent(name)
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("# Audit P3\n\nInitial decision.\n".utf8).write(to: file)
+        for args in [["add", "--", name], ["commit", "-qm", "baseline"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        for revision in 0..<31 {
+            let result = GitCommandExecution.run(
+                ["commit", "--allow-empty", "-qm", "history-\(revision)"], in: root.path
+            )
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let changed = "# Audit P3\n\nInitial decision.\n"
+            + (0..<75).map { "Finding \($0): verified.\n" }.joined()
+        try Data(changed.utf8).write(to: file)
+
+        let status = GitStatusModel()
+        status.sync(root: root.path)
+        status.refresh()
+        let diff = DiffTab(repoRoot: root.path, path: name, source: .worktree,
+                           untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        try await wait({
+            status.hasResolvedStatus && status.isRepo && !status.isRefreshing
+                && diff.canPresentNativeContent
+        }, timeout: 10)
+        XCTAssertNil(diff.error)
+        XCTAssertTrue(diff.hasChanges)
+        XCTAssertEqual(diff.newContent, changed)
+        XCTAssertTrue(status.changedEntries.contains { $0.path == name })
+
+        let surface = DiffNativeSurface(diff: diff)
+        diff.nativeSurface = surface
+        surface.frame = CGRect(x: 0, y: 0, width: 850, height: 550)
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        XCTAssertTrue(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .contains { !$0.isHidden && $0.textView.string.contains("Finding 74: verified.") })
+        diff.retireNativeSurface()
+    }
+
+    func testGitCleanFilterCannotPublishStaleRawBytesWhenCanonicalOIDIsUnchanged() async throws {
+        for source: DiffTab.Source in [.worktree, .revisionWorktree(hash: "HEAD")] {
+            let root = try repository()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let file = root.appendingPathComponent("filtered.txt")
+            let script = root.appendingPathComponent("clean-once.sh")
+            let marker = root.appendingPathComponent(".git/clean-ran")
+            try Data("original\n".utf8).write(to: file)
+            try Data("filtered.txt filter=rewrite\n".utf8)
+                .write(to: root.appendingPathComponent(".gitattributes"))
+            for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+                let result = GitCommandExecution.run(args, in: root.path)
+                XCTAssertEqual(result.status, 0, result.stderr)
+            }
+            try Data("first raw\n".utf8).write(to: file)
+            try Data("""
+            #!/bin/sh
+            if [ ! -e '\(marker.path)' ]; then
+                : > '\(marker.path)'
+                printf 'second raw\\n' > '\(file.path)'
+            fi
+            printf 'same canonical\\n'
+            """.utf8).write(to: script)
+            let configured = GitCommandExecution.run(
+                ["config", "filter.rewrite.clean", "sh '\(script.path)'"], in: root.path
+            )
+            XCTAssertEqual(configured.status, 0, configured.stderr)
+
+            let tab = DiffTab(repoRoot: root.path, path: "filtered.txt", source: source,
+                              untracked: false, origPath: nil,
+                              backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                              preferences: try isolatedPreferences())
+            try await wait({ !tab.isLoading && tab.display != nil }, timeout: 30)
+            XCTAssertNil(tab.error)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path),
+                          "The clean filter must actually rewrite the source during reload")
+            XCTAssertEqual(try Data(contentsOf: file), Data("second raw\n".utf8))
+            XCTAssertEqual(tab.newContent, "second raw\n",
+                           "A matching canonical Git OID cannot validate older raw worktree bytes")
+        }
+    }
+
     func testAuthorizedWindowsSSHGitReviewAndRawSaveMatchGitCleanRules() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Real SSH Git Review requires an explicitly selected test host")
@@ -3844,7 +6467,7 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(review.computation.unified.rows.filter { $0.kind == .added }.count, 1)
 
             XCTAssertTrue(filtered.isEditing)
-            filtered.updateEditedContent("changed again\nTRANSIENT\n")
+            try replaceNativeDiffText(filtered, with: "changed again\nTRANSIENT\n")
             await filtered.save()
             XCTAssertNil(filtered.saveError)
             let persisted = try await backend.read(path: root + "/filtered.txt", maxBytes: 128)
@@ -3886,7 +6509,7 @@ final class NativeDiffTabTests: XCTestCase {
                           preferences: try isolatedPreferences())
         try await wait { !tab.isLoading }
         XCTAssertFalse(tab.hasChanges)
-        tab.updateEditedContent(canonical)
+        try replaceNativeDiffText(tab, with: canonical)
         await tab.save()
         XCTAssertNil(tab.saveError)
         XCTAssertEqual(try Data(contentsOf: path), Data(canonical.utf8))
@@ -3896,7 +6519,7 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { !tab.isLoading && !tab.hasChanges }
         XCTAssertNil(tab.display, "Review must converge to Git's clean state after saving")
 
-        tab.updateEditedContent(checkedOut)
+        try replaceNativeDiffText(tab, with: checkedOut)
         tab.autoSaveOnFocusLoss()
         try await wait {
             !tab.isLoading && !tab.isDirty && !tab.hasChanges
@@ -4056,13 +6679,23 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
     func testEditableFoldAccessibilityFrameMatchesActualClickAfterScrolling() throws {
-        let old = (0..<900).map { "line \($0)\n" }.joined()
-        let modified = old.replacingOccurrences(of: "line 594\n", with: "changed 594\n")
+        let unchanged = (0..<900).map { "line \($0)\n" }.joined()
+        let old = "deleted before first line\n" + unchanged
+        let modified = unchanged.replacingOccurrences(of: "line 594\n", with: "changed 594\n")
             .replacingOccurrences(of: "line 617\n", with: "changed 617\n")
         let core = DiffCore.compute(oldText: old, newText: modified)
         let projection = DiffComputation.build(core: core, revealedLines: [])
         let offsets = core.newLines.map(\.utf16Range.location)
         let folds = DiffEditFold.sourceFolds(in: projection.unified, lineCount: offsets.count)
+        let oldText = old as NSString
+        let ghosts = projection.editState.ghosts.map { block in
+            DiffDecorations.GhostBlock(
+                anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                lines: block.lines.map { NSAttributedString(string: oldText.substring(with: $0.sourceRange)) }
+            )
+        }
+        XCTAssertTrue(ghosts.contains { $0.anchorLine == 0 },
+                      "The AX regression must include a genuine leading deletion")
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 750, height: 280),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -4076,14 +6709,18 @@ final class NativeDiffTabTests: XCTestCase {
                              textColor: .textColor)
         pane.setEditBufferText(modified)
         pane.setEditingFolds(
-            folds, lineOffsets: offsets,
+            folds,
             baseDecorations: .edit(state: projection.editState, snapshotOffsets: offsets,
-                                   lineCount: offsets.count, ghostBlocks: []),
+                                   lineCount: offsets.count, ghostBlocks: ghosts),
             revision: 1
         )
         pane.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(pane.textView.textContainerInset.height, 0,
+                             "The leading removed row must offset the native body")
         let gutter = try XCTUnwrap(pane.subviews.compactMap { $0 as? DiffGutterView }.first)
         let scroll = pane.scrollView.contentView
+        var expanded: DiffCollapsedRun?
+        pane.onExpandCollapsedRun = { expanded = $0 }
         for offset in [0.0, 50.0, 100.0] {
             pane.setVerticalScrollOffset(offset)
             pane.layoutSubtreeIfNeeded()
@@ -4103,8 +6740,16 @@ final class NativeDiffTabTests: XCTestCase {
                 let expected = row.frame.midY - scroll.bounds.origin.y
                 XCTAssertEqual(cursor.y, expected, accuracy: 2,
                                "A scrolled editable AX fold button must hit its actual separator")
+                XCTAssertEqual(button.accessibilityRole(), .button)
+                if expanded == nil {
+                    XCTAssertTrue(button.accessibilityPerformPress())
+                    XCTAssertEqual(expanded?.baselineRange,
+                                   pane.decorations.rows[row.index].collapsed?.baselineRange,
+                                   "AX Press must expand the same visible folded row")
+                }
             }
         }
+        XCTAssertNotNil(expanded, "At least one real folded row must have an AX Press action")
         XCTAssertEqual(pane.textView.string, modified)
     }
 
@@ -4254,7 +6899,7 @@ final class NativeDiffTabTests: XCTestCase {
         await backend.pauseOneRead()
         diff.reload()
         try await wait { await backend.reading }
-        diff.updateEditedContent("editing during read")
+        try replaceNativeDiffText(diff, with: "editing during read")
         await backend.finishRead(with: Data("stale result".utf8))
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertTrue(diff.isDirty)
@@ -4262,7 +6907,8 @@ final class NativeDiffTabTests: XCTestCase {
 
         XCTAssertFalse(diff.isLoading, "Invalidated read must release its loading state")
 
-        diff.updateEditedContent(baseline)
+        try replaceNativeDiffText(diff, with: baseline)
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(baseline.utf8))
         XCTAssertFalse(diff.isDirty)
         await backend.pauseOneRead()
         diff.reload()
@@ -4405,7 +7051,7 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { await backend.reading }
         XCTAssertTrue(diff.preferences === preferences)
         XCTAssertTrue(diff.isEditing, "A regular worktree is directly editable")
-        diff.updateEditedContent("current buffer")
+        try replaceNativeDiffText(diff, with: "current buffer")
         XCTAssertTrue(diff.isDirty)
         await backend.finishRead(with: Data("stale before editor appeared".utf8))
         try await wait { !diff.isLoading }

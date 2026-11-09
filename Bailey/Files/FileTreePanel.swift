@@ -541,7 +541,7 @@ private struct FileTreeRow: View {
         default: return false
         }
         guard let index = menu.items.firstIndex(where: {
-            $0.isEnabled && $0.accessibilityLabel() == title
+            $0.isEnabled && ($0.title == title || $0.title.hasPrefix(title + "\t"))
         }) else { return false }
         menu.performActionForItem(at: index)
         if let target = model.contextMenuTargetPath {

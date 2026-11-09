@@ -35,22 +35,38 @@ actor DiffSyntaxSource {
     private var cachedGrammar: Int?
     private var cachedTree: MutableTree?
     private(set) var parseCount = 0
+    // The Diff viewer never accepts text beyond 5 MiB. One tree per side
+    // lives only as long as its tab, avoiding full reparses on every unfold.
+    private let maxCachedTextBytes = 5 << 20
+
+    /// Shared Swift String storage proves byte identity in O(1). Unrelated
+    /// buffers still compare every UTF-8 byte: Swift String equality itself
+    /// can equate canonically equivalent but differently encoded Unicode.
+    private func matchesCachedBytes(_ text: String) -> Bool {
+        guard let cachedText else { return false }
+        let sameStorage = cachedText.utf8.withContiguousStorageIfAvailable { cached in
+            text.utf8.withContiguousStorageIfAvailable { current in
+                cached.baseAddress == current.baseAddress && cached.count == current.count
+            } ?? false
+        } ?? false
+        return sameStorage || cachedText.utf8.elementsEqual(text.utf8)
+    }
 
     func captures(
         text: String, context: DiffHighlightContext, ranges: [NSRange]
     ) -> [DiffCaptureRun] {
         guard !Task.isCancelled, !text.isEmpty, !ranges.isEmpty else { return [] }
         let unchanged = cachedGrammar == context.grammarIndex
-            && (cachedText?.utf8.elementsEqual(text.utf8) ?? false)
+            && matchesCachedBytes(text)
         if !unchanged {
             let parser = Parser()
             guard let grammar = SyntaxLanguage.parser(grammarIndex: context.grammarIndex),
                   (try? parser.setLanguage(grammar)) != nil,
                   let parsed = parser.parse(text), !Task.isCancelled else { return [] }
             parseCount += 1
-            // Retain bounded snapshots only. Large files still get visible
-            // highlights without keeping two multi-megabyte trees per tab.
-            if text.utf8.count <= 2_000_000 {
+            // Keep one bounded, tab-owned tree up to the viewer's actual
+            // 5 MiB text cap; above that, do not retain a syntax snapshot.
+            if text.utf8.count <= maxCachedTextBytes {
                 cachedText = text
                 cachedGrammar = context.grammarIndex
                 cachedTree = parsed
@@ -71,11 +87,6 @@ actor DiffSyntaxSource {
 }
 
 enum DiffSyntaxHighlighter {
-    /// Whole-file capture requests over multi-megabyte generated files are
-    /// skipped. Diff panes instead query their visible source ranges, even
-    /// when the underlying file is larger than this legacy full-pass budget.
-    nonisolated static let highlightByteLimit = 1_500_000
-
     /// Range-filter query captures to the source rows actually represented by
     /// the folded diff. Tree-sitter still parses the complete file for correct
     /// multiline syntax context; hidden source rows need no token attributes.
@@ -107,36 +118,14 @@ enum DiffSyntaxHighlighter {
         return DiffHighlightContext(grammarIndex: grammarIndex, query: query)
     }
 
-    /// Parse the real source for correct multiline syntax, but query only
-    /// source ranges projected into visible folded Git rows. Return Sendable
-    /// capture metadata without constructing a second colored document.
-    nonisolated static func captures(
-        text: String, context: DiffHighlightContext, ranges: [NSRange]? = nil
-    ) -> [DiffCaptureRun] {
-        guard !Task.isCancelled, !text.isEmpty,
-              ranges != nil || text.utf8.count <= highlightByteLimit else { return [] }
-        if let ranges, ranges.isEmpty { return [] }
-        let parser = Parser()
-        guard let grammar = SyntaxLanguage.parser(grammarIndex: context.grammarIndex) else {
-            return []
-        }
-        do {
-            try parser.setLanguage(grammar)
-        } catch {
-            return []
-        }
-        guard let tree = parser.parse(text), !Task.isCancelled else { return [] }
-        return queryCaptures(tree: tree, text: text, context: context, ranges: ranges)
-    }
-
     fileprivate nonisolated static func queryCaptures(
         tree: MutableTree, text: String, context: DiffHighlightContext,
-        ranges: [NSRange]?
+        ranges: [NSRange]
     ) -> [DiffCaptureRun] {
         guard !Task.isCancelled, let root = tree.rootNode else { return [] }
         let predicateContext = SwiftTreeSitter.Predicate.Context(string: text)
         var runs: [DiffCaptureRun] = []
-        for visible in ranges ?? [NSRange(location: 0, length: text.utf16.count)] {
+        for visible in ranges {
             guard !Task.isCancelled else { return [] }
             let cursor = context.query.execute(node: root, in: tree)
             cursor.setRange(visible)

@@ -118,7 +118,7 @@ struct DiffDecorations {
         var kind: DiffRowKind
         let oldLine: Int?
         let newLine: Int?
-        /// Word-level changed spans in *document* UTF-16 coordinates.
+        /// Review spans use document UTF-16; edit spans use source-line-relative UTF-16.
         let emphasis: [NSRange]
         let missingNewline: Bool
         /// Present on `.collapsed` separator rows.
@@ -151,11 +151,6 @@ struct DiffDecorations {
     /// buffer's offsets drift between recomputes and rows are addressed by
     /// paragraph counting instead.
     let lineStartOffsets: [Int]
-    /// Edit mode: the buffer snapshot's per-line start offsets, backing
-    /// paragraph-spacing application and emphasis geometry. Kept separate
-    /// from `lineStartOffsets` so row geometry stays paragraph-counted
-    /// against the live buffer.
-    var editSnapshotOffsets: [Int] = []
     /// Edit mode: ghost deletion blocks keyed by anchor paragraph.
     var ghostsByAnchor: [Int: GhostBlock] = [:]
     /// Virtual Git rows, including removed rows absent from the editable buffer.
@@ -212,12 +207,8 @@ struct DiffDecorations {
         var rows: [Row] = []
         rows.reserveCapacity(rowCount)
         for index in 0..<rowCount {
-            let emphasis = (state.addedEmphasis[index] ?? []).compactMap { range -> NSRange? in
-                guard index < snapshotOffsets.count else { return nil }
-                return NSRange(
-                    location: snapshotOffsets[index] + range.location, length: range.length
-                )
-            }
+            let emphasis = index < snapshotOffsets.count
+                ? (state.addedEmphasis[index] ?? []) : []
             rows.append(Row(
                 kind: added.contains(index) ? .added : .context,
                 oldLine: nil,
@@ -240,7 +231,6 @@ struct DiffDecorations {
             maxOldLine: maxOld,
             maxNewLine: rowCount
         )
-        decorations.editSnapshotOffsets = snapshotOffsets
         decorations.ghostsByAnchor = ghostsByAnchor
         var priorGhostRows = 0
         for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
@@ -291,22 +281,269 @@ struct DiffDecorations {
 
 // MARK: - Text view
 
+/// Pins each unwrapped Git LF paragraph to its known source row, rather than
+/// making TextKit estimate all preceding paragraph heights before scrolling.
+nonisolated private final class DiffFixedRowFragment: NSTextLayoutFragment {
+    var row = 0
+    var rowHeight: CGFloat = 0
+    var wrapped = false
+    var currentWrappedRow: (() -> Int)?
+
+    override var layoutFragmentFrame: CGRect {
+        var frame = super.layoutFragmentFrame
+        frame.origin.y = CGFloat(currentWrappedRow?() ?? row) * rowHeight
+        frame.size.height = CGFloat(wrapped ? max(1, textLineFragments.count) : 1) * rowHeight
+        return frame
+    }
+}
+
+/// Keep the complete writable NSTextStorage while allowing TextKit to skip
+/// whole hidden paragraph ranges. Its ordinary delegate filter still visited
+/// every hidden paragraph, making initial layout proportional to source size.
+nonisolated private final class FoldedDiffContentStorage: NSTextContentStorage {
+    var hiddenRanges: [Range<Int>] = []
+
+    override func enumerateTextElements(
+        from location: (any NSTextLocation)?,
+        options: NSTextContentManager.EnumerationOptions,
+        using block: (NSTextElement) -> Bool
+    ) -> (any NSTextLocation)? {
+        guard !hiddenRanges.isEmpty else {
+            return super.enumerateTextElements(from: location, options: options, using: block)
+        }
+        let reverse = options.contains(.reverse)
+        let base = documentRange.location
+        let endOffset = offset(from: base, to: documentRange.endLocation)
+        var cursor: any NSTextLocation = location ?? (reverse ? documentRange.endLocation : base)
+        while true {
+            let position = offset(from: base, to: cursor)
+            var low = 0
+            var high = hiddenRanges.count
+            while low < high {
+                let middle = (low + high) / 2
+                if reverse ? hiddenRanges[middle].lowerBound < position
+                    : hiddenRanges[middle].upperBound <= position {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            let next = reverse
+                ? (low > 0 ? hiddenRanges[low - 1] : nil)
+                : (low < hiddenRanges.count ? hiddenRanges[low] : nil)
+            if let next {
+                let within = reverse
+                    ? position > next.lowerBound && position <= next.upperBound
+                    : next.contains(position)
+                if within {
+                    let target = reverse ? next.lowerBound : min(next.upperBound, endOffset)
+                    if target == position { return cursor }
+                    guard let advanced = self.location(base, offsetBy: target) else { return cursor }
+                    cursor = advanced
+                    continue
+                }
+            }
+            var skippedTo: Int?
+            var stoppedByCaller = false
+            let edge = super.enumerateTextElements(from: cursor, options: options) { element in
+                guard let elementRange = element.elementRange else {
+                    let proceed = block(element)
+                    if !proceed { stoppedByCaller = true }
+                    return proceed
+                }
+                let start = offset(from: base, to: elementRange.location)
+                if let next, reverse ? next.contains(start) : start >= next.lowerBound {
+                    skippedTo = reverse ? next.lowerBound : min(next.upperBound, endOffset)
+                    return false
+                }
+                let proceed = block(element)
+                if !proceed { stoppedByCaller = true }
+                return proceed
+            }
+            if stoppedByCaller { return edge }
+            guard let skippedTo else { return edge }
+            guard let advanced = self.location(base, offsetBy: skippedTo) else { return edge }
+            cursor = advanced
+        }
+    }
+}
+
 /// The pane's text view expands collapsed-run separators on click instead
 /// of placing a caret in the separator row.
-final class DiffTextView: NativeCodeTextView, NSTextContentStorageDelegate {
-    private var nativeBreaksSnapshot: Bool?
+final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
+    override init(contentStorage storage: NSTextContentStorage = FoldedDiffContentStorage()) {
+        super.init(contentStorage: storage)
+    }
+
+    private var fixedLayoutRowHeight: CGFloat?
+    var layoutRowForUTF16: ((Int) -> Int)?
+    var ghostStartY: ((Int) -> CGFloat)?
+
+    func setFixedLayoutRowHeight(_ height: CGFloat?) {
+        guard fixedLayoutRowHeight != height else { return }
+        fixedLayoutRowHeight = height
+        nativeLayoutManager.delegate = height == nil ? nil : self
+        nativeLayoutManager.invalidateLayout(for: nativeLayoutManager.documentRange)
+    }
+
+    func textLayoutManager(_ textLayoutManager: NSTextLayoutManager,
+                           textLayoutFragmentFor location: any NSTextLocation,
+                           in textElement: NSTextElement) -> NSTextLayoutFragment {
+        guard let height = fixedLayoutRowHeight,
+              let rowForOffset = layoutRowForUTF16,
+              let range = textElement.elementRange else {
+            return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
+        }
+        let offset = nativeContentManager.offset(
+            from: nativeContentManager.documentRange.location, to: location
+        )
+        let fragment = DiffFixedRowFragment(textElement: textElement, range: range)
+        fragment.row = rowForOffset(offset)
+        fragment.rowHeight = height
+        fragment.wrapped = wrapsLines
+        if fragment.wrapped {
+            // TextKit can retain fragments built before the long-line prefix
+            // heights are measured. Their Y must follow the live row mapping.
+            fragment.currentWrappedRow = {
+                MainActor.assumeIsolated { rowForOffset(offset) }
+            }
+        }
+        return fragment
+    }
+
+    var onNativeParagraphGeometryChanged: (() -> Void)?
     private(set) var editingFolds: [DiffEditFold] = []
-    private var foldedLineOffsets: [Int] = []
+    private var foldedHiddenPrefix: [Int] = []
+    private var foldedNativeHiddenPrefix: [Int] = []
+    private var foldedGitLines: NativeTextLineIndex?
+    /// Git excludes the empty terminal line that TextKit retains after LF.
+    private(set) var liveGitSourceLineCount: Int?
+
+    private func rebuildFoldedHiddenPrefix() {
+        var hidden = 0
+        foldedHiddenPrefix = editingFolds.map { fold in
+            hidden += max(0, fold.range.count - 1)
+            return hidden
+        }
+    }
+
+    private func rebuildFoldedUTF16Ranges() {
+        let content = nativeContentManager as! FoldedDiffContentStorage
+        guard let index = foldedGitLines, let storage = textStorage else {
+            content.hiddenRanges = []
+            foldedNativeHiddenPrefix = []
+            return
+        }
+        let needsNativeParagraphs = hasNativeNonLFSeparators
+        content.hiddenRanges = editingFolds.compactMap { fold in
+            let start = index.offset(atLine: fold.range.lowerBound)
+            let end = fold.range.upperBound >= index.lineCount
+                ? index.length + 1 : index.offset(atLine: fold.range.upperBound)
+            // The separator owns the first actual paragraph, even when one
+            // Git-LF row contains several native CR/Unicode paragraphs.
+            let firstEnd = needsNativeParagraphs && start < storage.length
+                ? NSMaxRange(storage.mutableString.paragraphRange(
+                    for: NSRange(location: start, length: 0)))
+                : index.offset(atLine: fold.range.lowerBound + 1)
+            return firstEnd < end ? firstEnd..<end : nil
+        }
+        var nativeHidden = 0
+        foldedNativeHiddenPrefix = content.hiddenRanges.map { range in
+            let first = lineNumber(atUTF16Offset: range.lowerBound) - 1
+            let last = lineNumber(atUTF16Offset: range.upperBound) - 1
+            nativeHidden += max(0, last - first)
+            if range.upperBound > storage.length { nativeHidden += 1 }
+            return nativeHidden
+        }
+    }
+
+    func isNativeParagraphHidden(atUTF16 offset: Int) -> Bool {
+        let ranges = (nativeContentManager as! FoldedDiffContentStorage).hiddenRanges
+        var low = 0
+        var high = ranges.count
+        while low < high {
+            let mid = (low + high) / 2
+            if ranges[mid].lowerBound <= offset { low = mid + 1 }
+            else { high = mid }
+        }
+        return low > 0 && ranges[low - 1].contains(offset)
+    }
+
+    func hiddenNativeParagraphs(beforeUTF16 offset: Int) -> Int {
+        let ranges = (nativeContentManager as! FoldedDiffContentStorage).hiddenRanges
+        var low = 0
+        var high = ranges.count
+        while low < high {
+            let mid = (low + high) / 2
+            if ranges[mid].upperBound <= offset { low = mid + 1 }
+            else { high = mid }
+        }
+        let preceding = low == 0 ? 0 : foldedNativeHiddenPrefix[low - 1]
+        guard low < ranges.count, ranges[low].contains(offset) else { return preceding }
+        // A folded Git line may contain several native CR/Unicode paragraphs.
+        // Hidden paragraphs inside that range must share the separator's
+        // display row; counting only completed folds breaks Y monotonicity.
+        let firstNativeRow = lineNumber(atUTF16Offset: ranges[low].lowerBound) - 1
+        let currentNativeRow = lineNumber(atUTF16Offset: offset) - 1
+        return preceding + currentNativeRow - firstNativeRow + 1
+    }
+
+    var totalHiddenNativeParagraphs: Int { foldedNativeHiddenPrefix.last ?? 0 }
+
+    func hiddenSourceRows(before sourceRow: Int) -> Int {
+        var low = 0
+        var high = editingFolds.count
+        while low < high {
+            let middle = (low + high) / 2
+            if editingFolds[middle].range.upperBound <= sourceRow { low = middle + 1 }
+            else { high = middle }
+        }
+        let fullyHidden = low == 0 ? 0 : foldedHiddenPrefix[low - 1]
+        if low < editingFolds.count {
+            let fold = editingFolds[low].range
+            if fold.contains(sourceRow) {
+                // Every source row inside a fold projects onto its separator.
+                return fullyHidden + sourceRow - fold.lowerBound
+            }
+        }
+        return fullyHidden
+    }
+
+    struct LiveFoldEdit {
+        let firstLine: Int
+        let lastLine: Int
+        let lineDelta: Int
+        let endAtLineStart: Bool
+        let foldsChanged: Bool
+    }
 
     /// Fold in the TextKit layout, never in the underlying NSTextStorage.
-    func setEditingFolds(_ folds: [DiffEditFold], lineOffsets: [Int]) -> Bool {
-        let changed = editingFolds != folds || (!folds.isEmpty && foldedLineOffsets != lineOffsets)
-        guard changed else { return false }
-        let layoutChanged = editingFolds != folds
+    func setEditingFolds(_ folds: [DiffEditFold]) -> Bool {
+        let oldFolds = editingFolds
+        let layoutChanged = oldFolds != folds
         editingFolds = folds
-        foldedLineOffsets = lineOffsets
+        if layoutChanged { rebuildFoldedHiddenPrefix() }
+        // A presentation refresh must never replace the live UTF-16 index
+        // with offsets from an older immutable Diff snapshot.
+        rebuildFoldedUTF16Ranges()
         if layoutChanged {
-            nativeContentManager.delegate = folds.isEmpty ? nil : self
+            if let storage = textStorage, storage.length > 0 {
+                let changed = folds.difference(from: oldFolds)
+                var first = Int.max
+                for difference in changed {
+                    let fold: DiffEditFold
+                    switch difference {
+                    case .insert(_, let value, _), .remove(_, let value, _): fold = value
+                    }
+                    first = min(first, fold.range.lowerBound)
+                }
+                let start = liveGitOffset(forLine: first) ?? 0
+                storage.beginEditing()
+                storage.edited(.editedAttributes,
+                               range: NSRange(location: start, length: storage.length - start),
+                               changeInLength: 0)
+                storage.endEditing()
+            }
             nativeLayoutManager.invalidateLayout(for: nativeLayoutManager.documentRange)
             needsLayout = true
             needsDisplay = true
@@ -314,50 +551,88 @@ final class DiffTextView: NativeCodeTextView, NSTextContentStorageDelegate {
         return layoutChanged
     }
 
-    private func sourceLine(at offset: Int) -> Int {
-        var low = 0
-        var high = foldedLineOffsets.count
-        while low < high {
-            let middle = (low + high) / 2
-            if foldedLineOffsets[middle] <= offset { low = middle + 1 }
-            else { high = middle }
+    func resetLiveGitLineIndex(_ text: String) {
+        foldedGitLines = NativeTextLineIndex(gitLF: text)
+        liveGitSourceLineCount = text.isEmpty ? 0
+            : (foldedGitLines?.lineCount ?? 0) - (text.utf16.last == 10 ? 1 : 0)
+    }
+    var liveGitLineCount: Int? { foldedGitLines?.lineCount }
+    func liveGitLine(atUTF16 offset: Int) -> Int? { foldedGitLines?.row(at: offset) }
+    func liveGitOffset(forLine line: Int) -> Int? {
+        guard let foldedGitLines, line >= 0, line < foldedGitLines.lineCount else { return nil }
+        return foldedGitLines.offset(atLine: line)
+    }
+
+    /// Project collapsed source rows through a character edit before the
+    /// background Diff reaches its 120 ms content version.
+    func adjustLiveFoldSource(in previousRange: NSRange,
+                              replacement: String) -> LiveFoldEdit? {
+        guard let storage = textStorage,
+              let originalCount = liveGitSourceLineCount,
+              NSMaxRange(previousRange) <= (foldedGitLines?.length ?? -1) else { return nil }
+        // A zero-width insertion after the final LF starts a new Git line,
+        // even though the line index clamps EOF to the preceding row.
+        let afterFinalLF = previousRange.length == 0
+            && previousRange.location == foldedGitLines?.length
+            && previousRange.location > 0
+            && (foldedGitLines?.lineCount ?? 0) > originalCount
+        let first = afterFinalLF ? originalCount
+            : (foldedGitLines?.row(at: previousRange.location) ?? 0)
+        let last = afterFinalLF ? originalCount
+            : (foldedGitLines?.row(at: NSMaxRange(previousRange)) ?? 0)
+        let endAtLineStart = afterFinalLF
+            || foldedGitLines?.offset(atLine: last) == NSMaxRange(previousRange)
+        foldedGitLines?.replace(in: previousRange,
+                                replacementLength: replacement.utf16.count,
+                                text: storage.mutableString)
+        let sourceCount = storage.length == 0 ? 0
+            : (foldedGitLines?.lineCount ?? 0)
+                - (storage.mutableString.character(at: storage.length - 1) == 10 ? 1 : 0)
+        let lineDelta = sourceCount - originalCount
+        liveGitSourceLineCount = sourceCount
+        if lineDelta == 0 {
+            rebuildFoldedUTF16Ranges()
+            return LiveFoldEdit(firstLine: first, lastLine: last,
+                                lineDelta: 0, endAtLineStart: endAtLineStart,
+                                foldsChanged: false)
         }
-        return max(0, low - 1)
-    }
-
-    func textContentManager(_ manager: NSTextContentManager,
-                            shouldEnumerate element: NSTextElement,
-                            options: NSTextContentManager.EnumerationOptions) -> Bool {
-        guard !editingFolds.isEmpty, let range = element.elementRange else { return true }
-        let offset = manager.offset(from: manager.documentRange.location, to: range.location)
-        let source = sourceLine(at: offset)
-        var low = 0
-        var high = editingFolds.count
-        while low < high {
-            let middle = (low + high) / 2
-            if editingFolds[middle].range.lowerBound <= source { low = middle + 1 }
-            else { high = middle }
+        let adjusted = editingFolds.compactMap { fold -> DiffEditFold? in
+            if last < fold.range.lowerBound {
+                let shifted = (fold.range.lowerBound + lineDelta)..<(fold.range.upperBound + lineDelta)
+                return DiffEditFold(range: shifted, separator: fold.separator)
+            }
+            if first >= fold.range.upperBound { return fold }
+            if first >= fold.range.lowerBound && last < fold.range.upperBound {
+                let end = fold.range.upperBound + lineDelta
+                guard end > fold.range.lowerBound else { return nil }
+                return DiffEditFold(range: fold.range.lowerBound..<end,
+                                    separator: fold.separator)
+            }
+            return nil
         }
-        guard low > 0 else { return true }
-        let fold = editingFolds[low - 1].range
-        return !fold.contains(source)
-            || (source == fold.lowerBound && offset == foldedLineOffsets[source])
+        let changed = adjusted != editingFolds
+        if changed {
+            editingFolds = adjusted
+            rebuildFoldedHiddenPrefix()
+            nativeLayoutManager.invalidateLayout(for: nativeLayoutManager.documentRange)
+            needsLayout = true
+            needsDisplay = true
+        }
+        rebuildFoldedUTF16Ranges()
+        return LiveFoldEdit(firstLine: first, lastLine: last,
+                            lineDelta: lineDelta, endAtLineStart: endAtLineStart,
+                            foldsChanged: changed)
     }
 
-    var hasNativeNonLFSeparators: Bool {
-        if let nativeBreaksSnapshot { return nativeBreaksSnapshot }
-        let value = DiffRowGeometry.hasNativeNonLFSeparators(text ?? "")
-        nativeBreaksSnapshot = value
-        return value
-    }
+    var hasNativeNonLFSeparators: Bool { hasNativeOnlySeparators }
 
-    func updateNativeLineBreaks(for text: String) {
-        nativeBreaksSnapshot = DiffRowGeometry.hasNativeNonLFSeparators(text)
-    }
-
-    override func storageCharactersDidChange() {
-        nativeBreaksSnapshot = nil
-        super.storageCharactersDidChange()
+    override func storageCharactersDidChange(in previousRange: NSRange, replacement: String,
+                                             nativeParagraphGeometryChanged: Bool) {
+        // The shared native index tracks both paragraph count and separator
+        // kinds. CRLF -> bare CR changes geometry even if row count is stable.
+        if wrapsLines || nativeParagraphGeometryChanged {
+            onNativeParagraphGeometryChanged?()
+        }
     }
 
     /// Returns true when the click landed on a collapsed-run separator and
@@ -407,18 +682,7 @@ struct DiffVisibleRow {
 /// an additional paragraph, the Git row advances only at its next LF.
 @MainActor
 enum DiffRowGeometry {
-    /// Git counts LF alone; TextKit also makes native paragraphs for bare CR.
-    static func hasNativeNonLFSeparators(_ text: String) -> Bool {
-        var previousCR = false
-        for scalar in text.unicodeScalars {
-            if (previousCR && scalar != "\n") ||
-                scalar == "\u{2028}" || scalar == "\u{2029}" || scalar == "\u{0085}" {
-                return true
-            }
-            previousCR = scalar == "\r"
-        }
-        return previousCR
-    }
+
 
     static func visibleRows(
         textView: DiffTextView, decorations: DiffDecorations
@@ -426,63 +690,27 @@ enum DiffRowGeometry {
         let layoutManager = textView.nativeLayoutManager
         let contentManager = textView.nativeContentManager
         let viewport = layoutManager.textViewportLayoutController
-        if !textView.editingFolds.isEmpty || viewport.viewportRange == nil {
-            viewport.layoutViewport()
-        }
+        if viewport.viewportRange == nil { viewport.layoutViewport() }
         guard let viewportRange = viewport.viewportRange else { return [] }
 
         let byOffsets = !decorations.lineStartOffsets.isEmpty
-        let foldedEditing = !textView.editingFolds.isEmpty
         let nativeBreaks = textView.hasNativeNonLFSeparators
-        let hasNativeBreaks = !byOffsets && nativeBreaks
-        var nextCountedIndex = 0
         var previousGitRow: Int?
-        if !byOffsets && !foldedEditing {
-            let preceding = contentManager.textElements(
-                for: NSTextRange(
-                    location: layoutManager.documentRange.location,
-                    end: viewportRange.location
-                )!
-            )
-            if hasNativeBreaks {
-                nextCountedIndex = preceding.reduce(0) { count, element in
-                    let paragraph = element as? NSTextParagraph
-                    return count + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
-                }
-                if let last = preceding.last as? NSTextParagraph,
-                   last.attributedString.string.utf16.last != 10 {
-                    previousGitRow = nextCountedIndex
-                }
-            } else {
-                nextCountedIndex = preceding.count
-            }
-        }
 
         var rows: [DiffVisibleRow] = []
         layoutManager.enumerateTextLayoutFragments(in: viewportRange) { fragment in
             let fragmentFrame = fragment.layoutFragmentFrame
-            let baseIndex: Int
-            if byOffsets || foldedEditing {
-                let offset = contentManager.offset(
-                    from: layoutManager.documentRange.location,
-                    to: fragment.rangeInElement.location
-                )
-                let offsets = byOffsets ? decorations.lineStartOffsets : decorations.editSnapshotOffsets
-                var low = 0
-                var high = offsets.count
-                while low < high {
-                    let middle = (low + high) / 2
-                    if offsets[middle] <= offset { low = middle + 1 }
-                    else { high = middle }
-                }
-                baseIndex = max(0, low - 1)
-                if previousGitRow == nil, baseIndex < offsets.count,
-                   offset > offsets[baseIndex] {
-                    previousGitRow = baseIndex
-                }
-            } else {
-                baseIndex = nextCountedIndex
-            }
+            let offset = contentManager.offset(
+                from: layoutManager.documentRange.location,
+                to: fragment.rangeInElement.location
+            )
+            let baseIndex = byOffsets
+                ? (decorations.rowIndex(forUTF16Offset: offset) ?? 0)
+                : (textView.liveGitLine(atUTF16: offset) ?? 0)
+            let lineStart = byOffsets
+                ? decorations.lineStartOffsets[baseIndex]
+                : textView.liveGitOffset(forLine: baseIndex)
+            if let lineStart, offset > lineStart { previousGitRow = baseIndex }
 
             // Native NSTextLineFragment.attributedString is the whole source
             // paragraph even for the synthetic zero-character terminal line.
@@ -494,7 +722,6 @@ enum DiffRowGeometry {
             let terminatesGitLine = !nativeBreaks || atDocumentEnd
                 || (fragment.textElement as? NSTextParagraph)?
                     .attributedString.string.utf16.last == 10
-            var lineOffset = 0
             var emittedBody = false
             for (linePosition, lineFragment) in fragment.textLineFragments.enumerated() {
                 let extra = lineFragment.characterRange.length == 0
@@ -508,7 +735,8 @@ enum DiffRowGeometry {
                     index: rowIndex,
                     frame: CGRect(
                         x: fragmentFrame.origin.x,
-                        y: fragmentFrame.origin.y + bounds.minY,
+                        y: fragmentFrame.origin.y + bounds.minY
+                            + textView.textContainerInset.height,
                         width: fragmentFrame.width,
                         height: bounds.height
                     ),
@@ -516,22 +744,10 @@ enum DiffRowGeometry {
                     isLastSegment: endsGitLine
                 ))
                 if extra {
-                    lineOffset += 1
                     previousGitRow = nil
                 } else {
-                    if !emittedBody { lineOffset += 1 }
                     emittedBody = true
                     previousGitRow = rowIndex
-                }
-            }
-            if !foldedEditing {
-                if !hasNativeBreaks {
-                    nextCountedIndex = baseIndex + max(1, lineOffset)
-                } else {
-                    // Native CR paragraphs share a Git line until an LF is reached.
-                    let paragraph = fragment.textElement as? NSTextParagraph
-                    nextCountedIndex = baseIndex
-                        + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
                 }
             }
             return true
@@ -553,7 +769,7 @@ private enum DiffGhostGeometry {
     static func visibleBlocks(
         textView: DiffTextView, clipView: NSClipView, decorations: DiffDecorations
     ) -> [VisibleBlock] {
-        guard !textView.wrapsLines, !textView.hasNativeNonLFSeparators,
+        guard textView.nativeLayoutManager.delegate != nil,
               !decorations.positionedGhosts.isEmpty else { return [] }
         let rowHeight = DiffTypography.paragraphStyle(
             for: textView.font ?? TerminalFont.current()
@@ -561,7 +777,17 @@ private enum DiffGhostGeometry {
         guard rowHeight > 0 else { return [] }
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
-        let inset = textView.textContainerInset.height
+        // A leading deletion occupies the native text container's top inset.
+        // Draw that ghost in the reserved gap, not on top of the first glyph.
+        let leading = CGFloat(decorations.ghostsByAnchor[0]?.lines.count ?? 0) * rowHeight
+        let inset = textView.textContainerInset.height - leading
+        func topY(_ ghost: DiffDecorations.PositionedGhost) -> CGFloat {
+            if (textView.wrapsLines || textView.hasNativeNonLFSeparators),
+               let start = textView.ghostStartY?(ghost.block.anchorLine) {
+                return start
+            }
+            return inset + CGFloat(ghost.visibleStartRow) * rowHeight
+        }
         // Both the gutter and underlay query this on every scroll frame.
         // Skip blocks ending before the viewport instead of walking the file.
         var low = 0
@@ -569,12 +795,12 @@ private enum DiffGhostGeometry {
         while low < high {
             let middle = (low + high) / 2
             let ghost = ghosts[middle]
-            let bottom = inset + CGFloat(ghost.visibleStartRow + ghost.block.lines.count) * rowHeight
+            let bottom = topY(ghost) + CGFloat(ghost.block.lines.count) * rowHeight
             if bottom <= viewport.minY { low = middle + 1 } else { high = middle }
         }
         var result: [VisibleBlock] = []
         for ghost in ghosts[low...] {
-            let top = inset + CGFloat(ghost.visibleStartRow) * rowHeight
+            let top = topY(ghost)
             if top >= viewport.maxY { break }
             let bottom = top + CGFloat(ghost.block.lines.count) * rowHeight
             result.append(VisibleBlock(
@@ -630,7 +856,7 @@ final class DiffDecorationUnderlayView: NSView {
 
         guard let textView, let clipView, !decorations.rows.isEmpty else { return }
         let rows = DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
-        let virtualGhosts = !textView.wrapsLines && !textView.hasNativeNonLFSeparators
+        let virtualGhosts = textView.nativeLayoutManager.delegate != nil
 
         for row in rows {
             guard row.index < decorations.rows.count else { continue }
@@ -669,8 +895,12 @@ final class DiffDecorationUnderlayView: NSView {
                 let emphasisColor = metadata.kind == .added
                     ? scheme.addedEmphasis : scheme.removedEmphasis
                 emphasisColor.setFill()
+                let sourceStart = decorations.lineStartOffsets.isEmpty
+                    ? (textView.liveGitOffset(forLine: row.index) ?? 0) : 0
                 for range in metadata.emphasis {
-                    for segment in segmentRects(for: range) {
+                    let absolute = NSRange(location: sourceStart + range.location,
+                                           length: range.length)
+                    for segment in segmentRects(for: absolute) {
                         let rect = converted(segment).intersection(rowRect)
                         guard !rect.isNull, rect.width > 0 else { continue }
                         NSBezierPath(
@@ -904,7 +1134,7 @@ final class DiffGutterView: NSView {
 
         guard let textView, let clipView, !decorations.rows.isEmpty else { return }
         let rows = DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
-        let virtualGhosts = !textView.wrapsLines && !textView.hasNativeNonLFSeparators
+        let virtualGhosts = textView.nativeLayoutManager.delegate != nil
 
         let numberFont = numberFont
         let digit = digitWidth(numberFont)
@@ -996,11 +1226,12 @@ final class DiffGutterView: NSView {
             let line: Int?
             switch layoutStyle {
             case .single:
-                line = metadata.kind == .removed ? metadata.oldLine : metadata.newLine
+                line = decorations.lineStartOffsets.isEmpty ? row.index + 1
+                    : (metadata.kind == .removed ? metadata.oldLine : metadata.newLine)
             case .oldOnly:
                 line = metadata.oldLine
             case .newOnly:
-                line = metadata.newLine
+                line = decorations.lineStartOffsets.isEmpty ? row.index + 1 : metadata.newLine
             }
 
             let attributes: [NSAttributedString.Key: Any] = [
@@ -1288,6 +1519,8 @@ final class DiffCodePaneView: NSView {
     private let foldOverlay = DiffFoldOverlayView()
     /// Re-entrancy guard for vertical scroll syncing between split panes.
     private var isSyncingScroll = false
+    private var isRefreshingViewport = false
+    private var lastViewportBounds: NSRect?
 
     var onScroll: ((NSPoint) -> Void)?
     /// Fired with the fold's metadata when the user activates a collapsed-run
@@ -1324,6 +1557,11 @@ final class DiffCodePaneView: NSView {
     private var appliedFoldRevision: UInt?
     private var needsCompleteDocumentLayout = false
     private var measuredDocumentHeight: CGFloat?
+    private struct WrappedExtra: Equatable {
+        let nativeRow: Int
+        let prefix: Int
+    }
+    private var wrappedExtras: [WrappedExtra] = []
     private var lastLayoutWidth: CGFloat = 0
     private enum ReviewScrollTarget {
         case anchor(old: Int?, new: Int?, viewportY: CGFloat)
@@ -1337,7 +1575,7 @@ final class DiffCodePaneView: NSView {
               rowHeight > 0, !decorations.rows.isEmpty else { return }
         let y = scrollOffset.y
         for row in DiffRowGeometry.visibleRows(textView: textView, decorations: decorations)
-        where row.frame.maxY > y && row.index < decorations.rows.count {
+        where row.frame.maxY > y + 1 && row.index < decorations.rows.count {
             let source = decorations.rows[row.index]
             if source.oldLine != nil || source.newLine != nil {
                 pendingReviewScroll = .anchor(old: source.oldLine, new: source.newLine,
@@ -1347,17 +1585,115 @@ final class DiffCodePaneView: NSView {
         }
     }
 
+    private func displayRow(forSourceRow sourceRow: Int) -> Int {
+        guard mode == .edit else { return sourceRow }
+        let visibleRow = sourceRow - textView.hiddenSourceRows(before: sourceRow)
+        let ghosts = decorations.positionedGhosts
+        var low = 0
+        var high = ghosts.count
+        while low < high {
+            let mid = (low + high) / 2
+            if ghosts[mid].block.anchorLine <= sourceRow { low = mid + 1 }
+            else { high = mid }
+        }
+        guard low > 0 else { return visibleRow }
+        let last = ghosts[low - 1]
+        return visibleRow + last.startRow - last.block.anchorLine + last.block.lines.count
+    }
+
+    private var usesNativeParagraphFixedLayout: Bool {
+        rowHeight > 0 && !textView.wrapsLines && textView.hasNativeNonLFSeparators
+    }
+
+    private var usesPlainSourceFixedLayout: Bool {
+        // A historical plain source is read-only and has no diff rows.
+        // Empty decorations during an editable buffer replacement are transient.
+        mode == .edit && !textView.isEditable && decorations.rows.isEmpty
+            && textView.liveGitSourceLineCount != nil && rowHeight > 0
+            && !textView.wrapsLines && !textView.hasNativeNonLFSeparators
+    }
+
+    private var usesSparseWrappedLayout: Bool {
+        rowHeight > 0 && textView.wrapsLines && textView.longLineDisplayWidth == .showAll
+    }
+
+    private func extraWrappedRows(beforeNativeRow nativeRow: Int) -> Int {
+        var low = 0
+        var high = wrappedExtras.count
+        while low < high {
+            let mid = (low + high) / 2
+            if wrappedExtras[mid].nativeRow < nativeRow { low = mid + 1 }
+            else { high = mid }
+        }
+        return low == 0 ? 0 : wrappedExtras[low - 1].prefix
+    }
+
+    private func rebuildSparseWrappedLayout() {
+        let content = textView.nativeContentManager
+        let layout = textView.nativeLayoutManager
+        let length = content.length
+        guard let storage = textView.textStorage else { return }
+        var prefix = 0
+        var mapped: [WrappedExtra] = []
+        for candidate in textView.nativeWrapCandidates() {
+            guard candidate.offset < length,
+                  !textView.isNativeParagraphHidden(atUTF16: candidate.offset) else { continue }
+            // A wrapped paragraph must be laid out through its final line;
+            // asking TextKit for only its first character is insufficient.
+            let paragraph = storage.mutableString.paragraphRange(
+                for: NSRange(location: candidate.offset, length: 0))
+            guard let range = NSTextRange(paragraph, in: content) else { continue }
+            layout.ensureLayout(for: range)
+            guard let fragment = layout.textLayoutFragment(for: range.location) else { continue }
+            let extra = max(0, fragment.textLineFragments.filter {
+                $0.characterRange.length > 0
+            }.count - 1)
+            guard extra > 0 else { continue }
+            prefix += extra
+            mapped.append(WrappedExtra(nativeRow: candidate.row, prefix: prefix))
+        }
+        if wrappedExtras != mapped {
+            wrappedExtras = mapped
+            layout.invalidateLayout(for: layout.documentRange)
+        }
+    }
+
+    private func fixedFragmentRow(atUTF16 offset: Int) -> Int {
+        if usesNativeParagraphFixedLayout || usesSparseWrappedLayout {
+            let nativeRow = textView.lineNumber(atUTF16Offset: offset) - 1
+            let wrappedRows = extraWrappedRows(beforeNativeRow: nativeRow)
+            guard mode == .edit, let gitRow = textView.liveGitLine(atUTF16: offset) else {
+                return nativeRow + wrappedRows
+            }
+            let visibleSourceRow = gitRow - textView.hiddenSourceRows(before: gitRow)
+            let precedingGhosts = displayRow(forSourceRow: gitRow) - visibleSourceRow
+            let leading = decorations.ghostsByAnchor[0]?.lines.count ?? 0
+            return nativeRow - textView.hiddenNativeParagraphs(beforeUTF16: offset)
+                + wrappedRows + precedingGhosts - leading
+        }
+        let sourceRow = mode == .review
+            ? (decorations.rowIndex(forUTF16Offset: offset) ?? 0)
+            : (textView.liveGitLine(atUTF16: offset) ?? textView.lineNumber(atUTF16Offset: offset) - 1)
+        // Leading deletion ghosts are represented by the native text inset;
+        // all other ghost rows belong to the text fragment's display coordinate.
+        let leading = mode == .edit ? (decorations.ghostsByAnchor[0]?.lines.count ?? 0) : 0
+        return displayRow(forSourceRow: sourceRow) - leading
+    }
+
     private func invalidateDocumentLayout() {
         needsCompleteDocumentLayout = true
         measuredDocumentHeight = nil
+        wrappedExtras = []
+        lastViewportBounds = nil
         needsLayout = true
     }
 
-    func setEditingFolds(_ folds: [DiffEditFold], lineOffsets: [Int],
+    func setEditingFolds(_ folds: [DiffEditFold],
                          baseDecorations: DiffDecorations, revision: UInt) {
         guard appliedFoldRevision != revision else { return }
         appliedFoldRevision = revision
-        if textView.setEditingFolds(folds, lineOffsets: lineOffsets) {
+        if textView.setEditingFolds(folds) {
+            textView.setFixedLayoutRowHeight(nil)
             invalidateDocumentLayout()
         }
         var decorated = baseDecorations
@@ -1370,82 +1706,120 @@ final class DiffCodePaneView: NSView {
         if !folds.isEmpty { setFixedRowCount(nil) }
     }
 
-    /// Ghost spacing last applied, keyed by buffer paragraph index →
-    /// (rows above, rows after), so refreshes only touch paragraphs whose
-    /// ghost blocks changed.
-    private var appliedGhostSpacing: [Int: GhostSpacing] = [:]
+    private var appliedGhostCounts: [Int: Int] = [:]
 
-    private struct GhostSpacing: Equatable {
-        var rowsBefore = 0
-        var rowsAfter = 0
+    /// Called only after the owning Diff tab is permanently closed.
+    func retireNativeDocument() {
+        onScroll = nil
+        onExpandCollapsedRun = nil
+        textView.handleCollapsedClick = nil
+        textView.ghostStartY = nil
+        textView.layoutRowForUTF16 = nil
+        textView.onBecomeFirstResponder = nil
+        textView.onResignFirstResponder = nil
+        textView.retireNativeDocument()
+        // A closed Diff has no remaining native owner. Detach its document
+        // before removing the TextKit layout manager, which otherwise keeps
+        // the content storage and paragraph cache alive after view disposal.
+        let storage = textView.textContentStorage
+        let layout = textView.textLayoutManager
+        scrollView.documentView = nil
+        if let storage, let layout { storage.removeTextLayoutManager(layout) }
+        foldOverlay.decorations = .empty
+        appliedGhostCounts = [:]
     }
 
-    /// Replaces the edit buffer's text, resetting the spacing bookkeeping
-    /// that referred to the previous document.
+    /// A new source owns its own folds, deletion ghosts and row decorations.
+    /// Retire the old presentation before installing the new editable bytes.
     func setEditBufferText(_ text: String) {
-        appliedGhostSpacing = [:]
+        appliedFoldRevision = nil
+        if !decorations.rows.isEmpty || !decorations.ghostsByAnchor.isEmpty {
+            decorations = .empty
+        }
+        if !textView.editingFolds.isEmpty { _ = textView.setEditingFolds([]) }
+        appliedGhostCounts = [:]
+        textView.setFixedLayoutRowHeight(nil)
+        textView.textContainerInset = .zero
         invalidateDocumentLayout()
         textView.text = text
-        textView.updateNativeLineBreaks(for: text)
+        textView.resetLiveGitLineIndex(text)
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         applyContentHeightOverride()
     }
 
-    /// Gives each ghost anchor paragraph spacing above it (or after it, for
-    /// an end-of-file block) exactly tall enough for its ghost rows; the
-    /// underlay and gutter draw the removed lines into those gaps.
+    func applyLiveNativeEdit(previousRange: NSRange, replacement: String) {
+        let previousFolds = textView.editingFolds
+        guard mode == .edit,
+              let live = textView.adjustLiveFoldSource(in: previousRange,
+                                                        replacement: replacement) else { return }
+        guard live.lineDelta != 0 || live.foldsChanged else { return }
+        guard let liveCount = textView.liveGitSourceLineCount else { return }
+        let count = max(1, liveCount)
+        let previous = decorations
+        let firstUnaffected = live.lastLine + (live.endAtLineStart ? 0 : 1)
+        let newFirstUnaffected = firstUnaffected + live.lineDelta
+        let firstChanged = min(live.firstLine, previous.rows.count, count)
+        let lastReplaced = liveCount - live.lineDelta == 0 ? previous.rows.count
+            : min(max(firstChanged, firstUnaffected), previous.rows.count)
+        let nextUnaffected = liveCount == 0 ? count
+            : min(max(firstChanged, newFirstUnaffected), count)
+        var rows = previous.rows
+        let newRows = (firstChanged..<nextUnaffected).map { line in
+            DiffDecorations.Row(kind: .context, oldLine: nil, newLine: line + 1,
+                                emphasis: [], missingNewline: false)
+        }
+        rows.replaceSubrange(firstChanged..<lastReplaced, with: newRows)
+        if live.foldsChanged {
+            for fold in previousFolds {
+                let index = fold.range.lowerBound < firstChanged ? fold.range.lowerBound
+                    : fold.range.lowerBound >= firstUnaffected
+                        ? fold.range.lowerBound + live.lineDelta : -1
+                guard rows.indices.contains(index) else { continue }
+                rows[index].kind = .context
+                rows[index].collapsed = nil
+            }
+        }
+        var updated = DiffDecorations(
+            rows: rows, lineStartOffsets: [],
+            maxOldLine: previous.maxOldLine, maxNewLine: count)
+        for (anchor, block) in previous.ghostsByAnchor {
+            guard anchor < live.firstLine || anchor >= firstUnaffected else { continue }
+            let nextAnchor = anchor >= firstUnaffected ? anchor + live.lineDelta : anchor
+            updated.ghostsByAnchor[nextAnchor] = DiffDecorations.GhostBlock(
+                anchorLine: nextAnchor, firstOldLine: block.firstOldLine,
+                lines: block.lines, kind: block.kind)
+        }
+        var precedingGhostRows = 0
+        for (anchor, block) in updated.ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
+            updated.positionedGhosts.append(.init(
+                startRow: anchor + precedingGhostRows,
+                visibleStartRow: anchor + precedingGhostRows, block: block))
+            precedingGhostRows += block.lines.count
+        }
+        updated.positionGhosts(for: textView.editingFolds)
+        if live.foldsChanged {
+            for fold in textView.editingFolds where fold.range.lowerBound < updated.rows.count {
+                updated.rows[fold.range.lowerBound].kind = .collapsed
+                updated.rows[fold.range.lowerBound].collapsed = fold.separator
+            }
+        }
+        invalidateDocumentLayout()
+        decorations = updated
+    }
+
+    /// Reserve deletion rows in the same native fragment coordinates as the
+    /// source text. Paragraph attributes remain untouched for Undo and syntax.
     private func applyGhostSpacing() {
         guard rowHeight > 0 else { return }
-        let offsets = decorations.editSnapshotOffsets
-        let lastLine = max(0, decorations.rows.count - 1)
-
-        // One paragraph can carry spacing on both edges (a deletion before
-        // the last line plus one at end-of-file), so merge per paragraph
-        // before touching attributes — paragraph style is a single value.
-        var wanted: [Int: GhostSpacing] = [:]
-        for (anchor, block) in decorations.ghostsByAnchor {
-            if anchor >= decorations.rows.count {
-                wanted[lastLine, default: GhostSpacing()].rowsAfter = block.lines.count
-            } else {
-                wanted[anchor, default: GhostSpacing()].rowsBefore = block.lines.count
-            }
+        let wanted = decorations.ghostsByAnchor.mapValues { $0.lines.count }
+        let leadingHeight = CGFloat(wanted[0] ?? 0) * rowHeight
+        guard wanted != appliedGhostCounts
+            || abs(textView.textContainerInset.height - leadingHeight) > 0.5 else { return }
+        appliedGhostCounts = wanted
+        if abs(textView.textContainerInset.height - leadingHeight) > 0.5 {
+            textView.textContainerInset = NSSize(width: 0, height: leadingHeight)
         }
-        guard wanted != appliedGhostSpacing else { return }
-
-        let source = textView.text ?? ""
-        let documentLength = source.utf16.count
-        let nsSource = source as NSString
-        func paragraphRange(forLine line: Int, atEnd: Bool) -> NSRange? {
-            guard line < offsets.count, documentLength > 0 else { return nil }
-            let start = offsets[line]
-            let end = line + 1 < offsets.count ? offsets[line + 1] : documentLength
-            guard start < documentLength else { return nil }
-            let position = atEnd ? max(start, min(end, documentLength) - 1) : start
-            return nsSource.paragraphRange(for: NSRange(location: position, length: 0))
-        }
-
-        let base = DiffTypography.paragraphStyle(for: textView.font ?? TerminalFont.current())
-        func applyStyle(_ spacing: GhostSpacing, to range: NSRange) {
-            guard let style = base.mutableCopy() as? NSMutableParagraphStyle else { return }
-            style.paragraphSpacingBefore = CGFloat(spacing.rowsBefore) * rowHeight
-            style.paragraphSpacing = CGFloat(spacing.rowsAfter) * rowHeight
-            if textView.truncatesLongLines { style.lineBreakMode = .byTruncatingTail }
-            textView.textStorage?.addAttributes([.paragraphStyle: style], range: range)
-        }
-        for line in Set(appliedGhostSpacing.keys).union(wanted.keys) {
-            let current = wanted[line] ?? GhostSpacing()
-            guard current != (appliedGhostSpacing[line] ?? GhostSpacing()),
-                  let first = paragraphRange(forLine: line, atEnd: false),
-                  let last = paragraphRange(forLine: line, atEnd: true) else { continue }
-            if first == last {
-                applyStyle(current, to: first)
-            } else {
-                // A Git LF line can contain several native CR paragraphs.
-                applyStyle(GhostSpacing(rowsBefore: current.rowsBefore), to: first)
-                applyStyle(GhostSpacing(rowsAfter: current.rowsAfter), to: last)
-            }
-        }
-        appliedGhostSpacing = wanted
+        textView.nativeLayoutManager.invalidateLayout(for: textView.nativeLayoutManager.documentRange)
         invalidateDocumentLayout()
     }
 
@@ -1472,6 +1846,15 @@ final class DiffCodePaneView: NSView {
         scrollView.contentInsets = NSEdgeInsets()
         scrollView.clipsToBounds = true
         scrollView.documentView = textView
+        textView.layoutRowForUTF16 = { [weak self] offset in
+            self?.fixedFragmentRow(atUTF16: offset) ?? 0
+        }
+        textView.ghostStartY = { [weak self] anchor in
+            self?.ghostStartY(forAnchor: anchor) ?? 0
+        }
+        textView.onNativeParagraphGeometryChanged = { [weak self] in
+            self?.invalidateDocumentLayout()
+        }
         clipView.onBoundsChange = { [weak self] in
             self?.handleScrolled()
         }
@@ -1518,6 +1901,21 @@ final class DiffCodePaneView: NSView {
     /// Repaint viewport decorations and synchronize both axes in split mode.
     private func handleScrolled() {
         let viewport = scrollView.contentView.bounds
+        if !isRefreshingViewport && !needsCompleteDocumentLayout
+            && lastViewportBounds != viewport {
+            isRefreshingViewport = true
+            let previousY = lastViewportBounds?.minY ?? 0
+            if viewport.height > 0 && abs(viewport.minY - previousY) > viewport.height {
+                materializeNativeViewport(at: viewport.minY)
+            }
+            lastViewportBounds = viewport
+            if !isSyncingScroll {
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+            }
+            lastViewportBounds = scrollView.contentView.bounds
+            isRefreshingViewport = false
+        }
         if foldOverlay.frame != viewport { foldOverlay.frame = viewport }
         underlay.needsDisplay = true
         gutter.needsDisplay = true
@@ -1548,13 +1946,17 @@ final class DiffCodePaneView: NSView {
         lastLayoutWidth = width
         if needsCompleteDocumentLayout, bounds.width > 0, bounds.height > 0 {
             needsCompleteDocumentLayout = false
-            // TextKit 2's estimated fragment positions differ from their
-            // final folded geometry. Resolve them before the first scroll,
-            // rather than moving the scrollbar's bottom during navigation.
-            let layout = textView.nativeLayoutManager
-            layout.ensureLayout(for: layout.documentRange)
-            if textView.wrapsLines || textView.hasNativeNonLFSeparators
-                || (mode == .edit && decorations.rows.isEmpty) {
+            let fixedLF = rowHeight > 0 && !textView.wrapsLines
+                && !textView.hasNativeNonLFSeparators
+                && (!decorations.rows.isEmpty || usesPlainSourceFixedLayout)
+            let fixedNative = usesNativeParagraphFixedLayout
+            let sparseWrapped = usesSparseWrappedLayout
+            textView.setFixedLayoutRowHeight(fixedLF || fixedNative || sparseWrapped ? rowHeight : nil)
+            if sparseWrapped {
+                rebuildSparseWrappedLayout()
+            } else if !fixedLF && !fixedNative {
+                let layout = textView.nativeLayoutManager
+                layout.ensureLayout(for: layout.documentRange)
                 measuredDocumentHeight = ceil(layout.usageBoundsForTextContainer.maxY)
             }
             applyContentHeightOverride()
@@ -1570,7 +1972,11 @@ final class DiffCodePaneView: NSView {
                 if let index = decorations.rows.firstIndex(where: {
                     $0.oldLine == old && $0.newLine == new
                 }) {
+                    // A replaced TextKit document may preserve the clip Y
+                    // while its target paragraph has no realized glyph lines.
+                    materializeSourceRow(index)
                     setVerticalScrollOffset(max(0, documentY(forRow: index) - viewportY))
+                    textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
                 } else {
                     setVerticalScrollOffset(0)
                 }
@@ -1614,6 +2020,7 @@ final class DiffCodePaneView: NSView {
         defer { isSyncingScroll = false }
         clipView.scroll(to: constrained)
         scrollView.reflectScrolledClipView(clipView)
+        textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
     }
 
     func setVerticalScrollOffset(_ y: CGFloat) {
@@ -1674,9 +2081,7 @@ final class DiffCodePaneView: NSView {
         if let selection { textView.selectedRanges = selection }
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         decorations = newDecorations
-        // Preserve TextKit's real height when its paragraph boundaries do
-        // not match Git LF rows; reuse the text-owned line-break flag.
-        textView.updateNativeLineBreaks(for: text.string)
+        // The shared native line index already owns paragraph separator kinds.
         setFixedRowCount(textView.wrapsLines || textView.hasNativeNonLFSeparators
             ? nil : newDecorations.rows.count)
 
@@ -1698,7 +2103,18 @@ final class DiffCodePaneView: NSView {
 
     private func applyContentHeightOverride() {
         var height = fixedRowCount.map { CGFloat($0) * rowHeight }
-        if textView.wrapsLines || textView.hasNativeNonLFSeparators
+        if usesNativeParagraphFixedLayout || usesSparseWrappedLayout
+            || usesPlainSourceFixedLayout {
+            let length = textView.textStorage?.length ?? 0
+            let ghostRows = mode == .edit ? decorations.ghostsByAnchor.values.reduce(0) {
+                $0 + $1.lines.count
+            } : 0
+            height = needsCompleteDocumentLayout && usesSparseWrappedLayout
+                ? textView.overrideContentHeight
+                : CGFloat(textView.lineNumber(atUTF16Offset: length)
+                    - textView.totalHiddenNativeParagraphs + ghostRows
+                    + (wrappedExtras.last?.prefix ?? 0)) * rowHeight
+        } else if textView.wrapsLines || textView.hasNativeNonLFSeparators
             || (mode == .edit && decorations.rows.isEmpty) {
             height = measuredDocumentHeight
         } else if mode == .edit {
@@ -1706,7 +2122,7 @@ final class DiffCodePaneView: NSView {
             if empty, let ghosts = decorations.ghostsByAnchor[decorations.rows.count] {
                 height = CGFloat(ghosts.lines.count + 1) * rowHeight
             } else if !empty, !textView.wrapsLines, !textView.hasNativeNonLFSeparators,
-                      decorations.editSnapshotOffsets.count == decorations.rows.count {
+                      max(1, textView.liveGitSourceLineCount ?? 0) == decorations.rows.count {
                 let hidden = textView.editingFolds.reduce(0) {
                     $0 + max(0, $1.range.count - 1)
                 }
@@ -1770,7 +2186,14 @@ final class DiffCodePaneView: NSView {
         if foldOverlay.labelFont != labelFont {
             foldOverlay.labelFont = labelFont
         }
+        let oldRowHeight = rowHeight
         rowHeight = paragraphStyle.maximumLineHeight
+        if mode == .edit {
+            let typographyChanged = previousFont != font || abs(oldRowHeight - rowHeight) > 0.5
+            if typographyChanged || wasWrapping != textView.wrapsLines {
+                applyGhostSpacing()
+            }
+        }
         if mode == .review, !decorations.rows.isEmpty {
             fixedRowCount = textView.wrapsLines || textView.hasNativeNonLFSeparators
                 ? nil : decorations.rows.count
@@ -1788,28 +2211,79 @@ final class DiffCodePaneView: NSView {
 
     /// The same native row geometry is used for explicit navigation and for
     /// keeping a stable reading anchor when a review document is replaced.
+    /// Materialize the owning source paragraph before a cold scrollbar jump;
+    /// TextKit's estimated folded positions cannot locate it by Y alone.
+    private func materializeNativeViewport(at y: CGFloat) {
+        guard mode == .edit,
+              rowHeight > 0, textView.nativeLayoutManager.delegate != nil,
+              let liveCount = textView.liveGitSourceLineCount else { return }
+        let rowCount = decorations.rows.count
+        guard rowCount > 0, max(1, liveCount) == rowCount else { return }
+        var low = 0
+        var high = rowCount
+        while low < high {
+            let mid = (low + high) / 2
+            if documentY(forRow: mid) < y { low = mid + 1 }
+            else { high = mid }
+        }
+        // The published Diff projection can be older than an in-progress
+        // inline edit. Always materialize the target from the live text index.
+        materializeSourceRow(min(low, rowCount - 1))
+    }
+
+    private func materializeSourceRow(_ row: Int) {
+        let offset = mode == .review
+            ? (decorations.lineStartOffsets.indices.contains(row)
+                ? decorations.lineStartOffsets[row] : nil)
+            : textView.liveGitOffset(forLine: row)
+        guard let offset, let storage = textView.textStorage else { return }
+        let range = textView.wrapsLines
+            ? storage.mutableString.paragraphRange(for: NSRange(location: offset, length: 0))
+            : NSRange(location: offset, length: 1)
+        guard let target = NSTextRange(range, in: textView.nativeContentManager) else { return }
+        textView.nativeLayoutManager.ensureLayout(for: target)
+    }
+
+    private func ghostStartY(forAnchor anchor: Int) -> CGFloat {
+        let lines = decorations.ghostsByAnchor[anchor]?.lines.count ?? 0
+        if anchor >= decorations.rows.count {
+            return (textView.overrideContentHeight ?? textView.frame.height)
+                - CGFloat(lines) * rowHeight
+        }
+        return documentY(forRow: anchor) - CGFloat(lines) * rowHeight
+    }
+
     private func documentY(forRow rowIndex: Int) -> CGFloat {
+        if usesNativeParagraphFixedLayout || usesSparseWrappedLayout {
+            let offset = mode == .review
+                ? (decorations.lineStartOffsets.indices.contains(rowIndex)
+                    ? decorations.lineStartOffsets[rowIndex] : nil)
+                : textView.liveGitOffset(forLine: rowIndex)
+            if let offset {
+                return CGFloat(fixedFragmentRow(atUTF16: offset)) * rowHeight
+                    + textView.textContainerInset.height
+            }
+        }
         if textView.wrapsLines || textView.hasNativeNonLFSeparators {
-            let starts = mode == .review
-                ? decorations.lineStartOffsets : decorations.editSnapshotOffsets
-            if rowIndex < starts.count {
+            let offset = mode == .review
+                ? (decorations.lineStartOffsets.indices.contains(rowIndex)
+                    ? decorations.lineStartOffsets[rowIndex] : nil)
+                : textView.liveGitOffset(forLine: rowIndex)
+            if let offset {
                 let content = textView.nativeContentManager
-                if let target = NSTextRange(NSRange(location: starts[rowIndex], length: 1),
+                if let target = NSTextRange(NSRange(location: offset, length: 1),
                                             in: content) {
                     let layout = textView.nativeLayoutManager
                     layout.ensureLayout(for: target)
                     if let fragment = layout.textLayoutFragment(for: target.location) {
                         scrollView.layoutSubtreeIfNeeded()
                         return fragment.layoutFragmentFrame.minY
+                            + textView.textContainerInset.height
                     }
                 }
             }
         }
-        let rowsBefore = mode == .edit
-            ? decorations.ghostsByAnchor.reduce(0) { total, entry in
-                total + (entry.key <= rowIndex ? entry.value.lines.count : 0)
-            } : 0
-        return CGFloat(rowIndex + rowsBefore) * rowHeight
+        return CGFloat(displayRow(forSourceRow: rowIndex)) * rowHeight
     }
 
     func scrollToRow(_ rowIndex: Int) {
@@ -1821,9 +2295,20 @@ final class DiffCodePaneView: NSView {
             setVerticalScrollOffset(0)
             return
         }
-        if mode == .edit, rowIndex < decorations.editSnapshotOffsets.count {
-            let offset = decorations.editSnapshotOffsets[rowIndex]
-            textView.scrollRangeToVisible(NSRange(location: offset, length: 1))
+        if mode == .edit, rowIndex < (textView.liveGitSourceLineCount ?? 0) {
+            if textView.nativeLayoutManager.delegate != nil,
+               (max(1, textView.liveGitSourceLineCount ?? 0) == decorations.rows.count
+                   || usesPlainSourceFixedLayout) {
+                let y = documentY(forRow: rowIndex)
+                if usesPlainSourceFixedLayout {
+                    materializeSourceRow(rowIndex)
+                } else {
+                    materializeNativeViewport(at: y)
+                }
+                setVerticalScrollOffset(y)
+            } else if let offset = textView.liveGitOffset(forLine: rowIndex) {
+                textView.scrollRangeToVisible(NSRange(location: offset, length: 1))
+            }
             return
         }
         setVerticalScrollOffset(documentY(forRow: rowIndex))

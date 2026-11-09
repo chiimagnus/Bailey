@@ -101,9 +101,15 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
 要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。
-PR 不再自动触发 GitHub Actions 的宿主或 UI 测试；合并前由本机运行受影响的测试，
+PR 不自动触发 GitHub Actions 的宿主或 UI 测试；合并前由本机运行受影响的测试，
 阶段验收按上方完成标准执行完整回归，结果须对应实际提交版本。
-GitHub Actions 只在推送版本 Tag 时[构建并发布](release.md#正式发布)，不代替本地验收。
+显式 `ci-ui-*` 测试标签触发独立的 [XCTest workflow](../.github/workflows/ci-ui-test.yml)，
+使用两个 Runner 分别运行全部宿主与 UI XCTest，保存 `.xcresult`；
+工作流进入默认分支后可手动选择 Host、UI 或 Both，
+按类名／方法指定一个或多个 XCTest，留空则执行完整目标；
+测试选择仍由 Makefile 枚举与校验。
+Tag 发布仍由[发布工作流](release.md#正式发布)负责。
+云端使用临时签名及独立桌面，不代替本机开发签名和授权 SSH、外观等特殊条件的验收。
 测试入口由 [Makefile](../Makefile) 与
 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；
 不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。

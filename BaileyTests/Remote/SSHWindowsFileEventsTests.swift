@@ -74,21 +74,28 @@ final class SSHWindowsFileEventsTests: XCTestCase {
                            "-EncodedCommand", encoded],
                     cwd: nil, env: nil, stdin: nil, timeout: 20
                 )
-                XCTAssertEqual(response.status, 0)
-                return Int(String(decoding: response.stdout, as: UTF8.self)
+                XCTAssertEqual(response.status, 0, String(decoding: response.stderr, as: UTF8.self))
+                let value = Int(String(decoding: response.stdout, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+                return value
             }
+            // The native protocol permits 30 seconds to start; Windows CIM
+            // queries can take 20 seconds each. The watcher must outlive both
+            // checks so zero after cancel cannot be a natural lease expiry.
+            let leaseSeconds = 90
+            let subscribedAt = Date()
             let subscription = SSHWindowsFileEvents.subscribe(
-                host: host, windowsRoot: windowsRoot, leaseSeconds: 30
+                host: host, windowsRoot: windowsRoot, leaseSeconds: leaseSeconds
             )
             defer { subscription.cancel() }
             let ready = expectation(description: "Windows watcher READY")
             let consumer = Task {
                 for await event in subscription.events {
                     if event == .ready { ready.fulfill() }
+                    if event == .lost { XCTFail("Windows watcher reported LOST before cancellation") }
                 }
             }
-            await fulfillment(of: [ready], timeout: 18)
+            await fulfillment(of: [ready], timeout: 32)
             let active = try await countOwnedPowerShellWatchers()
             XCTAssertEqual(active, 1,
                            "Exactly one live PowerShell watcher must own this isolated test root")
@@ -103,6 +110,8 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             } while Date() < deadline
             XCTAssertEqual(count, 0,
                            "Cancelling the PTY stream must reap the remote PowerShell before its lease")
+            XCTAssertLessThan(Date().timeIntervalSince(subscribedAt), Double(leaseSeconds),
+                              "A natural watcher lease expiry cannot count as cancellation")
         } catch {
             await cleanUp()
             throw error

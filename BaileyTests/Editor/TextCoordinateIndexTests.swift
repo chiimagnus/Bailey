@@ -17,27 +17,38 @@ final class TextCoordinateIndexTests: XCTestCase {
                 let unit = units[offset]
                 offset += 1
                 if unit == 13, offset < units.count, units[offset] == 10 { offset += 1 }
-                if [10, 13, 0x2028, 0x2029].contains(unit) { starts.append(offset) }
+                if [10, 13, 0x85, 0x2028, 0x2029].contains(unit) { starts.append(offset) }
             }
             return starts
+        }
+        func expectedNativeOnly(_ text: String) -> Bool {
+            let units = Array(text.utf16)
+            for (offset, unit) in units.enumerated() {
+                if unit == 13 && (offset + 1 == units.count || units[offset + 1] != 10) {
+                    return true
+                }
+                if [0x85, 0x2028, 0x2029].contains(unit) { return true }
+            }
+            return false
         }
         var seed: UInt64 = 0xABCDEF1234
         func next(_ limit: Int) -> Int {
             seed = seed &* 6364136223846793005 &+ 1442695040888963407
             return Int((seed >> 32) % UInt64(limit))
         }
-        for original in ["", "\r\n", "a\r\nb\r", "中文👋\u{2028}e\u{301}\u{2029}\n", String(repeating: "x\r\n", count: 1_000)] {
+        for original in ["", "\r\n", "a\r\nb\r", "中文👋\u{2028}e\u{301}\u{2029}\n", "a\u{0085}b", String(repeating: "x\r\n", count: 1_000)] {
             var text = original
             var index = NativeTextLineIndex(text as NSString)
             for _ in 0..<300 {
                 let starts = expectedStarts(text)
                 XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, starts)
+                XCTAssertEqual(index.hasNativeOnlySeparators, expectedNativeOnly(text))
                 var boundaries = [0]
                 for scalar in text.unicodeScalars { boundaries.append(boundaries.last! + scalar.utf16.count) }
                 let first = next(boundaries.count)
                 let last = first + next(boundaries.count - first)
                 let range = NSRange(location: boundaries[first], length: boundaries[last] - boundaries[first])
-                let replacement = ["", "\r", "\n", "\r\n", "👋", "\u{2028}", "\u{2029}", "abc"][next(8)]
+                let replacement = ["", "\r", "\n", "\r\n", "👋", "\u{0085}", "\u{2028}", "\u{2029}", "abc"][next(9)]
                 text = (text as NSString).replacingCharacters(in: range, with: replacement)
                 let previousRows = index.lineCount
                 let changed = index.replace(
@@ -50,6 +61,51 @@ final class TextCoordinateIndexTests: XCTestCase {
                 for (row, start) in expectedStarts(text).enumerated() { XCTAssertEqual(index.row(at: start), row) }
             }
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, expectedStarts(text))
+            XCTAssertEqual(index.hasNativeOnlySeparators, expectedNativeOnly(text))
+        }
+    }
+
+    func testGitLFNativeLineIndexTracksMixedSeparatorsAndUnicodeEdits() throws {
+        func starts(_ text: String) -> [Int] {
+            var result = [0]
+            for (index, unit) in text.utf16.enumerated() where unit == 10 {
+                result.append(index + 1)
+            }
+            return result
+        }
+        var seed: UInt64 = 0xC1A0F01D
+        func next(_ limit: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 32) % UInt64(limit))
+        }
+        let replacements = ["", "\r", "\n", "\r\n", "👋", "\u{2028}",
+                            "\u{2029}", "abc", "x\n\n", "中文\n👋"]
+        for original in ["", "\r\n", "a\rb\n", "中文👋\u{2028}e\u{301}\u{2029}\n",
+                         String(repeating: "x\r\n", count: 1_000)] {
+            var text = original
+            var index = NativeTextLineIndex(text as NSString, breakMode: .gitLF)
+            for _ in 0..<300 {
+                let oldStarts = starts(text)
+                XCTAssertEqual((0..<index.lineCount).map(index.offset(atLine:)), oldStarts)
+                var boundaries = [0]
+                for scalar in text.unicodeScalars {
+                    boundaries.append(boundaries[boundaries.count - 1] + scalar.utf16.count)
+                }
+                let first = next(boundaries.count)
+                let last = first + next(boundaries.count - first)
+                let range = NSRange(location: boundaries[first],
+                                    length: boundaries[last] - boundaries[first])
+                let replacement = replacements[next(replacements.count)]
+                text = (text as NSString).replacingCharacters(in: range, with: replacement)
+                index.replace(in: range, replacementLength: replacement.utf16.count,
+                              text: text as NSString)
+                let updated = starts(text)
+                XCTAssertEqual(index.length, text.utf16.count)
+                XCTAssertEqual((0..<index.lineCount).map(index.offset(atLine:)), updated)
+                for (row, offset) in updated.enumerated() {
+                    XCTAssertEqual(index.row(at: offset), row)
+                }
+            }
         }
     }
 
@@ -95,6 +151,43 @@ final class TextCoordinateIndexTests: XCTestCase {
         }
     }
 
+    func testSwiftGitLFIndexMatchesFoundationForLargeMixedUTF16Sources() {
+        let sources = [
+            "",
+            "a\r\nb\n👋\u{2028}c\u{2029}\n",
+            String(repeating: "x👋\r\ny\u{2028}z\n", count: 50_000) + "tail",
+        ]
+        for source in sources {
+            let started = CFAbsoluteTimeGetCurrent()
+            var swift = NativeTextLineIndex(gitLF: source)
+            let swiftMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            let foundationStarted = CFAbsoluteTimeGetCurrent()
+            let foundation = NativeTextLineIndex(source as NSString, breakMode: .gitLF)
+            let foundationMs = (CFAbsoluteTimeGetCurrent() - foundationStarted) * 1_000
+            print("AUDIT_GIT_LF_INDEX utf16=\(source.utf16.count) swiftMs=\(swiftMs) foundationMs=\(foundationMs)")
+            XCTAssertEqual(swift.length, foundation.length)
+            XCTAssertEqual(swift.lineCount, foundation.lineCount)
+            for row in 0..<swift.lineCount {
+                XCTAssertEqual(swift.offset(atLine: row), foundation.offset(atLine: row))
+            }
+            for offset in [0, 1, source.utf16.count / 4, source.utf16.count / 2,
+                           source.utf16.count - 1, source.utf16.count] where offset >= 0 {
+                XCTAssertEqual(swift.row(at: offset), foundation.row(at: offset))
+            }
+            let oldEnd = (source as NSString).length
+            let insertion = "\n👋\r\n"
+            let updated = source + insertion
+            swift.replace(in: NSRange(location: oldEnd, length: 0),
+                          replacementLength: insertion.utf16.count, text: updated as NSString)
+            let fresh = NativeTextLineIndex(gitLF: updated)
+            XCTAssertEqual(swift.lineCount, fresh.lineCount)
+            XCTAssertEqual(swift.length, fresh.length)
+            for row in 0..<swift.lineCount {
+                XCTAssertEqual(swift.offset(atLine: row), fresh.offset(atLine: row))
+            }
+        }
+    }
+
     func testNativeHundredThousandLineEditsMatchFreshIndex() throws {
         let source = NSMutableString(string: String(repeating: "a\r\nb\u{2028}c\u{2029}d\n", count: 25_000))
         var index = NativeTextLineIndex(source)
@@ -111,6 +204,8 @@ final class TextCoordinateIndexTests: XCTestCase {
             index.replace(in: range, replacementLength: replacement.utf16.count, text: source)
             let fresh = NativeTextLineIndex(source)
             XCTAssertEqual(index.length, source.length)
+            XCTAssertEqual(index.hasNativeOnlySeparators, fresh.hasNativeOnlySeparators,
+                           "iteration=\(iteration)")
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) },
                            (0..<fresh.lineCount).map { fresh.offset(atLine: $0) },
                            "iteration=\(iteration)")

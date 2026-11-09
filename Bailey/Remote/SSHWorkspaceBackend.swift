@@ -9,6 +9,24 @@ nonisolated protocol RemoteCommandRunner: Sendable {
     func run(
         _ argv: [String], stdin: Data?, timeout: TimeInterval
     ) async throws -> (status: Int32, stdout: Data, stderr: Data)
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data)
+}
+
+extension RemoteCommandRunner {
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        // Test runners have in-memory output; real SSH runners constrain pipes.
+        let result = try await run(argv, stdin: stdin, timeout: timeout)
+        guard result.stdout.count <= stdoutLimit, result.stderr.count <= stderrLimit else {
+            throw WorkspaceError.tooLarge
+        }
+        return result
+    }
 }
 
 /// A remote command that failed, carrying the remote's own message so the
@@ -266,6 +284,22 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult {
+        try await execute(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout,
+                          limits: nil)
+    }
+
+    func runLimited(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> WorkspaceRunResult {
+        try await execute(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout,
+                          limits: (stdout: stdoutLimit, stderr: stderrLimit))
+    }
+
+    private func execute(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, limits: (stdout: Int, stderr: Int)?
+    ) async throws -> WorkspaceRunResult {
         guard !argv.isEmpty else { throw WorkspaceError.notFound }
         var command = ""
         if let cwd { command += "cd \(RemoteCommands.doubleQuote(cwd)) && " }
@@ -277,9 +311,15 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         }
         command += argv.map(RemoteCommands.doubleQuote).joined(separator: " ")
 
-        let result = try await runner.run(
-            [command], stdin: stdin, timeout: timeout ?? self.timeout
-        )
+        let result: (status: Int32, stdout: Data, stderr: Data)
+        if let limits {
+            result = try await runner.runLimited(
+                [command], stdin: stdin, timeout: timeout ?? self.timeout,
+                stdoutLimit: limits.stdout, stderrLimit: limits.stderr
+            )
+        } else {
+            result = try await runner.run([command], stdin: stdin, timeout: timeout ?? self.timeout)
+        }
         return WorkspaceRunResult(
             status: result.status, stdout: result.stdout, stderr: result.stderr
         )
@@ -303,10 +343,14 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
 nonisolated enum ProcessRemoteCommandRunner {
 
     static func launch(
-        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
+        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) throws -> (status: Int32, stdout: Data, stderr: Data) {
-        let result = run(sshPath: sshPath, arguments: arguments, stdin: stdin, timeout: timeout)
+        let result = run(sshPath: sshPath, arguments: arguments, stdin: stdin,
+                         timeout: timeout, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
         if result.status == -2 { throw WorkspaceError.timedOut }
+        if result.status == -3 { throw WorkspaceError.tooLarge }
+        if result.status == -4 { throw CancellationError() }
         if result.status == -1 {
             throw RemoteConnectionError.commandFailed(
                 status: result.status, message: String(decoding: result.stderr, as: UTF8.self)
@@ -316,91 +360,31 @@ nonisolated enum ProcessRemoteCommandRunner {
     }
 
     static func run(
-        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
+        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int? = nil, stderrLimit: Int? = nil
     ) -> (status: Int32, stdout: Data, stderr: Data) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: sshPath)
-        process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["LC_ALL"] = "C"
-        process.environment = environment
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        let stdinPipe: Pipe? = stdin == nil ? nil : Pipe()
-        if let stdinPipe, fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != 0 {
-            return (-1, Data(), Data(String(cString: strerror(errno)).utf8))
-        }
-        process.standardInput = stdinPipe ?? FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
         do {
-            try process.run()
+            let result = try LocalWorkspaceBackend.runSync(
+                argv: [sshPath] + arguments, cwd: nil, env: environment,
+                stdin: stdin, timeout: timeout,
+                stdoutLimit: stdoutLimit, stderrLimit: stderrLimit,
+                preservePartialOnTimeout: true
+            )
+            var details = result.stderr
+            if result.status == -2 {
+                details.append(Data("\nssh did not respond in time.\n".utf8))
+            }
+            return (result.status, result.stdout, details)
+        } catch is CancellationError {
+            return (-4, Data(), Data())
+        } catch WorkspaceError.tooLarge {
+            return (-3, Data(), Data())
+        } catch WorkspaceError.timedOut {
+            return (-2, Data(), Data("\nssh did not respond in time.\n".utf8))
         } catch {
             return (-1, Data(), Data(error.localizedDescription.utf8))
         }
-        let writer = stdinPipe.flatMap { pipe in
-            stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
-        }
-        let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
-        let errFD = stderrPipe.fileHandleForReading.fileDescriptor
-        for descriptor in [outFD, errFD] {
-            let flags = fcntl(descriptor, F_GETFL, 0)
-            if flags >= 0 { _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) }
-        }
-        var outData = Data()
-        var errData = Data()
-        var buffer = [UInt8](repeating: 0, count: 8_192)
-        var openDescriptors: Set<Int32> = [outFD, errFD]
-        let deadline = Date().addingTimeInterval(timeout)
-        var timedOut = false
-        while true {
-            if Date() >= deadline {
-                timedOut = true
-                break
-            }
-            var fds = openDescriptors.sorted().map { descriptor in
-                pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-            }
-            if fds.isEmpty {
-                if exited.wait(timeout: .now() + .milliseconds(200)) == .success { break }
-                continue
-            }
-            let ready = poll(&fds, nfds_t(fds.count), 100)
-            if ready < 0 {
-                if errno == EINTR { continue }
-                break
-            }
-            for entry in fds where entry.revents != 0 {
-                let count = Darwin.read(entry.fd, &buffer, buffer.count)
-                if count > 0 {
-                    if entry.fd == outFD {
-                        outData.append(buffer, count: count)
-                    } else {
-                        errData.append(buffer, count: count)
-                    }
-                } else if count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR) {
-                    openDescriptors.remove(entry.fd)
-                }
-            }
-        }
-        if timedOut {
-            if process.isRunning {
-                process.terminate()
-                if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
-                    Darwin.kill(process.processIdentifier, SIGKILL)
-                    _ = exited.wait(timeout: .now() + .seconds(1))
-                }
-            }
-            errData.append(Data("\nssh did not respond in time.\n".utf8))
-            return (-2, outData, errData)
-        }
-        if let error = writer?.finish(), process.terminationStatus == 0 {
-            errData.append(Data(error.localizedDescription.utf8))
-            return (-1, outData, errData)
-        }
-        return (process.terminationStatus, outData, errData)
     }
 }

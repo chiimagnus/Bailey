@@ -44,7 +44,6 @@ enum DiffLayoutStyle: String {
 final class DiffDisplay {
     let id = UUID()
     let computation: DiffComputation
-    let hasCollapsedContext: Bool
     private let oldRuns: [DiffHighlightRun]
     private let newRuns: [DiffHighlightRun]
     private let baseAttributes: [NSAttributedString.Key: Any]
@@ -52,7 +51,6 @@ final class DiffDisplay {
     fileprivate init(computation: DiffComputation, inputs: DiffDisplayInputs,
          font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor) {
         self.computation = computation
-        hasCollapsedContext = computation.unified.rows.contains { $0.collapsed != nil }
         oldRuns = inputs.oldRuns
         newRuns = inputs.newRuns
         baseAttributes = [.font: font, .foregroundColor: textColor,
@@ -158,6 +156,12 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var editableBaseline: DiffEditableBaseline?
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
+
+    func retireNativeSurface() {
+        nativeSurface?.retireNativeDocument()
+        nativeSurface = nil
+    }
+
     private(set) var hasChanges = false
     /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
     var isEditing: Bool { source == .worktree && isEditable }
@@ -181,7 +185,12 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated static let maxBytes = 5 << 20
     @ObservationIgnored private var savedNewContent = ""
-    @ObservationIgnored private(set) var editedNewContent = ""
+    @ObservationIgnored private var editableSnapshot = ""
+    var editedNewContent: String { nativeSurface?.editedText ?? editableSnapshot }
+    @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int] = [:]
+    @ObservationIgnored private var reversibleEdit: (
+        range: NSRange, removed: String, inserted: String, wasClean: Bool
+    )?
     @ObservationIgnored private(set) var editBufferRevision: UInt = 0
     @ObservationIgnored private var displayGeneration: UInt = 0
     @ObservationIgnored private var displayTask: Task<Void, Never>?
@@ -192,6 +201,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var editGeneration: UInt = 0
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
     @ObservationIgnored private var fileMutationHeld = false
     @ObservationIgnored private var saveDeferredUntilMutation = false
@@ -238,6 +248,7 @@ final class DiffTab: nonisolated Identifiable {
 
     deinit {
         syntaxContextTask.cancel()
+        reloadTask?.cancel()
         displayTask?.cancel()
         displayCoreTask?.cancel()
         editTask?.cancel()
@@ -335,6 +346,8 @@ final class DiffTab: nonisolated Identifiable {
 
     private func invalidateReload() {
         reloadGeneration &+= 1
+        reloadTask?.cancel()
+        reloadTask = nil
         isLoading = false
     }
 
@@ -359,9 +372,10 @@ final class DiffTab: nonisolated Identifiable {
 
         let backend = self.backend
 
-        Task { [weak self] in
-            // Git first, on its own thread, exactly as before.
-            let git = await Task.detached(priority: .userInitiated) {
+        reloadTask = Task { [weak self] in
+            // Run Git on a cancellable child owned by this reload, not an
+            // untracked detached task that survives tab close or selection.
+            guard let git = await Self.runBackgroundDiffWork({
                 var failure: String?
                 var old = ""
                 var newFromGit: String?
@@ -369,6 +383,7 @@ final class DiffTab: nonisolated Identifiable {
                 var unmerged = false
                 var oldOID: String?
                 var oldFromIndex = false
+                var stagedOutdated = false
                 func take(_ result: (text: String, error: String?)) -> String {
                     if let error = result.error { failure = error }
                     return result.text
@@ -420,6 +435,25 @@ final class DiffTab: nonisolated Identifiable {
                     if staged.isUnmerged && staged.error == nil {
                         failure = String(localized: "Unresolved merge conflict", table: "Git")
                     }
+                    if failure == nil {
+                        // Parallel HEAD/index reads lock each object's bytes,
+                        // not the repository generation. Recheck both selected
+                        // OIDs before publishing a potentially mixed snapshot.
+                        async let currentHead = Self.gitObject(
+                            .tree(revision: "HEAD", path: oldPath), in: root, backend: backend
+                        )
+                        async let currentIndex = Self.gitObject(
+                            .index(path: path, stages: [0]), in: root, backend: backend
+                        )
+                        let (headNow, indexNow) = await (currentHead, currentIndex)
+                        if let issue = headNow.error ?? indexNow.error {
+                            failure = issue
+                        } else {
+                            stagedOutdated = headNow.oid != earlier.oid
+                                || indexNow.oid != staged.oid
+                                || indexNow.isUnmerged != staged.isUnmerged
+                        }
+                    }
                 case .worktree:
                     if !untracked {
                         let earlier = await Self.firstGitContent(
@@ -434,9 +468,9 @@ final class DiffTab: nonisolated Identifiable {
                     }
                 }
                 return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
-                        failure: failure, unmerged: unmerged,
+                        failure: failure, unmerged: unmerged, stagedOutdated: stagedOutdated,
                         oldOID: oldOID, oldFromIndex: oldFromIndex)
-            }.value
+            }), !Task.isCancelled else { return }
 
             var failure = git.failure
             let new: String
@@ -469,8 +503,8 @@ final class DiffTab: nonisolated Identifiable {
             var reviewNew = new
             var editBaseline: String?
             var verifiedCore: DiffCore?
-            var snapshotOutdated = false
-            if failure == nil, let oldOID = git.oldOID, !git.unmerged {
+            var snapshotOutdated = git.stagedOutdated
+            if failure == nil, !snapshotOutdated, let oldOID = git.oldOID, !git.unmerged {
                 let projected = await Self.gitComparisonBaseline(
                     source: source, oldPath: oldPath, path: path,
                     worktreePath: git.worktreePath, oldFromIndex: git.oldFromIndex,
@@ -497,8 +531,11 @@ final class DiffTab: nonisolated Identifiable {
             // The connection may have dropped while these reads were in
             // flight; their failure must not become the tab's content.
             guard let self, self.reloadGeneration == generation,
-                  self.readOnlyReason == nil
+                  self.readOnlyReason == nil, !Task.isCancelled
             else { return }
+            defer {
+                if self.reloadGeneration == generation { self.reloadTask = nil }
+            }
             guard !self.isDirty else { return }
             if result.snapshotOutdated {
                 if snapshotAttempt < 3 {
@@ -553,7 +590,9 @@ final class DiffTab: nonisolated Identifiable {
                 self.editBufferRevision &+= 1
             }
             self.savedNewContent = result.new
-            self.editedNewContent = result.new
+            self.editableSnapshot = result.new
+            self.nativeCodeUnitDelta = [:]
+            self.reversibleEdit = nil
             if self.isEditing { self.refreshEditDecorations(immediate: true) }
             self.isDirty = false
             self.saveError = nil
@@ -580,13 +619,52 @@ final class DiffTab: nonisolated Identifiable {
         reload()
     }
 
-    /// Keep the native TextKit buffer as the editing source of truth.
-    func updateEditedContent(_ contents: String) {
+    /// The native storage is the only writable text; ordinary edits update
+    /// a small difference tally instead of rereading the entire document.
+    func nativeTextDidChange(previousRange: NSRange, removed: String?, replacement: String) {
         guard isEditableNow else { return }
-        editedNewContent = contents
-        isDirty = !contents.utf8.elementsEqual(savedNewContent.utf8)
-        if isDirty { invalidateReload() }
+        let previouslyClean = !isDirty
+        let reverted = reversibleEdit.map { previous in
+            previous.wasClean && previous.range.location == previousRange.location
+                && previousRange.length == previous.inserted.utf16.count
+                && replacement.utf8.elementsEqual(previous.removed.utf8)
+        } ?? false
+        let dirty: Bool
+        if reverted {
+            nativeCodeUnitDelta = [:]
+            reversibleEdit = nil
+            dirty = false
+        } else if let removed {
+            Self.adjustCodeUnits(removed, by: -1, delta: &nativeCodeUnitDelta)
+            Self.adjustCodeUnits(replacement, by: 1, delta: &nativeCodeUnitDelta)
+            dirty = !nativeCodeUnitDelta.isEmpty
+                || !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            reversibleEdit = (previousRange, removed, replacement, previouslyClean)
+        } else {
+            reversibleEdit = nil
+            dirty = resynchronizeNativeDelta()
+        }
+        if isDirty != dirty { isDirty = dirty }
+        if previouslyClean && dirty { invalidateReload() }
         refreshEditDecorations()
+    }
+
+    private func resynchronizeNativeDelta() -> Bool {
+        let current = editedNewContent
+        var delta: [UInt16: Int] = [:]
+        Self.adjustCodeUnits(savedNewContent, by: -1, delta: &delta)
+        Self.adjustCodeUnits(current, by: 1, delta: &delta)
+        nativeCodeUnitDelta = delta
+        return !delta.isEmpty || !current.utf8.elementsEqual(savedNewContent.utf8)
+    }
+
+    private static func adjustCodeUnits(_ text: String, by direction: Int,
+                                        delta: inout [UInt16: Int]) {
+        for unit in text.utf16 {
+            let next = (delta[unit] ?? 0) + direction
+            if next == 0 { delta.removeValue(forKey: unit) }
+            else { delta[unit] = next }
+        }
     }
 
     func setDiffStyle(_ style: DiffLayoutStyle) {
@@ -782,7 +860,6 @@ final class DiffTab: nonisolated Identifiable {
         editGeneration &+= 1
         let generation = editGeneration
         let before = editComparisonOld ?? comparisonOld
-        let after = editedNewContent
         let oldRuns = editComparisonOld == nil ? (displayInputs?.oldRuns ?? []) : []
         let revealedLines = revealedOldLines
         let prepareSplit = isEditing && preferences.diffStyle == .split
@@ -799,7 +876,12 @@ final class DiffTab: nonisolated Identifiable {
         editTask?.cancel()
         editTask = Task { [weak self] in
             if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
-            guard !Task.isCancelled else { return }
+            let after: String
+            do {
+                guard let current = self, !Task.isCancelled,
+                      current.editGeneration == generation else { return }
+                after = current.editedNewContent
+            }
             // Pure edit-line diff remains in the background; AppKit ghost
             // attributed strings and view decorations remain on MainActor.
             let prepared: (DiffEditState, [Int], Int, [Int: Int]?, DiffComputation)? =
@@ -953,7 +1035,11 @@ final class DiffTab: nonisolated Identifiable {
             guard generation == targetGeneration, readOnlyReason == nil else { return }
             savedNewContent = written
             // An edit landing while the write was in flight stays dirty.
-            isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            let dirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            if isDirty != dirty { isDirty = dirty }
+            if dirty { _ = resynchronizeNativeDelta() }
+            else { nativeCodeUnitDelta = [:] }
+            reversibleEdit = nil
             saveError = nil
             if !isDirty { reload() }
         } catch {
@@ -1018,30 +1104,34 @@ final class DiffTab: nonisolated Identifiable {
         let selection = await gitObject(location, in: root, backend: backend)
         if let error = selection.error { return (.failed(error), selection.isUnmerged) }
         guard let oid = selection.oid else { return (.missing, selection.isUnmerged) }
-        let size = await GitCommandExecution.run(
-            ["cat-file", "-s", oid], in: root, backend: backend
+        // Read the immutable OID through the same Git environment as metadata.
+        // One bounded --batch exchange returns type, size and complete bytes.
+        let result = await GitCommandExecution.runData(
+            ["cat-file", "--batch"], in: root, timeout: 60,
+            stdoutLimit: maxBytes + 128, stdin: Data((oid + "\n").utf8), backend: backend
         )
-        guard size.status == 0 else {
-            return (.failed(size.stderr.isEmpty
-                ? String(localized: "Unable to read Git content", table: "Git") : size.stderr), selection.isUnmerged)
+        if result.status == -3 { return (.tooLarge, selection.isUnmerged) }
+        let failure = String(localized: "Unable to read Git content", table: "Git")
+        guard result.status == 0 else {
+            return (.failed(result.stderr.isEmpty ? failure : result.stderr), selection.isUnmerged)
         }
-        guard let byteCount = Int(size.stdout.trimmingCharacters(in: .whitespacesAndNewlines)),
-              byteCount >= 0 else {
-            return (.failed(String(localized: "Unable to read Git content", table: "Git")), selection.isUnmerged)
+        let data = result.stdout
+        guard let headerEnd = data.firstIndex(of: 10), headerEnd <= 128,
+              let header = String(bytes: data[..<headerEnd], encoding: .utf8) else {
+            return (.failed(failure), selection.isUnmerged)
+        }
+        let fields = header.split(separator: " ")
+        guard fields.count == 3, fields[0] == oid, fields[1] == "blob",
+              let byteCount = Int(fields[2]), byteCount >= 0 else {
+            return (.failed(failure), selection.isUnmerged)
         }
         guard byteCount <= maxBytes else { return (.tooLarge, selection.isUnmerged) }
-        let blob = await GitCommandExecution.runData(
-            ["cat-file", "blob", oid], in: root, stdoutLimit: maxBytes + 1, backend: backend
-        )
-        guard blob.status == 0 else {
-            return (.failed(blob.stderr.isEmpty
-                ? String(localized: "Unable to read Git content", table: "Git") : blob.stderr), selection.isUnmerged)
-        }
-        guard blob.stdout.count <= maxBytes else { return (.tooLarge, selection.isUnmerged) }
-        guard blob.stdout.count == byteCount else {
+        let start = headerEnd + 1
+        guard data.count == start + byteCount + 1, data.last == 10 else {
             return (.failed(String(localized: "Incomplete Git content", table: "Git")), selection.isUnmerged)
         }
-        guard !blob.stdout.contains(0), let text = String(data: blob.stdout, encoding: .utf8) else {
+        let blob = Data(data[start..<(start + byteCount)])
+        guard !blob.contains(0), let text = String(data: blob, encoding: .utf8) else {
             return (.binary, selection.isUnmerged)
         }
         return (.content(text, oid: oid), selection.isUnmerged)
@@ -1062,23 +1152,26 @@ final class DiffTab: nonisolated Identifiable {
         }
         let limit = 1 << 16
         let metadata = await GitCommandExecution.runData(
-            args, in: root, stdoutLimit: limit + 1, backend: backend
+            args, in: root, timeout: 60, stdoutLimit: limit + 1, backend: backend
         )
         if metadata.status != 0 {
             if case .tree("HEAD", _) = location {
                 // A verified unborn HEAD has no tree. An arbitrary bad ref,
                 // missing repository or failed command must not masquerade as one.
                 let head = await GitCommandExecution.run(
-                    ["rev-parse", "-q", "--verify", "HEAD^{commit}"], in: root, backend: backend
+                    ["rev-parse", "-q", "--verify", "HEAD^{commit}"],
+                    in: root, timeout: 60, backend: backend
                 )
                 if head.status == 1 {
                     let symbolic = await GitCommandExecution.run(
-                        ["symbolic-ref", "-q", "HEAD"], in: root, backend: backend
+                        ["symbolic-ref", "-q", "HEAD"],
+                        in: root, timeout: 60, backend: backend
                     )
                     if symbolic.status == 0 {
                         let branch = symbolic.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
                         let ref = await GitCommandExecution.run(
-                            ["show-ref", "--verify", "--quiet", branch], in: root, backend: backend
+                            ["show-ref", "--verify", "--quiet", branch],
+                            in: root, timeout: 60, backend: backend
                         )
                         if ref.status == 1 { return (nil, false, nil) }
                     }
@@ -1166,19 +1259,13 @@ final class DiffTab: nonisolated Identifiable {
             return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
         }
         let failure = String(localized: "Unable to read Git content", table: "Git")
-        let cleaned: WorkspaceRunResult
-        do {
-            cleaned = try await backend.run(
-                argv: ["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
-                       "LC_ALL=C", "git", "hash-object", "--path=" + worktreePath, "--stdin"],
-                cwd: root, env: nil, stdin: Data(worktree.utf8), timeout: 60
-            )
-        } catch {
-            return (nil, nil, error.localizedDescription, false)
-        }
+        let cleaned = await GitCommandExecution.runData(
+            ["hash-object", "--path=" + worktreePath, "--stdin"],
+            in: root, timeout: 60, stdoutLimit: 128,
+            stdin: Data(worktree.utf8), backend: backend
+        )
         guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
-            let detail = String(decoding: cleaned.stderr, as: UTF8.self)
-            return (nil, nil, detail.isEmpty ? failure : detail, false)
+            return (nil, nil, cleaned.stderr.isEmpty ? failure : cleaned.stderr, false)
         }
         let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1186,7 +1273,7 @@ final class DiffTab: nonisolated Identifiable {
             ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
              "--no-color", "--no-renames", "--full-index", "--unified=0",
              "--inter-hunk-context=0"] + comparison + ["--", path],
-            in: root, stdoutLimit: maxBytes * 4 + 1, backend: backend
+            in: root, timeout: 60, stdoutLimit: maxBytes * 4 + 1, backend: backend
         )
         guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
               let text = String(data: patch.stdout, encoding: .utf8) else {
@@ -1196,6 +1283,17 @@ final class DiffTab: nonisolated Identifiable {
             old: old, worktree: worktree, patch: text,
             oldOID: oldOID, newOID: newOID
         ) {
+            // Git's normalized OID cannot distinguish different raw files
+            // when a clean filter discards or rewrites their bytes. The filter
+            // itself may have replaced the worktree during hash-object/diff.
+            // Confirm the editable source, not just the canonical Git patch.
+            let current = await readWorktreeFile(
+                root: root, path: worktreePath, backend: backend
+            )
+            if let error = current.error { return (nil, nil, error, false) }
+            guard current.text.utf8.elementsEqual(worktree.utf8) else {
+                return (nil, nil, nil, true)
+            }
             let core: DiffCore? = await Self.runBackgroundDiffWork {
                 guard let ops = content.operations else { return nil }
                 return DiffCore.fromVerifiedOperations(

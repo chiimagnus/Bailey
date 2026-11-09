@@ -27,7 +27,36 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
     private var rightPane: DiffCodePaneView?
     private var divider: NSView?
     private var editPane: DiffCodePaneView?
+    private weak var focusedFindPane: DiffCodePaneView?
     private var renderedEditRevision: UInt?
+    private var pendingEdit: (range: NSRange, removed: String, inserted: String)?
+
+    var editedText: String? {
+        guard let diff, renderedEditRevision == diff.editBufferRevision else { return nil }
+        return editPane?.textView.string
+    }
+
+    /// True tab/project closure, never a temporary SwiftUI dismantle.
+    func retireNativeDocument() {
+        onFocused = nil
+        canFocus = { false }
+        pendingFocus = false
+        pendingViewportOffsets = []
+        pendingAnchor = nil
+        pendingEdit = nil
+        focusedFindPane = nil
+        for pane in [editPane, unifiedPane, leftPane, rightPane].compactMap({ $0 }) {
+            pane.retireNativeDocument()
+            pane.removeFromSuperview()
+        }
+        divider?.removeFromSuperview()
+        editPane = nil
+        unifiedPane = nil
+        leftPane = nil
+        rightPane = nil
+        divider = nil
+        diff = nil
+    }
     private var pendingAnchor: (oldLine: Int?, newLine: Int?)?
     private var didRevealInitialChange = false
     private var pendingFirstChangeRow: Int?
@@ -107,13 +136,9 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
             restorePendingViewports()
             if let row = pendingFirstChangeRow, let pane = editPane, !pane.isHidden {
                 pane.layoutSubtreeIfNeeded()
-                pane.scrollView.layoutSubtreeIfNeeded()
-                pane.textView.layoutSubtreeIfNeeded()
                 pane.scrollToRow(row)
                 if let leftPane, !leftPane.isHidden {
                     leftPane.layoutSubtreeIfNeeded()
-                    leftPane.scrollView.layoutSubtreeIfNeeded()
-                    leftPane.textView.layoutSubtreeIfNeeded()
                     leftPane.setScrollOffset(pane.scrollOffset)
                 }
                 let rowHeight = DiffTypography.paragraphStyle(for: TerminalFont.current())
@@ -179,11 +204,11 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                                  longLineDisplayWidth: width)
             pane.textView.insertionPointColor = palette.insertionPoint
             pane.textView.isEditable = diff.isEditableNow
-            loadSourceText(diff.editedNewContent, revision: diff.editBufferRevision,
-                           path: diff.path, into: pane)
-            let lineOffsets = diff.editDecorations.editSnapshotOffsets
-            pane.setEditingFolds(folds, lineOffsets: lineOffsets,
-                                 baseDecorations: diff.editDecorations,
+            if renderedEditRevision != diff.editBufferRevision {
+                loadSourceText(diff.editedNewContent, revision: diff.editBufferRevision,
+                               path: diff.path, into: pane)
+            }
+            pane.setEditingFolds(folds, baseDecorations: diff.editDecorations,
                                  revision: diff.editPresentationRevision)
             if let display = diff.display {
                 if diff.showsCanonicalComparison {
@@ -276,7 +301,10 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                                 into pane: DiffCodePaneView) {
         if renderedEditRevision != revision {
             renderedEditRevision = revision
+            let onEdit = pane.textView.onCharacterEdit
+            pane.textView.onCharacterEdit = nil
             pane.setEditBufferText(text)
+            pane.textView.onCharacterEdit = onEdit
         }
         if !paneHasSyntaxPlugin {
             paneHasSyntaxPlugin = true
@@ -286,10 +314,29 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         }
     }
 
+    func performFindAction(_ action: FindAction) {
+        if case .replace = action {
+            guard diff?.isEditing == true, diff?.isEditableNow == true,
+                  let editPane, !editPane.isHidden else { return }
+            if let focusedFindPane, focusedFindPane !== editPane,
+               focusedFindPane.scrollView.isFindBarVisible {
+                FindAction.hide.perform(on: focusedFindPane.textView)
+            }
+            focusedFindPane = editPane
+            action.perform(on: editPane.textView)
+            return
+        }
+        let visible = [editPane, rightPane, unifiedPane, leftPane]
+            .compactMap { $0 }.filter { !$0.isHidden }
+        guard let pane = visible.first(where: { $0 === focusedFindPane }) ?? visible.first else { return }
+        action.perform(on: pane.textView)
+    }
+
     private func makePane(mode: DiffCodePaneView.Mode, gutter: DiffGutterLayout) -> DiffCodePaneView {
         let pane = DiffCodePaneView(mode: mode, gutterLayout: gutter)
         pane.textView.onBecomeFirstResponder = { [weak self, weak pane] in
-            guard let self else { return }
+            guard let self, let pane else { return }
+            self.focusedFindPane = pane
             if pane === self.editPane { self.diff?.setEditorActive(true) }
             self.onFocused?()
         }
@@ -302,7 +349,9 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         let pane = makePane(mode: .edit, gutter: .single)
         pane.textView.setAccessibilityIdentifier("bailey.diff.worktree")
         pane.textView.delegate = self
-        pane.textView.onCharacterEdit = { [weak self] in self?.editTextDidChange() }
+        pane.textView.onCharacterEdit = { [weak self] range, replacement in
+            self?.editTextDidChange(previousRange: range, replacement: replacement)
+        }
         pane.textView.onResignFirstResponder = { [weak self] in
             guard let self else { return }
             self.diff?.autoSaveOnFocusLoss()
@@ -379,9 +428,31 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
         }
     }
 
-    private func editTextDidChange() {
-        guard let diff, diff.isEditing, let textView = editPane?.textView else { return }
-        diff.updateEditedContent(textView.string)
+    func textView(_ view: NSTextView, shouldChangeTextIn range: NSRange,
+                  replacementString: String?) -> Bool {
+        guard view === editPane?.textView, let replacementString,
+              let storage = view.textStorage, range.location != NSNotFound,
+              NSMaxRange(range) <= storage.length else {
+            pendingEdit = nil
+            return true
+        }
+        pendingEdit = (range, storage.attributedSubstring(from: range).string, replacementString)
+        return true
+    }
+
+    private func editTextDidChange(previousRange: NSRange, replacement: String) {
+        guard let diff, diff.isEditing else { return }
+        let removed: String?
+        if let pendingEdit, pendingEdit.range == previousRange,
+           pendingEdit.inserted.utf8.elementsEqual(replacement.utf8) {
+            removed = pendingEdit.removed
+        } else {
+            removed = previousRange.length == 0 ? "" : nil
+        }
+        pendingEdit = nil
+        editPane?.applyLiveNativeEdit(previousRange: previousRange, replacement: replacement)
+        diff.nativeTextDidChange(previousRange: previousRange, removed: removed,
+                                 replacement: replacement)
     }
 
 }

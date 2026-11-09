@@ -132,7 +132,7 @@ nonisolated enum SSHWindowsFileEvents {
         process.arguments = [
             "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
             "-o", "ControlMaster=no", "-S", "none",
-            "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=3",
+            "-o", "ServerAliveInterval=3",
             "-o", "ServerAliveCountMax=2", "-tt", "--", host, command
         ]
         let stdout = Pipe()
@@ -166,13 +166,14 @@ nonisolated enum SSHWindowsFileEvents {
         var sawEnd = false
         var sawReady = false
         let started = Date()
+        let startupTimeout = 30.0
         var openDescriptors: Set<Int32> = [outFD, errFD]
         var buffer = [UInt8](repeating: 0, count: 4_096)
         // stdout carries the only trusted event frames. Its EOF invalidates
         // the stream even if a remote child still holds stderr open.
         while !Task<Never, Never>.isCancelled && openDescriptors.contains(outFD) && !sawEnd {
-            if Date().timeIntervalSince(started) > Double(leaseSeconds + 20)
-                || (!sawReady && Date().timeIntervalSince(started) > 15) { break }
+            if Date().timeIntervalSince(started) > Double(leaseSeconds) + startupTimeout
+                || (!sawReady && Date().timeIntervalSince(started) > startupTimeout) { break }
             var fds = openDescriptors.sorted().map {
                 pollfd(fd: $0, events: Int16(POLLIN), revents: 0)
             }

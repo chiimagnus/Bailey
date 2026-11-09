@@ -81,6 +81,7 @@ final class HighlightQueryCache {
 @MainActor
 final class SyntaxHighlightCoordinator {
     private(set) var highlighter: Neon.Highlighter?
+    private let textInterface: SyntaxHighlightTextInterface
     let tsClient: TreeSitterClient
     private let coordinates: TextCoordinateIndex
     private var pendingInjectionQueries: Set<SyntaxLanguage> = []
@@ -106,10 +107,6 @@ final class SyntaxHighlightCoordinator {
             synchronousLengthThreshold: 0
         )
 
-        tsClient.invalidationHandler = { [weak self, hasInjections = injectionsData != nil] indexSet in
-            self?.highlighter?.invalidate(hasInjections ? .all : .set(indexSet))
-        }
-
         let textInterface = SyntaxHighlightTextInterface(textView: textView) { neonToken in
             // Metadata captures aren't colors — skip them so they don't repaint
             // a real capture on the same range. Swift captures comments as
@@ -124,7 +121,11 @@ final class SyntaxHighlightCoordinator {
         // Start with no token provider (a no-op); it's installed below once the
         // query is ready — off the main thread on first use, so opening a file
         // never blocks on the ~190 ms Swift query compile.
+        self.textInterface = textInterface
         highlighter = Neon.Highlighter(textInterface: textInterface)
+        tsClient.invalidationHandler = { [weak self, hasInjections = injectionsData != nil] indexSet in
+            self?.highlighter?.invalidate(hasInjections ? .all : .set(indexSet))
+        }
 
         // Parse the whole document once up front.
         let initialLength = string.utf16.count
@@ -199,8 +200,10 @@ final class SyntaxHighlightCoordinator {
                         for: language, kind: .injections, data: injectionsData
                     )
                 }
-                guard let query = await root.value, let self, let textContentManager else { return }
-                if let injectionsQuery = await embedded.value {
+                let rootQuery = await root.value
+                let injectionsQuery = await embedded.value
+                guard let query = rootQuery, let self, let textContentManager else { return }
+                if let injectionsQuery {
                     self.setInjectionTokenProvider(
                         highlightsQuery: query, injectionsQuery: injectionsQuery,
                         textContentManager: textContentManager
@@ -363,6 +366,9 @@ final class SyntaxHighlightCoordinator {
         highlightRevision &+= 1
         for task in injectedFragments.values { task.cancel() }
         injectedFragments.removeAll()
+        // Neon may retain a queued main-queue token callback after the owner
+        // drops its Highlighter. Disconnect its adapter before TextKit retires.
+        textInterface.deactivate()
         highlighter = nil
     }
 
@@ -401,6 +407,8 @@ private final class SyntaxHighlightTextInterface: TextSystemInterface {
         self.textView = textView
         self.colorProvider = colorProvider
     }
+
+    func deactivate() { textView = nil }
 
     func clearStyle(in range: NSRange) {
         guard let textView,

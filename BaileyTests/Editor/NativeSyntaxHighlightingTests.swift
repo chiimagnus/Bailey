@@ -151,22 +151,30 @@ final class NativeSyntaxHighlightingTests: XCTestCase {
         XCTAssertEqual(mounted.editor.text, "")
     }
 
-    func testClosingEmbeddedEditorReleasesPendingHighlightRequests() async throws {
-        weak var editor: NativeCodeTextView?
+    func testRetiringEmbeddedEditorReleasesPendingHighlightRequests() async throws {
         weak var coordinator: SyntaxHighlightCoordinator?
         func startAndClose() async throws {
             let source = "```swift\n" + String(repeating: "// 中文 👋\nlet value = 42\n", count: 2048) + "```\n"
             let mounted = try autoreleasepool { try mountedPlugin(path: "fixture.md", source: source) }
-            editor = mounted.editor
             coordinator = mounted.coordinator
             _ = try await mounted.coordinator.tsClient.currentTree()
-            try XCTUnwrap(mounted.coordinator.highlighter).tokenProvider(NSRange(location: 0, length: 1024)) { _ in }
+            var delivered = 0
+            try XCTUnwrap(mounted.coordinator.highlighter).tokenProvider(
+                NSRange(location: 0, length: 1024)) { _ in delivered += 1 }
+            let beforeRetirement = delivered
+            // True document retirement is separate from NSWindow close: this
+            // fixture deliberately keeps its NSWindow alive after close.
+            mounted.editor.retireNativeDocument()
+            XCTAssertNil(mounted.editor.syntaxCoordinator)
             mounted.window.contentView = nil
             mounted.window.close()
+            await Task.yield()
+            XCTAssertEqual(delivered, beforeRetirement,
+                           "Retired Markdown injection requests must never deliver late colors")
         }
         for _ in 0..<6 {
             try await startAndClose()
-            try await wait { editor == nil && coordinator == nil }
+            try await wait { coordinator == nil }
         }
     }
 
@@ -187,9 +195,9 @@ final class NativeSyntaxHighlightingTests: XCTestCase {
         let expected = SyntaxHighlightCoordinator.themeColor(for: "comment", theme: SyntaxHighlighting.theme)
         XCTAssertNotNil(expected)
         try await wait { self.color(second.editor, at: comment) == expected }
-        let captures = await Task.detached {
-            DiffSyntaxHighlighter.captures(text: source, context: context)
-        }.value
+        let captures = await DiffSyntaxSource().captures(
+            text: source, context: context,
+            ranges: [NSRange(location: 0, length: source.utf16.count)])
         let colors = DiffSyntaxHighlighter.colors(for: captures)
         XCTAssertTrue(colors.contains { NSLocationInRange(comment, $0.range) && $0.color == expected })
     }

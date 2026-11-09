@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 import XCTest
@@ -38,17 +39,195 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertEqual(failure.status, 7)
 
         let started = Date()
-        XCTAssertThrowsError(try ProcessRemoteCommandRunner.launch(
+        let completed = try ProcessRemoteCommandRunner.launch(
             sshPath: "/bin/sh",
-            arguments: ["-c", "(sleep 0.5) & printf retained"],
-            stdin: nil,
-            timeout: 0.05
-        )) { error in
-            guard case WorkspaceError.timedOut = error else {
-                return XCTFail("Expected timeout, got \(error)")
+            arguments: ["-c", "(sleep 2) & printf retained"],
+            stdin: nil, timeout: 1
+        )
+        XCTAssertEqual(completed.status, 0)
+        XCTAssertEqual(completed.stdout, Data("retained".utf8))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testCompletedSSHRunnerDoesNotWaitForInheritedOutputPipes() throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-output-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        defer {
+            if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGTERM)
             }
         }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.4)
+        let started = Date()
+        let result = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 4 & echo $! > \(escaped); printf out; printf err >&2"],
+            stdin: nil, timeout: 2, stdoutLimit: 3, stderrLimit: 3
+        )
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, Data("out".utf8))
+        XCTAssertEqual(result.stderr, Data("err".utf8))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testCancelStopsTheActualRemoteCommandRunnerProcess() async throws {
+        let started = Date()
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sleep", arguments: ["8"], stdin: nil, timeout: 4,
+                stdoutLimit: 32, stderrLimit: 32
+            )
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        command.cancel()
+        do {
+            _ = try await command.value
+            XCTFail("Cancelled SSH process must not return a successful result")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Cancelled SSH process returned the wrong failure: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testCompletedSSHCommandFailsPromptlyWhenDescendantHoldsUnwrittenInput() throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-unread-input-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        defer {
+            if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = Darwin.kill(pid, SIGTERM)
+            }
+        }
+        let started = Date()
+        do {
+            _ = try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sh",
+                arguments: ["-c", "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); exit 0"],
+                stdin: Data(repeating: 0x62, count: 2 * 1024 * 1024), timeout: 2,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+            XCTFail("An SSH command cannot succeed with unwritten input")
+        } catch RemoteConnectionError.commandFailed(let status, let message) {
+            XCTAssertEqual(status, -1)
+            XCTAssertFalse(message.isEmpty)
+        } catch {
+            XCTFail("Expected an incomplete-input command error, got \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testCancelledRemoteInputWriterDoesNotWaitForInheritedPipeTimeout() async throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-stdin-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let escaped = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let started = Date()
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sh",
+                arguments: ["-c", "exec 3<&0; /bin/sleep 4 0<&3 >/dev/null 2>&1 & echo $! > \(escaped); /bin/sleep 0.5; exit 0"],
+                stdin: Data(repeating: 0x62, count: 2 * 1024 * 1024), timeout: 3,
+                stdoutLimit: 128, stderrLimit: 128
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidURL.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pid = try XCTUnwrap(pid_t(String(contentsOf: pidURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { if Darwin.kill(pid, 0) == 0 { _ = Darwin.kill(pid, SIGTERM) } }
+        command.cancel()
+        do {
+            _ = try await command.value
+            XCTFail("Cancelled remote stdin writer must not report success")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Cancelled remote stdin writer returned the wrong error: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1,
+                          "Remote stdout completion cannot conceal a stuck stdin writer")
+    }
+
+    func testCancelledRemoteRunnerReapsItsExactPID() async throws {
+        let pidURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-remote-cancel-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidURL) }
+        let path = "'" + pidURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let command = Task.detached(priority: .utility) {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/bin/sh",
+                arguments: ["-c", "echo $$ > \(path); exec /bin/sleep 8"],
+                stdin: nil, timeout: 5, stdoutLimit: 128, stderrLimit: 128
+            )
+        }
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: pidURL.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pidText = try String(contentsOf: pidURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(pid_t(pidText))
+        XCTAssertEqual(Darwin.kill(pid, 0), 0)
+        command.cancel()
+        do {
+            _ = try await command.value
+            XCTFail("Cancelled child must not succeed")
+        } catch is CancellationError {
+        }
+        var exited = false
+        for _ in 0..<50 {
+            if Darwin.kill(pid, 0) == -1 && errno == ESRCH { exited = true; break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(exited, "An abandoned SSH command must not leave its process running")
+    }
+
+    func testBoundedRemotePipeStopsBeforeLargeOutputIsCollected() throws {
+        let exact = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/bin/sh", arguments: ["-c", "printf abcde; printf err >&2"],
+            stdin: nil, timeout: 2, stdoutLimit: 5, stderrLimit: 3
+        )
+        XCTAssertEqual(exact.status, 0)
+        XCTAssertEqual(exact.stdout, Data("abcde".utf8))
+        XCTAssertEqual(exact.stderr, Data("err".utf8))
+
+        let scripts = [
+            "print STDOUT 'x' x (16 * 1024 * 1024)",
+            "print STDERR 'e' x (16 * 1024 * 1024)",
+            "$|=1; while (1) { print STDOUT 'a' x 4096; print STDERR 'b' x 4096 }",
+        ]
+        for script in scripts {
+            let start = Date()
+            let output = ProcessRemoteCommandRunner.run(
+                sshPath: "/usr/bin/perl", arguments: ["-e", script],
+                stdin: nil, timeout: 4, stdoutLimit: 4_096, stderrLimit: 4_096
+            )
+            XCTAssertEqual(output.status, -3, "An oversized stream must not publish success")
+            XCTAssertLessThanOrEqual(output.stdout.count, 4_096)
+            XCTAssertLessThanOrEqual(output.stderr.count, 4_096)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 2,
+                              "A rejected command must stop rather than drain the full stream")
+            XCTAssertThrowsError(try ProcessRemoteCommandRunner.launch(
+                sshPath: "/usr/bin/perl", arguments: ["-e", script],
+                stdin: nil, timeout: 4, stdoutLimit: 4_096, stderrLimit: 4_096
+            )) { error in
+                guard case WorkspaceError.tooLarge = error else {
+                    return XCTFail("Expected output limit, got \(error)")
+                }
+            }
+        }
+
+        let abnormal = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/bin/sh", arguments: ["-c", "printf abc; printf warning >&2; exit 7"],
+            stdin: nil, timeout: 2, stdoutLimit: 8, stderrLimit: 16
+        )
+        XCTAssertEqual(abnormal.status, 7)
+        XCTAssertEqual(abnormal.stdout, Data("abc".utf8))
+        XCTAssertEqual(abnormal.stderr, Data("warning".utf8))
     }
 
     func testPrivateSSHSocketHandoffCompletesAcrossWorkerAndMainActor() async throws {

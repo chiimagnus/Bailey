@@ -1,0 +1,201 @@
+name: Bailey XCTest (host and UI)
+
+on:
+  push:
+    tags:
+      - 'ci-ui-*'
+  workflow_dispatch:
+    inputs:
+      test_target:
+        description: 'Choose which XCTest targets to run'
+        type: choice
+        required: true
+        default: both
+        options:
+          - both
+          - host
+          - ui
+      host_tests:
+        description: 'Host class/method selectors, comma or space separated; empty = all'
+        type: string
+        required: false
+      ui_tests:
+        description: 'UI class/method selectors, comma or space separated; empty = all'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bailey-xctest-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  host:
+    name: BaileyTests
+    if: ${{ github.event_name == 'push' || inputs.test_target == 'both' || inputs.test_target == 'host' }}
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify runner and Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcode-select -p)" = "$DEVELOPER_DIR"
+          sw_vers -productVersion
+          xcodebuild -version
+          /usr/bin/git --version
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Execute selected BaileyTests
+        env:
+          REQUESTED_TESTS: ${{ inputs.host_tests }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_TESTS//,/ }"
+          selected=()
+          for item in $requested; do
+            if [[ ! "$item" =~ ^(BaileyTests/)?[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)?$ ]]; then
+              echo "::error::Invalid BaileyTests selector: $item"
+              exit 2
+            fi
+            selected+=("BaileyTests/${item#BaileyTests/}")
+          done
+          if (( ${#selected[@]} )); then
+            make test SIGNING=adhoc ONLY_TESTING="${selected[*]}"
+          else
+            make test SIGNING=adhoc
+          fi
+      - name: Inspect XCTest results
+        if: success()
+        run: |
+          python3 - <<'PYRESULT'
+          import glob
+          import json
+          import subprocess
+          import sys
+
+          executed = 0
+          for bundle in glob.glob("build/DerivedData-Dev/Logs/Test/*.xcresult"):
+              summary = json.loads(subprocess.check_output(
+                  ["xcrun", "xcresulttool", "get", "test-results", "summary",
+                   "--path", bundle, "--compact"], text=True
+              ))
+              if summary["totalTestCount"] == 0:
+                  continue  # Makefile's -enumerate-tests preflight generates an empty bundle.
+              print(bundle, {key: summary[key] for key in
+                  ("result", "totalTestCount", "passedTests", "failedTests", "skippedTests")})
+              if summary["result"] != "Passed" or summary["passedTests"] == 0:
+                  sys.exit("XCTest did not complete successfully")
+              executed += summary["totalTestCount"]
+          if executed == 0:
+              sys.exit("No XCTest methods executed")
+          PYRESULT
+      - name: Pack XCTest diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          for bundle in build/DerivedData-Dev/Logs/Test/*.xcresult; do
+            test -d "$bundle" || continue
+            ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
+          done
+      - name: Upload host XCTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bailey-host-xcresult
+          path: test-results/*.zip
+          if-no-files-found: warn
+          retention-days: 7
+
+  ui:
+    name: BaileyUITests
+    if: ${{ github.event_name == 'push' || inputs.test_target == 'both' || inputs.test_target == 'ui' }}
+    runs-on: xcode-27
+    timeout-minutes: 240
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify runner and Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcode-select -p)" = "$DEVELOPER_DIR"
+          sw_vers -productVersion
+          xcodebuild -version
+          /usr/bin/git --version
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Execute selected BaileyUITests
+        env:
+          REQUESTED_TESTS: ${{ inputs.ui_tests }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_TESTS//,/ }"
+          selected=()
+          for item in $requested; do
+            if [[ ! "$item" =~ ^(BaileyUITests/)?[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)?$ ]]; then
+              echo "::error::Invalid BaileyUITests selector: $item"
+              exit 2
+            fi
+            selected+=("BaileyUITests/${item#BaileyUITests/}")
+          done
+          if (( ${#selected[@]} )); then
+            make test:ui SIGNING=adhoc ONLY_TESTING="${selected[*]}"
+          else
+            make test:ui SIGNING=adhoc
+          fi
+      - name: Inspect XCTest results
+        if: success()
+        run: |
+          python3 - <<'PYRESULT'
+          import glob
+          import json
+          import subprocess
+          import sys
+
+          executed = 0
+          for bundle in glob.glob("build/DerivedData-Dev/Logs/Test/*.xcresult"):
+              summary = json.loads(subprocess.check_output(
+                  ["xcrun", "xcresulttool", "get", "test-results", "summary",
+                   "--path", bundle, "--compact"], text=True
+              ))
+              if summary["totalTestCount"] == 0:
+                  continue  # Makefile's -enumerate-tests preflight generates an empty bundle.
+              print(bundle, {key: summary[key] for key in
+                  ("result", "totalTestCount", "passedTests", "failedTests", "skippedTests")})
+              if summary["result"] != "Passed" or summary["passedTests"] == 0:
+                  sys.exit("XCTest did not complete successfully")
+              executed += summary["totalTestCount"]
+          if executed == 0:
+              sys.exit("No XCTest methods executed")
+          PYRESULT
+      - name: Pack XCTest diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          for bundle in build/DerivedData-Dev/Logs/Test/*.xcresult; do
+            test -d "$bundle" || continue
+            ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
+          done
+      - name: Upload UI XCTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bailey-ui-xcresult
+          path: test-results/*.zip
+          if-no-files-found: warn
+          retention-days: 7

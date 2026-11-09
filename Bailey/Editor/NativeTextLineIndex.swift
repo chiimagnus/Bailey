@@ -4,18 +4,51 @@ import Foundation
 
 /// UTF-16 line breaks with a Fenwick index; not a rendering engine.
 struct NativeTextLineIndex {
+    enum BreakMode { case native, gitLF }
+
     private var lineLengths: [Int]
     private var lengths: PrefixSums
+    private var nativeOnlyLineEnds: [Bool]
+    private var nativeOnlySeparatorCount: Int
+    private let breakMode: BreakMode
     private(set) var length: Int
 
     var lineCount: Int { lineLengths.count }
+    var hasNativeOnlySeparators: Bool { nativeOnlySeparatorCount > 0 }
 
-    init(_ text: NSString) {
+    init(_ text: NSString, breakMode: BreakMode = .native) {
+        self.breakMode = breakMode
         length = text.length
-        let positions = Self.starts(in: text, from: 0, to: text.length)
+        let positions = Self.starts(in: text, from: 0, to: text.length,
+                                    breakMode: breakMode)
         lineLengths = positions.enumerated().map { index, start in
             (index + 1 < positions.count ? positions[index + 1] : text.length) - start
         }
+        nativeOnlyLineEnds = breakMode == .native ? positions.enumerated().map { index, _ in
+            Self.isNativeOnlyTerminator(
+                in: text, end: index + 1 < positions.count ? positions[index + 1] : text.length
+            )
+        } : []
+        nativeOnlySeparatorCount = nativeOnlyLineEnds.reduce(0) { $0 + ($1 ? 1 : 0) }
+        lengths = PrefixSums(lineLengths)
+    }
+
+    /// The initial Git index already has a Swift String; stream its UTF-16
+    /// units directly rather than bridging each range through NSString.
+    init(gitLF text: String) {
+        var starts = [0]
+        var total = 0
+        for unit in text.utf16 {
+            total += 1
+            if unit == 10 { starts.append(total) }
+        }
+        breakMode = .gitLF
+        length = total
+        lineLengths = starts.enumerated().map { index, start in
+            (index + 1 < starts.count ? starts[index + 1] : total) - start
+        }
+        nativeOnlyLineEnds = []
+        nativeOnlySeparatorCount = 0
         lengths = PrefixSums(lineLengths)
     }
 
@@ -33,9 +66,20 @@ struct NativeTextLineIndex {
         let delta = replacementLength - range.length
         let end = oldEnd + delta
         let inserted = Self.starts(in: text, from: offset(atLine: first), to: end,
-                                   includesEnd: last == originalCount)
+                                   includesEnd: last == originalCount,
+                                   breakMode: breakMode)
         let newLengths = inserted.enumerated().map { index, start in
             (index + 1 < inserted.count ? inserted[index + 1] : end) - start
+        }
+        let newNativeOnlyEnds = breakMode == .native ? inserted.enumerated().map { index, _ in
+            Self.isNativeOnlyTerminator(
+                in: text, end: index + 1 < inserted.count ? inserted[index + 1] : end
+            )
+        } : []
+        if breakMode == .native {
+            let removed = nativeOnlyLineEnds[first..<last].reduce(0) { $0 + ($1 ? 1 : 0) }
+            let added = newNativeOnlyEnds.reduce(0) { $0 + ($1 ? 1 : 0) }
+            nativeOnlySeparatorCount += added - removed
         }
         if newLengths.count == last - first {
             for (offset, value) in newLengths.enumerated() {
@@ -43,10 +87,14 @@ struct NativeTextLineIndex {
                 let shift = value - lineLengths[row]
                 lineLengths[row] = value
                 lengths.add(shift, at: row)
+                if breakMode == .native { nativeOnlyLineEnds[row] = newNativeOnlyEnds[offset] }
             }
         } else {
             lineLengths.replaceSubrange(first..<last, with: newLengths)
             lengths = PrefixSums(lineLengths)
+            if breakMode == .native {
+                nativeOnlyLineEnds.replaceSubrange(first..<last, with: newNativeOnlyEnds)
+            }
         }
         length = text.length
         return (first..<last, first..<(first + newLengths.count))
@@ -106,8 +154,27 @@ struct NativeTextLineIndex {
         }
     }
 
-    private static func starts(in text: NSString, from start: Int, to end: Int, includesEnd: Bool = true) -> [Int] {
+    private static func isNativeOnlyTerminator(in text: NSString, end: Int) -> Bool {
+        guard end > 0 else { return false }
+        switch text.character(at: end - 1) {
+        case 0x0D, 0x85, 0x2028, 0x2029: return true
+        default: return false
+        }
+    }
+
+    private static func starts(in text: NSString, from start: Int, to end: Int,
+                               includesEnd: Bool = true,
+                               breakMode: BreakMode) -> [Int] {
         var result = [start]
+        if breakMode == .gitLF {
+            for offset in start..<end where text.character(at: offset) == 10 {
+                let following = offset + 1
+                if following < end || (includesEnd && following == text.length) {
+                    result.append(following)
+                }
+            }
+            return result
+        }
         var offset = start
         while offset < end {
             var lineEnd = 0

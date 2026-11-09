@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import XCTest
 
@@ -94,7 +95,7 @@ final class WorkspaceGitUITests: XCTestCase {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
             process.arguments = [
                 "-T", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-                "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", host, "sh -s",
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "--", host, "sh -s",
             ]
             let input = Pipe()
             let output = Pipe()
@@ -120,14 +121,14 @@ final class WorkspaceGitUITests: XCTestCase {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         // The remote output is reused in shell commands, including cleanup.
         // Accept only the exact mktemp name so it cannot become shell input.
-        guard root.range(of: #"^/tmp/bailey-git-ui-[A-Za-z0-9]{6}$"#,
-                         options: .regularExpression) != nil else {
+        guard let match = root.range(of: #"^/tmp/bailey-git-ui-[A-Za-z0-9]{6}$"#,
+                                     options: .regularExpression),
+              match.lowerBound == root.startIndex, match.upperBound == root.endIndex else {
             throw NSError(domain: "WindowsSSHGuiFixture", code: 1)
         }
-        defer {
-            WorkspaceUITestSupport.finishSession()
-            // The generated path is checked against the fixed owned prefix.
-            try? ssh("rm -r -- '\(root)'\n")
+        addTeardownBlock { @MainActor in
+            do { _ = try ssh("rm -r -- '\(root)'\n") }
+            catch { XCTFail("Could not delete test-owned SSH fixture: \(error)") }
         }
 
         let status = try ssh("""
@@ -188,24 +189,32 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 40), .completed)
         confirmButton.click()
 
-        let addPanel = window.buttons["Add Panel"]
-        XCTAssertTrue(addPanel.waitForExistence(timeout: 40),
-                      "The selected SSH project must mount its workspace")
-        addPanel.click()
-        let gitAction = app.buttons.matching(
-            NSPredicate(format: "label == %@", "Git Manager")
-        ).firstMatch
-        XCTAssertTrue(gitAction.waitForExistence(timeout: 15))
-        gitAction.click()
+        let projectLabel = (root as NSString).lastPathComponent + ", SSH · " + host
+        let project = window.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", projectLabel))
+            .firstMatch
+        let projectSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in project.exists && project.isSelected }, object: nil
+        )
+        guard XCTWaiter.wait(for: [projectSelected], timeout: 40) == .completed else {
+            return XCTFail("The authorized SSH project must be selected")
+        }
+        app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
-        XCTAssertTrue(git.waitForExistence(timeout: 40))
+        let gitSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in git.exists && git.isSelected }, object: nil
+        )
+        guard XCTWaiter.wait(for: [gitSelected], timeout: 40) == .completed else {
+            return XCTFail("The Git Manager must be selected before browsing changes")
+        }
         let remoteURL = URL(fileURLWithPath: root + "/filtered.txt")
         let rootURL = URL(fileURLWithPath: root)
         let change = WorkspaceUITestSupport.fileRow(
             remoteURL, in: window, relativeTo: rootURL
         )
-        XCTAssertTrue(change.waitForExistence(timeout: 90),
-                      "Actual Windows SSH project must show its changed file")
+        guard change.waitForExistence(timeout: 90) else {
+            return XCTFail("Actual Windows SSH project must show its changed file")
+        }
         change.click()
         let review = window.textViews["bailey.diff.canonical"]
         XCTAssertTrue(review.waitForExistence(timeout: 40))
@@ -439,6 +448,145 @@ final class WorkspaceGitUITests: XCTestCase {
                           "Split divider must restore its light color after dark-to-light")
     }
 
+    func testClosedWorktreeDiffReopensWithFreshOriginalDocument() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("reopen-diff.swift",
+                                    text: "let original = 1\nlet emoji = \"中文 🪨\"\n")
+        try fixture.initializeGit()
+        let updated = "let original = 2\nlet emoji = \"中文 🪨\"\n"
+        try updated.write(to: file, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let gitDock = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(gitDock.waitForExistence(timeout: 20))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            gitDock.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        row.click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        XCTAssertEqual(editor.value as? String, updated)
+        editor.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 15),
+                      "Closing the actual Diff tab must retire the editable native surface")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), updated)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        XCTAssertEqual(editor.value as? String, updated,
+                       "Reopening must read a new clean original document, not a retired buffer")
+        editor.click()
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, updated,
+                       "The closed tab's Undo stack must never become the reopened tab's history")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), updated)
+    }
+
+    func testFoldedWorktreeFindNextReplacesHiddenMatchWithoutChangingOtherLines() throws {
+        let findBoard = NSPasteboard(name: .find)
+        let originalFindItems = try (findBoard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                guard let data = item.data(forType: type), copy.setData(data, forType: type) else {
+                    throw NSError(domain: "BaileyUITestFind", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "Cannot preserve Find pasteboard contents"
+                    ])
+                }
+            }
+            return copy
+        }
+        let originalFindVersion = findBoard.changeCount
+        addTeardownBlock { @MainActor in
+            guard findBoard.changeCount != originalFindVersion else { return }
+            findBoard.clearContents()
+            if !originalFindItems.isEmpty {
+                XCTAssertTrue(findBoard.writeObjects(originalFindItems))
+            }
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        var lines = (0..<320).map { "line \($0)\n" }
+        lines[20] = "line 20 UNIQUE_HIDDEN_FINDER\n"
+        let original = lines.joined()
+        let changed = original.replacingOccurrences(of: "line 160\n", with: "changed 160\n")
+        let file = try fixture.file("folded-find.txt", text: original)
+        try fixture.initializeGit()
+        try changed.write(to: file, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let gitDock = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(gitDock.waitForExistence(timeout: 20))
+        let gitHittable = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            gitDock.exists && gitDock.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [gitHittable], timeout: 12), .completed,
+                       "Wait for the Git Manager panel layout before querying Changes")
+        let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(row.waitForExistence(timeout: 25))
+        row.click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        XCTAssertEqual(editor.value as? String, changed)
+        let folded = window.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "unmodified lines")
+        )
+        XCTAssertTrue(folded.firstMatch.waitForExistence(timeout: 15))
+        editor.click()
+        let before = window.textFields.count + window.searchFields.count
+        app.typeKey("f", modifierFlags: .command)
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textFields.count + window.searchFields.count > before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 10), .completed)
+        let find = window.searchFields.firstMatch.exists
+            ? window.searchFields.firstMatch
+            : window.textFields.element(boundBy: window.textFields.count - 1)
+        XCTAssertTrue(find.exists)
+        find.click()
+        find.typeKey("a", modifierFlags: .command)
+        find.typeText("UNIQUE_HIDDEN_FINDER")
+        XCTAssertEqual(find.value as? String, "UNIQUE_HIDDEN_FINDER",
+                       "Native Find can inherit the user's prior search; the fixture must replace it")
+        app.typeKey("g", modifierFlags: .command)
+        app.typeKey("g", modifierFlags: .command)
+        app.typeKey("f", modifierFlags: [.command, .option])
+        let replace = window.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Replace")
+        ).firstMatch
+        XCTAssertTrue(replace.waitForExistence(timeout: 10),
+                      "Native Replace must be available without leaving the folded editor")
+        replace.click()
+        replace.typeKey("a", modifierFlags: .command)
+        replace.typeText("FOUND20")
+        let replaceAll = window.buttons.matching(
+            NSPredicate(format: "label == %@", "All")
+        ).firstMatch
+        XCTAssertTrue(replaceAll.waitForExistence(timeout: 10))
+        replaceAll.click()
+        let expected = changed.replacingOccurrences(of: "UNIQUE_HIDDEN_FINDER", with: "FOUND20")
+        let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.exists && (editor.value as? String) == expected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 10), .completed,
+                       "Find Next must select the hidden original text without replacing other lines")
+        XCTAssertTrue(folded.firstMatch.exists,
+                      "Replacing one hidden match must keep other unchanged context folded")
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: file, encoding: .utf8)) == expected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "The real file must contain precisely the Find replacement")
+        XCTAssertEqual(editor.value as? String, expected)
+    }
+
     func testWorktreeDiffEditsAndPersistsRealGitFile() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("diff-edit.swift", text: "let value = 1\n")
@@ -473,13 +621,35 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, original,
                        "Worktree Diff must expose the live worktree content, not the old Git revision")
+        let firstFrame = XCTAttachment(screenshot: window.screenshot())
+        firstFrame.name = "Worktree editor with first-line deletion ghost"
+        firstFrame.lifetime = .keepAlways
+        add(firstFrame)
+        let fieldsBeforeFind = window.textFields.count + window.searchFields.count
+        app.typeKey("f", modifierFlags: .command)
+        let findBar = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textFields.count + window.searchFields.count > fieldsBeforeFind
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [findBar], timeout: 10), .completed,
+                       "Command-F must open the native Find bar in the actual Worktree Diff")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(editor.value as? String, original)
         editor.click()
         app.typeKey("a", modifierFlags: .command)
         editor.typeText(updated)
         XCTAssertEqual(editor.value as? String, updated)
-        // Real native Undo/Redo is tested against this retained NSTextView in
-        // NativeDiffTabTests. This UI test verifies the Split/Unified path,
-        // keyboard editing and save without repeating synthetic Cmd-Z input.
+        app.typeKey("z", modifierFlags: .command)
+        let undone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.exists && (editor.value as? String) != updated
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [undone], timeout: 10), .completed,
+                       "Actual Command-Z must change the worktree editor buffer")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        let redone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.exists && (editor.value as? String) == updated
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [redone], timeout: 10), .completed,
+                       "Actual Command-Shift-Z must restore the original edit")
         app.typeKey("s", modifierFlags: .command)
 
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

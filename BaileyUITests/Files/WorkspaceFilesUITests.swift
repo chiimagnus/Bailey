@@ -1426,7 +1426,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = ["-o", "BatchMode=yes", "-o", "ControlMaster=no",
                              "-o", "ControlPath=none", "-o", "StrictHostKeyChecking=yes",
-                             "-o", "ConnectTimeout=8", "-T", "--", host, command]
+                             "-o", "ConnectTimeout=30", "-T", "--", host, command]
         let output = Pipe()
         let error = Pipe()
         process.standardOutput = output

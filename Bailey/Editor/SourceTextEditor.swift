@@ -270,7 +270,9 @@ struct SourceTextEditor: NSViewRepresentable {
             self.textView = textView
             self.scrollView = scrollView
             textView.delegate = self
-            textView.onCharacterEdit = { [weak self] in self?.handleNativeCharacterEdit() }
+            textView.onCharacterEdit = { [weak self] range, replacement in
+                self?.handleNativeCharacterEdit(previousRange: range, replacement: replacement)
+            }
             scrollObserver = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: scrollView.contentView,
@@ -302,16 +304,9 @@ struct SourceTextEditor: NSViewRepresentable {
                 self.scrollObserver = nil
             }
             if let editor = textView as? FocusReportingTextView {
-                // A retired native document must not create new Undo actions or
-                // retain the old NSTextStorage through obsolete Undo targets.
-                editor.isEditable = false
-                editor.undoManager?.removeAllActions()
-                editor.syntaxCoordinator?.deactivate()
-                editor.syntaxCoordinator = nil
-                editor.delegate = nil
-                editor.onCharacterEdit = nil
                 editor.onBecomeFirstResponder = nil
                 editor.onResignFirstResponder = nil
+                editor.retireNativeDocument()
             }
             // The prior SwiftUI host can outlive a file generation while
             // AppKit finishes its layout. Its scroll view must not keep the
@@ -352,15 +347,17 @@ struct SourceTextEditor: NSViewRepresentable {
             return true
         }
 
-        private func handleNativeCharacterEdit() {
+        private func handleNativeCharacterEdit(previousRange: NSRange,
+                                               replacement: String) {
             guard let file, file.editorCoordinator === self else { return }
-            if let pendingReplacement {
-                file.recordNativeReplacement(at: pendingReplacement.range,
-                    removing: pendingReplacement.removed, inserting: pendingReplacement.inserted)
-                self.pendingReplacement = nil
+            if let pendingReplacement, pendingReplacement.range == previousRange,
+               pendingReplacement.inserted.utf8.elementsEqual(replacement.utf8) {
+                file.recordNativeReplacement(at: previousRange,
+                    removing: pendingReplacement.removed, inserting: replacement)
             } else {
                 file.nativeTextChangedWithoutReplacement()
             }
+            pendingReplacement = nil
             file.refreshDirtyState()
         }
 

@@ -108,9 +108,10 @@ enum WorkspaceUITestSupport {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         XCTAssertEqual(app.windows.count, 1,
                        "An isolated launch must not inherit windows from other UI tests")
-        if project != nil {
-            let files = element("bailey.dock.files", in: app)
-            guard files.waitForExistence(timeout: 30) else {
+        if let project {
+            let mountedProject = app.buttons.matching(identifier: "bailey.project.row")
+                .matching(NSPredicate(format: "label CONTAINS %@", project.path)).firstMatch
+            guard mountedProject.waitForExistence(timeout: 30) else {
                 throw NSError(domain: "BaileyUITestLaunch", code: 3, userInfo: [
                     NSLocalizedDescriptionKey: "The isolated fixture project did not appear"
                 ])

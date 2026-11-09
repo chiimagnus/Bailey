@@ -107,6 +107,32 @@ class NativeCodeTextView: NSTextView {
     }
 
     var syntaxCoordinator: SyntaxHighlightCoordinator?
+    private var nativeDocumentRetired = false
+
+    /// Only a true content-owner retirement may detach this TextKit document.
+    /// SwiftUI mount/dismantle and Dock reparenting must never call this.
+    func retireNativeDocument() {
+        guard !nativeDocumentRetired else { return }
+        nativeDocumentRetired = true
+        isEditable = false
+        isSelectable = false
+        undoManager?.removeAllActions()
+        syntaxCoordinator?.deactivate()
+        syntaxCoordinator = nil
+        delegate = nil
+        onCharacterEdit = nil
+        if let textEditObserver {
+            NotificationCenter.default.removeObserver(textEditObserver)
+            self.textEditObserver = nil
+        }
+        // AppKit can retain a detached NSTextView after a tab is closed.
+        // Retirement must release the old document bytes now, independently
+        // of when the view object itself is eventually deallocated.
+        textStorage?.setAttributedString(NSAttributedString(string: ""))
+        resetDocumentIndex("")
+        undoManager?.removeAllActions()
+    }
+
     var overrideContentHeight: CGFloat? {
         didSet {
             if let height = overrideContentHeight, height > 0 {
@@ -149,7 +175,7 @@ class NativeCodeTextView: NSTextView {
 
     /// Called for actual character mutations, including Undo/Redo, which do
     /// not necessarily emit NSTextViewDelegate.textDidChange.
-    var onCharacterEdit: (() -> Void)?
+    var onCharacterEdit: ((NSRange, String) -> Void)?
     private var textEditObserver: (any NSObjectProtocol)?
     private struct CompositionSnapshot {
         let text: String
@@ -533,6 +559,20 @@ class NativeCodeTextView: NSTextView {
         (lineIndex?.row(at: min(max(offset, 0), lineIndex?.length ?? 0)) ?? 0) + 1
     }
 
+    var hasNativeOnlySeparators: Bool { lineIndex?.hasNativeOnlySeparators ?? false }
+
+    /// Natural paragraphs whose measured glyph width can exceed the native
+    /// container. Short paragraphs need no TextKit wrapping/layout probe.
+    func nativeWrapCandidates() -> [(row: Int, offset: Int)] {
+        guard isWrappingLines, let lineIndex, let measuredLineWidths,
+              let container = textContainer else { return [] }
+        let available = container.size.width - 2 * container.lineFragmentPadding
+        guard available > 0 else { return [] }
+        return measuredLineWidths.rowsExceeding(available).map {
+            ($0, lineIndex.offset(atLine: $0))
+        }
+    }
+
     func approximateCharacterOffset(atDocumentY y: CGFloat) -> Int? {
         guard let lineIndex, let font else { return nil }
         let lineHeight = max(1, ceil(font.ascender - font.descender + font.leading))
@@ -542,10 +582,13 @@ class NativeCodeTextView: NSTextView {
 
     func configureWrapping(_ wraps: Bool, viewportWidth: CGFloat) {
         let showAll = longLineDisplayWidth == .showAll
-        isWrappingLines = wraps || showAll
-        guard viewportWidth > 0 else { return }
+        guard viewportWidth > 0 else {
+            isWrappingLines = wraps || showAll
+            return
+        }
         let codeWidth: CGFloat
         let truncate: Bool
+        var needsWrap = wraps
         if wraps {
             measuredLineWidths = nil
             codeWidth = viewportWidth
@@ -567,10 +610,12 @@ class NativeCodeTextView: NSTextView {
                 ? LongLineDisplayWidth.expanded.rawValue : longLineDisplayWidth.rawValue))
             codeWidth = min(naturalWidth, limit)
             truncate = !showAll && naturalWidth > limit
+            needsWrap = showAll && naturalWidth > limit
         } else {
             codeWidth = viewportWidth
             truncate = false
         }
+        isWrappingLines = needsWrap
         setLongLineTruncation(truncate)
         // Keep the native document and TextKit 2 container at the same finite
         // width so far-distance navigation does not eagerly lay out every row.
@@ -623,6 +668,8 @@ class NativeCodeTextView: NSTextView {
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
         let currentText = storage.string as NSString
+        let previousParagraphCount = lineIndex?.lineCount
+        let previousNativeOnlySeparators = lineIndex?.hasNativeOnlySeparators
         syntaxCoordinator?.willChangeContent(in: previousRange)
         if lineIndex?.length == storage.length - storage.changeInLength,
            let changed = lineIndex?.replace(
@@ -645,13 +692,16 @@ class NativeCodeTextView: NSTextView {
         if !isWrappingLines, let width = enclosingScrollView?.contentView.bounds.width {
             configureWrapping(false, viewportWidth: width)
         }
-        storageCharactersDidChange()
-        onCharacterEdit?()
+        storageCharactersDidChange(in: previousRange, replacement: replacement,
+                                   nativeParagraphGeometryChanged: previousParagraphCount != lineIndex?.lineCount
+                                       || previousNativeOnlySeparators != lineIndex?.hasNativeOnlySeparators)
+        onCharacterEdit?(previousRange, replacement)
     }
 
-    /// Subclasses can invalidate presentation caches on every storage change,
-    /// including Undo/Redo which bypass NSTextView.didChangeText.
-    func storageCharactersDidChange() {}
+    /// Subclasses receive actual Undo/Redo and IME edits plus native paragraph
+    /// changes, already measured by the shared incremental UTF-16 index.
+    func storageCharactersDidChange(in previousRange: NSRange, replacement: String,
+                                   nativeParagraphGeometryChanged: Bool) {}
 }
 
 /// Cached natural line widths, updated only for the rows affected by an edit.
@@ -662,14 +712,19 @@ private final class NativeMeasuredLineWidths {
     private(set) var maximum: CGFloat = 0
     var count: Int { widths.count }
 
+    func rowsExceeding(_ width: CGFloat) -> [Int] {
+        widths.indices.filter { widths[$0] >= width }
+    }
+
     init(index: NativeTextLineIndex, text: NSString, font: NSFont) {
         self.font = font
         widths = []
         widths.reserveCapacity(index.lineCount)
         var cache: [String: CGFloat] = [:]
+        var units = [UInt16](repeating: 0, count: 4_096)
         for row in 0..<index.lineCount {
             widths.append(Self.measure(row: row, index: index, text: text,
-                                       font: font, cache: &cache))
+                                       font: font, cache: &cache, units: &units))
         }
         maximum = widths.max() ?? 0
     }
@@ -679,8 +734,10 @@ private final class NativeMeasuredLineWidths {
         index: NativeTextLineIndex, text: NSString
     ) {
         var cache: [String: CGFloat] = [:]
+        var units = [UInt16](repeating: 0, count: 4_096)
         let updated = changed.inserted.map {
-            Self.measure(row: $0, index: index, text: text, font: font, cache: &cache)
+            Self.measure(row: $0, index: index, text: text, font: font,
+                         cache: &cache, units: &units)
         }
         let replacedMaximum = widths[changed.replaced].contains(maximum)
         widths.replaceSubrange(changed.replaced, with: updated)
@@ -694,25 +751,45 @@ private final class NativeMeasuredLineWidths {
 
     private static func measure(
         row: Int, index: NativeTextLineIndex, text: NSString, font: NSFont,
-        cache: inout [String: CGFloat]
+        cache: inout [String: CGFloat], units: inout [UInt16]
     ) -> CGFloat {
         let start = index.offset(atLine: row)
         guard start < text.length else { return 0 }
-        var contentEnd = start
-        text.getLineStart(nil, end: nil, contentsEnd: &contentEnd,
-                          for: NSRange(location: start, length: 0))
-        let length = max(0, contentEnd - start)
+        let next = row + 1 < index.lineCount
+            ? index.offset(atLine: row + 1) : text.length
+        var contentEnd = next
+        if next > start {
+            switch text.character(at: next - 1) {
+            case 10:
+                contentEnd -= 1
+                if contentEnd > start && text.character(at: contentEnd - 1) == 13 {
+                    contentEnd -= 1
+                }
+            case 13, 0x85, 0x2028, 0x2029:
+                contentEnd -= 1
+            default:
+                break
+            }
+        }
+        let length = contentEnd - start
         guard length > 0 else { return 0 }
 
-        // All printable ASCII glyphs occupy one cell in a fixed-pitch font.
-        // This avoids shaping 100,000 near-identical code rows individually.
+        // Printable ASCII in a fixed-pitch font requires no glyph shaping.
+        // Reuse one bounded buffer, not per-character Foundation calls.
         if font.isFixedPitch {
             var ascii = true
-            for offset in start..<contentEnd {
-                if !(32...126).contains(Int(text.character(at: offset))) {
+            var position = start
+            while position < contentEnd && ascii {
+                let count = min(units.count, contentEnd - position)
+                units.withUnsafeMutableBufferPointer {
+                    text.getCharacters($0.baseAddress!,
+                                       range: NSRange(location: position, length: count))
+                }
+                for unit in units.prefix(count) where unit < 32 || unit > 126 {
                     ascii = false
                     break
                 }
+                position += count
             }
             if ascii { return CGFloat(length) * font.maximumAdvancement.width }
         }

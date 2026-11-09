@@ -3,6 +3,89 @@ import XCTest
 @testable import Bailey
 
 final class DiffEngineTests: XCTestCase {
+    func testSharedTokenIntralineBoundaryKeepsExactEmphasis() throws {
+        for tokenCount in [399, 400, 401] {
+            let changedCount = tokenCount / 2
+            let commonCount = tokenCount - changedCount
+            let beforeLine = String(repeating: "+", count: changedCount)
+                + String(repeating: "=", count: commonCount) + "\n"
+            let afterLine = String(repeating: "-", count: changedCount)
+                + String(repeating: "=", count: commonCount) + "\n"
+            for lineCount in [1, 10, 100] {
+                let before = String(repeating: beforeLine, count: lineCount)
+                let after = String(repeating: afterLine, count: lineCount)
+                let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+                    oldText: before, newText: after,
+                    operations: [.delete(oldStart: 0, count: lineCount),
+                                 .insert(newStart: 0, count: lineCount)]))
+                let started = CFAbsoluteTimeGetCurrent()
+                let projection = DiffComputation.build(core: core, revealedLines: [])
+                let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+                let removed = projection.unified.rows.filter { $0.kind == .removed }
+                let added = projection.unified.rows.filter { $0.kind == .added }
+                XCTAssertEqual(removed.count, lineCount)
+                XCTAssertEqual(added.count, lineCount)
+                XCTAssertEqual(projection.splitLeft.rows.count, lineCount)
+                XCTAssertEqual(projection.splitRight.rows.count, lineCount)
+                let expected = tokenCount > 400 ? [] : [NSRange(location: 0, length: changedCount)]
+                for row in removed { XCTAssertEqual(row.emphasis, expected) }
+                for row in added { XCTAssertEqual(row.emphasis, expected) }
+                for row in projection.splitLeft.rows { XCTAssertEqual(row.emphasis, expected) }
+                for row in projection.splitRight.rows { XCTAssertEqual(row.emphasis, expected) }
+                print("AUDIT_DIFF_SHARED_TOKENS tokens=\(tokenCount) pairs=\(lineCount) elapsedMs=\(elapsed)")
+            }
+        }
+    }
+
+    func testDenseIntralineProjectionTokenBoundaryCosts() throws {
+        for tokenCount in [399, 400, 401] {
+            for lineCount in [1, 100, 1_000] {
+                let old = String(repeating: String(repeating: "+", count: tokenCount) + "\n",
+                                 count: lineCount)
+                let new = String(repeating: String(repeating: "-", count: tokenCount) + "\n",
+                                 count: lineCount)
+                let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+                    oldText: old, newText: new,
+                    operations: [.delete(oldStart: 0, count: lineCount),
+                                 .insert(newStart: 0, count: lineCount)]))
+                let started = CFAbsoluteTimeGetCurrent()
+                let result = DiffComputation.build(core: core, revealedLines: [])
+                let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+                XCTAssertEqual(result.unified.rows.filter { $0.kind == .removed }.count, lineCount)
+                XCTAssertEqual(result.unified.rows.filter { $0.kind == .added }.count, lineCount)
+                XCTAssertEqual(result.splitLeft.rows.count, lineCount)
+                XCTAssertEqual(result.splitRight.rows.count, lineCount)
+                XCTAssertTrue(result.unified.rows.allSatisfy { $0.emphasis.isEmpty })
+                print("AUDIT_DIFF_DENSE_PROJECTION tokens=\(tokenCount) pairs=\(lineCount) elapsedMs=\(elapsed)")
+            }
+        }
+    }
+
+    func testCancelledDenseTokenMyersStopsBeforeCompletingAllPairs() async throws {
+        // Half the tokens remain equal, so the provably-noisy shortcut must
+        // not suppress legitimate emphasis; cancellation must stop its Myers.
+        let beforeLine = String(repeating: "+", count: 200)
+            + String(repeating: "=", count: 199) + "\n"
+        let afterLine = String(repeating: "-", count: 200)
+            + String(repeating: "=", count: 199) + "\n"
+        let count = 1_000
+        let core = try XCTUnwrap(DiffCore.fromVerifiedOperations(
+            oldText: String(repeating: beforeLine, count: count),
+            newText: String(repeating: afterLine, count: count),
+            operations: [.delete(oldStart: 0, count: count),
+                         .insert(newStart: 0, count: count)]
+        ))
+        let compute = Task.detached(priority: .utility) {
+            DiffComputation.build(core: core, revealedLines: [])
+        }
+        try await Task.sleep(for: .milliseconds(40))
+        let cancelledAt = Date()
+        compute.cancel()
+        _ = await compute.value
+        XCTAssertLessThan(Date().timeIntervalSince(cancelledAt), 0.8,
+                          "Cancelled dense intraline Myers must not consume seconds of stale CPU")
+    }
+
     private func assertVerifiedHunksAgreeWithOriginalDiff(
         _ content: GitWorktreeComparison.Content,
         file: StaticString = #filePath, line: UInt = #line

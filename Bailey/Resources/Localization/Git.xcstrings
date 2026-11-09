@@ -1495,6 +1495,26 @@
         }
       }
     },
+    "Git command was cancelled." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 命令已取消。"
+          }
+        }
+      }
+    },
+    "Git output exceeded the allowed size." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 输出超过允许的大小。"
+          }
+        }
+      }
+    },
     "Git returned an empty repository path." : {
       "localizations" : {
         "zh-Hans" : {

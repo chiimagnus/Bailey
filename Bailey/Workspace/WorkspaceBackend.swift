@@ -64,9 +64,28 @@ nonisolated protocol WorkspaceBackend: Sendable {
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult
+    /// Opt-in bounded output for Git objects and patches. Ordinary workspace
+    /// commands keep their full output; a limit violation must fail, not truncate.
+    func runLimited(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> WorkspaceRunResult
 }
 
 extension WorkspaceBackend {
+    func runLimited(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> WorkspaceRunResult {
+        // In-memory fixtures can use the ordinary run path. Production local
+        // and SSH backends override this requirement at the actual pipe reader.
+        let result = try await run(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
+        guard result.stdout.count <= stdoutLimit, result.stderr.count <= stderrLimit else {
+            throw WorkspaceError.tooLarge
+        }
+        return result
+    }
+
     func list(directories: [String]) async -> [String: [WorkspaceEntry]] {
         var listed: [String: [WorkspaceEntry]] = [:]
         for directory in directories {

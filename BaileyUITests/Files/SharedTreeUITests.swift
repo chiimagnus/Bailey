@@ -4,6 +4,16 @@ import XCTest
 
 @MainActor
 final class SharedTreeUITests: XCTestCase {
+    private func expectFilesClipboard(_ path: String) {
+        let received = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            NSPasteboard.general.string(forType: .string) == path
+                && NSPasteboard.general.data(forType:
+                    NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")) != nil
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 5), .completed,
+                       "The real Files copy must publish both its path and transfer record")
+    }
+
     func testFileAndFolderContextMenusDoNotBrowseOrOpen() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/real-file.swift", text: "original file bytes\n")
@@ -77,8 +87,7 @@ final class SharedTreeUITests: XCTestCase {
                       "Esc must not turn a temporary right-click target into a selection")
         app.activate()
         app.typeKey("c", modifierFlags: .command)
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), original.path,
-                       "Cmd-C after menu cancellation must use the original keyboard selection")
+        expectFilesClipboard(original.path)
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 1,
                        "Right click must not open another editor tab")
     }
@@ -106,9 +115,7 @@ final class SharedTreeUITests: XCTestCase {
         }, "Right-click menu must remain open when Cmd-C is sent")
         app.typeKey("c", modifierFlags: .command)
 
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), target.path)
-        XCTAssertNotNil(NSPasteboard.general.data(forType:
-            NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")))
+        expectFilesClipboard(target.path)
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "beta\n")
         XCTAssertEqual(try String(contentsOf: selected, encoding: .utf8), "alpha\n")
     }
@@ -137,9 +144,7 @@ final class SharedTreeUITests: XCTestCase {
         })
         app.typeKey("c", modifierFlags: .command)
 
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), target.path)
-        XCTAssertNotNil(NSPasteboard.general.data(forType:
-            NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")))
+        expectFilesClipboard(target.path)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let marker = fixture.root.appendingPathComponent("terminal-owns-focus.txt")
         app.typeText("printf terminal > '\(marker.path)'")

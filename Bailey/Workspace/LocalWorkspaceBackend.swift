@@ -1,64 +1,6 @@
 import Darwin
 import Foundation
 
-/// Writes complete stdin or returns an error. Nonblocking IO lets the writer
-/// honor a deadline even when a child exits but its descendant keeps the
-/// read end of the pipe open without consuming bytes.
-nonisolated final class ProcessStdinWriter: @unchecked Sendable {
-    private let completion = DispatchGroup()
-    private var writeError: Error?
-
-    init(data: Data, pipe: Pipe, timeout: TimeInterval?) {
-        completion.enter()
-        DispatchQueue.global(qos: .utility).async {
-            defer {
-                try? pipe.fileHandleForWriting.close()
-                self.completion.leave()
-            }
-            do {
-                let fd = pipe.fileHandleForWriting.fileDescriptor
-                let flags = fcntl(fd, F_GETFL, 0)
-                guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                }
-                let deadline = timeout.map { ProcessInfo.processInfo.systemUptime + $0 }
-                try data.withUnsafeBytes { bytes in
-                    guard let base = bytes.baseAddress else { return }
-                    var offset = 0
-                    while offset < bytes.count {
-                        if let deadline, ProcessInfo.processInfo.systemUptime >= deadline {
-                            throw WorkspaceError.timedOut
-                        }
-                        var ready = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                        let count = poll(&ready, 1, 100)
-                        if count == 0 || (count < 0 && errno == EINTR) { continue }
-                        if count < 0 {
-                            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                        }
-                        let written = Darwin.write(fd, base.advanced(by: offset),
-                                                   min(64 * 1024, bytes.count - offset))
-                        if written > 0 {
-                            offset += written
-                        } else if written < 0 && (errno == EAGAIN || errno == EINTR) {
-                            continue
-                        } else {
-                            throw NSError(domain: NSPOSIXErrorDomain,
-                                          code: Int(written == 0 ? EIO : errno))
-                        }
-                    }
-                }
-            } catch {
-                self.writeError = error
-            }
-        }
-    }
-
-    func finish() -> Error? {
-        completion.wait()
-        return writeError
-    }
-}
-
 /// Completed paths and independent failures from one Finder copy batch.
 nonisolated struct LocalFileImportResult: Sendable {
     let copied: [String]
@@ -352,17 +294,40 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         // Waiting on pipe readers blocks, which an async function may not do,
         // so the whole launch runs on a background thread — where the panels
         // ran their `ps` and `lsof` calls before the seam existed.
-        try await Task.detached(priority: .utility) {
-            try Self.runSync(
-                argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout
-            )
-        }.value
+        let command = Task.detached(priority: .utility) {
+            try Self.runSync(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
+        }
+        return try await withTaskCancellationHandler {
+            try await command.value
+        } onCancel: {
+            command.cancel()
+        }
     }
 
-    private static func runSync(
+    func runLimited(
         argv: [String], cwd: String?, env: [String: String]?,
-        stdin: Data?, timeout: TimeInterval?
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> WorkspaceRunResult {
+        let command = Task.detached(priority: .utility) {
+            try Self.runSync(argv: argv, cwd: cwd, env: env, stdin: stdin,
+                             timeout: timeout, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
+        }
+        return try await withTaskCancellationHandler {
+            try await command.value
+        } onCancel: {
+            command.cancel()
+        }
+    }
+
+    /// Shared synchronous pipe owner for workspace and Git commands.
+    /// It is always called off the main actor and polls for task cancellation.
+    static func runSync(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int? = nil, stderrLimit: Int? = nil,
+        preservePartialOnTimeout: Bool = false,
+        honorTaskCancellation: Bool = true
     ) throws -> WorkspaceRunResult {
+        if honorTaskCancellation { try Task.checkCancellation() }
         guard let executable = argv.first else { throw WorkspaceError.notFound }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -370,15 +335,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         if let cwd {
             process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
         }
-        if let env {
-            process.environment = env
-        }
+        if let env { process.environment = env }
 
         let stdout = Pipe()
         let stderr = Pipe()
+        let input = stdin.map { _ in Pipe() }
         process.standardOutput = stdout
         process.standardError = stderr
-        let input: Pipe? = stdin == nil ? nil : Pipe()
         if let input, fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != 0 {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
@@ -386,30 +349,51 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         try process.run()
-        let writer = input.flatMap { pipe in
-            stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGTERM)
+                if exited.wait(timeout: .now() + .milliseconds(250)) == .timedOut,
+                   process.isRunning {
+                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    _ = exited.wait(timeout: .now() + .milliseconds(250))
+                }
+            }
         }
 
-        // Drain stdout and stderr concurrently without waiting for inherited
-        // pipe handles to reach EOF after the direct child has exited.
+        // One nonblocking owner drains both outputs and feeds stdin. A
+        // separate input writer can outlive the process or block its caller.
         let outFD = stdout.fileHandleForReading.fileDescriptor
         let errFD = stderr.fileHandleForReading.fileDescriptor
+        let inFD = input?.fileHandleForWriting.fileDescriptor
         defer {
+            if let input { try? input.fileHandleForWriting.close() }
             try? stdout.fileHandleForReading.close()
             try? stderr.fileHandleForReading.close()
         }
-        for fd in [outFD, errFD] {
+        for fd in [outFD, errFD] + (inFD.map { [$0] } ?? []) {
             let flags = fcntl(fd, F_GETFL, 0)
             guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
         }
+        let inputData = stdin ?? Data()
+        var inputOffset = 0
+        var inputOpen = inFD != nil
+        var inputError: Error?
+        func closeInput() {
+            guard inputOpen else { return }
+            inputOpen = false
+            if let input { try? input.fileHandleForWriting.close() }
+        }
+        if inputData.isEmpty { closeInput() }
+
         let deadline = timeout.map { ProcessInfo.processInfo.systemUptime + $0 }
         var openFDs: Set<Int32> = [outFD, errFD]
         var outData = Data()
         var errData = Data()
         var buffer = [UInt8](repeating: 0, count: 8_192)
         while !openFDs.isEmpty || process.isRunning {
+            if honorTaskCancellation { try Task.checkCancellation() }
             if let deadline, ProcessInfo.processInfo.systemUptime >= deadline {
                 if process.isRunning {
                     _ = Darwin.kill(process.processIdentifier, SIGTERM)
@@ -419,28 +403,71 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                         _ = exited.wait(timeout: .now() + .milliseconds(250))
                     }
                 }
+                if preservePartialOnTimeout {
+                    return WorkspaceRunResult(status: -2, stdout: outData, stderr: errData)
+                }
                 throw WorkspaceError.timedOut
             }
-            if openFDs.isEmpty {
-                // The child may still be exiting after both pipes close.
-                // Wait on its termination signal, not an unconditional 50 ms sleep.
+            if inputOpen && !process.isRunning {
+                inputError = NSError(domain: NSPOSIXErrorDomain, code: Int(EPIPE))
+                closeInput()
+            }
+            var fds = openFDs.sorted().map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
+            if inputOpen, let inFD {
+                fds.append(pollfd(fd: inFD, events: Int16(POLLOUT), revents: 0))
+            }
+            if fds.isEmpty {
                 _ = exited.wait(timeout: .now() + .milliseconds(10))
                 continue
             }
-            var fds = openFDs.sorted().map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
-            let milliseconds = deadline.map {
+            let milliseconds = !process.isRunning ? 0 : (deadline.map {
                 max(1, min(100, Int(($0 - ProcessInfo.processInfo.systemUptime) * 1_000)))
-            } ?? 100
+            } ?? 100)
             let ready = poll(&fds, nfds_t(fds.count), Int32(milliseconds))
             if ready < 0 {
                 if errno == EINTR { continue }
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
+            // Drain already-buffered output; a descendant's inherited handle
+            // cannot extend the lifetime of a completed direct command.
+            if ready == 0 && !process.isRunning { break }
             for entry in fds where entry.revents != 0 {
+                if let inFD, entry.fd == inFD {
+                    if entry.revents & Int16(POLLOUT) != 0 {
+                        let written = inputData.withUnsafeBytes { bytes -> Int in
+                            guard let base = bytes.baseAddress else { return 0 }
+                            return Darwin.write(inFD, base.advanced(by: inputOffset),
+                                                min(64 * 1024, bytes.count - inputOffset))
+                        }
+                        if written > 0 {
+                            inputOffset += written
+                            if inputOffset == inputData.count { closeInput() }
+                        } else if written == 0 {
+                            inputError = NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+                            closeInput()
+                        } else if errno != EAGAIN && errno != EINTR {
+                            inputError = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                            closeInput()
+                        }
+                    } else if entry.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
+                        inputError = NSError(domain: NSPOSIXErrorDomain, code: Int(EPIPE))
+                        closeInput()
+                    }
+                    continue
+                }
                 let count = Darwin.read(entry.fd, &buffer, buffer.count)
                 if count > 0 {
-                    if entry.fd == outFD { outData.append(buffer, count: count) }
-                    else { errData.append(buffer, count: count) }
+                    if entry.fd == outFD {
+                        if let stdoutLimit, count > stdoutLimit - outData.count {
+                            throw WorkspaceError.tooLarge
+                        }
+                        outData.append(buffer, count: count)
+                    } else {
+                        if let stderrLimit, count > stderrLimit - errData.count {
+                            throw WorkspaceError.tooLarge
+                        }
+                        errData.append(buffer, count: count)
+                    }
                 } else if count == 0 {
                     openFDs.remove(entry.fd)
                 } else if errno != EAGAIN && errno != EINTR {
@@ -448,8 +475,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 }
             }
         }
+        if honorTaskCancellation { try Task.checkCancellation() }
         process.waitUntilExit()
-        if let error = writer?.finish(), process.terminationStatus == 0 { throw error }
+        if inputOpen {
+            inputError = NSError(domain: NSPOSIXErrorDomain, code: Int(EPIPE))
+            closeInput()
+        }
+        if let inputError, process.terminationStatus == 0 { throw inputError }
         return WorkspaceRunResult(
             status: process.terminationStatus,
             stdout: outData,

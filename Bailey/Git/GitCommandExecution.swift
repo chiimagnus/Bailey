@@ -1,12 +1,12 @@
-import Darwin
 import Foundation
 
 nonisolated enum GitCommandExecution {
     private static let localEnvironment = loadLoginEnvironment()
 
-    private final class PipeData: @unchecked Sendable {
-        var value = Data()
-    }
+    private static let gitErrorBytes = 64 * 1024
+    private static let outputExceededMessage = String(
+        localized: "Git output exceeded the allowed size.", table: "Git"
+    )
 
     static func loadLoginEnvironment(
         shell: String = LocalWorkspaceBackend.loginShell,
@@ -17,7 +17,8 @@ nonisolated enum GitCommandExecution {
         let result = runProcess(
             ["-ilc", "/usr/bin/printf '\\0\(marker.dropFirst().dropLast())\\0'; exec /usr/bin/env -0"],
             executable: shell, in: NSHomeDirectory(), environment: environment,
-            timeout: timeout, stdoutLimit: 1024 * 1024 + 1
+            timeout: timeout, stdoutLimit: 1024 * 1024 + 1,
+            honorTaskCancellation: false
         )
         let error = String(localized: "Could not load the login shell environment. Check your shell startup files and restart Bailey.", table: "Git")
         guard result.status == 0,
@@ -37,13 +38,11 @@ nonisolated enum GitCommandExecution {
         return (0, values, "")
     }
 
-    /// Runs Git while draining stdout and stderr concurrently. Dedicated
-    /// reader threads are intentional: several restored diff tabs can call
-    /// this from Swift's cooperative executor at once, and dispatching the
-    /// readers back onto the shared pool can starve every pipe drain.
+    /// Executes Git via the shared bounded, cancellable local process reader.
+    /// A single polling owner drains both streams without blocking separate threads.
     static func runData(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        stdoutLimit: Int? = nil
+        stdoutLimit: Int? = nil, stdin: Data? = nil
     ) -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
         let started = ProcessInfo.processInfo.systemUptime
@@ -59,106 +58,42 @@ nonisolated enum GitCommandExecution {
         env["LC_ALL"] = "C"
         return runProcess(
             ["git"] + args, executable: "/usr/bin/env", in: dir,
-            environment: env, timeout: remaining, stdoutLimit: stdoutLimit
+            environment: env, timeout: remaining, stdoutLimit: stdoutLimit, stdin: stdin
         )
     }
 
     private static func runProcess(
         _ args: [String], executable: String, in dir: String,
-        environment: [String: String], timeout: TimeInterval?, stdoutLimit: Int?
+        environment: [String: String], timeout: TimeInterval?, stdoutLimit: Int?,
+        stdin: Data? = nil, honorTaskCancellation: Bool = true
     ) -> (status: Int32, stdout: Data, stderr: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: dir, isDirectory: true)
-        process.environment = environment
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        process.standardInput = FileHandle.nullDevice
-        let processExited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in processExited.signal() }
-
+        // Use the same cancellable, bounded FD-polling process owner as local
+        // workspace commands. The former Git-only reader threads could stay
+        // blocked after cancellation when a descendant inherited a pipe.
         do {
-            try process.run()
+            let result = try LocalWorkspaceBackend.runSync(
+                argv: [executable] + args, cwd: dir, env: environment,
+                stdin: stdin, timeout: timeout, stdoutLimit: stdoutLimit,
+                stderrLimit: stdoutLimit == nil ? nil : gitErrorBytes,
+                preservePartialOnTimeout: true,
+                honorTaskCancellation: honorTaskCancellation
+            )
+            let detail = String(decoding: result.stderr, as: UTF8.self)
+            if result.status == -2 {
+                return (-2, result.stdout, detail + "\n" + String(
+                    localized: "Git did not respond in time.", table: "Git"
+                ))
+            }
+            return (result.status, result.stdout, detail)
+        } catch is CancellationError {
+            return (-4, Data(), String(localized: "Git command was cancelled.", table: "Git"))
+        } catch WorkspaceError.tooLarge {
+            return (-3, Data(), outputExceededMessage)
+        } catch WorkspaceError.timedOut {
+            return (-2, Data(), String(localized: "Git did not respond in time.", table: "Git"))
         } catch {
             return (-1, Data(), error.localizedDescription)
         }
-        let ownsProcessGroup = getpgid(process.processIdentifier) == process.processIdentifier
-        let outData = PipeData()
-        let errData = PipeData()
-        let readers = DispatchGroup()
-        // These readers are on the synchronous completion path below. Match
-        // the caller so a user-initiated Git request never waits on utility
-        // threads, while background refreshes keep their lower priority.
-        let readerQualityOfService = Thread.current.qualityOfService
-        readers.enter()
-        let stdoutReader = Thread {
-            while true {
-                let chunk: Data
-                do {
-                    guard let next = try stdout.fileHandleForReading.read(upToCount: 64 * 1024),
-                          !next.isEmpty else { break }
-                    chunk = next
-                } catch {
-                    break
-                }
-                let remaining = (stdoutLimit ?? .max) - outData.value.count
-                if remaining > 0 {
-                    outData.value.append(chunk.prefix(remaining))
-                }
-            }
-            readers.leave()
-        }
-        stdoutReader.qualityOfService = readerQualityOfService
-        stdoutReader.start()
-        readers.enter()
-        let stderrReader = Thread {
-            errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
-            readers.leave()
-        }
-        stderrReader.qualityOfService = readerQualityOfService
-        stderrReader.start()
-        var timedOut = false
-        if let timeout {
-            let deadline = DispatchTime.now() + timeout
-            var processStillRunning = processExited.wait(timeout: deadline) == .timedOut
-            let pipesStillOpen = readers.wait(timeout: deadline) == .timedOut
-            timedOut = processStillRunning || pipesStillOpen
-            if timedOut {
-                if processStillRunning, process.isRunning { process.terminate() }
-                let terminationDeadline = DispatchTime.now() + 1
-                processStillRunning = processStillRunning
-                    && processExited.wait(timeout: terminationDeadline) == .timedOut
-                let pipesStillOpen = readers.wait(timeout: terminationDeadline) == .timedOut
-                if processStillRunning || pipesStillOpen, ownsProcessGroup {
-                    Darwin.kill(-process.processIdentifier, SIGKILL)
-                } else if processStillRunning {
-                    Darwin.kill(process.processIdentifier, SIGKILL)
-                }
-                process.waitUntilExit()
-            }
-        } else {
-            process.waitUntilExit()
-        }
-        readers.wait()
-        let output = outData.value
-        var errorOutput = String(data: errData.value, encoding: .utf8) ?? ""
-        if timedOut {
-            let timeoutMessage = String(localized: "Git did not respond in time.", table: "Git")
-            if !errorOutput.isEmpty, !errorOutput.hasSuffix("\n") {
-                errorOutput += "\n"
-            }
-            errorOutput += timeoutMessage
-            return (-2, output, errorOutput)
-        }
-        return (
-            process.terminationStatus,
-            output,
-            errorOutput
-        )
     }
 
     static func run(
@@ -178,22 +113,37 @@ nonisolated enum GitCommandExecution {
 
     @concurrent static func runData(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        stdoutLimit: Int? = nil, backend: WorkspaceBackend
+        stdoutLimit: Int? = nil, stdin: Data? = nil, backend: WorkspaceBackend
     ) async -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
+        if Task.isCancelled {
+            return (-4, Data(), String(localized: "Git command was cancelled.", table: "Git"))
+        }
         if backend is LocalWorkspaceBackend {
-            return runData(args, in: dir, timeout: timeout, stdoutLimit: stdoutLimit)
+            return runData(args, in: dir, timeout: timeout,
+                           stdoutLimit: stdoutLimit, stdin: stdin)
         }
         do {
-            let result = try await backend.run(
-                argv: ["git"] + args, cwd: dir,
-                env: ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"],
-                stdin: nil, timeout: timeout
-            )
-            let output = stdoutLimit.map { Data(result.stdout.prefix($0)) } ?? result.stdout
-            return (result.status, output, String(data: result.stderr, encoding: .utf8) ?? "")
+            let argv = ["git"] + args
+            let env = ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"]
+            let result: WorkspaceRunResult
+            if let stdoutLimit {
+                result = try await backend.runLimited(
+                    argv: argv, cwd: dir, env: env, stdin: stdin, timeout: timeout,
+                    stdoutLimit: stdoutLimit, stderrLimit: gitErrorBytes
+                )
+            } else {
+                result = try await backend.run(
+                    argv: argv, cwd: dir, env: env, stdin: stdin, timeout: timeout
+                )
+            }
+            return (result.status, result.stdout, String(data: result.stderr, encoding: .utf8) ?? "")
+        } catch WorkspaceError.tooLarge {
+            return (-3, Data(), outputExceededMessage)
         } catch WorkspaceError.timedOut {
             return (-2, Data(), String(localized: "Git did not respond in time.", table: "Git"))
+        } catch is CancellationError {
+            return (-4, Data(), String(localized: "Git command was cancelled.", table: "Git"))
         } catch {
             return (-1, Data(), error.localizedDescription)
         }

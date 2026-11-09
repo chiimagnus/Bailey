@@ -4,6 +4,92 @@ import XCTest
 
 @MainActor
 final class NativeEditorCompositionTests: XCTestCase {
+    func testNativeEditMetadataAndPrechangeCoverageAcrossInputUndoAndComposition() throws {
+        @MainActor final class EditDelegate: NSObject, NSTextViewDelegate {
+            var prechanges = 0
+
+            func textView(_ view: NSTextView, shouldChangeTextIn range: NSRange,
+                          replacementString: String?) -> Bool {
+                prechanges += 1
+                return true
+            }
+
+            func undoManager(for view: NSTextView) -> UndoManager? { view.undoManager }
+        }
+
+        let original = "first second third\n"
+        let cases: [(String, String, @MainActor (NativeCodeTextView) -> Void)] = [
+            ("insert", "X" + original, { $0.insertText("X", replacementRange: NSRange(location: 0, length: 0)) }),
+            ("paste", "first 中文👋 third\n", {
+                $0.insertText("中文👋", replacementRange: NSRange(location: 6, length: 6))
+            }),
+            ("delete", "firstsecond third\n", {
+                $0.setSelectedRange(NSRange(location: 6, length: 0))
+                $0.deleteBackward(nil)
+            }),
+            ("selectAll", "replacement\n", {
+                $0.selectAll(nil)
+                $0.insertText("replacement\n", replacementRange: .notFound)
+            }),
+            ("composition", "你" + original, {
+                $0.setSelectedRange(NSRange(location: 0, length: 0))
+                $0.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0), replacementRange: .notFound)
+                $0.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
+                $0.insertText("你", replacementRange: .notFound)
+                $0.unmarkText()
+            }),
+            ("multipleSelections", "X second X\n", {
+                $0.selectedRanges = [NSValue(range: NSRange(location: 0, length: 5)),
+                                     NSValue(range: NSRange(location: 13, length: 5))]
+                $0.insertText("X", replacementRange: .notFound)
+            }),
+            ("programmaticAppend", original + "tail", { XCTAssertTrue($0.appendDocumentText("tail")) })
+        ]
+        for (label, expected, apply) in cases {
+            let editor = NativeCodeTextView()
+            editor.text = original
+            let delegate = EditDelegate()
+            editor.delegate = delegate
+            var previous = original
+            var callbacks = 0
+            editor.onCharacterEdit = { [weak editor] previousRange, replacement in
+                guard let editor, let storage = editor.textStorage else { return }
+                callbacks += 1
+                let range = storage.editedRange
+                let priorLength = range.length - storage.changeInLength
+                guard priorLength >= 0, range.location != NSNotFound,
+                      range.location + priorLength <= (previous as NSString).length,
+                      NSMaxRange(range) <= storage.length else {
+                    XCTFail("Invalid native post-edit metadata for \(label)")
+                    return
+                }
+                XCTAssertEqual(previousRange, NSRange(location: range.location,
+                                                     length: priorLength))
+                XCTAssertEqual(replacement, storage.attributedSubstring(from: range).string)
+                let reconstructed = NSMutableString(string: previous)
+                reconstructed.replaceCharacters(in: previousRange, with: replacement)
+                XCTAssertEqual(Data((reconstructed as String).utf8), Data(editor.string.utf8), label)
+                previous = editor.string
+            }
+            apply(editor)
+            editor.breakUndoCoalescing()
+            XCTAssertGreaterThan(callbacks, 0, label)
+            XCTAssertEqual(Data(editor.string.utf8), Data(expected.utf8), label)
+            print("AUDIT_NATIVE_EDIT_EVENTS action=\(label) phase=forward callbacks=\(callbacks) prechanges=\(delegate.prechanges)")
+            let undo = try XCTUnwrap(editor.undoManager)
+            XCTAssertTrue(undo.canUndo, label)
+            for (phase, action, text) in [("undo", { undo.undo() }, original),
+                                           ("redo", { undo.redo() }, expected)] {
+                callbacks = 0
+                delegate.prechanges = 0
+                action()
+                XCTAssertGreaterThan(callbacks, 0, label)
+                XCTAssertEqual(Data(editor.string.utf8), Data(text.utf8), "\(label) \(phase)")
+                print("AUDIT_NATIVE_EDIT_EVENTS action=\(label) phase=\(phase) callbacks=\(callbacks) prechanges=\(delegate.prechanges)")
+            }
+        }
+    }
+
     private func beginComposition(_ editor: NativeCodeTextView) {
         editor.text = "before after"
         editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0),
