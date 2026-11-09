@@ -76,13 +76,13 @@
 
 - 任务：`P1-T4`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`Bailey/Git/DiffEngine.swift:819`
 - 摘要：`密集行内投影已实证为热点，但取消及完整分配归因尚未核销`
 - 风险：`399/400 token、1000 对替换投影约37秒，稀疏样本不能支持生产阶段忽略此路径`
 - 预期修复：`补齐共享token、取消时延和分配测量，将经验证的最小词级算法修复纳入P3-T3`
 - 验证：`make test ONLY_TESTING=BaileyTests/DiffEngineTests/testDenseIntralineProjectionTokenBoundaryCosts；追加真实取消测量`
-- 解决证据：`2026-11-06 399/400/401 token × 1/100/1000对与共享token、真实DiffCore取消已测；400token千对约37秒，100×400取消尚需约277ms，旧后台取消100×400曾约3709ms；内存归因/产品修复属于P3-T3。见evidence-p1.md及build/git-diff-p1-*日志；不把实测缺陷写成已修复。`
+- 解决证据：`2026-11-09 cross-phase evidence: P3-T3 original 399/400-token × 1000 pairs ~37 s reduced to 0.42 s Debug, DiffEngineTests 24/24; d70ea53e and fd3a3f84 added cooperative cancellation through native / SSH PID, no abandoned worker; make test build/p123-audit-20261109-final-full-v2.log 920 tests 0 failures 16 conditional skips, full make exit 0; Bailey Dev GitChanges/GitDialog/GitHistory E2E 55/55 pass, log build/p123-audit-20261109-git-ui-final.log. The P1 research hotspot has been fixed by P3, not by a P1 prototype. Original baseline, Red and all historic evidence retained.`
 
 
 ## 发现 F-01
@@ -192,8 +192,10 @@
 
 ## 最终状态与剩余风险
 
-- P1 探索：完成。F-04／F-05 已解决，F-01／F-02／F-03 已归属后续
-  真实实现与完整 App 验收；P2 的布局首屏不是已完成结果。
+- P1 探索：完成。F-04／F-05 早前已解决；F-02 于 2026-11-09 根据 P3
+  `d70ea53e`／`fd3a3f84` 的真实密集 Diff、取消与全量回归证据核销。
+  F-01 的可变高度首帧仍由 P2-T1（`blocked`）承担；F-03 精确 WindowServer 首像素
+  仍归 P4-T4，均未被宿主／GUI 通过冒充完成。
 - 主要未验收：快速且准确的 TextKit 全条件几何；
   大仓密集差异的及时取消与完整内存归因；
   真实 GUI 首像素／可输入高帧率测量、完整中文候选及物理 SSH 断线。

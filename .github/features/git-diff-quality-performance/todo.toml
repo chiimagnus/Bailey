@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P2-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -47,10 +47,10 @@ note = "2026-11-06 技术决策已写入idea.md及P2/P3/P4：TextKit现有快速
 [[tasks]]
 id = "P2-T1"
 title = "修复原生首帧布局和滚动几何的共同根因"
-status = "completed"
+status = "in_progress"
 plan = "plan-p2.md#p2-t1"
-commit = "c8d92f1a"
-note = "2026-11-07 根因修复折叠原生元素枚举、实时Git-LF索引、冷远跳及ghost几何；24k Unstaged组件位图P95约899→603ms，100k 500折叠+500ghost冷远跳P95约3.79ms，结构编辑P95文首/中/末约29.61/28.72/27.03ms。make test 887项16条件跳过0失败退出0，make build与make build:release及验签成功；Bailey Dev WorkspaceGitUITests 8通过1 SSH跳过。另行扩大执行的GitHistoryUITests 5项冷启动/右键AX未通过，已留evidence-p2.md供GUI交互任务跟进，不冒称全量GUI通过。原子提交c8d92f1a，正式Bailey未替换/重启。"
+commit = ""
+note = "2026-11-07 根因修复折叠原生元素枚举、实时Git-LF索引、冷远跳及ghost几何；24k Unstaged组件位图P95约899→603ms，100k 500折叠+500ghost冷远跳P95约3.79ms，结构编辑P95文首/中/末约29.61/28.72/27.03ms。make test 887项16条件跳过0失败退出0，make build与make build:release及验签成功；Bailey Dev WorkspaceGitUITests 8通过1 SSH跳过。另行扩大执行的GitHistoryUITests 5项冷启动/右键AX未通过，已留evidence-p2.md供GUI交互任务跟进，不冒称全量GUI通过。原子提交c8d92f1a，正式Bailey未替换/重启。\n2026-11-09 独立复审重新开放：25200b0d 修复等高裸 CR/Unicode 的原生布局，100k CR 初次布局约3081→154ms，新增极端测试与完整917项宿主全绿；但有自动折行或 Ghost 自然段落间距时仍同步 ensureLayout(documentRange)，未达 P2-T1 全文本形态首帧、P95 及真机像素准入，audit-p2.md F-03 High Open。完成全部边界之前状态保持 blocked。\n2026-11-09 P2-T1 同一原生 TextKit 所有者新增稀疏折行／虚拟 Ghost、有界目标段落布局和阅读锚点恢复；CRLF→裸 CR 的行数不变边界 Red→Green，唯一 NativeTextLineIndex 增量追踪分隔符类型，5项定向全绿；历史纯原文100k行首次布局约3173→216ms，远跳由偏差十万点到准确，正常可编辑空装饰状态保持无旧文件高度（2项定向Green）。183项先前相关宿主全绿，但修复后的完整矩阵与真实GUI冷热P95仍需验收；P2-T1继续in_progress，F-03 High Open，禁止冒称P2阶段放行。\n2026-11-09 已原子提交 a16c71fa：原生分隔符增量索引、稀疏折行、Ghost、阅读锚点及100k历史纯原文首帧修复，代码／测试／功能文档8文件；make test 929项0失败16跳过，Debug/Release构建与严格验签通过，make build:ui编译通过，修复后相关185项0失败1跳过。完整 App GUI 首像素及30次冷热P95仍未运行，因当前桌面与用户输入共用焦点，无法在不干扰使用的条件下进行；P2-T1状态保持in_progress，F-03 High Open。\n2026-11-09 原子提交 a45a8996：修复折叠区间内部 CR／Unicode 原生段落隐藏计数、TextKit 视口滚动与 Ghost 组合首帧，不再滚动时强制整棵视图同步布局。100k Git 行／约300k原生段落含三处折叠、四处 Ghost、稀疏折行，30 次深跳 P95 6.69ms／最慢 7.13ms；未预热原生 clip 直达目标行及字形命中通过。相关 187 项0失败1跳过；make test 931 项0失败16跳过；Debug／Release 构建与严格验签、UI 测试目标编译均通过。真实 Bailey Dev 首像素与完整冷／热30次P95仍待隔离图形会话，F-03 High Open、P2 Gate No-Go；未安装／重启正式 App。\\n2026-11-09 原子提交 eaa6d05a：100k Git-LF 首次行索引改为 Swift UTF-16 原文扫描，约 263→43ms；原生行宽测量复用有界 UTF-16 缓冲与自然段落索引，约 290→152ms；1k／24k／100k Staged／Unstaged 各30次首次组件位图、真实源字形像素与未预热冷滚动像素测试通过。make test 完整932项0失败16条件跳过，Debug／Release 构建与严格验签、UI测试目标编译通过；只更新代码／测试／文档7文件。本机不存在独立图形会话，尚不能执行不干扰用户桌面的真实App首像素及30次冷热 GUI P95；P2-T1继续in_progress，F-03 High Open，Gate No-Go。"
 
 [[tasks]]
 id = "P2-T2"

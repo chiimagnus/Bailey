@@ -73,8 +73,9 @@
    先写宿主 Red：首次可见前时间、未滚动时已完整的原生滚动范围、
    滚动条多次直达末尾后不缩短、末项正文与删除 ghost 的真实命中。
 2. 把可测的高度／折叠／行片段尺寸归属保持在 `DiffCodePaneView` 与原生 TextKit，
-   而不是增加 SwiftUI 高度镜像。固定行高快路径不能套用到裸 CR、Unicode、折行、
-   ghost 等可变几何；用 P1 已验证的准确路径处理。仅在对应布局失效时重算。
+   而不是增加 SwiftUI 高度镜像。不能把 Git LF 行数直接套用到裸 CR／Unicode 自然段落；
+   在确实不折行且没有 Ghost 段落间距时，可以使用现有自然段落索引的固定高度快路径，
+   真实可变行高仍必须由 TextKit 准确测量。仅在对应布局失效时重算。
    **另一个同源热路径必须同时处理：**`DiffRowGeometry.visibleRows` 在无行起点且非折叠时
    从文首枚举到 viewport；优先用当前 Diff 内容版本的 LF UTF-16 行起点反查 Git 行号，
    `NativeTextLineIndex` 仅用于确定 AppKit 自然段落，不得把裸 CR／Unicode 段落算作 Git 行；
