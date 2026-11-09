@@ -151,6 +151,43 @@ final class TextCoordinateIndexTests: XCTestCase {
         }
     }
 
+    func testSwiftGitLFIndexMatchesFoundationForLargeMixedUTF16Sources() {
+        let sources = [
+            "",
+            "a\r\nb\n👋\u{2028}c\u{2029}\n",
+            String(repeating: "x👋\r\ny\u{2028}z\n", count: 50_000) + "tail",
+        ]
+        for source in sources {
+            let started = CFAbsoluteTimeGetCurrent()
+            var swift = NativeTextLineIndex(gitLF: source)
+            let swiftMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+            let foundationStarted = CFAbsoluteTimeGetCurrent()
+            let foundation = NativeTextLineIndex(source as NSString, breakMode: .gitLF)
+            let foundationMs = (CFAbsoluteTimeGetCurrent() - foundationStarted) * 1_000
+            print("AUDIT_GIT_LF_INDEX utf16=\(source.utf16.count) swiftMs=\(swiftMs) foundationMs=\(foundationMs)")
+            XCTAssertEqual(swift.length, foundation.length)
+            XCTAssertEqual(swift.lineCount, foundation.lineCount)
+            for row in 0..<swift.lineCount {
+                XCTAssertEqual(swift.offset(atLine: row), foundation.offset(atLine: row))
+            }
+            for offset in [0, 1, source.utf16.count / 4, source.utf16.count / 2,
+                           source.utf16.count - 1, source.utf16.count] where offset >= 0 {
+                XCTAssertEqual(swift.row(at: offset), foundation.row(at: offset))
+            }
+            let oldEnd = (source as NSString).length
+            let insertion = "\n👋\r\n"
+            let updated = source + insertion
+            swift.replace(in: NSRange(location: oldEnd, length: 0),
+                          replacementLength: insertion.utf16.count, text: updated as NSString)
+            let fresh = NativeTextLineIndex(gitLF: updated)
+            XCTAssertEqual(swift.lineCount, fresh.lineCount)
+            XCTAssertEqual(swift.length, fresh.length)
+            for row in 0..<swift.lineCount {
+                XCTAssertEqual(swift.offset(atLine: row), fresh.offset(atLine: row))
+            }
+        }
+    }
+
     func testNativeHundredThousandLineEditsMatchFreshIndex() throws {
         let source = NSMutableString(string: String(repeating: "a\r\nb\u{2028}c\u{2029}d\n", count: 25_000))
         var index = NativeTextLineIndex(source)

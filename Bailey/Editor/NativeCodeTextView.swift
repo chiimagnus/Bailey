@@ -721,9 +721,10 @@ private final class NativeMeasuredLineWidths {
         widths = []
         widths.reserveCapacity(index.lineCount)
         var cache: [String: CGFloat] = [:]
+        var units = [UInt16](repeating: 0, count: 4_096)
         for row in 0..<index.lineCount {
             widths.append(Self.measure(row: row, index: index, text: text,
-                                       font: font, cache: &cache))
+                                       font: font, cache: &cache, units: &units))
         }
         maximum = widths.max() ?? 0
     }
@@ -733,8 +734,10 @@ private final class NativeMeasuredLineWidths {
         index: NativeTextLineIndex, text: NSString
     ) {
         var cache: [String: CGFloat] = [:]
+        var units = [UInt16](repeating: 0, count: 4_096)
         let updated = changed.inserted.map {
-            Self.measure(row: $0, index: index, text: text, font: font, cache: &cache)
+            Self.measure(row: $0, index: index, text: text, font: font,
+                         cache: &cache, units: &units)
         }
         let replacedMaximum = widths[changed.replaced].contains(maximum)
         widths.replaceSubrange(changed.replaced, with: updated)
@@ -748,25 +751,45 @@ private final class NativeMeasuredLineWidths {
 
     private static func measure(
         row: Int, index: NativeTextLineIndex, text: NSString, font: NSFont,
-        cache: inout [String: CGFloat]
+        cache: inout [String: CGFloat], units: inout [UInt16]
     ) -> CGFloat {
         let start = index.offset(atLine: row)
         guard start < text.length else { return 0 }
-        var contentEnd = start
-        text.getLineStart(nil, end: nil, contentsEnd: &contentEnd,
-                          for: NSRange(location: start, length: 0))
-        let length = max(0, contentEnd - start)
+        let next = row + 1 < index.lineCount
+            ? index.offset(atLine: row + 1) : text.length
+        var contentEnd = next
+        if next > start {
+            switch text.character(at: next - 1) {
+            case 10:
+                contentEnd -= 1
+                if contentEnd > start && text.character(at: contentEnd - 1) == 13 {
+                    contentEnd -= 1
+                }
+            case 13, 0x85, 0x2028, 0x2029:
+                contentEnd -= 1
+            default:
+                break
+            }
+        }
+        let length = contentEnd - start
         guard length > 0 else { return 0 }
 
-        // All printable ASCII glyphs occupy one cell in a fixed-pitch font.
-        // This avoids shaping 100,000 near-identical code rows individually.
+        // Printable ASCII in a fixed-pitch font requires no glyph shaping.
+        // Reuse one bounded buffer, not per-character Foundation calls.
         if font.isFixedPitch {
             var ascii = true
-            for offset in start..<contentEnd {
-                if !(32...126).contains(Int(text.character(at: offset))) {
+            var position = start
+            while position < contentEnd && ascii {
+                let count = min(units.count, contentEnd - position)
+                units.withUnsafeMutableBufferPointer {
+                    text.getCharacters($0.baseAddress!,
+                                       range: NSRange(location: position, length: count))
+                }
+                for unit in units.prefix(count) where unit < 32 || unit > 126 {
                     ascii = false
                     break
                 }
+                position += count
             }
             if ascii { return CGFloat(length) * font.maximumAdvancement.width }
         }

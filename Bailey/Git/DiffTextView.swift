@@ -552,7 +552,7 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
     }
 
     func resetLiveGitLineIndex(_ text: String) {
-        foldedGitLines = NativeTextLineIndex(text as NSString, breakMode: .gitLF)
+        foldedGitLines = NativeTextLineIndex(gitLF: text)
         liveGitSourceLineCount = text.isEmpty ? 0
             : (foldedGitLines?.lineCount ?? 0) - (text.utf16.last == 10 ? 1 : 0)
     }

@@ -682,6 +682,28 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    private func sourceGlyphPixelVariety(_ bitmap: NSBitmapImageRep,
+                                         in surface: NSView, at point: NSPoint) -> Int {
+        let scale = CGFloat(bitmap.pixelsWide) / surface.bounds.width
+        let startX = Int(point.x * scale)
+        let centerY = Int(point.y * scale)
+        func distinctColors(at y: Int) -> Int {
+            guard (0..<bitmap.pixelsHigh).contains(y) else { return 0 }
+            var colors = Set<String>()
+            for x in stride(from: max(0, startX),
+                            to: min(bitmap.pixelsWide, startX + Int(140 * scale)),
+                            by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y)?
+                    .usingColorSpace(.sRGB) else { continue }
+                colors.insert(String(format: "%.2f:%.2f:%.2f",
+                    color.redComponent, color.greenComponent, color.blueComponent))
+            }
+            return colors.count
+        }
+        return max(distinctColors(at: centerY),
+                   distinctColors(at: bitmap.pixelsHigh - 1 - centerY))
+    }
+
     func testDiffShortDocumentsDoNotExposePhantomHorizontalScroll() {
         for mode in [DiffCodePaneView.Mode.review, .edit] {
             let pane = DiffCodePaneView(mode: mode, gutterLayout: .single)
@@ -2236,6 +2258,14 @@ final class NativeDiffTabTests: XCTestCase {
         let manualHit = pane.textView.characterIndex(for: manualScreen)
         XCTAssertEqual(pane.textView.liveGitLine(atUTF16: manualHit), coldManualRow,
                        "Cold scroller glyph hit must resolve to the actual source row")
+        window.displayIfNeeded()
+        let raster = try XCTUnwrap(
+            pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?.retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: raster)
+        let rasterPoint = pane.textView.convert(
+            NSPoint(x: 16, y: manualTarget.frame.midY), to: pane)
+        XCTAssertGreaterThan(sourceGlyphPixelVariety(raster, in: pane, at: rasterPoint), 4,
+                             "A cold 100k mixed native scroller jump must rasterize its glyphs")
         pane.setVerticalScrollOffset(0)
         pane.setVerticalScrollOffset(expectedHeight)
         let bottom = DiffRowGeometry.visibleRows(
@@ -2591,7 +2621,7 @@ final class NativeDiffTabTests: XCTestCase {
     func testLocalGitStagedAndUnstagedDiffReadyLatencyMatrix() async throws {
         let font = TerminalFont.current()
         print("AUDIT_DIFF_ENV system=\(ProcessInfo.processInfo.operatingSystemVersionString) font=\(font.fontName) size=\(font.pointSize) longLineWidth=\(AppSettings.shared.longLineDisplayWidth) scale=\(NSScreen.main?.backingScaleFactor ?? 0) scroller=\(NSScroller.preferredScrollerStyle.rawValue)")
-        for lineCount in [1_000, 24_000] {
+        for lineCount in [1_000, 24_000, 100_000] {
             let root = try repository()
             defer { try? FileManager.default.removeItem(at: root) }
             let filename = "latency-\(lineCount).swift"
@@ -2636,20 +2666,26 @@ final class NativeDiffTabTests: XCTestCase {
                 let native = (bitmapStart - start) * 1_000
                 let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
                 surface.cacheDisplay(in: surface.bounds, to: bitmap)
-                if lineCount == 24_000, case .worktree = source {
+                if lineCount >= 24_000, case .worktree = source {
                     let pane = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
                         .first(where: { !$0.isHidden && $0.mode == .edit }))
                     let viewport = pane.scrollView.contentView.bounds
                     let sourceRows = DiffRowGeometry.visibleRows(
                         textView: pane.textView, decorations: pane.decorations)
-                    let firstChangeVisible = sourceRows.contains {
+                    let firstChange = sourceRows.first {
                         $0.index == lineCount / 2 + 1 && $0.frame.intersects(viewport)
                     }
-                    XCTAssertTrue(firstChangeVisible,
-                                  "First paint must contain source row \(lineCount / 2 + 1); "
-                                  + "viewport=\(viewport), visible=\(sourceRows.map(\.index))")
+                    let change = try XCTUnwrap(firstChange,
+                        "First paint must contain source row \(lineCount / 2 + 1); "
+                        + "viewport=\(viewport), visible=\(sourceRows.map(\.index))")
+                    let origin = pane.textView.convert(
+                        NSPoint(x: 16, y: change.frame.midY), to: surface)
+                    XCTAssertGreaterThan(
+                        sourceGlyphPixelVariety(bitmap, in: surface, at: origin), 4,
+                        "First cached native paint must contain source glyph pixels "
+                        + "at Git row \(lineCount / 2 + 1)")
                 }
-                if lineCount == 24_000 {
+                if lineCount >= 24_000 {
                     print("AUDIT_GIT_DIFF_NATIVE_PHASES source=\(source) mountMs=\((renderStart - installedAt) * 1_000) renderMs=\((layoutStart - renderStart) * 1_000) layoutMs=\((bitmapStart - layoutStart) * 1_000) rasterMs=\((CFAbsoluteTimeGetCurrent() - bitmapStart) * 1_000)")
                 }
                 XCTAssertGreaterThan(bitmap.pixelsWide, 0)

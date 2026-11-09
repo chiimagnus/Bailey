@@ -33,6 +33,25 @@ struct NativeTextLineIndex {
         lengths = PrefixSums(lineLengths)
     }
 
+    /// The initial Git index already has a Swift String; stream its UTF-16
+    /// units directly rather than bridging each range through NSString.
+    init(gitLF text: String) {
+        var starts = [0]
+        var total = 0
+        for unit in text.utf16 {
+            total += 1
+            if unit == 10 { starts.append(total) }
+        }
+        breakMode = .gitLF
+        length = total
+        lineLengths = starts.enumerated().map { index, start in
+            (index + 1 < starts.count ? starts[index + 1] : total) - start
+        }
+        nativeOnlyLineEnds = []
+        nativeOnlySeparatorCount = 0
+        lengths = PrefixSums(lineLengths)
+    }
+
     func offset(atLine row: Int) -> Int { lengths.sum(before: row) }
     func row(at offset: Int) -> Int { min(lengths.containing(offset), lineCount - 1) }
 
