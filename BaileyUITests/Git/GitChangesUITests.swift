@@ -480,13 +480,17 @@ final class GitChangesUITests: XCTestCase {
                        "MM " + relativeDiff + "\n M " + relativeTree + "\n")
         func changedLine(_ args: [String]) throws -> String {
             let patch = String(decoding: try fixture.git(args), as: UTF8.self)
-            let candidate = patch.split(separator: "\n").first { line in
+            let lines = patch.split(separator: "\n")
+            let candidate = lines.first { line in
                 line.hasPrefix("+") && !line.hasPrefix("+++")
+                    && line.dropFirst().trimmingCharacters(in: .whitespaces).count > 18
+            } ?? lines.first { line in
+                line.hasPrefix("-") && !line.hasPrefix("---")
                     && line.dropFirst().trimmingCharacters(in: .whitespaces).count > 18
             }
             return try XCTUnwrap(candidate.map { String($0.dropFirst())
                 .trimmingCharacters(in: .whitespaces) },
-                "A real source change needs an identifiable added line")
+                "A real source change needs an identifiable added or removed line")
         }
         let stagedMarker = try changedLine(["diff", "--cached", "--unified=0", "--", relativeDiff])
         let worktreeMarker = try changedLine(["diff", "--unified=0", "--", relativeDiff])
