@@ -3,6 +3,60 @@ import Observation
 import XCTest
 @testable import Bailey
 
+private actor SuspendedGitStatusBackend: WorkspaceBackend {
+    private let delay: Duration
+    private let passthrough: DiscardRemoteWorkspaceFixture?
+    private let blockedSubcommand: String?
+    private var running = 0
+    private var started = 0
+    private var cancelled = 0
+
+    init(delay: Duration = .seconds(8),
+         passthrough: DiscardRemoteWorkspaceFixture? = nil,
+         blockedSubcommand: String? = nil) {
+        self.delay = delay
+        self.passthrough = passthrough
+        self.blockedSubcommand = blockedSubcommand
+    }
+
+    func counts() -> (running: Int, started: Int, cancelled: Int) {
+        (running, started, cancelled)
+    }
+
+    func run(argv: [String], cwd: String?, env: [String: String]?,
+             stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        let matchingRead = argv.count > 1 && argv[0] == "git"
+            && argv[1] == blockedSubcommand
+            && (blockedSubcommand != "diff" || argv.contains("--name-status"))
+        if let passthrough, !matchingRead {
+            return try await passthrough.run(
+                argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout
+            )
+        }
+        running += 1
+        started += 1
+        defer { running -= 1 }
+        do {
+            try await Task.sleep(for: delay)
+        } catch is CancellationError {
+            cancelled += 1
+            throw CancellationError()
+        }
+        return .init(status: -2, stdout: Data(), stderr: Data())
+    }
+
+    func list(directory: String) async throws -> [WorkspaceEntry] { [] }
+    func stat(path: String) async throws -> WorkspaceStat? { nil }
+    func readSymlinkDestination(path: String) async throws -> String? { nil }
+    func read(path: String, maxBytes: Int) async throws -> Data { throw WorkspaceError.notFound }
+    func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
+    func createFile(path: String) async throws { throw WorkspaceError.notFound }
+    func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
+    func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
+    func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
+}
+
 @MainActor
 final class GitStatusModelTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
@@ -1922,6 +1976,380 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.isCurrent(model.actionTarget()))
     }
 
+    func testReplacingRepositoryCancelsAbandonedGitStatusIO() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Status-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initResult = GitCommandExecution.run(["init", "-q"], in: root.path)
+        XCTAssertEqual(initResult.status, 0, initResult.stderr)
+
+        let abandoned = SuspendedGitStatusBackend()
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: abandoned, scope: "ssh:abandoned")
+        let startedDeadline = Date().addingTimeInterval(3)
+        while Date() < startedDeadline {
+            if await abandoned.counts().started > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await abandoned.counts()
+        XCTAssertEqual(started.started, 1)
+        model.sync(root: root.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertNil(model.statusError)
+
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while Date() < cancelDeadline {
+            if await abandoned.counts().running == 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let leftover = await abandoned.counts()
+        XCTAssertEqual(leftover.cancelled, 1,
+                       "Switching the only Git panel consumer must cancel its previous I/O")
+        XCTAssertEqual(leftover.running, 0,
+                       "The obsolete SSH command must not continue consuming a connection")
+    }
+
+    func testReplacingSSHChannelCancelsAbandonedStatusAndPublishesCurrentGit() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Status-Channel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initResult = GitCommandExecution.run(["init", "-q"], in: root.path)
+        XCTAssertEqual(initResult.status, 0, initResult.stderr)
+        try Data("fresh-worktree".utf8).write(to: root.appendingPathComponent("tracked.txt"))
+
+        let abandoned = SuspendedGitStatusBackend()
+        let current = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: abandoned, scope: "ssh:channel-test")
+        let startedDeadline = Date().addingTimeInterval(3)
+        while Date() < startedDeadline {
+            if await abandoned.counts().started > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await abandoned.counts()
+        XCTAssertEqual(started.started, 1)
+        model.sync(root: root.path, backend: current, scope: "ssh:channel-test")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertNil(model.statusError)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
+
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            if await abandoned.counts().running == 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let leftover = await abandoned.counts()
+        XCTAssertEqual(leftover.cancelled, 1)
+        XCTAssertEqual(leftover.running, 0)
+    }
+
+    func testStatusModelDeinitCancelsItsUnneededSSHWorker() async throws {
+        let backend = SuspendedGitStatusBackend()
+        var model: GitStatusModel? = GitStatusModel()
+        model?.sync(root: "/tmp/bailey-inactive-status", backend: backend, scope: "ssh:deinit")
+        let startedDeadline = Date().addingTimeInterval(3)
+        while Date() < startedDeadline {
+            if await backend.counts().started > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await backend.counts()
+        XCTAssertEqual(started.started, 1)
+        weak var released = model
+        model = nil
+        XCTAssertNil(released)
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            if await backend.counts().running == 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let leftover = await backend.counts()
+        XCTAssertEqual(leftover.cancelled, 1)
+        XCTAssertEqual(leftover.running, 0)
+    }
+
+    func testStatusWatchdogCancelsTheCommandInsteadOfOnlyHidingSpinner() async throws {
+        let backend = SuspendedGitStatusBackend(delay: .seconds(40))
+        let model = GitStatusModel()
+        model.sync(root: "/tmp/bailey-watchdog", backend: backend, scope: "ssh:watchdog")
+        let startedDeadline = Date().addingTimeInterval(3)
+        while Date() < startedDeadline {
+            if await backend.counts().started > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await backend.counts()
+        XCTAssertEqual(started.started, 1)
+        let deadline = Date().addingTimeInterval(35)
+        while model.isRefreshing && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertFalse(model.isRefreshing)
+        XCTAssertTrue(model.hasResolvedStatus)
+        XCTAssertNotNil(model.statusError)
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while Date() < cancelDeadline {
+            if await backend.counts().running == 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let leftover = await backend.counts()
+        XCTAssertEqual(leftover.cancelled, 1)
+        XCTAssertEqual(leftover.running, 0)
+    }
+
+    func testReconnectCancelsHistoricalBinaryReadAndAllowsImmediateRetry() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-History-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "History Cancel Test"],
+                     ["config", "user.email", "history@invalid"],
+                     ["config", "commit.gpgsign", "false"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data([0, 1, 2, 3]).write(to: root.appendingPathComponent("binary.bin"))
+        XCTAssertEqual(GitCommandExecution.run(["add", "binary.bin"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "binary"], in: root.path).status, 0)
+
+        let old = SuspendedGitStatusBackend(
+            delay: .seconds(20), passthrough: DiscardRemoteWorkspaceFixture(),
+            blockedSubcommand: "show"
+        )
+        let current = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: old, scope: "ssh:history-cancel")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        let commit = try XCTUnwrap(model.recentCommits.first)
+        model.loadHistoricalBinaryPaths(for: commit)
+        let startDeadline = Date().addingTimeInterval(3)
+        while Date() < startDeadline {
+            if await old.counts().started == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await old.counts()
+        XCTAssertEqual(started.started, 1)
+
+        model.sync(root: root.path, backend: current, scope: "ssh:history-cancel")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        model.loadHistoricalBinaryPaths(for: commit)
+        let retryDeadline = Date().addingTimeInterval(3)
+        while model.historicalBinaryPaths[commit.hash] == nil && Date() < retryDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(model.isHistoricalBinaryFile(commit: commit, path: "binary.bin"),
+                      "A reconnected channel must not inherit an old permanently pending read")
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while Date() < cancelDeadline {
+            if await old.counts().running == 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let leftover = await old.counts()
+        XCTAssertEqual(leftover.cancelled, 1)
+        XCTAssertEqual(leftover.running, 0)
+    }
+
+    func testReconnectCancelsStashDetailReadWithoutLosingCurrentFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Stash-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "Stash Cancel Test"],
+                     ["config", "user.email", "stash@invalid"],
+                     ["config", "commit.gpgsign", "false"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let file = root.appendingPathComponent("tracked.txt")
+        try Data("base\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "tracked.txt"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "base"], in: root.path).status, 0)
+        try Data("changed\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["stash", "push", "-qm", "saved"], in: root.path).status, 0)
+
+        let old = SuspendedGitStatusBackend(
+            delay: .seconds(20), passthrough: DiscardRemoteWorkspaceFixture(),
+            blockedSubcommand: "diff"
+        )
+        let current = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: old, scope: "ssh:stash-cancel")
+        try await wait { model.hasCurrentStashes && !model.isRefreshing }
+        let stash = try XCTUnwrap(model.stashes.first)
+        model.loadStashFiles(for: stash)
+        let startDeadline = Date().addingTimeInterval(3)
+        while Date() < startDeadline {
+            if await old.counts().started == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await old.counts()
+        XCTAssertEqual(started.started, 1)
+
+        model.sync(root: root.path, backend: current, scope: "ssh:stash-cancel")
+        try await wait { model.hasCurrentStashes && !model.isRefreshing }
+        model.loadStashFiles(for: try XCTUnwrap(model.stashes.first))
+        try await wait {
+            if case .loaded = model.stashFilesByOID[stash.oid] { return true }
+            return false
+        }
+        if case .loaded(let changes) = model.stashFilesByOID[stash.oid] {
+            XCTAssertEqual(changes.map(\.path), ["tracked.txt"])
+        } else {
+            XCTFail("The reconnected channel must load real stash file names")
+        }
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while Date() < cancelDeadline {
+            if await old.counts().running == 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let leftover = await old.counts()
+        XCTAssertEqual(leftover.cancelled, 1)
+        XCTAssertEqual(leftover.running, 0)
+    }
+
+    func testRemovingStashCancelsItsUnconsumedDetailRead() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Stash-Drop-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "Stash Drop Test"],
+                     ["config", "user.email", "stash-drop@invalid"],
+                     ["config", "commit.gpgsign", "false"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        let path = root.appendingPathComponent("tracked.txt")
+        try Data("base\n".utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "tracked.txt"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "base"], in: root.path).status, 0)
+        try Data("changed\n".utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["stash", "push", "-qm", "to drop"], in: root.path).status, 0)
+        let backend = SuspendedGitStatusBackend(
+            delay: .seconds(20), passthrough: DiscardRemoteWorkspaceFixture(),
+            blockedSubcommand: "diff"
+        )
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: backend, scope: "ssh:stash-drop")
+        try await wait { model.hasCurrentStashes && !model.isRefreshing }
+        let stash = try XCTUnwrap(model.stashes.first)
+        model.loadStashFiles(for: stash)
+        let startDeadline = Date().addingTimeInterval(3)
+        while await backend.counts().started == 0 && Date() < startDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await backend.counts()
+        XCTAssertEqual(started.started, 1)
+        XCTAssertEqual(GitCommandExecution.run(["stash", "drop", stash.selector], in: root.path).status, 0)
+        model.refresh()
+        try await wait { model.hasCurrentStashes && model.stashes.isEmpty && !model.isRefreshing }
+        XCTAssertNil(model.stashFilesByOID[stash.oid])
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while await backend.counts().running > 0 && Date() < cancelDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let counts = await backend.counts()
+        XCTAssertEqual(counts.cancelled, 1,
+                       "Dropping an expanded stash must stop its obsolete Git process")
+        XCTAssertEqual(counts.running, 0)
+    }
+
+    func testRewrittenHistoryCancelsInvisibleBinaryDetailRead() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-History-Reset-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "History Reset Test"],
+                     ["config", "user.email", "history-reset@invalid"],
+                     ["config", "commit.gpgsign", "false"],
+                     ["commit", "--allow-empty", "-qm", "base"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data([0, 1, 2, 3]).write(to: root.appendingPathComponent("binary.bin"))
+        XCTAssertEqual(GitCommandExecution.run(["add", "binary.bin"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "binary"], in: root.path).status, 0)
+        let backend = SuspendedGitStatusBackend(
+            delay: .seconds(20), passthrough: DiscardRemoteWorkspaceFixture(),
+            blockedSubcommand: "show"
+        )
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: backend, scope: "ssh:history-reset")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        let oldCommit = try XCTUnwrap(model.recentCommits.first)
+        model.loadHistoricalBinaryPaths(for: oldCommit)
+        model.loadHistoricalBinaryPaths(for: oldCommit)
+        let startDeadline = Date().addingTimeInterval(3)
+        while await backend.counts().started == 0 && Date() < startDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await backend.counts()
+        XCTAssertEqual(started.started, 1,
+                       "Repeated expansion must share the same in-flight read")
+        XCTAssertEqual(GitCommandExecution.run(["reset", "--hard", "HEAD~1"], in: root.path).status, 0)
+        model.refresh()
+        try await wait {
+            model.hasCurrentHistory && !model.isRefreshing
+                && !model.recentCommits.contains(where: { $0.hash == oldCommit.hash })
+        }
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while await backend.counts().running > 0 && Date() < cancelDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let counts = await backend.counts()
+        XCTAssertEqual(counts.cancelled, 1,
+                       "History no longer displayed by Git must not retain a running metadata query")
+        XCTAssertEqual(counts.running, 0)
+        XCTAssertNil(model.historicalBinaryPaths[oldCommit.hash])
+    }
+
+    func testReleasingGitPanelCancelsPendingStashDetails() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Stash-Owner-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "Stash Owner Test"],
+                     ["config", "user.email", "stash-owner@invalid"],
+                     ["config", "commit.gpgsign", "false"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        let file = root.appendingPathComponent("tracked.txt")
+        try Data("base\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "tracked.txt"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "base"], in: root.path).status, 0)
+        try Data("stash\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["stash", "push", "-qm", "saved"], in: root.path).status, 0)
+        let backend = SuspendedGitStatusBackend(
+            delay: .seconds(20), passthrough: DiscardRemoteWorkspaceFixture(),
+            blockedSubcommand: "diff"
+        )
+        var model: GitStatusModel? = GitStatusModel()
+        model?.sync(root: root.path, backend: backend, scope: "ssh:owner")
+        try await wait { model?.hasCurrentStashes == true && model?.isRefreshing == false }
+        let stash = try XCTUnwrap(model?.stashes.first)
+        model?.loadStashFiles(for: stash)
+        let startDeadline = Date().addingTimeInterval(3)
+        while await backend.counts().started == 0 && Date() < startDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await backend.counts()
+        XCTAssertEqual(started.started, 1)
+        weak var released = model
+        model = nil
+        XCTAssertNil(released, "Detached metadata operations cannot retain the Git panel")
+        let cancelDeadline = Date().addingTimeInterval(1)
+        while await backend.counts().running > 0 && Date() < cancelDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let counts = await backend.counts()
+        XCTAssertEqual(counts.cancelled, 1)
+        XCTAssertEqual(counts.running, 0)
+    }
+
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2329,7 +2757,10 @@ final class GitStatusModelTests: XCTestCase {
 
                 _ = try git(["commit", "--allow-empty", "-qm", "external worktree commit"], at: shared)
                 let advanced = try git(["rev-parse", "HEAD"], at: shared)
-                if remote { model.refresh() }
+                // This matrix verifies detached Git history after a requested snapshot.
+                // Native FSEvents delivery has its own integration tests; it pauses
+                // when the test host loses foreground, independently of Git data.
+                model.refresh()
                 try await wait {
                     !model.isRefreshing && model.recentCommits.contains { $0.hash == advanced }
                 }
@@ -2344,6 +2775,44 @@ final class GitStatusModelTests: XCTestCase {
                 XCTAssertEqual(try git(["rev-parse", "HEAD"]), base)
             }
         }
+    }
+
+    func testNativeFileEventsReportExternalLinkedWorktreeHeadCommit() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Linked-HEAD-Event-" + UUID().uuidString)
+        let main = root.appendingPathComponent("main")
+        let linked = root.appendingPathComponent("linked")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ arguments: [String], at directory: URL = main) -> String {
+            let result = GitCommandExecution.run(arguments, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Linked HEAD Event"])
+        _ = git(["config", "user.email", "head-event@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        _ = git(["commit", "--allow-empty", "-qm", "base"])
+        _ = git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        let original = git(["rev-parse", "HEAD"], at: linked)
+        let gitDirectory = main.appendingPathComponent(".git").path
+        let watched = GitFileEventWatcher.paths(
+            root: main.path, gitDirectory: gitDirectory, worktrees: [linked.path]
+        )
+        XCTAssertTrue(watched.contains { gitDirectory == $0 || gitDirectory.hasPrefix($0 + "/") },
+                      "The shared Git metadata must be covered by a recursive watcher root")
+        XCTAssertTrue(watched.contains { linked.path == $0 || linked.path.hasPrefix($0 + "/") },
+                      "The linked checkout must also be covered by a watcher root")
+        let received = expectation(description: "External linked HEAD commit reaches native FSEvents")
+        received.assertForOverFulfill = false
+        var watcher = GitFileEventWatcher(paths: watched, onChange: { received.fulfill() })
+        XCTAssertNotNil(watcher)
+        defer { watcher = nil }
+
+        _ = git(["commit", "--allow-empty", "-qm", "external HEAD"], at: linked)
+        XCTAssertNotEqual(git(["rev-parse", "HEAD"], at: linked), original)
+        await fulfillment(of: [received], timeout: 10)
     }
 
     func testDetachedWorktreeHistoryPaginationChecksHeadsAndRetainsFailedPages() async throws {

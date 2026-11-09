@@ -28,6 +28,13 @@ final class GitStatusModel {
         }
     }
 
+    deinit {
+        statusRefreshTask?.cancel()
+        statusTimeoutTask?.cancel()
+        for task in binaryDetailTasks.values { task.cancel() }
+        for task in stashFileTasks.values { task.cancel() }
+    }
+
     nonisolated struct Entry: Identifiable, Equatable, Sendable {
         var id: String { path }
         /// Relative to the repository root, as porcelain v2 reports it.
@@ -471,30 +478,32 @@ final class GitStatusModel {
 
     /// Each expanded commit is queried once, not each file or each hover.
     func loadHistoricalBinaryPaths(for commit: RecentCommit) {
-        guard isRepo, recentCommits.contains(where: { $0.hash == commit.hash }),
-              historicalBinaryPaths[commit.hash] == nil,
-              pendingBinaryCommits.insert(commit.hash).inserted else { return }
+        let oid = commit.hash
+        guard isRepo, recentCommits.contains(where: { $0.hash == oid }),
+              historicalBinaryPaths[oid] == nil, binaryDetailTasks[oid] == nil else { return }
         let generation = contextGeneration
-        let selectedRoot = repoRoot
-        let selectedBackend = backend
-        Task { [weak self] in
-            let binary = await Task.detached(priority: .utility) {
-                let result = await GitCommandExecution.runData(
-                    ["show", "--format=", "--numstat", "-z",
-                     "--diff-merges=first-parent", commit.hash],
-                    in: selectedRoot, stdoutLimit: (2 << 20) + 1,
-                    backend: selectedBackend
-                )
-                guard result.status == 0, result.stdout.count <= (2 << 20),
-                      let binary = Self.parseHistoricalBinaryPaths(result.stdout)
-                else { return Optional<Set<String>>.none }
-                return binary
-            }.value
-            guard let self, self.contextGeneration == generation,
-                  self.repoRoot == selectedRoot else { return }
-            self.pendingBinaryCommits.remove(commit.hash)
-            if let binary { self.historicalBinaryPaths[commit.hash] = binary }
+        let root = repoRoot
+        let backend = backend
+        binaryDetailTasks[oid] = Task(priority: .utility) { [weak self] in
+            let binary = await Self.readHistoricalBinaryPaths(oid: oid, root: root, backend: backend)
+            guard !Task.isCancelled, let self, self.contextGeneration == generation,
+                  self.repoRoot == root else { return }
+            self.binaryDetailTasks[oid] = nil
+            if let binary { self.historicalBinaryPaths[oid] = binary }
         }
+    }
+
+    @concurrent private static func readHistoricalBinaryPaths(
+        oid: String, root: String, backend: WorkspaceBackend
+    ) async -> Set<String>? {
+        let result = await GitCommandExecution.runData(
+            ["show", "--format=", "--numstat", "-z", "--diff-merges=first-parent", oid],
+            in: root, stdoutLimit: (2 << 20) + 1, backend: backend
+        )
+        guard !Task.isCancelled, result.status == 0, result.stdout.count <= (2 << 20) else {
+            return nil
+        }
+        return parseHistoricalBinaryPaths(result.stdout)
     }
 
     nonisolated static func parseHistoricalBinaryPaths(_ output: Data) -> Set<String>? {
@@ -561,7 +570,7 @@ final class GitStatusModel {
     /// Loaded only when a historical commit's files are expanded. No per-row
     /// SSH queries or eager binary inspection during regular status refresh.
     private(set) var historicalBinaryPaths: [String: Set<String>] = [:]
-    @ObservationIgnored private var pendingBinaryCommits = Set<String>()
+    @ObservationIgnored private var binaryDetailTasks: [String: Task<Void, Never>] = [:]
 
     nonisolated struct RemoteBranchTarget: Sendable {
         let remote: String
@@ -668,6 +677,7 @@ final class GitStatusModel {
     }
 
     private(set) var stashFilesByOID: [String: StashFilesState] = [:]
+    @ObservationIgnored private var stashFileTasks: [String: Task<Void, Never>] = [:]
     var graphCommits: [RecentCommit] {
         Self.graphCommits(
             recentCommits, stashes: stashes,
@@ -783,6 +793,8 @@ final class GitStatusModel {
     /// Invalidates an in-flight status refresh when a mutation begins, so its
     /// pre-operation snapshot cannot overwrite the post-operation state.
     private var statusRequestID: UInt = 0
+    @ObservationIgnored private var statusRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var statusTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var coreCompletedRequestID: UInt?
     /// Coalesces an event that arrives while another refresh or mutation is
     /// running. Without polling, dropping that event could leave the snapshot
@@ -906,6 +918,7 @@ final class GitStatusModel {
         if panelTargetIdentity != context.identity {
             clearPanelNavigation()
             contextGeneration &+= 1
+            cancelOptionalReads()
             stashFilesByOID = [:]
             invalidateStatusRefresh()
         }
@@ -953,6 +966,7 @@ final class GitStatusModel {
             hasCurrentHistory = false
             hasCurrentStashes = false
             hasCurrentWorktrees = false
+            cancelOptionalReads()
             stashFilesByOID = [:]
             invalidateStatusRefresh()
             needsCoreVerification = true
@@ -1060,8 +1074,9 @@ final class GitStatusModel {
         // A blocked filesystem may outlive the Git command timeout.
         let refreshTimeout: Duration = backend is LocalWorkspaceBackend
             ? .seconds(12) : .seconds(30)
-        Task { [weak self] in
-            try? await Task.sleep(for: refreshTimeout)
+        statusTimeoutTask = Task { [weak self] in
+            do { try await Task.sleep(for: refreshTimeout) }
+            catch { return }
             guard let self,
                   self.isRefreshing,
                   self.contextGeneration == generation,
@@ -1070,11 +1085,8 @@ final class GitStatusModel {
             let phase = self.coreCompletedRequestID == requestID ? "details" : "core"
             let remote = !(self.backend is LocalWorkspaceBackend)
             Self.statusLogger.error("refresh watchdog timed out id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public)")
-            self.statusRequestID &+= 1
-            self.isRefreshing = false
-            self.isLoadingMoreCommits = false
             let pending = self.pendingRefresh
-            self.pendingRefresh = nil
+            self.invalidateStatusRefresh()
             let timeout = String(localized: "Git did not respond in time.", table: "Git")
             if self.coreCompletedRequestID == requestID {
                 if requestKind == .historyOnly {
@@ -1097,9 +1109,8 @@ final class GitStatusModel {
         }
 
         let backend = backend
-        Task { [weak self] in
-            let result = await Task.detached(priority: .utility) {
-                await Self.runGitStatus(
+        statusRefreshTask = Task(priority: .utility) { [weak self] in
+            let result = await Self.runGitStatus(
                     in: root, recentCommitLimit: commitLimit, backend: backend,
                     kind: requestKind, requestID: requestID
                 ) { [weak self] core in
@@ -1119,10 +1130,12 @@ final class GitStatusModel {
                     if !self.hasResolvedStatus { self.hasResolvedStatus = true }
                     return true
                 }
-            }.value
             guard let self, self.contextGeneration == generation,
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
+            self.statusRefreshTask = nil
+            self.statusTimeoutTask?.cancel()
+            self.statusTimeoutTask = nil
             self.isRefreshing = false
             let loadingMore = commitLimit < self.recentCommitLimit
             if self.isLoadingMoreCommits != loadingMore { self.isLoadingMoreCommits = loadingMore }
@@ -3089,7 +3102,18 @@ final class GitStatusModel {
         let failure: String?
     }
 
+    private func cancelOptionalReads() {
+        for task in binaryDetailTasks.values { task.cancel() }
+        binaryDetailTasks.removeAll()
+        for task in stashFileTasks.values { task.cancel() }
+        stashFileTasks.removeAll()
+    }
+
     private func invalidateStatusRefresh() {
+        statusRefreshTask?.cancel()
+        statusRefreshTask = nil
+        statusTimeoutTask?.cancel()
+        statusTimeoutTask = nil
         statusRequestID &+= 1
         isRefreshing = false
         isLoadingMoreCommits = false
@@ -3181,35 +3205,40 @@ final class GitStatusModel {
         let generation = contextGeneration
         let root = repoRoot
         let backend = backend
-        Task { [weak self] in
-            let state = await Task.detached(priority: .utility) { () async -> StashFilesState in
-                let tracked = await GitCommandExecution.runData([
-                    "diff", "--name-status", "-z", "--no-ext-diff",
-                    stash.baseHash, stash.oid, "--"
-                ], in: root, backend: backend)
-                guard tracked.status == 0,
-                      let trackedFiles = Self.parseGitFileChanges(tracked.stdout) else {
-                    return .failed(tracked.stderr.isEmpty
-                        ? String(localized: "Unable to read stash changes", table: "Git")
-                        : tracked.stderr)
-                }
-                guard let untracked = stash.untrackedFilesHash else { return .loaded(trackedFiles) }
-                let extra = await GitCommandExecution.runData([
-                    "diff-tree", "--root", "-r", "--name-status", "-z",
-                    "--no-commit-id", untracked, "--"
-                ], in: root, backend: backend)
-                guard extra.status == 0,
-                      let extraFiles = Self.parseGitFileChanges(extra.stdout, fromUntracked: true) else {
-                    return .failed(extra.stderr.isEmpty
-                        ? String(localized: "Unable to read stash changes", table: "Git")
-                        : extra.stderr)
-                }
-                return .loaded(trackedFiles + extraFiles)
-            }.value
-            guard let self, self.contextGeneration == generation, self.repoRoot == root,
-                  self.stashes.contains(where: { $0.oid == stash.oid }) else { return }
+        stashFileTasks[stash.oid] = Task(priority: .utility) { [weak self] in
+            let state = await Self.readStashFiles(stash, root: root, backend: backend)
+            guard !Task.isCancelled, let self, self.contextGeneration == generation,
+                  self.repoRoot == root, self.stashes.contains(where: { $0.oid == stash.oid })
+            else { return }
+            self.stashFileTasks[stash.oid] = nil
             self.stashFilesByOID[stash.oid] = state
         }
+    }
+
+    @concurrent private static func readStashFiles(
+        _ stash: Stash, root: String, backend: WorkspaceBackend
+    ) async -> StashFilesState {
+        let tracked = await GitCommandExecution.runData([
+            "diff", "--name-status", "-z", "--no-ext-diff", stash.baseHash, stash.oid, "--"
+        ], in: root, backend: backend)
+        guard tracked.status == 0,
+              let trackedFiles = parseGitFileChanges(tracked.stdout) else {
+            return .failed(tracked.stderr.isEmpty
+                ? String(localized: "Unable to read stash changes", table: "Git")
+                : tracked.stderr)
+        }
+        guard let untracked = stash.untrackedFilesHash else { return .loaded(trackedFiles) }
+        let extra = await GitCommandExecution.runData([
+            "diff-tree", "--root", "-r", "--name-status", "-z",
+            "--no-commit-id", untracked, "--"
+        ], in: root, backend: backend)
+        guard extra.status == 0,
+              let extraFiles = parseGitFileChanges(extra.stdout, fromUntracked: true) else {
+            return .failed(extra.stderr.isEmpty
+                ? String(localized: "Unable to read stash changes", table: "Git")
+                : extra.stderr)
+        }
+        return .loaded(trackedFiles + extraFiles)
     }
 
     private func clearRepositoryState(
@@ -3235,7 +3264,7 @@ final class GitStatusModel {
         fileDecorations = [:]
         ignoredPaths = []
         repositoryOperation = nil
-        isRefreshing = false
+        invalidateStatusRefresh()
         isBusy = runningOperationID != nil
         operation = failedOperation
         lastError = failedError
@@ -3244,8 +3273,6 @@ final class GitStatusModel {
         historyPageError = nil
         needsCoreVerification = false
         coreCompletedRequestID = nil
-        statusRequestID &+= 1
-        pendingRefresh = nil
         if !preserveIdentity {
             repositoryIdentity = ""
             clearPanelNavigation()
@@ -3264,9 +3291,9 @@ final class GitStatusModel {
         defaultBranch = nil
         remotes = []
         recentCommits = []
+        cancelOptionalReads()
         stashFilesByOID = [:]
         historicalBinaryPaths = [:]
-        pendingBinaryCommits.removeAll()
         hasMoreRecentCommits = false
         isLoadingMoreCommits = false
         stashes = []
@@ -3363,6 +3390,13 @@ final class GitStatusModel {
             if !hasCurrentReferences { hasCurrentReferences = true }
         }
         if let history = result.history {
+            let liveCommits = Set(history.commits.map(\.hash))
+            for oid in binaryDetailTasks.keys.filter({ !liveCommits.contains($0) }) {
+                binaryDetailTasks.removeValue(forKey: oid)?.cancel()
+            }
+            if historicalBinaryPaths.keys.contains(where: { !liveCommits.contains($0) }) {
+                historicalBinaryPaths = historicalBinaryPaths.filter { liveCommits.contains($0.key) }
+            }
             if recentCommits != history.commits { recentCommits = history.commits }
             if hasMoreRecentCommits != history.hasMore { hasMoreRecentCommits = history.hasMore }
             if !hasCurrentHistory { hasCurrentHistory = true }
@@ -3371,6 +3405,9 @@ final class GitStatusModel {
             if stashes != freshStashes { stashes = freshStashes }
             if !hasCurrentStashes { hasCurrentStashes = true }
             let liveStashOIDs = Set(freshStashes.map(\.oid))
+            for oid in stashFileTasks.keys.filter({ !liveStashOIDs.contains($0) }) {
+                stashFileTasks.removeValue(forKey: oid)?.cancel()
+            }
             let surviving = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
             if stashFilesByOID != surviving { stashFilesByOID = surviving }
         }
@@ -3514,7 +3551,7 @@ final class GitStatusModel {
 
     /// Resolves the active repository and distinguishes a normal non-repo
     /// directory from an actual Git failure that the UI should surface.
-    private nonisolated static func runGitStatus(
+    @concurrent private static func runGitStatus(
         in root: String,
         recentCommitLimit: Int,
         backend: WorkspaceBackend,
