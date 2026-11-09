@@ -1,0 +1,49 @@
+name: Bailey UI XCTest (isolated tag)
+
+on:
+  push:
+    tags:
+      - 'ci-ui-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bailey-ui-tag
+  cancel-in-progress: false
+
+jobs:
+  ui:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+    steps:
+      - name: Checkout exact test revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify Xcode and revision
+        run: |
+          xcodebuild -version
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Execute real Bailey Dev UI regression
+        run: |
+          make test:ui SIGNING=adhoc ONLY_TESTING="BaileyUITests/WorkspaceSmokeUITests/testIsolatedLaunchAndPaletteKeyboardFocus BaileyUITests/WorkspaceFilesUITests/testAddFolderAndOpenFileThroughRealFileTree BaileyUITests/WorkspaceFilesUITests/testCommandPaletteRestoresFileTreeKeyboardAfterDismissal BaileyUITests/WorkspaceFilesUITests/testOpeningTheSameFileFromMenuReusesItsExistingTab BaileyUITests/WorkspaceGitUITests/testGitChangesAreScopedToTheOpenedRepository BaileyUITests/GitGraphUITests/testGraphArrowNavigationKeepsRealCommitVisible BaileyUITests/WorkspaceWindowsUITests/testTwoEmptyWindowsHaveIndependentNativeLifecycle BaileyUITests/WorkspaceWindowsUITests/testCancelingFolderPickerDoesNotCreateAnEmptyProject BaileyUITests/EditorNavigationUITests/testUnicodeReplacementUndoRedoAndRealSave"
+      - name: Pack XCTest diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          for bundle in build/DerivedData-Dev/Logs/Test/*.xcresult; do
+            test -d "$bundle" || continue
+            ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
+          done
+      - name: Upload XCTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bailey-ui-xcresult
+          path: test-results/*.zip
+          if-no-files-found: warn
+          retention-days: 7
