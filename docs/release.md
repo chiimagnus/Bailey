@@ -13,7 +13,8 @@ GitHub Actions **不对 PR 或普通 `main` 提交自动运行 XCTest**。
 或完整 `BaileyTests/...`／`BaileyUITests/...` 路径，留空运行对应完整测试集。
 非空选择项交给 Makefile 的 `ONLY_TESTING` 和 Xcode 原生枚举校验，
 不存在的测试不得被视为通过；`ci-ui-*` 标签推送仍执行全部两套测试。
-两个独立的 macOS Runner Job 使用 Xcode 27.2，各自保存 `.xcresult`。
+两个独立的 macOS Runner Job 将系统 `xcode-select` 与 `DEVELOPER_DIR` 一起指向 Xcode 27.2，
+避免 XCTest 子进程重新调用旧版 Xcode 工具链；各自保存 `.xcresult`。
 CI 结果与本机验收分别记录，失败不能冒充已验收；
 授权 SSH、系统外观及其他特殊环境条件仍按 [测试完成标准](testing.md#完成标准)另行核验。
 合并前的结果由提交者负责，Tag 发布工作流不重复执行测试。

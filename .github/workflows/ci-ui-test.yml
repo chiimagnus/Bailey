@@ -47,8 +47,11 @@ jobs:
       - name: Verify runner and Xcode
         run: |
           set -euo pipefail
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcode-select -p)" = "$DEVELOPER_DIR"
           sw_vers -productVersion
           xcodebuild -version
+          /usr/bin/git --version
           test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Execute selected BaileyTests
@@ -128,8 +131,11 @@ jobs:
       - name: Verify runner and Xcode
         run: |
           set -euo pipefail
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcode-select -p)" = "$DEVELOPER_DIR"
           sw_vers -productVersion
           xcodebuild -version
+          /usr/bin/git --version
           test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Execute selected BaileyUITests
