@@ -8,10 +8,13 @@ struct NativeTextLineIndex {
 
     private var lineLengths: [Int]
     private var lengths: PrefixSums
+    private var nativeOnlyLineEnds: [Bool]
+    private var nativeOnlySeparatorCount: Int
     private let breakMode: BreakMode
     private(set) var length: Int
 
     var lineCount: Int { lineLengths.count }
+    var hasNativeOnlySeparators: Bool { nativeOnlySeparatorCount > 0 }
 
     init(_ text: NSString, breakMode: BreakMode = .native) {
         self.breakMode = breakMode
@@ -21,6 +24,12 @@ struct NativeTextLineIndex {
         lineLengths = positions.enumerated().map { index, start in
             (index + 1 < positions.count ? positions[index + 1] : text.length) - start
         }
+        nativeOnlyLineEnds = breakMode == .native ? positions.enumerated().map { index, _ in
+            Self.isNativeOnlyTerminator(
+                in: text, end: index + 1 < positions.count ? positions[index + 1] : text.length
+            )
+        } : []
+        nativeOnlySeparatorCount = nativeOnlyLineEnds.reduce(0) { $0 + ($1 ? 1 : 0) }
         lengths = PrefixSums(lineLengths)
     }
 
@@ -43,16 +52,30 @@ struct NativeTextLineIndex {
         let newLengths = inserted.enumerated().map { index, start in
             (index + 1 < inserted.count ? inserted[index + 1] : end) - start
         }
+        let newNativeOnlyEnds = breakMode == .native ? inserted.enumerated().map { index, _ in
+            Self.isNativeOnlyTerminator(
+                in: text, end: index + 1 < inserted.count ? inserted[index + 1] : end
+            )
+        } : []
+        if breakMode == .native {
+            let removed = nativeOnlyLineEnds[first..<last].reduce(0) { $0 + ($1 ? 1 : 0) }
+            let added = newNativeOnlyEnds.reduce(0) { $0 + ($1 ? 1 : 0) }
+            nativeOnlySeparatorCount += added - removed
+        }
         if newLengths.count == last - first {
             for (offset, value) in newLengths.enumerated() {
                 let row = first + offset
                 let shift = value - lineLengths[row]
                 lineLengths[row] = value
                 lengths.add(shift, at: row)
+                if breakMode == .native { nativeOnlyLineEnds[row] = newNativeOnlyEnds[offset] }
             }
         } else {
             lineLengths.replaceSubrange(first..<last, with: newLengths)
             lengths = PrefixSums(lineLengths)
+            if breakMode == .native {
+                nativeOnlyLineEnds.replaceSubrange(first..<last, with: newNativeOnlyEnds)
+            }
         }
         length = text.length
         return (first..<last, first..<(first + newLengths.count))
@@ -109,6 +132,14 @@ struct NativeTextLineIndex {
                 tree[index] += delta
                 index += index & -index
             }
+        }
+    }
+
+    private static func isNativeOnlyTerminator(in text: NSString, end: Int) -> Bool {
+        guard end > 0 else { return false }
+        switch text.character(at: end - 1) {
+        case 0x0D, 0x85, 0x2028, 0x2029: return true
+        default: return false
         }
     }
 

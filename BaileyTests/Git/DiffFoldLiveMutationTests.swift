@@ -267,7 +267,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
         XCTAssertEqual(pane.textView.liveGitOffset(forLine: 1), 6)
     }
 
-    func testLiveGhostSpacingSwitchesBetweenVirtualLFAndNativeCR() throws {
+    func testLiveGhostVirtualRowsDoNotRewriteParagraphSpacingAcrossCRChanges() throws {
         let text = "first\nsecond\n"
         let second = (text as NSString).range(of: "second").location
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
@@ -297,8 +297,8 @@ final class DiffFoldLiveMutationTests: XCTestCase {
                        "Fixed LF uses virtual deletion geometry, not native paragraph spacing")
         pane.textView.insertText("\r", replacementRange: NSRange(location: second + 3, length: 0))
         XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
-        XCTAssertEqual(try ghostGap(), DiffTypography.lineHeight(for: font), accuracy: 0.5,
-                       "A new CR paragraph must switch the same ghost to measured native spacing")
+        XCTAssertEqual(try ghostGap(), 0, accuracy: 0.5,
+                       "CR must retain virtual ghost geometry without rewriting source paragraphs")
         pane.textView.insertText("", replacementRange: NSRange(location: second + 3, length: 1))
         XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
         XCTAssertEqual(try ghostGap(), 0, accuracy: 0.5,

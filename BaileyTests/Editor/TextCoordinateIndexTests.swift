@@ -17,27 +17,38 @@ final class TextCoordinateIndexTests: XCTestCase {
                 let unit = units[offset]
                 offset += 1
                 if unit == 13, offset < units.count, units[offset] == 10 { offset += 1 }
-                if [10, 13, 0x2028, 0x2029].contains(unit) { starts.append(offset) }
+                if [10, 13, 0x85, 0x2028, 0x2029].contains(unit) { starts.append(offset) }
             }
             return starts
+        }
+        func expectedNativeOnly(_ text: String) -> Bool {
+            let units = Array(text.utf16)
+            for (offset, unit) in units.enumerated() {
+                if unit == 13 && (offset + 1 == units.count || units[offset + 1] != 10) {
+                    return true
+                }
+                if [0x85, 0x2028, 0x2029].contains(unit) { return true }
+            }
+            return false
         }
         var seed: UInt64 = 0xABCDEF1234
         func next(_ limit: Int) -> Int {
             seed = seed &* 6364136223846793005 &+ 1442695040888963407
             return Int((seed >> 32) % UInt64(limit))
         }
-        for original in ["", "\r\n", "a\r\nb\r", "中文👋\u{2028}e\u{301}\u{2029}\n", String(repeating: "x\r\n", count: 1_000)] {
+        for original in ["", "\r\n", "a\r\nb\r", "中文👋\u{2028}e\u{301}\u{2029}\n", "a\u{0085}b", String(repeating: "x\r\n", count: 1_000)] {
             var text = original
             var index = NativeTextLineIndex(text as NSString)
             for _ in 0..<300 {
                 let starts = expectedStarts(text)
                 XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, starts)
+                XCTAssertEqual(index.hasNativeOnlySeparators, expectedNativeOnly(text))
                 var boundaries = [0]
                 for scalar in text.unicodeScalars { boundaries.append(boundaries.last! + scalar.utf16.count) }
                 let first = next(boundaries.count)
                 let last = first + next(boundaries.count - first)
                 let range = NSRange(location: boundaries[first], length: boundaries[last] - boundaries[first])
-                let replacement = ["", "\r", "\n", "\r\n", "👋", "\u{2028}", "\u{2029}", "abc"][next(8)]
+                let replacement = ["", "\r", "\n", "\r\n", "👋", "\u{0085}", "\u{2028}", "\u{2029}", "abc"][next(9)]
                 text = (text as NSString).replacingCharacters(in: range, with: replacement)
                 let previousRows = index.lineCount
                 let changed = index.replace(
@@ -50,6 +61,7 @@ final class TextCoordinateIndexTests: XCTestCase {
                 for (row, start) in expectedStarts(text).enumerated() { XCTAssertEqual(index.row(at: start), row) }
             }
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, expectedStarts(text))
+            XCTAssertEqual(index.hasNativeOnlySeparators, expectedNativeOnly(text))
         }
     }
 
@@ -155,6 +167,8 @@ final class TextCoordinateIndexTests: XCTestCase {
             index.replace(in: range, replacementLength: replacement.utf16.count, text: source)
             let fresh = NativeTextLineIndex(source)
             XCTAssertEqual(index.length, source.length)
+            XCTAssertEqual(index.hasNativeOnlySeparators, fresh.hasNativeOnlySeparators,
+                           "iteration=\(iteration)")
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) },
                            (0..<fresh.lineCount).map { fresh.offset(atLine: $0) },
                            "iteration=\(iteration)")

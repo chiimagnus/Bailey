@@ -559,6 +559,20 @@ class NativeCodeTextView: NSTextView {
         (lineIndex?.row(at: min(max(offset, 0), lineIndex?.length ?? 0)) ?? 0) + 1
     }
 
+    var hasNativeOnlySeparators: Bool { lineIndex?.hasNativeOnlySeparators ?? false }
+
+    /// Natural paragraphs whose measured glyph width can exceed the native
+    /// container. Short paragraphs need no TextKit wrapping/layout probe.
+    func nativeWrapCandidates() -> [(row: Int, offset: Int)] {
+        guard isWrappingLines, let lineIndex, let measuredLineWidths,
+              let container = textContainer else { return [] }
+        let available = container.size.width - 2 * container.lineFragmentPadding
+        guard available > 0 else { return [] }
+        return measuredLineWidths.rowsExceeding(available).map {
+            ($0, lineIndex.offset(atLine: $0))
+        }
+    }
+
     func approximateCharacterOffset(atDocumentY y: CGFloat) -> Int? {
         guard let lineIndex, let font else { return nil }
         let lineHeight = max(1, ceil(font.ascender - font.descender + font.leading))
@@ -568,10 +582,13 @@ class NativeCodeTextView: NSTextView {
 
     func configureWrapping(_ wraps: Bool, viewportWidth: CGFloat) {
         let showAll = longLineDisplayWidth == .showAll
-        isWrappingLines = wraps || showAll
-        guard viewportWidth > 0 else { return }
+        guard viewportWidth > 0 else {
+            isWrappingLines = wraps || showAll
+            return
+        }
         let codeWidth: CGFloat
         let truncate: Bool
+        var needsWrap = wraps
         if wraps {
             measuredLineWidths = nil
             codeWidth = viewportWidth
@@ -593,10 +610,12 @@ class NativeCodeTextView: NSTextView {
                 ? LongLineDisplayWidth.expanded.rawValue : longLineDisplayWidth.rawValue))
             codeWidth = min(naturalWidth, limit)
             truncate = !showAll && naturalWidth > limit
+            needsWrap = showAll && naturalWidth > limit
         } else {
             codeWidth = viewportWidth
             truncate = false
         }
+        isWrappingLines = needsWrap
         setLongLineTruncation(truncate)
         // Keep the native document and TextKit 2 container at the same finite
         // width so far-distance navigation does not eagerly lay out every row.
@@ -649,6 +668,8 @@ class NativeCodeTextView: NSTextView {
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
         let currentText = storage.string as NSString
+        let previousParagraphCount = lineIndex?.lineCount
+        let previousNativeOnlySeparators = lineIndex?.hasNativeOnlySeparators
         syntaxCoordinator?.willChangeContent(in: previousRange)
         if lineIndex?.length == storage.length - storage.changeInLength,
            let changed = lineIndex?.replace(
@@ -671,12 +692,16 @@ class NativeCodeTextView: NSTextView {
         if !isWrappingLines, let width = enclosingScrollView?.contentView.bounds.width {
             configureWrapping(false, viewportWidth: width)
         }
-        storageCharactersDidChange(in: previousRange, replacement: replacement)
+        storageCharactersDidChange(in: previousRange, replacement: replacement,
+                                   nativeParagraphGeometryChanged: previousParagraphCount != lineIndex?.lineCount
+                                       || previousNativeOnlySeparators != lineIndex?.hasNativeOnlySeparators)
         onCharacterEdit?(previousRange, replacement)
     }
 
-    /// Subclasses receive the actual change, including Undo/Redo and IME edits.
-    func storageCharactersDidChange(in previousRange: NSRange, replacement: String) {}
+    /// Subclasses receive actual Undo/Redo and IME edits plus native paragraph
+    /// changes, already measured by the shared incremental UTF-16 index.
+    func storageCharactersDidChange(in previousRange: NSRange, replacement: String,
+                                   nativeParagraphGeometryChanged: Bool) {}
 }
 
 /// Cached natural line widths, updated only for the rows affected by an edit.
@@ -686,6 +711,10 @@ private final class NativeMeasuredLineWidths {
     private var widths: [CGFloat]
     private(set) var maximum: CGFloat = 0
     var count: Int { widths.count }
+
+    func rowsExceeding(_ width: CGFloat) -> [Int] {
+        widths.indices.filter { widths[$0] >= width }
+    }
 
     init(index: NativeTextLineIndex, text: NSString, font: NSFont) {
         self.font = font

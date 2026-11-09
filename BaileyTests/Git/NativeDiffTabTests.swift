@@ -1778,6 +1778,339 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testHistoricalPlainRevisionColdLayoutAndDeepRowAreNativeAndBounded() throws {
+        let count = 100_000
+        let source = (0..<count).map { "revision \($0)" }.joined(separator: "\n") + "\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 740, height: 310),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .standard)
+        pane.setEditBufferText(source)
+        pane.textView.isEditable = false
+        pane.decorations = .empty // Historical plain source has no diff rows.
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let layoutMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("AUDIT_P2_PLAIN_REVISION rows=\(count) layoutMs=\(layoutMs) "
+              + "height=\(pane.textView.overrideContentHeight ?? -1)")
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate,
+                        "A plain historical source must not force full TextKit document layout")
+        XCTAssertLessThan(layoutMs, 300)
+        XCTAssertEqual(pane.textView.overrideContentHeight ?? -1,
+                       CGFloat(count + 1) * style.maximumLineHeight, accuracy: style.maximumLineHeight)
+
+        for row in [count - 4, 100, count / 2, count - 4] {
+            pane.scrollToRow(row)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertLessThan(abs(pane.scrollOffset.y - CGFloat(row) * style.maximumLineHeight),
+                              pane.scrollView.contentView.bounds.height + style.maximumLineHeight,
+                              "Historical plain source must reach row \(row) directly")
+        }
+        let target = try XCTUnwrap(NSTextRange(
+            NSRange(location: source.utf16.count - 2, length: 1),
+            in: pane.textView.nativeContentManager
+        ))
+        pane.textView.nativeLayoutManager.ensureLayout(for: target)
+        let last = try XCTUnwrap(pane.textView.nativeLayoutManager.textLayoutFragment(for: target.location))
+        XCTAssertTrue((last.textElement as? NSTextParagraph)?.attributedString.string
+            .contains("revision \(count - 1)") == true)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testNativeCRGhostsKeepExactHeightWithoutWholeDocumentLayout() throws {
+        let count = 24_000
+        let source = (0..<count).map { "part\($0)" }.joined(separator: "\r") + "\nlast\n"
+        let gitLines = DiffLineSplitter.lines(of: source).lines
+        XCTAssertEqual(gitLines.count, 2)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: gitLines.map(\.utf16Range.location), lineCount: gitLines.count,
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1,
+                      lines: [NSAttributedString(string: "leading deletion")]),
+                .init(anchorLine: 1, firstOldLine: 2,
+                      lines: [NSAttributedString(string: "middle deletion")]),
+                .init(anchorLine: 2, firstOldLine: 3,
+                      lines: [NSAttributedString(string: "end deletion")])
+            ]
+        )
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        let rowHeight = style.maximumLineHeight
+        let expected = CGFloat(pane.textView.lineNumber(atUTF16Offset: source.utf16.count) + 3)
+            * rowHeight
+        print("AUDIT_P2_NATIVE_GHOST count=\(count) initialLayoutMs=\(elapsed) "
+              + "height=\(pane.textView.frame.height) expected=\(expected)")
+        XCTAssertLessThan(elapsed, 300,
+                          "Native CR paragraphs with deleted rows must not trigger full layout")
+        XCTAssertEqual(pane.textView.frame.height, expected, accuracy: rowHeight)
+        let initialHeight = pane.textView.frame.height
+        pane.setVerticalScrollOffset(1_000_000_000)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 0.5)
+        XCTAssertGreaterThan(pane.scrollOffset.y, initialHeight - 500)
+        let rows = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                               decorations: pane.decorations)
+        XCTAssertTrue(rows.contains { $0.index == 1 && $0.frame.intersects(
+            pane.scrollView.contentView.bounds) }, "The last Git row must remain reachable")
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testFoldedNativeCRParagraphsAndGhostsKeepExactColdScrollGeometry() {
+        let gitCount = 1_200
+        let partsPerLine = 8
+        let source = (0..<gitCount).map { row in
+            (0..<partsPerLine).map { "part\(row)-\($0)" }.joined(separator: "\r")
+        }.joined(separator: "\n") + "\n"
+        let gitLines = DiffLineSplitter.lines(of: source).lines
+        let folds = [50..<70, 400..<420, 1_000..<1_020].map { range in
+            DiffEditFold(range: range, separator: DiffCollapsedRun(
+                baselineRange: range, direction: .both))
+        }
+        let ghostAnchors = [0, 80, 500, gitCount]
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds(folds, baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: gitLines.map(\.utf16Range.location), lineCount: gitCount,
+            ghostBlocks: ghostAnchors.map { .init(anchorLine: $0, firstOldLine: $0 + 1,
+                lines: [NSAttributedString(string: "deleted")]) }), revision: 1)
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        let hidden = folds.reduce(0) { $0 + $1.range.count * partsPerLine - 1 }
+        let expected = CGFloat(gitCount * partsPerLine + 1 - hidden + ghostAnchors.count)
+            * style.maximumLineHeight
+        print("AUDIT_P2_NATIVE_FOLD_GHOST layoutMs=\(elapsed) "
+              + "height=\(pane.textView.frame.height) expected=\(expected)")
+        XCTAssertLessThan(elapsed, 300)
+        XCTAssertEqual(pane.textView.frame.height, expected, accuracy: 1)
+        XCTAssertNotNil(pane.textView.nativeLayoutManager.delegate)
+        for sourceRow in [1, 85, 510, 1_000, 1_100, 1_199] {
+            pane.scrollToRow(sourceRow)
+            let viewport = pane.scrollView.contentView.bounds
+            let visible = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations)
+            XCTAssertTrue(visible.contains { $0.index == sourceRow && $0.frame.intersects(viewport) },
+                          "Cold native fold+ghost scroll must hit Git row \(sourceRow)")
+            XCTAssertEqual(pane.textView.frame.height, expected, accuracy: 1)
+        }
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, expected, accuracy: 1)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testShowAllSparseLongLinesAndGhostsAvoidFullTextKitLayout() throws {
+        let lineCount = 24_000
+        let oversized = String(repeating: "longword_", count: 8_000)
+        let source = (0..<lineCount).map { row in
+            [9, 12_000, 23_990].contains(row) ? oversized : "short row \(row)"
+        }.joined(separator: "\n") + "\n"
+        let lines = DiffLineSplitter.lines(of: source).lines
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .showAll)
+        pane.setEditBufferText(source)
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: lines.map(\.utf16Range.location), lineCount: lineCount,
+            ghostBlocks: [
+                .init(anchorLine: 20, firstOldLine: 20,
+                      lines: [NSAttributedString(string: "one deletion")]),
+                .init(anchorLine: lineCount, firstOldLine: lineCount,
+                      lines: [NSAttributedString(string: "end deletion")])
+            ]
+        )
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("AUDIT_P2_SPARSE_WRAPS count=\(lineCount) initialLayoutMs=\(elapsed)")
+        XCTAssertTrue(pane.textView.wrapsLines)
+        XCTAssertLessThan(elapsed, 350,
+                          "Only the three oversized paragraphs need native wrap layout")
+        let initialHeight = pane.textView.frame.height
+        let native = pane.textView.nativeContentManager
+        let layout = pane.textView.nativeLayoutManager
+        var extraLines = 0
+        for row in [9, 12_000, 23_990] {
+            let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+            let paragraph = try XCTUnwrap(pane.textView.textStorage?.mutableString.paragraphRange(
+                for: NSRange(location: offset, length: 0)))
+            let range = try XCTUnwrap(NSTextRange(paragraph, in: native))
+            layout.ensureLayout(for: range)
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+            let bodyLines = fragment.textLineFragments.filter {
+                $0.characterRange.length > 0
+            }.count
+            XCTAssertGreaterThan(bodyLines, 1)
+            extraLines += bodyLines - 1
+        }
+        let expectedHeight = CGFloat(lineCount + 1 + extraLines + 2)
+            * style.maximumLineHeight
+        XCTAssertEqual(initialHeight, expectedHeight, accuracy: style.maximumLineHeight)
+        for row in [22_000, 10, 23_999] {
+            pane.scrollToRow(row)
+            let visible = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations)
+            let hit = visible.contains { $0.index == row && $0.frame.intersects(
+                pane.scrollView.contentView.bounds) }
+            if !hit {
+                let offset = pane.textView.liveGitOffset(forLine: row) ?? 0
+                let loc = NSTextRange(NSRange(location: offset, length: 1), in: native)
+                if let loc {
+                    layout.ensureLayout(for: loc)
+                    let fragment = layout.textLayoutFragment(for: loc.location)
+                    print("AUDIT_P2_TARGET_FRAGMENT row=\(row) y=\(String(describing: fragment?.layoutFragmentFrame.minY)) "
+                          + "height=\(String(describing: fragment?.layoutFragmentFrame.height)) "
+                          + "lines=\(fragment?.textLineFragments.count ?? -1)")
+                }
+                print("AUDIT_P2_WRAP_JUMP_MISS target=\(row) offset=\(pane.scrollOffset.y) "
+                      + "viewport=\(pane.scrollView.contentView.bounds) "
+                      + "visibleCount=\(visible.count) last=\(visible.last?.index ?? -1):\(visible.last?.frame.minY ?? -1) "
+                      + "nativeRange=\(String(describing: layout.textViewportLayoutController.viewportRange))")
+            }
+            XCTAssertTrue(hit, "Wrapped deep jump must hit row \(row)")
+            XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 1)
+        }
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testWrappedNativeSeparatorEditsSurviveSwitchToBoundedDisplay() {
+        let longLine = String(repeating: "longword", count: 10_000)
+        let source = longLine + "\nsecond line\n"
+        let gitLines = DiffLineSplitter.lines(of: source).lines
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let editOffset = longLine.utf16.count + 1 + 3
+
+        func verify(_ separator: String) {
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+            let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 720, height: 300),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = pane
+            window.orderFront(nil)
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .showAll)
+            pane.setEditBufferText(source)
+            pane.setEditingFolds([], baseDecorations: .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: gitLines.map(\.utf16Range.location),
+                lineCount: gitLines.count, ghostBlocks: []), revision: 1)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.wrapsLines)
+            XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+
+            let insertedRange = NSRange(location: editOffset, length: 0)
+            pane.textView.insertText(separator, replacementRange: insertedRange)
+            pane.applyLiveNativeEdit(previousRange: insertedRange, replacement: separator)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.hasNativeNonLFSeparators,
+                          "An inserted native separator must remain visible to the layout owner")
+
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .standard)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertFalse(pane.textView.wrapsLines)
+            XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+            let nativeCount = pane.textView.lineNumber(atUTF16Offset: pane.textView.string.utf16.count)
+            XCTAssertGreaterThan(nativeCount, gitLines.count)
+            XCTAssertEqual(pane.textView.overrideContentHeight ?? -1,
+                           CGFloat(nativeCount) * style.maximumLineHeight,
+                           accuracy: style.maximumLineHeight)
+
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .showAll)
+            pane.layoutSubtreeIfNeeded()
+            let removedRange = NSRange(location: editOffset, length: separator.utf16.count)
+            pane.textView.insertText("", replacementRange: removedRange)
+            pane.applyLiveNativeEdit(previousRange: removedRange, replacement: "")
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertFalse(pane.textView.hasNativeNonLFSeparators,
+                           "Deleting the last native separator must clear the layout mode")
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                                 longLineDisplayWidth: .standard)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertFalse(pane.textView.wrapsLines)
+            XCTAssertEqual(pane.textView.text, source)
+        }
+        for separator in ["\r", "\u{0085}", "\u{2028}", "\u{2029}"] {
+            verify(separator)
+        }
+    }
+
+    func testShowAllShortLinesUseNativeFixedLayoutWithoutUnnecessaryWrapping() {
+        let count = 24_000
+        let source = (0..<count).map { "short row \($0)" }.joined(separator: "\n") + "\n"
+        let lines = DiffLineSplitter.lines(of: source).lines
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: CGRect(x: -950, y: -950, width: 700, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor,
+                             longLineDisplayWidth: .showAll)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds([], baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: lines.map(\.utf16Range.location), lineCount: lines.count,
+            ghostBlocks: []), revision: 1)
+        let started = CFAbsoluteTimeGetCurrent()
+        pane.layoutSubtreeIfNeeded()
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        XCTAssertFalse(pane.textView.wrapsLines,
+                       "Show All must not force wrapping after the actual window width is known")
+        print("AUDIT_P2_SHOW_ALL_SHORT count=\(count) initialLayoutMs=\(elapsed)")
+        XCTAssertLessThan(elapsed, 300)
+        let initialHeight = pane.textView.frame.height
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(pane.textView.frame.height, initialHeight, accuracy: 0.5)
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
     func testDenseIntralineProjectionCancellationLatency() async throws {
         let lineCount = 100
         let old = String(repeating: String(repeating: "+", count: 400) + "\n", count: lineCount)
@@ -3395,9 +3728,8 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertLessThanOrEqual(editor.frame.width, max(680, actual) + 1)
             let after = try XCTUnwrap(editor.textStorage?.attribute(
                 .paragraphStyle, at: 9_001, effectiveRange: nil) as? NSParagraphStyle)
-            let expected = mode == .showAll ? style.maximumLineHeight : 0
-            XCTAssertEqual(after.paragraphSpacingBefore, expected, accuracy: 0.5,
-                           "Ghosts use native spacing only when \(mode) wraps")
+            XCTAssertEqual(after.paragraphSpacingBefore, 0, accuracy: 0.5,
+                           "Deleted rows belong to virtual geometry, not paragraph styles")
             XCTAssertEqual(pane.decorations.positionedGhosts.first?.visibleStartRow, 1,
                            "Changing line width must not move the removed source row")
             XCTAssertEqual(editor.text, full)
@@ -3607,7 +3939,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertNil(pane.textView.overrideContentHeight)
     }
 
-    func testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR() throws {
+    func testNativeCRGhostSpacingUsesVirtualRowsWithoutMutatingParagraphs() throws {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         pane.applyTypography(
@@ -3636,9 +3968,9 @@ final class NativeDiffTabTests: XCTestCase {
         let secondStyle = try XCTUnwrap(
             attributed.attribute(.paragraphStyle, at: 6, effectiveRange: nil) as? NSParagraphStyle
         )
-        XCTAssertGreaterThan(firstStyle.paragraphSpacingBefore, 0)
+        XCTAssertEqual(firstStyle.paragraphSpacingBefore, 0)
         XCTAssertEqual(secondStyle.paragraphSpacingBefore, 0,
-                       "One Git deletion must not insert ghost spacing into every native CR paragraph")
+                       "Native fixed geometry must reserve ghost rows without paragraph spacing")
 
         pane.decorations = .edit(
             state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
@@ -3657,7 +3989,8 @@ final class NativeDiffTabTests: XCTestCase {
         )
         XCTAssertEqual(firstAtEnd.paragraphSpacingBefore, 0)
         XCTAssertEqual(firstAtEnd.paragraphSpacing, 0)
-        XCTAssertGreaterThan(lastAtEnd.paragraphSpacing, 0)
+        XCTAssertEqual(lastAtEnd.paragraphSpacing, 0,
+                       "End-of-file deletion must use virtual fixed rows, not native spacing")
 
         pane.decorations = .edit(
             state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
