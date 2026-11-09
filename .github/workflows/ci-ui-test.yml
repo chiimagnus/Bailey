@@ -73,13 +73,28 @@ jobs:
       - name: Inspect XCTest results
         if: success()
         run: |
-          set -euo pipefail
-          bundles=(build/DerivedData-Dev/Logs/Test/*.xcresult)
-          test -d "${bundles[0]}"
-          for bundle in "${bundles[@]}"; do
-            xcrun xcresulttool get test-results summary --path "$bundle" --compact |
-              python3 -c 'import json,sys; j=json.load(sys.stdin); print({k:j[k] for k in ("result","totalTestCount","passedTests","failedTests","skippedTests")}); assert j["result"] == "Passed" and j["passedTests"] > 0'
-          done
+          python3 - <<'PYRESULT'
+          import glob
+          import json
+          import subprocess
+          import sys
+
+          executed = 0
+          for bundle in glob.glob("build/DerivedData-Dev/Logs/Test/*.xcresult"):
+              summary = json.loads(subprocess.check_output(
+                  ["xcrun", "xcresulttool", "get", "test-results", "summary",
+                   "--path", bundle, "--compact"], text=True
+              ))
+              if summary["totalTestCount"] == 0:
+                  continue  # Makefile's -enumerate-tests preflight generates an empty bundle.
+              print(bundle, {key: summary[key] for key in
+                  ("result", "totalTestCount", "passedTests", "failedTests", "skippedTests")})
+              if summary["result"] != "Passed" or summary["passedTests"] == 0:
+                  sys.exit("XCTest did not complete successfully")
+              executed += summary["totalTestCount"]
+          if executed == 0:
+              sys.exit("No XCTest methods executed")
+          PYRESULT
       - name: Pack XCTest diagnostics
         if: always()
         run: |
@@ -139,13 +154,28 @@ jobs:
       - name: Inspect XCTest results
         if: success()
         run: |
-          set -euo pipefail
-          bundles=(build/DerivedData-Dev/Logs/Test/*.xcresult)
-          test -d "${bundles[0]}"
-          for bundle in "${bundles[@]}"; do
-            xcrun xcresulttool get test-results summary --path "$bundle" --compact |
-              python3 -c 'import json,sys; j=json.load(sys.stdin); print({k:j[k] for k in ("result","totalTestCount","passedTests","failedTests","skippedTests")}); assert j["result"] == "Passed" and j["passedTests"] > 0'
-          done
+          python3 - <<'PYRESULT'
+          import glob
+          import json
+          import subprocess
+          import sys
+
+          executed = 0
+          for bundle in glob.glob("build/DerivedData-Dev/Logs/Test/*.xcresult"):
+              summary = json.loads(subprocess.check_output(
+                  ["xcrun", "xcresulttool", "get", "test-results", "summary",
+                   "--path", bundle, "--compact"], text=True
+              ))
+              if summary["totalTestCount"] == 0:
+                  continue  # Makefile's -enumerate-tests preflight generates an empty bundle.
+              print(bundle, {key: summary[key] for key in
+                  ("result", "totalTestCount", "passedTests", "failedTests", "skippedTests")})
+              if summary["result"] != "Passed" or summary["passedTests"] == 0:
+                  sys.exit("XCTest did not complete successfully")
+              executed += summary["totalTestCount"]
+          if executed == 0:
+              sys.exit("No XCTest methods executed")
+          PYRESULT
       - name: Pack XCTest diagnostics
         if: always()
         run: |
