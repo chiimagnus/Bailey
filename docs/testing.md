@@ -105,7 +105,10 @@ PR 不自动触发 GitHub Actions 的宿主或 UI 测试；合并前由本机运
 阶段验收按上方完成标准执行完整回归，结果须对应实际提交版本。
 显式 `ci-ui-*` 测试标签触发独立的 [XCTest workflow](../.github/workflows/ci-ui-test.yml)，
 使用两个 Runner 分别运行全部宿主与 UI XCTest，保存 `.xcresult`；
-工作流进入默认分支后还可手动触发。Tag 发布仍由[发布工作流](release.md#正式发布)负责。
+工作流进入默认分支后可手动选择 Host、UI 或 Both，
+按类名／方法指定一个或多个 XCTest，留空则执行完整目标；
+测试选择仍由 Makefile 枚举与校验。
+Tag 发布仍由[发布工作流](release.md#正式发布)负责。
 云端使用临时签名及独立桌面，不代替本机开发签名和授权 SSH、外观等特殊条件的验收。
 测试入口由 [Makefile](../Makefile) 与
 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；
