@@ -478,7 +478,14 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
             if ranges[mid].upperBound <= offset { low = mid + 1 }
             else { high = mid }
         }
-        return low == 0 ? 0 : foldedNativeHiddenPrefix[low - 1]
+        let preceding = low == 0 ? 0 : foldedNativeHiddenPrefix[low - 1]
+        guard low < ranges.count, ranges[low].contains(offset) else { return preceding }
+        // A folded Git line may contain several native CR/Unicode paragraphs.
+        // Hidden paragraphs inside that range must share the separator's
+        // display row; counting only completed folds breaks Y monotonicity.
+        let firstNativeRow = lineNumber(atUTF16Offset: ranges[low].lowerBound) - 1
+        let currentNativeRow = lineNumber(atUTF16Offset: offset) - 1
+        return preceding + currentNativeRow - firstNativeRow + 1
     }
 
     var totalHiddenNativeParagraphs: Int { foldedNativeHiddenPrefix.last ?? 0 }
@@ -1902,7 +1909,10 @@ final class DiffCodePaneView: NSView {
                 materializeNativeViewport(at: viewport.minY)
             }
             lastViewportBounds = viewport
-            textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+            if !isSyncingScroll {
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
+            }
             lastViewportBounds = scrollView.contentView.bounds
             isRefreshingViewport = false
         }
@@ -2010,6 +2020,7 @@ final class DiffCodePaneView: NSView {
         defer { isSyncingScroll = false }
         clipView.scroll(to: constrained)
         scrollView.reflectScrolledClipView(clipView)
+        textView.nativeLayoutManager.textViewportLayoutController.layoutViewport()
     }
 
     func setVerticalScrollOffset(_ y: CGFloat) {
