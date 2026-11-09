@@ -221,7 +221,16 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
                 throw error
             }
             XCTAssertEqual(model.currentScope, "ssh:" + host)
-            let originalHead = try XCTUnwrap(model.recentCommits.first?.hash)
+            let originalHead = try XCTUnwrap(model.headOID,
+                "The verified core Git snapshot must identify the initial HEAD")
+            if model.hasCurrentHistory {
+                XCTAssertEqual(model.recentCommits.first?.hash, originalHead)
+            } else {
+                // Core state may succeed while an optional remote detail query fails.
+                // A visible error and subsequent polling must recover the real Graph.
+                XCTAssertNotNil(model.detailError,
+                                "Missing history must report a detail failure")
+            }
 
             var polling = Task { await model.runRemoteRefreshLoop() }
             defer { polling.cancel() }
