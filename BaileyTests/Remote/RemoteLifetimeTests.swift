@@ -22,6 +22,28 @@ final class RemoteLifetimeTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testIsolatedSSHFailureDoesNotInvalidateSharedHostConnection() async throws {
+        // An invalid hostname fails before network access, but still exercises
+        // the real OpenSSH exit status and host connection publication.
+        let host = "invalid host " + UUID().uuidString
+        let normal = try await SSHHostCommandRunner(host: host).run(
+            ["true"], stdin: nil, timeout: 3
+        )
+        XCTAssertEqual(normal.status, 255)
+        XCTAssertEqual(SSHHostWorkspaces.connectionState(for: host), false)
+        SSHHostWorkspaces.setConnected(true, for: host)
+        let revision = SSHHostWorkspaces.connectionRevision(for: host)
+
+        let isolated = try await SSHHostCommandRunner(
+            host: host, socket: "/tmp/bailey-ssh-isolated-\(UUID().uuidString).sock"
+        ).run(["true"], stdin: nil, timeout: 3)
+        XCTAssertEqual(isolated.status, 255)
+        XCTAssertEqual(SSHHostWorkspaces.connectionState(for: host), true)
+        XCTAssertEqual(SSHHostWorkspaces.connectionRevision(for: host), revision,
+                       "A separate SSH master cannot invalidate the workspace connection")
+    }
+
     func testIndependentCommandRunnerPreservesStreamsAndBoundsPipes() throws {
         let normal = try ProcessRemoteCommandRunner.launch(
             sshPath: "/bin/sh",

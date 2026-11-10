@@ -18,9 +18,11 @@ nonisolated enum SSHMultiplexing {
 nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
     let host: String
     private let multiplexOptions: [String]
+    private let reportsConnectionState: Bool
 
     init(host: String, socket: String? = nil) {
         self.host = host
+        reportsConnectionState = socket == nil
         // Real SSH tests keep their own disposable master, never the user's.
         multiplexOptions = socket.map {
             ["-o", "ControlMaster=auto", "-o", "ControlPersist=180", "-o", "ControlPath=\($0)"]
@@ -63,8 +65,10 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
             } onCancel: {
                 command.cancel()
             }
-            await MainActor.run {
-                SSHHostWorkspaces.setConnected(result.status != 255, for: host)
+            if reportsConnectionState {
+                await MainActor.run {
+                    SSHHostWorkspaces.setConnected(result.status != 255, for: host)
+                }
             }
             return result
         } catch WorkspaceError.tooLarge {
@@ -72,7 +76,9 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            await MainActor.run { SSHHostWorkspaces.setConnected(false, for: host) }
+            if reportsConnectionState {
+                await MainActor.run { SSHHostWorkspaces.setConnected(false, for: host) }
+            }
             throw error
         }
     }
