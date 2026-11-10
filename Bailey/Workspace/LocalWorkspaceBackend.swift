@@ -394,14 +394,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         var buffer = [UInt8](repeating: 0, count: 8_192)
         while !openFDs.isEmpty || process.isRunning {
             if honorTaskCancellation { try Task.checkCancellation() }
-            if let deadline, ProcessInfo.processInfo.systemUptime >= deadline {
-                if process.isRunning {
-                    _ = Darwin.kill(process.processIdentifier, SIGTERM)
-                    if exited.wait(timeout: .now() + .milliseconds(250)) == .timedOut,
-                       process.isRunning {
-                        _ = Darwin.kill(process.processIdentifier, SIGKILL)
-                        _ = exited.wait(timeout: .now() + .milliseconds(250))
-                    }
+            if let deadline, ProcessInfo.processInfo.systemUptime >= deadline,
+               process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGTERM)
+                if exited.wait(timeout: .now() + .milliseconds(250)) == .timedOut,
+                   process.isRunning {
+                    _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    _ = exited.wait(timeout: .now() + .milliseconds(250))
                 }
                 if preservePartialOnTimeout {
                     return WorkspaceRunResult(status: -2, stdout: outData, stderr: errData)
