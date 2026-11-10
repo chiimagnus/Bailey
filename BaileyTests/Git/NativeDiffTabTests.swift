@@ -1415,6 +1415,9 @@ final class NativeDiffTabTests: XCTestCase {
         }
         let expandedHeight = CGFloat(expandedRows + ghosts.reduce(0) { $0 + $1.lines.count })
             * rowHeight
+        XCTAssertEqual(try XCTUnwrap(pane.textView.overrideContentHeight),
+                       expandedHeight, accuracy: rowHeight,
+                       "An expanded fold must update the native height owner before layout")
         XCTAssertEqual(pane.textView.frame.height, expandedHeight, accuracy: rowHeight,
                        "Unfolding must update the full native scroll extent before scrolling")
         pane.setVerticalScrollOffset(1_000_000)
@@ -1453,6 +1456,10 @@ final class NativeDiffTabTests: XCTestCase {
         )
         pane.layoutSubtreeIfNeeded()
         let firstHeight = pane.textView.frame.height
+        XCTAssertEqual(firstHeight,
+                       max(try XCTUnwrap(pane.textView.overrideContentHeight),
+                           pane.scrollView.contentView.bounds.height), accuracy: 1,
+                       "A pinned document must fill its viewport before the first edit")
         let edited = changed.replacingOccurrences(of: "changed 500\n",
                                                    with: "changed LARGER 500\n")
         pane.textView.textStorage?.replaceCharacters(
@@ -3687,21 +3694,40 @@ final class NativeDiffTabTests: XCTestCase {
                        "Moving the caret and focusing editable code must not unfold context")
         XCTAssertEqual(ObjectIdentifier(editor.textView), surfaceID)
         let gutter = try XCTUnwrap(editor.subviews.compactMap { $0 as? DiffGutterView }.first)
-        func firstLabel() -> String? {
-            (gutter.accessibilityChildren()?.first as? NSAccessibilityElement)?
-                .accessibilityLabel()
-        }
-        let priorLabel = try XCTUnwrap(firstLabel())
         let previousDisplay = tab.display?.id
         tab.expandRun(try XCTUnwrap(before.first).separator)
         try await wait {
             host.layoutSubtreeIfNeeded()
             return tab.display?.id != previousDisplay
         }
+        let updated = try XCTUnwrap(tab.display)
+        let updatedFolds = DiffEditFold.sourceFolds(in: updated.computation.unified,
+                                                     lineCount: 320)
+        XCTAssertLessThan(updatedFolds.reduce(0) { $0 + $1.range.count - 1 },
+                          before.reduce(0) { $0 + $1.range.count - 1 },
+                          "Explicit expansion must reveal actual source paragraphs")
         try await wait {
             host.layoutSubtreeIfNeeded()
-            return firstLabel() != nil && firstLabel() != priorLabel
+            return editor.textView.editingFolds == updatedFolds
         }
+        let next = try XCTUnwrap(updatedFolds.first)
+        editor.scrollToRow(next.range.lowerBound)
+        host.layoutSubtreeIfNeeded()
+        let visibleRowsAfterExpansion = DiffRowGeometry.visibleRows(
+            textView: editor.textView, decorations: editor.decorations
+        )
+        let expectedLabels = visibleRowsAfterExpansion.compactMap { row -> String? in
+            guard editor.decorations.rows.indices.contains(row.index),
+                  let fold = editor.decorations.rows[row.index].collapsed else { return nil }
+            return DiffCollapsedRunLabel.expandAction(hiddenLines: fold.hiddenLines)
+        }
+        XCTAssertFalse(expectedLabels.isEmpty,
+                       "Expanded native Diff must retain a visible AX fold button")
+        let actualLabels = (gutter.accessibilityChildren() ?? []).compactMap {
+            ($0 as? NSAccessibilityElement)?.accessibilityLabel()
+        }
+        XCTAssertEqual(actualLabels, expectedLabels,
+                       "Accessibility must reflect current visible folds, not a stale first child")
         XCTAssertEqual(ObjectIdentifier(editor.textView), surfaceID)
         XCTAssertEqual(editor.textView.string, modified)
         XCTAssertTrue(tab.isEditing)
@@ -6526,12 +6552,10 @@ final class NativeDiffTabTests: XCTestCase {
         let source = String(repeating: "let value = 123 // comment\n", count: 77_000)
         XCTAssertGreaterThan(source.utf8.count, 2_000_000)
         let firstLine = [NSRange(location: 0, length: 25)]
-        let baseline = try residentKiB()
-        let baselineAllocated = allocatedKiB()
         var owners: [DiffSyntaxSource] = []
         var weakOwners: [WeakSource] = []
         var coldTimes: [Double] = []
-        for i in 0..<30 {
+        for _ in 0..<20 {
             let syntax = DiffSyntaxSource()
             let started = CFAbsoluteTimeGetCurrent()
             let matches = await syntax.captures(text: source, context: context, ranges: firstLine)
@@ -6539,11 +6563,21 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertFalse(matches.isEmpty)
             let count = await syntax.parseCount
             XCTAssertEqual(count, 1)
-            if i < 10 {
-                // Each tab holds a distinct parser owner, not a global cache.
-                owners.append(syntax)
-                weakOwners.append(WeakSource(syntax))
-            }
+        }
+        // Measure retained tab owners only after cold parser allocations settle;
+        // otherwise global parser warm-up is misattributed to those owners.
+        let baseline = try residentKiB()
+        let baselineAllocated = allocatedKiB()
+        for _ in 0..<10 {
+            let syntax = DiffSyntaxSource()
+            let started = CFAbsoluteTimeGetCurrent()
+            let matches = await syntax.captures(text: source, context: context, ranges: firstLine)
+            coldTimes.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+            XCTAssertFalse(matches.isEmpty)
+            let count = await syntax.parseCount
+            XCTAssertEqual(count, 1)
+            owners.append(syntax)
+            weakOwners.append(WeakSource(syntax))
         }
         XCTAssertEqual(owners.count, 10)
         XCTAssertTrue(weakOwners.allSatisfy { $0.value != nil })

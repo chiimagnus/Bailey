@@ -136,15 +136,22 @@ class NativeCodeTextView: NSTextView {
     var overrideContentHeight: CGFloat? {
         didSet {
             if let height = overrideContentHeight, height > 0 {
-                let requiredHeight = max(height, enclosingScrollView?.contentView.bounds.height ?? 0)
-                minSize.height = requiredHeight
-                maxSize.height = requiredHeight
-                setFrameSize(NSSize(width: frame.width, height: requiredHeight))
+                updatePinnedContentHeight()
             } else {
                 maxSize.height = CGFloat.greatestFiniteMagnitude
                 minSize.height = 0
                 needsLayout = true
             }
+        }
+    }
+
+    private func updatePinnedContentHeight() {
+        guard let contentHeight = overrideContentHeight, contentHeight > 0 else { return }
+        let height = max(contentHeight, enclosingScrollView?.contentView.bounds.height ?? 0)
+        if minSize.height != height { minSize.height = height }
+        if maxSize.height != height { maxSize.height = height }
+        if abs(frame.height - height) > 0.5 {
+            setFrameSize(NSSize(width: frame.width, height: height))
         }
     }
 
@@ -509,16 +516,19 @@ class NativeCodeTextView: NSTextView {
 
     override func layout() {
         super.layout()
-        // A short native text document must still cover the scroll viewport,
-        // including the area below its final line, so clicks focus the editor.
-        guard overrideContentHeight == nil,
-              let height = enclosingScrollView?.contentView.bounds.height,
+        if let height = overrideContentHeight, height > 0 {
+            updatePinnedContentHeight()
+            return
+        }
+        // Even short documents must cover the viewport so clicks focus the editor.
+        guard let height = enclosingScrollView?.contentView.bounds.height,
               frame.height < height else { return }
         setFrameSize(NSSize(width: frame.width, height: height))
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
+        updatePinnedContentHeight()
         configureGutter()
     }
 
