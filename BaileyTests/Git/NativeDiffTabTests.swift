@@ -502,6 +502,27 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(left.scrollOffset.x, sourceX, accuracy: 1,
                        "Clamping the short pane must never bounce its origin back to the long pane")
         XCTAssertEqual(feedback, 1, "Follower scroll must not echo the original event")
+
+        // When both real lines exceed the selected width cap, they correctly
+        // have the same scroll end regardless of their different text lengths.
+        for pane in [left, right] {
+            pane.applyTypography(font: font,
+                                 paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: .textColor, longLineDisplayWidth: .compact)
+        }
+        left.setReviewDocument(NSAttributedString(string: String(repeating: "a", count: 2000)),
+                               decorations: .empty)
+        right.setReviewDocument(NSAttributedString(string: String(repeating: "b", count: 2500)),
+                                decorations: .empty)
+        container.layoutSubtreeIfNeeded()
+        left.layoutSubtreeIfNeeded()
+        right.layoutSubtreeIfNeeded()
+        XCTAssertEqual(left.textView.frame.width, CGFloat(LongLineDisplayWidth.compact.rawValue),
+                       accuracy: 1)
+        XCTAssertEqual(right.textView.frame.width, left.textView.frame.width, accuracy: 1)
+        left.setScrollOffset(NSPoint(x: 100_000, y: 0))
+        left.onScroll?(left.scrollOffset)
+        XCTAssertEqual(right.scrollOffset.x, left.scrollOffset.x, accuracy: 1)
     }
 
     func testWindowFindCommandsTargetNativeWritableAndStagedDiffPanes() async throws {
@@ -2930,6 +2951,33 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(editor.textView.text, modified)
         XCTAssertFalse(tab.isDirty)
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
+
+        tab.setDiffStyle(.split)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.editableBaseline != nil && tab.nativeSurface?.subviews
+                .compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden }.count == 2
+        }
+        let surface = try XCTUnwrap(tab.nativeSurface)
+        let baseline = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && !$0.textView.isEditable })
+        XCTAssertTrue(window.makeFirstResponder(baseline.textView))
+        XCTAssertFalse(tab.editorActive)
+        lines[15_000] = "line 15000 changed without edit focus\n"
+        let latest = lines.joined()
+        try Data(latest.utf8).write(to: path)
+        tab.reload()
+        try await wait({ tab.display == nil && tab.hasChanges },
+                       pollingInterval: .milliseconds(1), timeout: 15)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(tab.canPresentNativeContent,
+                      "A mounted editor must remain visible while a new snapshot is computed")
+        XCTAssertTrue(surface.superview != nil)
+        XCTAssertFalse(editor.isHidden)
+        try await wait({ tab.display != nil && tab.newContent == latest }, timeout: 20)
+        XCTAssertTrue(tab.nativeSurface === surface)
+        XCTAssertEqual(editor.textView.text, latest)
     }
 
     func testFoldedGitLineHidesAllItsNativeCRParagraphsExceptSeparator() throws {
@@ -3615,6 +3663,188 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
     }
 
+    func testSplitBaselineIsNotReplacedByRightSideInlineEditingOrLeftFocus() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("split.swift")
+        let original = (0..<140).map { "let value_\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        for arguments in [["add", "split.swift"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let modified = original.replacingOccurrences(
+            of: "let value_75 = 75\n", with: "let changedValue = 75\n"
+        ).replacingOccurrences(
+            of: "let value_105 = 105\n",
+            with: "let value_105 = 105\nlet newlyAdded = 100\n"
+        )
+        try Data(modified.utf8).write(to: file)
+        let preferences = try isolatedPreferences()
+        preferences.diffStyle = .split
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "split.swift", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        tab.autoSaveSuspendedForClose = true
+        try await wait { tab.editableBaseline != nil && tab.editFoldsReady }
+        let window = NSWindow(
+            contentRect: NSRect(x: -920, y: -920, width: 900, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: tab))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden }.count == 2
+        }
+        let surface = try XCTUnwrap(tab.nativeSurface)
+        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+        let left = try XCTUnwrap(panes.first { !$0.isHidden && !$0.textView.isEditable })
+        let right = try XCTUnwrap(panes.first { !$0.isHidden && $0.textView.isEditable })
+        let originalLeft = left.textView.attributedText.copy() as! NSAttributedString
+        let storage = try XCTUnwrap(left.textView.textStorage)
+        let didReplaceText = expectation(
+            forNotification: NSTextStorage.didProcessEditingNotification, object: storage
+        ) { notification in
+            (notification.object as? NSTextStorage)?.editedMask.contains(.editedCharacters) == true
+        }
+        didReplaceText.isInverted = true
+        let previousID = try XCTUnwrap(tab.editableBaseline?.id)
+        XCTAssertTrue(window.makeFirstResponder(right.textView))
+        let caret = (right.textView.string as NSString).range(of: "newlyAdded").location
+        right.textView.insertText("typing", replacementRange: NSRange(location: caret, length: 0))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.editableBaseline?.id != previousID
+                && left.renderedDisplayID == tab.editableBaseline?.id
+        }
+        XCTAssertEqual(left.textView.string, originalLeft.string,
+                       "Right-side edits must not rewrite the unchanged left source")
+        XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text),
+                      "Left-side emphasis changes must still be applied")
+        XCTAssertTrue(window.makeFirstResponder(left.textView))
+        host.layoutSubtreeIfNeeded()
+        await fulfillment(of: [didReplaceText], timeout: 0.3)
+        XCTAssertTrue(left.textView.textStorage === storage)
+        XCTAssertEqual(left.textView.string, originalLeft.string)
+
+        // Adding a whole source line legitimately inserts filler on the left.
+        // This still must not replace the existing TextKit document wholesale.
+        let beforeNewline = try XCTUnwrap(tab.editableBaseline?.id)
+        let updatedLeft = left.textView.string
+        let nextCaret = (right.textView.string as NSString).range(of: "newlyAdded").location
+        right.textView.insertText("let addedRow = 1\n", replacementRange: NSRange(
+            location: nextCaret, length: 0
+        ))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.editableBaseline?.id != beforeNewline
+                && left.renderedDisplayID == tab.editableBaseline?.id
+        }
+        XCTAssertNotEqual(left.textView.string, updatedLeft)
+        XCTAssertTrue(left.textView.textStorage === storage)
+        XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text))
+        XCTAssertTrue(left.textView.textLayoutManager != nil)
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+
+        // Clicking the red read-only side after typing also triggers the
+        // editor's focus-loss save and Git reload; neither may unmount it.
+        tab.autoSaveSuspendedForClose = false
+        XCTAssertTrue(window.makeFirstResponder(right.textView))
+        let saveCaret = (right.textView.string as NSString).range(of: "newlyAdded").location
+        right.textView.insertText("edited", replacementRange: NSRange(location: saveCaret,
+                                                                        length: 0))
+        XCTAssertTrue(tab.isDirty)
+        let monitor = Task { @MainActor in
+            var unavailable = 0
+            for _ in 0..<350 {
+                host.layoutSubtreeIfNeeded()
+                if !tab.canPresentNativeContent || surface.superview == nil
+                    || left.isHidden || right.isHidden
+                    || left.textView.textLayoutManager == nil {
+                    unavailable += 1
+                }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            return unavailable
+        }
+        XCTAssertTrue(window.makeFirstResponder(left.textView))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            guard let current = try? Data(contentsOf: file) else { return false }
+            return !tab.isDirty && current != Data(modified.utf8)
+                && tab.nativeSurface === surface && !left.isHidden
+                && !tab.isLoading && tab.editFoldsReady && tab.display != nil
+        }
+        let unavailableCount = await monitor.value
+        XCTAssertEqual(unavailableCount, 0,
+                       "Autosave and Git reload must keep both native Split panes visible")
+        XCTAssertTrue(left.textView.textStorage === storage)
+        XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text))
+        let deletion = try XCTUnwrap(left.decorations.rows.firstIndex { $0.kind == .removed })
+        left.scrollToRow(deletion)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(left.bitmapImageRepForCachingDisplay(in: left.bounds)?
+            .retagging(with: .sRGB))
+        left.cacheDisplay(in: left.bounds, to: bitmap)
+        let row = try XCTUnwrap(DiffRowGeometry.visibleRows(
+            textView: left.textView, decorations: left.decorations
+        ).first { $0.index == deletion })
+        XCTAssertGreaterThan(sourceGlyphPixelVariety(
+            bitmap, in: left,
+            at: NSPoint(x: 95, y: row.frame.midY - left.scrollOffset.y)
+        ), 3, "The removed row must still paint its text after focus-loss save")
+    }
+
+    func testReviewProjectionRetainsExactUTF16WhenReplacingUnicode() throws {
+        let surrogateChange = try XCTUnwrap(NativeCodeTextView.changedTextRanges(
+            from: "start \u{1F600} end" as NSString, to: "start \u{1FA00} end" as NSString
+        ))
+        XCTAssertEqual(surrogateChange.old.length, 2)
+        XCTAssertEqual(surrogateChange.new.length, 2)
+        XCTAssertNotNil(NativeCodeTextView.changedTextRanges(
+            from: "Café" as NSString, to: "Cafe\u{0301}" as NSString
+        ))
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let paragraph = DiffTypography.paragraphStyle(for: font)
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -920, y: -920, width: 690, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.applyTypography(font: font, paragraphStyle: paragraph, textColor: .textColor)
+        let context = String(repeating: "unchanged line\n", count: 120)
+        let initial = context + "Cafe\u{0301} 🍎\n" + context
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .paragraphStyle: paragraph, .foregroundColor: NSColor.textColor
+        ]
+        let decorations = DiffDecorations.empty
+        pane.setReviewDocument(NSAttributedString(string: initial, attributes: attributes),
+                               decorations: decorations)
+        pane.layoutSubtreeIfNeeded()
+        let storage = try XCTUnwrap(pane.textView.textStorage)
+        let layout = pane.textView.nativeLayoutManager
+        for changed in [context + "Café 🍏\n" + context,
+                        context + "Cafe\u{0301} 🍎\n" + context,
+                        context + "Cafe\u{0301} 🍎\nnew line\n" + context,
+                        initial] {
+            pane.setReviewDocument(NSAttributedString(string: changed, attributes: attributes),
+                                   decorations: decorations)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.string.utf16.elementsEqual(changed.utf16))
+            XCTAssertTrue(pane.textView.textStorage === storage)
+            XCTAssertTrue(pane.textView.nativeLayoutManager === layout)
+        }
+    }
+
     func testEditableSplitAlignsFullWorktreeWithReadOnlyBaselineAcrossFoldedContext() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -3847,6 +4077,100 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, source)
     }
 
+    func testCachedGhostLayoutFollowsLiveUTF16OffsetsAfterInlineUnicodeEdit() throws {
+        let source = (0..<32).map { "let newAdded\($0) = \($0)\n" }.joined()
+        let offsets = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: .init(x: -950, y: -950, width: 720, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let rowHeight = style.maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: offsets, lineCount: offsets.count,
+            ghostBlocks: [.init(anchorLine: 12, firstOldLine: 12,
+                                lines: (0..<8).map { NSAttributedString(string: "deleted \($0)") })]
+        )
+        pane.layoutSubtreeIfNeeded()
+        let content = pane.textView.nativeContentManager
+        let layout = pane.textView.nativeLayoutManager
+        func fragment(_ row: Int) throws -> NSTextLayoutFragment {
+            let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+            let range = try XCTUnwrap(NSTextRange(NSRange(location: offset, length: 1), in: content))
+            layout.ensureLayout(for: range)
+            return try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+        }
+        let beforeDeletion = try fragment(11)
+        let afterDeletion = try fragment(12)
+        XCTAssertEqual(beforeDeletion.layoutFragmentFrame.height, 9 * rowHeight, accuracy: 1)
+        XCTAssertEqual(afterDeletion.layoutFragmentFrame.minY, 20 * rowHeight, accuracy: 1)
+
+        func verifyVisibleRows(ghostRows: Int = 8) throws {
+            XCTAssertEqual(beforeDeletion.layoutFragmentFrame.height,
+                           CGFloat(1 + ghostRows) * rowHeight, accuracy: 1,
+                           "Cached fragment must use the current Ghost height after edits")
+            XCTAssertEqual(afterDeletion.layoutFragmentFrame.minY,
+                           CGFloat(12 + ghostRows) * rowHeight, accuracy: 1,
+                           "Cached fragment must not fall onto the preceding live row")
+            for row in 10...17 {
+                let expected = CGFloat(row + (row >= 12 ? ghostRows : 0)) * rowHeight
+                XCTAssertEqual(try fragment(row).layoutFragmentFrame.minY, expected, accuracy: 1)
+            }
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+                .retagging(with: .sRGB))
+            pane.cacheDisplay(in: pane.bounds, to: bitmap)
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            for row in [11, 12, 13] {
+                let visual = try XCTUnwrap(visible.first { $0.index == row })
+                XCTAssertGreaterThan(sourceGlyphPixelVariety(
+                    bitmap, in: pane,
+                    at: NSPoint(x: 95, y: visual.frame.midY - pane.scrollOffset.y)
+                ), 3, "Row \(row) must have independently visible text pixels")
+            }
+        }
+
+        // The source row counts do not change. Inserting Unicode, ASCII, and
+        // deleting them shifts later UTF-16 offsets in both directions.
+        for inserted in ["测试🙂", "阿斯顿", "1234567890"] {
+            let lineStart = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 10))
+            let location = lineStart + "let newAdded10 = 10".utf16.count
+            let insertion = NSRange(location: location, length: 0)
+            pane.textView.textStorage?.replaceCharacters(in: insertion, with: inserted)
+            pane.applyLiveNativeEdit(previousRange: insertion, replacement: inserted)
+            try verifyVisibleRows()
+            XCTAssertTrue(pane.textView.string.contains("let newAdded10 = 10\(inserted)"))
+
+            let deletion = NSRange(location: location, length: inserted.utf16.count)
+            pane.textView.textStorage?.replaceCharacters(in: deletion, with: "")
+            pane.applyLiveNativeEdit(previousRange: deletion, replacement: "")
+            try verifyVisibleRows()
+            XCTAssertEqual(pane.textView.string, source)
+        }
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: offsets, lineCount: offsets.count, ghostBlocks: []
+        )
+        pane.layoutSubtreeIfNeeded()
+        try verifyVisibleRows(ghostRows: 0)
+        let lineStart = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 10))
+        let insertion = NSRange(location: lineStart + "let newAdded10 = 10".utf16.count,
+                                length: 0)
+        pane.textView.textStorage?.replaceCharacters(in: insertion, with: "测试🙂")
+        pane.applyLiveNativeEdit(previousRange: insertion, replacement: "测试🙂")
+        try verifyVisibleRows(ghostRows: 0)
+        XCTAssertTrue(pane.textView.string.contains("let newAdded10 = 10测试🙂"))
+    }
+
     func testLargeDeletionPaintsEveryReservedRowBeforeNewLines() throws {
         let prefix = (0..<578).map { "keep \($0)\n" }.joined()
         let removed = (0..<18).map { "deleted code \($0)\n" }.joined()
@@ -3912,6 +4236,19 @@ final class NativeDiffTabTests: XCTestCase {
         let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
             .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let visible = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        )
+        let clip = pane.scrollView.contentView.bounds
+        for sourceRow in 578..<587 {
+            let row = try XCTUnwrap(visible.first {
+                $0.index == sourceRow && $0.frame.intersects(clip)
+            }, "New row \(sourceRow) must be visible after reserving deletion space")
+            XCTAssertGreaterThan(sourceGlyphPixelVariety(
+                bitmap, in: pane,
+                at: NSPoint(x: 95, y: row.frame.midY - pane.scrollOffset.y)
+            ), 3, "New row \(sourceRow) must paint text, not just its green background")
+        }
         let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let removedColor = try XCTUnwrap(DiffColorScheme.current(dark: dark)
             .removedRow.usingColorSpace(.sRGB))
@@ -6945,9 +7282,9 @@ final class NativeDiffTabTests: XCTestCase {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("wide.txt")
-        let oldText = ([String(repeating: "a", count: 1100)]
+        let oldText = ([String(repeating: "a", count: 200)]
             + (0..<150).map { "before \($0)" }).joined(separator: "\n") + "\n"
-        let newText = ([String(repeating: "b", count: 1400)]
+        let newText = ([String(repeating: "b", count: 420)]
             + (0..<150).map { "after \($0)" }).joined(separator: "\n") + "\n"
         try Data(oldText.utf8).write(to: file)
         XCTAssertEqual(GitCommandExecution.run(["add", "wide.txt"], in: directory.path).status, 0)

@@ -177,7 +177,9 @@ final class DiffTab: nonisolated Identifiable {
     var canPresentNativeContent: Bool {
         guard hasLoadedContent else { return false }
         if source.isPlainRevision || isDirty { return true }
-        if isEditing && (editorActive || !hasChanges) { return true }
+        // Once mounted, the worktree editor survives save/reload while its new
+        // diff projection is being prepared; only initial display waits for it.
+        if isEditing && (nativeSurface != nil || editorActive || !hasChanges) { return true }
         return display != nil && (!isEditing || editFoldsReady)
     }
     /// A non-invertible clean filter needs Git's canonical Review alongside the raw editor.

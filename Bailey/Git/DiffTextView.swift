@@ -232,37 +232,30 @@ struct DiffDecorations {
             maxNewLine: rowCount
         )
         decorations.ghostsByAnchor = ghostsByAnchor
-        var priorGhostRows = 0
-        for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
-            decorations.positionedGhosts.append(
-                PositionedGhost(startRow: anchor + priorGhostRows,
-                                visibleStartRow: anchor + priorGhostRows, block: block)
-            )
-            priorGhostRows += block.lines.count
-        }
+        decorations.positionGhosts(for: [])
         return decorations
     }
 
-    /// Map hidden source lines to display coordinates once per fold change,
-    /// instead of scanning every fold on every gutter and background repaint.
+    /// Rebuild the sorted ghost positions when decorations or folds change,
+    /// not during gutter or background drawing.
     mutating func positionGhosts(for folds: [DiffEditFold]) {
-        var completed = 0
+        positionedGhosts.removeAll(keepingCapacity: true)
+        var precedingGhosts = 0
+        var hidden = 0
         var foldIndex = 0
-        for index in positionedGhosts.indices {
-            let anchor = positionedGhosts[index].block.anchorLine
+        for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
             while foldIndex < folds.count && folds[foldIndex].range.upperBound <= anchor {
-                completed += max(0, folds[foldIndex].range.count - 1)
+                hidden += max(0, folds[foldIndex].range.count - 1)
                 foldIndex += 1
             }
-            let partial: Int
-            if foldIndex < folds.count {
-                let range = folds[foldIndex].range
-                partial = max(0, min(anchor, range.upperBound) - range.lowerBound - 1)
-            } else {
-                partial = 0
-            }
-            positionedGhosts[index].visibleStartRow = positionedGhosts[index].startRow
-                - completed - partial
+            let partial = foldIndex < folds.count
+                ? max(0, min(anchor, folds[foldIndex].range.upperBound)
+                    - folds[foldIndex].range.lowerBound - 1) : 0
+            let start = anchor + precedingGhosts
+            positionedGhosts.append(PositionedGhost(
+                startRow: start, visibleStartRow: start - hidden - partial, block: block
+            ))
+            precedingGhosts += block.lines.count
         }
     }
 
@@ -286,12 +279,16 @@ struct DiffDecorations {
 nonisolated private final class DiffFixedRowFragment: NSTextLayoutFragment {
     var rowHeight: CGFloat = 0
     var wrapped = false
-    var currentRow: (() -> Int)?
+    var currentPosition: (() -> (row: Int, trailingRows: Int))?
 
     override var layoutFragmentFrame: CGRect {
         var frame = super.layoutFragmentFrame
-        frame.origin.y = CGFloat(currentRow?() ?? 0) * rowHeight
-        frame.size.height = CGFloat(wrapped ? max(1, textLineFragments.count) : 1) * rowHeight
+        let position = currentPosition?() ?? (row: 0, trailingRows: 0)
+        frame.origin.y = CGFloat(position.row) * rowHeight
+        // TextKit tiles by fragment height, so virtual deletion rows must occupy native space.
+        frame.size.height = CGFloat(
+            (wrapped ? max(1, textLineFragments.count) : 1) + position.trailingRows
+        ) * rowHeight
         return frame
     }
 }
@@ -377,6 +374,7 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
     private var fixedLayoutRowHeight: CGFloat?
     var layoutRowForUTF16: ((Int) -> Int)?
     var ghostStartY: ((Int) -> CGFloat)?
+    var ghostRowsAfterGitLine: ((Int) -> Int)?
 
     func setFixedLayoutRowHeight(_ height: CGFloat?) {
         guard fixedLayoutRowHeight != height else { return }
@@ -393,16 +391,25 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
               let range = textElement.elementRange else {
             return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
         }
-        let offset = nativeContentManager.offset(
-            from: nativeContentManager.documentRange.location, to: location
-        )
         let fragment = DiffFixedRowFragment(textElement: textElement, range: range)
         fragment.rowHeight = height
         fragment.wrapped = wrapsLines
-        // TextKit retains fragments across live diff updates. Ghosts, folds,
-        // and wrapped prefixes can all change a cached paragraph's display row.
-        fragment.currentRow = {
-            MainActor.assumeIsolated { rowForOffset(offset) }
+        // A retained fragment's original UTF-16 offset becomes stale when text
+        // is inserted before it. Resolve its current paragraph location each time.
+        fragment.currentPosition = { [weak self, weak fragment] in
+            MainActor.assumeIsolated {
+                guard let self, let fragment, let range = fragment.textElement?.elementRange
+                else { return (row: 0, trailingRows: 0) }
+                let content = self.nativeContentManager
+                let offset = content.offset(from: content.documentRange.location,
+                                            to: range.location)
+                let row = rowForOffset(offset)
+                guard !self.wrapsLines, !self.hasNativeNonLFSeparators,
+                      let sourceRow = self.liveGitLine(atUTF16: offset) else {
+                    return (row: row, trailingRows: 0)
+                }
+                return (row: row, trailingRows: self.ghostRowsAfterGitLine?(sourceRow) ?? 0)
+            }
         }
         return fragment
     }
@@ -765,12 +772,10 @@ private enum DiffGhostGeometry {
     static func visibleBlocks(
         textView: DiffTextView, clipView: NSClipView, decorations: DiffDecorations
     ) -> [VisibleBlock] {
-        guard textView.nativeLayoutManager.delegate != nil,
-              !decorations.positionedGhosts.isEmpty else { return [] }
-        let rowHeight = DiffTypography.paragraphStyle(
-            for: textView.font ?? TerminalFont.current()
-        ).maximumLineHeight
-        guard rowHeight > 0 else { return [] }
+        guard !decorations.positionedGhosts.isEmpty else { return [] }
+        let configuredHeight = textView.defaultParagraphStyle?.maximumLineHeight ?? 0
+        let rowHeight = configuredHeight > 0 ? configuredHeight
+            : DiffTypography.lineHeight(for: textView.font ?? TerminalFont.current())
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
         // A leading deletion occupies the native text container's top inset.
@@ -1711,6 +1716,7 @@ final class DiffCodePaneView: NSView {
         textView.handleCollapsedClick = nil
         textView.ghostStartY = nil
         textView.layoutRowForUTF16 = nil
+        textView.ghostRowsAfterGitLine = nil
         textView.onBecomeFirstResponder = nil
         textView.onResignFirstResponder = nil
         textView.retireNativeDocument()
@@ -1785,13 +1791,6 @@ final class DiffCodePaneView: NSView {
                 anchorLine: nextAnchor, firstOldLine: block.firstOldLine,
                 lines: block.lines, kind: block.kind)
         }
-        var precedingGhostRows = 0
-        for (anchor, block) in updated.ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
-            updated.positionedGhosts.append(.init(
-                startRow: anchor + precedingGhostRows,
-                visibleStartRow: anchor + precedingGhostRows, block: block))
-            precedingGhostRows += block.lines.count
-        }
         updated.positionGhosts(for: textView.editingFolds)
         if live.foldsChanged {
             for fold in textView.editingFolds where fold.range.lowerBound < updated.rows.count {
@@ -1845,6 +1844,9 @@ final class DiffCodePaneView: NSView {
         textView.layoutRowForUTF16 = { [weak self] offset in
             self?.fixedFragmentRow(atUTF16: offset) ?? 0
         }
+        textView.ghostRowsAfterGitLine = { [weak self] line in
+            self?.decorations.ghostsByAnchor[line + 1]?.lines.count ?? 0
+        }
         textView.ghostStartY = { [weak self] anchor in
             self?.ghostStartY(forAnchor: anchor) ?? 0
         }
@@ -1864,10 +1866,6 @@ final class DiffCodePaneView: NSView {
         textView.showsLineNumbers = false
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         textView.isIncrementalSearchingEnabled = true
-        // Review documents are swapped wholesale (fold expansion, reloads);
-        // the caret-follow scroll after such a swap would jump to the top and
-        // discard the restored scroll position. Editors keep it for typing.
-
         underlay.textView = textView
         underlay.clipView = scrollView.contentView
         foldOverlay.textView = textView
@@ -1890,8 +1888,6 @@ final class DiffCodePaneView: NSView {
         foldOverlay.frame = clipView.bounds
         foldOverlay.autoresizingMask = [.width, .height]
 
-        // Repaint decorations after every viewport layout pass; scroll
-        // movements are reported synchronously by DiffClipView above.
     }
 
     /// Repaint viewport decorations and synchronize both axes in split mode.
@@ -2058,13 +2054,17 @@ final class DiffCodePaneView: NSView {
     func setReviewDocument(_ text: NSAttributedString, decorations newDecorations: DiffDecorations) {
         let isExpansionSwap = pendingExpansionSwap
         pendingExpansionSwap = false
-        let contentChanged = textView.attributedText.string != text.string
+        guard let storage = textView.textStorage else { return }
+        let changed = NativeCodeTextView.changedTextRanges(
+            from: storage.string as NSString, to: text.string as NSString
+        )
+        let contentChanged = changed != nil
         if isExpansionSwap {
             pendingReviewScroll = .offset(scrollOffset.y)
-        } else {
+        } else if contentChanged {
             rememberReviewAnchor()
         }
-        invalidateDocumentLayout()
+        if contentChanged { invalidateDocumentLayout() }
         defer {
             if contentChanged && !isExpansionSwap {
                 let y = scrollView.contentView.bounds.origin.y
@@ -2072,10 +2072,32 @@ final class DiffCodePaneView: NSView {
             }
         }
 
-        let selection = contentChanged ? nil : textView.selectedRanges
-        textView.attributedText = text
-        if let selection { textView.selectedRanges = selection }
-        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
+        // The left projection is rebuilt after live edits. Preserve its TextKit
+        // document and replace only the changed characters or attributes.
+        if contentChanged || !storage.isEqual(to: text) {
+            storage.beginEditing()
+            if let changed {
+                storage.replaceCharacters(
+                    in: changed.old, with: text.attributedSubstring(from: changed.new)
+                )
+            }
+            var offset = 0
+            while offset < text.length {
+                var existingRange = NSRange()
+                var desiredRange = NSRange()
+                let existing = storage.attributes(at: offset, effectiveRange: &existingRange)
+                let desired = text.attributes(at: offset, effectiveRange: &desiredRange)
+                let end = min(NSMaxRange(existingRange), NSMaxRange(desiredRange))
+                if !NSDictionary(dictionary: existing).isEqual(to: desired) {
+                    storage.setAttributes(desired, range: NSRange(location: offset, length: end - offset))
+                }
+                offset = end
+            }
+            storage.endEditing()
+        }
+        if contentChanged {
+            textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
+        }
         decorations = newDecorations
         // The shared native line index already owns paragraph separator kinds.
         setFixedRowCount(textView.wrapsLines || textView.hasNativeNonLFSeparators

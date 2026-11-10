@@ -284,11 +284,9 @@ class NativeCodeTextView: NSTextView {
         ))
     }
 
-    /// Restore only changed UTF-16 characters. A final IME insertion can
-    /// explicitly replace a range unrelated to its marked-text region.
-    private static func replaceChangedText(in storage: NSTextStorage, with desired: String) {
-        let old = storage.string as NSString
-        let next = desired as NSString
+    /// Return the minimal UTF-16 edit without splitting surrogate pairs.
+    static func changedTextRanges(from old: NSString, to next: NSString)
+        -> (old: NSRange, new: NSRange)? {
         let oldLength = old.length
         let nextLength = next.length
         var start = 0
@@ -301,13 +299,25 @@ class NativeCodeTextView: NSTextView {
               old.character(at: oldLength - end - 1) == next.character(at: nextLength - end - 1) {
             end += 1
         }
-        guard start < oldLength - end || start < nextLength - end else { return }
-        // Avoid cutting the interior of a UTF-16 surrogate pair.
+        guard start < oldLength - end || start < nextLength - end else { return nil }
         if start > 0, start < oldLength,
            (0xD800...0xDBFF).contains(old.character(at: start - 1)) { start -= 1 }
-        let remove = NSRange(location: start, length: oldLength - start - end)
-        let insert = next.substring(with: NSRange(location: start, length: nextLength - start - end))
-        storage.replaceCharacters(in: remove, with: insert)
+        if end > 0, end < oldLength,
+           (0xDC00...0xDFFF).contains(old.character(at: oldLength - end)) { end -= 1 }
+        return (
+            NSRange(location: start, length: oldLength - start - end),
+            NSRange(location: start, length: nextLength - start - end)
+        )
+    }
+
+    /// Restore only changed UTF-16 characters. A final IME insertion can
+    /// explicitly replace a range unrelated to its marked-text region.
+    private static func replaceChangedText(in storage: NSTextStorage, with desired: String) {
+        let next = desired as NSString
+        guard let changed = changedTextRanges(from: storage.string as NSString, to: next) else {
+            return
+        }
+        storage.replaceCharacters(in: changed.old, with: next.substring(with: changed.new))
     }
 
     init(contentStorage storage: NSTextContentStorage = NSTextContentStorage()) {
