@@ -279,16 +279,25 @@ struct DiffDecorations {
 nonisolated private final class DiffFixedRowFragment: NSTextLayoutFragment {
     var rowHeight: CGFloat = 0
     var wrapped = false
+    var hasNativeLineSeparators = false
     var currentPosition: (() -> (row: Int, trailingRows: Int))?
 
     override var layoutFragmentFrame: CGRect {
         var frame = super.layoutFragmentFrame
         let position = currentPosition?() ?? (row: 0, trailingRows: 0)
         frame.origin.y = CGFloat(position.row) * rowHeight
-        // TextKit tiles by fragment height, so virtual deletion rows must occupy native space.
-        frame.size.height = CGFloat(
-            (wrapped ? max(1, textLineFragments.count) : 1) + position.trailingRows
-        ) * rowHeight
+        // U+2028 stays inside one NSTextParagraph but creates several glyph lines.
+        let lineCount: Int
+        if wrapped {
+            lineCount = max(1, textLineFragments.count)
+        } else if hasNativeLineSeparators {
+            let lines = textLineFragments
+            lineCount = max(1, lines.count - (lines.last?.characterRange.length == 0 ? 1 : 0))
+        } else {
+            lineCount = 1
+        }
+        // TextKit tiles by fragment height, including deletion ghost rows.
+        frame.size.height = CGFloat(lineCount + position.trailingRows) * rowHeight
         return frame
     }
 }
@@ -394,6 +403,7 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
         let fragment = DiffFixedRowFragment(textElement: textElement, range: range)
         fragment.rowHeight = height
         fragment.wrapped = wrapsLines
+        fragment.hasNativeLineSeparators = hasNativeNonLFSeparators
         // A retained fragment's original UTF-16 offset becomes stale when text
         // is inserted before it. Resolve its current paragraph location each time.
         fragment.currentPosition = { [weak self, weak fragment] in

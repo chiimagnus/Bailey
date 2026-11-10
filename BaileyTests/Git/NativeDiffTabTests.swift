@@ -1874,6 +1874,57 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testUnicodeLineSeparatorKeepsLastNativeGlyphVisibleAfterDeepScroll() throws {
+        let count = 36
+        let source = (0..<count).map { "visual line \($0)" }
+            .joined(separator: "\u{2028}") + "\n"
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 720, height: 180),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.setEditingFolds([], baseDecorations: .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: [0], lineCount: 1, ghostBlocks: []), revision: 1)
+        pane.layoutSubtreeIfNeeded()
+
+        let tail = (source as NSString).range(of: "visual line 35").location
+        let content = pane.textView.nativeContentManager
+        let target = try XCTUnwrap(NSTextRange(NSRange(location: tail, length: 1), in: content))
+        let layout = pane.textView.nativeLayoutManager
+        layout.ensureLayout(for: target)
+        let paragraph = try XCTUnwrap(layout.textLayoutFragment(for: target.location))
+        let glyphLines = paragraph.textLineFragments.filter { $0.characterRange.length > 0 }
+        XCTAssertEqual(glyphLines.count, count,
+                       "U+2028 creates visual lines inside one TextKit paragraph")
+        XCTAssertGreaterThanOrEqual(paragraph.layoutFragmentFrame.height,
+                                    CGFloat(glyphLines.count) * style.maximumLineHeight - 1,
+                                    "The native fragment must cover every visible LS glyph line")
+
+        pane.setVerticalScrollOffset(1_000_000)
+        pane.layoutSubtreeIfNeeded()
+        let lastLine = try XCTUnwrap(glyphLines.last)
+        let glyphY = paragraph.layoutFragmentFrame.minY + lastLine.typographicBounds.midY
+            + pane.textView.textContainerInset.height
+        let viewport = pane.scrollView.contentView.bounds
+        XCTAssertTrue(viewport.minY <= glyphY && glyphY <= viewport.maxY,
+                      "Scrolling to the end must reach the final Unicode LS glyph")
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        XCTAssertGreaterThan(sourceGlyphPixelVariety(
+            bitmap, in: pane, at: NSPoint(x: 80, y: glyphY - pane.scrollOffset.y)
+        ), 3, "The final Unicode LS line must have actual visible glyph pixels")
+        XCTAssertEqual(pane.textView.string, source)
+    }
+
     func testHistoricalPlainRevisionColdLayoutAndDeepRowAreNativeAndBounded() throws {
         let count = 100_000
         let source = (0..<count).map { "revision \($0)" }.joined(separator: "\n") + "\n"
