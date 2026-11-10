@@ -71,6 +71,29 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             menuPresentation.beginTracking(
                 project: owner?.selectedProject, projects: owner?.projects ?? []
             )
+            if let tracked = menuPresentation.tracked {
+                syncMenuTitles(
+                    tracked.panels.map(\.title),
+                    in: menu, named: String(localized: "Panel", table: "Interface")
+                )
+                syncMenuTitles(
+                    tracked.projects.map(\.title),
+                    in: menu, named: String(localized: "Project", table: "Interface")
+                )
+            }
+        }
+    }
+
+    private func syncMenuTitles(_ titles: [String], in mainMenu: NSMenu, named name: String) {
+        guard !titles.isEmpty,
+              let submenu = mainMenu.items.first(where: { $0.title == name })?.submenu,
+              submenu.items.count > titles.count,
+              submenu.items[submenu.items.count - titles.count - 1].isSeparatorItem
+        else { return }
+
+        for (native, title) in zip(submenu.items.suffix(titles.count), titles)
+        where native.title != title {
+            native.title = title
         }
     }
 

@@ -22,7 +22,7 @@ final class WorkspaceWindowsUITests: XCTestCase {
     }
 
     func testNativeWindowMenuRetainsArrangementAcrossWindowChanges() throws {
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", clipboardIsReadOnly: true)
 
         for step in 0..<3 {
             app.menuBarItems["Window"].click()
@@ -256,7 +256,8 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("window-a/panel-a.txt", text: "window A bytes\n")
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", project: file.deletingLastPathComponent()
+            in: self, language: "en", project: file.deletingLastPathComponent(),
+            clipboardIsReadOnly: true
         )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let firstID = app.windows.firstMatch.identifier

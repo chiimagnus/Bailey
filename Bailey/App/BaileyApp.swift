@@ -105,9 +105,10 @@ extension FocusedValues {
 @MainActor
 @Observable
 final class MainMenuPresentation {
-    // Invalidating SwiftUI during menu tracking discards AppKit's native Window commands.
+    // Only menu rows refresh during tracking; rebuilding Commands would drop native Window items.
     @ObservationIgnored private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
     private var completedTrackings = 0
+    private(set) var trackingEpoch = 0
 
     func panelEntries(for project: Project?) -> [PanelMenuEntry] {
         _ = completedTrackings
@@ -120,12 +121,15 @@ final class MainMenuPresentation {
     }
 
     func beginTracking(project: Project?, projects: [Project]) {
-        tracked = (PanelMenuEntry.entries(for: project), ProjectMenuEntry.entries(for: projects))
+        tracked = (PanelMenuEntry.entries(for: project, captureDisplay: true),
+                   ProjectMenuEntry.entries(for: projects, captureDisplay: true))
+        trackingEpoch &+= 1
     }
 
     func endTracking() {
         tracked = nil
         completedTrackings &+= 1
+        trackingEpoch &+= 1
     }
 }
 
@@ -266,15 +270,7 @@ private struct BaileyCommands: Commands {
                     Button {
                         manager?.selectPanel(item.id)
                     } label: {
-                        Label {
-                            Text(verbatim: item.title)
-                        } icon: {
-                            Image(nsImage: item.icon)
-                                .resizable()
-                                .interpolation(.high)
-                                .frame(width: 16, height: 16)
-                        }
-                        .labelStyle(.titleAndIcon)
+                        PanelMenuLabel(item: item, presentation: menuPresentation)
                     }
                     .keyboardShortcut(item.index < 9
                         ? KeyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .control)
@@ -333,12 +329,7 @@ private struct BaileyCommands: Commands {
                             manager?.selectProject(index: index)
                         }
                     } label: {
-                        Label {
-                            Text(verbatim: item.title)
-                        } icon: {
-                            Image(nsImage: item.icon)
-                        }
-                        .labelStyle(.titleAndIcon)
+                        ProjectMenuLabel(item: item, presentation: menuPresentation)
                     }
                     .keyboardShortcut(item.index < 9
                         ? KeyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
@@ -444,31 +435,75 @@ private struct BaileyCommands: Commands {
     }
 }
 
+private struct PanelMenuLabel: View {
+    let item: PanelMenuEntry
+    let presentation: MainMenuPresentation
+
+    var body: some View {
+        let _ = presentation.trackingEpoch
+        let display = presentation.tracked?.panels.first(where: { $0.id == item.id }) ?? item
+        Label {
+            Text(verbatim: display.title)
+        } icon: {
+            Image(nsImage: display.icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 16, height: 16)
+        }
+        .labelStyle(.titleAndIcon)
+    }
+}
+
+private struct ProjectMenuLabel: View {
+    let item: ProjectMenuEntry
+    let presentation: MainMenuPresentation
+
+    var body: some View {
+        let _ = presentation.trackingEpoch
+        let display = presentation.tracked?.projects.first(where: { $0.id == item.id }) ?? item
+        Label {
+            Text(verbatim: display.title)
+        } icon: {
+            Image(nsImage: display.icon)
+        }
+        .labelStyle(.titleAndIcon)
+    }
+}
+
 struct PanelMenuEntry: Identifiable {
     let id: DockItem
     let index: Int
-    let title: String
-    let icon: NSImage
+    private let tab: PaneTab
+    private let capturedTitle: String?
+    private let capturedIcon: NSImage?
 
-    init(tab: PaneTab, index: Int) {
+    var title: String { capturedTitle ?? tab.displayTitle }
+    var icon: NSImage { capturedIcon ?? Self.icon(for: tab) }
+
+    init(tab: PaneTab, index: Int, captureDisplay: Bool = false) {
         id = .tab(tab.id)
         self.index = index
-        title = tab.displayTitle
-        if let path = tab.content.fileIconPath {
-            let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
-            icon = MaterialFileIcon.image(forPath: fileIconPath)
-        } else if case .browser(let browser) = tab.content, let favicon = browser.favicon {
-            icon = favicon
-        } else {
-            icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
-        }
+        self.tab = tab
+        capturedTitle = captureDisplay ? tab.displayTitle : nil
+        capturedIcon = captureDisplay ? Self.icon(for: tab) : nil
     }
 
-    static func entries(for project: Project?) -> [Self] {
+    private static func icon(for tab: PaneTab) -> NSImage {
+        if let path = tab.content.fileIconPath {
+            let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
+            return MaterialFileIcon.image(forPath: fileIconPath)
+        }
+        if case .browser(let browser) = tab.content, let favicon = browser.favicon {
+            return favicon
+        }
+        return NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
+    }
+
+    static func entries(for project: Project?, captureDisplay: Bool = false) -> [Self] {
         guard let project else { return [] }
         let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
         return Array(project.dock.tabOrder.compactMap { tabsByID[$0] }.enumerated()).map {
-            Self(tab: $0.element, index: $0.offset)
+            Self(tab: $0.element, index: $0.offset, captureDisplay: captureDisplay)
         }
     }
 }
@@ -476,20 +511,31 @@ struct PanelMenuEntry: Identifiable {
 struct ProjectMenuEntry: Identifiable {
     let id: UUID
     let index: Int
-    let title: String
-    let icon: NSImage
+    private let project: Project
+    private let capturedTitle: String?
+    private let capturedIcon: NSImage?
 
-    init(project: Project, index: Int) {
+    var title: String { capturedTitle ?? project.name }
+    var icon: NSImage { capturedIcon ?? Self.icon(for: project) }
+
+    init(project: Project, index: Int, captureDisplay: Bool = false) {
         id = project.id
         self.index = index
-        title = project.name
-        icon = NSImage(
+        self.project = project
+        capturedTitle = captureDisplay ? project.name : nil
+        capturedIcon = captureDisplay ? Self.icon(for: project) : nil
+    }
+
+    private static func icon(for project: Project) -> NSImage {
+        NSImage(
             systemSymbolName: project.sshHost == nil ? "folder" : "network",
             accessibilityDescription: nil
         ) ?? NSImage()
     }
 
-    static func entries(for projects: [Project]) -> [Self] {
-        Array(projects.enumerated()).map { Self(project: $0.element, index: $0.offset) }
+    static func entries(for projects: [Project], captureDisplay: Bool = false) -> [Self] {
+        Array(projects.enumerated()).map {
+            Self(project: $0.element, index: $0.offset, captureDisplay: captureDisplay)
+        }
     }
 }

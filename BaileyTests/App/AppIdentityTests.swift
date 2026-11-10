@@ -109,6 +109,30 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testMenuEntryConstructionDoesNotObserveDynamicTitles() {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let tab = PaneTab(content: .session(terminal))
+        let project = Project(fallbackName: "Original", workspaceConfiguration: .standard)
+        project.append(tab)
+        let changes = Mutex<Int>(0)
+
+        withObservationTracking {
+            XCTAssertEqual(PanelMenuEntry.entries(for: project).map(\.id), [.tab(tab.id)])
+            XCTAssertEqual(ProjectMenuEntry.entries(for: [project]).map(\.id), [project.id])
+        } onChange: {
+            changes.withLock { $0 += 1 }
+        }
+
+        terminal.terminalDidChangeTitle("Updated Terminal Title")
+        XCTAssertEqual(PanelMenuEntry.entries(for: project).first?.title, "Updated Terminal Title")
+        project.customDirectory = "/tmp/updated-project"
+        XCTAssertEqual(ProjectMenuEntry.entries(for: [project]).first?.title, "updated-project")
+        XCTAssertEqual(changes.withLock { $0 }, 0,
+                       "Dynamic names must not invalidate the entire SwiftUI Commands hierarchy")
+    }
+
+    @MainActor
     func testWindowCommandsStayInNativeWindowMenu() throws {
         let menu = try XCTUnwrap(NSApp.windowsMenu)
         let newWindow = menu.items.filter {

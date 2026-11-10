@@ -132,7 +132,9 @@ final class WorkspaceDockUITests: XCTestCase {
         let files = try (0..<3).map {
             try fixture.file("panel-hover-\($0).swift", text: "let panel = \($0)\n")
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
         let window = app.windows.firstMatch
         for file in files {
             let row = WorkspaceUITestSupport.fileRow(file, in: window)
@@ -193,18 +195,24 @@ final class WorkspaceDockUITests: XCTestCase {
             try fixture.file("panel-long-diff-title-\($0)-context.swift", text: "let value = \($0)\n")
         }
         let marker = fixture.root.appendingPathComponent("spinner-started.txt")
+        let stop = fixture.root.appendingPathComponent("spinner-stop.txt")
+        let finished = fixture.root.appendingPathComponent("spinner-finished.txt")
         let script = try fixture.file("terminal-spinner.py", text: """
         import pathlib, sys, time
         pathlib.Path(r"\(marker.path)").write_text("running")
-        for _ in range(400):
+        for _ in range(800):
+            if pathlib.Path(r"\(stop.path)").exists(): break
             for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
                 sys.stdout.write("\\x1b]0;" + frame + " Panel Hover Test\\x07")
                 sys.stdout.flush()
                 time.sleep(0.008)
         sys.stdout.write("\\x1b]0;Panel Hover Test\\x07")
         sys.stdout.flush()
+        pathlib.Path(r"\(finished.path)").write_text("done")
         """)
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
         let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
             withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
         let opened = expectation(description: "Open ten real work tabs")
@@ -229,6 +237,19 @@ final class WorkspaceDockUITests: XCTestCase {
             FileManager.default.fileExists(atPath: marker.path)
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [started], timeout: 15), .completed)
+
+        app.menuBarItems["Window"].click()
+        let windowMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Bring All to Front"].exists
+        })
+        let windowItemCount = windowMenu.menuItems.count
+        for _ in 0..<6 {
+            windowMenu.menuItems["Bring All to Front"].hover()
+            XCTAssertEqual(windowMenu.menuItems.count, windowItemCount)
+            XCTAssertTrue(windowMenu.menuItems["Move & Resize"].exists)
+            XCTAssertTrue(windowMenu.menuItems["Full Screen Tile"].exists)
+        }
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         app.menuBarItems["Panel"].click()
         let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
@@ -260,7 +281,19 @@ final class WorkspaceDockUITests: XCTestCase {
         screenshot.name = "Panel menu remains stable during terminal title animation"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        first.click()
+        try Data().write(to: stop)
+        let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: finished.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 10), .completed)
+        XCTAssertEqual(terminalItem.title, displayedTitle,
+                       "Finishing the terminal command must not alter the open Panel menu")
+
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.menuBarItems["Panel"].click()
+        XCTAssertTrue(app.menuItems["Panel Hover Test"].waitForExistence(timeout: 5),
+                      "A reopened menu must display the terminal's latest title")
+        app.menuItems[files[0].lastPathComponent].click()
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).isSelected,
                       "A pinned menu entry must still select its real tab")
         app.typeKey("2", modifierFlags: .control)
@@ -816,6 +849,26 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(secondTab.exists, "Right-clicking an inactive tab must not replace the active one")
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
+    func testSystemProjectMenuRetainsCurrentProjectWithoutPicker() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("菜单测试项目/readme.md", text: "menu contents stay unchanged\n")
+        let folder = file.deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "zh-Hans", project: folder, clipboardIsReadOnly: true
+        )
+
+        for _ in 0..<2 {
+            app.menuBarItems["项目"].click()
+            let item = app.menuItems[folder.lastPathComponent]
+            XCTAssertTrue(item.waitForExistence(timeout: 5))
+            XCTAssertTrue(item.isHittable)
+            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        }
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.projects", in: app).exists)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "menu contents stay unchanged\n")
     }
 
     func testSystemProjectMenuSelectsCurrentProjectAndCommandTwo() throws {
