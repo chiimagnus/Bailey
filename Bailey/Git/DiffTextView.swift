@@ -232,37 +232,30 @@ struct DiffDecorations {
             maxNewLine: rowCount
         )
         decorations.ghostsByAnchor = ghostsByAnchor
-        var priorGhostRows = 0
-        for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
-            decorations.positionedGhosts.append(
-                PositionedGhost(startRow: anchor + priorGhostRows,
-                                visibleStartRow: anchor + priorGhostRows, block: block)
-            )
-            priorGhostRows += block.lines.count
-        }
+        decorations.positionGhosts(for: [])
         return decorations
     }
 
-    /// Map hidden source lines to display coordinates once per fold change,
-    /// instead of scanning every fold on every gutter and background repaint.
+    /// Rebuild the sorted ghost positions when decorations or folds change,
+    /// not during gutter or background drawing.
     mutating func positionGhosts(for folds: [DiffEditFold]) {
-        var completed = 0
+        positionedGhosts.removeAll(keepingCapacity: true)
+        var precedingGhosts = 0
+        var hidden = 0
         var foldIndex = 0
-        for index in positionedGhosts.indices {
-            let anchor = positionedGhosts[index].block.anchorLine
+        for (anchor, block) in ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
             while foldIndex < folds.count && folds[foldIndex].range.upperBound <= anchor {
-                completed += max(0, folds[foldIndex].range.count - 1)
+                hidden += max(0, folds[foldIndex].range.count - 1)
                 foldIndex += 1
             }
-            let partial: Int
-            if foldIndex < folds.count {
-                let range = folds[foldIndex].range
-                partial = max(0, min(anchor, range.upperBound) - range.lowerBound - 1)
-            } else {
-                partial = 0
-            }
-            positionedGhosts[index].visibleStartRow = positionedGhosts[index].startRow
-                - completed - partial
+            let partial = foldIndex < folds.count
+                ? max(0, min(anchor, folds[foldIndex].range.upperBound)
+                    - folds[foldIndex].range.lowerBound - 1) : 0
+            let start = anchor + precedingGhosts
+            positionedGhosts.append(PositionedGhost(
+                startRow: start, visibleStartRow: start - hidden - partial, block: block
+            ))
+            precedingGhosts += block.lines.count
         }
     }
 
@@ -779,12 +772,10 @@ private enum DiffGhostGeometry {
     static func visibleBlocks(
         textView: DiffTextView, clipView: NSClipView, decorations: DiffDecorations
     ) -> [VisibleBlock] {
-        guard textView.nativeLayoutManager.delegate != nil,
-              !decorations.positionedGhosts.isEmpty else { return [] }
-        let rowHeight = DiffTypography.paragraphStyle(
-            for: textView.font ?? TerminalFont.current()
-        ).maximumLineHeight
-        guard rowHeight > 0 else { return [] }
+        guard !decorations.positionedGhosts.isEmpty else { return [] }
+        let configuredHeight = textView.defaultParagraphStyle?.maximumLineHeight ?? 0
+        let rowHeight = configuredHeight > 0 ? configuredHeight
+            : DiffTypography.lineHeight(for: textView.font ?? TerminalFont.current())
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
         // A leading deletion occupies the native text container's top inset.
@@ -1800,13 +1791,6 @@ final class DiffCodePaneView: NSView {
                 anchorLine: nextAnchor, firstOldLine: block.firstOldLine,
                 lines: block.lines, kind: block.kind)
         }
-        var precedingGhostRows = 0
-        for (anchor, block) in updated.ghostsByAnchor.sorted(by: { $0.key < $1.key }) {
-            updated.positionedGhosts.append(.init(
-                startRow: anchor + precedingGhostRows,
-                visibleStartRow: anchor + precedingGhostRows, block: block))
-            precedingGhostRows += block.lines.count
-        }
         updated.positionGhosts(for: textView.editingFolds)
         if live.foldsChanged {
             for fold in textView.editingFolds where fold.range.lowerBound < updated.rows.count {
@@ -1882,10 +1866,6 @@ final class DiffCodePaneView: NSView {
         textView.showsLineNumbers = false
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         textView.isIncrementalSearchingEnabled = true
-        // Review documents are swapped wholesale (fold expansion, reloads);
-        // the caret-follow scroll after such a swap would jump to the top and
-        // discard the restored scroll position. Editors keep it for typing.
-
         underlay.textView = textView
         underlay.clipView = scrollView.contentView
         foldOverlay.textView = textView
@@ -1908,8 +1888,6 @@ final class DiffCodePaneView: NSView {
         foldOverlay.frame = clipView.bounds
         foldOverlay.autoresizingMask = [.width, .height]
 
-        // Repaint decorations after every viewport layout pass; scroll
-        // movements are reported synchronously by DiffClipView above.
     }
 
     /// Repaint viewport decorations and synchronize both axes in split mode.
