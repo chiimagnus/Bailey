@@ -3847,6 +3847,100 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, source)
     }
 
+    func testCachedGhostLayoutFollowsLiveUTF16OffsetsAfterInlineUnicodeEdit() throws {
+        let source = (0..<32).map { "let newAdded\($0) = \($0)\n" }.joined()
+        let offsets = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: .init(x: -950, y: -950, width: 720, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let rowHeight = style.maximumLineHeight
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: offsets, lineCount: offsets.count,
+            ghostBlocks: [.init(anchorLine: 12, firstOldLine: 12,
+                                lines: (0..<8).map { NSAttributedString(string: "deleted \($0)") })]
+        )
+        pane.layoutSubtreeIfNeeded()
+        let content = pane.textView.nativeContentManager
+        let layout = pane.textView.nativeLayoutManager
+        func fragment(_ row: Int) throws -> NSTextLayoutFragment {
+            let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+            let range = try XCTUnwrap(NSTextRange(NSRange(location: offset, length: 1), in: content))
+            layout.ensureLayout(for: range)
+            return try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+        }
+        let beforeDeletion = try fragment(11)
+        let afterDeletion = try fragment(12)
+        XCTAssertEqual(beforeDeletion.layoutFragmentFrame.height, 9 * rowHeight, accuracy: 1)
+        XCTAssertEqual(afterDeletion.layoutFragmentFrame.minY, 20 * rowHeight, accuracy: 1)
+
+        func verifyVisibleRows(ghostRows: Int = 8) throws {
+            XCTAssertEqual(beforeDeletion.layoutFragmentFrame.height,
+                           CGFloat(1 + ghostRows) * rowHeight, accuracy: 1,
+                           "Cached fragment must use the current Ghost height after edits")
+            XCTAssertEqual(afterDeletion.layoutFragmentFrame.minY,
+                           CGFloat(12 + ghostRows) * rowHeight, accuracy: 1,
+                           "Cached fragment must not fall onto the preceding live row")
+            for row in 10...17 {
+                let expected = CGFloat(row + (row >= 12 ? ghostRows : 0)) * rowHeight
+                XCTAssertEqual(try fragment(row).layoutFragmentFrame.minY, expected, accuracy: 1)
+            }
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+                .retagging(with: .sRGB))
+            pane.cacheDisplay(in: pane.bounds, to: bitmap)
+            let visible = DiffRowGeometry.visibleRows(textView: pane.textView,
+                                                      decorations: pane.decorations)
+            for row in [11, 12, 13] {
+                let visual = try XCTUnwrap(visible.first { $0.index == row })
+                XCTAssertGreaterThan(sourceGlyphPixelVariety(
+                    bitmap, in: pane,
+                    at: NSPoint(x: 95, y: visual.frame.midY - pane.scrollOffset.y)
+                ), 3, "Row \(row) must have independently visible text pixels")
+            }
+        }
+
+        // The source row counts do not change. Inserting Unicode, ASCII, and
+        // deleting them shifts later UTF-16 offsets in both directions.
+        for inserted in ["测试🙂", "阿斯顿", "1234567890"] {
+            let lineStart = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 10))
+            let location = lineStart + "let newAdded10 = 10".utf16.count
+            let insertion = NSRange(location: location, length: 0)
+            pane.textView.textStorage?.replaceCharacters(in: insertion, with: inserted)
+            pane.applyLiveNativeEdit(previousRange: insertion, replacement: inserted)
+            try verifyVisibleRows()
+            XCTAssertTrue(pane.textView.string.contains("let newAdded10 = 10\(inserted)"))
+
+            let deletion = NSRange(location: location, length: inserted.utf16.count)
+            pane.textView.textStorage?.replaceCharacters(in: deletion, with: "")
+            pane.applyLiveNativeEdit(previousRange: deletion, replacement: "")
+            try verifyVisibleRows()
+            XCTAssertEqual(pane.textView.string, source)
+        }
+        pane.decorations = .edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: offsets, lineCount: offsets.count, ghostBlocks: []
+        )
+        pane.layoutSubtreeIfNeeded()
+        try verifyVisibleRows(ghostRows: 0)
+        let lineStart = try XCTUnwrap(pane.textView.liveGitOffset(forLine: 10))
+        let insertion = NSRange(location: lineStart + "let newAdded10 = 10".utf16.count,
+                                length: 0)
+        pane.textView.textStorage?.replaceCharacters(in: insertion, with: "测试🙂")
+        pane.applyLiveNativeEdit(previousRange: insertion, replacement: "测试🙂")
+        try verifyVisibleRows(ghostRows: 0)
+        XCTAssertTrue(pane.textView.string.contains("let newAdded10 = 10测试🙂"))
+    }
+
     func testLargeDeletionPaintsEveryReservedRowBeforeNewLines() throws {
         let prefix = (0..<578).map { "keep \($0)\n" }.joined()
         let removed = (0..<18).map { "deleted code \($0)\n" }.joined()

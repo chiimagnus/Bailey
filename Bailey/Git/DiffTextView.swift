@@ -286,15 +286,15 @@ struct DiffDecorations {
 nonisolated private final class DiffFixedRowFragment: NSTextLayoutFragment {
     var rowHeight: CGFloat = 0
     var wrapped = false
-    var currentRow: (() -> Int)?
-    var currentTrailingRows: (() -> Int)?
+    var currentPosition: (() -> (row: Int, trailingRows: Int))?
 
     override var layoutFragmentFrame: CGRect {
         var frame = super.layoutFragmentFrame
-        frame.origin.y = CGFloat(currentRow?() ?? 0) * rowHeight
+        let position = currentPosition?() ?? (row: 0, trailingRows: 0)
+        frame.origin.y = CGFloat(position.row) * rowHeight
         // TextKit tiles by fragment height, so virtual deletion rows must occupy native space.
         frame.size.height = CGFloat(
-            (wrapped ? max(1, textLineFragments.count) : 1) + (currentTrailingRows?() ?? 0)
+            (wrapped ? max(1, textLineFragments.count) : 1) + position.trailingRows
         ) * rowHeight
         return frame
     }
@@ -398,22 +398,24 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
               let range = textElement.elementRange else {
             return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
         }
-        let offset = nativeContentManager.offset(
-            from: nativeContentManager.documentRange.location, to: location
-        )
         let fragment = DiffFixedRowFragment(textElement: textElement, range: range)
         fragment.rowHeight = height
         fragment.wrapped = wrapsLines
-        // TextKit retains fragments across live diff updates. Ghosts, folds,
-        // and wrapped prefixes can all change a cached paragraph's display row.
-        fragment.currentRow = {
-            MainActor.assumeIsolated { rowForOffset(offset) }
-        }
-        fragment.currentTrailingRows = { [weak self] in
+        // A retained fragment's original UTF-16 offset becomes stale when text
+        // is inserted before it. Resolve its current paragraph location each time.
+        fragment.currentPosition = { [weak self, weak fragment] in
             MainActor.assumeIsolated {
-                guard let self, !self.wrapsLines, !self.hasNativeNonLFSeparators,
-                      let sourceRow = self.liveGitLine(atUTF16: offset) else { return 0 }
-                return self.ghostRowsAfterGitLine?(sourceRow) ?? 0
+                guard let self, let fragment, let range = fragment.textElement?.elementRange
+                else { return (row: 0, trailingRows: 0) }
+                let content = self.nativeContentManager
+                let offset = content.offset(from: content.documentRange.location,
+                                            to: range.location)
+                let row = rowForOffset(offset)
+                guard !self.wrapsLines, !self.hasNativeNonLFSeparators,
+                      let sourceRow = self.liveGitLine(atUTF16: offset) else {
+                    return (row: row, trailingRows: 0)
+                }
+                return (row: row, trailingRows: self.ghostRowsAfterGitLine?(sourceRow) ?? 0)
             }
         }
         return fragment
