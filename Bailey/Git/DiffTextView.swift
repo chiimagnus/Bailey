@@ -284,14 +284,13 @@ struct DiffDecorations {
 /// Pins each unwrapped Git LF paragraph to its known source row, rather than
 /// making TextKit estimate all preceding paragraph heights before scrolling.
 nonisolated private final class DiffFixedRowFragment: NSTextLayoutFragment {
-    var row = 0
     var rowHeight: CGFloat = 0
     var wrapped = false
-    var currentWrappedRow: (() -> Int)?
+    var currentRow: (() -> Int)?
 
     override var layoutFragmentFrame: CGRect {
         var frame = super.layoutFragmentFrame
-        frame.origin.y = CGFloat(currentWrappedRow?() ?? row) * rowHeight
+        frame.origin.y = CGFloat(currentRow?() ?? 0) * rowHeight
         frame.size.height = CGFloat(wrapped ? max(1, textLineFragments.count) : 1) * rowHeight
         return frame
     }
@@ -398,15 +397,12 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
             from: nativeContentManager.documentRange.location, to: location
         )
         let fragment = DiffFixedRowFragment(textElement: textElement, range: range)
-        fragment.row = rowForOffset(offset)
         fragment.rowHeight = height
         fragment.wrapped = wrapsLines
-        if fragment.wrapped {
-            // TextKit can retain fragments built before the long-line prefix
-            // heights are measured. Their Y must follow the live row mapping.
-            fragment.currentWrappedRow = {
-                MainActor.assumeIsolated { rowForOffset(offset) }
-            }
+        // TextKit retains fragments across live diff updates. Ghosts, folds,
+        // and wrapped prefixes can all change a cached paragraph's display row.
+        fragment.currentRow = {
+            MainActor.assumeIsolated { rowForOffset(offset) }
         }
         return fragment
     }

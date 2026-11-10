@@ -3785,6 +3785,148 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testLateGhostDecorationKeepsLiveSourceRowsAtCurrentPositions() throws {
+        let source = (0..<120).map { "row \($0)\n" }.joined()
+        let offsets = DiffLineSplitter.lines(of: source).lines.map(\.utf16Range.location)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(contentRect: .init(x: -900, y: -900, width: 700, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(source)
+
+        func applyGhost(anchor: Int?, count: Int) {
+            let ghosts: [DiffDecorations.GhostBlock] = anchor.map { anchor in
+                [.init(anchorLine: anchor, firstOldLine: anchor + 1,
+                       lines: (0..<count).map { NSAttributedString(string: "deleted \($0)") })]
+            } ?? []
+            pane.decorations = .edit(
+                state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+                snapshotOffsets: offsets, lineCount: offsets.count, ghostBlocks: ghosts
+            )
+            pane.layoutSubtreeIfNeeded()
+        }
+        func realRowY(_ row: Int) throws -> CGFloat {
+            let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: row))
+            let content = pane.textView.nativeContentManager
+            let range = try XCTUnwrap(NSTextRange(NSRange(location: offset, length: 1), in: content))
+            let layout = pane.textView.nativeLayoutManager
+            layout.ensureLayout(for: range)
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+            return fragment.layoutFragmentFrame.minY + pane.textView.textContainerInset.height
+        }
+
+        applyGhost(anchor: nil, count: 0)
+        XCTAssertEqual(try realRowY(40), 40 * style.maximumLineHeight, accuracy: 1)
+        applyGhost(anchor: 40, count: 2)
+        XCTAssertEqual(try realRowY(39), 39 * style.maximumLineHeight, accuracy: 1)
+        XCTAssertEqual(try realRowY(40), 42 * style.maximumLineHeight, accuracy: 1,
+                       "A live row must move down when deleted lines are inserted before it")
+        applyGhost(anchor: 45, count: 8)
+        XCTAssertEqual(try realRowY(40), 40 * style.maximumLineHeight, accuracy: 1,
+                       "Moving a deletion block must not retain old cached source coordinates")
+        XCTAssertEqual(try realRowY(45), 53 * style.maximumLineHeight, accuracy: 1)
+        applyGhost(anchor: nil, count: 0)
+        XCTAssertEqual(try realRowY(45), 45 * style.maximumLineHeight, accuracy: 1)
+        let emptyDecorations = pane.decorations
+        let fold = DiffEditFold(range: 20..<40, separator: DiffCollapsedRun(
+            baselineRange: 20..<40, direction: .both
+        ))
+        pane.setEditingFolds([fold], baseDecorations: emptyDecorations, revision: 1)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try realRowY(40), 21 * style.maximumLineHeight, accuracy: 1,
+                       "Folding previously laid-out paragraphs must update later rows")
+        pane.setEditingFolds([], baseDecorations: emptyDecorations, revision: 2)
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try realRowY(40), 40 * style.maximumLineHeight, accuracy: 1)
+        XCTAssertEqual(pane.textView.string, source)
+    }
+
+    func testLargeDeletionPaintsEveryReservedRowBeforeNewLines() throws {
+        let prefix = (0..<578).map { "keep \($0)\n" }.joined()
+        let removed = (0..<18).map { "deleted code \($0)\n" }.joined()
+        let added = (0..<9).map { "new code \($0)\n" }.joined()
+        let suffix = (0..<30).map { "tail \($0)\n" }.joined()
+        let before = prefix + removed + suffix
+        let after = prefix + added + suffix
+        let core = DiffCore.compute(oldText: before, newText: after)
+        let compared = DiffComputation.build(core: core, revealedLines: [])
+        let state = compared.editState
+        let block = try XCTUnwrap(state.ghosts.first)
+        XCTAssertEqual(block.anchorLine, 578)
+        XCTAssertEqual(block.lines.count, 18)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let style = DiffTypography.paragraphStyle(for: font)
+        let oldText = before as NSString
+        let ghost = DiffDecorations.GhostBlock(
+            anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+            lines: block.lines.map {
+                NSAttributedString(string: oldText.substring(with: $0.sourceRange),
+                                   attributes: [.font: font, .paragraphStyle: style])
+            }
+        )
+        let empty = DiffDecorations.edit(
+            state: DiffEditState(addedLines: [], addedEmphasis: [:], ghosts: []),
+            snapshotOffsets: core.newLines.map(\.utf16Range.location),
+            lineCount: core.newLines.count, ghostBlocks: []
+        )
+        let full = DiffDecorations.edit(
+            state: state, snapshotOffsets: core.newLines.map(\.utf16Range.location),
+            lineCount: core.newLines.count, ghostBlocks: [ghost]
+        )
+        let folds = DiffEditFold.sourceFolds(in: compared.unified, lineCount: core.newLines.count)
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: .init(x: -900, y: -900, width: 720, height: 330),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.applyTypography(font: font, paragraphStyle: style, textColor: .textColor)
+        pane.setEditBufferText(after)
+        pane.setEditingFolds(folds, baseDecorations: empty, revision: 1)
+        pane.layoutSubtreeIfNeeded()
+        pane.scrollToRow(block.anchorLine)
+        // Simulate delayed presentation: update the same TextKit owner after
+        // it has already materialized source rows without deletion space.
+        pane.setEditingFolds(folds, baseDecorations: full, revision: 2)
+        pane.layoutSubtreeIfNeeded()
+        pane.scrollToRow(block.anchorLine)
+        let offset = try XCTUnwrap(pane.textView.liveGitOffset(forLine: block.anchorLine))
+        let content = pane.textView.nativeContentManager
+        let range = try XCTUnwrap(NSTextRange(NSRange(location: offset, length: 1), in: content))
+        let layout = pane.textView.nativeLayoutManager
+        layout.ensureLayout(for: range)
+        let source = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+        let sourceY = source.layoutFragmentFrame.minY + pane.textView.textContainerInset.height
+        pane.setVerticalScrollOffset(max(0, sourceY - 10 * style.maximumLineHeight))
+        pane.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
+        pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let removedColor = try XCTUnwrap(DiffColorScheme.current(dark: dark)
+            .removedRow.usingColorSpace(.sRGB))
+        let colors = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
+        let tinted = colors.filter { pixel in
+            abs((pixel.greenComponent - pixel.redComponent)
+                - (removedColor.greenComponent - removedColor.redComponent)) < 0.03
+                && abs((pixel.blueComponent - pixel.redComponent)
+                    - (removedColor.blueComponent - removedColor.redComponent)) < 0.03
+        }.count
+        XCTAssertGreaterThan(tinted, Int(7 * style.maximumLineHeight),
+                             "Deleted lines must be painted, not left as a blank reserved gap")
+        XCTAssertEqual(pane.textView.string, after)
+    }
+
     func testFoldedEditableDiffDrawsRemovalGhostBesideChangedSource() throws {
         let before = (0..<500).map { "line \($0)\n" }.joined()
         let after = before.replacingOccurrences(of: "line 250\n", with: "changed 250\n")
