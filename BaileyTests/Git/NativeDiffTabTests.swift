@@ -3763,7 +3763,10 @@ final class NativeDiffTabTests: XCTestCase {
         let monitor = Task { @MainActor in
             var unavailable = 0
             for _ in 0..<350 {
-                if !tab.canPresentNativeContent || surface.superview == nil {
+                host.layoutSubtreeIfNeeded()
+                if !tab.canPresentNativeContent || surface.superview == nil
+                    || left.isHidden || right.isHidden
+                    || left.textView.textLayoutManager == nil {
                     unavailable += 1
                 }
                 try? await Task.sleep(for: .milliseconds(2))
@@ -3780,9 +3783,23 @@ final class NativeDiffTabTests: XCTestCase {
         }
         let unavailableCount = await monitor.value
         XCTAssertEqual(unavailableCount, 0,
-                       "Autosave and Git reload must not unmount the previously rendered editor")
+                       "Autosave and Git reload must keep both native Split panes visible")
         XCTAssertTrue(left.textView.textStorage === storage)
         XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text))
+        let deletion = try XCTUnwrap(left.decorations.rows.firstIndex { $0.kind == .removed })
+        left.scrollToRow(deletion)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(left.bitmapImageRepForCachingDisplay(in: left.bounds)?
+            .retagging(with: .sRGB))
+        left.cacheDisplay(in: left.bounds, to: bitmap)
+        let row = try XCTUnwrap(DiffRowGeometry.visibleRows(
+            textView: left.textView, decorations: left.decorations
+        ).first { $0.index == deletion })
+        XCTAssertGreaterThan(sourceGlyphPixelVariety(
+            bitmap, in: left,
+            at: NSPoint(x: 95, y: row.frame.midY - left.scrollOffset.y)
+        ), 3, "The removed row must still paint its text after focus-loss save")
     }
 
     func testReviewProjectionRetainsExactUTF16WhenReplacingUnicode() throws {
