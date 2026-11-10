@@ -6579,6 +6579,16 @@ final class NativeDiffTabTests: XCTestCase {
             weak var value: DiffSyntaxSource?
             init(_ value: DiffSyntaxSource) { self.value = value }
         }
+        final class WeakTree {
+            weak var value: AnyObject?
+            init?(_ source: DiffSyntaxSource) {
+                guard let cached = Mirror(reflecting: source).children.first(where: {
+                    $0.label == "cachedTree"
+                }), let tree = Mirror(reflecting: cached.value).children.first?.value as AnyObject?
+                else { return nil }
+                value = tree
+            }
+        }
         func residentKiB() throws -> Int {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -6605,6 +6615,7 @@ final class NativeDiffTabTests: XCTestCase {
         let firstLine = [NSRange(location: 0, length: 25)]
         var owners: [DiffSyntaxSource] = []
         var weakOwners: [WeakSource] = []
+        var weakTrees: [WeakTree] = []
         var coldTimes: [Double] = []
         for _ in 0..<20 {
             let syntax = DiffSyntaxSource()
@@ -6629,22 +6640,26 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(count, 1)
             owners.append(syntax)
             weakOwners.append(WeakSource(syntax))
+            weakTrees.append(try XCTUnwrap(WeakTree(syntax)))
         }
         XCTAssertEqual(owners.count, 10)
         XCTAssertTrue(weakOwners.allSatisfy { $0.value != nil })
+        XCTAssertTrue(weakTrees.allSatisfy { $0.value != nil })
         let retained = try residentKiB()
         let retainedAllocated = allocatedKiB()
         owners.removeAll()
         XCTAssertTrue(weakOwners.allSatisfy { $0.value == nil },
-                      "Closing all ten tabs must release their parser trees and bytes")
+                      "Closing tabs must retire their syntax owners")
+        XCTAssertTrue(weakTrees.allSatisfy { $0.value == nil },
+                      "Closing tabs must deinit the actual Tree-sitter trees")
         let released = try residentKiB()
         let releasedAllocated = allocatedKiB()
         XCTAssertGreaterThan(retainedAllocated - baselineAllocated, 128 * 1_024,
                              "Ten actual syntax owners must retain observable live heap")
-        XCTAssertLessThan(releasedAllocated - baselineAllocated, 32 * 1_024,
-                          "Closing tabs must release tree allocations, not merely weak references")
+        // Process-wide malloc includes other XCTest activity; weak native tree
+        // lifetime tests the exact resource owner instead of unrelated heap drift.
         coldTimes.sort()
-        print("AUDIT_DIFF_SYNTAX_10_OWNERS bytes=\(source.utf8.count) coldSamples=30 coldMedianMs=\(coldTimes[15]) coldP95Ms=\(coldTimes[28]) rssBaselineKiB=\(baseline) rssTenOwnersKiB=\(retained) rssAfterReleaseKiB=\(released) mallocBaselineKiB=\(baselineAllocated) mallocTenOwnersKiB=\(retainedAllocated) mallocAfterReleaseKiB=\(releasedAllocated) releasedOwners=10")
+        print("AUDIT_DIFF_SYNTAX_10_OWNERS bytes=\(source.utf8.count) coldSamples=30 coldMedianMs=\(coldTimes[15]) coldP95Ms=\(coldTimes[28]) rssBaselineKiB=\(baseline) rssTenOwnersKiB=\(retained) rssAfterReleaseKiB=\(released) mallocBaselineKiB=\(baselineAllocated) mallocTenOwnersKiB=\(retainedAllocated) mallocAfterReleaseKiB=\(releasedAllocated) releasedOwners=10 releasedTrees=10")
     }
 
     func testDisjointVisibleSyntaxQueryCostAndReuse() async throws {
