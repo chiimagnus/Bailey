@@ -29,7 +29,11 @@ final class WorkspaceWindowsUITests: XCTestCase {
             let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
                 $0.menuItems["Bring All to Front"].exists
             })
-            for _ in 0..<3 {
+            let originalCount = menu.menuItems.count
+            for _ in 0..<10 {
+                menu.menuItems["Bring All to Front"].hover()
+                XCTAssertEqual(menu.menuItems.count, originalCount,
+                               "Native Window menu must not change size while tracking")
                 XCTAssertTrue(menu.menuItems["Move & Resize"].exists,
                               "The Window menu must retain macOS arrangement commands while open")
                 XCTAssertTrue(menu.menuItems["Full Screen Tile"].exists,
@@ -39,6 +43,8 @@ final class WorkspaceWindowsUITests: XCTestCase {
 
             if step == 0 {
                 app.typeKey("n", modifierFlags: [.command, .shift])
+                XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15),
+                              "Creating a native window is asynchronous")
                 XCTAssertEqual(app.windows.count, 2)
             } else if step == 1 {
                 app.typeKey("`", modifierFlags: .command)

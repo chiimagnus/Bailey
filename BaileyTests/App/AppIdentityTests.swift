@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import Observation
 import SwiftUI
+import Synchronization
 import XCTest
 @testable import Bailey
 
@@ -188,6 +190,28 @@ final class AppIdentityTests: XCTestCase {
                         "Unrelated popup tracking must not release the system menu snapshot")
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
         XCTAssertNil(presentation.tracked)
+    }
+
+    @MainActor
+    func testNativeMenuPresentationInvalidatesOnlyAfterTrackingEnds() {
+        let presentation = MainMenuPresentation()
+        let changes = Mutex<Int>(0)
+        withObservationTracking {
+            _ = presentation.panelEntries(for: nil)
+            _ = presentation.projectEntries(for: [])
+        } onChange: {
+            changes.withLock { $0 += 1 }
+        }
+
+        presentation.beginTracking(project: nil, projects: [])
+        XCTAssertNotNil(presentation.tracked)
+        XCTAssertEqual(changes.withLock { $0 }, 0,
+                       "Opening a system menu must not invalidate SwiftUI Commands")
+
+        presentation.endTracking()
+        XCTAssertNil(presentation.tracked)
+        XCTAssertEqual(changes.withLock { $0 }, 1,
+                       "Refresh menu entries only after AppKit stops tracking")
     }
 
     @MainActor

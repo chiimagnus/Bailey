@@ -31,7 +31,6 @@ struct BaileyApp: App {
                 application: applicationDelegate.workspace,
                 menuPresentation: applicationDelegate.menuPresentation
             )
-            WindowCommands(application: applicationDelegate.workspace)
         }
 
         Settings {
@@ -106,21 +105,28 @@ extension FocusedValues {
 @MainActor
 @Observable
 final class MainMenuPresentation {
-    private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
+    // Invalidating SwiftUI during menu tracking discards AppKit's native Window commands.
+    @ObservationIgnored private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
+    private var completedTrackings = 0
 
     func panelEntries(for project: Project?) -> [PanelMenuEntry] {
-        tracked?.panels ?? PanelMenuEntry.entries(for: project)
+        _ = completedTrackings
+        return tracked?.panels ?? PanelMenuEntry.entries(for: project)
     }
 
     func projectEntries(for projects: [Project]) -> [ProjectMenuEntry] {
-        tracked?.projects ?? ProjectMenuEntry.entries(for: projects)
+        _ = completedTrackings
+        return tracked?.projects ?? ProjectMenuEntry.entries(for: projects)
     }
 
     func beginTracking(project: Project?, projects: [Project]) {
         tracked = (PanelMenuEntry.entries(for: project), ProjectMenuEntry.entries(for: projects))
     }
 
-    func endTracking() { tracked = nil }
+    func endTracking() {
+        tracked = nil
+        completedTrackings &+= 1
+    }
 }
 
 /// Menu commands routed to the focused window's manager.
@@ -129,12 +135,16 @@ private struct BaileyCommands: Commands {
     let menuPresentation: MainMenuPresentation
     @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
     @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: FocusedGitCommitAction?
+    @Environment(\.openWindow) private var openWindow
     private var manager: WorkspaceWindowModel? {
         guard let focusedManager, NSApp.isActive,
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
         return focusedManager
     }
     var body: some Commands {
+        let _ = application.registerWindowOpener {
+            openWindow(id: "main")
+        }
         CommandGroup(replacing: .newItem) {}
         CommandGroup(replacing: .saveItem) {}
 
@@ -414,18 +424,6 @@ private struct BaileyCommands: Commands {
                 manager?.openSelectedPageInDefaultBrowser()
             }
             .disabled(manager?.hasSelectedBrowser != true)
-        }
-    }
-}
-
-/// System window commands do not depend on live Panel/Project presentation state.
-private struct WindowCommands: Commands {
-    let application: WorkspaceApplication
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some Commands {
-        let _ = application.registerWindowOpener {
-            openWindow(id: "main")
         }
 
         CommandGroup(before: .windowArrangement) {
