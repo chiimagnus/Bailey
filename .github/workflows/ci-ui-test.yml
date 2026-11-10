@@ -5,24 +5,6 @@ on:
     tags:
       - 'ci-ui-*'
   workflow_dispatch:
-    inputs:
-      test_target:
-        description: 'Choose which XCTest targets to run'
-        type: choice
-        required: true
-        default: both
-        options:
-          - both
-          - host
-          - ui
-      host_tests:
-        description: 'Host class/method selectors, comma or space separated; empty = all'
-        type: string
-        required: false
-      ui_tests:
-        description: 'UI class/method selectors, comma or space separated; empty = all'
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -34,7 +16,6 @@ concurrency:
 jobs:
   host:
     name: BaileyTests
-    if: ${{ github.event_name == 'push' || inputs.test_target == 'both' || inputs.test_target == 'host' }}
     runs-on: xcode-27
     timeout-minutes: 180
     env:
@@ -54,25 +35,8 @@ jobs:
           /usr/bin/git --version
           test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Execute selected BaileyTests
-        env:
-          REQUESTED_TESTS: ${{ inputs.host_tests }}
-        run: |
-          set -euo pipefail
-          requested="${REQUESTED_TESTS//,/ }"
-          selected=()
-          for item in $requested; do
-            if [[ ! "$item" =~ ^(BaileyTests/)?[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)?$ ]]; then
-              echo "::error::Invalid BaileyTests selector: $item"
-              exit 2
-            fi
-            selected+=("BaileyTests/${item#BaileyTests/}")
-          done
-          if (( ${#selected[@]} )); then
-            make test SIGNING=adhoc ONLY_TESTING="${selected[*]}"
-          else
-            make test SIGNING=adhoc
-          fi
+      - name: Execute all BaileyTests
+        run: make test SIGNING=adhoc
       - name: Inspect XCTest results
         if: success()
         run: |
@@ -118,7 +82,6 @@ jobs:
 
   ui:
     name: BaileyUITests
-    if: ${{ github.event_name == 'push' || inputs.test_target == 'both' || inputs.test_target == 'ui' }}
     runs-on: xcode-27
     timeout-minutes: 240
     env:
@@ -138,25 +101,8 @@ jobs:
           /usr/bin/git --version
           test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.2'
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Execute selected BaileyUITests
-        env:
-          REQUESTED_TESTS: ${{ inputs.ui_tests }}
-        run: |
-          set -euo pipefail
-          requested="${REQUESTED_TESTS//,/ }"
-          selected=()
-          for item in $requested; do
-            if [[ ! "$item" =~ ^(BaileyUITests/)?[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)?$ ]]; then
-              echo "::error::Invalid BaileyUITests selector: $item"
-              exit 2
-            fi
-            selected+=("BaileyUITests/${item#BaileyUITests/}")
-          done
-          if (( ${#selected[@]} )); then
-            make test:ui SIGNING=adhoc ONLY_TESTING="${selected[*]}"
-          else
-            make test:ui SIGNING=adhoc
-          fi
+      - name: Execute all BaileyUITests
+        run: make test:ui SIGNING=adhoc
       - name: Inspect XCTest results
         if: success()
         run: |

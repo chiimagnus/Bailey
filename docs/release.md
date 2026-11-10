@@ -8,11 +8,8 @@
 GitHub Actions **不对 PR 或普通 `main` 提交自动运行 XCTest**。
 独立的 [XCTest workflow](../.github/workflows/ci-ui-test.yml) 在显式推送 `ci-ui-*` 测试标签时运行，
 并在工作流合入默认分支后提供手动运行入口。
-手动触发时可选择 `both`／`host`／`ui`，分别为两套测试填写类名／方法筛选项；
-筛选项接受逗号或空格分隔的 `GitStatusModelTests`、`GitStatusModelTests/test...`
-或完整 `BaileyTests/...`／`BaileyUITests/...` 路径，留空运行对应完整测试集。
-非空选择项交给 Makefile 的 `ONLY_TESTING` 和 Xcode 原生枚举校验，
-不存在的测试不得被视为通过；`ci-ui-*` 标签推送仍执行全部两套测试。
+手动触发和推送 `ci-ui-*` 标签均运行完整的 `BaileyTests` 与 `BaileyUITests`，
+不提供目标或用例筛选；本地按需测试仍使用 Makefile。
 两个独立的 macOS Runner Job 将系统 `xcode-select` 与 `DEVELOPER_DIR` 一起指向 Xcode 27.2，
 避免 XCTest 子进程重新调用旧版 Xcode 工具链；各自保存 `.xcresult`。
 CI 结果与本机验收分别记录，失败不能冒充已验收；
