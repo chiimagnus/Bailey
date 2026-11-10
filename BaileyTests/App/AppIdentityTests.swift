@@ -107,6 +107,21 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testWindowCommandsStayInNativeWindowMenu() throws {
+        let menu = try XCTUnwrap(NSApp.windowsMenu)
+        let newWindow = menu.items.filter {
+            $0.title == String(localized: "New Window", table: "Interface")
+        }
+        XCTAssertEqual(newWindow.count, 1)
+        XCTAssertEqual(newWindow.first?.keyEquivalent, "n")
+        XCTAssertEqual(newWindow.first?.keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertEqual(menu.items.filter {
+            $0.title == String(localized: "Enter Full Screen", table: "Interface")
+                || $0.title == String(localized: "Exit Full Screen", table: "Interface")
+        }.count, 1)
+    }
+
+    @MainActor
     func testEditDeleteUsesNativeMenuShortcut() throws {
         let menu = try XCTUnwrap(NSApp.mainMenu)
         let editMenu = try XCTUnwrap(menu.items.compactMap(\.submenu).first(where: { submenu in

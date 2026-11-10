@@ -31,6 +31,7 @@ struct BaileyApp: App {
                 application: applicationDelegate.workspace,
                 menuPresentation: applicationDelegate.menuPresentation
             )
+            WindowCommands(application: applicationDelegate.workspace)
         }
 
         Settings {
@@ -133,13 +134,7 @@ private struct BaileyCommands: Commands {
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
         return focusedManager
     }
-    @Environment(\.openWindow) private var openWindow
-
     var body: some Commands {
-        let _ = application.registerWindowOpener {
-            openWindow(id: "main")
-        }
-
         CommandGroup(replacing: .newItem) {}
         CommandGroup(replacing: .saveItem) {}
 
@@ -419,6 +414,18 @@ private struct BaileyCommands: Commands {
                 manager?.openSelectedPageInDefaultBrowser()
             }
             .disabled(manager?.hasSelectedBrowser != true)
+        }
+    }
+}
+
+/// System window commands do not depend on live Panel/Project presentation state.
+private struct WindowCommands: Commands {
+    let application: WorkspaceApplication
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        let _ = application.registerWindowOpener {
+            openWindow(id: "main")
         }
 
         CommandGroup(before: .windowArrangement) {

@@ -29,9 +29,12 @@ final class WorkspaceWindowsUITests: XCTestCase {
             let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
                 $0.menuItems["Bring All to Front"].exists
             })
-            XCTAssertTrue(menu.menuItems["Move & Resize"].exists,
-                          "The Window menu must retain macOS arrangement commands")
-            XCTAssertTrue(menu.menuItems["Full Screen Tile"].exists)
+            for _ in 0..<3 {
+                XCTAssertTrue(menu.menuItems["Move & Resize"].exists,
+                              "The Window menu must retain macOS arrangement commands while open")
+                XCTAssertTrue(menu.menuItems["Full Screen Tile"].exists,
+                              "Window arrangement items must not disappear during menu tracking")
+            }
             app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
             if step == 0 {
