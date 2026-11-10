@@ -3615,6 +3615,157 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
     }
 
+    func testSplitBaselineIsNotReplacedByRightSideInlineEditingOrLeftFocus() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("split.swift")
+        let original = (0..<140).map { "let value_\($0) = \($0)\n" }.joined()
+        try Data(original.utf8).write(to: file)
+        for arguments in [["add", "split.swift"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let modified = original.replacingOccurrences(
+            of: "let value_75 = 75\n", with: "let changedValue = 75\n"
+        ).replacingOccurrences(
+            of: "let value_105 = 105\n",
+            with: "let value_105 = 105\nlet newlyAdded = 100\n"
+        )
+        try Data(modified.utf8).write(to: file)
+        let preferences = try isolatedPreferences()
+        preferences.diffStyle = .split
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "split.swift", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        tab.autoSaveSuspendedForClose = true
+        try await wait { tab.editableBaseline != nil && tab.editFoldsReady }
+        let window = NSWindow(
+            contentRect: NSRect(x: -920, y: -920, width: 900, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: tab))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden }.count == 2
+        }
+        let surface = try XCTUnwrap(tab.nativeSurface)
+        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }
+        let left = try XCTUnwrap(panes.first { !$0.isHidden && !$0.textView.isEditable })
+        let right = try XCTUnwrap(panes.first { !$0.isHidden && $0.textView.isEditable })
+        let originalLeft = left.textView.attributedText.copy() as! NSAttributedString
+        let storage = try XCTUnwrap(left.textView.textStorage)
+        let didReplaceText = expectation(
+            forNotification: NSTextStorage.didProcessEditingNotification, object: storage
+        ) { notification in
+            (notification.object as? NSTextStorage)?.editedMask.contains(.editedCharacters) == true
+        }
+        didReplaceText.isInverted = true
+        let previousID = try XCTUnwrap(tab.editableBaseline?.id)
+        XCTAssertTrue(window.makeFirstResponder(right.textView))
+        let caret = (right.textView.string as NSString).range(of: "newlyAdded").location
+        right.textView.insertText("typing", replacementRange: NSRange(location: caret, length: 0))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.editableBaseline?.id != previousID
+                && left.renderedDisplayID == tab.editableBaseline?.id
+        }
+        XCTAssertEqual(left.textView.string, originalLeft.string,
+                       "Right-side edits must not rewrite the unchanged left source")
+        XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text),
+                      "Left-side emphasis changes must still be applied")
+        XCTAssertTrue(window.makeFirstResponder(left.textView))
+        host.layoutSubtreeIfNeeded()
+        await fulfillment(of: [didReplaceText], timeout: 0.3)
+        XCTAssertTrue(left.textView.textStorage === storage)
+        XCTAssertEqual(left.textView.string, originalLeft.string)
+
+        // Adding a whole source line legitimately inserts filler on the left.
+        // This still must not replace the existing TextKit document wholesale.
+        let beforeNewline = try XCTUnwrap(tab.editableBaseline?.id)
+        let updatedLeft = left.textView.string
+        let nextCaret = (right.textView.string as NSString).range(of: "newlyAdded").location
+        right.textView.insertText("let addedRow = 1\n", replacementRange: NSRange(
+            location: nextCaret, length: 0
+        ))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.editableBaseline?.id != beforeNewline
+                && left.renderedDisplayID == tab.editableBaseline?.id
+        }
+        XCTAssertNotEqual(left.textView.string, updatedLeft)
+        XCTAssertTrue(left.textView.textStorage === storage)
+        XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text))
+        XCTAssertTrue(left.textView.textLayoutManager != nil)
+        XCTAssertEqual(try Data(contentsOf: file), Data(modified.utf8))
+
+        // Clicking the red read-only side after typing also triggers the
+        // editor's focus-loss save and Git reload; neither may unmount it.
+        tab.autoSaveSuspendedForClose = false
+        XCTAssertTrue(window.makeFirstResponder(right.textView))
+        let saveCaret = (right.textView.string as NSString).range(of: "newlyAdded").location
+        right.textView.insertText("edited", replacementRange: NSRange(location: saveCaret,
+                                                                        length: 0))
+        XCTAssertTrue(tab.isDirty)
+        XCTAssertTrue(window.makeFirstResponder(left.textView))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            guard let current = try? Data(contentsOf: file) else { return false }
+            return !tab.isDirty && current != Data(modified.utf8)
+                && tab.nativeSurface === surface && !left.isHidden
+        }
+        XCTAssertTrue(left.textView.textStorage === storage)
+        XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text))
+    }
+
+    func testReviewProjectionRetainsExactUTF16WhenReplacingUnicode() throws {
+        let surrogateChange = try XCTUnwrap(NativeCodeTextView.changedTextRanges(
+            from: "start \u{1F600} end" as NSString, to: "start \u{1FA00} end" as NSString
+        ))
+        XCTAssertEqual(surrogateChange.old.length, 2)
+        XCTAssertEqual(surrogateChange.new.length, 2)
+        XCTAssertNotNil(NativeCodeTextView.changedTextRanges(
+            from: "Café" as NSString, to: "Cafe\u{0301}" as NSString
+        ))
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let paragraph = DiffTypography.paragraphStyle(for: font)
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(contentRect: NSRect(x: -920, y: -920, width: 690, height: 340),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.applyTypography(font: font, paragraphStyle: paragraph, textColor: .textColor)
+        let context = String(repeating: "unchanged line\n", count: 120)
+        let initial = context + "Cafe\u{0301} 🍎\n" + context
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .paragraphStyle: paragraph, .foregroundColor: NSColor.textColor
+        ]
+        let decorations = DiffDecorations.empty
+        pane.setReviewDocument(NSAttributedString(string: initial, attributes: attributes),
+                               decorations: decorations)
+        pane.layoutSubtreeIfNeeded()
+        let storage = try XCTUnwrap(pane.textView.textStorage)
+        let layout = pane.textView.nativeLayoutManager
+        for changed in [context + "Café 🍏\n" + context,
+                        context + "Cafe\u{0301} 🍎\n" + context,
+                        context + "Cafe\u{0301} 🍎\nnew line\n" + context,
+                        initial] {
+            pane.setReviewDocument(NSAttributedString(string: changed, attributes: attributes),
+                                   decorations: decorations)
+            pane.layoutSubtreeIfNeeded()
+            XCTAssertTrue(pane.textView.string.utf16.elementsEqual(changed.utf16))
+            XCTAssertTrue(pane.textView.textStorage === storage)
+            XCTAssertTrue(pane.textView.nativeLayoutManager === layout)
+        }
+    }
+
     func testEditableSplitAlignsFullWorktreeWithReadOnlyBaselineAcrossFoldedContext() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -2054,13 +2054,17 @@ final class DiffCodePaneView: NSView {
     func setReviewDocument(_ text: NSAttributedString, decorations newDecorations: DiffDecorations) {
         let isExpansionSwap = pendingExpansionSwap
         pendingExpansionSwap = false
-        let contentChanged = textView.attributedText.string != text.string
+        guard let storage = textView.textStorage else { return }
+        let changed = NativeCodeTextView.changedTextRanges(
+            from: storage.string as NSString, to: text.string as NSString
+        )
+        let contentChanged = changed != nil
         if isExpansionSwap {
             pendingReviewScroll = .offset(scrollOffset.y)
-        } else {
+        } else if contentChanged {
             rememberReviewAnchor()
         }
-        invalidateDocumentLayout()
+        if contentChanged { invalidateDocumentLayout() }
         defer {
             if contentChanged && !isExpansionSwap {
                 let y = scrollView.contentView.bounds.origin.y
@@ -2068,10 +2072,32 @@ final class DiffCodePaneView: NSView {
             }
         }
 
-        let selection = contentChanged ? nil : textView.selectedRanges
-        textView.attributedText = text
-        if let selection { textView.selectedRanges = selection }
-        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
+        // The left projection is rebuilt after live edits. Preserve its TextKit
+        // document and replace only the changed characters or attributes.
+        if contentChanged || !storage.isEqual(to: text) {
+            storage.beginEditing()
+            if let changed {
+                storage.replaceCharacters(
+                    in: changed.old, with: text.attributedSubstring(from: changed.new)
+                )
+            }
+            var offset = 0
+            while offset < text.length {
+                var existingRange = NSRange()
+                var desiredRange = NSRange()
+                let existing = storage.attributes(at: offset, effectiveRange: &existingRange)
+                let desired = text.attributes(at: offset, effectiveRange: &desiredRange)
+                let end = min(NSMaxRange(existingRange), NSMaxRange(desiredRange))
+                if !NSDictionary(dictionary: existing).isEqual(to: desired) {
+                    storage.setAttributes(desired, range: NSRange(location: offset, length: end - offset))
+                }
+                offset = end
+            }
+            storage.endEditing()
+        }
+        if contentChanged {
+            textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
+        }
         decorations = newDecorations
         // The shared native line index already owns paragraph separator kinds.
         setFixedRowCount(textView.wrapsLines || textView.hasNativeNonLFSeparators
