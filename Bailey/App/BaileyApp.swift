@@ -129,7 +129,6 @@ final class MainMenuPresentation {
     func endTracking() {
         tracked = nil
         completedTrackings &+= 1
-        trackingEpoch &+= 1
     }
 }
 
@@ -474,18 +473,16 @@ struct PanelMenuEntry: Identifiable {
     let id: DockItem
     let index: Int
     private let tab: PaneTab
-    private let capturedTitle: String?
-    private let capturedIcon: NSImage?
+    private let capturedDisplay: (title: String, icon: NSImage)?
 
-    var title: String { capturedTitle ?? tab.displayTitle }
-    var icon: NSImage { capturedIcon ?? Self.icon(for: tab) }
+    var title: String { capturedDisplay?.title ?? tab.displayTitle }
+    var icon: NSImage { capturedDisplay?.icon ?? Self.icon(for: tab) }
 
     init(tab: PaneTab, index: Int, captureDisplay: Bool = false) {
         id = .tab(tab.id)
         self.index = index
         self.tab = tab
-        capturedTitle = captureDisplay ? tab.displayTitle : nil
-        capturedIcon = captureDisplay ? Self.icon(for: tab) : nil
+        capturedDisplay = captureDisplay ? (tab.displayTitle, Self.icon(for: tab)) : nil
     }
 
     private static func icon(for tab: PaneTab) -> NSImage {
@@ -502,7 +499,7 @@ struct PanelMenuEntry: Identifiable {
     static func entries(for project: Project?, captureDisplay: Bool = false) -> [Self] {
         guard let project else { return [] }
         let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
-        return Array(project.dock.tabOrder.compactMap { tabsByID[$0] }.enumerated()).map {
+        return project.dock.tabOrder.compactMap { tabsByID[$0] }.enumerated().map {
             Self(tab: $0.element, index: $0.offset, captureDisplay: captureDisplay)
         }
     }
@@ -512,18 +509,16 @@ struct ProjectMenuEntry: Identifiable {
     let id: UUID
     let index: Int
     private let project: Project
-    private let capturedTitle: String?
-    private let capturedIcon: NSImage?
+    private let capturedDisplay: (title: String, icon: NSImage)?
 
-    var title: String { capturedTitle ?? project.name }
-    var icon: NSImage { capturedIcon ?? Self.icon(for: project) }
+    var title: String { capturedDisplay?.title ?? project.name }
+    var icon: NSImage { capturedDisplay?.icon ?? Self.icon(for: project) }
 
     init(project: Project, index: Int, captureDisplay: Bool = false) {
         id = project.id
         self.index = index
         self.project = project
-        capturedTitle = captureDisplay ? project.name : nil
-        capturedIcon = captureDisplay ? Self.icon(for: project) : nil
+        capturedDisplay = captureDisplay ? (project.name, Self.icon(for: project)) : nil
     }
 
     private static func icon(for project: Project) -> NSImage {
@@ -534,7 +529,7 @@ struct ProjectMenuEntry: Identifiable {
     }
 
     static func entries(for projects: [Project], captureDisplay: Bool = false) -> [Self] {
-        Array(projects.enumerated()).map {
+        projects.enumerated().map {
             Self(project: $0.element, index: $0.offset, captureDisplay: captureDisplay)
         }
     }
