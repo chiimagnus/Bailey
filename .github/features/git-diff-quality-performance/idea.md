@@ -1,14 +1,18 @@
 # Git Diff 正确性、原生体验与性能收敛
 
 本文件是需求、范围与验收的唯一真源；实施拆分见 `plan-p1.md` 至 `plan-p4.md`，
-实时状态只在 `todo.toml`。计划编制于 2026-11-05；当前实际进度以 `todo.toml` 和审计 Gate 为准。
-P1 技术调查已完成；P2 当前验收状态以 `todo.toml` 与 `audit-p2.md` 为准；
+实时状态只在 `todo.toml`。计划编制于 2026-11-05；当前进度和结果须以 `todo.toml`、现行源码与实测为准。
+P1 技术调查已完成；P1–P3 的实时完成状态以 `todo.toml` 为准，
+实施事实需直接核对当前源码、真实测试与 Git 历史，不以旧 `audit*.md` 代替审查；
 2026-11-09 明确验收口径：以覆盖实际 Swift 行为的 `BaileyTests` 和必要的
 `BaileyUITests` 为准，不再把额外的 WindowServer 首像素、30 次冷热 GUI P95、
 独立图形会话或 macOS 虚拟机作为阶段门禁；失败的 XCTest 仍须追查，不能豁免。
 P3 的 Git／SSH 生命周期修复 `1f3987d3` 和实机验收契约更正 `5dc33923`
 已提交。完整本机 923 项（16 项 Windows 条件跳过）、隔离 Bailey Dev GUI 55 项、
-授权 Windows SSH 实机 16 项（0 跳过）均通过，P3 当前 Gate 为 `Go`。
+授权 Windows SSH 实机 16 项（0 跳过）当时通过，P3 阶段 Gate 为 `Go`。
+2026-11-10 又合入真实远端 Split 自动保存及 SSH 测试 socket 隔离修复；
+PR #78 已于 2026-11-05 合并。P4 必须按**最终 HEAD**重新核销受影响范围，
+不能继续以 2026-11-05 连接超时／16 项跳过当作当前实机阻塞。
 已独立验证并提交冗余字段清理（`a9fdb51b`）；原始布局反证、Git 对象和密集投影
 测量仍保留在 `evidence-p1.md`。P4 的必要 Swift UI 交互、IME 与跨环境终验
 仍按其测试覆盖核销；旧性能数字是诊断证据，不是新增的独立 GUI 门禁。
@@ -48,7 +52,7 @@ HEAD `5230f341`，工作区干净；PR #78 当时仍 OPEN。
 | `GitWorktreeComparison.resolve → DiffCore.fromVerifiedOperations` | 能复用已验证 Git hunk；不能映射时回退算法；实时编辑仍重新计算 | 不代表全部 Git 来源、特殊文本与并发路径都已完成跨界面验收 |
 | `DiffComputation.build → DiffBlocks.blockEmphasis → DiffIntraline.myersTokens` | 稀疏改动样本投影中位约 0.17 ms；但每次 build 对成对修改行运行逐词 Myers，token 上限 400，回溯轨迹随编辑距离增长且内部无独立取消点 | 简单样本不能代表密集改动；需先测 399／400／401 token、百／千行成对改动、反复展开及取消时延，实测有问题才优化 |
 | `DiffSyntaxSource.captures` | 未变字节复用 Tree-sitter 树，修改侧 Worktree 由 Neon 着色；大于 2 MB 的源码不缓存树 | 未实现编辑增量解析，也尚未证明增量解析值得引入 |
-| 2026-11-05 测试日志 | 独立清理提交 `a9fdb51b` 后的完整 `make test` 在 19:47 执行 843 项、16 项授权 SSH 跳过、0 失败；之前 105 项定点测试通过、5 项 Git GUI 一次 ⌘S 事件合成超时后复测通过 | 新全量证明**当前清理提交**未破坏宿主测试；不证明未来 P2/P3 优化或真实 GUI/Release/SSH 实机已验收。GUI 偶发超时根因仍未找到，16 项跳过均不可计作通过 |
+| 2026-11-05 测试日志 | 独立清理提交 `a9fdb51b` 后的完整 `make test` 在 19:47 执行 843 项、16 项授权 SSH 跳过、0 失败；之前 105 项定点测试通过、5 项 Git GUI 一次 ⌘S 事件合成超时后复测通过 | 只证明 `a9fdb51b` 当时的宿主状态；2026-11-09 已有单独授权 Windows SSH 16 项实际通过。旧 GUI 合成超时仍需按发生时的 SHA 与最终字节归因；旧跳过与旧通过都不能代替当前 HEAD 的证据 |
 | `docs/testing.md` | 输入 P95、滚动帧、热视口几何和本地 Git 30 次热样本均有现行测量标准 | 模型准备时间不是文本真正显示或可交互时间 |
 
 ## 必须交付的产品结果
@@ -175,8 +179,8 @@ SSH 认证、Monaco／Electron／WebKit 编辑器替换、LSP、正式发布以�
 - 保留现有 Unified／Split 偏好，未改的折叠规则、颜色、快捷键、主题、字体及超长行设置。
 - 默认折叠较长的未变区域；仅手动展开，不因普通编辑器焦点自动展开。
 - 不为性能增加用户必须理解的新开关；内容大小、滚动高度和缓存策略先实验，再定实现。
-- 保留 Apple Silicon、Swift 6、TextKit 2、Bailey Dev 隔离测试；
-  仓库最低部署目标不变。没有 macOS 15.6 实机时标明未覆盖，不能声称已实机通过。
+- 保留 Apple Silicon、Swift 6、TextKit 2、Bailey Dev 隔离测试及既有部署目标；
+  本轮以当前 Mac 与实际 GitHub runner 为验收环境，不要求 macOS 15.6 实机 GUI 测试。
 - 纯优化零外观和语义变化；确需改变可见编辑的边界时，以 R3 的用户安全契约和真实测试为依据作出显式决定。
 
 ## P1 技术准入与性能预算（2026-11-06）
@@ -214,8 +218,8 @@ SSH 认证、Monaco／Electron／WebKit 编辑器替换、LSP、正式发布以�
 Undo、IME、Find、Ghost 和 100k 反复远跳。
 P1 当时要求 P2-T1 在同一 TextKit 所有者证明全部 17 次深跳、
 完整滑块范围和真实末行，避免把错误原生快路径直接接入生产；
-该阶段的实际修复与 Swift 回归见 `audit-p2.md`，不再以 P1 的旧 No-Go
-描述当前已完成的 P2-T1。
+P2 的当前实现应直接核对 `DiffCodePaneView`、`NativeDiffTabTests`
+及提交历史，不再以 P1 的旧 No-Go 描述已完成的 P2-T1。
 P1 的 No-Go 是**已有快路径不可放行**，不是 Apple TextKit 2 一概不可行。
 
 **可进入实现的已有证据与否决边界：**
@@ -282,8 +286,8 @@ P3 独占 Git IO、快照、取消及语法成本；P4 核销
 **暂时无法直接完成的条件与补验：**
 - Windows SSH 实机：必须使用明确授权的独立测试仓库及现有 `BAILEY_P4_TEST_SSH_HOST`；
   未提供则以受控后端和本地临时仓库辅助验证，但远端真实 RTT、断线及保存仍属阻塞缺口。
-- macOS 15.6 实机：当前仅有现用 Mac，维护部署目标并核对编译/API；
-  未取得真实旧系统时不做低版本 GUI 保证，记录具体差异与补验环境。
+- macOS 15.6 实机 GUI 不属于本轮验收门禁；仍维护现有部署目标及编译/API 兼容，
+  但不对未实际运行的旧系统作 GUI 验收声明。
 - 必需的完整 App GUI 行为：优先 GitHub Actions 的独立 macOS runner 上执行
   相关 `BaileyUITests`；不得在用户正在使用的本机桌面抢焦点，
   不创建 macOS 虚拟机。保留失败日志，按测试夹具／系统／产品归因，不靠固定等待制造绿色。
