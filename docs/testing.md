@@ -315,6 +315,8 @@ Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为�
 其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。
 `GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、
 历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；
+`NativeDiffTabTests` 另以真实 Windows SSH 验证 clean filter 的规范化对照、
+CRLF Split 失焦自动保存的原始 Unicode 字节及 Staged 只读差异；
 `GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel`
 的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、
 `GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，

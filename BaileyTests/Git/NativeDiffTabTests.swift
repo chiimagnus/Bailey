@@ -6963,6 +6963,88 @@ final class NativeDiffTabTests: XCTestCase {
             let after = try await execute(["git", "diff", "--numstat", "--", "filtered.txt"])
             XCTAssertEqual(after.trimmingCharacters(in: .whitespacesAndNewlines),
                            "1\t1\tfiltered.txt")
+
+            // Clean filters that change the source row mapping use the
+            // canonical comparison, not an editable Split baseline.
+            XCTAssertTrue(filtered.showsCanonicalComparison)
+            XCTAssertFalse(raw.showsCanonicalComparison)
+            // Exercise the native Split editor using real Windows CRLF bytes.
+            raw.setDiffStyle(.split)
+            try await wait({ raw.editableBaseline != nil && raw.editFoldsReady }, timeout: 90)
+            let window = NSWindow(
+                contentRect: NSRect(x: -920, y: -920, width: 900, height: 480),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let hostView = NSHostingView(rootView: DiffViewerView(diff: raw))
+            window.contentView = hostView
+            window.orderFront(nil)
+            try await wait({
+                hostView.layoutSubtreeIfNeeded()
+                return raw.nativeSurface?.subviews.compactMap { $0 as? DiffCodePaneView }
+                    .filter { !$0.isHidden }.count == 2
+            }, timeout: 30)
+            let native = try XCTUnwrap(raw.nativeSurface)
+            let panes = native.subviews.compactMap { $0 as? DiffCodePaneView }
+            let left = try XCTUnwrap(panes.first { !$0.isHidden && !$0.textView.isEditable })
+            let right = try XCTUnwrap(panes.first { !$0.isHidden && $0.textView.isEditable })
+            let storage = try XCTUnwrap(left.textView.textStorage)
+            XCTAssertTrue(left.decorations.rows.contains { $0.kind == .removed })
+            XCTAssertTrue(window.makeFirstResponder(right.textView))
+            let caret = (right.textView.string as NSString).range(of: "beta").location
+            right.textView.insertText("远程🙂 ", replacementRange: NSRange(location: caret, length: 0))
+            XCTAssertTrue(raw.isDirty)
+            let expected = right.textView.string
+            let monitor = Task { @MainActor in
+                var hidden = 0
+                while !Task.isCancelled {
+                    hostView.layoutSubtreeIfNeeded()
+                    if native.superview == nil || left.isHidden || right.isHidden
+                        || !raw.canPresentNativeContent {
+                        hidden += 1
+                    }
+                    try? await Task.sleep(for: .milliseconds(15))
+                }
+                return hidden
+            }
+            XCTAssertTrue(window.makeFirstResponder(left.textView))
+            do {
+                try await wait({
+                    hostView.layoutSubtreeIfNeeded()
+                    return !raw.isDirty && !raw.isLoading
+                        && raw.newContent.utf8.elementsEqual(expected.utf8)
+                        && raw.editableBaseline != nil
+                        && left.renderedDisplayID == raw.editableBaseline?.id
+                }, timeout: 90)
+            } catch {
+                monitor.cancel()
+                _ = await monitor.value
+                throw error
+            }
+            monitor.cancel()
+            let hidden = await monitor.value
+            XCTAssertEqual(hidden, 0, "Remote focus-loss save must keep both Split panes visible")
+            XCTAssertNil(raw.saveError)
+            XCTAssertTrue(left.textView.textStorage === storage)
+            XCTAssertTrue(left.textView.attributedText.isEqual(
+                to: try XCTUnwrap(raw.editableBaseline).text
+            ))
+            let remoteBytes = try await backend.read(path: root + "/raw.txt", maxBytes: 512)
+            XCTAssertEqual(remoteBytes, Data(expected.utf8),
+                           "Remote autosave must preserve exact Unicode and transient raw bytes")
+
+            _ = try await execute(["git", "add", "--", "raw.txt"])
+            let staged = DiffTab(
+                repoRoot: root, path: "raw.txt", source: .staged,
+                untracked: false, origPath: nil, backend: backend,
+                workspaceIdentity: nil, preferences: preferences
+            )
+            try await wait({ !staged.isLoading && staged.display != nil }, timeout: 90)
+            XCTAssertNil(staged.error)
+            XCTAssertTrue(staged.hasChanges)
+            XCTAssertFalse(staged.isEditing)
+            XCTAssertTrue(staged.display?.unifiedText.string.contains("远程🙂") == true)
         } catch {
             await cleanup()
             throw error
