@@ -3912,6 +3912,19 @@ final class NativeDiffTabTests: XCTestCase {
         let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
             .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let visible = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        )
+        let clip = pane.scrollView.contentView.bounds
+        for sourceRow in 578..<587 {
+            let row = try XCTUnwrap(visible.first {
+                $0.index == sourceRow && $0.frame.intersects(clip)
+            }, "New row \(sourceRow) must be visible after reserving deletion space")
+            XCTAssertGreaterThan(sourceGlyphPixelVariety(
+                bitmap, in: pane,
+                at: NSPoint(x: 95, y: row.frame.midY - pane.scrollOffset.y)
+            ), 3, "New row \(sourceRow) must paint text, not just its green background")
+        }
         let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let removedColor = try XCTUnwrap(DiffColorScheme.current(dark: dark)
             .removedRow.usingColorSpace(.sRGB))

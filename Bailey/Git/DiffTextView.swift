@@ -287,11 +287,15 @@ nonisolated private final class DiffFixedRowFragment: NSTextLayoutFragment {
     var rowHeight: CGFloat = 0
     var wrapped = false
     var currentRow: (() -> Int)?
+    var currentTrailingRows: (() -> Int)?
 
     override var layoutFragmentFrame: CGRect {
         var frame = super.layoutFragmentFrame
         frame.origin.y = CGFloat(currentRow?() ?? 0) * rowHeight
-        frame.size.height = CGFloat(wrapped ? max(1, textLineFragments.count) : 1) * rowHeight
+        // TextKit tiles by fragment height, so virtual deletion rows must occupy native space.
+        frame.size.height = CGFloat(
+            (wrapped ? max(1, textLineFragments.count) : 1) + (currentTrailingRows?() ?? 0)
+        ) * rowHeight
         return frame
     }
 }
@@ -377,6 +381,7 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
     private var fixedLayoutRowHeight: CGFloat?
     var layoutRowForUTF16: ((Int) -> Int)?
     var ghostStartY: ((Int) -> CGFloat)?
+    var ghostRowsAfterGitLine: ((Int) -> Int)?
 
     func setFixedLayoutRowHeight(_ height: CGFloat?) {
         guard fixedLayoutRowHeight != height else { return }
@@ -403,6 +408,13 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
         // and wrapped prefixes can all change a cached paragraph's display row.
         fragment.currentRow = {
             MainActor.assumeIsolated { rowForOffset(offset) }
+        }
+        fragment.currentTrailingRows = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.wrapsLines, !self.hasNativeNonLFSeparators,
+                      let sourceRow = self.liveGitLine(atUTF16: offset) else { return 0 }
+                return self.ghostRowsAfterGitLine?(sourceRow) ?? 0
+            }
         }
         return fragment
     }
@@ -1711,6 +1723,7 @@ final class DiffCodePaneView: NSView {
         textView.handleCollapsedClick = nil
         textView.ghostStartY = nil
         textView.layoutRowForUTF16 = nil
+        textView.ghostRowsAfterGitLine = nil
         textView.onBecomeFirstResponder = nil
         textView.onResignFirstResponder = nil
         textView.retireNativeDocument()
@@ -1844,6 +1857,9 @@ final class DiffCodePaneView: NSView {
         scrollView.documentView = textView
         textView.layoutRowForUTF16 = { [weak self] offset in
             self?.fixedFragmentRow(atUTF16: offset) ?? 0
+        }
+        textView.ghostRowsAfterGitLine = { [weak self] line in
+            self?.decorations.ghostsByAnchor[line + 1]?.lines.count ?? 0
         }
         textView.ghostStartY = { [weak self] anchor in
             self?.ghostStartY(forAnchor: anchor) ?? 0
