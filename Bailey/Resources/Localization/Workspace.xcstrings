@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Unknown text encoding. Choose an encoding to reopen." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确定文本编码。请选择编码后重新打开。"
+          }
+        }
+      }
+    },
+    "Cannot determine declared encoding: %@. Choose an encoding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确定声明的编码 %@。请手动选择编码。"
+          }
+        }
+      }
+    },
+    "File bytes are not valid %@ text." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件字节不是有效的 %@ 文本。"
+          }
+        }
+      }
+    },
     "A name can’t contain “/” or be “.” or “..”." : {
       "localizations" : {
         "zh-Hans" : {

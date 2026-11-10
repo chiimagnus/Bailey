@@ -58,6 +58,8 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored var editorState = EditorState()
 
     private(set) var isDirty = false
+    private(set) var fileEncoding = TextFileEncoding.utf8
+    @ObservationIgnored private var preferredEncoding: TextFileEncoding?
     var saveError: String?
     private(set) var reloadError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
@@ -116,7 +118,18 @@ final class FileTab: nonisolated Identifiable {
     private struct LoadedContent {
         let content: Content
         let text: String
+        let encoding: TextFileEncoding?
         let imageFingerprint: Int?
+        let decodingFailed: Bool
+    }
+
+    func reopen(using encoding: TextFileEncoding?) {
+        guard !isDirty, !isSaving, !fileMutationHeld else {
+            saveError = String(localized: "Save or discard edits before changing encoding.", table: "Editor")
+            return
+        }
+        preferredEncoding = encoding
+        reloadFromDiskIfClean()
     }
 
     init(
@@ -363,8 +376,12 @@ final class FileTab: nonisolated Identifiable {
 
     /// Serialize manual and focus-triggered writes. A later edit can never
     /// land on disk before an older in-flight write completes.
-    func save() async {
+    func save(as encoding: TextFileEncoding? = nil) async {
         if fileMutationHeld {
+            if encoding != nil {
+                saveError = String(localized: "Cannot change encoding during a file operation.", table: "Editor")
+                return
+            }
             saveDeferredUntilMutation = true
             return
         }
@@ -373,15 +390,24 @@ final class FileTab: nonisolated Identifiable {
         let preceding = lastSaveTask
         let task = Task { [weak self] in
             await preceding?.value
-            await self?.writeCurrentText()
+            await self?.writeCurrentText(as: encoding)
         }
         lastSaveTask = task
         await task.value
         if saveRequestGeneration == generation { lastSaveTask = nil }
     }
 
-    private func writeCurrentText() async {
-        guard case .text = content, isDirty else { return }
+    private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
+        guard case .text = content, isDirty || (encoding != nil && encoding != fileEncoding) else { return }
+        let chosen = encoding ?? fileEncoding
+        if chosen != fileEncoding && TextFileEncoding.contradictsDeclaration(text, chosen: chosen) {
+            saveError = String(localized: "Update the declared coding header before changing the file encoding.", table: "Editor")
+            return
+        }
+        guard let bytes = chosen.encoded(text) else {
+            saveError = String(localized: "Text cannot be saved in \(chosen.name) without losing characters.", table: "Editor")
+            return
+        }
         // Refused, not silently dropped: the save-error bar says why.
         if let readOnlyReason {
             saveError = readOnlyReason
@@ -395,8 +421,10 @@ final class FileTab: nonisolated Identifiable {
         let generation = targetGeneration
         let target = backend
         do {
-            try await target.write(path: savedPath, data: Data(written.utf8))
+            try await target.write(path: savedPath, data: bytes)
             guard generation == targetGeneration else { return }
+            fileEncoding = chosen
+            if encoding != nil { preferredEncoding = chosen }
             savedText = written
             reversibleEdit = nil
             restoredSavedBytes = false
@@ -445,7 +473,9 @@ final class FileTab: nonisolated Identifiable {
             }
             let loaded: LoadedContent
             do {
-                let (data, decoded) = try await Self.readContent(path: expectedPath, backend: backend)
+                let (data, decoded) = try await Self.readContent(
+                    path: expectedPath, backend: backend, override: self?.preferredEncoding
+                )
                 loaded = Self.loadedContent(path: expectedPath, data: data, decoded: decoded)
             } catch {
                 let missingOrOversized: Bool
@@ -471,7 +501,9 @@ final class FileTab: nonisolated Identifiable {
                 } else {
                     reason = String(localized: "Could not read file", table: "Workspace")
                 }
-                loaded = LoadedContent(content: .unavailable(reason), text: "", imageFingerprint: nil)
+                loaded = LoadedContent(content: .unavailable(reason), text: "",
+                                       encoding: nil, imageFingerprint: nil,
+                                       decodingFailed: false)
             }
             guard !Task.isCancelled,
                   let self,
@@ -482,17 +514,27 @@ final class FileTab: nonisolated Identifiable {
                   self.readOnlyReason == nil
             else { return }
 
+            if loaded.decodingFailed, case .unavailable(let reason) = loaded.content {
+                switch self.content {
+                case .text, .image:
+                    self.reloadError = reason
+                    return
+                case .loading, .unavailable:
+                    break
+                }
+            }
             self.reloadError = nil
+            self.saveError = nil
             guard !self.matches(loaded) else { return }
             self.retireNativeEditor()
             self.content = loaded.content
+            if let encoding = loaded.encoding { self.fileEncoding = encoding }
             self.text = loaded.text
             self.savedText = loaded.text
             self.nativeCodeUnitDelta = [:]
             self.reversibleEdit = nil
             self.restoredSavedBytes = false
             self.imageFingerprint = loaded.imageFingerprint
-            self.saveError = nil
             self.reloadRevision &+= 1
         }
     }
@@ -518,7 +560,7 @@ final class FileTab: nonisolated Identifiable {
     private func matches(_ loaded: LoadedContent) -> Bool {
         switch (content, loaded.content) {
         case (.text, .text):
-            return Self.hasIdenticalBytes(savedText, loaded.text)
+            return fileEncoding == loaded.encoding && Self.hasIdenticalBytes(savedText, loaded.text)
         case (.image, .image):
             return imageFingerprint == loaded.imageFingerprint
         case (.unavailable(let current), .unavailable(let new)):
@@ -529,39 +571,48 @@ final class FileTab: nonisolated Identifiable {
     }
 
     @concurrent private static func readContent(
-        path: String, backend: WorkspaceBackend
-    ) async throws -> (Data, String?) {
+        path: String, backend: WorkspaceBackend, override: TextFileEncoding?
+    ) async throws -> (Data, Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?) {
         let isImage = imageExtensions.contains((path as NSString).pathExtension.lowercased())
         let data = try await backend.read(path: path, maxBytes: isImage ? .max : maxTextBytes)
-        return (data, data.count <= maxTextBytes && !data.contains(0)
-            ? String(data: data, encoding: .utf8) : nil)
+        guard data.count <= maxTextBytes else { return (data, nil) }
+        return (data, await TextFileEncoding.decode(data, backend: backend, override: override))
     }
 
-    private static func loadedContent(path: String, data: Data, decoded: String?) -> LoadedContent {
+    private static func loadedContent(
+        path: String, data: Data,
+        decoded: Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?
+    ) -> LoadedContent {
         let url = URL(fileURLWithPath: path)
         if imageExtensions.contains(url.pathExtension.lowercased()),
            let image = NSImage(data: data) {
             return LoadedContent(
                 content: .image(image),
-                text: "",
-                imageFingerprint: data.hashValue
+                text: "", encoding: nil,
+                imageFingerprint: data.hashValue, decodingFailed: false
             )
         }
         guard data.count <= maxTextBytes else {
             return LoadedContent(
                 content: .unavailable(String(localized: "File is too large to open", table: "Workspace")),
-                text: "",
-                imageFingerprint: nil
+                text: "", encoding: nil,
+                imageFingerprint: nil, decodingFailed: false
             )
         }
-        guard let string = decoded else {
-            return LoadedContent(
-                content: .unavailable(String(localized: "Binary file", table: "Workspace")),
-                text: "",
-                imageFingerprint: nil
-            )
+        guard let decoded else { preconditionFailure("Text input was not decoded") }
+        switch decoded {
+        case .success(let document):
+            return LoadedContent(content: .text, text: document.text,
+                                 encoding: document.encoding, imageFingerprint: nil,
+                                 decodingFailed: false)
+        case .failure(let failure):
+            let unknownTextEncoding: Bool
+            if case .binary = failure { unknownTextEncoding = false }
+            else { unknownTextEncoding = true }
+            return LoadedContent(content: .unavailable(failure.message), text: "",
+                                 encoding: nil, imageFingerprint: nil,
+                                 decodingFailed: unknownTextEncoding)
         }
-        return LoadedContent(content: .text, text: string, imageFingerprint: nil)
     }
 }
 
@@ -620,6 +671,12 @@ struct FileViewerView: View {
                     if let error = file.saveError {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
+                    HStack {
+                        Spacer()
+                        encodingMenu
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 23)
                     SourceTextEditor(
                         file: file,
                         font: TerminalFont.current(),
@@ -650,6 +707,7 @@ struct FileViewerView: View {
                     Text(reason)
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
+                    encodingMenu
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -663,6 +721,36 @@ struct FileViewerView: View {
                   file.readOnlyReason == nil else { return }
             file.refreshWhenSelected()
         }
+    }
+
+    private var encodingMenu: some View {
+        Menu {
+            Menu(String(localized: "Reopen with Encoding", table: "Editor")) {
+                Button(String(localized: "Automatic", table: "Editor")) {
+                    file.reopen(using: nil)
+                }
+                ForEach(TextFileEncoding.choices, id: \.self) { encoding in
+                    Button(encoding.name) { file.reopen(using: encoding) }
+                }
+            }
+            .disabled(file.isDirty)
+            if case .text = file.content {
+                Menu(String(localized: "Save with Encoding", table: "Editor")) {
+                    ForEach(TextFileEncoding.choices, id: \.self) { encoding in
+                        Button(encoding.name) { Task { await file.save(as: encoding) } }
+                    }
+                }
+            }
+        } label: {
+            if case .text = file.content {
+                Text(file.fileEncoding.name).font(.system(size: 11))
+            } else {
+                Text(String(localized: "Choose Encoding", table: "Editor"))
+                    .font(.system(size: 11))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private func errorBar(_ message: String) -> some View {

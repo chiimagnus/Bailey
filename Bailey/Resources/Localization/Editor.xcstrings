@@ -1,6 +1,86 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Automatic" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动识别"
+          }
+        }
+      }
+    },
+    "Choose Encoding" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择编码"
+          }
+        }
+      }
+    },
+    "Reopen with Encoding" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用指定编码重新打开"
+          }
+        }
+      }
+    },
+    "Save with Encoding" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用指定编码保存"
+          }
+        }
+      }
+    },
+    "Save or discard edits before changing encoding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改编码前，请先保存或放弃未保存的修改。"
+          }
+        }
+      }
+    },
+    "Cannot change encoding during a file operation." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件操作进行期间不能更改编码。"
+          }
+        }
+      }
+    },
+    "Update the declared coding header before changing the file encoding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改文件编码前，请先修改文件头的编码声明。"
+          }
+        }
+      }
+    },
+    "Text cannot be saved in %@ without losing characters." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文本无法无损保存为 %@ 编码。"
+          }
+        }
+      }
+    },
     "Could not refresh file; showing last loaded content." : {
       "localizations" : {
         "zh-Hans" : {

@@ -596,10 +596,11 @@ final class FileTreeModel {
             kFSEventStreamEventFlagUnmount
         let rootLinkChanged = events.contains { event in
             guard let link = localWatchedRootSymlinkPath else { return false }
-            return event.path == link || (
-                event.path == (link as NSString).deletingLastPathComponent
-                    && event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0
-            )
+            if event.path == link { return true }
+            guard event.path == (link as NSString).deletingLastPathComponent,
+                  event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0
+            else { return false }
+            return Self.physicalRootPath(rootPath) != localWatchMappings[rootPath]
         }
         if rootLinkChanged || events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
             let epoch = treeEpoch

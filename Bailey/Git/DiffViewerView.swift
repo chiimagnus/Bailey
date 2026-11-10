@@ -137,6 +137,8 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var isUnmerged = false
     private(set) var isEditable = false
     private(set) var isDirty = false
+    private(set) var fileEncoding = TextFileEncoding.utf8
+    @ObservationIgnored private var preferredEncoding: TextFileEncoding?
     var saveError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
@@ -163,6 +165,7 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     private(set) var hasChanges = false
+    private(set) var encodingOnlyChange: String?
     /// A writable worktree owns one editor; historical and staged snapshots remain read-only.
     var isEditing: Bool { source == .worktree && isEditable }
     /// Transient editing intent; the native editor remains the only text/Undo owner.
@@ -260,6 +263,15 @@ final class DiffTab: nonisolated Identifiable {
     /// machine is still reachable.
     var isEditableNow: Bool {
         isEditable && readOnlyReason == nil
+    }
+
+    func reopen(using encoding: TextFileEncoding?) {
+        guard !isDirty, !isSaving, !fileMutationHeld else {
+            saveError = String(localized: "Save or discard edits before changing encoding.", table: "Git")
+            return
+        }
+        preferredEncoding = encoding
+        reload()
     }
 
     // MARK: - Remote workspace
@@ -371,6 +383,7 @@ final class DiffTab: nonisolated Identifiable {
         let oldPath = origPath ?? path
         let source = source
         let untracked = untracked
+        let chosenEncoding = preferredEncoding
 
         let backend = self.backend
 
@@ -380,7 +393,9 @@ final class DiffTab: nonisolated Identifiable {
             guard let git = await Self.runBackgroundDiffWork({
                 var failure: String?
                 var old = ""
+                var oldEncoding: TextFileEncoding?
                 var newFromGit: String?
+                var newFromGitEncoding: TextFileEncoding?
                 var worktreePath = path
                 var unmerged = false
                 var oldOID: String?
@@ -394,27 +409,37 @@ final class DiffTab: nonisolated Identifiable {
                 case .commit(let hash, let parent, let status):
                     if status != "A", let parent {
                         let previous = await Self.requiredGitContent(
-                            .tree(revision: parent, path: oldPath), in: root, backend: backend)
+                            .tree(revision: parent, path: oldPath), in: root,
+                            backend: backend, override: chosenEncoding)
                         old = take((previous.text, previous.error))
+                        oldEncoding = previous.encoding
                     }
                     if status == "D" {
                         let deleted = await Self.firstGitContent(
-                            [.tree(revision: hash, path: path)], in: root, backend: backend
+                            [.tree(revision: hash, path: path)], in: root,
+                            backend: backend, override: chosenEncoding
                         )
                         newFromGit = take((deleted.text, deleted.error))
+                        newFromGitEncoding = deleted.encoding
                     } else {
                         let next = await Self.requiredGitContent(
-                            .tree(revision: hash, path: path), in: root, backend: backend)
+                            .tree(revision: hash, path: path), in: root,
+                            backend: backend, override: chosenEncoding)
                         newFromGit = take((next.text, next.error))
+                        newFromGitEncoding = next.encoding
                     }
                 case .revision(let hash):
                     let revision = await Self.requiredGitContent(
-                        .tree(revision: hash, path: path), in: root, backend: backend)
+                        .tree(revision: hash, path: path), in: root,
+                        backend: backend, override: chosenEncoding)
                     newFromGit = take((revision.text, revision.error))
+                    newFromGitEncoding = revision.encoding
                 case .revisionWorktree(let hash):
                     let revision = await Self.requiredGitContent(
-                        .tree(revision: hash, path: path), in: root, backend: backend)
+                        .tree(revision: hash, path: path), in: root,
+                        backend: backend, override: chosenEncoding)
                     old = take((revision.text, revision.error))
+                    oldEncoding = revision.encoding
                     oldOID = revision.oid
                     switch await GitHistoricalFileLocator.resolve(
                         root: root, path: path, revision: hash, backend: backend
@@ -425,14 +450,18 @@ final class DiffTab: nonisolated Identifiable {
                     }
                 case .staged:
                     async let previous = Self.firstGitContent(
-                        [.tree(revision: "HEAD", path: oldPath)], in: root, backend: backend
+                        [.tree(revision: "HEAD", path: oldPath)], in: root,
+                        backend: backend, override: chosenEncoding
                     )
                     async let indexed = Self.firstGitContent(
-                        [.index(path: path, stages: [0])], in: root, backend: backend
+                        [.index(path: path, stages: [0])], in: root,
+                        backend: backend, override: chosenEncoding
                     )
                     let (earlier, staged) = await (previous, indexed)
                     old = take((earlier.text, earlier.error))
+                    oldEncoding = earlier.encoding
                     newFromGit = take((staged.text, staged.error))
+                    newFromGitEncoding = staged.encoding
                     unmerged = staged.isUnmerged
                     if staged.isUnmerged && staged.error == nil {
                         failure = String(localized: "Unresolved merge conflict", table: "Git")
@@ -461,21 +490,25 @@ final class DiffTab: nonisolated Identifiable {
                         let earlier = await Self.firstGitContent(
                             [.index(path: oldPath, stages: [0, 2, 1]),
                              .tree(revision: "HEAD", path: oldPath)],
-                            in: root, backend: backend
+                            in: root, backend: backend, override: chosenEncoding
                         )
                         unmerged = earlier.isUnmerged
                         old = take((earlier.text, earlier.error))
+                        oldEncoding = earlier.encoding
                         oldOID = earlier.oid
                         oldFromIndex = earlier.fromIndex
                     }
                 }
-                return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
-                        failure: failure, unmerged: unmerged, stagedOutdated: stagedOutdated,
-                        oldOID: oldOID, oldFromIndex: oldFromIndex)
+                return (old: old, oldEncoding: oldEncoding,
+                        newFromGit: newFromGit, newEncoding: newFromGitEncoding,
+                        worktreePath: worktreePath, failure: failure, unmerged: unmerged,
+                        stagedOutdated: stagedOutdated, oldOID: oldOID, oldFromIndex: oldFromIndex)
             }), !Task.isCancelled else { return }
 
             var failure = git.failure
             let new: String
+            var newEncoding = git.newEncoding ?? .utf8
+            var worktreeBytes: Data?
             let editable: Bool
             if let newFromGit = git.newFromGit {
                 new = newFromGit
@@ -484,21 +517,25 @@ final class DiffTab: nonisolated Identifiable {
                 new = ""
                 editable = false
             } else {
-                let worktree: (text: String, error: String?)
+                let worktree: (text: String, error: String?, encoding: TextFileEncoding?, bytes: Data?)
                 if case .worktree = source {
                     // File IO and metadata lookup are independent. On SSH,
                     // serializing them adds an avoidable full round trip.
                     async let fileIsEditable = Self.isEditableWorktreeFile(
                         root: root, path: git.worktreePath, backend: backend)
                     worktree = await Self.readWorktreeFile(
-                        root: root, path: git.worktreePath, backend: backend)
+                        root: root, path: git.worktreePath, backend: backend,
+                        override: chosenEncoding)
                     editable = await fileIsEditable
                 } else {
                     worktree = await Self.readWorktreeFile(
-                        root: root, path: git.worktreePath, backend: backend)
+                        root: root, path: git.worktreePath, backend: backend,
+                        override: chosenEncoding)
                     editable = false
                 }
                 new = worktree.text
+                newEncoding = worktree.encoding ?? .utf8
+                worktreeBytes = worktree.bytes
                 if let error = worktree.error { failure = error }
             }
             var baseline = git.old
@@ -511,7 +548,8 @@ final class DiffTab: nonisolated Identifiable {
                     source: source, oldPath: oldPath, path: path,
                     worktreePath: git.worktreePath, oldFromIndex: git.oldFromIndex,
                     root: root, oldOID: oldOID, old: git.old, worktree: new,
-                    backend: backend
+                    oldEncoding: git.oldEncoding, newEncoding: newEncoding,
+                    worktreeBytes: worktreeBytes, override: chosenEncoding, backend: backend
                 )
                 if let content = projected.content {
                     baseline = content.old
@@ -522,12 +560,22 @@ final class DiffTab: nonisolated Identifiable {
                 if let error = projected.error { failure = error }
                 snapshotOutdated = projected.outdated
             }
+            let encodingOnlyChange: String?
+            if let previousEncoding = git.oldEncoding,
+               previousEncoding != newEncoding,
+               git.old.utf8.elementsEqual(new.utf8),
+               baseline.utf8.elementsEqual(reviewNew.utf8) {
+                encodingOnlyChange = "\(previousEncoding.name) → \(newEncoding.name)"
+            } else {
+                encodingOnlyChange = nil
+            }
             let result = (
                 old: git.old, baseline: baseline, reviewNew: reviewNew,
+                encodingOnlyChange: encodingOnlyChange,
                 editBaseline: editBaseline, verifiedCore: verifiedCore,
                 new: new, failure: failure,
                 snapshotOutdated: snapshotOutdated,
-                unmerged: git.unmerged, editable: editable,
+                unmerged: git.unmerged, editable: editable, encoding: newEncoding,
                 resolvedPath: source.isLive ? git.worktreePath : nil
             )
             // The connection may have dropped while these reads were in
@@ -560,6 +608,7 @@ final class DiffTab: nonisolated Identifiable {
             self.hasLoadedContent = true
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
+            self.fileEncoding = result.encoding
             self.resolvedWorktreePath = result.resolvedPath
             let filteredBaselineChanged: Bool
             switch (self.editComparisonOld, result.editBaseline) {
@@ -574,10 +623,13 @@ final class DiffTab: nonisolated Identifiable {
             let changed = baselineChanged
                 || !self.comparisonNew.utf8.elementsEqual(result.reviewNew.utf8)
                 || !self.newContent.utf8.elementsEqual(result.new.utf8)
+                || self.encodingOnlyChange != result.encodingOnlyChange
             self.oldContent = result.old
             self.comparisonOld = result.baseline
             self.comparisonNew = result.reviewNew
+            self.encodingOnlyChange = result.encodingOnlyChange
             self.hasChanges = !result.baseline.utf8.elementsEqual(result.reviewNew.utf8)
+                || result.encodingOnlyChange != nil
             self.editComparisonOld = result.editBaseline
             self.newContent = result.new
             if changed {
@@ -1003,8 +1055,12 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     /// Keep worktree writes in edit order across manual and automatic saves.
-    func save() async {
+    func save(as encoding: TextFileEncoding? = nil) async {
         if fileMutationHeld {
+            if encoding != nil {
+                saveError = String(localized: "Cannot change encoding during a file operation.", table: "Git")
+                return
+            }
             saveDeferredUntilMutation = true
             return
         }
@@ -1013,28 +1069,39 @@ final class DiffTab: nonisolated Identifiable {
         let preceding = lastSaveTask
         let task = Task { [weak self] in
             await preceding?.value
-            await self?.writeCurrentText()
+            await self?.writeCurrentText(as: encoding)
         }
         lastSaveTask = task
         await task.value
         if saveRequestGeneration == generation { lastSaveTask = nil }
     }
 
-    private func writeCurrentText() async {
-        guard isEditable, isDirty else { return }
+    private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
+        guard isEditable, isDirty || (encoding != nil && encoding != fileEncoding) else { return }
+        let chosen = encoding ?? fileEncoding
+        let written = editedNewContent
+        if chosen != fileEncoding && TextFileEncoding.contradictsDeclaration(written, chosen: chosen) {
+            saveError = String(localized: "Update the declared coding header before changing the file encoding.", table: "Git")
+            return
+        }
+        guard let bytes = chosen.encoded(written) else {
+            saveError = String(localized: "Text cannot be saved in \(chosen.name) without losing characters.", table: "Git")
+            return
+        }
         // Refused, not silently dropped: the save-error bar says why.
         if let readOnlyReason {
             saveError = readOnlyReason
             return
         }
         let filePath = (repoRoot as NSString).appendingPathComponent(path)
-        let written = editedNewContent
         let target = backend
         let generation = targetGeneration
         invalidateReload()
         do {
-            try await target.write(path: filePath, data: Data(written.utf8))
+            try await target.write(path: filePath, data: bytes)
             guard generation == targetGeneration, readOnlyReason == nil else { return }
+            fileEncoding = chosen
+            if encoding != nil { preferredEncoding = chosen }
             savedNewContent = written
             // An edit landing while the write was in flight stays dirty.
             let dirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
@@ -1052,7 +1119,7 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated enum GitContent {
         case missing
-        case content(String, oid: String)
+        case content(TextFileEncoding.Document, oid: String)
         case binary
         case tooLarge
         case failed(String)
@@ -1066,42 +1133,46 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     private nonisolated static func firstGitContent(
-        _ locations: [GitLocation], in root: String, backend: WorkspaceBackend
+        _ locations: [GitLocation], in root: String, backend: WorkspaceBackend,
+        override: TextFileEncoding?
     ) async -> (text: String, error: String?, isUnmerged: Bool,
-                 oid: String?, fromIndex: Bool) {
+                 oid: String?, fromIndex: Bool, encoding: TextFileEncoding?) {
         var isUnmerged = false
         for location in locations {
-            let result = await gitContent(location, in: root, backend: backend)
+            let result = await gitContent(location, in: root, backend: backend, override: override)
             isUnmerged = isUnmerged || result.isUnmerged
             switch result.content {
             case .missing: continue
-            case .content(let text, let oid):
-                if case .index = location { return (text, nil, isUnmerged, oid, true) }
-                return (text, nil, isUnmerged, oid, false)
-            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged, nil, false)
-            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged, nil, false)
-            case .failed(let message): return ("", message, isUnmerged, nil, false)
+            case .content(let document, let oid):
+                let fromIndex: Bool
+                if case .index = location { fromIndex = true } else { fromIndex = false }
+                return (document.text, nil, isUnmerged, oid, fromIndex, document.encoding)
+            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged, nil, false, nil)
+            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged, nil, false, nil)
+            case .failed(let message): return ("", message, isUnmerged, nil, false, nil)
             }
         }
-        return ("", nil, isUnmerged, nil, false)
+        return ("", nil, isUnmerged, nil, false, nil)
     }
 
     private nonisolated static func requiredGitContent(
-        _ location: GitLocation, in root: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?, oid: String?) {
-        let result = await gitContent(location, in: root, backend: backend)
+        _ location: GitLocation, in root: String, backend: WorkspaceBackend,
+        override: TextFileEncoding?
+    ) async -> (text: String, error: String?, oid: String?, encoding: TextFileEncoding?) {
+        let result = await gitContent(location, in: root, backend: backend, override: override)
         switch result.content {
-        case .content(let text, let oid): return (text, nil, oid)
+        case .content(let document, let oid): return (document.text, nil, oid, document.encoding)
         case .missing:
-            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"), nil)
-        case .binary: return ("", String(localized: "Binary file", table: "Git"), nil)
-        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), nil)
-        case .failed(let message): return ("", message, nil)
+            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"), nil, nil)
+        case .binary: return ("", String(localized: "Binary file", table: "Git"), nil, nil)
+        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil)
+        case .failed(let message): return ("", message, nil, nil)
         }
     }
 
     private nonisolated static func gitContent(
-        _ location: GitLocation, in root: String, backend: WorkspaceBackend
+        _ location: GitLocation, in root: String, backend: WorkspaceBackend,
+        override: TextFileEncoding?
     ) async -> (content: GitContent, isUnmerged: Bool) {
         let selection = await gitObject(location, in: root, backend: backend)
         if let error = selection.error { return (.failed(error), selection.isUnmerged) }
@@ -1133,10 +1204,14 @@ final class DiffTab: nonisolated Identifiable {
             return (.failed(String(localized: "Incomplete Git content", table: "Git")), selection.isUnmerged)
         }
         let blob = Data(data[start..<(start + byteCount)])
-        guard !blob.contains(0), let text = String(data: blob, encoding: .utf8) else {
+        switch await TextFileEncoding.decode(blob, backend: backend, override: override) {
+        case .success(let document):
+            return (.content(document, oid: oid), selection.isUnmerged)
+        case .failure(.binary):
             return (.binary, selection.isUnmerged)
+        case .failure(let failure):
+            return (.failed(failure.message), selection.isUnmerged)
         }
-        return (.content(text, oid: oid), selection.isUnmerged)
     }
 
     private nonisolated static func gitObject(
@@ -1248,7 +1323,8 @@ final class DiffTab: nonisolated Identifiable {
     private nonisolated static func gitComparisonBaseline(
         source: Source, oldPath: String, path: String, worktreePath: String,
         oldFromIndex: Bool, root: String, oldOID: String, old: String,
-        worktree: String, backend: WorkspaceBackend
+        worktree: String, oldEncoding: TextFileEncoding?, newEncoding: TextFileEncoding,
+        worktreeBytes: Data?, override: TextFileEncoding?, backend: WorkspaceBackend
     ) async -> (content: GitWorktreeComparison.Content?, core: DiffCore?,
                 error: String?, outdated: Bool) {
         let comparison: [String]
@@ -1260,25 +1336,40 @@ final class DiffTab: nonisolated Identifiable {
         default:
             return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
         }
+        guard let bytes = worktreeBytes, let oldEncoding, oldEncoding == newEncoding else {
+            return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
+        }
         let failure = String(localized: "Unable to read Git content", table: "Git")
         let cleaned = await GitCommandExecution.runData(
             ["hash-object", "--path=" + worktreePath, "--stdin"],
             in: root, timeout: 60, stdoutLimit: 128,
-            stdin: Data(worktree.utf8), backend: backend
+            stdin: bytes, backend: backend
         )
         guard cleaned.status == 0, cleaned.stdout.count <= 128 else {
             return (nil, nil, cleaned.stderr.isEmpty ? failure : cleaned.stderr, false)
         }
         let newOID = String(decoding: cleaned.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if newEncoding.hasSignature {
+            guard newOID == oldOID else {
+                return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
+            }
+            let current = await readWorktreeFile(
+                root: root, path: worktreePath, backend: backend, override: override
+            )
+            if let error = current.error { return (nil, nil, error, false) }
+            guard current.bytes == bytes else { return (nil, nil, nil, true) }
+            return (.init(old: worktree, new: worktree, editBaseline: nil), nil, nil, false)
+        }
         let patch = await GitCommandExecution.runData(
-            ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+            ["--literal-pathspecs", "-c", "core.quotePath=true", "diff",
+             "--no-ext-diff", "--no-textconv",
              "--no-color", "--no-renames", "--full-index", "--unified=0",
              "--inter-hunk-context=0"] + comparison + ["--", path],
             in: root, timeout: 60, stdoutLimit: maxBytes * 4 + 1, backend: backend
         )
         guard patch.status == 0, patch.stdout.count <= maxBytes * 4,
-              let text = String(data: patch.stdout, encoding: .utf8) else {
+              let text = newEncoding.decoded(patch.stdout) else {
             return (nil, nil, patch.stderr.isEmpty ? failure : patch.stderr, false)
         }
         if let content = GitWorktreeComparison.resolve(
@@ -1290,10 +1381,10 @@ final class DiffTab: nonisolated Identifiable {
             // itself may have replaced the worktree during hash-object/diff.
             // Confirm the editable source, not just the canonical Git patch.
             let current = await readWorktreeFile(
-                root: root, path: worktreePath, backend: backend
+                root: root, path: worktreePath, backend: backend, override: override
             )
             if let error = current.error { return (nil, nil, error, false) }
-            guard current.text.utf8.elementsEqual(worktree.utf8) else {
+            guard current.bytes == bytes else {
                 return (nil, nil, nil, true)
             }
             let core: DiffCore? = await Self.runBackgroundDiffWork {
@@ -1306,9 +1397,10 @@ final class DiffTab: nonisolated Identifiable {
         }
         // Git diff reads a live file. A different index OID or file content
         // means the patch does not describe the snapshot we already loaded.
-        let refreshed = await readWorktreeFile(root: root, path: worktreePath, backend: backend)
-        let worktreeMoved = refreshed.error == nil
-            && !refreshed.text.utf8.elementsEqual(worktree.utf8)
+        let refreshed = await readWorktreeFile(
+            root: root, path: worktreePath, backend: backend, override: override
+        )
+        let worktreeMoved = refreshed.error == nil && refreshed.bytes != bytes
         let indexLine = DiffLineSplitter.lines(of: text).lines
             .first(where: { $0.text.hasPrefix("index ") })?.text
         let patchIDs = indexLine?.dropFirst(6).split(separator: " ").first?
@@ -1320,34 +1412,35 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     private nonisolated static func readWorktreeFile(
-        root: String, path: String, backend: WorkspaceBackend
-    ) async -> (text: String, error: String?) {
+        root: String, path: String, backend: WorkspaceBackend,
+        override: TextFileEncoding?
+    ) async -> (text: String, error: String?, encoding: TextFileEncoding?, bytes: Data?) {
         let filePath = (root as NSString).appendingPathComponent(path)
         let symlink = (try? await backend.readSymlinkDestination(path: filePath)) ?? nil
         if let symlink {
             guard symlink.utf8.count <= maxBytes else {
-                return ("", String(localized: "File is too large to diff", table: "Git"))
+                return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil)
             }
-            return (symlink, nil)
+            return (symlink, nil, .utf8, Data(symlink.utf8))
         }
         do {
             let data = try await backend.read(path: filePath, maxBytes: maxBytes)
-            guard !data.contains(0),
-                  let text = String(data: data, encoding: .utf8)
-            else {
-                return ("", String(localized: "Binary file", table: "Git"))
+            switch await TextFileEncoding.decode(data, backend: backend, override: override) {
+            case .success(let document):
+                return (document.text, nil, document.encoding, data)
+            case .failure(let failure):
+                return ("", failure.message, nil, nil)
             }
-            return (text, nil)
         } catch WorkspaceError.tooLarge {
-            return ("", String(localized: "File is too large to diff", table: "Git"))
+            return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil)
         } catch WorkspaceError.notFound {
             // Deleted from the worktree: an empty "after" side is the diff.
-            return ("", nil)
+            return ("", nil, .utf8, Data())
         } catch {
             return ("", String(
                 localized: "Unable to read file: \(error.localizedDescription)", table: "Git",
                 comment: "Diff error followed by a system-provided error description."
-            ))
+            ), nil, nil)
         }
     }
 }
@@ -1414,6 +1507,17 @@ struct DiffViewerView: View {
                 } else {
                     VStack(spacing: 0) {
                         if !diff.source.isPlainRevision { controlBar }
+                        if let encodingChange = diff.encodingOnlyChange {
+                            HStack(spacing: 5) {
+                                Text(String(localized: "Text encoding changed:", table: "Git"))
+                                Text(encodingChange)
+                                Spacer(minLength: 0)
+                            }
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .frame(height: 22)
+                        }
                         if diff.canPresentNativeContent {
                             // Each tab retains its own TextKit document; never reuse another tab's NSView.
                             DiffNativeRoot(diff: diff, isFocused: isFocused,
@@ -1468,13 +1572,45 @@ struct DiffViewerView: View {
     }
 
     private var controlBar: some View {
-        DiffControlsBar(
-            diffStyle: Binding(
-                get: { preferences.diffStyle },
-                set: { diff.setDiffStyle($0) }
+        HStack(spacing: 8) {
+            DiffControlsBar(
+                diffStyle: Binding(
+                    get: { preferences.diffStyle },
+                    set: { diff.setDiffStyle($0) }
+                )
             )
-        )
+            .frame(maxWidth: .infinity)
+            encodingMenu
+                .padding(.trailing, 12)
+        }
         .frame(height: DiffViewerLayout.controlsHeight)
+    }
+
+    private var encodingMenu: some View {
+        Menu {
+            Menu(String(localized: "Reopen with Encoding", table: "Git")) {
+                Button(String(localized: "Automatic", table: "Git")) {
+                    diff.reopen(using: nil)
+                }
+                ForEach(TextFileEncoding.choices, id: \.self) { encoding in
+                    Button(encoding.name) { diff.reopen(using: encoding) }
+                }
+            }
+            .disabled(diff.isDirty)
+            if diff.isEditing {
+                Menu(String(localized: "Save with Encoding", table: "Git")) {
+                    ForEach(TextFileEncoding.choices, id: \.self) { encoding in
+                        Button(encoding.name) { Task { await diff.save(as: encoding) } }
+                    }
+                }
+            }
+        } label: {
+            Text(diff.hasLoadedContent ? diff.fileEncoding.name
+                 : String(localized: "Choose Encoding", table: "Git"))
+                .font(.system(size: 11))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     /// Reserve the toolbar row while the native diff is computing so its
@@ -1497,6 +1633,7 @@ struct DiffViewerView: View {
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
+            if diff.error != nil { encodingMenu }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

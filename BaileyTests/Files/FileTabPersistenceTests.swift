@@ -77,6 +77,9 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     }
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
+        if argv.first == "powershell.exe" {
+            return WorkspaceRunResult(status: 0, stdout: Data("936\n".utf8), stderr: Data())
+        }
         throw WorkspaceError.notFound
     }
 }
@@ -208,8 +211,10 @@ final class FileTabPersistenceTests: XCTestCase {
         try (Data(repeating: 65, count: limit - 2) + emoji.prefix(2)).write(to: truncatedPath)
         let truncated = FileTab(path: truncatedPath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         do { try await truncated.waitForText(); XCTFail("Truncated UTF-8 cannot be decoded") } catch {}
-        guard case .unavailable(let invalidReason) = truncated.content else { return XCTFail("Expected binary placeholder") }
-        XCTAssertEqual(invalidReason, String(localized: "Binary file", table: "Workspace"))
+        guard case .unavailable(let invalidReason) = truncated.content else { return XCTFail("Expected unavailable text") }
+        XCTAssertEqual(invalidReason, String(
+            localized: "Unknown text encoding. Choose an encoding to reopen.", table: "Workspace"
+        ))
 
         let missing = FileTab(path: root.appendingPathComponent("missing.txt").path,
                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
@@ -1108,6 +1113,164 @@ final class FileTabPersistenceTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertEqual(file.text, "local edit while old read awaits")
         XCTAssertTrue(file.isDirty)
+    }
+
+    func testFailedEncodingRefreshPreservesLastReadableFileUntilRecovery() async throws {
+        let path = "/fixture/encoding-reload.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("first\n".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await file.waitForText()
+        let initialRevision = file.reloadRevision
+
+        await backend.replace(path: path, with: Data([0xFF, 0x80]))
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState { file.reloadError != nil }
+        guard case .text = file.content else {
+            return XCTFail("A failed reload must not destroy the previous document")
+        }
+        XCTAssertEqual(file.text, "first\n")
+        XCTAssertEqual(file.reloadRevision, initialRevision)
+        XCTAssertFalse(file.isDirty)
+
+        await backend.replace(path: path, with: Data("restored\n".utf8))
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState {
+            file.reloadError == nil && file.text == "restored\n"
+        }
+        XCTAssertEqual(file.text, "restored\n")
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        XCTAssertEqual(file.reloadRevision, initialRevision + 1)
+
+        await backend.replace(path: path, with: Data([0x61, 0x00, 0x62]))
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState {
+            if case .unavailable = file.content { return true }
+            return false
+        }
+        guard case .unavailable(let reason) = file.content else {
+            return XCTFail("True binary replacement must invalidate a text document")
+        }
+        XCTAssertEqual(reason, String(localized: "Binary file", table: "Workspace"))
+        XCTAssertEqual(file.text, "")
+        XCTAssertNil(file.reloadError)
+    }
+
+    func testExplicitLegacyEncodingsOnlyAcceptLosslessRoundTrips() throws {
+        for (encoding, text) in [
+            (TextFileEncoding.gbk, "模型装配件"),
+            (.gb18030, "字符𠮷😀"),
+            (.shiftJIS, "日本語かな"),
+            (.windows1252, "Café résumé"),
+        ] {
+            let bytes = try XCTUnwrap(encoding.encoded(text), encoding.name)
+            XCTAssertEqual(encoding.decoded(bytes), text, encoding.name)
+            XCTAssertEqual(encoding.encoded(try XCTUnwrap(encoding.decoded(bytes))), bytes)
+        }
+        XCTAssertNil(TextFileEncoding.gbk.encoded("😀"))
+        XCTAssertNil(TextFileEncoding.windows1252.encoded("中文"))
+    }
+
+    func testWindowsMBCSFileUsesActualCodePageAndSavesExactlyInOriginalEncoding() async throws {
+        let path = "/fixture/abaqus.rpy"
+        let original = "# -*- coding: mbcs -*-\n# 模型装配件个数：二\n"
+        let encoded = try XCTUnwrap(TextFileEncoding.gbk.encoded(original))
+        let backend = EditorWorkspaceFixture(path: path, contents: encoded)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:windows")
+        try await file.waitForText()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(file.fileEncoding, .gbk)
+        XCTAssertFalse(file.isDirty)
+
+        let edited = original + "# 新增模型\n"
+        file.text = edited
+        file.refreshDirtyState()
+        let saving = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await saving.value
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        let firstSaved = await backend.data(at: path)
+        XCTAssertEqual(firstSaved, TextFileEncoding.gbk.encoded(edited))
+
+        await file.save(as: .utf8)
+        XCTAssertNotNil(file.saveError, "The declared mbcs header must block implicit transcoding")
+        let stillGBK = await backend.data(at: path)
+        XCTAssertEqual(stillGBK, firstSaved)
+        file.reopen(using: .gbk)
+        try await file.waitForText()
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(file.fileEncoding, .gbk)
+
+        file.text = edited + "# 😀 cannot fit in CP936\n"
+        file.refreshDirtyState()
+        await file.save()
+        XCTAssertNotNil(file.saveError)
+        XCTAssertTrue(file.isDirty)
+        let afterRejectedSave = await backend.data(at: path)
+        XCTAssertEqual(afterRejectedSave, TextFileEncoding.gbk.encoded(edited))
+    }
+
+    func testUnmarkedLegacyTextCanReopenAndConvertOnlyWhenExplicitlySelected() async throws {
+        let path = "/fixture/legacy.txt"
+        let original = "中文内容\n"
+        let source = try XCTUnwrap(TextFileEncoding.gbk.encoded(original))
+        let backend = EditorWorkspaceFixture(path: path, contents: source)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:windows")
+        file.loadIfNeeded()
+        try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+        guard case .unavailable(let message) = file.content else {
+            return XCTFail("Unmarked non-UTF8 bytes must require an explicit encoding")
+        }
+        XCTAssertEqual(message, String(
+            localized: "Unknown text encoding. Choose an encoding to reopen.", table: "Workspace"
+        ))
+
+        file.reopen(using: .gbk)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(file.fileEncoding, .gbk)
+        let originalBytes = await backend.data(at: path)
+        XCTAssertEqual(originalBytes, source)
+
+        let converting = Task { await file.save(as: .utf8) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await converting.value
+        let convertedBytes = await backend.data(at: path)
+        XCTAssertEqual(convertedBytes, Data(original.utf8))
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        XCTAssertFalse(file.isDirty)
+
+        file.reopen(using: nil)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(file.fileEncoding, .utf8)
+    }
+
+    func testCodingWordInsideOrdinaryTextDoesNotOverrideUTF8() async throws {
+        let path = "/fixture/source.py"
+        let contents = "message = \"coding: mbcs\"\n# 合法 UTF-8 内容\n"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data(contents.utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:windows")
+        try await file.waitForText()
+        XCTAssertEqual(file.text, contents)
+        XCTAssertEqual(file.fileEncoding, .utf8)
+    }
+
+    func testUTF8AndUTF16ByteOrderMarksRemainByteExact() async throws {
+        for encoding in [TextFileEncoding.utf8BOM, .utf16LEBOM, .utf16BEBOM] {
+            let path = "/fixture/bom-\(encoding.name).txt"
+            let original = "你好 123\n"
+            let bytes = try XCTUnwrap(encoding.encoded(original))
+            let backend = EditorWorkspaceFixture(path: path, contents: bytes)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+            try await file.waitForText()
+            XCTAssertEqual(file.text, original)
+            XCTAssertEqual(file.fileEncoding, encoding)
+            let actual = await backend.data(at: path)
+            XCTAssertEqual(actual, bytes)
+        }
     }
 
     func testBinaryAndLargeTextAreNotTreatedAsEditable() async throws {

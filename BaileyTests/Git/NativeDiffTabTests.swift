@@ -204,6 +204,52 @@ private actor StagedTransitionBackend: WorkspaceBackend {
     }
 }
 
+/// Exercises real Git objects and patches while supplying a Windows ANSI code page.
+private struct WindowsCodePageGitBackend: WorkspaceBackend {
+    func list(directory: String) async throws -> [WorkspaceEntry] {
+        try await LocalWorkspaceBackend.shared.list(directory: directory)
+    }
+    func stat(path: String) async throws -> WorkspaceStat? {
+        try await LocalWorkspaceBackend.shared.stat(path: path)
+    }
+    func readSymlinkDestination(path: String) async throws -> String? {
+        try await LocalWorkspaceBackend.shared.readSymlinkDestination(path: path)
+    }
+    func read(path: String, maxBytes: Int) async throws -> Data {
+        try await LocalWorkspaceBackend.shared.read(path: path, maxBytes: maxBytes)
+    }
+    func write(path: String, data: Data) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data)
+    }
+    func createFile(path: String) async throws {
+        try await LocalWorkspaceBackend.shared.createFile(path: path)
+    }
+    func createDirectory(path: String) async throws {
+        try await LocalWorkspaceBackend.shared.createDirectory(path: path)
+    }
+    func copy(from: String, to: String) async throws {
+        try await LocalWorkspaceBackend.shared.copy(from: from, to: to)
+    }
+    func rename(from: String, to: String) async throws {
+        try await LocalWorkspaceBackend.shared.rename(from: from, to: to)
+    }
+    func delete(paths: [String]) async throws {
+        try await LocalWorkspaceBackend.shared.delete(paths: paths)
+    }
+    func run(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?
+    ) async throws -> WorkspaceRunResult {
+        if argv.first == "powershell.exe" {
+            return .init(status: 0, stdout: Data("936\n".utf8), stderr: Data())
+        }
+        let executable = argv.first == "git" ? ["/usr/bin/git"] + argv.dropFirst() : argv
+        return try await LocalWorkspaceBackend.shared.run(
+            argv: executable, cwd: cwd, env: env, stdin: stdin, timeout: timeout
+        )
+    }
+}
+
 @MainActor
 @Observable
 private final class DiffSelectionFixture {
@@ -5287,6 +5333,240 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(display.computation.unified.rows.contains { $0.kind == .added })
     }
 
+    func testCP936WorktreeDiffWithUnicodeFilenameAndUnquotedGitPaths() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let name = "中.rpy"
+        let path = directory.appendingPathComponent(name)
+        let old = "# -*- coding: mbcs -*-\n# 模型 1\n"
+        let new = "# -*- coding: mbcs -*-\n# 模型 2\n"
+        XCTAssertEqual(GitCommandExecution.run(
+            ["config", "core.quotePath", "false"], in: directory.path
+        ).status, 0)
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(old)).write(to: path)
+        for args in [["add", name], ["commit", "-qm", "base"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(new)).write(to: path)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: name, source: .worktree,
+            untracked: false, origPath: nil, backend: WindowsCodePageGitBackend(),
+            workspaceIdentity: "ssh:windows", preferences: try isolatedPreferences()
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error, "Git patch metadata must not mix UTF-8 paths into CP936 hunks")
+        XCTAssertEqual(tab.oldContent, old)
+        XCTAssertEqual(tab.newContent, new)
+        XCTAssertTrue(tab.hasChanges)
+        try await wait { tab.display != nil }
+    }
+
+    func testEncodingOnlyGitChangeRemainsVisibleWhenDecodedTextMatches() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("encoding.txt")
+        let text = "unchanged text\n"
+        try Data(text.utf8).write(to: path)
+        for args in [["add", "encoding.txt"], ["commit", "-qm", "base"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(text)).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "encoding.txt"], in: directory.path).status, 0)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "encoding.txt", source: .staged,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.oldContent, text)
+        XCTAssertEqual(tab.newContent, text)
+        XCTAssertEqual(tab.fileEncoding, .utf8BOM)
+        XCTAssertEqual(tab.encodingOnlyChange, "UTF-8 → UTF-8 BOM")
+        XCTAssertTrue(tab.hasChanges, "Git changed only the encoded bytes, not the visible text")
+        try await wait { tab.display != nil }
+
+        XCTAssertEqual(GitCommandExecution.run(
+            ["restore", "--staged", "--", "encoding.txt"], in: directory.path
+        ).status, 0)
+        let worktree = DiffTab(
+            repoRoot: directory.path, path: "encoding.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        try await wait { !worktree.isLoading }
+        XCTAssertNil(worktree.error)
+        XCTAssertEqual(worktree.oldContent, text)
+        XCTAssertEqual(worktree.newContent, text)
+        XCTAssertEqual(worktree.encodingOnlyChange, "UTF-8 → UTF-8 BOM")
+        XCTAssertTrue(worktree.hasChanges)
+        try await wait { worktree.display != nil }
+    }
+
+    func testBOMOnlyEOLChangeIsGitCleanAfterGitNormalization() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("signed.txt")
+        try Data("signed.txt text eol=lf\n".utf8).write(
+            to: directory.appendingPathComponent(".gitattributes")
+        )
+        let canonical = "first\nsecond\n"
+        let checkout = "first\r\nsecond\r\n"
+        try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(canonical)).write(to: file)
+        for args in [["add", "."], ["commit", "-qm", "base"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(checkout)).write(to: file)
+        XCTAssertEqual(
+            GitCommandExecution.run(["diff", "--numstat", "--", "signed.txt"],
+                                    in: directory.path).stdout,
+            ""
+        )
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "signed.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.newContent, checkout)
+        XCTAssertFalse(tab.hasChanges, "Git's clean filter must decide, not raw BOM/CRLF")
+        XCTAssertNil(tab.display)
+        XCTAssertEqual(try Data(contentsOf: file), TextFileEncoding.utf8BOM.encoded(checkout))
+    }
+
+    func testBOMEncodedGitTextKeepsCompleteReadAndSaveWithoutTextPatchProjection() async throws {
+        for encoding in [TextFileEncoding.utf8BOM, .utf16LEBOM, .utf16BEBOM] {
+            let directory = try repository()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let path = directory.appendingPathComponent("signed.txt")
+            let before = "模型 1\n"
+            let after = "模型 2\n"
+            try XCTUnwrap(encoding.encoded(before)).write(to: path)
+            for args in [["add", "signed.txt"], ["commit", "-qm", "base"]] {
+                XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+            }
+            try XCTUnwrap(encoding.encoded(after)).write(to: path)
+            let tab = DiffTab(
+                repoRoot: directory.path, path: "signed.txt", source: .worktree,
+                untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                workspaceIdentity: nil, preferences: try isolatedPreferences()
+            )
+            try await wait({ !tab.isLoading && tab.display != nil }, timeout: 30)
+            XCTAssertNil(tab.error)
+            XCTAssertEqual(tab.oldContent, before)
+            XCTAssertEqual(tab.newContent, after)
+            XCTAssertEqual(tab.fileEncoding, encoding)
+            XCTAssertTrue(tab.hasChanges)
+            try replaceNativeDiffText(tab, with: after + "新增行\n")
+            await tab.save()
+            XCTAssertNil(tab.saveError)
+            XCTAssertEqual(try Data(contentsOf: path), encoding.encoded(after + "新增行\n"))
+        }
+    }
+
+    func testMBCSStagedAndWorktreeDiffUseRealGitAndSaveOriginalCP936Bytes() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("abaqus.rpy")
+        let before = "# -*- coding: mbcs -*-\n# 模型装配件个数 1\n"
+        let stagedText = "# -*- coding: mbcs -*-\n# 模型装配件个数 2\n"
+        let worktreeText = "# -*- coding: mbcs -*-\n# 模型装配件个数 3\n"
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(before)).write(to: path)
+        for args in [["add", "abaqus.rpy"], ["commit", "-qm", "base"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(stagedText)).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "abaqus.rpy"], in: directory.path).status, 0)
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(worktreeText)).write(to: path)
+
+        let backend = WindowsCodePageGitBackend()
+        let staged = DiffTab(
+            repoRoot: directory.path, path: "abaqus.rpy", source: .staged,
+            untracked: false, origPath: nil, backend: backend,
+            workspaceIdentity: "ssh:windows", preferences: try isolatedPreferences()
+        )
+        try await wait { !staged.isLoading }
+        XCTAssertNil(staged.error)
+        XCTAssertEqual(staged.newContent, stagedText)
+        XCTAssertEqual(staged.oldContent, before)
+        XCTAssertEqual(staged.fileEncoding, .gbk)
+        XCTAssertTrue(staged.hasChanges)
+        XCTAssertFalse(staged.isEditing)
+        try await wait { staged.display != nil }
+
+        let worktree = DiffTab(
+            repoRoot: directory.path, path: "abaqus.rpy", source: .worktree,
+            untracked: false, origPath: nil, backend: backend,
+            workspaceIdentity: "ssh:windows", preferences: try isolatedPreferences()
+        )
+        try await wait { !worktree.isLoading }
+        XCTAssertNil(worktree.error)
+        XCTAssertEqual(worktree.oldContent, stagedText)
+        XCTAssertEqual(worktree.newContent, worktreeText)
+        XCTAssertEqual(worktree.fileEncoding, .gbk)
+        XCTAssertTrue(worktree.hasChanges)
+        try await wait { worktree.display != nil }
+        try replaceNativeDiffText(worktree, with: worktreeText + "# 新增一行\n")
+        await worktree.save()
+        XCTAssertNil(worktree.saveError)
+        XCTAssertEqual(try Data(contentsOf: path),
+                       TextFileEncoding.gbk.encoded(worktreeText + "# 新增一行\n"))
+        await worktree.save(as: .utf8)
+        XCTAssertNotNil(worktree.saveError, "A coding cookie cannot silently become false")
+        XCTAssertEqual(try Data(contentsOf: path),
+                       TextFileEncoding.gbk.encoded(worktreeText + "# 新增一行\n"))
+        XCTAssertEqual(GitCommandExecution.run(["status", "--short"], in: directory.path).status, 0)
+    }
+
+    func testNewCP936ReplayFileInUnbornStagedRepositoryIsNotBinary() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let contents = "# -*- coding: mbcs -*-\n# 模型装配件个数 4\n"
+        let path = directory.appendingPathComponent("abaqus.rpy")
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(contents)).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "abaqus.rpy"], in: directory.path).status, 0)
+        let diff = DiffTab(
+            repoRoot: directory.path, path: "abaqus.rpy", source: .staged,
+            untracked: false, origPath: nil, backend: WindowsCodePageGitBackend(),
+            workspaceIdentity: "ssh:windows", preferences: try isolatedPreferences()
+        )
+        try await wait({ !diff.isLoading && diff.display != nil }, timeout: 30)
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(diff.oldContent, "")
+        XCTAssertEqual(diff.newContent, contents)
+        XCTAssertEqual(diff.fileEncoding, .gbk)
+        XCTAssertTrue(diff.hasChanges)
+        XCTAssertFalse(diff.isEditing)
+    }
+
+    func testUnmarkedCP936StagedGitTextCanReopenWithExplicitEncoding() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("legacy.py")
+        try Data("baseline\n".utf8).write(to: path)
+        for args in [["add", "legacy.py"], ["commit", "-qm", "base"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let changed = "中文注释\n"
+        try XCTUnwrap(TextFileEncoding.gbk.encoded(changed)).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", "legacy.py"], in: directory.path).status, 0)
+        let diff = DiffTab(
+            repoRoot: directory.path, path: "legacy.py", source: .staged,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        try await wait { !diff.isLoading }
+        XCTAssertNotNil(diff.error)
+        diff.reopen(using: .gbk)
+        try await wait { !diff.isLoading }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(diff.newContent, changed)
+        XCTAssertEqual(diff.oldContent, "baseline\n")
+        XCTAssertEqual(diff.fileEncoding, .gbk)
+        XCTAssertTrue(diff.hasChanges)
+    }
+
     func testTextContainingGitBinaryPatchWordsOpensAndSavesInWorktreeDiff() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -6831,6 +7111,108 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(tab.newContent, "second raw\n",
                            "A matching canonical Git OID cannot validate older raw worktree bytes")
         }
+    }
+
+    func testAuthorizedWindowsSSHLegacyMBCSFileAndStagedDiffKeepCP936Bytes() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Real Windows MBCS decoding requires an authorized test host")
+        }
+        let socket = "/tmp/bailey-mbcs-" + UUID().uuidString + ".sock"
+        let backend = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 45
+        )
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-mbcs-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 30
+        )
+        XCTAssertEqual(created.status, 0)
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard root.range(of: #"^/tmp/bailey-mbcs-[A-Za-z0-9]{6}$"#,
+                         options: .regularExpression) != nil else {
+            throw WorkspaceError.notFound
+        }
+
+        func execute(_ args: [String]) async throws {
+            let result = try await backend.run(
+                argv: ["git"] + args, cwd: root, env: nil, stdin: nil, timeout: 45
+            )
+            XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+            guard result.status == 0 else { throw WorkspaceError.notFound }
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not clean owned MBCS fixture: \(error)") }
+            if FileManager.default.fileExists(atPath: socket) {
+                do {
+                    let result = try await Task.detached {
+                        try ProcessRemoteCommandRunner.launch(
+                            sshPath: "/usr/bin/ssh",
+                            arguments: ["-S", socket, "-O", "exit", host],
+                            stdin: nil, timeout: 10
+                        )
+                    }.value
+                    XCTAssertEqual(result.status, 0)
+                } catch { XCTFail("Could not close owned SSH master: \(error)") }
+            }
+        }
+
+        do {
+            try await execute(["init", "-q", "-b", "main"])
+            try await execute(["config", "user.name", "MBCS Test"])
+            try await execute(["config", "user.email", "fixture@invalid"])
+            try await execute(["config", "commit.gpgsign", "false"])
+            let before = "# -*- coding: mbcs -*-\n# 模型装配件个数 1\n"
+            let stagedText = "# -*- coding: mbcs -*-\n# 模型装配件个数 2\n"
+            let changed = "# -*- coding: mbcs -*-\n# 模型装配件个数 3\n"
+            try await backend.write(path: root + "/abaqus.rpy",
+                                    data: try XCTUnwrap(TextFileEncoding.gbk.encoded(before)))
+            try await execute(["add", "abaqus.rpy"])
+            try await execute(["commit", "-qm", "base"])
+            try await backend.write(path: root + "/abaqus.rpy",
+                                    data: try XCTUnwrap(TextFileEncoding.gbk.encoded(stagedText)))
+            try await execute(["add", "abaqus.rpy"])
+
+            let staged = DiffTab(
+                repoRoot: root, path: "abaqus.rpy", source: .staged,
+                untracked: false, origPath: nil, backend: backend,
+                workspaceIdentity: nil, preferences: try isolatedPreferences()
+            )
+            try await wait({ !staged.isLoading && staged.display != nil }, timeout: 90)
+            XCTAssertNil(staged.error)
+            XCTAssertEqual(staged.oldContent, before)
+            XCTAssertEqual(staged.newContent, stagedText)
+            XCTAssertEqual(staged.fileEncoding, .gbk)
+
+            let file = FileTab(path: root + "/abaqus.rpy", backend: backend,
+                               workspaceIdentity: nil)
+            try await file.waitForText()
+            XCTAssertEqual(file.text, stagedText)
+            XCTAssertEqual(file.fileEncoding, .gbk)
+            file.text = changed
+            file.refreshDirtyState()
+            await file.save()
+            XCTAssertNil(file.saveError)
+            XCTAssertFalse(file.isDirty)
+            let stored = try await backend.read(path: root + "/abaqus.rpy", maxBytes: 8192)
+            XCTAssertEqual(stored, TextFileEncoding.gbk.encoded(changed))
+
+            let worktree = DiffTab(
+                repoRoot: root, path: "abaqus.rpy", source: .worktree,
+                untracked: false, origPath: nil, backend: backend,
+                workspaceIdentity: nil, preferences: try isolatedPreferences()
+            )
+            try await wait({ !worktree.isLoading && worktree.display != nil }, timeout: 90)
+            XCTAssertNil(worktree.error)
+            XCTAssertEqual(worktree.oldContent, stagedText)
+            XCTAssertEqual(worktree.newContent, changed)
+            XCTAssertEqual(worktree.fileEncoding, .gbk)
+            XCTAssertTrue(worktree.hasChanges)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
     }
 
     func testAuthorizedWindowsSSHGitReviewAndRawSaveMatchGitCleanRules() async throws {

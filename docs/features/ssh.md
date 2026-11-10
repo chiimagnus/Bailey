@@ -83,6 +83,9 @@ Git 报连接或权限错误不转为全树扫描，目录遍历和 Git 输出�
 
 远端命令要求 POSIX shell 与相应 GNU 工具。Windows 支持依赖 MSYS2 路径和 shell，
 不承诺原生 PowerShell 命令兼容；路径转义与参数边界必须由后端处理。
+例外：仅当文件头声明 `coding: mbcs` 时，通过 Windows `powershell.exe` 只读查询
+`[System.Text.Encoding]::Default.CodePage`，由文件/Diff 解码公共规则使用。
+探测失败不得猜测远端地区或代码页，也不得把原始非 UTF-8 字节当成损坏；用户可手动选编码。
 文件写入须确认全部输入字节已传给子进程；
 子进程提前关闭输入时报告失败，不能把进程正常退出误判为保存成功。
 

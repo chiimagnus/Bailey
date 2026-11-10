@@ -77,7 +77,8 @@ SSH 在独立测试连接补实机结果。只对变更影响范围定点复测�
    `text/-text/eol`、clean filter、无末行 LF、LF／CRLF／裸 CR／Unicode 分隔符、
    UTF-8 BOM、代理对／组合字符／规范等价不同字节、空文件／仅换行、
    重复短行无唯一锚点／超长 SVG 行、多 hunk／全部删除、
-   5 MiB 恰好和 ±1 byte、二进制／NUL／非法 UTF-8／编码错误；
+   5 MiB 恰好和 ±1 byte、二进制／NUL／未声明的非 UTF-8 文本、
+   Windows MBCS/CP936、手动选择编码、不可编码字符的拒写与 UTF BOM；
    真实 Git index stage 和文件原字节必须是测试已验证前提，
    不允许未经声明的空侧或错误状态冒充正常数据。
 4. 测“文件外部改写→正在读取→用户编辑→用户保存→旧请求返回”，
@@ -213,7 +214,10 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
    使用测试专属 socket；不得碰用户工作文件、master 或网络配置。
 2. 复核 `NativeDiffTabTests.testAuthorizedWindowsSSHGitReviewAndRawSaveMatchGitCleanRules`
    的真实 `core.autocrlf=true`、`text/-text`、clean filter、CRLF Split、Unicode 失焦自动保存、
-   Staged 只读与真实远端字节断言；`WorkspaceGitUITests.testAuthorizedWindowsSSHGitReviewThroughRealUI`
+   Staged 只读与真实远端字节断言；新增
+   `testAuthorizedWindowsSSHLegacyMBCSFileAndStagedDiffKeepCP936Bytes`
+   直接验证独立 Windows 代码页、Staged/Worktree 和原字节保存，
+   不能把真实 CP936 文本误判为 Binary file；`WorkspaceGitUITests.testAuthorizedWindowsSSHGitReviewThroughRealUI`
    已覆盖远端项目选择、规范化对照、编辑及 ⌘S 落盘。只补当前 HEAD 未覆盖的配置，
    不另造一套 EOL/filter 远端数据矩阵。
 3. 沿 `GitCommandExecution.runData → SSHWorkspaceBackend.runLimited →
