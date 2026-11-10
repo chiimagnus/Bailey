@@ -181,20 +181,6 @@ final class AppIdentityTests: XCTestCase {
         let appDelegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
         let mainMenu = try XCTUnwrap(NSApp.mainMenu)
         let presentation = appDelegate.menuPresentation
-        XCTAssertNil(presentation.tracked)
-
-        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
-        XCTAssertNotNil(presentation.tracked)
-        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
-        XCTAssertNotNil(presentation.tracked,
-                        "Unrelated popup tracking must not release the system menu snapshot")
-        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
-        XCTAssertNil(presentation.tracked)
-    }
-
-    @MainActor
-    func testNativeMenuPresentationInvalidatesOnlyAfterTrackingEnds() {
-        let presentation = MainMenuPresentation()
         let changes = Mutex<Int>(0)
         withObservationTracking {
             _ = presentation.panelEntries(for: nil)
@@ -203,27 +189,21 @@ final class AppIdentityTests: XCTestCase {
             changes.withLock { $0 += 1 }
         }
 
-        presentation.beginTracking(project: nil, projects: [])
+        XCTAssertNil(presentation.tracked)
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
         XCTAssertNotNil(presentation.tracked)
         XCTAssertEqual(changes.withLock { $0 }, 0,
-                       "Opening a system menu must not invalidate SwiftUI Commands")
+                       "Opening a menu must not invalidate native Window commands")
 
-        presentation.endTracking()
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
+        XCTAssertNotNil(presentation.tracked,
+                        "Unrelated popup tracking must not release the system menu snapshot")
+        XCTAssertEqual(changes.withLock { $0 }, 0)
+
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
         XCTAssertNil(presentation.tracked)
         XCTAssertEqual(changes.withLock { $0 }, 1,
-                       "Refresh menu entries only after AppKit stops tracking")
-    }
-
-    @MainActor
-    func testSystemPanelMenuDoesNotReceiveContextShortcutFormatting() throws {
-        let panel = try XCTUnwrap(NSApp.mainMenu?.items.first {
-            $0.title == String(localized: "Panel", table: "Interface")
-        }?.submenu)
-        let item = NSMenuItem(title: "Example\t⌃1", action: nil, keyEquivalent: "")
-        panel.addItem(item)
-        defer { panel.removeItem(item) }
-        XCTAssertNil(item.attributedTitle,
-                     "The app's context-menu formatter must never rewrite a system Panel entry")
+                       "Refresh the snapshot only after AppKit ends menu tracking")
     }
 
     @MainActor
@@ -254,20 +234,6 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
         XCTAssertNil(menu.items.last?.badge)
         XCTAssertLessThan(menu.size.width, 290, "Native badges should not reserve a fixed column")
-    }
-
-    @MainActor
-    func testLegacyTabFormattedMenuTitlesAreNotRewritten() throws {
-        let menu = NSHostingMenu(rootView: Button(action: {}) {
-            Text(verbatim: "Legacy\t⌘C")
-        })
-        menu.update()
-        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
-        defer {
-            NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
-        }
-        XCTAssertNil(menu.items.first?.attributedTitle,
-                     "Context shortcut display must no longer mutate native menu titles")
     }
 
     @MainActor

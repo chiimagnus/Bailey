@@ -190,8 +190,8 @@ private final class WindowChromeAttachmentView: NSView {
 /// outside this view so their own drag gestures receive the full mouse stream.
 ///
 /// Double-clicking runs the standard title-bar action (zoom / minimize per
-/// System Settings) — behavior our non-movable, hidden title bar would
-/// otherwise lose. The tap is simultaneous with the drag: a stationary
+/// System Settings), which the hidden title bar no longer provides here.
+/// The tap is simultaneous with the drag: a stationary
 /// double-click never registers a move, so the two don't conflict.
 struct WindowDragArea: View {
     var body: some View {
