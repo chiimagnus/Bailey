@@ -116,10 +116,6 @@ struct WindowChromeAccessor: NSViewRepresentable {
             }
             window.delegate = self
             onAttach(window)
-            // Interactive controls occupy the title-bar region. Disable the
-            // server-side title-bar drag entirely; WindowDragArea is the only
-            // surface that opts into moving the window.
-            window.isMovable = false
             reposition()
             // The initial system layout can land after us; catch up.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.reposition() }
@@ -147,7 +143,6 @@ struct WindowChromeAccessor: NSViewRepresentable {
 
         private func reposition() {
             guard let window else { return }
-            window.isMovable = false
             guard !window.styleMask.contains(.fullScreen) else { return }
             let types: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
             for (index, type) in types.enumerated() {

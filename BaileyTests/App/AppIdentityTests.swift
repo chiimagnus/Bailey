@@ -84,6 +84,29 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testWindowChromePreservesNativeWindowArrangement() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.isMovable = true
+        let chrome = WindowChromeAccessor.Coordinator(
+            onAttach: { _ in }, hasUnsavedEdits: { false }, saveBeforeClose: { true }
+        )
+        chrome.attach(window)
+        XCTAssertTrue(window.isMovable,
+                      "Window menu arrangement requires a movable native window")
+
+        for event in [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification,
+                      NSWindow.didResignMainNotification, NSWindow.didExitFullScreenNotification] {
+            NotificationCenter.default.post(name: event, object: window)
+            XCTAssertTrue(window.isMovable,
+                          "Window chrome must not disable macOS window management on \(event.rawValue)")
+        }
+    }
+
+    @MainActor
     func testEditDeleteUsesNativeMenuShortcut() throws {
         let menu = try XCTUnwrap(NSApp.mainMenu)
         let editMenu = try XCTUnwrap(menu.items.compactMap(\.submenu).first(where: { submenu in

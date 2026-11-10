@@ -21,6 +21,28 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].exists)
     }
 
+    func testNativeWindowMenuRetainsArrangementAcrossWindowChanges() throws {
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+
+        for step in 0..<3 {
+            app.menuBarItems["Window"].click()
+            let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+                $0.menuItems["Bring All to Front"].exists
+            })
+            XCTAssertTrue(menu.menuItems["Move & Resize"].exists,
+                          "The Window menu must retain macOS arrangement commands")
+            XCTAssertTrue(menu.menuItems["Full Screen Tile"].exists)
+            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+            if step == 0 {
+                app.typeKey("n", modifierFlags: [.command, .shift])
+                XCTAssertEqual(app.windows.count, 2)
+            } else if step == 1 {
+                app.typeKey("`", modifierFlags: .command)
+            }
+        }
+    }
+
     func testCancelingFolderPickerDoesNotCreateAnEmptyProject() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
 
