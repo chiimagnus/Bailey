@@ -28,6 +28,7 @@
 ## 根因与回归覆盖
 
 **必须尽可能覆盖受影响功能的全部测试环境、测试条件、异常状态、边界与极端情况及其组合；不得以正常路径或几个代表性测试通过作为完成依据。**
+覆盖范围由本次改动的真实影响路径决定，不等于每次都执行全仓测试。
 修复缺陷须还原真实触发条件，沿入口、状态所有者、共享依赖及失败／恢复路径定位失效不变量，
 在归属处修复；逐一核对同一根因涉及的其它入口，不能吞错、加等待或只调整断言。
 可复现缺陷保留 Red→Green 证据；测试夹具必须证明前置条件成立，例如真实 Git 冲突索引，
@@ -174,17 +175,22 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 主题、字号、宽度确实影响原生交互时仍须验证对应边界，但不为每项数据组合重复执行整套 App 启动、
 菜单和点击。
 
-**本地迭代先定点验证。** 按修改范围运行受影响的 `make test:类名1,类名2`；
-确实涉及完整用户入口时再用上面的 `ONLY_TESTING` 定点运行 UI 类或方法。
-完成阶段验收时仍执行要求的全量测试，不在每次小改动后重复跑完整 UI Target。
+**本地迭代先定点验证。** 先根据实际入口、共享依赖和最终结果确定受影响的条件，
+优先运行对应测试方法（`make test ONLY_TESTING=BaileyTests/类名/方法名`）；
+必要时扩展到相关类及共享使用方，不为保险运行无关模块的耗时或性能测试。
+只有宿主无法证明的真实交互才运行指定 UI 方法；没有独立图形会话时记录未测，
+不得抢占用户桌面。仅在明确要求的阶段验收或发布门禁中运行全量 `make test`／`make test:ui`，
+中断、超时和未执行均不能报告为通过。
 
 ## 改什么，测什么
 
-下表是选择依据，不是另一套执行器；完整测试集合仍由 Xcode 目标发现。
+下表用于定位受影响的测试，不要求执行某一行的全部测试类；
+优先选具体方法，完整集合仍由 Xcode 目标发现。
 
 | 改动 | 相关测试 |
 | --- | --- |
 | 应用身份、Finder 类型注册、系统文件事件和目标窗口路由 | `AppIdentityTests`、`FinderDeliveryIntegrationTests`、`WorkspaceWindowsUITests`；实际 Finder 拖放另需受控图形会话 |
+| 原生右键菜单的快捷键提示、宽度与目标 | `AppIdentityTests`（显示契约）；`WorkspaceDockUITests`（中英文宽度、⌘W）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`（复制／删除）。实际对齐须由 GUI 验证 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `WorkspaceDockUITests`、`WorkspaceFilesUITests` 的真实输入与双窗 E2E |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |

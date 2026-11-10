@@ -71,10 +71,6 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             menuPresentation.beginTracking(
                 project: owner?.selectedProject, projects: owner?.projects ?? []
             )
-        } else {
-            var root = menu
-            while let parent = root.supermenu { root = parent }
-            if root !== NSApp.mainMenu { Self.formatShortcutHints(in: menu) }
         }
     }
 
@@ -96,41 +92,6 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
                       || action == #selector(TreeKeyboardView.paste(_:))
                       || action == #selector(TreeKeyboardView.delete(_:)) {
             configureDeleteShortcut()
-        }
-    }
-
-    /// A context menu may display a shortcut, but only the main menu owns its key equivalent.
-    static func formatShortcutHints(in menu: NSMenu) {
-        let hinted = menu.items.filter { $0.keyEquivalent.isEmpty && $0.title.contains("\t") }
-        guard !hinted.isEmpty else { return }
-
-        let font = NSFont.menuFont(ofSize: 0)
-        let widest = menu.items.map {
-            let label = $0.title.components(separatedBy: "\t").first ?? $0.title
-            return (label as NSString).size(withAttributes: [.font: font]).width
-        }.max() ?? 0
-        let widestHint = hinted.map {
-            let hint = $0.title.components(separatedBy: "\t").last ?? ""
-            return (hint as NSString).size(withAttributes: [.font: font]).width
-        }.max() ?? 0
-        let tabStop = widest + widestHint + 16
-
-        for item in hinted {
-            let style = NSMutableParagraphStyle()
-            style.tabStops = [NSTextTab(textAlignment: .right, location: tabStop)]
-            let label = NSMutableAttributedString(
-                string: item.title, attributes: [.font: font, .paragraphStyle: style]
-            )
-            let tab = (item.title as NSString).range(of: "\t")
-            if tab.location != NSNotFound {
-                let suffix = NSRange(location: tab.location + 1,
-                                     length: (item.title as NSString).length - tab.location - 1)
-                label.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: suffix)
-            }
-            item.attributedTitle = label
-            if let tabIndex = item.title.firstIndex(of: "\t") {
-                item.setAccessibilityLabel(String(item.title[..<tabIndex]))
-            }
         }
     }
 

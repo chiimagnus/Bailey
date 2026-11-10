@@ -165,59 +165,62 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testContextMenuShortcutHintsAreDisplayOnly() throws {
+    func testSwiftUIMenuShortcutBadgesAreDisplayOnly() throws {
         let menu = NSHostingMenu(rootView: VStack {
-            Button(action: {}) { Text(verbatim: "Copy\t⌘C") }
-            Button(action: {}) { Text(verbatim: "Paste\t⌘V") }
-            Button(action: {}) { Text(verbatim: "Close Panel\t⌘W") }
-                .accessibilityLabel("Close Panel")
-            Button(action: {}) { Text(verbatim: "Close\t⌘W") }
-                .accessibilityLabel("Close")
+            Button("Cut", action: {}).badge("⌘X")
+            Button("Copy", action: {}).badge("⌘C")
+            Button("Paste", action: {}).badge("⌘V").disabled(true)
+            Button("Move to Trash", role: .destructive, action: {}).badge("⌫")
+            Button("Close", action: {}).badge("⌘W")
             Button("Close Tabs to the Right", action: {})
         })
         menu.update()
-        XCTAssertNil(menu.items.first?.attributedTitle,
-                     "Formatting belongs to native popup tracking, not incremental menu construction")
+        let expectations = [
+            ("Cut", "⌘X"), ("Copy", "⌘C"), ("Paste", "⌘V"),
+            ("Move to Trash", "⌫"), ("Close", "⌘W")
+        ]
+        for (index, expected) in expectations.enumerated() {
+            let item = menu.items[index]
+            XCTAssertEqual(item.title, expected.0)
+            XCTAssertEqual(item.badge?.stringValue, expected.1)
+            XCTAssertTrue(item.keyEquivalent.isEmpty,
+                          "The system main menu must remain the only keyboard shortcut owner")
+            XCTAssertNil(item.attributedTitle)
+            XCTAssertTrue(item.accessibilityLabel()?.contains(expected.0) == true)
+        }
+        XCTAssertFalse(menu.items[2].isEnabled)
+        XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
+        XCTAssertNil(menu.items.last?.badge)
+        XCTAssertLessThan(menu.size.width, 290, "Native badges should not reserve a fixed column")
+    }
+
+    @MainActor
+    func testLegacyTabFormattedMenuTitlesAreNotRewritten() throws {
+        let menu = NSHostingMenu(rootView: Button(action: {}) {
+            Text(verbatim: "Legacy\t⌘C")
+        })
+        menu.update()
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
         defer {
             NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
         }
+        XCTAssertNil(menu.items.first?.attributedTitle,
+                     "Context shortcut display must no longer mutate native menu titles")
+    }
 
-        let copy = try XCTUnwrap(menu.items.first)
-        let paste = try XCTUnwrap(menu.items.dropFirst().first)
-        XCTAssertEqual(copy.attributedTitle?.string, "Copy\t⌘C",
-                       "The menu observer must format shortcuts before the popup opens")
-        XCTAssertEqual(paste.attributedTitle?.string, "Paste\t⌘V")
-        let closePanel = try XCTUnwrap(menu.items.dropFirst(2).first)
-        let closeTab = try XCTUnwrap(menu.items.dropFirst(3).first)
-        for (item, name) in [(closePanel, "Close Panel"), (closeTab, "Close")] {
-            XCTAssertEqual(item.attributedTitle?.string, name + "\t⌘W")
-            XCTAssertEqual(item.accessibilityLabel(), name)
-            XCTAssertTrue(item.keyEquivalent.isEmpty,
-                          "A context-menu shortcut hint must not register a second shortcut")
-        }
-        XCTAssertEqual(copy.accessibilityLabel(), "Copy")
-        XCTAssertEqual(paste.accessibilityLabel(), "Paste")
-        let style = try XCTUnwrap(copy.attributedTitle?
-            .attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
-        XCTAssertEqual(style.tabStops.first?.alignment, .right)
-        let font = NSFont.menuFont(ofSize: 0)
-        let labels = menu.items.map {
-            ($0.title.components(separatedBy: "\t").first ?? $0.title) as NSString
-        }
-        let hints = menu.items.filter { $0.title.contains("\t") }.map {
-            ($0.title.components(separatedBy: "\t").last ?? "") as NSString
-        }
-        let labelWidth = labels.map { $0.size(withAttributes: [.font: font]).width }.max() ?? 0
-        let hintWidth = hints.map { $0.size(withAttributes: [.font: font]).width }.max() ?? 0
-        let tabStop = try XCTUnwrap(style.tabStops.first?.location)
-        XCTAssertGreaterThanOrEqual(tabStop, labelWidth + hintWidth + 10)
-        XCTAssertLessThanOrEqual(tabStop, labelWidth + hintWidth + 24,
-                                 "Shortcut alignment must fit content instead of reserving 250pt")
-        XCTAssertTrue(copy.keyEquivalent.isEmpty)
-        XCTAssertTrue(paste.keyEquivalent.isEmpty)
-        XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
-        XCTAssertNil(menu.items.last?.attributedTitle)
+    @MainActor
+    func testNativeMenuBadgeOmittedWhenShortcutIsUnavailable() throws {
+        let menu = NSHostingMenu(rootView: VStack {
+            Button("Commit Staged", action: {}).badge(nil as String?)
+            Button("Commit Staged", action: {}).badge("⌘↩")
+            Button("新建文件夹…", action: {}).badge("⌥⌘N")
+        })
+        menu.update()
+        XCTAssertNil(menu.items[0].badge)
+        XCTAssertEqual(menu.items[1].badge?.stringValue, "⌘↩")
+        XCTAssertEqual(menu.items[2].badge?.stringValue, "⌥⌘N")
+        XCTAssertEqual(menu.items[2].title, "新建文件夹…")
+        XCTAssertTrue(menu.items.allSatisfy(\.keyEquivalent.isEmpty))
     }
 
     @MainActor

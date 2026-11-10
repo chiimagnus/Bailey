@@ -617,13 +617,11 @@ struct DockTabGroupView: View {
                 )
                 .contextMenu {
                     let closeTitle = closeTitle(for: item)
-                    Button {
+                    Button(closeTitle) {
                         guard isValidMenuTarget(item) else { return }
                         close(item)
-                    } label: {
-                        Text(verbatim: closeTitle + "\t⌘W")
                     }
-                    .accessibilityLabel(closeTitle)
+                    .badge("⌘W")
                     .disabled(project.isClosingPanels)
                 }
             }
@@ -646,7 +644,7 @@ struct DockTabGroupView: View {
     private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
         guard isValidMenuTarget(item), project.dock.contextTarget == item else { return false }
         let title = closeTitle(for: item)
-        return menu.items.contains { $0.accessibilityLabel() == title }
+        return menu.items.contains { $0.title == title }
     }
 
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent, for item: DockItem) -> Bool {
@@ -655,7 +653,7 @@ struct DockTabGroupView: View {
               isMenuForTab(menu, item: item) else { return false }
         let title = closeTitle(for: item)
         guard let index = menu.items.firstIndex(where: {
-            $0.isEnabled && $0.accessibilityLabel() == title
+            $0.isEnabled && $0.title == title
         }) else { return false }
         menu.performActionForItem(at: index)
         menu.cancelTracking()
@@ -829,13 +827,11 @@ struct DockTabGroupView: View {
             Divider()
         }
         let closeTitle = closeTitle(for: .tab(tabID))
-        Button {
+        Button(closeTitle) {
             guard currentMenuTab(tabID) != nil else { return }
             close(.tab(tabID))
-        } label: {
-            Text(verbatim: closeTitle + "\t⌘W")
         }
-        .accessibilityLabel(closeTitle)
+        .badge("⌘W")
         .disabled(project.isClosingPanels || tab.content.isClosing)
         Button(String(localized: "Close Others", table: "Interface")) {
             if let current = currentMenuTab(tabID) { project.closeOthers(current) }

@@ -541,7 +541,7 @@ private struct FileTreeRow: View {
         default: return false
         }
         guard let index = menu.items.firstIndex(where: {
-            $0.isEnabled && ($0.title == title || $0.title.hasPrefix(title + "\t"))
+            $0.isEnabled && $0.title == title
         }) else { return false }
         menu.performActionForItem(at: index)
         if let target = model.contextMenuTargetPath {
@@ -557,26 +557,22 @@ private struct FileTreeRow: View {
             ? model.contextSelection(for: item) : [target.path]
         if target.isDirectory {
             let newFileTitle = String(localized: "New File…", table: "Sidebar")
-            Button {
+            Button(newFileTitle) {
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.beginNewFile(in: target.path)
                 }
-            } label: {
-                Text(verbatim: newFileTitle + "\t⌘N")
             }
-            .accessibilityLabel(newFileTitle)
+            .badge("⌘N")
 
             let newFolderTitle = String(localized: "New Folder…", table: "Sidebar")
-            Button {
+            Button(newFolderTitle) {
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.beginNewFolder(in: target.path)
                 }
-            } label: {
-                Text(verbatim: newFolderTitle + "\t⌥⌘N")
             }
-            .accessibilityLabel(newFolderTitle)
+            .badge("⌥⌘N")
         } else {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(target.path, true) }
@@ -592,29 +588,23 @@ private struct FileTreeRow: View {
         }
         Divider()
         let cutTitle = String(localized: "Cut", table: "Sidebar")
-        Button {
+        Button(cutTitle) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
-        } label: {
-            Text(verbatim: cutTitle + "\t⌘X")
         }
-        .accessibilityLabel(cutTitle)
+        .badge("⌘X")
 
         let copyTitle = String(localized: "Copy", table: "Sidebar")
-        Button {
+        Button(copyTitle) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
-        } label: {
-            Text(verbatim: copyTitle + "\t⌘C")
         }
-        .accessibilityLabel(copyTitle)
+        .badge("⌘C")
 
         if target.isDirectory {
             let pasteTitle = String(localized: "Paste", table: "Sidebar")
-            Button {
+            Button(pasteTitle) {
                 if isCurrentTarget() { onCommand(.paste(into: target.path)) }
-            } label: {
-                Text(verbatim: pasteTitle + "\t⌘V")
             }
-            .accessibilityLabel(pasteTitle)
+            .badge("⌘V")
         }
         Divider()
         Button(String(localized: "Copy Path", table: "Sidebar")) {
@@ -637,12 +627,10 @@ private struct FileTreeRow: View {
         }
         let deleteTitle = isRemote ? String(localized: "Delete…", table: "Sidebar")
             : String(localized: "Move to Trash", table: "Sidebar")
-        Button(role: .destructive) {
+        Button(deleteTitle, role: .destructive) {
             if isCurrentTarget() { onCommand(.delete(selection)) }
-        } label: {
-            Text(verbatim: deleteTitle + "\t⌫")
         }
-        .accessibilityLabel(deleteTitle)
+        .badge("⌫")
     }
 
     /// Commits an inline rename and, when the file actually moved, tells the

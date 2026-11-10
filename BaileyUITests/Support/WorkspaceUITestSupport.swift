@@ -276,6 +276,13 @@ enum WorkspaceUITestSupport {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+    static func menuItem(_ title: String, in scope: XCUIElement) -> XCUIElement {
+        scope.menuItems.matching(NSPredicate(
+            format: "label == %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+            title, title + ",", title + "，"
+        )).firstMatch
+    }
+
     static func fileRow(
         _ url: URL, in scope: XCUIElement, relativeTo repository: URL? = nil
     ) -> XCUIElement {

@@ -743,7 +743,7 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         alphaRow.click()
         let copyMenu = try fileContextMenu(for: alphaRow, in: app)
-        let copy = copyMenu.menuItems["Copy"]
+        let copy = WorkspaceUITestSupport.menuItem("Copy", in: copyMenu)
         XCTAssertTrue(copy.exists)
         copy.click()
         let privateTransfer = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
@@ -780,7 +780,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: movedBeta), Data("beta original\n".utf8))
 
         let trashMenu = try fileContextMenu(for: alphaRow, in: app)
-        let trash = trashMenu.menuItems["Move to Trash"]
+        let trash = WorkspaceUITestSupport.menuItem("Move to Trash", in: trashMenu)
         XCTAssertTrue(trash.exists)
         trash.click()
         let deleted = XCTNSPredicateExpectation(
@@ -1148,7 +1148,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a.txt\nb.txt",
                        "Context-clicking a selected row must copy the selected relative paths")
         let deleteMenu = try fileContextMenu(for: a, in: app)
-        deleteMenu.menuItems["Move to Trash"].click()
+        WorkspaceUITestSupport.menuItem("Move to Trash", in: deleteMenu).click()
         let deleted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             !FileManager.default.fileExists(atPath: alpha.path)
                 && !FileManager.default.fileExists(atPath: beta.path)

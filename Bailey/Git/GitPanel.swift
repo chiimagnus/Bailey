@@ -1501,12 +1501,10 @@ struct GitPanel: View {
     private var commitMenu: some View {
         Menu {
             let stagedTitle = String(localized: "Commit Staged", table: "Sidebar")
-            Button {
+            Button(stagedTitle) {
                 performCommit(includeAll: false, trigger: .commitMenu)
-            } label: {
-                Text(verbatim: stagedTitle + (isCommitFieldFocused ? "\t⌘↩" : ""))
             }
-                .accessibilityLabel(stagedTitle)
+                .badge(isCommitFieldFocused ? "⌘↩" : nil)
                 .disabled(!canCommit(includeAll: false))
             Button(String(localized: "Stage All & Commit", table: "Sidebar")) {
                 performCommit(includeAll: true, trigger: .commitMenu)

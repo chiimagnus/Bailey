@@ -184,7 +184,8 @@ final class SharedTreeUITests: XCTestCase {
 
         rowText.rightClick()
         let firstMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            $0.menuItems["New File…"].exists && $0.menuItems["Copy Relative Path"].exists
+            WorkspaceUITestSupport.menuItem("New File…", in: $0).exists
+                && $0.menuItems["Copy Relative Path"].exists
         })
         firstMenu.typeKey("n", modifierFlags: .command)
         let fileName = window.textFields.matching(
@@ -205,7 +206,8 @@ final class SharedTreeUITests: XCTestCase {
 
         rowText.rightClick()
         let secondMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            $0.menuItems["New Folder…"].exists && $0.menuItems["Copy Relative Path"].exists
+            WorkspaceUITestSupport.menuItem("New Folder…", in: $0).exists
+                && $0.menuItems["Copy Relative Path"].exists
         })
         secondMenu.typeKey("n", modifierFlags: [.option, .command])
         let folderName = window.textFields.matching(
