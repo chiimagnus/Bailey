@@ -502,6 +502,27 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(left.scrollOffset.x, sourceX, accuracy: 1,
                        "Clamping the short pane must never bounce its origin back to the long pane")
         XCTAssertEqual(feedback, 1, "Follower scroll must not echo the original event")
+
+        // When both real lines exceed the selected width cap, they correctly
+        // have the same scroll end regardless of their different text lengths.
+        for pane in [left, right] {
+            pane.applyTypography(font: font,
+                                 paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: .textColor, longLineDisplayWidth: .compact)
+        }
+        left.setReviewDocument(NSAttributedString(string: String(repeating: "a", count: 2000)),
+                               decorations: .empty)
+        right.setReviewDocument(NSAttributedString(string: String(repeating: "b", count: 2500)),
+                                decorations: .empty)
+        container.layoutSubtreeIfNeeded()
+        left.layoutSubtreeIfNeeded()
+        right.layoutSubtreeIfNeeded()
+        XCTAssertEqual(left.textView.frame.width, CGFloat(LongLineDisplayWidth.compact.rawValue),
+                       accuracy: 1)
+        XCTAssertEqual(right.textView.frame.width, left.textView.frame.width, accuracy: 1)
+        left.setScrollOffset(NSPoint(x: 100_000, y: 0))
+        left.onScroll?(left.scrollOffset)
+        XCTAssertEqual(right.scrollOffset.x, left.scrollOffset.x, accuracy: 1)
     }
 
     func testWindowFindCommandsTargetNativeWritableAndStagedDiffPanes() async throws {
@@ -2930,6 +2951,33 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(editor.textView.text, modified)
         XCTAssertFalse(tab.isDirty)
         XCTAssertEqual(try Data(contentsOf: path), Data(modified.utf8))
+
+        tab.setDiffStyle(.split)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tab.editableBaseline != nil && tab.nativeSurface?.subviews
+                .compactMap { $0 as? DiffCodePaneView }
+                .filter { !$0.isHidden }.count == 2
+        }
+        let surface = try XCTUnwrap(tab.nativeSurface)
+        let baseline = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && !$0.textView.isEditable })
+        XCTAssertTrue(window.makeFirstResponder(baseline.textView))
+        XCTAssertFalse(tab.editorActive)
+        lines[15_000] = "line 15000 changed without edit focus\n"
+        let latest = lines.joined()
+        try Data(latest.utf8).write(to: path)
+        tab.reload()
+        try await wait({ tab.display == nil && tab.hasChanges },
+                       pollingInterval: .milliseconds(1), timeout: 15)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(tab.canPresentNativeContent,
+                      "A mounted editor must remain visible while a new snapshot is computed")
+        XCTAssertTrue(surface.superview != nil)
+        XCTAssertFalse(editor.isHidden)
+        try await wait({ tab.display != nil && tab.newContent == latest }, timeout: 20)
+        XCTAssertTrue(tab.nativeSurface === surface)
+        XCTAssertEqual(editor.textView.text, latest)
     }
 
     func testFoldedGitLineHidesAllItsNativeCRParagraphsExceptSeparator() throws {
@@ -3712,13 +3760,27 @@ final class NativeDiffTabTests: XCTestCase {
         right.textView.insertText("edited", replacementRange: NSRange(location: saveCaret,
                                                                         length: 0))
         XCTAssertTrue(tab.isDirty)
+        let monitor = Task { @MainActor in
+            var unavailable = 0
+            for _ in 0..<350 {
+                if !tab.canPresentNativeContent || surface.superview == nil {
+                    unavailable += 1
+                }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            return unavailable
+        }
         XCTAssertTrue(window.makeFirstResponder(left.textView))
         try await wait {
             host.layoutSubtreeIfNeeded()
             guard let current = try? Data(contentsOf: file) else { return false }
             return !tab.isDirty && current != Data(modified.utf8)
                 && tab.nativeSurface === surface && !left.isHidden
+                && !tab.isLoading && tab.editFoldsReady && tab.display != nil
         }
+        let unavailableCount = await monitor.value
+        XCTAssertEqual(unavailableCount, 0,
+                       "Autosave and Git reload must not unmount the previously rendered editor")
         XCTAssertTrue(left.textView.textStorage === storage)
         XCTAssertTrue(left.textView.attributedText.isEqual(to: try XCTUnwrap(tab.editableBaseline).text))
     }
@@ -7203,9 +7265,9 @@ final class NativeDiffTabTests: XCTestCase {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("wide.txt")
-        let oldText = ([String(repeating: "a", count: 1100)]
+        let oldText = ([String(repeating: "a", count: 200)]
             + (0..<150).map { "before \($0)" }).joined(separator: "\n") + "\n"
-        let newText = ([String(repeating: "b", count: 1400)]
+        let newText = ([String(repeating: "b", count: 420)]
             + (0..<150).map { "after \($0)" }).joined(separator: "\n") + "\n"
         try Data(oldText.utf8).write(to: file)
         XCTAssertEqual(GitCommandExecution.run(["add", "wide.txt"], in: directory.path).status, 0)
