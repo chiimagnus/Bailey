@@ -111,6 +111,8 @@ PR 不自动触发 GitHub Actions 的宿主或 UI 测试；合并前由本机运
 测试选择仍由 Makefile 枚举与校验。
 Tag 发布仍由[发布工作流](release.md#正式发布)负责。
 云端使用临时签名及独立桌面，不代替本机开发签名和授权 SSH、外观等特殊条件的验收。
+UI Job 必须检出完整 Git 历史：`GitChangesUITests.testRealBaileySourceHistoryDiffLoadsAcrossIndexWorktreeAndOtherSource`
+会从实际 Bailey 源码取两个提交版本并在隔离克隆中构造 Staged／Worktree 变化；默认浅克隆仅有当前提交会导致夹具无法创建，而非产品 Git Diff 故障。
 测试入口由 [Makefile](../Makefile) 与
 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；
 不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
