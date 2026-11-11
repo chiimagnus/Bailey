@@ -144,7 +144,7 @@ final class GitGraphGeometryUITests: XCTestCase {
                 CGPoint(x: 10 * scale, y: height / 2), CGPoint(x: 28 * scale, y: height / 2),
                 CGPoint(x: min(142 * scale, width - 18), y: height * 0.79),
                 CGPoint(x: width - 8, y: height * 0.34),
-                CGPoint(x: 18 * scale, y: 1), CGPoint(x: 18 * scale, y: height - 1)
+                CGPoint(x: 18 * scale, y: 1)
             ] {
                 let wasExpanded = file.exists
                 origin.withOffset(CGVector(
@@ -156,6 +156,17 @@ final class GitGraphGeometryUITests: XCTestCase {
                 XCTAssertEqual(XCTWaiter.wait(for: [toggled], timeout: 8), .completed,
                                "The commit row must toggle once at \(point), width \(requestedWidth)")
             }
+            // The bottom-left row contains a deliberate Copy Commit Hash
+            // button, not a second commit-toggle target. Verify its own action.
+            let copyHash = app.buttons["Copy Commit Hash"].firstMatch
+            XCTAssertTrue(copyHash.isHittable,
+                          "The commit hash action must remain reachable at \(requestedWidth)pt")
+            let expandedBeforeCopy = file.exists
+            copyHash.click()
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), oid,
+                           "The visible hash button must copy the actual commit OID")
+            XCTAssertEqual(file.exists, expandedBeforeCopy,
+                           "Copy Commit Hash cannot accidentally toggle the commit")
         }
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
