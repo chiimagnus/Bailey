@@ -184,7 +184,7 @@ final class GitUncommittedUITests: XCTestCase {
     }
 
     private func presentDialog(named titles: [String], app: XCUIApplication) throws -> XCUIElement {
-        let more = app.menuButtons.matching(identifier: "ellipsis").firstMatch
+        let more = app.menuButtons.matching(identifier: "bailey.git.more-actions").firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 15), "Git Manager's More menu is required")
         more.click()
         let option = app.menuItems.matching(NSPredicate(format: "title IN %@", titles)).firstMatch
