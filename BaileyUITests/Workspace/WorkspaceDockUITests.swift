@@ -705,10 +705,10 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(files.isHittable, "The Files tab must be reachable by horizontal scrolling")
         XCTAssertTrue(strip.frame.contains(CGPoint(x: files.frame.midX, y: files.frame.midY)),
                       "The right-clicked Files tab must be inside the actual tab-strip viewport")
+        let before = try contextOutlinePixels(of: files)
         files.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            WorkspaceUITestSupport.menuItem("Close Panel", in: $0).exists
-        }, "The native right-click menu must still be open")
+        XCTAssertNotEqual(try contextOutlinePixels(of: files), before,
+                          "The inactive Files panel must become the visible native context target")
         app.typeKey("w", modifierFlags: .command)
 
         XCTAssertTrue(files.waitForNonExistence(timeout: 12),
@@ -745,10 +745,10 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(a.waitForExistence(timeout: 15))
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         b.click()
+        let before = try contextOutlinePixels(of: a)
         a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            WorkspaceUITestSupport.menuItem("Close", in: $0).exists && $0.menuItems["Close Others"].exists
-        })
+        XCTAssertNotEqual(try contextOutlinePixels(of: a), before,
+                          "An inactive file tab must visibly become the transient context target")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(a.exists && b.exists)
         app.typeKey("w", modifierFlags: .command)
