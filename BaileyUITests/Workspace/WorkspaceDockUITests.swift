@@ -3,16 +3,104 @@ import XCTest
 
 @MainActor
 final class WorkspaceDockUITests: XCTestCase {
+    func testBlankWindowDragAndDividerDragHaveSeparateOwners() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let original = window.frame
+        let blank = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: original.width * 0.52, dy: 19))
+        let destination = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: original.width * 0.52 + 80, dy: 79))
+        blank.click(forDuration: 0.2, thenDragTo: destination)
+        let firstMove = window.frame
+        XCTAssertGreaterThan(firstMove.origin.x - original.origin.x, 40,
+                             "The blank Dock header must still move the native window")
+        XCTAssertGreaterThan(abs(firstMove.origin.y - original.origin.y), 30)
+
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.isHittable)
+        let afterTab = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: files.frame.maxX - firstMove.minX + 14,
+                                 dy: files.frame.midY - firstMove.minY))
+        let afterTabDestination = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: files.frame.maxX - firstMove.minX + 70,
+                                 dy: files.frame.midY - firstMove.minY + 40))
+        afterTab.click(forDuration: 0.2, thenDragTo: afterTabDestination)
+        let moved = window.frame
+        XCTAssertGreaterThan(moved.minX - firstMove.minX, 30,
+                             "Blank space after a tab must also drag the native window")
+        XCTAssertGreaterThan(abs(moved.minY - firstMove.minY), 20)
+
+        let dividers = window.otherElements.matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.sorted { $0.frame.minX < $1.frame.minX }
+        XCTAssertEqual(dividers.count, 2)
+        let first = try XCTUnwrap(dividers.first)
+        XCTAssertGreaterThan(first.frame.minX - moved.minX, 160,
+                             "Narrow windows need a usable Projects panel")
+        let last = try XCTUnwrap(dividers.last)
+        XCTAssertGreaterThan(moved.maxX - last.frame.minX, 160,
+                             "Narrow windows need a usable Files/Git panel")
+        let dividerX = first.frame.midX
+        let dividerY = first.frame.midY
+        let dividerStart = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: dividerX - moved.minX, dy: dividerY - moved.minY))
+        let dividerEnd = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: dividerX - moved.minX + 70, dy: dividerY - moved.minY))
+        dividerStart.click(forDuration: 0.2, thenDragTo: dividerEnd)
+        XCTAssertEqual(window.frame.origin.x, moved.origin.x, accuracy: 2,
+                       "Resizing a Dock pane must never move the window")
+        XCTAssertEqual(window.frame.origin.y, moved.origin.y, accuracy: 2)
+        XCTAssertGreaterThan(first.frame.midX - dividerX, 25,
+                             "Divider drag must resize the actual Dock columns")
+    }
+
+    func testDraggingFileTabIntoAnotherGroupDoesNotMoveWindow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("tab-a.swift", text: "let a = 1\n")
+        let second = try fixture.file("tab-b.swift", text: "let b = 2\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev"
+        ).compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open two real file tabs")
+        NSWorkspace.shared.open([first, second], withApplicationAt: bundle,
+                                configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tab = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        let original = window.frame.origin
+        tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.3, thenDragTo:
+                window.coordinate(withNormalizedOffset: CGVector(dx: 0.46, dy: 0.91))
+            )
+        XCTAssertEqual(window.frame.origin.x, original.x, accuracy: 2)
+        XCTAssertEqual(window.frame.origin.y, original.y, accuracy: 2)
+        XCTAssertEqual(window.otherElements.matching(identifier: "bailey.dock.divider").count, 3)
+        app.menuBarItems["Window"].click()
+        let windowMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Move & Resize"].exists
+        })
+        XCTAssertTrue(windowMenu.menuItems["Move & Resize"].isEnabled,
+                      "Dock gestures must not leave the native Window menu disabled")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    }
+
     func testBlankDockTitlebarDoubleClickUsesNativeZoom() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 15))
         let before = window.frame
-        // The first 76 points are the actual titlebar drag surface;
-        // the traffic-light buttons end before this blank point.
-        window.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: 71, dy: 19)).doubleClick()
+        // The fixture's middle Dock group has no open tabs; its header is an
+        // actual WindowDragArea rather than a tab, toolbar button or traffic light.
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: 19)).doubleClick()
         let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick")
         if action == "None" { return }
         if action == "Minimize" {

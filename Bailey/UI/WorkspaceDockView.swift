@@ -31,6 +31,7 @@ final class DockTabDragCoordinator {
     @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
     @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
+    @ObservationIgnored private var interactiveFrames: [UUID: CGRect] = [:]
     @ObservationIgnored private var escapeMonitor: Any?
 
     isolated deinit {
@@ -56,6 +57,16 @@ final class DockTabDragCoordinator {
     func setFrames(tabs: [DockItem: CGRect]) {
         if source != nil, self.tabs != tabs { cancel() }
         self.tabs = tabs
+    }
+
+    func setInteractiveFrames(_ frames: [UUID: CGRect]) {
+        interactiveFrames = frames
+    }
+
+    func blocksNativeWindowMove(at point: CGPoint) -> Bool {
+        (Array(interactiveFrames.values) + Array(tabs.values)).contains {
+            $0.insetBy(dx: -4, dy: -4).contains(point)
+        }
     }
 
     func begin(_ item: DockItem, dock: DockWorkspaceModel) {
@@ -122,6 +133,13 @@ final class DockTabDragCoordinator {
     }
 }
 
+private struct DockInteractiveFrames: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
 private struct DockGroupFrames: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
@@ -149,7 +167,7 @@ struct WorkspaceDockView: View {
                 let layout = project.dock.root
                 DockTreeView(
                     node: layout, project: project, manager: manager,
-                    git: git, dragging: dragging
+                    git: git, dragging: dragging, isTopLeft: true
                 )
                 .frame(width: rootGeometry.size.width, height: rootGeometry.size.height)
                 .background {
@@ -162,7 +180,11 @@ struct WorkspaceDockView: View {
                 .onPreferenceChange(DockTabFrames.self) {
                     dragging.setFrames(tabs: $0)
                 }
+                .onPreferenceChange(DockInteractiveFrames.self) {
+                    dragging.setInteractiveFrames($0)
+                }
                 .onChange(of: manager.selectedProjectID) { dragging.cancel() }
+                .background(WindowPointerDragGate(blocksWindowMove: { dragging.blocksNativeWindowMove(at: $0) }))
                 .overlay(alignment: .topLeading) {
                     if let position = dragging.position, position.destination != nil {
                         let origin = rootGeometry.frame(in: .global).origin
@@ -224,6 +246,7 @@ private struct DockTreeView: View {
     let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator
+    let isTopLeft: Bool
 
     @State private var liveFraction: Double?
 
@@ -233,7 +256,7 @@ private struct DockTreeView: View {
         case .group(let group):
             DockTabGroupView(
                 group: group, project: project, manager: manager,
-                git: git, dragging: dragging
+                git: git, dragging: dragging, isTopLeft: isTopLeft
             )
         case .split(let split):
             GeometryReader { geometry in
@@ -246,20 +269,20 @@ private struct DockTreeView: View {
                 Group {
                     if horizontal {
                         HStack(spacing: 0) {
-                            child(split.first)
+                            child(split.first, isTopLeft: isTopLeft)
                                 .frame(width: firstLength, height: size.height)
                             divider(split, available: available)
                                 .frame(width: 1, height: size.height)
-                            child(split.second)
+                            child(split.second, isTopLeft: false)
                                 .frame(width: secondLength, height: size.height)
                         }
                     } else {
                         VStack(spacing: 0) {
-                            child(split.first)
+                            child(split.first, isTopLeft: isTopLeft)
                                 .frame(width: size.width, height: firstLength)
                             divider(split, available: available)
                                 .frame(width: size.width, height: 1)
-                            child(split.second)
+                            child(split.second, isTopLeft: false)
                                 .frame(width: size.width, height: secondLength)
                         }
                     }
@@ -269,10 +292,10 @@ private struct DockTreeView: View {
         }
     }
 
-    private func child(_ node: DockNode) -> some View {
+    private func child(_ node: DockNode, isTopLeft: Bool) -> some View {
         DockTreeView(
             node: node, project: project, manager: manager,
-            git: git, dragging: dragging
+            git: git, dragging: dragging, isTopLeft: isTopLeft
         )
     }
 
@@ -307,6 +330,14 @@ private struct DockTreeView: View {
                     )
             }
             .accessibilityIdentifier("bailey.dock.divider")
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: DockInteractiveFrames.self,
+                        value: [split.id: geometry.frame(in: .global)]
+                    )
+                }
+            }
     }
 }
 
@@ -317,12 +348,14 @@ struct DockTabGroupView: View {
     let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator
+    var isTopLeft = false
     private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false
     @State private var tabKeyboard = TreeKeyboardOwner()
     @State private var tabCursor: DockItem?
     @State private var tabKeyboardFocused = false
+    @State private var tabStripContentWidth: CGFloat = 0
     @State private var dragGestureItem: DockItem?
     @GestureState private var isTabDragging = false
     @Environment(\.appearsActive) private var windowAppearsActive
@@ -413,13 +446,19 @@ struct DockTabGroupView: View {
 
     private var header: some View {
         GeometryReader { geometry in
-            let origin = geometry.frame(in: .named("workspaceDock")).origin
-            let isTopLeft = origin.x < 1 && origin.y < 1
             let dragWidth = isTopLeft ? min(76, max(0, geometry.size.width - 124)) : 0
             HStack(spacing: 4) {
                 if dragWidth > 0 { WindowDragArea().frame(width: dragWidth) }
                 tabStrip(maxWidth: max(0, geometry.size.width - dragWidth - 44))
                 panelAddButton
+                    .background {
+                        GeometryReader { controlGeometry in
+                            Color.clear.preference(
+                                key: DockInteractiveFrames.self,
+                                value: [group.id: controlGeometry.frame(in: .global)]
+                            )
+                        }
+                    }
                 WindowDragArea().frame(minWidth: 0, maxWidth: .infinity)
             }
             .padding(.trailing, 8)
@@ -434,6 +473,7 @@ struct DockTabGroupView: View {
             font: .system(size: 10, weight: .semibold),
             iconSize: 14
         ) { showingPanelPicker.toggle() }
+        .accessibilityIdentifier("bailey.dock.addPanel")
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
                 ForEach(availableActions.indices, id: \.self) { index in
@@ -520,7 +560,7 @@ struct DockTabGroupView: View {
         project.dock.availableAddActions()
     }
 
-    private func tabStrip(maxWidth: CGFloat? = nil) -> some View {
+    private func tabStrip(maxWidth: CGFloat) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
@@ -561,10 +601,18 @@ struct DockTabGroupView: View {
                 }
                 .padding(.leading, 4)
                 .padding(.trailing, 2)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    tabStripContentWidth = $0
+                }
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(width: maxWidth, alignment: .leading)
             .clipped()
+            .overlay(alignment: .trailing) {
+                if tabStripContentWidth > 0 && tabStripContentWidth < maxWidth {
+                    WindowDragArea().frame(width: maxWidth - tabStripContentWidth)
+                }
+            }
             .background(TreeKeyboardHost(
                 owner: tabKeyboard, onKeyDown: handleTabKey,
                 onFocusChanged: { focused in

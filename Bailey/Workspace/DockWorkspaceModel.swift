@@ -49,7 +49,7 @@ struct DockWorkspaceConfiguration {
     static let standard = DockWorkspaceConfiguration(
         groups: [[.projects], [], [.files, .git]],
         selected: [.projects, nil, .files],
-        weights: [0.12, 0.69256, 0.18744],
+        weights: [0.24, 0.52, 0.24],
         addActions: DockAddAction.allCases,
         edgeThreshold: 0.22
     )

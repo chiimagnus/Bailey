@@ -186,6 +186,102 @@ private final class WindowChromeAttachmentView: NSView {
     }
 }
 
+/// A non-hit-testing observer that prevents the native titlebar from stealing
+/// mouse drags that begin on actual Dock controls. Blank areas remain movable.
+struct WindowPointerDragGate: NSViewRepresentable {
+    let blocksWindowMove: (CGPoint) -> Bool
+
+    func makeNSView(context: Context) -> WindowPointerDragGateView {
+        WindowPointerDragGateView()
+    }
+
+    func updateNSView(_ view: WindowPointerDragGateView, context: Context) {
+        view.blocksWindowMove = blocksWindowMove
+    }
+
+    static func dismantleNSView(_ view: WindowPointerDragGateView, coordinator: ()) {
+        view.detach()
+    }
+}
+
+@MainActor
+final class WindowPointerDragGateView: NSView {
+    var blocksWindowMove: (CGPoint) -> Bool = { _ in false }
+    private var monitor: Any?
+    private var resignObserver: NSObjectProtocol?
+    private weak var trackedWindow: NSWindow?
+    private var originalMovable: Bool?
+    private var exitTrackingArea: NSTrackingArea?
+    private var acceptsMouseMovedEventsBeforeAttach = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let exitTrackingArea { removeTrackingArea(exitTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        exitTrackingArea = area
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        restoreWindowMovement()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        detach()
+        guard let window else { return }
+        trackedWindow = window
+        acceptsMouseMovedEventsBeforeAttach = window.acceptsMouseMovedEvents
+        window.acceptsMouseMovedEvents = true
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restoreWindowMovement() }
+        }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseUp]) {
+            [weak self, weak window] event in
+            MainActor.assumeIsolated {
+                guard let self, let window, event.window === window else { return }
+                let local = self.convert(event.locationInWindow, from: nil)
+                let point = CGPoint(x: local.x, y: self.isFlipped ? local.y : self.bounds.height - local.y)
+                if self.blocksWindowMove(point) {
+                    if self.originalMovable == nil {
+                        self.originalMovable = window.isMovable
+                        window.isMovable = false
+                    }
+                } else {
+                    self.restoreWindowMovement()
+                }
+            }
+            return event
+        }
+    }
+
+    private func restoreWindowMovement() {
+        if let originalMovable, let trackedWindow {
+            trackedWindow.isMovable = originalMovable
+        }
+        originalMovable = nil
+    }
+
+    func detach() {
+        restoreWindowMovement()
+        trackedWindow?.acceptsMouseMovedEvents = acceptsMouseMovedEventsBeforeAttach
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        monitor = nil
+        resignObserver = nil
+        trackedWindow = nil
+    }
+
+    isolated deinit { detach() }
+}
+
 /// A deliberate window-moving surface. Interactive header controls are kept
 /// outside this view so their own drag gestures receive the full mouse stream.
 ///

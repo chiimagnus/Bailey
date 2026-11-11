@@ -451,7 +451,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         // tree or a separate test implementation of scroll behavior.
         let host = NSHostingView(rootView: DockTabGroupView(
             group: tabGroup, project: project, manager: manager,
-            git: GitStatusModel(), dragging: DockTabDragCoordinator()
+            git: GitStatusModel(), dragging: DockTabDragCoordinator(), isTopLeft: true
         ).coordinateSpace(name: "workspaceDock"))
         window.contentView = host
         window.orderFront(nil)

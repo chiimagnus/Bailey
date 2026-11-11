@@ -915,8 +915,8 @@ final class DockWorkspaceTests: XCTestCase {
               case .split(let inner) = outer.second else {
             return XCTFail("Expected default nested horizontal split")
         }
-        XCTAssertEqual(outer.fraction, 0.12, accuracy: 0.0001)
-        XCTAssertEqual(inner.fraction, 0.787, accuracy: 0.0001)
+        XCTAssertEqual(outer.fraction, 0.24, accuracy: 0.0001)
+        XCTAssertEqual(inner.fraction, 0.52 / 0.76, accuracy: 0.0001)
     }
 
     func testConfigurationRejectsInvalidLayouts() throws {
