@@ -493,18 +493,24 @@ final class GitGraphGeometryUITests: XCTestCase {
                        "External file and Ref events must really refresh the graph during the dwell")
         XCTAssertEqual(try fixture.git(["worktree", "list", "--porcelain"]), locations,
                        "A menu invalidated by refresh must not run its stale Worktree action")
-        // A native nested NSMenu may close when SwiftUI updates its backing ref list.
-        // Never use the stale AX element: resolve the same checkout from the new menu.
-        let actionable: XCUIElement
-        if open.isHittable {
-            actionable = open
-        } else {
-            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-            actionable = openSelectedWorktreeAction()
-        }
+        // The reference refresh invalidates the native nested menu. XCTest
+        // can still report its old AX element as hittable after it has closed;
+        // the recording shows that clicking it then hits the empty Dock pane.
+        // Dismiss the old menu and resolve the checkout from the current refs.
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let actionable = openSelectedWorktreeAction()
         XCTAssertTrue(actionable.isHittable,
                       "The selected checkout must have a physically hittable current menu action")
         actionable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        let openedProject = app.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", first.path)).firstMatch
+        XCTAssertTrue(openedProject.waitForExistence(timeout: 15),
+                      "Only the refreshed Worktree menu can open the selected checkout")
+        let selectedProject = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            openedProject.isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selectedProject], timeout: 8), .completed,
+                       "The Worktree action must select the exact requested checkout")
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         files.click()
