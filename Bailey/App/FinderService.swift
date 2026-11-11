@@ -7,6 +7,7 @@ import Carbon
 final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     let workspace = WorkspaceApplication(loadSavedState: true)
     let menuPresentation = MainMenuPresentation()
+    private weak var trackedPresentationMenu: NSMenu?
     private var preparingToQuit = false
 
     /// Let AppKit finish quitting only after all edited files were written.
@@ -65,22 +66,25 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func menuDidBeginTracking(_ notification: Notification) {
-        guard let menu = notification.object as? NSMenu else { return }
-        if menu === NSApp.mainMenu {
-            let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
-            menuPresentation.beginTracking(
-                project: owner?.selectedProject, projects: owner?.projects ?? []
+        guard let menu = notification.object as? NSMenu,
+              let mainMenu = NSApp.mainMenu, menu.supermenu === mainMenu,
+              menu.title == String(localized: "Panel", table: "Interface")
+                  || menu.title == String(localized: "Project", table: "Interface"),
+              trackedPresentationMenu == nil else { return }
+        trackedPresentationMenu = menu
+        let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
+        menuPresentation.beginTracking(
+            project: owner?.selectedProject, projects: owner?.projects ?? []
+        )
+        if let tracked = menuPresentation.tracked {
+            syncMenuTitles(
+                tracked.panels.map(\.title),
+                in: mainMenu, named: String(localized: "Panel", table: "Interface")
             )
-            if let tracked = menuPresentation.tracked {
-                syncMenuTitles(
-                    tracked.panels.map(\.title),
-                    in: menu, named: String(localized: "Panel", table: "Interface")
-                )
-                syncMenuTitles(
-                    tracked.projects.map(\.title),
-                    in: menu, named: String(localized: "Project", table: "Interface")
-                )
-            }
+            syncMenuTitles(
+                tracked.projects.map(\.title),
+                in: mainMenu, named: String(localized: "Project", table: "Interface")
+            )
         }
     }
 
@@ -99,7 +103,8 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuDidEndTracking(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu,
-              menu === NSApp.mainMenu else { return }
+              menu === trackedPresentationMenu else { return }
+        trackedPresentationMenu = nil
         menuPresentation.endTracking()
     }
 

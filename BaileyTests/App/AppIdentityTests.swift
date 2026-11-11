@@ -204,6 +204,11 @@ final class AppIdentityTests: XCTestCase {
     func testSystemMenuTrackingPinsPresentationUntilEndNotification() throws {
         let appDelegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
         let mainMenu = try XCTUnwrap(NSApp.mainMenu)
+        let panel = try XCTUnwrap(mainMenu.items.first {
+            $0.title == String(localized: "Panel", table: "Interface")
+        }?.submenu)
+        XCTAssertTrue(panel.supermenu === mainMenu)
+        XCTAssertEqual(panel.title, String(localized: "Panel", table: "Interface"))
         let presentation = appDelegate.menuPresentation
         let changes = Mutex<Int>(0)
         withObservationTracking {
@@ -215,6 +220,8 @@ final class AppIdentityTests: XCTestCase {
 
         XCTAssertNil(presentation.tracked)
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
+        XCTAssertNil(presentation.tracked, "The menu bar itself does not present the Panel rows")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: panel)
         XCTAssertNotNil(presentation.tracked)
         XCTAssertEqual(changes.withLock { $0 }, 0,
                        "Opening a menu must not invalidate native Window commands")
@@ -225,6 +232,8 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(changes.withLock { $0 }, 0)
 
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
+        XCTAssertNotNil(presentation.tracked)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: panel)
         XCTAssertNil(presentation.tracked)
         XCTAssertEqual(changes.withLock { $0 }, 1,
                        "Refresh the snapshot only after AppKit ends menu tracking")
