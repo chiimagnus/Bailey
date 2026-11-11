@@ -90,6 +90,34 @@ final class GitExecutionTests: XCTestCase {
         }
     }
 
+    func testConcurrentRepositoryDiscoveryAlwaysReturnsItsActualRoot() async throws {
+        let roots = try [makeRepository(), makeRepository()]
+        defer { for root in roots { try? FileManager.default.removeItem(at: root) } }
+        await withTaskGroup(of: [String].self) { group in
+            for worker in 0..<8 {
+                group.addTask {
+                    var errors: [String] = []
+                    for iteration in 0..<32 {
+                        let root = roots[(worker + iteration) % roots.count]
+                        let result = await GitCommandExecution.run(
+                            ["rev-parse", "--show-toplevel"], in: root.path,
+                            backend: LocalWorkspaceBackend.shared
+                        )
+                        let discovered = URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .newlines))
+                            .resolvingSymlinksInPath().path
+                        if result.status != 0 || discovered != root.resolvingSymlinksInPath().path {
+                            errors.append("\(root.lastPathComponent): \(result.status), stdout=\(result.stdout.debugDescription), stderr=\(result.stderr)")
+                        }
+                    }
+                    return errors
+                }
+            }
+            for await errors in group {
+                XCTAssertTrue(errors.isEmpty, errors.joined(separator: "\n"))
+            }
+        }
+    }
+
     func testInterleavedStagedMetadataCanDescribeNoCoherentGitSnapshot() throws {
         let directory = try makeRepository()
         defer { try? FileManager.default.removeItem(at: directory) }

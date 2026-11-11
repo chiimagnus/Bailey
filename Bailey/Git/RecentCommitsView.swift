@@ -826,6 +826,7 @@ struct RecentCommitsView: View {
                         .buttonStyle(.plain)
                         .help(commit.hash)
                         .accessibilityLabel(String(localized: "Copy Commit Hash", table: "Git"))
+                        .accessibilityIdentifier("bailey.git.history.copyHash")
 
                         Text(verbatim: commit.author)
                             .font(.system(size: 11 * fontScale))

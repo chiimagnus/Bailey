@@ -158,7 +158,7 @@ final class GitGraphGeometryUITests: XCTestCase {
             }
             // The bottom-left row contains a deliberate Copy Commit Hash
             // button, not a second commit-toggle target. Verify its own action.
-            let copyHash = app.buttons["Copy Commit Hash"].firstMatch
+            let copyHash = app.buttons.matching(identifier: "bailey.git.history.copyHash").firstMatch
             XCTAssertTrue(copyHash.isHittable,
                           "The commit hash action must remain reachable at \(requestedWidth)pt")
             let expandedBeforeCopy = file.exists
