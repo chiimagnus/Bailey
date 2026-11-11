@@ -303,6 +303,11 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式
 Dev 的 `LSHandlerRank=None` 不竞逐 Finder 默认文件处理程序；
 Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为已验收。
 
+系统原生右键菜单的短暂 tracking 期间，XCUITest 的 `app.menus` 快照可能无法枚举弹出菜单。
+验证 `⌘W` 对右键目标的路由时应同时检查目标的实际高亮及最终关闭对象，
+不能只因菜单未出现在 AX 快照就判定快捷键失败；
+需要点击真实菜单项的测试仍必须证明该项存在、可执行，并核对最终副作用。
+
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。
 真实 Windows SSH 回归必须**明确指定获授权的测试主机**。
 `BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；

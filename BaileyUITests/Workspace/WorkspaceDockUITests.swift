@@ -780,10 +780,10 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(a.waitForExistence(timeout: 15))
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         b.click()
+        let before = try contextOutlinePixels(of: a)
         a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            WorkspaceUITestSupport.menuItem("Close", in: $0).exists && $0.menuItems["Close Others"].exists
-        }, "The native tab menu must be open before Cmd-W")
+        XCTAssertNotEqual(try contextOutlinePixels(of: a), before,
+                          "The inactive tab must visibly become the native context target")
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(a.waitForNonExistence(timeout: 12))
         XCTAssertTrue(b.exists && window.exists,
