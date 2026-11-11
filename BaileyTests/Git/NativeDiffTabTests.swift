@@ -3008,6 +3008,69 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data(latest.utf8))
     }
 
+    func testShorterReloadNeverProjectsOldFoldsOntoNewText() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("shrinking.swift")
+        var lines = (0..<2_400).map { "let row\($0) = \($0)\n" }
+        try Data(lines.joined().utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", file.lastPathComponent],
+                                               in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"],
+                                               in: directory.path).status, 0)
+        lines[1_200] = "let row1200 = 42\n"
+        try Data(lines.joined().utf8).write(to: file)
+
+        let tab = DiffTab(repoRoot: directory.path, path: file.lastPathComponent,
+                          source: .worktree, untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        tab.autoSaveSuspendedForClose = true
+        try await wait { tab.isEditing && tab.editFoldsReady
+            && tab.editFolds.contains { $0.range.lowerBound > 10 }
+        }
+        let surface = DiffNativeSurface(diff: tab)
+        tab.nativeSurface = surface
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 450)
+        surface.render()
+
+        let shorter = "let only = 1\nlet rest = 2\n"
+        try Data(shorter.utf8).write(to: file)
+        tab.reload()
+        try await wait({
+            tab.newContent == shorter && !tab.isLoading
+                && !tab.editFoldsReady
+        }, pollingInterval: .milliseconds(1), timeout: 15)
+        XCTAssertTrue(tab.editFolds.isEmpty,
+                      "A new text snapshot must retire folds from its former line index")
+        surface.render()
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first(where: { $0.textView.isEditable }))
+        XCTAssertEqual(editor.textView.string, shorter)
+        XCTAssertTrue(editor.textView.editingFolds.isEmpty)
+        try await wait { tab.editFoldsReady }
+        surface.render()
+        XCTAssertEqual(editor.textView.string, shorter)
+        XCTAssertEqual(try Data(contentsOf: file), Data(shorter.utf8))
+
+        let restored = lines.joined()
+        try Data(restored.utf8).write(to: file)
+        tab.reload()
+        try await wait { tab.newContent == restored && tab.editFoldsReady && !tab.editFolds.isEmpty }
+        surface.render()
+        XCTAssertEqual(editor.textView.string, restored)
+
+        try Data().write(to: file)
+        tab.reload()
+        try await wait({ tab.newContent.isEmpty && !tab.editFoldsReady },
+                       pollingInterval: .milliseconds(1), timeout: 15)
+        XCTAssertTrue(tab.editFolds.isEmpty)
+        surface.render()
+        XCTAssertTrue(editor.textView.string.isEmpty)
+        try await wait { tab.editFoldsReady }
+        XCTAssertEqual(try Data(contentsOf: file), Data())
+    }
+
     func testActiveCleanWorktreeEditorSurvivesNewDiffComputation() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

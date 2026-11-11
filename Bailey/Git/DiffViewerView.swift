@@ -635,6 +635,10 @@ final class DiffTab: nonisolated Identifiable {
             if changed {
                 if baselineChanged { self.revealedOldLines.removeAll() }
                 self.editFoldsReady = false
+                self.editFolds = []
+                self.editDecorations = .empty
+                if baselineChanged { self.editableBaseline = nil }
+                self.editPresentationRevision &+= 1
                 self.display = nil  // Never pair an old review with a newly accepted worktree snapshot.
             }
             if changed || (self.hasChanges && self.display == nil) {
