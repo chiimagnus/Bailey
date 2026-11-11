@@ -251,6 +251,25 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertTrue((restoredWindow.textViews.firstMatch.value as? String)?
             .contains("RESTORED_MARKER") == true)
         XCTAssertEqual(try Data(contentsOf: file), savedBytes)
+
+        // A restored window must keep native titlebar behavior, not only its tabs.
+        let separators = restoredWindow.otherElements
+            .matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.sorted { $0.frame.midX < $1.frame.midX }
+        XCTAssertEqual(separators.count, 2)
+        let middleX = (separators[0].frame.midX + separators[1].frame.midX) / 2
+        WorkspaceUITestSupport.fileTab(file, in: restoredWindow).hover()
+        let beforeZoom = restoredWindow.frame
+        restoredWindow.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: middleX - beforeZoom.minX, dy: 19)
+        ).doubleClick()
+        let zoomed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let frame = restoredWindow.frame
+            return abs(frame.width - beforeZoom.width) > 40
+                || abs(frame.height - beforeZoom.height) > 40
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [zoomed], timeout: 10), .completed,
+                       "Restored Dock blank header must still perform the native double-click")
     }
 
     func testSystemPanelMenuUsesOnlyTheActualKeyWindow() throws {
