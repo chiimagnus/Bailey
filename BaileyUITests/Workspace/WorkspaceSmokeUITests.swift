@@ -36,8 +36,14 @@ final class WorkspaceSmokeUITests: XCTestCase {
         let ssh = app.buttons["Add SSH Files or Projects…"]
         XCTAssertTrue(ssh.waitForExistence(timeout: 10))
         ssh.click()
-        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 15))
+        let dismiss = WorkspaceUITestSupport.element("bailey.sshFolderPicker.dismiss", in: app)
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 15),
+                      "SSH item selection must open the in-window picker, not a native file sheet")
+        XCTAssertTrue(app.buttons["Cancel"].exists,
+                      "Even with no configured SSH hosts, the picker must expose Cancel")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(dismiss.waitForNonExistence(timeout: 10),
+                      "Escape must dismiss the SSH overlay without leaving a native sheet")
         XCTAssertEqual(app.windows.count, 1)
     }
 
