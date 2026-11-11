@@ -194,6 +194,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | 应用身份、Finder 类型注册、系统文件事件和目标窗口路由 | `AppIdentityTests`、`FinderDeliveryIntegrationTests`、`WorkspaceWindowsUITests`；实际 Finder 拖放另需受控图形会话 |
 | 原生右键菜单的快捷键提示、宽度与目标 | `AppIdentityTests`（显示契约）；`WorkspaceDockUITests`（中英文宽度、⌘W）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`（复制／删除）。实际对齐须由 GUI 验证 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `WorkspaceDockUITests`、`WorkspaceFilesUITests` 的真实输入与双窗 E2E |
+| Dock 标题栏、标签与分隔线拖动 | `NativeContentIdentityIntegrationTests` 核对三区空白尺寸；`WorkspaceDockUITests` 核对三区双击、窗口移动、标签／分隔线拖动及 Window 菜单；`WorkspaceWindowsUITests` 核对关闭重启后悬停标签再双击，验证实际窗口尺寸变化 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `NativeGitHistoryFileTests`、`GitRemoteRefreshIntegrationTests`、`GitIgnoreIntegrationTests`、`GitUncommittedActionTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests` |
@@ -207,6 +208,11 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | Files 与所有 Git 树的命中与交互 | `SharedTreeUITests`、`GitChangesUITests`、`GitGraphUITests`、`GitGraphGeometryUITests` |
 | 快照、历史与测试隔离 | `SessionStoreTests`、`WindowOwnershipIntegrationTests` |
 | 标签、Finder 队列、原生关闭及窗口整合 | `WorkspaceWindowsUITests`、`FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`NativeContentIdentityIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`、`DockWorkspaceTests` |
+
+窗口恢复后的 Dock 双击曾被报告间歇性失效。现有用例分别覆盖新建双窗与关闭重启，
+**尚未连续验证**「新建第二窗 → 关闭旧窗和新窗 → 退出 → 重启恢复 → 双击」；
+三区窗口尺寸测试在系统双击设置为「最小化」或「无动作」时会跳过，不代表这两种设置已验收。
+不能据此认定该间歇性问题已根治。
 
 Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言，原生绘制、点击、菜单、
 主题与尺寸仍用窗口和像素检查；不依赖 Vision OCR 从截图反向识别文字。
