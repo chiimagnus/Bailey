@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import XCTest
 
 @MainActor
@@ -444,12 +445,43 @@ final class WorkspaceWindowsUITests: XCTestCase {
     }
 
     private func activate(_ window: XCUIElement, in app: XCUIApplication) {
+        let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev"
+        ).first
+        guard let running else { XCTFail("The isolated Bailey process must exist"); return }
+        let nativeApp = AXUIElementCreateApplication(running.processIdentifier)
+        func isKeyWindow() -> Bool {
+            var focused: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(nativeApp, kAXFocusedWindowAttribute as CFString,
+                                                &focused) == .success,
+                  let focused else { return false }
+            let native = focused as! AXUIElement
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(native, kAXIdentifierAttribute as CFString,
+                                             &value) == .success,
+               let identifier = value as? String {
+                return identifier == window.identifier
+            }
+            var positionValue: CFTypeRef?
+            var sizeValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(native, kAXPositionAttribute as CFString,
+                                                &positionValue) == .success,
+                  AXUIElementCopyAttributeValue(native, kAXSizeAttribute as CFString,
+                                                &sizeValue) == .success,
+                  let positionValue, let sizeValue else { return false }
+            var origin = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin),
+                  AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return false }
+            let frame = window.frame
+            return abs(origin.x - frame.minX) < 3 && abs(origin.y - frame.minY) < 3
+                && abs(size.width - frame.width) < 3 && abs(size.height - frame.height) < 3
+        }
         for _ in 0..<app.windows.count {
-            if app.windows.firstMatch.identifier == window.identifier { return }
+            if isKeyWindow() { return }
             app.typeKey("`", modifierFlags: .command)
         }
-        XCTAssertEqual(app.windows.firstMatch.identifier, window.identifier,
-                       "A background window must become the actual keyboard owner")
+        XCTAssertTrue(isKeyWindow(), "A background window must become the actual keyboard owner")
     }
 
     private func workspaceWindowCount(in app: XCUIApplication) -> Int {

@@ -279,7 +279,7 @@ enum WorkspaceUITestSupport {
 
     static func menuItem(_ title: String, in scope: XCUIElement) -> XCUIElement {
         scope.menuItems.matching(NSPredicate(
-            format: "label == %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+            format: "title == %@ OR title BEGINSWITH %@ OR title BEGINSWITH %@",
             title, title + ",", title + "，"
         )).firstMatch
     }
@@ -335,14 +335,33 @@ enum WorkspaceUITestSupport {
             return
         }
         let app = AXUIElementCreateApplication(finder.processIdentifier)
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString,
-                                            &focused) == .success,
-              let focused else {
-            XCTFail("The real Finder drag source must own the focused native window")
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString,
+                                            &value) == .success,
+              let windows = value as? [AXUIElement] else {
+            XCTFail("Finder must expose its real windows for the native drag")
             return
         }
-        let native = focused as! AXUIElement
+        let frame = window.frame
+        let native = windows.first { candidate in
+            var originValue: CFTypeRef?
+            var sizeValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(candidate, kAXPositionAttribute as CFString,
+                                                &originValue) == .success,
+                  AXUIElementCopyAttributeValue(candidate, kAXSizeAttribute as CFString,
+                                                &sizeValue) == .success,
+                  let originValue, let sizeValue else { return false }
+            var origin = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(originValue as! AXValue, .cgPoint, &origin),
+                  AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return false }
+            return abs(origin.x - frame.minX) < 3 && abs(origin.y - frame.minY) < 3
+                && abs(size.width - frame.width) < 3 && abs(size.height - frame.height) < 3
+        }
+        guard let native else {
+            XCTFail("The real Finder drag window must match the selected XCTest window")
+            return
+        }
         var desiredSize = CGSize(width: min(window.frame.width, 500),
                                  height: min(window.frame.height, 360))
         guard let sizeValue = AXValueCreate(.cgSize, &desiredSize),
