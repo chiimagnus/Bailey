@@ -34,14 +34,21 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
             manager.attach(to: window)
             window.orderFront(nil)
             defer { window.close() }
-            func pointers(_ view: NSView) -> [DockTabPointerView] {
-                (view as? DockTabPointerView).map { [$0] } ?? view.subviews.flatMap(pointers)
+            func pointers(_ view: NSView) -> [ContextMenuClickView] {
+                (view as? ContextMenuClickView).flatMap {
+                    $0.onMiddleClick != nil ? [$0] : nil
+                } ?? view.subviews.flatMap(pointers)
             }
             try await wait { host.layoutSubtreeIfNeeded(); return pointers(host).count == 2 }
             let target = try XCTUnwrap(pointers(host).sorted {
                 $0.convert($0.bounds, to: host).minX < $1.convert($1.bounds, to: host).minX
             }.last)
-            let point = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
+            XCTAssertGreaterThan(target.bounds.width, 24,
+                                 "A Dock tab must mount a nonempty native middle-click hit target")
+            XCTAssertGreaterThan(target.bounds.height, 12)
+            let point = target.convert(
+                NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil
+            )
             let template = try XCTUnwrap(NSEvent.mouseEvent(
                 with: .otherMouseDown, location: point, modifierFlags: [], timestamp: 0,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 917,
@@ -58,44 +65,6 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
             XCTAssertEqual(project.dock.group(containing: .files) == nil, multiple)
             XCTAssertEqual(project.dock.activeGroupID, active, "Middle close never activates the clicked background group")
         }
-    }
-
-    func testNativeTabPointerPreservesDownModifiersAndFinishesDragOnlyOnce() throws {
-        let view = DockTabPointerView(frame: .init(x: 0, y: 0, width: 100, height: 24))
-        XCTAssertFalse(view.mouseDownCanMoveWindow,
-                       "Interactive tabs must drag Dock items, not the native window titlebar")
-        var presses: [NSEvent.ModifierFlags] = []
-        var releases: [NSEvent.ModifierFlags] = []
-        var drops = 0
-        view.press = { presses.append($0) }
-        view.release = { releases.append($0) }
-        view.drag = { _, finished in if finished { drops += 1 } }
-        func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
-            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: .init(x: x, y: 10),
-                modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
-                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-        }
-        view.mouseDown(with: try mouse(.leftMouseDown, 10, .command))
-        view.mouseUp(with: try mouse(.leftMouseUp, 10))
-        XCTAssertEqual(presses, [.command])
-        XCTAssertEqual(releases, [.command])
-        view.mouseDown(with: try mouse(.leftMouseDown, 10))
-        view.mouseDragged(with: try mouse(.leftMouseDragged, 13))
-        XCTAssertEqual(drops, 0)
-        view.mouseDragged(with: try mouse(.leftMouseDragged, 14))
-        view.mouseUp(with: try mouse(.leftMouseUp, 20))
-        view.mouseUp(with: try mouse(.leftMouseUp, 20))
-        XCTAssertEqual(drops, 1)
-        XCTAssertEqual(releases, [.command], "A completed drag must never replay ordinary selection")
-        var cancellations = 0
-        view.cancel = { cancellations += 1 }
-        view.mouseDown(with: try mouse(.leftMouseDown, 10))
-        view.mouseDragged(with: try mouse(.leftMouseDragged, 20))
-        view.cancelOperation(nil)
-        view.mouseUp(with: try mouse(.leftMouseUp, 30))
-        XCTAssertEqual(drops, 1)
-        XCTAssertEqual(cancellations, 1)
-        XCTAssertEqual(releases, [.command])
     }
 
     func testTabStripNativeKeyboardNavigatesWithoutDisplayingUntilReturn() async throws {

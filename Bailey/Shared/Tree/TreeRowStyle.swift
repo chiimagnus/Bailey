@@ -113,14 +113,17 @@ struct ContextMenuClickTarget: NSViewRepresentable {
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
     var isExpectedMenu: ((NSMenu) -> Bool)?
+    var onMiddleClick: (() -> Void)?
 
     init(onContextClick: @escaping () -> Void, onMenuClosed: (() -> Void)? = nil,
          onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil,
-         isExpectedMenu: ((NSMenu) -> Bool)? = nil) {
+         isExpectedMenu: ((NSMenu) -> Bool)? = nil,
+         onMiddleClick: (() -> Void)? = nil) {
         self.onContextClick = onContextClick
         self.onMenuClosed = onMenuClosed
         self.onMenuKeyDown = onMenuKeyDown
         self.isExpectedMenu = isExpectedMenu
+        self.onMiddleClick = onMiddleClick
     }
 
     func makeNSView(context: Context) -> ContextMenuClickView {
@@ -132,6 +135,7 @@ struct ContextMenuClickTarget: NSViewRepresentable {
         view.onMenuClosed = onMenuClosed
         view.onMenuKeyDown = onMenuKeyDown
         view.isExpectedMenu = isExpectedMenu
+        view.onMiddleClick = onMiddleClick
     }
 
     static func dismantleNSView(_ view: ContextMenuClickView, coordinator: ()) {
@@ -140,6 +144,7 @@ struct ContextMenuClickTarget: NSViewRepresentable {
         view.onMenuClosed = nil
         view.onMenuKeyDown = nil
         view.isExpectedMenu = nil
+        view.onMiddleClick = nil
     }
 }
 
@@ -148,6 +153,7 @@ final class ContextMenuClickView: NSView {
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
     var isExpectedMenu: ((NSMenu) -> Bool)?
+    var onMiddleClick: (() -> Void)?
     private weak var contextMouseEvent: NSEvent?
     private var menuKeyMonitor: Any?
     private var trackingMenu: NSMenu?
@@ -161,13 +167,20 @@ final class ContextMenuClickView: NSView {
     required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let event = NSApp.currentEvent,
-              event.type == .rightMouseDown
+        guard let event = NSApp.currentEvent else { return nil }
+        if event.type == .otherMouseDown {
+            return onMiddleClick != nil && event.buttonNumber == 2 ? super.hitTest(point) : nil
+        }
+        guard event.type == .rightMouseDown
                   || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
         else { return nil }
         let hit = super.hitTest(point)
         if hit != nil { prepareContextClick(event) }
         return hit
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 { onMiddleClick?() }
     }
 
     private func prepareContextClick(_ event: NSEvent) {

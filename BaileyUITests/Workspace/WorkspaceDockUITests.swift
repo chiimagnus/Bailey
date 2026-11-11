@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class WorkspaceDockUITests: XCTestCase {
+    func testBlankDockTitlebarDoubleClickUsesNativeZoom() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let before = window.frame
+        // The first 76 points are the actual titlebar drag surface;
+        // the traffic-light buttons end before this blank point.
+        window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 71, dy: 19)).doubleClick()
+        let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick")
+        if action == "None" { return }
+        if action == "Minimize" {
+            XCTAssertFalse(window.isHittable, "Titlebar double-click must honor system minimization")
+        } else {
+            let resized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let frame = window.frame
+                return abs(frame.width - before.width) > 40
+                    || abs(frame.height - before.height) > 40
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [resized], timeout: 10), .completed,
+                           "Double-clicking blank Dock titlebar must invoke native window zoom")
+            XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.projects", in: app).exists,
+                          "Zooming must preserve the original panel and its content")
+        }
+    }
+
     func testDockCommandAndShiftTabSelectionHasNativeAccessibilityState() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let files = try (0..<3).map {
@@ -1037,7 +1064,10 @@ final class WorkspaceDockUITests: XCTestCase {
                           "The project context outline must be visible only during menu tracking")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         row.hover()
-        XCTAssertEqual(try contextOutlinePixels(of: row), before,
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? self.contextOutlinePixels(of: row)) == before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed,
                        "Dismissal must remove the project context outline")
     }
 

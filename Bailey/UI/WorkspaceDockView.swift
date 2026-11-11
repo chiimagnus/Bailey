@@ -31,9 +31,16 @@ final class DockTabDragCoordinator {
     @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
     @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
+    @ObservationIgnored private var escapeMonitor: Any?
+
+    isolated deinit {
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+    }
 
     func cancel(_ item: DockItem? = nil) {
         if let item, source?.item != item { return }
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        escapeMonitor = nil
         // Layout preferences may update before project-switch cancellation;
         // preserve their latest frames so the next drag can still hit a target.
         position = nil
@@ -57,6 +64,15 @@ final class DockTabDragCoordinator {
         sourceDock = dock
         source = Source(item: item, items: dock.commandTargets(for: item),
                         sourceGroupID: group.id, sourceLayout: dock.root)
+        let window = NSApp.keyWindow
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak window] event in
+            guard event.window === window, window?.isKeyWindow == true,
+                  event.keyCode == 53,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+            else { return event }
+            self?.cancel()
+            return nil
+        }
     }
 
     func insertionX(in group: DockGroup) -> CGFloat? {
@@ -307,6 +323,8 @@ struct DockTabGroupView: View {
     @State private var tabKeyboard = TreeKeyboardOwner()
     @State private var tabCursor: DockItem?
     @State private var tabKeyboardFocused = false
+    @State private var dragGestureItem: DockItem?
+    @GestureState private var isTabDragging = false
     @Environment(\.appearsActive) private var windowAppearsActive
 
     private var active: DockItem? { group.selected }
@@ -518,28 +536,27 @@ struct DockTabGroupView: View {
                                     )
                                 }
                             }
-                            .overlay {
-                                if item.tabID == nil || renamingTabID != item.tabID {
-                                    DockTabPointerInput(
-                                        press: { modifiers in
-                                            select(item, extending: selectionChange(modifiers))
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                                    .updating($isTabDragging) { _, active, _ in active = true }
+                                    .onChanged { value in
+                                        if dragGestureItem != item {
+                                            dragGestureItem = item
                                             dragging.begin(item, dock: project.dock)
-                                        },
-                                        release: { modifiers in
-                                            dragging.cancel()
-                                            if modifiers.intersection([.command, .shift]).isEmpty { select(item) }
-                                        },
-                                        drag: { point, finished in
-                                            dragging.update(item, at: point, dock: project.dock)
-                                            if finished { dragging.finish(project: project) }
-                                            else { NSCursor.closedHand.set() }
-                                        },
-                                        close: { manager.closePanel(item, in: project) },
-                                        cancel: { dragging.cancel(item) }
-                                    )
-                                    .padding(.leading, 22)
-                                }
-                            }
+                                        }
+                                        dragging.update(item, at: value.location, dock: project.dock)
+                                        if dragging.position != nil { NSCursor.closedHand.set() }
+                                    }
+                                    .onEnded { value in
+                                        if dragGestureItem == item {
+                                            dragging.update(item, at: value.location, dock: project.dock)
+                                            dragging.finish(project: project)
+                                        }
+                                        dragGestureItem = nil
+                                    },
+                                including: item.tabID != nil && renamingTabID == item.tabID
+                                    ? .subviews : .all
+                            )
                     }
                 }
                 .padding(.leading, 4)
@@ -564,6 +581,9 @@ struct DockTabGroupView: View {
             .onChange(of: group.items) { _, items in
                 if tabCursor.map({ !items.contains($0) }) ?? false { tabCursor = active }
             }
+            .onChange(of: isTabDragging) { _, active in
+                if !active { dragGestureItem = nil }
+            }
         }
     }
 
@@ -576,7 +596,7 @@ struct DockTabGroupView: View {
                 isSelected: project.dock.selection(in: group.id).contains(item),
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
-                select: { select(item) },
+                select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
                 close: { close(item) },
                 renamingTabID: $renamingTabID
             )
@@ -587,7 +607,8 @@ struct DockTabGroupView: View {
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
                     },
-                    isExpectedMenu: { isMenuForTab($0, item: item) }
+                    isExpectedMenu: { isMenuForTab($0, item: item) },
+                    onMiddleClick: { manager.closePanel(item, in: project) }
                 )
                 .contextMenu {
                     if let current = project.tabs.first(where: { $0.id == id }) {
@@ -602,7 +623,7 @@ struct DockTabGroupView: View {
                 isSelected: project.dock.selection(in: group.id).contains(item),
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
-                select: { select(item) },
+                select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
                 close: { close(item) }
             )
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
@@ -613,7 +634,8 @@ struct DockTabGroupView: View {
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
                     },
-                    isExpectedMenu: { isMenuForTab($0, item: item) }
+                    isExpectedMenu: { isMenuForTab($0, item: item) },
+                    onMiddleClick: { manager.closePanel(item, in: project) }
                 )
                 .contextMenu {
                     let closeTitle = closeTitle(for: item)
@@ -663,7 +685,7 @@ struct DockTabGroupView: View {
     private func selectionChange(_ modifiers: NSEvent.ModifierFlags) -> DockWorkspaceModel.SelectionChange {
         if modifiers.contains(.shift) { return .range }
         if modifiers.contains(.command) { return .toggle }
-        return .preserve
+        return .replace
     }
 
     private func select(_ item: DockItem, extending change: DockWorkspaceModel.SelectionChange = .replace) {
@@ -879,110 +901,6 @@ struct DockTabGroupView: View {
                     .allowsHitTesting(false)
             }
         }
-    }
-}
-
-private struct DockTabPointerInput: NSViewRepresentable {
-    let press: (NSEvent.ModifierFlags) -> Void
-    let release: (NSEvent.ModifierFlags) -> Void
-    let drag: (CGPoint, Bool) -> Void
-    let close: () -> Void
-    let cancel: () -> Void
-
-    func makeNSView(context: Context) -> DockTabPointerView { DockTabPointerView() }
-    func updateNSView(_ view: DockTabPointerView, context: Context) {
-        view.press = press
-        view.release = release
-        view.drag = drag
-        view.close = close
-        view.cancel = cancel
-    }
-    static func dismantleNSView(_ view: DockTabPointerView, coordinator: ()) {
-        view.cancelOperation(nil)
-        view.press = nil
-        view.release = nil
-        view.drag = nil
-        view.close = nil
-        view.cancel = nil
-    }
-}
-
-final class DockTabPointerView: NSView {
-    var press: ((NSEvent.ModifierFlags) -> Void)?
-    var release: ((NSEvent.ModifierFlags) -> Void)?
-    var drag: ((CGPoint, Bool) -> Void)?
-    var close: (() -> Void)?
-    var cancel: (() -> Void)?
-    private var dragKeyMonitor: Any?
-    private var origin: CGPoint?
-    private var dragged = false
-    private var modifiers: NSEvent.ModifierFlags = []
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        setAccessibilityElement(false)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let event = NSApp.currentEvent,
-              event.type == .otherMouseDown || (event.type == .leftMouseDown && !event.modifierFlags.contains(.control))
-        else { return nil }
-        return super.hitTest(point)
-    }
-    override func mouseDown(with event: NSEvent) {
-        origin = event.locationInWindow
-        dragged = false
-        modifiers = event.modifierFlags
-        press?(modifiers)
-    }
-    override func mouseDragged(with event: NSEvent) {
-        guard let origin else { return }
-        if !dragged, hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 {
-            dragged = true
-            dragKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] key in
-                guard let self, key.window === self.window, self.window?.isKeyWindow == true,
-                      key.keyCode == 53, key.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
-                else { return key }
-                self.cancelOperation(nil)
-                return nil
-            }
-        }
-        if dragged { drag?(location(event), false) }
-    }
-    override func mouseUp(with event: NSEvent) {
-        guard origin != nil else { return }
-        if let window, !window.isKeyWindow { cancelOperation(nil); return }
-        origin = nil
-        stopMonitoring()
-        if dragged { drag?(location(event), true) }
-        else { release?(modifiers) }
-    }
-    override func otherMouseDown(with event: NSEvent) {
-        if event.buttonNumber == 2 { close?() }
-    }
-    override func cancelOperation(_ sender: Any?) {
-        origin = nil
-        dragged = false
-        stopMonitoring()
-        cancel?()
-    }
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil { cancelOperation(nil) }
-    }
-    private func stopMonitoring() {
-        if let dragKeyMonitor { NSEvent.removeMonitor(dragKeyMonitor) }
-        dragKeyMonitor = nil
-    }
-    private func location(_ event: NSEvent) -> CGPoint {
-        guard let content = window?.contentView else { return event.locationInWindow }
-        let point = content.convert(event.locationInWindow, from: nil)
-        return CGPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y)
     }
 }
 
