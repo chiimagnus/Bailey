@@ -395,8 +395,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let remotePoint = remoteFolder.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
-        XCTAssertLessThan(finder.window.frame.maxX, remotePoint.screenPoint.x - 20,
-                          "Finder must not obscure the real SSH Files destination")
+        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: remotePoint)
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: remotePoint)
 
@@ -426,7 +425,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let localPoint = localFolder.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
-        XCTAssertLessThan(finder.window.frame.maxX, localPoint.screenPoint.x - 20)
+        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: localPoint)
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: localPoint)
 

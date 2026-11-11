@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import Foundation
 import XCTest
@@ -312,20 +313,71 @@ enum WorkspaceUITestSupport {
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         let window = finder.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 20))
+        finder.activate()
         if !window.outlines["ListView"].waitForExistence(timeout: 2) {
-            finder.activate()
             finder.typeKey("2", modifierFlags: .command)
         }
         XCTAssertTrue(window.outlines["ListView"].waitForExistence(timeout: 12),
                       "The selected Finder file must expose an actual draggable row")
-        let title = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
-        title.click(forDuration: 0.2,
-                    thenDragTo: title.withOffset(CGVector(dx: 40 - window.frame.minX, dy: 0)))
         let source = window.outlines["ListView"].outlineRows.firstMatch
             .textFields[file.lastPathComponent]
         XCTAssertTrue(source.waitForExistence(timeout: 12),
                       "The system drag must originate from the actual selected file")
         return (window, source)
+    }
+
+    static func positionFinderDragWindow(_ window: XCUIElement, awayFrom target: XCUICoordinate) {
+        let point = target.screenPoint
+        guard let finder = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.finder"
+        ).first, let display = NSScreen.main else {
+            XCTFail("The real Finder process and display must be available for a file drag")
+            return
+        }
+        let app = AXUIElementCreateApplication(finder.processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString,
+                                            &focused) == .success,
+              let focused else {
+            XCTFail("The real Finder drag source must own the focused native window")
+            return
+        }
+        let native = focused as! AXUIElement
+        var desiredSize = CGSize(width: min(window.frame.width, 500),
+                                 height: min(window.frame.height, 360))
+        guard let sizeValue = AXValueCreate(.cgSize, &desiredSize),
+              AXUIElementSetAttributeValue(native, kAXSizeAttribute as CFString,
+                                            sizeValue) == .success else {
+            XCTFail("The actual Finder window must allow native resizing for an unobscured drag")
+            return
+        }
+        let size = window.frame.size
+        let margin: CGFloat = 20
+        let screen = display.frame
+        let x: CGFloat
+        let y: CGFloat
+        if point.x - screen.minX >= size.width + 2 * margin {
+            x = screen.minX + margin
+            y = max(screen.minY + margin, min(point.y - size.height / 2,
+                                              screen.maxY - size.height - margin))
+        } else if screen.maxX - point.x >= size.width + 2 * margin {
+            x = point.x + margin
+            y = max(screen.minY + margin, min(point.y - size.height / 2,
+                                              screen.maxY - size.height - margin))
+        } else {
+            x = screen.minX + margin
+            y = point.y >= screen.minY + size.height + 2 * margin
+                ? screen.minY + margin : point.y + margin
+        }
+        var desiredPosition = CGPoint(x: x, y: y)
+        guard let positionValue = AXValueCreate(.cgPoint, &desiredPosition),
+              AXUIElementSetAttributeValue(native, kAXPositionAttribute as CFString,
+                                            positionValue) == .success else {
+            XCTFail("The actual Finder window must move without covering the drop destination")
+            return
+        }
+        XCTAssertFalse(window.frame.insetBy(dx: -margin / 2, dy: -margin / 2).contains(point),
+                       "Finder must not cover the real destination at \(point)")
     }
 
     static func closeFinderDragWindow(_ window: XCUIElement) {

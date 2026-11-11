@@ -1063,8 +1063,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
         // Keep the actual WebKit drop point outside the Finder source window.
         let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
-        XCTAssertLessThan(finder.window.frame.maxX, target.screenPoint.x - 20,
-                          "Finder must not obscure the real WKWebView file input")
+        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: target)
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: target)
         XCTAssertTrue(browser.staticTexts["FINDER_UPLOAD_FILE: \(file.lastPathComponent)"]
@@ -1093,8 +1092,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         // visible: a hidden target cannot be validated by AX coordinates.
         let finder = WorkspaceUITestSupport.finderDragSource(for: file)
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
-        XCTAssertLessThan(finder.window.frame.maxX, window.frame.midX + 70,
-                          "Finder must not cover the native terminal drop target")
+        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: terminal)
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: terminal)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
