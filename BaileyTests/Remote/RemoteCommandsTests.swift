@@ -87,19 +87,17 @@ final class RemoteCommandsTests: XCTestCase {
     func testLocalCommandCompletionAndTimeoutIgnoreInheritedOutputPipe() async throws {
         for descriptor in [1, 2] {
             for parentExitsImmediately in [false, true] {
+                // A cold Python interpreter can exceed the 0.2s command deadline
+                // before the parent even reaches fork(). Exercise the pipe owner
+                // with a native shell, not interpreter startup latency.
                 let fixture = """
-                    import os, time
-                    if os.fork() == 0:
-                        os.setsid()
-                        time.sleep(1.5)
-                        os.write(\(descriptor), b"inherited pipe still open\\n")
-                        os._exit(0)
-                    \(parentExitsImmediately ? "os._exit(0)" : "time.sleep(0.6)")
+                    ( sleep 1.5; printf 'inherited pipe still open\\n' >&\(descriptor) ) &
+                    \(parentExitsImmediately ? "exit 0" : "sleep 0.6")
                     """
                 let started = ProcessInfo.processInfo.systemUptime
                 if parentExitsImmediately {
                     let completed = try await LocalWorkspaceBackend.shared.run(
-                        argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+                        argv: ["/bin/sh", "-c", fixture], cwd: nil, env: nil,
                         stdin: nil, timeout: 0.2
                     )
                     XCTAssertEqual(completed.status, 0)
@@ -108,7 +106,7 @@ final class RemoteCommandsTests: XCTestCase {
                 } else {
                     do {
                         _ = try await LocalWorkspaceBackend.shared.run(
-                            argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+                            argv: ["/bin/sh", "-c", fixture], cwd: nil, env: nil,
                             stdin: nil, timeout: 0.2
                         )
                         XCTFail("A still-running command must honor its deadline")
