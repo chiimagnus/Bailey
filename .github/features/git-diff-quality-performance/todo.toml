@@ -119,42 +119,44 @@ note = "2 MiB+-5 MiB 30次可见语法复用、30次冷解析和10标签堆内�
 [[tasks]]
 id = "P4-T1"
 title = "核销所有 Git Diff 来源和实际字节结果"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
 commit = ""
-note = ""
+no_commit_reason = "实际 Git 与宿主测试核销；无新增生产代码，Feature 状态与证据按执行规范仅留本地"
+note = "HEAD c9111491: make test 五类245项0失败2项仅授权SSH跳过，退出0；Git OID/Index/原始字节/历史/清理规则与编码实测，GUI交P4-T2，远端实机交P4-T3，见 evidence-p4.md"
 
 [[tasks]]
 id = "P4-T2"
-title = "完成完整 App GUI 交互与可访问性验收"
-status = "pending"
+title = "核销已有 App GUI 证据与本轮验收边界"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "5e4a7660"
+note = "2026-11-11用户限定P4为本机验收。旧版真实App GUI已有记录，但最终ae049476未运行完整E2E；旧云端225项含26失败方法保留为非门禁，不冒称已修复。UI历史源码夹具浅克隆根因由5e4a7660修复并用本地浅/完整Git实验证实；最终make build:ui通过。"
 
 [[tasks]]
 id = "P4-T3"
-title = "验收获授权 Windows SSH Diff 与失败恢复"
-status = "pending"
+title = "核验获授权 Windows SSH 实机数据与受控恢复"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "c9111491"
+note = "授权Windows SSH专属临时仓库真实3项0失败0跳过，含clean/EOL/CP936/原字节保存及受控连接失效拒写恢复；后续b76d4fa4完整宿主955项0跳过包含实机回归。真实物理断线、跨窗重连完整GUI未测，用户确定不纳入P4门禁。"
 
 [[tasks]]
 id = "P4-T4"
 title = "以 Swift XCTest 核验首屏、编辑、滚动与资源释放"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t4"
-commit = ""
-note = ""
+commit = "ae049476"
+note = "ea30f7be修复U+2028末行漏绘并以真实像素Red-Green验证；ae049476直接核对10个语法树与10个owner析构。最新NativeDiffTabTests136项0失败、2项SSH条件跳过退出0；旧b76d4fa4全量Host955项0失败0跳过；旧macOS27.0.1 CI首次布局性能超限未复测，按用户本机口径列为非门禁。"
 
 [[tasks]]
 id = "P4-T5"
-title = "执行最终全量回归并完成交付审计"
-status = "pending"
+title = "核销本机回归、构建签名与交付审计"
+status = "completed"
 plan = "plan-p4.md#p4-t5"
 commit = ""
-note = ""
+no_commit_reason = "任务仅整合Feature需求、计划、状态和审计，没有新的生产代码；用户要求本轮将Feature文档统一提交Git，产品修复已在先前原子提交。"
+note = "2026-11-11本机验收收口：b76d4fa4完整make test955项0失败0跳过退出0；最终产品代码ae049476受影响NativeDiffTabTests136项0失败2项环境跳过退出0；最终Debug、Release、UI target构建和严格验签通过。未在最终SHA重跑955项全量，也未完成云端GUI/旧系统或远端物理故障GUI；用户明确不作为P4 Gate，审计保留Deferred。"
 
 [[tasks]]
 id = "P1-T6"

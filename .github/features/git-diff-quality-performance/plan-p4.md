@@ -1,32 +1,39 @@
-# P4：跨来源完整用户验收、远端场景与性能交付
+# P4：Git Diff 本机回归、远端数据与性能收口
 
-**Goal：** 通过 `BaileyTests` 和必要的 `BaileyUITests`，
-验证 P2／P3 的原生组件与完整 Bailey Dev 用户结果；核销原始字节、
-渲染／输入、失败恢复以及现有性能和资源释放回归。
+**Goal：** 以本机 Swift XCTest、获授权 Windows SSH 实机、
+实际构建与验签核销 P2／P3 的 Git Diff 字节、原生布局、
+输入／保存、失败恢复和资源释放，不把未运行的完整 App GUI 声称为通过。
 
 **Non-goals：** 不把自动化绿色等同发布；PR #78 已于 2026-11-05 合并，本阶段不再安排其合并；
 不推送主分支、不修改用户数据、不重复实现普通 Git 操作或 `adaptive-large-files` 的 GB 级方案。
 
 **Approach：** 先按当前 HEAD、现行 `docs/testing.md` 与真实调用链，逐项对照
 `idea.md` 的条件矩阵、现有 XCTest 的**实际断言与执行记录**；有证据缺口才新增用例。
-宿主验证 Git／TextKit／字节／资源，隔离 GUI runner 验证实际用户动作，获授权的 Windows
-SSH 在独立测试连接补实机结果。只对变更影响范围定点复测，最终完整回归归 P4-T5；
+宿主验证 Git／TextKit／字节／资源，获授权 Windows SSH 在独立测试连接核对真实磁盘。
+2026-11-11 用户确认本次 P4 以**本机测试通过**收口：沿用 `b76d4fa4` 的
+955 项完整 Host 全绿证据，并在最终代码 `ae049476` 对受影响的 `NativeDiffTabTests`
+136 项重新验证；再核对 Debug／Release、UI Target 编译和签名。
+旧 CI 失败、独立 GUI 及旧系统性能证据保留但不再要求本轮补跑；
 不额外建 WindowServer 首帧、30 次 GUI P95、虚拟机或重复测试框架。
 
 **Acceptance：**
 - 真实 Git 各比较来源的 old/new 与磁盘、Index、Git 命令一致；
   不因规范化、状态切换和重载出现虚假变更或草稿丢失。
-- 真实完整 App 下折叠、行号、删除 ghost、Split 同步、浮动／传统滚动条、
-  高亮、AX、输入、保存、恢复和焦点全部符合 `idea.md`。
+- 通过本机 Swift XCTest 的真实原生字形、滚动、AX、折叠、编辑、Undo／保存、
+  Split 和资源退出断言，结合已有真实 App GUI 历史证据；
+  不以组件测试冒充最新版本完整 App GUI E2E。
 - 首屏可见文字、滚动范围、输入、切标签和关闭后的资源释放，
   由相关 Swift XCTest 的结果断言；既有 P95／内存测量用于定位回归，
   不再要求独立 WindowServer 首像素、30 次冷热 GUI P95 或虚拟机。
-- 全量测试、构建、签名、适用 GUI E2E 与远端缺口记录对应**最终提交版本**，
-  无未解释回归、旧双轨、临时调试改动和无主文档状态。
+- 记录**完整本机 Host 955 项在 `b76d4fa4` 全绿**，随后新代码限于原生布局与
+  语法树释放测试，最终 `ae049476` 对受影响的 136 项复验（2 条 SSH 用例环境跳过，
+  曾在前述授权完整 Host 中实际通过）；Debug／Release、UI Target 编译及验签全绿。
+  未执行的完整 GUI、云端及旧版系统明确列出，不伪称通过。
+  无新增旧双轨、临时调试改动和无主文档状态。
 
 **Rules：**
-- 不在用户正在使用的 Mac 桌面运行抢焦点 UIXCTest；必要的完整 App UI XCTest
-  优先在 GitHub Actions 隔离 runner 上进行，不创建 macOS 虚拟机。
+- 不在用户正在使用的 Mac 桌面运行抢焦点 UIXCTest；
+  本次 P4 不再启动新的独立 GUI runner 或虚拟机。
   现有 Windows SSH 授权只覆盖指定测试仓库，不扩展为任意远端操作。
 - Windows SSH 测试只针对明确授权的专属目标、独立临时仓库；
   测试不借 SSH master，不操作工作中用户文件。
@@ -91,11 +98,11 @@ SSH 在独立测试连接补实机结果。只对变更影响范围定点复测�
 `make test ONLY_TESTING='BaileyTests/NativeGitHistoryFileTests/testSHA256RepositoryResolvesImmutableBlobsForHistoryIndexAndWorktree'`；
 受共享实现影响时扩大到上述相关类；完成本任务时按环境核对该任务覆盖的实际方法、
 XCTest 结果、最终 Git/磁盘字节与跳过原因。不机械重复 `NativeDiffTabTests` 的全部性能测试。
-完整 App 至少核对 Staged／Unstaged 真实基线、Changes 列表目标、
-Graph 历史／其它 Worktree 浏览与工作区保存结果；
-从 `GitChangesUITests`、`GitGraphUITests`、`GitHistoryUITests`、
-`WorkspaceGitUITests` 中选择**不可被宿主测试替代的具体方法**，由 P4-T2 在隔离 GUI runner 执行；
-不因来源多就把四个 UI 类全部重复跑一轮。
+完整 App 入口的旧版本 GUI 实测证据归 P4-T2 如实核销；
+最终提交的真实前台选择、窗口焦点和 ⌘S E2E 在本轮未重跑。
+Staged／Unstaged、Changes／Graph 来源及保存后的 Git／磁盘字节，
+按本阶段授权范围以实际 Host 与既有 GUI 记录分别证明，
+不重复创建四套 GUI 大规模矩阵。
 `Makefile` 已提供原生 XCTest 枚举预检，任何零匹配选择器必须失败；
 不重复把底层全矩阵复制成冗长 GUI 脚本。
 检查完整命令退出状态及真实 Git/文件后置副作用。
@@ -114,82 +121,38 @@ Windows Git 专有配置的真实效果归 P4-T3 专属远端补验。
 真实生产缺陷在当前 owner 修复并移除被替代路径，原子提交；仅核销证据不制造代码提交。
 
 <a id="p4-t2"></a>
-## P4-T2 完整 App 真实 GUI、交互、AX 和保存验收
+## P4-T2 核销已有 App GUI 证据与本轮验收边界
 
-**结果：** 用户在 Bailey Dev 实际看到和操作的行为成立，
-不再只靠最小 `NSWindow` 宿主断言或一次成功的键盘事件推断正确。
+**结果：** 已有完整 App GUI 测试仅按实际运行的提交、系统和断言引用；
+不把本机 `NSWindow`／原生像素宿主测试或 `make build:ui` 误称完整 App E2E。
+2026-11-11 用户明确本阶段以本机 Swift 测试为完成依据，不额外启动
+GitHub Actions GUI 或占用当前桌面，原 P4-T2 完整 GUI 矩阵退出本次门禁。
 
-**Files／入口：**
-`DiffNativeRoot.updateNSView`、`DiffNativeSurface.render/requestFocus`、
-`DiffCodePaneView.layout/setReviewDocument/activateFold`、
-`DiffRowGeometry.visibleRows`、`DiffTab.save/autoSaveOnFocusLoss`；
-`BaileyUITests/Git/{WorkspaceGitUITests,GitChangesUITests,GitHistoryUITests,GitGraphUITests}.swift`、
-`BaileyUITests/Support/WorkspaceUITestSupport.swift` 的启动／焦点／输入辅助函数、
-`BaileyTests/Git/NativeDiffTabTests.swift`。
+**核销：**
+1. `WorkspaceGitUITests` 等历史真实 Bailey Dev 操作已有旧版本成功证据，
+   但不可外推为最终 `ae049476` 的完整 GUI 验收。
+2. 旧 SHA `c9111491` 的云端完整 UI Job 执行 225 项、8 跳过、
+   26 个失败方法（40 条失败断言）；保留可追溯的真实失败，不按通过处理。
+3. GitHub UI Job 真实源码历史夹具需要完整 Git 历史，
+   已在提交 `5e4a7660` 修复 shallow checkout，并由本地浅／完整克隆实验证实；
+   未在最终提交复跑云端 UI，不声称云端已绿。
+4. `make build:ui` 在最终 `ae049476` 通过、退出码 0；
+   原生字形、滚动、折叠 AX、键入与真实 Git／文件字节由受影响 Host 测试核对。
 
-**步骤：**
-1. 在 GitHub Actions 的独立 macOS runner 上，按**当前提交 SHA**启动 `chiimagnus.bailey.dev`，
-   使用测试专属 Git 临时目录，验证 XCTest 真正启动 App 并完成目标动作。
-   不在当前用户桌面抢焦点、修改个人系统外观／剪贴板或创建虚拟机。
-   若测试输入合成失败，保留日志并区分 runner、夹具与产品错误，
-   不通过 `sleep`、禁用焦点断言或吞事件制造绿色。
-2. 真实 Git Changes、Git Graph、历史原文、Staged／Unstaged 快速切换、
-   同文件多次打开、外部刷新、Dock 重挂载、多窗口选择、切文件及关窗恢复逐一操作。
-   看得到文字与真正能输入、第一响应者属于哪个窗口是两项不同结果。
-3. Unified／Split、普通 Worktree 可编辑／Staged 与历史只读／clean filter
-   规范化只读对照和原始 Worktree 并列、明暗／高对比、
-   两种原生滚动条风格、普通／完整长行设置，
-   窄／宽窗口、顶部／中部／深处滚动／无变更非折叠深处，
-   折叠按钮层级与 AX Press 实际坐标、长删除 ghost、
-   语法色及词级强调、视口恢复、字体/主题切换；
-   原生文字像素、滚动边界、宽度／主题／分隔符的组合由现有 `NativeDiffTabTests`
-   及编辑器宿主用例证明；完整 App 只核对真实入口、文字可见、AX 按压、焦点与落盘。
-   不为宿主已经覆盖的每种文本组合重建 GUI 夹具。
-4. 实际文本操作：普通输入不自动展开、手动折叠逐段展开、
-   跨隐藏选区（端点落在可见区／隐藏区／文末）、粘贴、剪切、`⌘A`、Find/Replace、
-   Undo/Redo、实际支持的 IME 输入、`⌘S`、失焦自动保存、
-   在途保存新增编辑、保存失败及关闭恢复；
-   断言光标、可见内容、磁盘精确字节、Git 工作区状态与 Index 未意外改变。
-5. 审查可视标记和 AX 树是否真实可点击，
-   无按钮／空状态的只读 Diff 不声明可编辑；
-   Changes 右键仅改变操作目标而不误触发 Diff 打开或其他组焦点，
-   右键菜单期间快捷键作用于当前第一响应者而非后台窗口。
-6. **历史偶发 GUI 故障要区分现行缺陷与旧环境证据：**
-   2026-11-05 的 `WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile`
-   曾在 ⌘S 的 XCUITest 事件合成阶段超时，后来复测通过；现行源码位置在
-   `BaileyUITests/Git/WorkspaceGitUITests.swift` 的同名方法，不绑定旧行号。
-   先核对失败日志对应提交、runner、前台 App、第一响应者、菜单与最终磁盘字节；
-   在当前 SHA 上定点复测一次完整用户路径。若仍失败，再按证据复现时序、定位
-   系统注入／夹具／产品责任，并进行必要次数的针对性回归；**单次转绿不等于已归因**，
-   但旧日志也不能无条件强制开启随机顺序、长轮次 GUI 压测。
-   旧 Peekaboo ⌘Z 回执与 AX 正文不一致同样先由现有 Undo／Redo XCTest 核对；
-   未重现不以猜测增加产品焦点重试、`sleep` 或兜底分支。
+**未覆盖（用户接受为非门禁）：** 最终提交的完整 App 前台菜单、
+第一响应者、跨窗快捷键和远端 GUI 断线／重连；
+旧云端 UI 失败与用户前台现状之间的归因尚未全部完成。
+不删或禁用现有 UI 测试、不放松断言、不称这些功能已通过 E2E。
+详见 `evidence-p4.md` 与 `audit-p4.md`。
 
-**验证：**
-`make build:ui` 仅负责确认 target 可编译，随后使用
-`make test:ui` 的受影响 `BaileyUITests` 选择器执行真实完整 App 路径；
-`make test:NativeDiffTabTests,NativeContentIdentityIntegrationTests,NativeEditorCompositionTests`
-保留极端原生像素、IME、AX 组件级断言，
-不重复整套 GUI 大规模数据矩阵。
-每个失败对应截图、AX frame、前台进程、XCTest 日志与真实磁盘结果；
-`testWorktreeDiffEditsAndPersistsRealGitFile` 在相同 SHA 复测并核对真实字节；
-发现可复现故障时才扩展到相邻用例、不同测试顺序和足够次数的定向复测。
-报告已证实的故障归属与剩余未解问题；不把历史 XCUITest 合成超时直接定性为产品故障。
-
-**Uncovered：** 真实中文输入法候选、获授权远端 GUI 等本轮适用条件须
-逐项记录环境、替代证据与用户可见影响；旧版 macOS 实机 GUI 非本轮验收要求；
-不要求虚拟机、不抢用户桌面。**必需的** App 级菜单、焦点、AX 和保存
-若未执行或失败，则不得标记本任务完成。
-
-**文档／提交：** 真实交互改变就在本任务更新 `docs/features/diff.md`、
-`docs/ui.md` 与必要的 `docs/testing.md`；E2E 夹具及生产根因分别原子提交，
-同时删除实际被替代的代码，不补历史流水账。
+**文档／提交：** UI 测试夹具的历史前提修复在 `5e4a7660` 已提交；
+本次只据实更新 Feature 计划、审计与测试边界，不为已豁免的 GUI 创建替代实现。
 
 <a id="p4-t3"></a>
-## P4-T3 完成获授权 SSH 的 Git Diff 语义与断线恢复闭环
+## P4-T3 核验获授权 SSH 实机数据与受控恢复
 
-**结果：** 远端文件的来源、保存与取消从未回退本机，
-Windows Git 与网络时序下保持同一 Diff 视觉和真实字节。
+**结果：** 通过获授权 Windows SSH 实机宿主测试，核对远端文件来源、
+原始字节、保存资格与模拟故障恢复；不以宿主模拟断线冒充完整 App 物理断网 GUI。
 
 **Files／入口：**
 `DiffTab.reload/gitContent/readWorktreeFile/writeCurrentText`、
@@ -235,9 +198,9 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 只对专属授权目录运行相关现有授权 live tests；
 以现有真实方法选择器运行宿主测试，例如
 `make test ONLY_TESTING='BaileyTests/NativeDiffTabTests/testAuthorizedWindowsSSHGitReviewAndRawSaveMatchGitCleanRules BaileyTests/SSHGitRecoveryLiveTests/testAuthorizedWindowsGitSnapshotSurvivesTransportFailureAndCanWriteOnlyAfterRecovery'`；
-再在专用桌面执行
-`make test:ui ONLY_TESTING='BaileyUITests/WorkspaceGitUITests/testAuthorizedWindowsSSHGitReviewThroughRealUI'`。
-这些选择器必须通过 Makefile 的原生枚举预检；
+`BaileyUITests/WorkspaceGitUITests/testAuthorizedWindowsSSHGitReviewThroughRealUI`
+在最终代码未于独立 GUI 会话重跑，按用户当前验收决策记录为非门禁。
+宿主测试选择器必须通过 Makefile 的原生枚举预检；
 核对最终远端文件、Index、HEAD、
 本机同名文件不变。执行超时、断线、重连、切别的窗口、远端路径改名／文件删除、
 多标签切换与取消后旧结果不得发布。
@@ -246,7 +209,8 @@ GUI 路径 `BaileyUITests/Git/WorkspaceGitUITests.swift` 的
 2026-11-09 的授权实机 16 项通过证据超越，不能继续列为现行阻塞。
 尚不能从现有宿主／真实 SSH UI 用例推出**完整 App 在断线期间的隐藏／重开／跨窗、
 保存失败后重连和过期结果**全已验收；`docs/testing.md` 已明确记录该限制。
-如无法在独立 GUI 会话获授权执行，逐项标注未测、替代证据和是否阻塞，
+本轮不再为此占用独立 GUI 会话；在 `evidence-p4.md` 逐项保留真实
+断线期间的隐藏／重开／跨窗／过期请求未验收，**非 P4 本地门禁**。
 不可把模型恢复用例冒充完整 App GUI。实机跳过仍须明确记作 skipped。
 
 **文档／提交：** 合约变更在本任务更新 `docs/features/{diff,ssh}.md`
@@ -284,7 +248,8 @@ Host 执行 941 项、16 skipped、11 条失败断言（2 unexpected）。其中
 - `testWorktreeFoldedEditorKeepsFoldsOnClickAndExpandsOnlyOnSeparator`：
   展开后 AX 折叠标签更新等待超时；区分真实未更新与测试只检查首个标签的假设。
 以上是旧于当前 HEAD 的真实失败证据，**不是当前 HEAD 已复现的结论**；
-须用同 SHA／系统环境和相同前提查明原因，缺口在本任务修复并定点验证。
+上述旧 CI 失败的修复已用本机真实 TextKit 与解析树生命周期回归验证；
+同系统 CI 复验不在本次用户确定的验收范围，不以本机转绿宣称旧 CI 已复现通过。
 
 **步骤：**
 1. 核对测试所用提交、Swift/Xcode 版本、Git 夹具和运行环境，
@@ -307,17 +272,19 @@ Host 执行 941 项、16 skipped、11 条失败断言（2 unexpected）。其中
    核对标签、项目、窗口真关闭和 Dock 重挂载的现有测试是否保留／释放唯一正文、
    Undo、布局与语法资源。Git／SSH 取消核对进程和字节读入边界，不能只看代次失效。
    有真实性能／泄漏失败再用 Instruments 找根因，不重复建一套测量平台。
-5. 必需的 App 级输入、焦点、保存及 AX 动作复用 P4-T2 的
-   `BaileyUITests`（GitHub Actions 独立 runner）。不得在用户工作桌面抢焦点，
-   不创建 macOS 虚拟机。真实失败回对应源码 owner 修复并复测。
+5. App 级输入、焦点、保存和 AX 的历史证据由 P4-T2 单独记录；
+   本轮以本机原生 TextKit／文件／Git XCTest 的实际后置断言验收，
+   不将未执行的最新完整 App GUI 计作通过。不占用用户工作桌面或创建虚拟机。
 
 **验证：** 优先选择上述已存在的具体 `BaileyTests` 方法，并在修改
 TextKit／共享行索引时扩大到 `NativeDiffTabTests`、`NativeEditorLayoutTests`、
 `TextCoordinateIndexTests`、`NativeContentIdentityIntegrationTests`、
 `NativePaneRetentionIntegrationTests` 和 `DiffEngineTests` 的受影响集合；
-实际 App 用户动作只通过 P4-T2 的 UI 方法核销。
+历史完整 App 用户动作由 P4-T2 按当时版本独立记证，
+本轮最终提交的 GUI 未验证内容明示为非门禁。
 所有通过证据记录具体提交、执行数量、失败／跳过项、退出码和真实副作用。
-如无新产品代码变化，不重复运行全量构建；最终全量归 P4-T5。
+如无新产品代码变化，不重复运行全量构建；P4-T5 按本机旧版完整
+Host 与最终受影响范围的定点回归分别核销，并明示 SHA 不一致。
 
 **Uncovered：**
 真实 SSH、输入法等环境不可用时按 `idea.md` 记录适用缺口；
@@ -328,7 +295,7 @@ TextKit／共享行索引时扩大到 `NativeDiffTabTests`、`NativeEditorLayout
 纯测试核销或性能证据不制造代码提交。
 
 <a id="p4-t5"></a>
-## P4-T5 最终回归、源码与计划双向审计及交付判定
+## P4-T5 本机回归、源码与计划双向审计及交付判定
 
 **结果：** 当前 HEAD 对应的全部必须条件能逐项追溯，
 没有未提交旧路径、虚假完成声明、未处理冲突或损坏正式用户环境。
@@ -354,25 +321,18 @@ TextKit／共享行索引时扩大到 `NativeDiffTabTests`、`NativeEditorLayout
    所有适用值和极端条件有精确测试入口、有效前提、可见结果及环境证据；
    未执行者列原因、影响、替代证据与必需补验，
    无法完成必需路径则明确 **No-Go**。
-3. 在**最终相同提交 SHA**运行 `make test`，核对全部 XCTest 发现数量、
-   failure／skip、`make` 实际退出状态及签名后置步骤；再执行 `make build`、
-   `make build:ui`、按 P4-T2 选定的真实 App UI 方法，必要时运行适用的
-   `make build:release`。GitHub Actions 当前工作流有 `workflow_dispatch`
-   的 Host／UI／Both 与可选类／方法选择，两个 job 独立 runner；
-   只引用**实际 job SHA、macOS/Xcode 版本、原始 `.xcresult`、全部断言和真实输出**。
-   历史 843／923 项通过与 16 项 skipped 都只是旧提交证据，
-   不能冒充当前成功。2026-11-10 run `42792227500` 的 Host 在 `162d1369`
-   执行 941 项，16 项 skipped、11 条失败断言（2 unexpected）：
-   其中 10 条来自 P4-T4 所列 4 个 `NativeDiffTabTests` 方法；另 1 条来自
-   `RemoteCommandsTests.testLocalCommandCompletionAndTimeoutIgnoreInheritedOutputPipe`。
-   后者沿 `LocalWorkspaceBackend.run → runSync` 的 `Process.run`、直接进程退出、
-   子进程继承 pipe 和 0.2 秒期限核对：区分进程启动／调度时延、真实 pipe 排空
-   与产品超时错误，必要时修复当前唯一 IO owner；不简单延长等待或放宽时间断言。
-   同 SHA／runner 的失败必须经真实前提定位并重测；不同 SHA 需重新核销。
-   对任何当前失败，区分 XCTest、产品、构建／签名、结果摘要解析或 GUI 输入合成，
-   不盲加 `sleep`、吞错或放松断言。
-   必要的 GUI 用户路径未执行或失败就是缺口；只对实际受影响的完整 App 用例
-   运行 GUI，不自动重复整套极端数据矩阵。Release 性能仅在现行契约及实际改动需要时验收。
+3. 本轮用户验收决定：保留 `b76d4fa4` 的本机授权完整 `make test`
+   **955 项／0 失败／0 跳过／退出 0**；后续仅改动 `DiffFixedRowFragment`
+   与原生语法资源测试，在最终实现提交 `ae049476` 重新运行受影响的
+   `NativeDiffTabTests` **136 项／0 失败／2 项 SSH 条件跳过／退出 0**。
+   此处是“旧提交完整 Host ＋新提交受影响类”的证据组合，
+   **不是最终 SHA 的完整 955 项再次执行**；跳过的 2 项在旧授权 Host 已实际通过。
+   `ae049476` 的 `make build`、`make build:ui`、`make build:release`
+   以及正式 Debug／Release 签名验证均通过、退出码 0。
+   在本次限定的本机范围内不追加完整重跑，未测条件逐项记录。
+   旧 macOS 27.0.1 的首次布局超 200 ms、GitHub GUI 失败和远端完整 App
+   断线／跨窗均属于尚未复验事实，已由用户明确排除本次 P4 门禁；
+   不推断这些问题已经修复，也不关闭或禁用相应 XCTest。
 4. P4 预审不构建、安装或重启正式 App。进入实施收口后按
    `docs/development.md#本地安装` 的适用授权与验签规则处理，
    **不主动退出或重启正在运行的正式 Bailey**；已构建／验签／安装／重启／发布分别报告。
@@ -384,13 +344,14 @@ TextKit／共享行索引时扩大到 `NativeDiffTabTests`、`NativeEditorLayout
    PR #78 已合并，不再安排重复 PR／合并；无明确授权不推送主分支。
 
 **验证与退出：**
-`make test` 完整 `TEST SUCCEEDED`、`make build`、`make build:ui`、
-适用 `make test:ui` 用户路径（尤其 ⌘S 的实际字节与历史合成超时的归因）、
-适用的 `make build:release` 与 `codesign`、
-`git diff --check`、`feature_tool.py todo validate`；
-所有统计与当前 HEAD 一一匹配。
-任何新产品修复先回 owner 重测，再重新跑受影响项目及最终全量验收。
-阶段审计实际开始才生成 `audit-p4.md`。
+`b76d4fa4` 完整 Host 955 项全绿、`ae049476` 受影响原生 Diff 全类
+136 项全绿（2 项 SSH 条件跳过，已有授权实机通过记录）；
+`ae049476` 的 `make build`、`make build:ui`、`make build:release` 与正式签名通过，
+另有真实 SSH 读取、编码与故障注入结果；`git diff --check`、
+`feature_tool.py todo validate` 通过。
+本次不重复运行完整 GUI／旧系统云端验证，不把未执行项目记成通过。
+只因新的生产修改影响验证范围时才重跑受影响项目；本次仅更新计划不重构 App。
+阶段审计使用既有 `audit-p4.md`。
 
 **Uncovered：**
 Windows SSH 可达性、系统 GUI 自动化认证、资源安全上限、
@@ -402,8 +363,9 @@ Windows SSH 可达性、系统 GUI 自动化认证、资源安全上限、
 
 ## 完成 Gate
 
-不是“看起来差不多”，也不是“旧提交曾通过”：
-以最新源码、完整 `idea.md` 适用条件和同机性能、
-当前 App 用户操作、真实 Git 原文／Index、SSH 授权结果以及内存释放核销。
-执行与审计阶段遵照仓库技能工作流；
-若必要条件缺失，交付明确的部分完成／No-Go，不伪称全面结束。
+2026-11-11 用户确认以本机 Host 的完整基线和最终改动的定点回归、
+获授权 Windows SSH 实机、Debug／Release 构建验签作为 P4 收口依据。
+此范围内核验 Git 原文字节／Index、原生 TextKit 像素、滚动、输入、保存、
+异常恢复与语法树释放后，阶段 Gate 可以为 `Go（本机范围）`。
+最新 SHA 的完整 App E2E、旧系统与云端失败未重新验证，
+单独保留风险说明，不虚构全面 GUI／跨环境通过。
