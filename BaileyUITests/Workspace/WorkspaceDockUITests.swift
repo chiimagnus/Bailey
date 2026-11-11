@@ -956,7 +956,11 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(row(0).isSelected, "Right-clicking a third project cannot activate it")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-        XCTAssertTrue(row(1).isSelected, "Return must commit the keyboard cursor, not the menu target")
+        let committedCursor = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            row(1).isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [committedCursor], timeout: 8), .completed,
+                       "Return must commit the keyboard cursor, not the menu target")
 
         row(0).click()
         XCTAssertTrue(row(0).isSelected)
