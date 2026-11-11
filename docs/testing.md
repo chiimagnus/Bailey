@@ -310,6 +310,8 @@ Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为�
 菜单树包含不可见的系统主菜单，弹出菜单还会改变元素排序；
 实际点击的 GUI 夹具应按可见菜单的稳定标识与非零 frame 定位，
 不能缓存 `app.menus.allElementsBoundByIndex` 的临时序号后再点击。
+菜单快捷键已执行并主动结束 tracking 后，不要再发送多余的 Escape：
+它可能抵达已恢复焦点的交互式 Bash，成为下一字符的 Meta 前缀，改变命令字节。
 打开应用设置时应从 Bailey 的应用菜单定位 `Settings…`，不能用全局
 `app.menuItems` 模糊查找 `Settings`（它可能匹配 Apple 菜单的 `System Settings…`）。
 Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or Projects”打开的是

@@ -145,7 +145,8 @@ final class SharedTreeUITests: XCTestCase {
         app.typeKey("c", modifierFlags: .command)
 
         expectFilesClipboard(target.path)
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        // Cmd-C already performs the native Files action and cancels menu tracking.
+        // A second Escape reaches Bash and turns the next 'p' into Meta-p.
         let marker = fixture.root.appendingPathComponent("terminal-owns-focus.txt")
         app.typeText("printf terminal > '\(marker.path)'")
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
