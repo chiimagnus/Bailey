@@ -256,14 +256,14 @@ final class WorkspaceDockUITests: XCTestCase {
             $0.menuItems.matching(NSPredicate(format: "title CONTAINS %@", "Panel Hover Test"))
                 .firstMatch.exists
         })
-        let terminalItem = app.menuItems.matching(NSPredicate(
+        let terminalItem = menu.menuItems.matching(NSPredicate(
             format: "title CONTAINS %@", "Panel Hover Test"
         )).firstMatch
         XCTAssertTrue(terminalItem.waitForExistence(timeout: 5))
         let displayedTitle = terminalItem.title
         XCTAssertTrue(displayedTitle.contains("Panel Hover Test"))
         let expectedCount = menu.menuItems.count
-        let first = app.menuItems.matching(NSPredicate(
+        let first = menu.menuItems.matching(NSPredicate(
             format: "title == %@", files[0].lastPathComponent
         )).firstMatch
         for _ in 0..<12 {
@@ -273,7 +273,7 @@ final class WorkspaceDockUITests: XCTestCase {
             XCTAssertEqual(terminalItem.title, displayedTitle,
                            "A tracking system menu must preserve its displayed title")
             XCTAssertEqual(menu.menuItems.count, expectedCount)
-            XCTAssertTrue(app.menuItems.matching(NSPredicate(
+            XCTAssertTrue(menu.menuItems.matching(NSPredicate(
                 format: "title == %@", files[0].lastPathComponent
             )).firstMatch.exists)
         }
@@ -291,9 +291,12 @@ final class WorkspaceDockUITests: XCTestCase {
 
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.menuBarItems["Panel"].click()
-        XCTAssertTrue(app.menuItems["Panel Hover Test"].waitForExistence(timeout: 5),
+        let reopened = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Panel Hover Test"].exists
+        })
+        XCTAssertTrue(reopened.menuItems["Panel Hover Test"].waitForExistence(timeout: 5),
                       "A reopened menu must display the terminal's latest title")
-        app.menuItems[files[0].lastPathComponent].click()
+        reopened.menuItems[files[0].lastPathComponent].click()
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).isSelected,
                       "A pinned menu entry must still select its real tab")
         app.typeKey("2", modifierFlags: .control)
