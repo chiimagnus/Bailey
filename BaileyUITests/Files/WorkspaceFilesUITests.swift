@@ -1443,9 +1443,18 @@ final class WorkspaceFilesUITests: XCTestCase {
 
     private func fileContextMenu(for row: XCUIElement, in app: XCUIApplication) throws -> XCUIElement {
         row.rightClick()
-        return try XCTUnwrap(app.menus.allElementsBoundByIndex.first { menu in
-            menu.frame.width > 50 && menu.menuItems["Copy Relative Path"].exists
-        }, "Files context menu must be selected instead of the global Edit menu")
+        // The live popup moves within app.menus while tracking; unlike
+        // its row-kind identifier, a snapshot boundBy index is not stable.
+        let popup = app.menus.matching(NSPredicate(
+            format: "identifier IN %@", ["bailey.tree.file", "bailey.tree.folder"]
+        )).firstMatch
+        XCTAssertTrue(popup.waitForExistence(timeout: 5),
+                      "Files must expose the clicked row's actual context menu")
+        XCTAssertGreaterThan(popup.frame.width, 50,
+                             "The context menu must have a visible frame")
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Copy Relative Path", in: popup).exists,
+                      "The live Files popup must expose its file operations")
+        return popup
     }
 
     func testSystemNewItemShortcutsUseFocusedFileManagerFolder() throws {
