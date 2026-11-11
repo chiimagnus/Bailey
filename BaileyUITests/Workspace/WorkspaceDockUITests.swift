@@ -319,9 +319,8 @@ final class WorkspaceDockUITests: XCTestCase {
         let tab = WorkspaceUITestSupport.fileTab(file, in: window)
         XCTAssertTrue(tab.waitForExistence(timeout: 12))
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            WorkspaceUITestSupport.menuItem("Close", in: $0).exists && $0.menuItems["Close Others"].exists
-        })
+        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).label.contains("⌘W"))
         print("NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -349,9 +348,8 @@ final class WorkspaceDockUITests: XCTestCase {
         let tab = WorkspaceUITestSupport.fileTab(file, in: window)
         XCTAssertTrue(tab.waitForExistence(timeout: 12))
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            WorkspaceUITestSupport.menuItem("关闭", in: $0).exists && $0.menuItems["关闭其他"].exists
-        })
+        let menu = app.menus.containing(.menuItem, identifier: "关闭其他").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("关闭", in: menu).label.contains("⌘W"))
         print("CHINESE_NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -391,9 +389,10 @@ final class WorkspaceDockUITests: XCTestCase {
         XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
         XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
         tabs[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
-        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            WorkspaceUITestSupport.menuItem("Close", in: $0).exists && $0.menuItems["Close Others"].exists
-        }, "An unselected tab must have a single-item Close action")
+        let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8),
+                      "An unselected tab must have a single-item Close action")
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists)
         XCTAssertFalse(menu.menuItems["Close Selected Panels"].exists)
         XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected,
                       "Right-clicking outside the selection cannot select or activate its target")
@@ -836,7 +835,9 @@ final class WorkspaceDockUITests: XCTestCase {
         firstTab.hover()
         let before = try contextOutlinePixels(of: firstTab)
         firstTab.rightClick()
-        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: app).waitForExistence(timeout: 8))
+        let contextMenu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+        XCTAssertTrue(contextMenu.waitForExistence(timeout: 8))
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: contextMenu).exists)
         XCTAssertNotEqual(try contextOutlinePixels(of: firstTab), before,
                           "The inactive tab must show a context outline while its menu is open")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
@@ -844,9 +845,8 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try contextOutlinePixels(of: firstTab), before,
                        "Dismissal must remove the temporary context outline")
         firstTab.rightClick()
-        let contextMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            $0.menuItems["Close Others"].exists && WorkspaceUITestSupport.menuItem("Close", in: $0).exists
-        }, "Only the tab context menu can close this inactive tab")
+        XCTAssertTrue(contextMenu.waitForExistence(timeout: 8),
+                      "Only the real tab popup can close this inactive tab")
         WorkspaceUITestSupport.menuItem("Close", in: contextMenu).click()
         XCTAssertTrue(firstTab.waitForNonExistence(timeout: 12))
         XCTAssertTrue(secondTab.exists, "Right-clicking an inactive tab must not replace the active one")
