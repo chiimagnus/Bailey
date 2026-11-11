@@ -19,20 +19,7 @@ final class WorkspaceDockUITests: XCTestCase {
                              "The blank Dock header must still move the native window")
         XCTAssertGreaterThan(abs(firstMove.origin.y - original.origin.y), 30)
 
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
-        XCTAssertTrue(files.isHittable)
-        let afterTab = window.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: files.frame.maxX - firstMove.minX + 14,
-                                 dy: files.frame.midY - firstMove.minY))
-        let afterTabDestination = window.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: files.frame.maxX - firstMove.minX + 70,
-                                 dy: files.frame.midY - firstMove.minY + 40))
-        afterTab.click(forDuration: 0.2, thenDragTo: afterTabDestination)
         let moved = window.frame
-        XCTAssertGreaterThan(moved.minX - firstMove.minX, 30,
-                             "Blank space after a tab must also drag the native window")
-        XCTAssertGreaterThan(abs(moved.minY - firstMove.minY), 20)
-
         let dividers = window.otherElements.matching(identifier: "bailey.dock.divider")
             .allElementsBoundByIndex.sorted { $0.frame.minX < $1.frame.minX }
         XCTAssertEqual(dividers.count, 2)
@@ -97,10 +84,12 @@ final class WorkspaceDockUITests: XCTestCase {
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 15))
         let before = window.frame
-        // The fixture's middle Dock group has no open tabs; its header is an
-        // actual WindowDragArea rather than a tab, toolbar button or traffic light.
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0))
-            .withOffset(CGVector(dx: 0, dy: 19)).doubleClick()
+        let dividers = window.otherElements.matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.sorted { $0.frame.midX < $1.frame.midX }
+        XCTAssertEqual(dividers.count, 2)
+        let middle = (dividers[0].frame.midX + dividers[1].frame.midX) / 2
+        window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: middle - window.frame.minX, dy: 19)).doubleClick()
         let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick")
         if action == "None" { return }
         if action == "Minimize" {
@@ -116,6 +105,71 @@ final class WorkspaceDockUITests: XCTestCase {
             XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.projects", in: app).exists,
                           "Zooming must preserve the original panel and its content")
         }
+    }
+
+    func testAllThreeDockGroupsSupportBlankHeaderDoubleClick() throws {
+        let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick")
+        if action == "None" || action == "Minimize" {
+            throw XCTSkip("Zoom cycle requires the system double-click action to be Zoom")
+        }
+
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+
+        func dividers() throws -> [XCUIElement] {
+            let elements = window.otherElements.matching(identifier: "bailey.dock.divider")
+                .allElementsBoundByIndex.sorted { $0.frame.midX < $1.frame.midX }
+            XCTAssertEqual(elements.count, 2)
+            return elements
+        }
+
+        func doubleClickBlank(at screenX: CGFloat) {
+            window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: screenX - window.frame.minX, dy: 19)).doubleClick()
+        }
+
+        func expectResize(from previous: CGRect, label: String) {
+            let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let frame = window.frame
+                return abs(frame.width - previous.width) > 40
+                    || abs(frame.height - previous.height) > 40
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed,
+                           "\(label) blank header must perform the native double-click action")
+        }
+
+        let initial = window.frame
+        let initialDividers = try dividers()
+        doubleClickBlank(at: (initialDividers[0].frame.midX + initialDividers[1].frame.midX) / 2)
+        expectResize(from: initial, label: "Middle")
+        let expanded = window.frame
+
+        // Locate actual empty space between the final tab and Add Panel.
+        let plusButtons = window.buttons.matching(identifier: "bailey.dock.addPanel")
+            .allElementsBoundByIndex.sorted { $0.frame.midX < $1.frame.midX }
+        XCTAssertEqual(plusButtons.count, 3)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        let rightTabEnd = max(files.frame.maxX, git.frame.maxX)
+        let rightGap = plusButtons[2].frame.minX - rightTabEnd
+        XCTAssertGreaterThan(rightGap, 12, "The expanded right group needs visible blank header")
+        doubleClickBlank(at: rightTabEnd + rightGap / 2)
+        expectResize(from: expanded, label: "Right")
+        let restored = window.frame
+        let restoredDividers = try dividers()
+
+        doubleClickBlank(at: (restoredDividers[0].frame.midX + restoredDividers[1].frame.midX) / 2)
+        expectResize(from: restored, label: "Middle")
+        let expandedAgain = window.frame
+        let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
+        let leftPlus = try XCTUnwrap(window.buttons.matching(identifier: "bailey.dock.addPanel")
+            .allElementsBoundByIndex.min { $0.frame.midX < $1.frame.midX })
+        let leftGap = leftPlus.frame.minX - projects.frame.maxX
+        XCTAssertGreaterThan(leftGap, 12, "The expanded left group needs visible blank header")
+        doubleClickBlank(at: projects.frame.maxX + leftGap / 2)
+        expectResize(from: expandedAgain, label: "Left")
     }
 
     func testDockCommandAndShiftTabSelectionHasNativeAccessibilityState() throws {

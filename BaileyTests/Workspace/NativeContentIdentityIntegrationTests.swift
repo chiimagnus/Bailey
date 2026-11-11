@@ -415,6 +415,44 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         return (root, file)
     }
 
+    func testEveryDockHeaderExposesARealBlankWindowSurface() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-blank-header-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+
+        func dragAreas(in view: NSView) -> [WindowDragAreaView] {
+            let own = (view as? WindowDragAreaView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(dragAreas)
+        }
+
+        for (index, group) in project.dock.root.groups.enumerated() {
+            let window = NSWindow(
+                contentRect: NSRect(x: -2000, y: -2000, width: 420, height: 280),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: DockTabGroupView(
+                group: group, project: project, manager: manager, git: GitStatusModel(),
+                dragging: DockTabDragCoordinator(), isTopLeft: index == 0
+            ).coordinateSpace(name: "workspaceDock"))
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.close() }
+            try await wait {
+                host.layoutSubtreeIfNeeded()
+                return dragAreas(in: host).contains { $0.bounds.width > 60 }
+            }
+            let blankAreas = dragAreas(in: host).map(\.bounds)
+            XCTAssertTrue(blankAreas.contains { $0.width > 100 && $0.height >= 30 },
+                          "Each Dock group needs a nonzero-height blank titlebar surface")
+        }
+    }
+
     // Native scroll elasticity requires observing the actual Dock component,
     // not a hand-built replacement or a full ContentView host.
     func testDockTabStripOnlyBouncesWhenTabsOverflowAfterResizing() async throws {
