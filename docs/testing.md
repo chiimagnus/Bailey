@@ -307,6 +307,14 @@ Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为�
 验证 `⌘W` 对右键目标的路由时应同时检查目标的实际高亮及最终关闭对象，
 不能只因菜单未出现在 AX 快照就判定快捷键失败；
 需要点击真实菜单项的测试仍必须证明该项存在、可执行，并核对最终副作用。
+菜单树包含不可见的系统主菜单，弹出菜单还会改变元素排序；
+实际点击的 GUI 夹具应按可见菜单的稳定标识与非零 frame 定位，
+不能缓存 `app.menus.allElementsBoundByIndex` 的临时序号后再点击。
+打开应用设置时应从 Bailey 的应用菜单定位 `Settings…`，不能用全局
+`app.menuItems` 模糊查找 `Settings`（它可能匹配 Apple 菜单的 `System Settings…`）。
+Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or Projects”打开的是
+当前窗口内的 `SSHFolderPickerView` 覆盖层；两条 UI 测试分别核验原生 sheet 与
+`bailey.sshFolderPicker.dismiss`／真实取消结果，不得将 SSH 覆盖层误判成 sheet。
 
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。
 真实 Windows SSH 回归必须**明确指定获授权的测试主机**。
