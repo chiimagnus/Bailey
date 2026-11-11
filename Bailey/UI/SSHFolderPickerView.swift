@@ -182,6 +182,7 @@ struct SSHFolderPickerView: View {
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
                 Button(String(localized: "Cancel", table: "Terminal"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
                 if model.host != nil {
                     Button(String(localized: "Add", table: "Terminal")) {
                         Task { await model.confirm(onChoose: onChoose) }
