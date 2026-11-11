@@ -694,9 +694,12 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertTrue(mainWindow.waitForExistence(timeout: 15),
                       "Relaunch must create the main window without test-side recovery")
         // Reopen Settings through the native menu to verify the saved appearance.
-        let openSettings = app.menuItems.matching(NSPredicate(
-            format: "title CONTAINS[c] %@", "Settings")).firstMatch
-        XCTAssertTrue(openSettings.waitForExistence(timeout: 12))
+        let appMenu = app.menuBarItems["Bailey Dev"]
+        XCTAssertTrue(appMenu.waitForExistence(timeout: 12))
+        appMenu.click()
+        let openSettings = appMenu.menuItems["Settings…"]
+        XCTAssertTrue(openSettings.waitForExistence(timeout: 12),
+                      "Open Bailey Settings from the Bailey menu, not Apple's System Settings")
         openSettings.click()
         let restoredWindow = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
         XCTAssertTrue(restoredWindow.waitForExistence(timeout: 12),
