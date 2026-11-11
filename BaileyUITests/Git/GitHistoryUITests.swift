@@ -205,13 +205,8 @@ final class GitHistoryUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
-        // The same path is also shown above in Git Changes. Collapse that
-        // section so the historical row is the only matching file target.
-        let changes = app.buttons.matching(NSPredicate(
-            format: "label IN %@", ["Changes", "更改"]
-        )).firstMatch
-        XCTAssertTrue(changes.waitForExistence(timeout: 12))
-        changes.click()
+        // Keep both sections present. historicalFileRow uses the history-only
+        // accessibility identifier, even when Changes shows the same path.
 
         func confirm(reset: Bool) throws {
             openHistoricalMenu(file, fixture: fixture, window: window)
