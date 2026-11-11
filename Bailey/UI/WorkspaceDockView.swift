@@ -926,6 +926,8 @@ final class DockTabPointerView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    override var mouseDownCanMoveWindow: Bool { false }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let event = NSApp.currentEvent,
               event.type == .otherMouseDown || (event.type == .leftMouseDown && !event.modifierFlags.contains(.control))

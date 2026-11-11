@@ -176,7 +176,8 @@ Git 提交消息框获得焦点且允许提交时，「项目」菜单提供「C
 Panel／Project 的动态标题与图标只更新对应菜单行，不驱动整个系统菜单重建；
 展开时固定当前显示，关闭后恢复最新内容，避免 Window 菜单的移动与平铺命令闪烁消失。
 窗口保持 AppKit 的可移动能力，以支持系统 Window 菜单的移动、居中和平铺命令；
-SwiftUI 仅禁用背景自动拖动，顶部留白使用 `WindowDragGesture`，不让标签或按钮拖动窗口。
+SwiftUI 禁用背景自动拖动，顶部留白使用 `WindowDragGesture`；
+原生标签拖动视图明确禁止从标题栏拖动窗口，确保拖动标签只触发 Dock 分屏与重排。
 不使用额外的系统「显示」菜单或 macOS 原生窗口标签页，避免与 Bailey Dock 重复。
 
 所有窗口相关命令通过当前 key window 的 `@FocusedValue` 路由；

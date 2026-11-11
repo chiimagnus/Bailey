@@ -62,6 +62,8 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
 
     func testNativeTabPointerPreservesDownModifiersAndFinishesDragOnlyOnce() throws {
         let view = DockTabPointerView(frame: .init(x: 0, y: 0, width: 100, height: 24))
+        XCTAssertFalse(view.mouseDownCanMoveWindow,
+                       "Interactive tabs must drag Dock items, not the native window titlebar")
         var presses: [NSEvent.ModifierFlags] = []
         var releases: [NSEvent.ModifierFlags] = []
         var drops = 0

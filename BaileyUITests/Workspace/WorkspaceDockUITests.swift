@@ -489,10 +489,15 @@ final class WorkspaceDockUITests: XCTestCase {
         let initialDividers = main.otherElements.matching(identifier: "bailey.dock.divider").count
         XCTAssertEqual(initialDividers, 2, "Fixture starts in the three-column layout")
 
+        let originalWindowOrigin = main.frame.origin
         lower.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.3, thenDragTo:
                 main.coordinate(withNormalizedOffset: CGVector(dx: 0.46, dy: 0.91))
             )
+        XCTAssertEqual(main.frame.origin.x, originalWindowOrigin.x, accuracy: 2,
+                       "Dragging a Dock tab must never move the native window")
+        XCTAssertEqual(main.frame.origin.y, originalWindowOrigin.y, accuracy: 2,
+                       "The tab header cannot act as the native window titlebar")
         let nested = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             main.otherElements.matching(identifier: "bailey.dock.divider").count == 3
                 && upper.exists && lower.exists && abs(upper.frame.midY - lower.frame.midY) > 110
