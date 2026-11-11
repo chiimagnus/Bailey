@@ -183,10 +183,10 @@ final class SharedTreeUITests: XCTestCase {
         let clipboardVersion = NSPasteboard.general.changeCount
 
         rowText.rightClick()
-        let firstMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            WorkspaceUITestSupport.menuItem("New File…", in: $0).exists
-                && $0.menuItems["Copy Relative Path"].exists
-        })
+        let firstMenu = app.menus.matching(identifier: "bailey.tree.folder").firstMatch
+        XCTAssertTrue(firstMenu.waitForExistence(timeout: 10))
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("New File…", in: firstMenu).exists)
+        XCTAssertTrue(firstMenu.menuItems["Copy Relative Path"].exists)
         firstMenu.typeKey("n", modifierFlags: .command)
         let fileName = window.textFields.matching(
             NSPredicate(format: "placeholderValue == %@", "File name")
@@ -205,10 +205,10 @@ final class SharedTreeUITests: XCTestCase {
         }
 
         rowText.rightClick()
-        let secondMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            WorkspaceUITestSupport.menuItem("New Folder…", in: $0).exists
-                && $0.menuItems["Copy Relative Path"].exists
-        })
+        let secondMenu = app.menus.matching(identifier: "bailey.tree.folder").firstMatch
+        XCTAssertTrue(secondMenu.waitForExistence(timeout: 10))
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("New Folder…", in: secondMenu).exists)
+        XCTAssertTrue(secondMenu.menuItems["Copy Relative Path"].exists)
         secondMenu.typeKey("n", modifierFlags: [.option, .command])
         let folderName = window.textFields.matching(
             NSPredicate(format: "placeholderValue == %@", "Folder name")
