@@ -1,328 +1,229 @@
-# P1：原生 GB 文档、稳定 IO 与 Diff 的技术准入
+# P1：源码证据与关键架构准入
 
-**Goal：** 先取得会改变架构的原生、存储、SSH 和 Diff 证据，固定预算，再准入生产改造。
+本阶段回答三个会改变实现路线的问题：TextKit 能否保留有界正文，
+本机／SSH 如何取得稳定源并完整发布保存，Diff 如何在 GB 输入上控制空间且不丢精度。
+完整产品迁移与用户路径验收分别归 P2、P3，不倒置为 P1 的前置条件。
 
-**Non-goals：** 不提前选择 Rope／Piece Tree 库，不先删除容量检查，
-不换编辑器，不安装正式 App，不以原型通过代替功能验收。
+**Goal：** 形成可实施、可证伪的架构决策。
+**Non-goals：** 不移除 8／5 MiB 门槛，不安装 App，不恢复独立的旧原型框架。
+**Acceptance：** 每个关键选择有最小真实链证据；预算、依赖和失败条件明确。
+本轮只研究和改计划，不执行产品改造或容量实验。
 
-**Approach：** 分开验证原生输入能否保持分页、后端能否提供稳定源与完整流式保存、
-Diff 能否以有界内存处理 GB 两侧。只使用现有 XCTest、Makefile 和隔离 Bailey Dev。
-P2／P3 是受实验约束的结果拆分；P1-T4 必须先将其具体化，才能进入生产实施。
+## 本轮基线与证据分类
 
-**Acceptance：** 原型有真实输入和最终字节证据；失败边界可复现；
-预算有量纲、测量方法与适用环境；没有把待验证假设写成已具备能力。
+- 上游：2026-11-12 从 GitHub HEAD 固定
+  `530b702bc1ecca912e842e906fa67ecfc60c091e`。
+  [完整研究](vscode-source-study.md)拥有路径、符号、调用链、数值单位及永久链接。
+- Bailey：`6a8ffc4e27d69791cb5deddc4ad42149bae31765`；
+  开始时 main 比 origin/main 领先 6 个提交，工作区干净。
+- **源码事实**证明当前控制流；**历史测试记录**只证明当时版本与环境；
+  **本轮未实测项**仍需验证。研究完成不等于技术准入，更不等于产品交付。
+- 旧 todo 在上述 Bailey 提交中记录了原型完成及 No-Go；
+  当前目录没有其 `evidence-p1.md`／`audit-p1.md`，当前 Git 跟踪集合没有
+  `P1*ProbeTests`、`LargeDocumentPrototypeTests` 或 `LargeDiffPrototypeTests`。
+  不把已撤回、无法在当前树复验的探针重新算作生产准入。
+  旧“Git 2.54 在 1 GiB 失败”仅是历史线索；新路线确实依赖它时再最小复验，
+  不写成已经核实的通用 Git 上限。
 
-**Rules：**
-- 2026-11-12 已授权 P1 原型与验证；本阶段不实施 P2／P3，也不直接解除容量检查。
-- 遵守根 AGENTS 及 `docs/{architecture,standards,testing,development,ui}.md`。
-- 保留原生输入、Undo、焦点及后端身份，不借实验引入第二套编辑器或远端常驻服务。
-- 先核对磁盘、内存、专属桌面与远端授权；不以 OOM 或破坏用户环境取证。
-- 计划、证据和审计默认不入 Git。审计文件仅在实际阶段审计开始时创建。
+### 已有生产修复必须保留
 
-## 已读依据和责任链
-
-2026-11-12 执行前复审基于 `main` HEAD
-`37badb70321bee40c0e2df1cf9e8105cd9bb6353`（macOS 27.3／Xcode 27.2）。
-本次同时核对 `c9111491` 的文件编码变更、`37badb70` 的旧折叠索引越界修复及现行功能文档；
-旧计划 11-04 的源码快照与测试结果不可直接当当前状态。
-P1 实际实验基线另为 `4f97741c97c0de8626e0ff225d409d881770b53e`；
-真实执行结果在 `evidence-p1.md`，本页仍只定义计划和实验准入条件。
-实施前仍须重新查 Git status／HEAD。
-
-**已落地的原生行为不得重复规划：** 工作区 Diff 自首次展示即使用同一可写
-`DiffCodePaneView`／TextKit 文档，未修改段落在该文档内折叠；
-不再存在 `showsFoldedWorktree`／`activateEditor`／`beginEditing` 浏览到编辑器的切换链。
-历史／暂存的 Unified／Split 才是派生只读投影；更换 Git 快照时必须在装入新原文前退役旧折叠、ghost 和旧坐标，
-并保留有效的 Split 左侧基线。P3 以这些**当前事实**为起点，不重建已删除的模式。
-
-| 责任链 | 已读源码锚点 | 最终结果及现有验证 |
+| 当前提交／源码 | 当前事实 | 本计划只补什么 |
 | --- | --- | --- |
-| 打开／恢复 | `WorkspaceWindowModel.openFile`、`Project.openFile/openLocalFile/makeContent` | 同机去重、本机身份、懒恢复；`FinderDeliveryIntegrationTests` |
-| 文件读取／更新 | `FileTab.loadIfNeeded/waitForText/reloadFromDiskIfClean/readContent/loadedContent` | 代次、目标与脏编辑保护；`FileTabPersistenceTests` |
-| 原生内容 | `SourceTextEditor.makeScrollView/Coordinator.retireObsoleteDocument` | 重挂载不重建，关闭解除正文；`NativePaneRetentionIntegrationTests` |
-| 输入／布局 | `NativeCodeTextView.processStorageEdit/configureWrapping/finishComposition`、`NativeMeasuredLineWidths` | IME、Undo、命中、像素；`NativeEditorCompositionTests`、`NativeEditorLayoutTests` |
-| 索引／高亮 | `NativeTextLineIndex`、`TextCoordinateIndex`、`SyntaxHighlightCoordinator`、`Vendor/Neon` | LF／原生段落坐标、稳定解析快照与真实颜色；`TextCoordinateIndexTests`、`NativeSyntaxHighlightingTests` |
-| 保存保护 | `FileTab.save/writeCurrentText/beginFileMutation`、`PaneContent.save`、`WorkspaceApplication.saveBeforeGitAction` | 字节、在途编辑、关闭否决；文件与工作区宿主测试 |
-| 本机／SSH | `WorkspaceBackend`、`LocalWorkspaceBackend.readSync/write/runSync`、`SSHWorkspaceBackend.read/write`、`SSHHostWorkspaces.execute`、`ProcessRemoteCommandRunner.run` | 当前完整 Data 契约及共享进程读／写／取消所有者；`RemoteCommandsTests`、`SSHFileTreeLiveTests` |
-| Diff 读取 | `DiffTab.reload/gitContent/readWorktreeFile/gitComparisonBaseline` | 锁定 OID、Git clean 与原始文件；`NativeGitHistoryFileTests`、`NativeDiffTabTests` |
-| Diff 派生 | `DiffCore.computeIfActive`、`DiffComputation.build`、`DiffTab.recomputeDisplay/publishDisplay/refreshEditDecorations`、`DiffNativeSurface.render` | 当前两侧全文行数组及统一／左右只读派生文档；工作区已用唯一原生可写正文；`DiffEngineTests`、原生 Diff 测试 |
+| `24014251`；`NativeCodeTextView.finishComposition/replayComposition` | IME 已记录局部 UTF-16 替换和一次 Undo 事务 | 跨页、大范围替换与回收；不重做全文快照修复 |
+| `5f1024e0`；`RemoteCommands.atomicWriteCommand` | 每次写入用同目录 `mktemp -d` 私有暂存，完整输入后发布 | 替换完整 Data 输入，保持并发隔离、权限与清理 |
+| `3d62c14b`；`DiffEngine.computeLineOps/diffRegion` | 重复行补充锚点已修复误判整篇替换，算法已有取消检查 | GB 分段索引、最坏内存与输出完整性 |
+| `37badb70`；`DiffNativeSurface.render/setEditingFolds` | 新快照安装前退役旧折叠坐标；工作区一直是单一可写原生文档 | 不重新引入 Review/Edit 切换 |
+| `a66052ae`、`1d2632a9` | 已恢复的事件生命周期／工作树索引修复 | 本 feature 不改其源码与测试 |
 
-| 编码识别及转换 | `TextFileEncoding.decode/encoded/declared/contradictsDeclaration`、`FileTab.reopen`、`DiffTab.reopen` | UTF-8／BOM、UTF-16、GBK、GB18030、Shift-JIS、Windows 单字节编码、远端 `mbcs`，严格往返和用户选择；不能把合法 UTF-16 零字节判作二进制 |
-| 非编辑器消费者 | `TabSwitcherView.filePreview/diffPreview/textExcerpt`、`Project.ignoreGitPaths` | 先访问全文再截取预览／判断换行；小视图不能成为 GB 文档全文物化的旁路 |
+提交正文的测试结果属于历史证据，本轮未重跑。
+保留已有回归；相同代码、配置和触发条件仍成立时才复用结果。
 
-### VS Code 固定版本对照
+### 当前真实链与剩余全文成本
 
-取证版本为
-[`077bec303574782e7b6f09b94c761ca96c7068eb`](https://github.com/microsoft/vscode/commit/077bec303574782e7b6f09b94c761ca96c7068eb)，
-提交时间 2026-11-04T01:30:55Z。这是源码对照，不是两款产品的同机 GB 性能实测。
-后续引用此固定版本，不自动追 main；未构建 VS Code，不宣称其实际性能或全部输入能力。
+| 责任链／源码锚点 | 剩余成本 |
+| --- | --- |
+| `FileTab.readContent → WorkspaceBackend.read → TextFileEncoding.decode` | 本机 64 KiB 循环最终拼完整 Data；SSH head/cat 也返回完整 Data，再转 String |
+| `SourceTextEditor.makeScrollView/currentText` | 首次安装完整 `file.text`；恢复选区也读取完整正文 |
+| `NativeTextLineIndex.init/replace`、`NativeMeasuredLineWidths`、`configureWrapping` | 初建全篇扫描、逐行常驻；结构变更重建 Fenwick；Unicode 长行可整行物化 |
+| `processStorageEdit → SyntaxHighlightCoordinator.didChangeContent → Parser.readFunction(for:)` | 当前仍传完整 String；可见着色不消除全文解析 |
+| `FileTab.writeCurrentText → TextFileEncoding.encoded → backend.write` | 完整编码 Data、往返校验与保存基线；编码声明检查先构造全文 UTF-8 |
+| `EditorFind.performFindAction`、`TabSwitcherView.textExcerpt`、`Project.ignoreGitPaths` | 原生 Find 访问边界待证；预览先取全文再裁 7,000 单元；ignore 查询全文换行 |
+| `DiffTab.gitContent/readWorktreeFile/gitComparisonBaseline` | blob／worktree、hash stdin、patch Data 与 Git clean 全文投影 |
+| `DiffCore.computeIfActive → DiffEngine.computeLineOps → DiffComputation.build` | 全文行／指纹数组，Unified 与 Split 左右派生文档 |
 
-| 主题 | 已读上游源码 | 适用启示与边界 |
-| --- | --- | --- |
-| 流式装载 | [textFileService.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/workbench/services/textfile/browser/textFileService.ts)、[textModel.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/textModel.ts) | `readStream → createTextBufferFactoryFromStream` 在流结束后交付 factory，不是只装入可见页即完成模型 |
-| 文本缓冲 | [pieceTreeTextBufferBuilder.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.ts)、[pieceTreeBase.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeBase.ts) | 分块、子树汇总及局部修改可借鉴；块仍是内存字符串，不是磁盘分页；不能复制 EOL 规范化 |
-| 视口 | [viewLayer.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/browser/view/viewLayer.ts) | 视口行的替换／复用；不移植 DOM 或替换已有 TextKit 2 |
-| 大模型策略 | [textModel.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/textModel.ts) | tokenization、sync、全文 heap 操作分别受限；比较的是 UTF-16 文本长度或行数，不能都当磁盘 MiB |
-| 打开确认 | [resourceEditorInput.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/workbench/common/editor/resourceEditorInput.ts)、[editor.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/workbench/common/editor.ts) | 按资源决定确认门槛，允许 Open Anyway；不证明任何大小都能在给定内存下成功编辑 |
-| 快照／保存 | [pieceTreeBase.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeBase.ts)、[textFileEditorModel.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/workbench/services/textfile/common/textFileEditorModel.ts)、[fileService.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/platform/files/common/fileService.ts) | 顺序快照、编码流和写入前校验；上游单线程快照假设不能当 Swift 跨 actor 安全证明 |
-| Undo／搜索 | [editStack.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/editStack.ts)、[textModelSearch.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/model/textModelSearch.ts) | 范围事务和结果驻留控制可参考；保留系统输入语义，不把结果限额当作完整搜索 |
-| Worker／Diff | [editorWorkerService.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/browser/services/editorWorkerService.ts)、[defaultLinesDiffComputer.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.ts)、[diffEditorViewModel.ts](https://github.com/microsoft/vscode/blob/077bec303574782e7b6f09b94c761ca96c7068eb/src/vs/editor/browser/widget/diffEditor/diffEditorViewModel.ts) | 预算、取消、提前结束显式化；Diff 会强制同步大模型，算法接收全文行数组，不是可直接搬用的分页算法 |
+详细路径与当前行号见[研究中的 Bailey 对照](vscode-source-study.md#bailey-current)。
+长期契约仍归 `docs/features/{editor,diff,ssh}.md`，本轮不把计划写成现行产品能力。
 
-[官方 Piece Tree 文章](https://code.visualstudio.com/blogs/2018/03/23/text-buffer-reimplementation)
-解释避免单字符串拼接、逐行对象膨胀的动机；历史指标不作为本 feature 的预算。
+## Monaco 对设计的约束
 
-只参考已核对的职责和算法，不把 TypeScript 移植当作现成 Swift 实现。
-若后续实际复用上游代码，保留其许可及归属，并按仓库规则更新 NOTICE；
-不得未经需要新增依赖、覆盖第三方头部或将源码副本混入产品资源。
+借鉴分块文本、范围编辑、树上汇总、增量通知、顺序快照和视口派生。
+不直接选定红黑树／第三方库，不复制 DOM、完整 worker mirror 或全文 replace-all。
+20／50／256 Mi UTF-16 单元、300,000 行及长行阈值是上游各消费者的保护条件，
+不是 Bailey 文件上限或本机性能预算。
 
-Apple 的
-[NSTextStorage 子类契约](https://developer.apple.com/documentation/appkit/nstextstorage#Subclassing-Notes)
-和 [TextKit 2 说明](https://developer.apple.com/videos/play/wwdc2021/10061/)
-允许自定义存储／内容模型，但没有承诺 NSTextView 的所有功能都不会物化全文。
-本机 xcdocs 能定位符号但未返回正文，已补读 Apple 文档数据及 WWDC。
-这只能证明原型入口有依据，不能通过以下 Gate。
+上游普通保存会直接写目标，解码也不等价于严格字节往返；
+Bailey 保留原字节、私有暂存、完整发布和草稿保护。
+上游没有证明 NSTextView 未知长度、巨段落、Find／AX 或远端不可变源的可行性。
 
-### 现有运行证据的边界
+<a id="p1-t5"></a>
+## P1-T5 固定最新 VS Code 源码并完成可追溯研究
 
-前轮调查运行了四项定点回归，回报 4/4、零失败、完整命令退出 0：
-
-```sh
-make test ONLY_TESTING='BaileyTests/FileTabPersistenceTests/testLocalTextReadCapacityAndFailureKinds BaileyTests/FileTabPersistenceTests/testInvalidUTF8AndImageFallbackRespectTextCapacity BaileyTests/RemoteCommandsTests/testSSHBackendEnforcesByteLimitAndPreservesBinaryWrites BaileyTests/NativeGitHistoryFileTests/testGitBlobAtExactFiveMiBIsReadableWhileNextByteIsRejected'
-```
-
-环境为 Apple Silicon、macOS 27.2、Swift 6.4.2。
-它们只证明旧边界、UTF-8／图片回退、受控 SSH 字节行为及 Git blob 上限。
-原报告日志为 `/tmp/bailey-large-file-review-20261104.log`，
-结果包名为 `Test-Bailey-2026.11.04_09-45-11-+0800.xcresult`；
-本轮未取得可复验的完整结果包，不把历史回报作为当前完整工作树验收。
-需要复用时先核对原日志和相关代码；缺失即用上述命令重跑。
+**交付：** [vscode-source-study.md](vscode-source-study.md)，覆盖模型、编辑渲染、
+本机／Remote IO、Git Diff、门槛与全文物化点。
+**验证：** 固定 SHA、逐字实现与实际调用者、永久链接文件／行区间及引用；
+负证据注明检索范围。没有运行 VS Code，不写 GB 性能或界面症状已实测。
+**边界：** 仅结束源码研究；下列三项机制和 P2／P3 仍分别验收。
 
 <a id="p1-t1"></a>
 ## P1-T1 原生分页编辑与全文访问点的反证实验
 
-**结果：** 证明原生控件能承载有界访问，或交付最小失败条件。
-不先提交未经证明的生产内容管理器。
+**问题：** 同一 FileTab→SourceTextEditor→NativeCodeTextView 链能否在全文未读完、
+UTF-16 总长度未知时，显示并编辑真实已知范围，同时保留完整文档位置语义？
 
-**Files／锚点：**
-读取 `Bailey/Editor/{NativeCodeTextView,SourceTextEditor,EditorFind}.swift`，
-特别是 `text/string/attributedText`、`finishComposition`、`processStorageEdit`、
-`configureWrapping`、`performFindAction`、`SourceTextEditor.Coordinator.currentText`；
-同时核对 `TabSwitcherView.textExcerpt` 与 `Project.ignoreGitPaths` 的全文消费。
-在现有 `BaileyTests/Editor/` 新增 `LargeDocumentPrototypeTests.swift`；
-对照 `NativeEditorLayoutTests`、`NativeEditorCompositionTests`。
-工程使用文件系统同步组，仍核对 XCTest 枚举，不建立新工程或 shell 测试系统。
+**位置：** `NativeCodeTextView` 的 string／storage、`configureWrapping`、
+`processStorageEdit`、`finishComposition`；`SourceTextEditor.makeScrollView/currentText`；
+`NativeTextLineIndex`、`EditorFind`。约束由现有 NativeFileTab／Layout／Composition 宿主类强制。
 
-**步骤：**
-1. 先以有读取计数的合法分段源探测 NSString／String、字符、属性和范围访问的真实成本。
-   优先实验官方 NSTextStorage 自定义 backing；
-   只有其失败证据明确时再检验自定义内容管理器与 NSTextView 的接入。
-2. 用真实原生视图对照小文件、256 MiB、1 GiB，以及多短行和单个超长逻辑行。
-   单行从 1／16／128 MiB 扩展到资源允许的 GB，不能用多行结果代替。
-3. 挂载、首屏、17 次首尾跳转、滚动、输入、IME、Undo／Redo、全选、查找／替换、
-   AX 范围请求、字体和折行变化逐项测量。记录正文、段落和缓存的持有者。
-4. 冷页 miss 若导致主 actor 阻塞，记录最坏值；不靠预热、隐藏段落合并、
-   截短正文、自绘编辑器或页外选区丢失制造通过。
-5. 同时核对小文件像素、命中、多选区和每次 IME 一条 Undo。
-   原型成功只证明接入，不替代全产品消费路径。
+**步骤与断言：**
+1. 在现有宿主测试接入可计数、可暂停的真实来源和真实原生适配；
+   不另建脱离 FileTab 的 NSString 演示。候选 backing 只服务最小接入，成功后直接迁入 P2。
+2. 变宽 UTF-8／UTF-16 源不得泄露全文 String、总 UTF-16 长度或全局行索引。
+   暂停后续读取时，首屏已有真实文字并接受局部编辑；
+   Cmd-End、全选、未知位置恢复明确等待／取消，不将前缀末端当全文 EOF。
+3. 多短行与巨单行分别从能复现机制的小输入扩到 256 MiB／1 GiB。
+   计数覆盖桥接、段落、选区、冷页、行宽、Find、AX；
+   不通过主 actor 同步等待后台 IO 伪装分页。
+4. 保留已修复的 IME 事务，测试跨页组词、确认、Undo／Redo与大范围删除。
+   常规隐式访问和用户明确导出整篇分别计量，不截断结果。
+5. 以快照迭代核对独立 oracle 字节；完整后端发布归 T2，
+   全部正常交互、像素／焦点／生命周期矩阵归 P2。
 
-**防止实验先替产品做完全文工作的约束：**
-- 使用尚无全局 UTF-16长度／行数索引的真实变宽 UTF-8源。
-  夹具可为独立 oracle知道答案，但不得把预生成 String、字符总数或全局行起点传给原生适配。
-  分别记录文件字节数、已知正文范围、已知 UTF-16／行范围和它们的实际获得过程。
-- 首次页／预取额度后用受控读取屏障暂停生产，再请求真实首屏和已知范围内输入。
-  屏障不释放前就应取得可见文字及有效编辑；不能把“读完整后内存降下来了”算按需。
-  索引未知时的 Cmd-End、恢复选区、滚动条和 Find请求也须明确等待／完成语义，
-  不允许把估算字符数、局部末尾或占位符伪装成全局文档位置。
-- 全局长度若是 NSTextView接入的不可绕过前提，直接记录该原生路线的失败；
-  不能用已知长度的合成 provider掩盖这一关键约束。
-- 将复制／剪切、跨窗口粘贴、原生服务和 AX普通查询／显式完整值读取纳入探测。
-  区分例行查询的隐式全文副本与显式导出整篇的协议成本；
-  不测、返回不完整数据或关掉能力都不算修复。
-- 探测布局中的单个巨段落、超长组合字符簇、冷页 miss和热缓存，
-  不只实验已经排好版／预先建好索引的多行 ASCII。
+**Gate：** 原生机制和不可绕过的协议访问成立即可准入这一方向。
+若系统要求已知总长度或完整巨段落，记录输入、读量与调用栈；
+不得以伪长度、隐藏全文、换编辑器或只读窗口通过。
+成功后冻结访问接口、坐标和页 miss 处理；其它方向未完成不导致重复本实验。
 
-**验证与覆盖：**
-`make test:LargeDocumentPrototypeTests,NativeEditorCompositionTests,NativeEditorLayoutTests`。
-Debug 验证正确性，隔离优化构建测性能；总集 E、D、N、L，
-必须组合长行 × 折行 × 字体 × 远距导航。
-当前支持的系统可先给证据；最低系统缺实机时独立列缺口，不冒称全平台准入。
-
-**文档、停止及提交：**
-仅在本 feature 的 `evidence-p1.md` 保存 API／SDK、访问计数、字节、内存、
-延迟与失败栈，不更新长期文档为“已支持”。
-原生输入、完整范围或有界内存无法兼容时，停止依赖路线，不默认换编辑器。
-可复用的测试才原子提交；一次性实验在结束前移除，不制造空提交。
+**验证：** 现有宿主类补最小用例，
+`make test:NativeFileTabTests,NativeEditorLayoutTests,NativeEditorCompositionTests`。
+完整 GUI／中文候选最终验收留 P2，不作为源码研究或 IO 调查的前置。
 
 <a id="p1-t2"></a>
 ## P1-T2 稳定源版本、分段 IO 与完整保存的协议实验
 
-**依赖：** 可与 P1-T1 的取证并行，生产路线须同时通过两者。
+**问题：** 两个现有后端能否提供同一稳定源和有界迭代保存，
+且不在首屏前偷偷下载／复制完整文件？
 
-**Files／锚点：**
-`WorkspaceBackend.read/write/stat`、`LocalWorkspaceBackend.readSync/write`、
-`SSHWorkspaceBackend.read/write`、`SSHHostWorkspaces.execute`、
-`ProcessRemoteCommandRunner.run`、`LocalWorkspaceBackend.runSync`（当前单一进程 stdin／stdout／stderr 泵）、
-`RemoteCommands.atomicWriteCommand`、`TextFileEncoding.decode/encoded/declared`。
-当前没有 `ProcessStdinWriter` 类型，不得为了匹配旧计划重新创建。
-在 `BaileyTests/Remote/RemoteCommandsTests.swift` 内新增
-`SegmentedWorkspacePrototypeTests` 类，复用同文件的 private `LocalShellRunnerFixture`，
-不为原型复制 runner 或扩大 helper 可见性；真实传输复用现有专属 master 入口。
+**位置：** WorkspaceBackend、LocalWorkspaceBackend.readSync/write/runSync、
+SSHWorkspaceBackend.read/write、SSHHostWorkspaces.execute、ProcessRemoteCommandRunner.run、
+RemoteCommands.atomicWriteCommand、TextFileEncoding.decode/encoded/contradictsDeclaration。
 
-**步骤：**
-1. 明确源版本的产生、保持、失效：原地写、增长／截断、原子替换、
-   符号链接、路径重建、重连及换目标；包括**同大小、同 mtime、字节已变化**的反例。
-   size／mtime 不单独证明内容不可变。
-2. 比较平台稳定只读源／快照和本次拥有的临时副本，测创建成本、空间、权限、
-   复制时源变化检测和清理；不假定 mmap 或一次 cp 就保证一致性。
-3. 实验有偏移的有界读取、预取和顺序编码保存。
-   页跨 UTF-8／UTF-16／GBK／GB18030／Shift-JIS 编码单元、CRLF、BOM、EOF 均无损；
-   扫描编码声明的前两行及 Windows `coding: mbcs` 的远端代码页一次性确定编码，不每页启动探测命令；
-   无法完整校验或无损编码时保留原目标及草稿。取消须终止本次生产者，不动共享连接。
-4. 先在本机 shell 验证协议和背压，再在授权远端临时目录验真。
-   复用现行 `LocalWorkspaceBackend.runSync` 的单进程 IO／取消所有者扩展分段协议，
-   不再造第二个独立 SSH pipe engine；runner 当前返回完整 Data，必须证明新文本边界不先攒完整文件，
-   也不每页／每行启动 SSH。保留其它业务原有有界 `Data` API。
-5. 将稳定版本与局部修改组成可迭代快照，同卷私有临时写入；
-   全部读取、校验、写入和目标核对成功才发布。
-   核对短写、对端提前关闭、空间／配额不足、取消、断线和保存期间新编辑。
-   当前远端 `atomicWriteCommand` 使用固定的 `$1.bailey-tmp`：
-   对同路径两次保存、遗留临时名及预置符号链接核对隔离和安全清理。
-   新流式契约必须独占本次临时资源，不复制固定名称造成并发截断。
-   沿用实际可写资格，核对原文件权限／可执行位及链接语义，不顺带承诺完整元数据备份。
-6. 区分连接／闲置截止与有进展传输，不把全 App 超时改无限。
-   所有失败核对原文件、草稿和临时资源；进程退出 0 不等于完整传输。
-7. 单独复验图片扩展名的合法 GB 文本和伪造／损坏图片头：
-   现有 `readContent` 先以 `.max` 读取图片数据、再用 `NSImage` 尝试解码。
-   新文本回退不得在进入分页之前已经下载／分配全文；
-   格式判定的有界路径须同时保留真实图片预览及错误分类。
-   此外，用真实临时 FIFO／socket、目录和可安全访问的设备节点检验普通文件资格：
-   不可读对象不得阻塞文件打开、变成空文本或被保存覆盖；
-   这是现有任意路径打开入口的适用输入，不为此新增通用文件类型框架。
-8. 测稳定源创建、建索引和预校验自身的首屏前读写量；
-   snapshot／clone／临时副本的创建成本和竞态不能从测量中排除。
-   记录磁盘配额、权限及发布前后故障，不把临时空间无界增长换成“低 RSS”。
+**步骤与断言：**
+1. 分开核对 FD、mmap、APFS clone、远端私有副本的保证和创建成本。
+   FD 不阻止原地改写；mtime／size／前后 stat 不证明不可变源；
+   O(N) 复制不能从首屏计时中扣除，不假定所有 POSIX／MSYS2 都有 CoW。
+2. 扩展现有唯一进程 IO 所有者做范围读取／有界 stdin 消费，计量排队字节、背压、
+   生产者终止和慢进展／停顿。保留其它业务 Data API；
+   不每页启动 SSH，不增加第二套引擎或远端常驻服务。
+3. 编码选定后建立原字节↔UTF-16 检查点，保留 BOM、现有前 512 字节声明识别、
+   mbcs 和手动选择。跨块解码与保存严格往返；晚发现非法尾部拒绝发布并留草稿。
+   发布前确认稳定源全部字节已严格校验，未改片段直拷也不例外；源验证完成与输出写完分别核验。
+   图片扩展名大文本须从真实 FileTab 入口验证，不先完整 NSImage 读取。
+4. 冻结文档版本，顺序编码到本次独占暂存，完整写入／校验／核对目标后发布；
+   新编辑仍脏。复用 `5f1024e0`，不再“修复固定临时名”。
+   现有远端 `cat` 收到正常 EOF 即进入发布；流式编码／生产者失败可能同样表现为 EOF。
+   必须证明显式完整结束、长度／校验确认后才可发布，不能直接把 Data 改成可能早停的 stdin 流。
+   故障覆盖短 IO、磁盘错误、取消、外部修改、并发保存，以及生产者失败后消费者仍收到 EOF。
+5. 发布后回执／metadata 失败先核验目标，不能盲重试；
+   stat 后 rename 不是对任意外部写者的原子 CAS。
+   保持实证的权限／symlink／hardlink 语义，不扩大断电与元数据保证。
+6. 受控 shell 证明协议后，明确授权主机、临时目录和 GB 空间再验真实 SSH；
+   不借用户 master。缺口只阻塞对应实机准入，不抹去本机证据。
 
-**验证与覆盖：**
-`make test:SegmentedWorkspacePrototypeTests,RemoteCommandsTests,FileTabPersistenceTests`。
-授权后才运行 `make test:SSHFileTreeLiveTests`；总集 E、D、I、S、R、L。
-并发修改 × 缓存 miss × 保存，断线 × 写入 × 重连必须组合。
-真实 SSH 参数沿用 testing 文档的 `BAILEY_P4_TEST_SSH_HOST` 与
-`TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST`，两者指向同一个本 feature 获准主机；
-每个 Windows MSYS2／POSIX 环境分别运行并记录实际系统／Shell／Git／命令能力，
-不能因文档有历史主机授权便自动取得本次 GB 空间与断线实验授权。
-未提供参数导致的 skip 不算实机证据，也不从用户 `/.ssh 的现存 master 借连接。
+**Gate：** 稳定源、按需首屏、严格编码和完整发布共同成立。
+若远端只有先复制全篇才能稳定，列出它与 R2 的最小冲突及替代；
+不得自批放宽一致性或将前置全读改名为初始化。
 
-**文档、停止及提交：**
-`evidence-p1.md` 给两种后端的稳定源策略、能力前提、磁盘／驻留预算、
-拟修改的 WorkspaceBackend 方法签名及全部 conformer。
-无空间／远端授权不做实机，记录具体缺口；稳定源和按需首屏冲突时交付实际代价。
-原型测试提交规则同 P1-T1，不建立通用传输框架或远端常驻服务。
+**验证：** `make test:RemoteCommandsTests,FileTabPersistenceTests,WorkspaceIdentityTests`，
+已获参数授权后补 SSHFileTreeLiveTests。
+先证明真实故障阶段，再核对完整目标、草稿、进程和私有资源；进程退出 0 不算充分证据。
 
 <a id="p1-t3"></a>
 ## P1-T3 GB 两侧 Diff 的有界数据与精度实验
 
-**Files／锚点：**
-`GitCommandExecution.runData`、`DiffTab.gitContent/gitComparisonBaseline/recomputeDisplay`、
-`refreshEditDecorations`、`DiffCore.compute`、`DiffEngine.lineOps`、
-`DiffComputation.build`、`DiffSyntaxHighlighter.captures`、
-`DiffNativeSurface.editTextDidChange`。
-在 `BaileyTests/Git/` 新增 `LargeDiffPrototypeTests.swift`，
-使用真实临时仓库，复用 `DiffEngineTests` 和 `NativeGitHistoryFileTests`。
+**问题：** GB 稳定两侧来源上，如何避免全文行数组／指纹表，
+仍精确定位少量变化并完整覆盖密集变更？
 
-**步骤：**
-1. 验证锁定 OID 的 blob 可以进入稳定分段源，不经 stdout 全量 Data／String。
-   原文、clean 后内容和 patch 各自核对，不能混用坐标。
-2. 对照现有前后缀／Patience／受限 Myers 的分页适配与 Git 原生流式 hunk。
-   优先复用已安装 Git，但实测其自身 GB 内存及输出放大，不能只把压力移到子进程。
-3. 同一 GB 基底制造首／中／末单点变化、重复行、整篇替换、超长行、重命名和改行数过滤器。
-   **已发现 Git 2.54 xdiff 对 1 GiB 文本直接退出 128**：
-   仅借助 `git diff --unified=0` 不具备 GB 级完整精确 hunk 准入。
-   必须改为已验证的独立有界比较方法，不能提高超时或增加输出上限掩盖硬失败。
-   同时覆盖 SHA-1／SHA-256、`.gitattributes working-tree-encoding`、
-   不同文件编码与 Git patch 输出编码不一致、只改文件模式和大二进制源。
-   当前 `gitComparisonBaseline` 将 patch 的输出直接交给 `newEncoding.decoded`，
-   **须用真实 Git 原始输出与独立字节 oracle 验证**，不能默认 Git patch 总与文件原编码相同。
-   核对定位、完整覆盖和重建字节，不能以整篇替换糊过小修改。
-4. 分别测行哈希、hunk 索引、词级强调、ghost、Unified／Split 的成本；
-   验证只构造需要的视口／hunk，不先做三篇全文富文本。
-5. 预算、取消、连续编辑和旧结果发布逐项验证。
-   未完成不得映射成空 diff，不能仅以后台执行证明有界。
+**位置：** DiffCore.computeIfActive、DiffEngine.computeLineOps/diffRegion、
+DiffTab.gitContent/gitComparisonBaseline、GitWorktreeComparison.resolve、DiffComputation.build。
+保留 `3d62c14b` 的重复行纠错和取消回归。
 
-**验证与覆盖：**
-`make test:LargeDiffPrototypeTests,DiffEngineTests,NativeGitHistoryFileTests`。
-总集 D、G、S、L；重复内容 × 小编辑、过滤器 × GB 原文、
-取消 × 旧结果为必测组合。报告输入、patch、进程及子进程峰值内存和精度。
+**步骤与断言：**
+1. 分段遍历 T2 稳定源或不可变 Git OID；明确 raw worktree、clean 比较文与 patch 的编码／坐标。
+   hash stdin、patch 和 clean 投影均计入预算，不能只改 cat-file。
+2. 先评估现有前后缀／可靠锚点／差异区间算法如何消费分页行目录；
+   只有空间证据不足才引入所需的局部算法，不直接搬 Monaco 全量 Map／worker mirror。
+   行目录、指纹、碰撞复核、字符细化、hunk、队列和临时磁盘分别有界。
+   从读取、解码、建目录、指纹排序到字符细化和结果投影都计量；
+   驻留内存遵守固定预算 B，临时磁盘可随输入增长为 O(N)，但须预检空间并限制实际峰值。
+3. 真实 GB 配独立流式 oracle：相同、首中末小变化、插删漂移、重复／交叉锚点、
+   单长行、海量短行、密集变化和空侧。定位明确的小变化严格检查；
+   重复内容允许不同合法对齐，完整覆盖与重建不可省。
+4. 区分完整行级结果、字符细化未完成、整体未完成／失败／取消。
+   密集变化可为真实粗块；预算不足不能把稀疏变化统称全替换并冒充精确。
+   未完成绝不显示没有变化。
+5. 取消以生产循环／子进程退出证明，时间预算、硬内存和结果输出预算分别测；
+   不复制 Monaco await 后丢结果的弱取消。
+6. 选择 Git 作计算者时先以当前版本核对 GB 行为及子进程内存；
+   旧无日志失败记载不代替复验，Git 自身超限不靠提高 stdout 限额掩盖。
 
-**文档、停止及提交：**
-在 `evidence-p1.md` 记录算法选择、正常／最坏成本和完成度定义；
-Git `hash-object --path --stdin` 当前一次传入完整原始 `Data`，`git diff` 当前有 `maxBytes * 4` 输出上限，
-新路线必须分别解决原始哈希输入、patch 流及 clean 后比较坐标，不仅改 `cat-file`。
-不在实验中移除 5 MiB、替换生产渲染或宣称正式支持。
-只保留可重复的精度／预算回归，不保留永久第二套试验 engine；
-失败不能用仅显示原文代替 Diff 交付。
+**Gate：** 冻结具体结构、最坏成本、精度、取消点和资源预算。
+只阻塞依赖它的 Diff 实施，不阻塞独立普通文件迁移。
+全部来源、Unified／Split 与可写工作区接入归 P3。
+
+**验证：** 扩展现有 DiffEngineTests、NativeGitHistoryFileTests、NativeDiffTabTests，
+仍经根 Makefile。大夹具顺序生成／核验，不在助手里先拼 GB String。
 
 <a id="p1-t4"></a>
 ## P1-T4 固定决策、预算并具体化后续任务
 
-**依赖：** P1-T1～T3 证据齐全。核心 Gate 失败不准入依赖路径。
+T1／T2／T3 分别报告通过、失败或缺证据的具体范围；T5 不替代实机结论。
 
-**步骤与产物：**
-1. 将实验映射 R1～R6；逐个新类型／状态／接口写出消费者、唯一所有者、
-   替代旧路径及证据。复用已有 generation、保存队列、错误通道和连接身份。
-2. 锁定**原始字节坐标／所选编码增量解码／UTF-16 编辑坐标／Git LF 行坐标**四者的映射，
-   覆盖 BOM、声明编码、远端 `mbcs`、手动重开与无损另存；保留 Undo、稳定快照和保存版本契约。
-   Tree-sitter 的 UInt32 字节范围不能被误当成全 GB 默认解析能力。
-3. 选定原生、稳定源、远端和 Diff 路线，在 `evidence-p1.md` 写
-   Decision／Alternatives／Why／Risk；删除已被否决的实施分支。
-4. 更新 `idea.md` 实证默认值及 P2／P3：明确新文件名、接口签名、
-   调用和迁移顺序、每次接入与旧路径删除，以及准确测试选择器。
-   不以“执行时再找入口”替代已可核对的事实。
-5. 数值固定：首屏、最坏同步停顿、页／索引／Undo 驻留、临时磁盘、
-   并发工作及取消收敛、跳转、搜索结果、保存吞吐、Diff 完成和细化。
-   写清量纲、冷／热、硬件、输入分布和失败判定；热路径至少 30 次，
-   给中位／p95／最坏值，不套用旧裸控件的 16／32ms 证明 GB 全功能。
-6. 审查总集每个条件的测试入口和授权缺口。不能因无最低系统或远端条件删掉该条件。
-   没有证据的可行性结论继续标未知，不能强行放行。
+1. 冻结最少实际类型的正文版本、原生适配、稳定 IO、索引与 Diff 接口；
+   指明现有消费者、唯一所有者、失败返回和删除的旧路径。
+   TextDocument／NativeDocumentStorage／WorkspaceFileSession 只是候选职责，不为名字造壳。
+2. 优化比较前登记页 P、正文／解码／索引／Undo／hunk 分项预算 B，
+   进程／子进程和临时磁盘、冷首屏、热输入 p95／最坏停顿、取消收敛、搜索／保存指标。
+   说明硬件、输入、量纲与失败条件，不以一次 RSS 或可压缩 sparse 输入证明容量。
+3. 记录方案取舍与重新考虑条件，不在失败后不断抬预算。
+   将 P2／P3 候选接口和预算换为实证值；需求改变才回到用户决策。
+4. 分派下文全部适用条件：P1 证明机制，P2／P3 证明生产路径。
+   不要求 P2 完整功能先通过才能开始 P2，也不凭研究 completed 认定可行。
 
-7. 修正共享链的先后依赖：本机和 SSH 都接通同一文档 IO 契约后，
-   才能由共享 FileTab解除容量检查。不得靠检测 backend类型／机器身份，
-   新增本机专用放行分支、远端全文默认实现或生产环境 unsupported占位方法。
-8. 验证预算在优化方案比较前登记，依据现有基线、设备资源和用户结果制定；
-   不能在测量失败后不断抬预算直到通过。调整预算需记录原因、前后结果和对验收的影响；
-   若改变用户要求的可观察结果，应重新确认而非自批 Go。
-9. 完成下文逐条件执行清单、task分派和根因反例检查。
-   P2／P3所有依赖实验的签名、具体算法、状态及测试参数均须被实证结论替换，
-   不能只将“具体化”这个 task标为完成却保留条件空缺。
+**依赖准入：** 原生与 IO 机制成立即可进入 P2 的小文件同契约迁移；
+本机与 SSH、原生全文旁路、完整保存全成立后，P2-T3 才解除共享 8 MiB。
+Diff 算法及两侧源成立可进入 P3 对应任务，全部来源与投影成立后 P3-T3 才解除 5 MiB。
+一个方向失败停对应分支，不重复未变化的其它实验。
 
-**验证与 Gate：**
-使用共享 `feature_tool.py todo validate`，核对真实 plan 锚点、源码路径和测试发现。
-P1 Go 只允许按具体化路线实施，不等于功能验收。
-No-Go 时交付最小冲突和解阻条件；不私自降成只读、全量加载或更换编辑器。
-阶段实际审计时才由工具创建 `audit-p1.md`，不预建审计文件。
+**证据归属：** 未来实际执行才生成阶段 evidence，实际审计才生成 audit；
+本轮不创建空证据或预制 Go。todo 是唯一实时状态，重新打开任务保留旧结论和范围变化原因。
 
-**提交：** 默认只有本地计划和证据，不作 Git 提交。
+## 统一验证入口与证据尺度
 
-### 统一测量命令与证据格式
+正确性只用根 Makefile 和现有 XCTest。
+性能使用隔离 `make build:dev CONFIGURATION=Release` 产物；
+不另建 shell 测试系统、Xcode 工程或私自覆盖构建命令。
+以当前本机验收，保留 macOS 15.6 API／部署兼容；
+不创建 VM、专门取得旧系统或因缺旧系统阻塞本轮。
 
-正确性使用各 task 的 `make test`／定点入口。
-隔离优化 App 使用 `make build:dev CONFIGURATION=Release`；已通过 Make dry-run
-核对它仍构建独立 `chiimagnus.bailey.dev`，不覆盖正式 App。
-需要优化宿主测量时仍从根 Makefile 进入，只在该隔离测试构建覆盖 XCODEBUILD：
-
-```sh
-make test CONFIGURATION=Release ONLY_TESTING='BaileyTests/LargeDocumentPrototypeTests' \
-  XCODEBUILD='xcodebuild -project Bailey.xcodeproj -scheme Bailey -configuration Release -destination platform=macOS,arch=arm64 -derivedDataPath build/DerivedData-Dev -clonedSourcePackagesDirPath build/SourcePackages -skipPackageUpdates -disableAutomaticPackageResolution ENABLE_TESTABILITY=YES'
-```
-
-其它原型类沿同一入口替换 ONLY_TESTING，不把 ENABLE_TESTABILITY 写入正式工程或发布配置。
-优化 XCTest 仍不代替独立 App 的首帧、内存和 GUI 结果。
-每条运行证据记录 Git／本任务 diff、系统、硬件、配置、输入字节、实际样本数、
-最终字节／可见结果、完整退出码及对应条件 ID。当前计划未执行此命令。
+实际证据记录 commit／diff、系统／工具链、硬件、输入分布、最终字节／可见结果、
+完整退出码及条件 ID。热路径至少 30 次给中位／p95／最坏值；
+冷首屏、索引、保存、Diff 分开测。只对受影响条件重验，不为纯文档更新重复测试。
 
 ## 覆盖执行契约
 
 本节把“尽可能全面”落实到执行，不增加生产防御框架或另建测试体系。
-当前所有新增用例、参数化运行和原型均是计划，尚无通过结果。
+下列是未来产品覆盖要求，不是本轮已经执行的结果。
+P1 只核销改变架构的机制；完整原生／用户链分别由 P2／P3 承担。
 
 ### 每个条件必须怎样落地
 
@@ -335,8 +236,9 @@ make test CONFIGURATION=Release ONLY_TESTING='BaileyTests/LargeDocumentPrototype
 - P1 原型与 P2／P3 正式用户链分别记证据。
   同一模型用例不能代替 `FileTab`、`DiffTab`、两个后端或完整 App 的实际接入；
   其它 task 只有源码／配置／触发条件未变时才可复用有效证据。
-  **先复用已存在的回归**，仅对它未证明的新条件增测：旧 5／8 MiB 断言必须改成新成功语义，
-  不能保留旧拒绝测试再叠加新放行测试。
+  **先复用已存在的回归**，仅对它未证明的新条件增测。
+  P2-T3／P3-T3 实际解除对应门槛时，同步将旧 8／5 MiB 拒绝断言改为新成功语义；
+  在此前迁移步骤继续保留旧门槛回归。同一已放行阶段不并存互相矛盾的拒绝与成功断言。
 - 计划中的页大小 P、缓存预算 B、并发／输出／时间预算，由 P1 实验固定后代入实际数值。
   每个适用值与边界须展开到可执行输入；不能到实施时仍只留下“各种大小”。
 - 先确认故障真的发生：例如主机确实断开本次通道、原子替换确实已发生、
@@ -363,14 +265,16 @@ L5 列出的交互是最低必测集，不是允许跳过其它组合的上限�
 
 表中是各 task 必须核销的本链切片，命令见各 task。
 条件全集定义在下一节；共享 ID 在不同链分别证明，不因另一链通过而自动核销。
-新增方法名是实施目标，不声称当前已经存在；P1-T4 固定具体方案时再补齐其它参数化方法。
+新增方法名是行为目标，不声称当前已经存在；优先扩展已有测试类和断言。
+P1-T4 将其映射到真实被枚举的方法，不为匹配旧原型名称重建测试壳。
 
 | 负责 task | 强制条件切片 | 测试入口与不可替代的最终断言 |
 | --- | --- | --- |
-| P1-T1 | E1／E3、D2～D4／D7／D8、I1／I4、N、L1／L2 | 拟新增 `LargeDocumentPrototypeTests.testFirstScreenAndEditBeforeSourceEOFWithoutGlobalIndex`：禁止夹具泄露全局长度，屏障未释放即有真实文字和有效编辑；原生布局／IME／Find／AX 每项给访问量、像素与原生事务证据 |
-| P1-T2 | E2／E4、D1／D2／D4～D7、I、R、S4、L1 | 拟新增 `SegmentedWorkspacePrototypeTests.testStableStreamSaveAtEveryPublishBoundary`：两后端冻结一个版本，逐提交点故障后核对完整目标、草稿与生产者／临时资源；图片扩展名大文本不先全读 |
-| P1-T3 | D1～D4／D7、G、I4／I5、L1／L2 | 拟新增 `LargeDiffPrototypeTests.testGiBRepeatedSmallEditsReconstructBothSourcesWithinBudget`：真实 Git 两侧及稠密变化均完整覆盖、重建正确，小改动不被糊成全替换；计入子进程和输出 |
-| P1-T4 | 全集的适用性、分派、预算与缺口 | 原型结果→固定接口／算法／状态／数值→更新 P2／P3→实际测试发现与条件展开逐项对应；结构校验不能代替 Go 证据 |
+| P1-T1 | 原生机制 E1、D2～D4／D7／D8、I1／I4、N8 | 现有 NativeFileTab／Layout／Composition 类证明未知长度、冷页、巨段落及协议访问；完整普通交互归 P2 |
+| P1-T2 | 源／保存协议 E2／E4、D4～D7、I2／I3／I5～I8、R1／R2 | 现有 RemoteCommands／FileTabPersistence 证明稳定源、背压、严格编码及发布边界；完整远端组合归 P2 |
+| P1-T3 | 算法准入 D2～D4／D7、G2／G7、I4／I5 | 现有 DiffEngine／NativeGitHistoryFile 类证明 GB 稀疏精度、密集覆盖、资源与取消；所有来源／投影归 P3 |
+| P1-T4 | 全集的适用性、分派、预算与缺口 | 机制证据→接口／算法／预算→分别准入 P2／P3；产品验收不倒置为 P1 前置 |
+| P1-T5 | 上游当前源码与关键限制 | 固定 SHA、调用链、可见源码索引与链接；静态研究不冒充运行证据 |
 | P2-T1 | D1／D4／D6～D8、N1／N2、I6、S4～S6、L7 | `TextDocumentTests` 对照模型逐步核对字节／坐标／Undo；`FileTabPersistenceTests`、`NativeFileTabTests` 证明挂载、非视图追加、标签切换器预览及 `.gitignore` 追加不借全文镜像，真实保存正确 |
 | P2-T2 | E2／E4、D1／D2／D4～D7、I、R、S1／S2／S4、L1／L3 | `WorkspaceFileSessionTests`、`RemoteCommandsTests`、`SSHFileTreeLiveTests`：本机与 SSH 共享契约，首屏前读量、全流哈希／重开、每个发布故障点、存活 master、FD／进程／临时文件共同核对 |
 | P2-T3 | E1～E3、D1～D4／D7／D8、I1／I4／I5／I9、N、L1／L2／L5／L7 | `NativeFileTabTests` 和 Editor 各原生测试：实际入口越过 8 MiB、两后端 GB 编辑保存重开；冷页、未知索引、长行、IME、Find、剪贴板／AX 均不隐式退回全文路径 |
@@ -397,8 +301,8 @@ P2／P3 每块提交前还须沿实际入口追到最终读写／渲染，核对
   另有 `.github/workflows/ci-ui-test.yml` 的 `xcode-27` Host／UI Runner（指定 Xcode 27.2）；
   CI 只在明确触发后记录其**实际 macOS 版本**、Git、签名、XCTest 总数与退出码，
   不把本机绿色或 CI 编译绿色当对方真实环境通过。最低部署目标仍为 macOS 15.6；
-  有可用旧系统时补跑受影响的原生、IO 与性能路径，缺设备时明确列为旧系统验证缺口，
-  **不为本 feature 专门搭旧系统 VM 或把未实测兼容性写成已通过**。
+  本 feature 以当前本机验收，不要求专门取得 macOS 15.6 或搭建 VM；
+  部署 API 兼容仍需检查，不把当前结果宣传为其它系统实测。
   SDK 可编译不等于老系统运行；当前本机证据不自动外推其它设备和内存。
   核对 Swift 6 语言模式、MainActor 隔离及 Debug／Release 实际优化条件。
 - E2：本机不同**可控缓存预算**、可用磁盘空间及本机 APFS 与授权 SSH 实际文件系统；
@@ -613,8 +517,8 @@ Windows 原子替换等平台行为仍须对应实机证据。
 
 | 条件 | 本轮限制 | 替代证据、影响和补验要求 |
 | --- | --- | --- |
-| P2／P3 正式实施 | 本轮明确执行 P1 | P1 Gate 证据通过之前不得开始；P1 实验不能算产品已交付 |
-| 最低及其它 macOS | 未取得对应系统 | SDK／源码只能支持可用性判断；取得机器后补原生、IO、GB，限制平台验收声明 |
+| P2／P3 正式实施 | 本轮仅源码研究与计划修订 | 各关键机制分别准入；不实际改产品，不把调查计作交付 |
+| 其它 macOS | 本 feature 按已确认决定以当前本机验收 | 保持最低部署 API 兼容；不要求旧系统实机／VM，不声称已跨系统实测 |
 | 低内存／其它卷 | 未确认授权设备、空间和卷 | 小预算验证保护，不冒充硬件性能；取得隔离资源后补测 |
 | Windows／POSIX SSH | 未取得本 feature 的主机、目录和 GB 空间授权 | shell 只证明协议；明确授权专属 socket和临时目录后补实机，缺必需后端证据不宣称全面交付 |
 | 完整 GUI／真实 IME | 未取得独占焦点／专用图形会话 | 宿主只证明组件；隔离 Dev 补前台键盘、候选、菜单、跨窗和重启 |
@@ -629,5 +533,5 @@ Windows 原子替换等平台行为仍须对应实机证据。
 
 P1 tasks 实际结束后由 executing-plans 进入 plan-task-auditor；
 工具届时生成 `audit-p1.md`，核对证据和 Go／No-Go再交回执行流。
-本轮按 `executing-plans` 执行 P1；原型、状态与实验结果由 `evidence-p1.md` 记录，
-不预先放行 P2／P3。
+本轮只完成源码研究与计划修订；未来实际运行时再生成对应 evidence／audit。
+技术准入与产品完成分别判断，不预先放行或冒称 P2／P3 已交付。
