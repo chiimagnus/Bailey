@@ -16,8 +16,12 @@
 所有来源／统一分栏／过滤器及已识别组合按总集核销。
 
 **Rules／准入：**
-- P1-T3通过且 P1-T4已固定算法、接口和数值；P2的共享文档／IO具备所需能力。
-  下面同样是条件任务，不提前宣称 out-of-core算法或 AppKit投影可行。
+- **必须取得 P1-T3 算法精度和有界完成度的技术 Gate 通过证据**，
+  而非仅凭原型任务完成。P1 实测 Apple Git 2.54 的 `git diff` 在 1 GiB 一行修改时
+  退出 128；锁定 OID 以 64 KiB 分段导出并定位一个修改块可行，
+  **却不证明**任意插删、重复行及密集 GB Diff 已可用。
+  P1-T4 必须固定能覆盖这些输入的算法／接口／数值，且 P2 共享文档／IO 具备所需能力。
+  下面仍是条件任务，不提前宣称 out-of-core 算法或 AppKit 投影可行。
 - DiffTab继续拥有该标签的来源、任务和原生表面；可写正文只有一份。
   不能通过全局路径缓存把 FileTab／DiffTab的独立草稿强行合并。
 - immutable旧侧、Git规范化比较内容和原始可写工作区必须分别保留身份与坐标。
@@ -67,8 +71,11 @@ SHA-1／SHA-256、重命名与含 Unicode／换行的特殊路径；
 3. clean／hash／patch 链按 P1 确定的流边界执行。
    区分 Git patch 的实际输出编码、工作区磁盘编码和展示用 UTF-16，
    不得无依据地用工作区所选编码解析整段 patch；
+   P1 已验证对私有 APFS 快照调用 `hash-object --path=<原路径> <私有源>`，
+   与直接对工作区执行的 clean OID 相同；优先验证这条无需 GB `stdin: Data` 的原生路径。
    `hash-object` 输入、原始工作区源、clean 输出、patch 输出及比较内容各自有背压、OID 和版本；
    同一输入快照可供 `hash-object` 与 patch 比对，不把动态 worktree 的两次读取混成一份内容。
+   Git xdiff 对 1 GiB 的硬失败不能靠增加 `maxBytes * 4`、输出超时或分段拼接未校验 hunk 规避；
    不能只移除 `maxBytes * 4` 检查却仍全攒 patch，
    也不能继续使用 `worktreeBytes: Data?` 作为 GB 比较的必要前置。
 4. Git 判断相同、原始文件不同（如 EOL／filter）时仍保存原文；
