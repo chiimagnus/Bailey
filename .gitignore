@@ -1,5 +1,6 @@
 # Local build outputs
 /build/
+/.build/
 
 # macOS
 .DS_Store
