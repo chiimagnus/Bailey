@@ -184,33 +184,62 @@ class NativeCodeTextView: NSTextView {
     /// not necessarily emit NSTextViewDelegate.textDidChange.
     var onCharacterEdit: ((NSRange, String) -> Void)?
     private var textEditObserver: (any NSObjectProtocol)?
-    private struct CompositionSnapshot {
-        let text: String
-        let selection: NSRange
+    private struct CompositionChange {
+        let range: NSRange
+        let removed: String
+        let inserted: String
     }
-    private var composingOriginal: CompositionSnapshot?
+
+    private struct CompositionTransaction {
+        let originalSelection: NSRange
+        let originalLength: Int
+        var changes: [CompositionChange] = []
+        var pending: (range: NSRange, removed: String)?
+    }
+
+    private var composition: CompositionTransaction?
     private var committingComposition = false
 
-    /// AppKit may omit the provisional IME edit from the native undo group
-    /// when the final insert targets an explicit, unrelated range. Treat one
-    /// marked-text session as one native UndoManager transaction, irrespective
-    /// of the number of interim candidates.
+    /// Record exactly the ranges that AppKit is about to replace. A whole
+    /// document snapshot on each IME session makes one local keystroke copy GB.
+    override func shouldChangeText(in affectedCharRange: NSRange,
+                                   replacementString: String?) -> Bool {
+        guard super.shouldChangeText(in: affectedCharRange,
+                                     replacementString: replacementString) else { return false }
+        if composition != nil, let storage = textStorage,
+           affectedCharRange.location != NSNotFound,
+           affectedCharRange.length >= 0,
+           NSMaxRange(affectedCharRange) <= storage.length {
+            composition?.pending = (
+                affectedCharRange,
+                storage.attributedSubstring(from: affectedCharRange).string
+            )
+        }
+        return true
+    }
+
+    /// AppKit can omit provisional marked-text edits from its undo history.
+    /// One grouped range transaction also handles a final insertion targeting
+    /// a different region from the marked text, without copying intervening text.
     override func setMarkedText(_ string: Any, selectedRange: NSRange,
                                 replacementRange: NSRange) {
-        if !hasMarkedText(), composingOriginal == nil {
-            composingOriginal = CompositionSnapshot(text: self.string, selection: self.selectedRange())
+        if !hasMarkedText(), composition == nil {
+            composition = CompositionTransaction(
+                originalSelection: self.selectedRange(),
+                originalLength: textStorage?.length ?? 0
+            )
             documentUndoManager.disableUndoRegistration()
         }
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
-        if replacementRange.location == NSNotFound, composingOriginal == nil, !hasMarkedText(),
+        if replacementRange.location == NSNotFound, composition == nil, !hasMarkedText(),
            let replacement = (string as? NSAttributedString)?.string ?? (string as? String),
            insertAcrossSelections(replacement) {
             return
         }
-        let hasComposition = composingOriginal != nil
+        let hasComposition = composition != nil
         committingComposition = hasComposition
         super.insertText(string, replacementRange: replacementRange)
         committingComposition = false
@@ -264,30 +293,78 @@ class NativeCodeTextView: NSTextView {
     }
 
     private func finishComposition() {
-        guard let initial = composingOriginal, !hasMarkedText() else { return }
-        composingOriginal = nil
+        guard let completed = composition, !hasMarkedText() else { return }
+        composition = nil
         documentUndoManager.enableUndoRegistration()
-        let completed = CompositionSnapshot(text: string, selection: selectedRange())
-        guard !initial.text.utf16.elementsEqual(completed.text.utf16),
-              let storage = textStorage else { return }
+        guard let storage = textStorage else { return }
+        var changes = completed.changes
+        var predictedLength = completed.originalLength
+        for change in changes {
+            predictedLength += change.inserted.utf16.count - change.removed.utf16.count
+        }
+        // AppKit can report a provisional deletion while ending marked text,
+        // then keep those characters as the settled result. Only published
+        // content belongs in the undo transaction, not transient notifications.
+        while predictedLength != storage.length, let last = changes.last,
+              last.inserted.isEmpty,
+              predictedLength + last.removed.utf16.count == storage.length {
+            predictedLength += last.removed.utf16.count
+            changes.removeLast()
+        }
+        guard predictedLength == storage.length, !changes.isEmpty else { return }
+        if let last = changes.last, !last.inserted.isEmpty {
+            let range = NSRange(location: last.range.location,
+                                length: last.inserted.utf16.count)
+            guard NSMaxRange(range) <= storage.length,
+                  storage.attributedSubstring(from: range).string == last.inserted else {
+                return
+            }
+        }
+        let finalSelection = selectedRange()
         documentUndoManager.beginUndoGrouping()
         documentUndoManager.registerUndo(withTarget: storage) { [weak self] storage in
-            self?.restoreComposition(in: storage, from: completed, to: initial)
+            self?.replayComposition(changes, undoing: true, in: storage,
+                                    initialSelection: completed.originalSelection,
+                                    finalSelection: finalSelection)
         }
         documentUndoManager.endUndoGrouping()
     }
 
-    private func restoreComposition(in storage: NSTextStorage, from previous: CompositionSnapshot,
-                                    to replacement: CompositionSnapshot) {
-        guard previous.text.utf16.elementsEqual(storage.string.utf16) else { return }
-        documentUndoManager.registerUndo(withTarget: storage) { [weak self] storage in
-            self?.restoreComposition(in: storage, from: replacement, to: previous)
+    private func replayComposition(
+        _ changes: [CompositionChange], undoing: Bool, in storage: NSTextStorage,
+        initialSelection: NSRange, finalSelection: NSRange
+    ) {
+        let sequence = undoing ? Array(changes.reversed()) : changes
+        var applied: [CompositionChange] = []
+        for change in sequence {
+            let expected = undoing ? change.inserted : change.removed
+            let replacement = undoing ? change.removed : change.inserted
+            let range = NSRange(location: change.range.location, length: expected.utf16.count)
+            guard NSMaxRange(range) <= storage.length,
+                  storage.attributedSubstring(from: range).string == expected else {
+                // A stale undo must never leave half of a multi-range edit applied.
+                for prior in applied.reversed() {
+                    let restore = undoing ? prior.inserted : prior.removed
+                    let current = undoing ? prior.removed : prior.inserted
+                    storage.replaceCharacters(
+                        in: NSRange(location: prior.range.location,
+                                    length: current.utf16.count), with: restore
+                    )
+                }
+                return
+            }
+            storage.replaceCharacters(in: range, with: replacement)
+            applied.append(change)
         }
-        Self.replaceChangedText(in: storage, with: replacement.text)
+        documentUndoManager.registerUndo(withTarget: storage) { [weak self] storage in
+            self?.replayComposition(changes, undoing: !undoing, in: storage,
+                                    initialSelection: initialSelection,
+                                    finalSelection: finalSelection)
+        }
+        let selection = undoing ? initialSelection : finalSelection
+        let location = min(selection.location, storage.length)
         setSelectedRange(NSRange(
-            location: min(replacement.selection.location, storage.length),
-            length: min(replacement.selection.length,
-                        max(0, storage.length - replacement.selection.location))
+            location: location, length: min(selection.length, storage.length - location)
         ))
     }
 
@@ -315,16 +392,6 @@ class NativeCodeTextView: NSTextView {
             NSRange(location: start, length: oldLength - start - end),
             NSRange(location: start, length: nextLength - start - end)
         )
-    }
-
-    /// Restore only changed UTF-16 characters. A final IME insertion can
-    /// explicitly replace a range unrelated to its marked-text region.
-    private static func replaceChangedText(in storage: NSTextStorage, with desired: String) {
-        let next = desired as NSString
-        guard let changed = changedTextRanges(from: storage.string as NSString, to: next) else {
-            return
-        }
-        storage.replaceCharacters(in: changed.old, with: next.substring(with: changed.new))
     }
 
     init(contentStorage storage: NSTextContentStorage = NSTextContentStorage()) {
@@ -687,6 +754,12 @@ class NativeCodeTextView: NSTextView {
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
+        if let pending = composition?.pending, pending.range == previousRange {
+            composition?.changes.append(CompositionChange(
+                range: previousRange, removed: pending.removed, inserted: replacement
+            ))
+            composition?.pending = nil
+        }
         let currentText = storage.string as NSString
         let previousParagraphCount = lineIndex?.lineCount
         let previousNativeOnlySeparators = lineIndex?.hasNativeOnlySeparators

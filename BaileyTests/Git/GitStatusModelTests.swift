@@ -2777,6 +2777,84 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testNativeFSEventsWatcherCanReleaseItselfFromCallbackWithoutQueueDeadlock() async throws {
+        final class Owner: @unchecked Sendable {
+            private let lock = NSLock()
+            private var watcher: GitFileEventWatcher?
+
+            func install(_ watcher: GitFileEventWatcher?) {
+                lock.withLock { self.watcher = watcher }
+            }
+
+            func releaseInCallback() {
+                lock.withLock { watcher = nil }
+            }
+
+            var hasWatcher: Bool { lock.withLock { watcher != nil } }
+        }
+
+        for fileEvents in [false, true] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Bailey-FSEvents-Lifetime-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let released = expectation(description: "FSEvents callback self-release fileEvents=\(fileEvents)")
+            released.assertForOverFulfill = false
+            let owner = Owner()
+            let notify: @Sendable () -> Void = { [weak owner] in
+                // The final owner is released on the FSEvents delivery queue,
+                // not the main actor. The former queue.sync deinit crashed here.
+                guard let owner else { return }
+                owner.releaseInCallback()
+                released.fulfill()
+            }
+            owner.install(fileEvents
+                ? GitFileEventWatcher(paths: [root.path], onEvents: { _ in notify() })
+                : GitFileEventWatcher(paths: [root.path], onChange: notify))
+            XCTAssertTrue(owner.hasWatcher, "The native watcher must actually start")
+            try Data("change".utf8).write(to: root.appendingPathComponent("changed.txt"))
+            await fulfillment(of: [released], timeout: 10)
+            XCTAssertFalse(owner.hasWatcher, "All owned watcher resources must be released")
+        }
+    }
+
+    func testFSEventsCallbackOwnerReleasesOnNormalStopAcrossRepeatedSubscriptions() async throws {
+        final class Lifetime: @unchecked Sendable {
+            private let lock = NSLock()
+            private var observed = 0
+            let released: XCTestExpectation
+
+            init(released: XCTestExpectation) { self.released = released }
+            func receive(_ events: [GitFileEventWatcher.Event]) {
+                lock.withLock { observed += events.count }
+            }
+            deinit { released.fulfill() }
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-FSEvents-Stop-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<32 {
+            let released = expectation(description: "FSEvents context releases callback \(index)")
+            weak var retained: Lifetime?
+            var watcher: GitFileEventWatcher?
+            do {
+                let lifetime = Lifetime(released: released)
+                retained = lifetime
+                watcher = GitFileEventWatcher(paths: [root.path], onEvents: { [lifetime] events in
+                    lifetime.receive(events)
+                })
+            }
+            XCTAssertNotNil(watcher)
+            XCTAssertNotNil(retained, "The active stream must own its callback")
+            watcher = nil
+            await fulfillment(of: [released], timeout: 3)
+            XCTAssertNil(retained, "Stopping the stream must release the callback exactly once")
+        }
+        XCTAssertNil(GitFileEventWatcher(paths: [], onEvents: { _ in }),
+                     "No stream or retained callback should be created for an empty target")
+    }
+
     func testNativeFileEventsReportExternalLinkedWorktreeHeadCommit() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-Linked-HEAD-Event-" + UUID().uuidString)

@@ -336,6 +336,81 @@ final class NativeEditorCompositionTests: XCTestCase {
         }
     }
 
+
+    func testNativeIMEExposesPrecisePrechangeRangesIncludingUnrelatedCommit() throws {
+        @MainActor final class TracedView: NativeCodeTextView {
+            var before: [(NSRange, String)] = []
+            override func shouldChangeText(in affectedCharRange: NSRange,
+                                           replacementString: String?) -> Bool {
+                let accepted = super.shouldChangeText(in: affectedCharRange,
+                                                      replacementString: replacementString)
+                if accepted, let storage = textStorage,
+                   affectedCharRange.location != NSNotFound,
+                   NSMaxRange(affectedCharRange) <= storage.length {
+                    before.append((affectedCharRange,
+                                   storage.attributedSubstring(from: affectedCharRange).string))
+                }
+                return accepted
+            }
+        }
+        let original = "prefix before 中文👩🏽‍💻 then suffix"
+        for final in [NSRange.notFound, NSRange(location: 0, length: 6),
+                      NSRange(location: 22, length: 4)] {
+            let editor = TracedView()
+            editor.text = original
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 200),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = editor
+            var actual: [(NSRange, String)] = []
+            editor.onCharacterEdit = { range, value in actual.append((range, value)) }
+            editor.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0),
+                                 replacementRange: NSRange(location: 7, length: 6))
+            editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
+                                 replacementRange: .notFound)
+            editor.insertText("你", replacementRange: final)
+            XCTAssertEqual(editor.before.count, actual.count,
+                           "Each AppKit mutation must expose its old range before editing")
+            let replay = NSMutableString(string: original)
+            for (prior, after) in zip(editor.before, actual) {
+                XCTAssertEqual(prior.0, after.0,
+                               "Pre-edit and post-edit coordinates must share one UTF-16 truth")
+                XCTAssertEqual(replay.substring(with: prior.0), prior.1)
+                replay.replaceCharacters(in: prior.0, with: after.1)
+            }
+            XCTAssertEqual(replay as String, editor.string)
+        }
+    }
+
+    func testEightMiBOriginalTextIMEAtStartMiddleAndEndKeepsExactUndo() {
+        let line = String(repeating: "a", count: 4095) + "\n"
+        let original = String(repeating: line, count: 2048)
+        XCTAssertEqual(original.utf8.count, 8 << 20)
+        let editor = NativeCodeTextView()
+        editor.text = original
+        for offset in [4, original.utf16.count / 2, original.utf16.count - 4] {
+            editor.setSelectedRange(NSRange(location: offset, length: 0))
+            editor.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0),
+                                 replacementRange: .notFound)
+            editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
+                                 replacementRange: .notFound)
+            editor.insertText("你🐈", replacementRange: .notFound)
+            editor.breakUndoCoalescing()
+            XCTAssertEqual(editor.textStorage?.length, (8 << 20) + 3)
+            XCTAssertEqual(editor.textStorage?.attributedSubstring(
+                from: NSRange(location: offset, length: 3)).string, "你🐈")
+            XCTAssertTrue(editor.undoManager?.canUndo == true)
+            editor.undoManager?.undo()
+            XCTAssertEqual(editor.string, original, "Undo must restore entire 8 MiB at offset \(offset)")
+            editor.undoManager?.redo()
+            XCTAssertEqual(editor.textStorage?.attributedSubstring(
+                from: NSRange(location: offset, length: 3)).string, "你🐈")
+            editor.undoManager?.undo()
+            XCTAssertEqual(editor.string, original)
+        }
+    }
+
     func testNativeMultipleSelectionsShareDocumentAndUndo() throws {
         let editor = NativeCodeTextView()
         editor.text = "first second third"

@@ -236,8 +236,8 @@ nonisolated enum DiffLineOp: Equatable {
 ///    a regenerated lockfile), and it produces the readable, structure-aware
 ///    splits patience diff is known for.
 /// 3. Exact Myers for small gaps, and bounded Myers for large gaps with
-///    few changes. Large regions with neither cheap matches nor unique
-///    anchors become a single replace block.
+///    few changes. Repeated equal-length regions retain confirmed aligned
+///    runs; only unresolved large gaps become replace blocks.
 nonisolated enum DiffEngine {
     /// Large repeated regions still get precise matches when edit distance
     /// is small, without allowing unbounded quadratic work.
@@ -429,8 +429,11 @@ nonisolated enum DiffEngine {
 
         let anchors = try patienceAnchors(context, old: old, new: new)
         guard !anchors.isEmpty else {
-            // A huge region with no unique common line: generated content.
-            // Optimal alignment is unaffordable and would not read better.
+            // Repeated lines have no unique patience anchor. Preserve proven
+            // aligned runs instead of painting every unchanged row as replaced.
+            if try alignedEqualRuns(context, old: old, new: new, into: &builder) {
+                return
+            }
             builder.delete(oldStart: old.lowerBound, count: old.count)
             builder.insert(newStart: new.lowerBound, count: new.count)
             return
@@ -452,6 +455,64 @@ nonisolated enum DiffEngine {
         try diffRegion(
             context, old: oldCursor..<old.upperBound, new: newCursor..<new.upperBound, into: &builder
         )
+    }
+
+    /// Repeated rows can be common without ever being unique. An equal-length
+    /// gap with sufficiently long byte-confirmed same-position runs can be
+    /// partitioned without inventing shifted matches or crossing any hunk.
+    /// Changed gaps are still resolved by the existing exact/bounded algorithm.
+    private static func alignedEqualRuns(
+        _ context: Context, old: Range<Int>, new: Range<Int>,
+        into builder: inout OpsBuilder
+    ) throws -> Bool {
+        guard old.count == new.count, old.count >= 16 else { return false }
+        let minimumRun = 8
+        var consecutive = 0
+        var found = false
+        for offset in 0..<old.count {
+            if offset.isMultiple(of: 256) { try context.checkCancellation() }
+            if context.linesEqual(old.lowerBound + offset, new.lowerBound + offset) {
+                consecutive += 1
+                if consecutive == minimumRun {
+                    found = true
+                    break
+                }
+            } else {
+                consecutive = 0
+            }
+        }
+        guard found else { return false }
+
+        var cursor = 0
+        var offset = 0
+        while offset < old.count {
+            if offset.isMultiple(of: 256) { try context.checkCancellation() }
+            guard context.linesEqual(old.lowerBound + offset, new.lowerBound + offset) else {
+                offset += 1
+                continue
+            }
+            let start = offset
+            repeat {
+                offset += 1
+                if offset.isMultiple(of: 256) { try context.checkCancellation() }
+            } while offset < old.count
+                && context.linesEqual(old.lowerBound + offset, new.lowerBound + offset)
+            guard offset - start >= minimumRun else { continue }
+            try diffRegion(
+                context,
+                old: (old.lowerBound + cursor)..<(old.lowerBound + start),
+                new: (new.lowerBound + cursor)..<(new.lowerBound + start),
+                into: &builder
+            )
+            builder.equal(oldStart: old.lowerBound + start,
+                          newStart: new.lowerBound + start, count: offset - start)
+            cursor = offset
+        }
+        try diffRegion(
+            context, old: (old.lowerBound + cursor)..<old.upperBound,
+            new: (new.lowerBound + cursor)..<new.upperBound, into: &builder
+        )
+        return true
     }
 
     // MARK: Patience anchors

@@ -702,7 +702,10 @@ final class FileTreeModel {
             return true
         }
         let directories = gitDirectories.isEmpty ? [root + "/.git"] : gitDirectories
-        for directory in directories where path != directory && LocalPathScope.contains(path, in: directory) {
+        for directory in directories where LocalPathScope.contains(path, in: directory) {
+            // FSEvents may coalesce a replaced index into its parent directory,
+            // including a linked worktree's Git metadata outside this project.
+            if path == directory { return true }
             let relative = String(path.dropFirst(directory.count + 1))
             if ["index", "HEAD", "packed-refs", "config", "commondir", "info/exclude"].contains(relative)
                 || relative.hasPrefix("refs/") && !relative.hasSuffix(".lock") {

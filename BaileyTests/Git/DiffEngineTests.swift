@@ -132,6 +132,114 @@ final class DiffEngineTests: XCTestCase {
                        edited.splitRight.rows.compactMap(\.collapsed))
     }
 
+    func testRepeatedLongDocumentKeepsEveryRealUnchangedRunAroundHundredsOfEdits() {
+        // Neither side has a unique shared line; the ordinary patience and
+        // bounded Myers paths must not collapse the whole document into one
+        // delete/insert when there are verified in-place equal runs.
+        let count = 32_768
+        var before = [String](repeating: "same", count: count)
+        var after = before
+        var modified = 0
+        for row in stride(from: 13, to: count - 13, by: 97) {
+            before[row] = "old"
+            after[row] = "new"
+            modified += 1
+        }
+        let old = DiffLineSplitter.lines(of: before.joined(separator: "\n") + "\n").lines
+        let new = DiffLineSplitter.lines(of: after.joined(separator: "\n") + "\n").lines
+        XCTAssertEqual(old.count, count)
+        XCTAssertEqual(new.count, count)
+        let ops = DiffEngine.lineOps(old: old, new: new)
+        var oldCursor = 0
+        var newCursor = 0
+        var matched = 0
+        var deleted = 0
+        var inserted = 0
+        for op in ops {
+            switch op {
+            case .equal(let oldStart, let newStart, let length):
+                XCTAssertEqual(oldStart, oldCursor)
+                XCTAssertEqual(newStart, newCursor)
+                for i in 0..<length {
+                    XCTAssertEqual(old[oldStart + i].text, new[newStart + i].text)
+                }
+                matched += length
+                oldCursor += length
+                newCursor += length
+            case .delete(let oldStart, let length):
+                XCTAssertEqual(oldStart, oldCursor)
+                deleted += length
+                oldCursor += length
+            case .insert(let newStart, let length):
+                XCTAssertEqual(newStart, newCursor)
+                inserted += length
+                newCursor += length
+            }
+        }
+        XCTAssertEqual(oldCursor, count)
+        XCTAssertEqual(newCursor, count)
+        XCTAssertEqual(matched, count - modified,
+                       "Verified unchanged rows must not be swallowed by a coarse whole-document replacement")
+        XCTAssertEqual(deleted, modified)
+        XCTAssertEqual(inserted, modified)
+
+        var checks = 0
+        XCTAssertNil(DiffEngine.lineOpsIfActive(old: old, new: new) {
+            checks += 1
+            return checks >= 8
+        }, "Cancellation must stop the same real alignment path")
+    }
+
+    func testRepeatedUnicodeRowsWithNetZeroInsertionDeletionNeverClaimFalseEquality() {
+        let count = 24_000
+        var oldRows = [String](repeating: "重复👩‍💻\r", count: count)
+        for row in stride(from: 20, to: count - 20, by: 131) {
+            oldRows[row] = "原始🐈\r"
+        }
+        var newRows = oldRows
+        for row in stride(from: 20, to: count - 20, by: 131) {
+            newRows[row] = "修改🐈\r"
+        }
+        newRows.remove(at: 200)
+        newRows.insert("新增中文🐈\r", at: 12_000)
+        let oldText = oldRows.joined(separator: "\n") + "\n"
+        let newText = newRows.joined(separator: "\n") + "\n"
+        let old = DiffLineSplitter.lines(of: oldText).lines
+        let new = DiffLineSplitter.lines(of: newText).lines
+        XCTAssertEqual(old.count, count)
+        XCTAssertEqual(new.count, count)
+        let ops = DiffEngine.lineOps(old: old, new: new)
+        var result: [Substring] = []
+        result.reserveCapacity(new.count)
+        var oldCursor = 0
+        var newCursor = 0
+        for op in ops {
+            switch op {
+            case .equal(let i, let j, let length):
+                XCTAssertEqual(i, oldCursor)
+                XCTAssertEqual(j, newCursor)
+                for offset in 0..<length {
+                    XCTAssertEqual(old[i + offset].text, new[j + offset].text)
+                    result.append(old[i + offset].text)
+                }
+                oldCursor += length
+                newCursor += length
+            case .delete(let i, let length):
+                XCTAssertEqual(i, oldCursor)
+                oldCursor += length
+            case .insert(let j, let length):
+                XCTAssertEqual(j, newCursor)
+                result.append(contentsOf: new[j..<(j + length)].map(\.text))
+                newCursor += length
+            }
+        }
+        XCTAssertEqual(oldCursor, old.count)
+        XCTAssertEqual(newCursor, new.count)
+        XCTAssertEqual(result, new.map(\.text),
+                       "The edit script must reconstruct exact unicode/CRLF rows")
+        XCTAssertTrue(ops.contains { if case .equal = $0 { return true }; return false })
+    }
+
     func testCancellableLineDiffStopsWithinLongRepeatedSourceWithoutChangingPureResults() {
         let source = (0..<12_000).map { "let line\($0) = content\n" }.joined()
         let modified = source.replacingOccurrences(of: "let line11000 = content\n",

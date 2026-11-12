@@ -47,6 +47,7 @@ private actor ScriptedCommandRunnerFixture: RemoteCommandRunner {
 private actor LocalShellRunnerFixture: RemoteCommandRunner {
     private var raceDestination: (path: String, directory: Bool)?
     private var stageInterruption: String?
+    private var atomicSaveInterruption = false
 
     func insertDestinationImmediatelyBeforeMove(_ path: String, asDirectory: Bool = false) {
         raceDestination = (path, asDirectory)
@@ -54,6 +55,7 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
     func interruptDuringCaseOnlyRename(signal: Bool = false) {
         stageInterruption = signal ? "kill -TERM $$" : "exit 70"
     }
+    func interruptAtomicSaveAfterStaging() { atomicSaveInterruption = true }
 
     func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
         -> (status: Int32, stdout: Data, stderr: Data)
@@ -66,6 +68,14 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
                 of: "\"$temp/item\" || exit 1",
                 with: "\"$temp/item\" || exit 1; " + stageInterruption
             )
+        }
+        if atomicSaveInterruption {
+            atomicSaveInterruption = false
+            let marker = "cat > \"$stage/item\""
+            guard command.contains(marker) else {
+                return (98, Data(), Data("atomic write marker missing".utf8))
+            }
+            command = command.replacingOccurrences(of: marker, with: marker + "; exit 70")
         }
         if let raceDestination {
             self.raceDestination = nil
@@ -231,6 +241,127 @@ final class RemoteCommandsTests: XCTestCase {
         } catch let error as RemoteCommandFailure {
             XCTAssertEqual(error.status, 255)
         }
+    }
+
+    func testSSHAtomicSaveNeverWritesThroughPreexistingTempSymlink() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-atomic-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let victim = folder.appendingPathComponent("other.txt")
+        let target = folder.appendingPathComponent("quote' 中文 target.txt")
+        let oldTemporary = URL(fileURLWithPath: target.path + ".bailey-tmp")
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        try Data("victim must survive".utf8).write(to: victim)
+        try Data("original".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: oldTemporary, withDestinationURL: victim)
+        try await backend.write(path: target.path, data: Data("replacement".utf8))
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "replacement")
+        XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "victim must survive",
+                       "Writing a target must not follow a stale sibling temp symlink")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: oldTemporary.path),
+                       victim.path, "A preexisting unrelated entry must not be removed either")
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)),
+                       Set(["other.txt", "quote' 中文 target.txt", "quote' 中文 target.txt.bailey-tmp"]))
+    }
+
+    func testSSHAtomicSavePublishesOneWholeVersionUnderConcurrentWrites() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-concurrent-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent("shared.txt")
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let a = Data(repeating: 0x41, count: 512 * 1_024)
+        let b = Data(repeating: 0x42, count: 512 * 1_024)
+        try Data("before".utf8).write(to: target)
+        async let first: Void = backend.write(path: target.path, data: a)
+        async let second: Void = backend.write(path: target.path, data: b)
+        try await first
+        try await second
+        let final = try Data(contentsOf: target)
+        XCTAssertTrue(final == a || final == b, "Last complete save must win atomically")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       ["shared.txt"], "Each transaction must clean up only its own staging files")
+    }
+
+    func testSSHAtomicSaveInterruptedBeforePublishKeepsOldBytesAndCleansPrivateStage() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-abort-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent("target.txt")
+        try Data("original".utf8).write(to: target)
+        let runner = LocalShellRunnerFixture()
+        await runner.interruptAtomicSaveAfterStaging()
+        let backend = SSHWorkspaceBackend(runner: runner)
+        do {
+            try await backend.write(path: target.path, data: Data(repeating: 0x41, count: 256 * 1_024))
+            XCTFail("An incomplete publish cannot be reported as success")
+        } catch let error as RemoteCommandFailure {
+            XCTAssertEqual(error.status, 70, "The fixture must abort the real post-write script")
+        }
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "original")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       ["target.txt"], "Failure must retire its own uncommitted staging directory")
+    }
+
+    func testSSHAtomicSaveRejectsDirectoryWithoutMovingContentInside() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-target-directory-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let directory = folder.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = directory.appendingPathComponent("marker.txt")
+        try Data("keep".utf8).write(to: marker)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        do {
+            try await backend.write(path: directory.path, data: Data("unwanted".utf8))
+            XCTFail("Saving a text file onto a directory must fail")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "keep")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path),
+                       ["marker.txt"], "A failed save must not publish a child file")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       ["target"], "Failed transaction must not leave staging artifacts")
+    }
+
+    func testSSHAtomicSavePreservesModeAndReplacesSymlinkEntryNotItsTarget() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-mode-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let target = folder.appendingPathComponent("source.sh")
+        try Data("old".utf8).write(to: target)
+        try FileManager.default.setAttributes([.posixPermissions: 0o754], ofItemAtPath: target.path)
+        try await backend.write(path: target.path, data: Data("new".utf8))
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "new")
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? NSNumber)?.uint16Value, 0o754)
+        let victim = folder.appendingPathComponent("victim")
+        let linked = folder.appendingPathComponent("linked")
+        try Data("untouched".utf8).write(to: victim)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: victim)
+        try await backend.write(path: linked.path, data: Data("new link contents".utf8))
+        XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "untouched")
+        XCTAssertEqual(try String(contentsOf: linked, encoding: .utf8), "new link contents")
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: linked.path))
+
+        let directory = folder.appendingPathComponent("directory")
+        let directoryLink = folder.appendingPathComponent("directory-link")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: directoryLink, withDestinationURL: directory)
+        try await backend.write(path: directoryLink.path, data: Data("not inside".utf8))
+        XCTAssertEqual(try String(contentsOf: directoryLink, encoding: .utf8), "not inside")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty,
+                      "Publishing at a symlink to a directory must replace the link, not write inside it")
+
+        let fresh = folder.appendingPathComponent("fresh file.txt")
+        try await backend.write(path: fresh.path, data: Data())
+        XCTAssertEqual(try Data(contentsOf: fresh), Data())
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(),
+                       ["directory", "directory-link", "fresh file.txt", "linked", "source.sh", "victim"])
     }
 
     func testRemoteWorkspaceCopyStagesAndRejectsOccupiedTargets() async throws {

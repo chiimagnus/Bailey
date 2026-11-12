@@ -4,34 +4,37 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "原生分页编辑与全文访问点的反证实验"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+no_commit_reason = "P1原生分页探针仅技术实验，不属于产品代码提交"
+note = "真实4GiB坐标及1GiB UTF8编辑流存、未知长度先编辑后索引与失败回滚，16/16原生宿主成功；正式TextKit/Find/AX及P2仍未交付"
 
 [[tasks]]
 id = "P1-T2"
 title = "稳定源版本、分段 IO 与完整保存的协议实验"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "fc81581b"
+note = "已修复SSH共享临时名数据损坏；受控Shell及真实回环SSH字节验收，联合宿主107/107；Windows/POSIX实机和流式GB后端仍待P2"
 
 [[tasks]]
 id = "P1-T3"
 title = "GB 两侧 Diff 的有界数据与精度实验"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
 commit = ""
-note = ""
+no_commit_reason = "GB精确差异算法仅位于本机隔离一次性实验，不引入第二套生产Diff"
+note = "两侧1GiB稀疏、CRLF、单行、无共享行密集和远移唯一锚点的精度及完整SHA256已证；复杂交叉锚点、生产Diff取消和资源预算未过"
 
 [[tasks]]
 id = "P1-T4"
 title = "固定决策、预算并具体化后续任务"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t4"
 commit = ""
-note = ""
+no_commit_reason = "仅本地feature技术决策、计划、证据及审计；不作为产品代码提交"
+note = "No-Go第三轮：原生16/16、联合107/107、SSH漏洞fc81581b已修；通用有界Diff、P1预算和跨GUI/SSH实机组合仍未过技术门槛，P2/P3 pending"
 
 [[tasks]]
 id = "P2-T1"
