@@ -740,6 +740,47 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(ProjectFileIndex.load(in: root.path).contains { $0.absolutePath == created.path })
     }
 
+    func testCoalescedExternalWorktreeGitDirectoryEventInvalidatesQuickOpen() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let repository = base.appendingPathComponent("repository")
+        let linked = base.appendingPathComponent("linked")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        func git(_ arguments: [String], at directory: URL = repository) {
+            let result = GitCommandExecution.run(arguments, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "BaileyTest"])
+        git(["config", "user.email", "test@example.invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        git(["commit", "--allow-empty", "-qm", "base"])
+        git(["worktree", "add", "-q", "-b", "feature", linked.path])
+
+        let gitDirectory = try XCTUnwrap(ProjectFileIndex.gitDirectory(in: linked.path))
+        XCTAssertFalse(LocalPathScope.contains(gitDirectory, in: linked.path))
+        let tree = FileTreeModel()
+        await tree.sync(root: linked.path, backend: LocalWorkspaceBackend.shared)
+        let member = UUID()
+        tree.setLocalFileEventsEnabled(true, member: member)
+        tree.setLocalFileIndexGitDirectory(gitDirectory)
+        defer {
+            tree.setLocalFileIndexGitDirectory(nil)
+            tree.setLocalFileEventsEnabled(false, member: member)
+        }
+        let revision = tree.contentRevision
+        // Under load, native FSEvents may coalesce children of an external Git
+        // metadata directory into a notification for that directory itself.
+        // It is not equivalent to a harmless index.lock event: the index may
+        // have been atomically replaced, so Cmd+P must invalidate its listing.
+        await tree.refreshForLocalEvents([
+            .init(path: gitDirectory, flags: UInt32(
+                kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsDir))
+        ])
+        XCTAssertGreaterThan(tree.contentRevision, revision,
+                             "Coalesced external Git metadata must invalidate the file index")
+    }
+
     func testNativeLinkedWorktreeGitIndexOutsideProjectInvalidatesQuickOpen() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let repository = base.appendingPathComponent("repository")
