@@ -259,12 +259,34 @@ nonisolated enum RemoteCommands {
     /// atomic within a directory. The mode is copied from the original when
     /// there is one, so an executable script stays executable.
     ///
-    /// `chmod --reference` is GNU coreutils, so this is Linux-only, as the
-    /// remote workspace is generally.
+    /// A private same-directory staging directory prevents stale symlinks
+    /// and concurrent writes from sharing unpublished data.
     static func atomicWriteCommand(path: String) -> String {
-        "sh -c 'cat > \"$1.bailey-tmp\" && "
-            + "{ [ -e \"$1\" ] && chmod --reference=\"$1\" \"$1.bailey-tmp\" || :; } && "
-            + "mv -f \"$1.bailey-tmp\" \"$1\"' _ \(quote(path))"
+        """
+        sh -c '
+        set -eu
+        stage=$(mktemp -d -- "$1.bailey-tmp.XXXXXXXX")
+        cleanup() {
+            rm -f -- "$stage/item"
+            rmdir -- "$stage" || :
+        }
+        trap cleanup EXIT
+        trap "exit 1" HUP INT TERM
+        cat > "$stage/item"
+        if [ -f "$1" ] && [ ! -L "$1" ]; then
+            chmod --reference="$1" "$stage/item" 2>/dev/null ||
+                chmod "$(stat -f %Lp -- "$1")" "$stage/item"
+        fi
+        if [ "$(uname -s)" = "Darwin" ]; then
+            if [ -d "$1" ] && [ ! -L "$1" ]; then exit 1; fi
+            mv -fh -- "$stage/item" "$1"
+        else
+            mv -fT -- "$stage/item" "$1"
+        fi
+        trap - EXIT HUP INT TERM
+        rmdir -- "$stage" || :
+        ' _ \(quote(path))
+        """
     }
 
     static func untrackedLineCountsCommand(
