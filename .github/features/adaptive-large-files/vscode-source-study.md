@@ -16,6 +16,13 @@ Piece Tree、TextModel、基础 View 与 Diff 核心位于 `src/vs/editor`；
 TextMate 集成、文件服务、Remote 和 Git 扩展属于 VS Code 的外层服务。
 这些外层能力不能自动归给独立 `monaco-editor` 包。
 
+续查最新 HEAD 为 [`15f8b54d0d15b89ca885e2aa87800848a53050f6`](https://github.com/microsoft/vscode/commit/15f8b54d0d15b89ca885e2aa87800848a53050f6)
+（2026-11-12 10:00:41 UTC），相对首轮仅改变 package.json 的 distro，本文相关源码未变。
+新增的 [33 项机制吸收设计](vscode-adoption.md)逐项说明成熟机制如何接入 Bailey、
+替代哪条全文链及怎样验证，并已写回 P1／P2／P3。
+续查也纠正了本文原先对 Diff 编辑后重基的描述：实际 helper 直接返回 undefined，
+不能由调用点推断已经实现；准确控制流见下文“取消与输入并发”。
+
 | 用户关心的问题 | 源码已实现的能力 | 实际边界 |
 | --- | --- | --- |
 | 模型与打开 | 流式解码、多块字符串、Piece Tree 局部编辑 | 等 EOF 后创建模型；所有原始块和块内行索引常驻 [M01] [M02] [M03] |
@@ -1195,12 +1202,17 @@ Workbench `DiffEditorHelperContribution` 显示提前终止警告，并提供
 provider 在 await 结束后才检查取消。
 所以不能宣称切走或取消必定立即停止旧 CPU 计算。[G10] [G11]
 
-`DiffEditorViewModel` 以 200 ms debounce 合并输入，
-计算期间收集双方内容编辑，并通过 `applyOriginalEdits/applyModifiedEdits` 更新返回映射。
-这改善编辑时的结果连续性，仍是完整模型上的映射与异步结果管理，
-不是支持 GB 的索引分页。
+`DiffEditorViewModel` 以 200 ms debounce 合并重算请求。
+内容监听器和在途计算虽然收集编辑并调用 `applyOriginalEdits/applyModifiedEdits`，
+两个函数在当前源码中都直接 `return undefined`，后面的实现处于 TODO 注释内。
+因此不能把调用点当成已实现的增量映射修复：编辑只将当前结果标为过期并安排重算，
+在途结果使用 `apply…(...) ?? result`，无法由这些空函数重基到新版本。
+本段存在取消／模型释放检查，但没有为每次计算核对原始／修改侧版本的最终发布检查；
+不能据此承诺旧结果总会被丢弃或已被正确重映射。
+实现位置见 [diffEditorViewModel.ts:651–719](https://github.com/microsoft/vscode/blob/530b702bc1ecca912e842e906fa67ecfc60c091e/src/vs/editor/browser/widget/diffEditor/diffEditorViewModel.ts#L651-L719)。
 worker 在等待可选后端加载之后才获取两边行内容，
-使该次 diff 和 identity 检查读取同一 worker 模型状态。[G11] [G21] [G33]
+使该次 worker 内的 diff 和 identity 检查读取同一模型状态；这不等于主线程后续没有新编辑。
+以上均是完整模型的异步结果管理，不是 GB 索引分页。[G11] [G21] [G33]
 
 #### identical 的准确含义
 
@@ -1281,7 +1293,7 @@ schema 默认抽样率为 0，可被实验配置更改。
 | G30 | [src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.ts][G30] | refineDiff；500 code units 阈值与词边界优化 |
 | G31 | [src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/dynamicProgrammingDiffing.ts][G31] | DynamicProgrammingDiffing；三张 O(MN) 矩阵 |
 | G32 | [src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/diffAlgorithm.ts][G32] | DateTimeout；协作式时间检查 |
-| G33 | [src/vs/editor/browser/widget/diffEditor/diffEditorViewModel.ts][G33] | 计算期间记录编辑、更新返回映射及发布 |
+| G33 | [src/vs/editor/browser/widget/diffEditor/diffEditorViewModel.ts][G33] | 计算期间记录编辑、未实现重基的调用与结果发布 |
 | G34 | [src/vs/editor/browser/widget/diffEditor/diffEditorOptions.ts][G34] | validateOptions；maxFileSize 归一化 |
 | G35 | [package.json][G35] | @vscode/diff 依赖版本 |
 | G36 | [pnpm-lock.yaml][G36] | @vscode/diff 锁定版本 |
@@ -1345,7 +1357,7 @@ schema 默认抽样率为 0，可被实验配置更改。
 
 - heap guard：[构造时判定][G26]；[getLinesContent 抛异常][G27]。
 - [Git stdout 全量收集][G28]；[两侧 resolve][G29]。
-- [Diff 输入变更合并／发布][G33]；[字符算法阈值][G30]。
+- [Diff 失效重算／结果发布][G33]；[字符算法阈值][G30]。
 - [O(MN) 三张矩阵][G31]；[DateTimeout 非硬截止][G32]。
 - 外部包固定版本：[package.json][G35]；[pnpm-lock.yaml][G36]。
 - [maxFileSize 仅归一化][G34]。
