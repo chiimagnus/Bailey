@@ -103,10 +103,14 @@ struct GitPanel: View {
 
     private typealias ChangeSelection = GitStatusModel.ChangeSelection
 
-    private struct VisibleChange {
-        let kind: GitEntryRow.Kind
-        let row: TreeDisplayModel.Row
-        let entry: GitStatusModel.Entry?
+    private typealias VisibleChange = GitStatusModel.ChangeItem
+
+    private var changesDisplay: GitStatusModel.ChangeDisplay {
+        var closed = Set<GitStatusModel.ChangeSection>()
+        if mergeCollapsed { closed.insert(.merge) }
+        if stagedCollapsed { closed.insert(.staged) }
+        if changesCollapsed { closed.insert(.unstaged) }
+        return model.displayChanges(filter: filterText, mode: settings.gitViewMode, closed: closed)
     }
 
     private var isGitActive: Bool {
@@ -1698,6 +1702,7 @@ struct GitPanel: View {
     // Only text scrolls horizontally. Section controls and row actions remain
     // anchored to the visible sidebar, even for exceptionally long paths.
     private var changeList: some View {
+        let changes = changesDisplay
         let graphCommits = model.graphCommits
         let graphTarget = model.actionTarget()
         return ScrollViewReader { proxy in
@@ -1705,29 +1710,29 @@ struct GitPanel: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if model.totalChangeCount == 0 {
                     cleanState
-                } else if visibleChangeCount == 0 {
+                } else if changes.filteredCount == 0 {
                     inlinePlaceholder(
                         icon: "line.3.horizontal.decrease",
                         text: String(localized: "No changed files match “\(filterText)”", table: "Sidebar")
                     )
                 }
-                if !filteredMergeEntries.isEmpty {
+                if changes.mergeCount > 0 {
                     PanelSectionHeader(
                         title: String(localized: "MERGE CHANGES", table: "Sidebar"),
-                        count: filteredMergeEntries.count,
+                        count: changes.mergeCount,
                         isCollapsed: $mergeCollapsed,
                         actions: [],
                         actionsDisabled: model.isBusy,
                         menuActions: uncommittedMenuActions
                     )
                     if !mergeCollapsed {
-                        changedFileRows(filteredMergeEntries, kind: .merge)
+                        changedFileRows(changes.mergeRows)
                     }
                 }
-                if !filteredStagedEntries.isEmpty {
+                if changes.stagedCount > 0 {
                     PanelSectionHeader(
                         title: String(localized: "STAGED CHANGES", table: "Sidebar"),
-                        count: filteredStagedEntries.count,
+                        count: changes.stagedCount,
                         isCollapsed: $stagedCollapsed,
                         actions: filterText.isEmpty ? [
                             .init(
@@ -1742,13 +1747,13 @@ struct GitPanel: View {
                         menuActions: uncommittedMenuActions
                     )
                     if !stagedCollapsed {
-                        changedFileRows(filteredStagedEntries, kind: .staged)
+                        changedFileRows(changes.stagedRows)
                     }
                 }
-                if !filteredChangedEntries.isEmpty {
+                if changes.changedCount > 0 {
                     PanelSectionHeader(
                         title: String(localized: "CHANGES", table: "Sidebar"),
-                        count: filteredChangedEntries.count,
+                        count: changes.changedCount,
                         isCollapsed: $changesCollapsed,
                         actions: filterText.isEmpty ? [
                             .init(
@@ -1770,7 +1775,7 @@ struct GitPanel: View {
                         menuActions: uncommittedMenuActions
                     )
                     if !changesCollapsed {
-                        changedFileRows(filteredChangedEntries, kind: .unstaged)
+                        changedFileRows(changes.changedRows)
                     }
                 }
                 if filterText.isEmpty, model.hasHead || !graphCommits.isEmpty {
@@ -1956,13 +1961,13 @@ struct GitPanel: View {
                                  onAttachedToWindow: focusGitChanges,
                                  onEditCommand: { action in
                                      if case .selectAll = action {
-                                         model.selectAllChanges(visible: navigableChanges.map(selection))
+                                         model.selectAllChanges(visible: changes.selections)
                                      }
                                  },
                                  canEditCommand: { action in
                                      if case .selectAll = action {
                                          return isGitActive && hasCurrentPanelTarget
-                                             && !navigableChanges.isEmpty
+                                             && !changes.navigation.isEmpty
                                      }
                                      return false
                                  })
@@ -2015,12 +2020,12 @@ struct GitPanel: View {
                 }
             }
             .onChange(of: model.graphCommits.map(\.id)) { _, _ in
-                if isGitActive && navigableChanges.isEmpty { focusGitChanges() }
+                if isGitActive && changes.navigation.isEmpty { focusGitChanges() }
             }
-            .onChange(of: navigableChanges.map { selection(for: $0) }) { _, choices in
+            .onChange(of: changes.revision) { _, _ in
                 if waitingForChanges { focusGitChanges() }
-                model.reconcileChangeSelection(visible: choices)
-                if let contextChange, !choices.contains(contextChange) {
+                model.reconcileChangeSelection(visible: changes.selections)
+                if let contextChange, !changes.selections.contains(contextChange) {
                     self.contextChange = nil
                 }
                 if !isGitActive { revealActiveChange() }
@@ -2041,38 +2046,7 @@ struct GitPanel: View {
         }
     }
 
-    private func visibleRows(
-        _ entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
-    ) -> [VisibleChange] {
-        if settings.gitViewMode == .tree {
-            let files = entries.map { entry in
-                TreeDisplayModel.Row(name: entry.fileName, path: entry.path, isDirectory: false,
-                                     status: .init(entryStatus(entry, kind: kind)))
-            }
-            let byPath = Dictionary(entries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
-            return TreeDisplayModel.pathRows(
-                files, section: kind.rawValue, collapsed: collapsedFolders
-            ).compactMap { row in
-                if row.isDirectory { return VisibleChange(kind: kind, row: row, entry: nil) }
-                guard let entry = byPath[row.path] else { return nil }
-                return VisibleChange(kind: kind, row: row, entry: entry)
-            }
-        }
-        return entries.map { entry in
-            VisibleChange(kind: kind, row: TreeDisplayModel.Row(
-                name: entry.fileName, path: entry.path, isDirectory: false,
-                status: .init(entryStatus(entry, kind: kind))
-            ), entry: entry)
-        }
-    }
-
-    private var navigableChanges: [VisibleChange] {
-        var rows: [VisibleChange] = []
-        if !mergeCollapsed { rows += visibleRows(filteredMergeEntries, kind: .merge) }
-        if !stagedCollapsed { rows += visibleRows(filteredStagedEntries, kind: .staged) }
-        if !changesCollapsed { rows += visibleRows(filteredChangedEntries, kind: .unstaged) }
-        return rows
-    }
+    private var navigableChanges: [VisibleChange] { changesDisplay.navigation }
 
     private func focusGitChanges() {
         if GitGraphScrollLog.enabled {
@@ -2121,6 +2095,7 @@ struct GitPanel: View {
               project.dock.group(containing: .git)?.selected == .git
         else { return }
         let content = isGitActive ? project.selectedTab?.content : project.focusedContent
+        let changes = changesDisplay
         let change: VisibleChange?
         switch content {
         case .diff(let diff):
@@ -2132,13 +2107,13 @@ struct GitPanel: View {
             case .worktree: kind = .unstaged
             case .commit, .revision, .revisionWorktree: return
             }
-            change = navigableChanges.first {
+            change = changes.navigation.first {
                 ($0.kind == kind || (kind == .unstaged && $0.kind == .merge))
                     && $0.entry?.path == diff.path
             }
         case .file(let file):
             guard file.workspaceIdentity == project.workspaceIdentity else { return }
-            let matching = navigableChanges.filter {
+            let matching = changes.navigation.filter {
                 guard let entry = $0.entry else { return false }
                 return model.absolutePath(for: entry) == file.path
             }
@@ -2151,7 +2126,7 @@ struct GitPanel: View {
         guard let change, let entry = change.entry, model.canBrowse(entry) else { return }
         let key = selection(for: change)
         if !model.selectedChanges.contains(key) || model.selectedChanges.count != 1 {
-            model.selectChange(key, visible: navigableChanges.map(selection))
+            model.selectChange(key, visible: changes.selections)
         } else if selectedChange != key {
             selectedChange = key
         }
@@ -2163,7 +2138,7 @@ struct GitPanel: View {
         let flags = NSApp.currentEvent?.modifierFlags ?? []
         let extending = flags.contains(.shift)
         let toggling = flags.contains(.command) && !extending
-        model.selectChange(key, visible: navigableChanges.map(selection),
+        model.selectChange(key, visible: changesDisplay.selections,
                            extending: extending, toggling: toggling)
         if isGitActive { keyboardOwner.focus() }
         return extending || toggling
@@ -2184,11 +2159,9 @@ struct GitPanel: View {
         case .staged: model.stagedEntries
         case .unstaged: model.changedEntries
         }
-        return entries.filter { entry in
-            matchesFilter(entry) && keys.contains {
-                entry.path == $0.path || entry.path.hasPrefix($0.path + "/")
-            }
-        }
+        return GitStatusModel.entriesUnderSelection(
+            entries, selectedPaths: Set(keys.map(\.path))
+        ).filter(matchesFilter)
     }
 
     private func focusContextChange(_ key: ChangeSelection) {
@@ -2219,15 +2192,14 @@ struct GitPanel: View {
               isGitActive, hasCurrentPanelTarget,
               event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         else { return false }
-        let rows = navigableChanges
+        let changes = changesDisplay
+        let rows = changes.navigation
         guard !rows.isEmpty else { return false }
-        let current = selectedChange.flatMap { key in
-            rows.firstIndex { selection(for: $0) == key }
-        }
+        let current = selectedChange.flatMap { changes.selections.firstIndex(of: $0) }
         let extending = event.modifierFlags.contains(.shift)
         switch event.keyCode {
         case 125, 126: // Down / Up: Shift expands or contracts without browsing Diff
-            model.moveChangeCursor(visible: rows.map(selection),
+            model.moveChangeCursor(visible: changes.selections,
                                    by: event.keyCode == 125 ? 1 : -1, extending: extending)
         case 124: // Right opens the directory; a second press selects its first child.
             guard !extending else { return false }
@@ -2267,15 +2239,13 @@ struct GitPanel: View {
     }
 
     @ViewBuilder
-    private func changedFileRows(
-        _ entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
-    ) -> some View {
-        ForEach(visibleRows(entries, kind: kind), id: \.row.id) { change in
+    private func changedFileRows(_ rows: [VisibleChange]) -> some View {
+        ForEach(rows, id: \.row.id) { change in
             if change.row.isDirectory {
-                directoryRow(change.row, kind: kind)
+                directoryRow(change.row, kind: change.kind)
                     .id(selection(for: change))
             } else if let entry = change.entry {
-                row(entry, kind: kind,
+                row(entry, kind: change.kind,
                     showDirectory: settings.gitViewMode != .tree, displayRow: change.row)
                     .id(selection(for: change))
             }
@@ -2371,30 +2341,6 @@ struct GitPanel: View {
             })
     }
 
-    private func entryStatus(_ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind) -> Character {
-        switch kind {
-        case .merge: "U"
-        case .staged: entry.staged
-        case .unstaged: entry.unstaged
-        }
-    }
-
-    private var filteredMergeEntries: [GitStatusModel.Entry] {
-        model.mergeEntries.filter(matchesFilter)
-    }
-
-    private var filteredStagedEntries: [GitStatusModel.Entry] {
-        model.stagedEntries.filter(matchesFilter)
-    }
-
-    private var filteredChangedEntries: [GitStatusModel.Entry] {
-        model.changedEntries.filter(matchesFilter)
-    }
-
-    private var visibleChangeCount: Int {
-        filteredMergeEntries.count + filteredStagedEntries.count + filteredChangedEntries.count
-    }
-
     private func matchesFilter(_ entry: GitStatusModel.Entry) -> Bool {
         let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty || entry.path.localizedCaseInsensitiveContains(query)
@@ -2418,7 +2364,7 @@ struct GitPanel: View {
         let discardTrigger = OperationTrigger.entry(path: entry.path, operation: .discard)
         let presentation = displayRow ?? TreeDisplayModel.Row(
             name: entry.fileName, path: entry.path, isDirectory: false,
-            status: .init(entryStatus(entry, kind: kind))
+            status: .init(kind.status(entry))
         )
         let key = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
                                   section: kind.rawValue, path: entry.path)
@@ -3011,9 +2957,7 @@ struct GitPanel: View {
 }
 
 private struct GitEntryRow: View {
-    enum Kind: String, Hashable {
-        case merge, staged, unstaged
-    }
+    typealias Kind = GitStatusModel.ChangeSection
 
     let entry: GitStatusModel.Entry
     let displayRow: TreeDisplayModel.Row

@@ -35,7 +35,7 @@ final class GitStatusModel {
         for task in stashFileTasks.values { task.cancel() }
     }
 
-    nonisolated struct Entry: Identifiable, Equatable, Sendable {
+    nonisolated struct Entry: Identifiable, Hashable, Sendable {
         var id: String { path }
         /// Relative to the repository root, as porcelain v2 reports it.
         let path: String
@@ -80,6 +80,33 @@ final class GitStatusModel {
         let repository: String
         let section: String
         let path: String
+    }
+
+    nonisolated enum ChangeSection: String, Hashable, Sendable {
+        case merge, staged, unstaged
+
+        nonisolated func status(_ entry: Entry) -> Character {
+            switch self {
+            case .merge: "U"
+            case .staged: entry.staged
+            case .unstaged: entry.unstaged
+            }
+        }
+    }
+
+    /// A file belongs to a selected folder only if a whole path component matches.
+    nonisolated static func entriesUnderSelection(
+        _ entries: [Entry], selectedPaths: Set<String>
+    ) -> [Entry] {
+        entries.filter { entry in
+            if selectedPaths.contains(entry.path) { return true }
+            var prefix = entry.path[...]
+            while let slash = prefix.lastIndex(of: "/") {
+                prefix = prefix[..<slash]
+                if selectedPaths.contains(String(prefix)) { return true }
+            }
+            return false
+        }
     }
 
     var changeCursor: ChangeSelection?
@@ -458,6 +485,103 @@ final class GitStatusModel {
     private(set) var mergeEntries: [Entry] = []
     private(set) var stagedEntries: [Entry] = []
     private(set) var changedEntries: [Entry] = []
+    private(set) var changeEntriesRevision: UInt64 = 0
+    @ObservationIgnored private var entryMembership: [ChangeSection: Set<Entry>] = [:]
+
+    struct ChangeItem {
+        let kind: ChangeSection
+        let row: TreeDisplayModel.Row
+        let entry: Entry?
+    }
+
+    struct ChangeDisplay {
+        let revision: UInt64
+        let mergeCount: Int
+        let stagedCount: Int
+        let changedCount: Int
+        let mergeRows: [ChangeItem]
+        let stagedRows: [ChangeItem]
+        let changedRows: [ChangeItem]
+        let navigation: [ChangeItem]
+        let selections: [ChangeSelection]
+
+        var filteredCount: Int { mergeCount + stagedCount + changedCount }
+    }
+
+    private struct ChangeDisplayKey: Equatable {
+        let scope: String
+        let repository: String
+        let entriesRevision: UInt64
+        let mode: GitViewMode
+        let filter: String
+        let folders: Set<String>
+        let closed: Set<ChangeSection>
+    }
+
+    @ObservationIgnored private var changeDisplayCache: (key: ChangeDisplayKey, value: ChangeDisplay)?
+    @ObservationIgnored private var changeDisplayRevision: UInt64 = 0
+
+    /// Derive visible rows only when Git status or display inputs change.
+    /// Focus and selection never invalidate the tree.
+    func displayChanges(
+        filter: String, mode: GitViewMode, closed: Set<ChangeSection>
+    ) -> ChangeDisplay {
+        let folders = mode == .tree ? Set(collapsedFolders.filter {
+            $0.hasPrefix("merge:") || $0.hasPrefix("staged:") || $0.hasPrefix("unstaged:")
+        }) : []
+        let key = ChangeDisplayKey(
+            scope: currentScope, repository: repoRoot, entriesRevision: changeEntriesRevision,
+            mode: mode, filter: filter, folders: folders, closed: closed
+        )
+        if let cached = changeDisplayCache, cached.key == key { return cached.value }
+
+        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+        func matching(_ entries: [Entry]) -> [Entry] {
+            query.isEmpty ? entries : entries.filter { $0.path.localizedCaseInsensitiveContains(query) }
+        }
+        func rows(_ entries: [Entry], section: ChangeSection) -> [ChangeItem] {
+            if mode == .list {
+                return entries.map { entry in
+                    ChangeItem(kind: section, row: TreeDisplayModel.Row(
+                        name: entry.fileName, path: entry.path, isDirectory: false,
+                        status: .init(section.status(entry))
+                    ), entry: entry)
+                }
+            }
+            let files = entries.map {
+                TreeDisplayModel.Row(name: $0.fileName, path: $0.path,
+                                     isDirectory: false, status: .init(section.status($0)))
+            }
+            let byPath = Dictionary(entries.map { ($0.path, $0) },
+                                    uniquingKeysWith: { first, _ in first })
+            return TreeDisplayModel.pathRows(files, section: section.rawValue, collapsed: folders)
+                .compactMap { row in
+                    if row.isDirectory { return ChangeItem(kind: section, row: row, entry: nil) }
+                    guard let entry = byPath[row.path] else { return nil }
+                    return ChangeItem(kind: section, row: row, entry: entry)
+                }
+        }
+        let merge = matching(mergeEntries)
+        let staged = matching(stagedEntries)
+        let changed = matching(changedEntries)
+        let mergeRows = closed.contains(.merge) ? [] : rows(merge, section: .merge)
+        let stagedRows = closed.contains(.staged) ? [] : rows(staged, section: .staged)
+        let changedRows = closed.contains(.unstaged) ? [] : rows(changed, section: .unstaged)
+        let navigation = mergeRows + stagedRows + changedRows
+        let selections = navigation.map {
+            ChangeSelection(scope: key.scope, repository: key.repository,
+                            section: $0.kind.rawValue, path: $0.row.path)
+        }
+        changeDisplayRevision &+= 1
+        let display = ChangeDisplay(
+            revision: changeDisplayRevision,
+            mergeCount: merge.count, stagedCount: staged.count, changedCount: changed.count,
+            mergeRows: mergeRows, stagedRows: stagedRows, changedRows: changedRows,
+            navigation: navigation, selections: selections
+        )
+        changeDisplayCache = (key, display)
+        return display
+    }
     nonisolated struct GitRef: Equatable, Sendable {
         let oid: String
         let symbolic: String?
@@ -1323,7 +1447,8 @@ final class GitStatusModel {
     func prepareLocalDiscard(_ entries: [Entry]) -> [PendingDiscard] {
         guard backend is LocalWorkspaceBackend, isRepo, canUseCurrentStatus else { return [] }
         let context = discardContext
-        return entries.filter { isCurrent($0) && changedEntries.contains($0) }.map { entry in
+        let current = entryMembership[.unstaged] ?? []
+        return entries.filter { isCurrent($0) && current.contains($0) }.map { entry in
             let fingerprints = Dictionary(uniqueKeysWithValues: discardPaths(for: entry).map {
                 ($0, localFingerprint(at: absoluteDiscardPath($0, for: entry)))
             })
@@ -1339,7 +1464,8 @@ final class GitStatusModel {
             throw DiscardReviewError.stale
         }
         let context = discardContext
-        guard entries.allSatisfy({ isCurrent($0) && changedEntries.contains($0) }) else {
+        let current = entryMembership[.unstaged] ?? []
+        guard entries.allSatisfy({ isCurrent($0) && current.contains($0) }) else {
             throw DiscardReviewError.stale
         }
         var reviews: [PendingDiscard] = []
@@ -1360,7 +1486,7 @@ final class GitStatusModel {
 
     private func isReviewedDiscardCurrent(_ review: PendingDiscard) -> Bool {
         isRepo && canUseCurrentStatus && !isBusy && discardContext == review.context
-            && isCurrent(review.entry) && changedEntries.contains(review.entry)
+            && isCurrent(review.entry) && entryMembership[.unstaged]?.contains(review.entry) == true
     }
 
     private func executeReviewedDiscard(
@@ -1453,8 +1579,10 @@ final class GitStatusModel {
     func stageEntries(_ entries: [Entry]) {
         let valid: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
+            let changed = self.entryMembership[.unstaged] ?? []
+            let merge = self.entryMembership[.merge] ?? []
             return entries.allSatisfy { self.isCurrent($0)
-                && (self.changedEntries.contains($0) || self.mergeEntries.contains($0)) }
+                && (changed.contains($0) || merge.contains($0)) }
         }
         guard !entries.isEmpty, entries.allSatisfy(validate), valid() else { return }
         let paths = entries.flatMap { entry in
@@ -1472,7 +1600,8 @@ final class GitStatusModel {
     func unstageEntries(_ entries: [Entry]) {
         let valid: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
-            return entries.allSatisfy { self.isCurrent($0) && self.stagedEntries.contains($0) }
+            let current = self.entryMembership[.staged] ?? []
+            return entries.allSatisfy { self.isCurrent($0) && current.contains($0) }
         }
         guard !entries.isEmpty, entries.allSatisfy(validate), valid() else { return }
         let paths = entries.flatMap { entry in
@@ -3257,9 +3386,14 @@ final class GitStatusModel {
         behind = 0
         hasUpstream = false
         clearDetails()
+        if !mergeEntries.isEmpty || !stagedEntries.isEmpty || !changedEntries.isEmpty {
+            changeEntriesRevision &+= 1
+        }
         mergeEntries = []
         stagedEntries = []
         changedEntries = []
+        entryMembership.removeAll()
+        changeDisplayCache = nil
         directoryDecorations = [:]
         fileDecorations = [:]
         ignoredPaths = []
@@ -3468,9 +3602,23 @@ final class GitStatusModel {
         let changedFiles = entries.filter {
             !$0.isConflict && $0.unstaged != "."
         }
-        if mergeEntries != conflicts { mergeEntries = conflicts }
-        if stagedEntries != staged { stagedEntries = staged }
-        if changedEntries != changedFiles { changedEntries = changedFiles }
+        var rowsChanged = false
+        if mergeEntries != conflicts {
+            mergeEntries = conflicts
+            entryMembership[.merge] = Set(conflicts)
+            rowsChanged = true
+        }
+        if stagedEntries != staged {
+            stagedEntries = staged
+            entryMembership[.staged] = Set(staged)
+            rowsChanged = true
+        }
+        if changedEntries != changedFiles {
+            changedEntries = changedFiles
+            entryMembership[.unstaged] = Set(changedFiles)
+            rowsChanged = true
+        }
+        if rowsChanged { changeEntriesRevision &+= 1 }
         if backend is LocalWorkspaceBackend {
             configureLocalWatcher(root: result.topLevel, gitDirectory: result.gitDirectory)
         }

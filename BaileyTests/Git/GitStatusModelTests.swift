@@ -180,6 +180,133 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(git.expandedCommitIDs.isEmpty)
     }
 
+    func testLargeChangeTreeIsBuiltOnlyWhenItsActualInputsChange() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Scale-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let model = GitStatusModel()
+        defer {
+            model.sync(root: "")
+            try? FileManager.default.removeItem(at: root)
+        }
+        let initResult = GitCommandExecution.run(["init", "-q", "-b", "main"], in: root.path)
+        XCTAssertEqual(initResult.status, 0, initResult.stderr)
+        let count = 5_701
+        for group in 0..<58 {
+            let folder = root.appendingPathComponent("src/group-\(group)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        for index in 0..<count {
+            let file = root.appendingPathComponent("src/group-\(index / 100)/file-\(index).txt")
+            try Data("x\n".utf8).write(to: file)
+        }
+        model.sync(root: root.path)
+        try await wait { model.changedEntries.count == count && model.hasResolvedStatus }
+        let first = model.displayChanges(filter: "", mode: .tree, closed: [])
+        XCTAssertEqual(first.changedCount, count)
+        XCTAssertEqual(first.changedRows.compactMap(\.entry).count, count)
+        XCTAssertEqual(first.navigation.count, first.selections.count)
+
+        let start = CFAbsoluteTimeGetCurrent()
+        for index in 0..<250 {
+            model.changeCursor = first.selections[index]
+            let displayed = model.displayChanges(filter: "", mode: .tree, closed: [])
+            XCTAssertEqual(displayed.revision, first.revision)
+        }
+        let cachedMS = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertLessThan(cachedMS, 1_000, "250 cursor moves must not rebuild the Git tree")
+        print("GIT_CHANGE_SCALE entries=\(count) reused_250_ms=\(cachedMS)")
+
+        model.toggleCollapsedFolder("commit:abcd:ignored")
+        XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).revision,
+                       first.revision, "Graph folder state must not rebuild Changes")
+        model.toggleCollapsedFolder("unstaged:src")
+        let folded = model.displayChanges(filter: "", mode: .tree, closed: [])
+        XCTAssertLessThan(folded.changedRows.count, first.changedRows.count)
+        XCTAssertEqual(folded.changedCount, count)
+        model.toggleCollapsedFolder("unstaged:src")
+        XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).selections,
+                       first.selections)
+        XCTAssertEqual(model.displayChanges(filter: "FiLe-5700", mode: .tree, closed: [])
+                       .changedCount, 1)
+        let list = model.displayChanges(filter: "", mode: .list, closed: [])
+        XCTAssertEqual(list.changedRows.count, count)
+        XCTAssertTrue(list.changedRows.allSatisfy { !$0.row.isDirectory })
+        XCTAssertEqual(model.displayChanges(filter: "", mode: .list, closed: [.unstaged])
+                       .changedRows.count, 0)
+
+        let beforeRefresh = model.changeEntriesRevision
+        model.refresh(kind: .indexOnly)
+        try await wait { !model.isRefreshing }
+        XCTAssertEqual(model.changeEntriesRevision, beforeRefresh)
+        let refreshed = model.displayChanges(filter: "", mode: .tree, closed: [])
+        XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).revision,
+                       refreshed.revision)
+
+        guard let entry = model.changedEntries.first else {
+            XCTFail("Expected untracked files")
+            return
+        }
+        model.stageEntries([entry])
+        try await wait {
+            model.stagedEntries.contains { $0.path == entry.path }
+                && !model.isBusy && !model.isRefreshing
+        }
+        let stagedDisplay = model.displayChanges(filter: "", mode: .tree, closed: [])
+        XCTAssertEqual(stagedDisplay.stagedCount, 1)
+        XCTAssertEqual(stagedDisplay.changedCount, count - 1)
+        let stagedPath = GitCommandExecution.run(["ls-files", "--", entry.path], in: root.path)
+        XCTAssertEqual(stagedPath.status, 0)
+        XCTAssertEqual(stagedPath.stdout.trimmingCharacters(in: .whitespacesAndNewlines), entry.path)
+
+        guard let staged = model.stagedEntries.first(where: { $0.path == entry.path }) else {
+            XCTFail("Expected staged entry")
+            return
+        }
+        model.unstageEntries([staged])
+        try await wait {
+            model.stagedEntries.isEmpty && model.changedEntries.count == count
+                && !model.isBusy && !model.isRefreshing
+        }
+
+        model.stageAll()
+        try await wait {
+            model.stagedEntries.count == count && model.changedEntries.isEmpty
+                && !model.isBusy && !model.isRefreshing
+        }
+        model.unstageAll()
+        try await wait {
+            model.stagedEntries.isEmpty && model.changedEntries.count == count
+                && !model.isBusy && !model.isRefreshing
+        }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(entry.path)),
+                       Data("x\n".utf8), "Git operations must preserve actual worktree bytes")
+    }
+
+    func testBulkSelectionUsesPathComponentsAndDoesNotSearchSelectedKeysQuadratically() {
+        let entries = (0..<20_000).map { index in
+            GitStatusModel.Entry(
+                path: "src/group-\(index / 500)/file-\(index).txt",
+                staged: "?", unstaged: "?"
+            )
+        }
+        let chosen = Set(entries.prefix(10_000).map(\.path))
+        let start = CFAbsoluteTimeGetCurrent()
+        let selected = GitStatusModel.entriesUnderSelection(entries, selectedPaths: chosen)
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertEqual(selected.count, 10_000)
+        XCTAssertEqual(GitStatusModel.entriesUnderSelection(
+            entries, selectedPaths: ["src/group-39"]).count, 500)
+        XCTAssertEqual(GitStatusModel.entriesUnderSelection(
+            entries, selectedPaths: ["src/group-3"]).count, 500)
+        XCTAssertEqual(GitStatusModel.entriesUnderSelection(
+            [.init(path: "中文/层理/😀.swift", staged: "?", unstaged: "?")],
+            selectedPaths: ["中文/层理"]
+        ).count, 1)
+        XCTAssertLessThan(elapsed, 1_500)
+        print("GIT_SELECTED_SCALE entries=20000 selected=10000 elapsed_ms=\(elapsed)")
+    }
+
     func testGitChangeSelectionProjectionCostsAtOneHundredAndTenThousandRows() {
         func p95(_ values: [Double]) -> Double {
             let sorted = values.sorted()
