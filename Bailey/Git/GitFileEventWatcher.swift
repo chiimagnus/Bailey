@@ -17,7 +17,6 @@ nonisolated final class GitFileEventWatcher {
         }
     }
 
-    private let listener: Listener
     private let queue = DispatchQueue(label: "chiimagnus.bailey.git.file-events", qos: .utility)
     private let stream: FSEventStreamRef
 
@@ -34,9 +33,19 @@ nonisolated final class GitFileEventWatcher {
     ) {
         guard !paths.isEmpty else { return nil }
         let listener = Listener(onEvents)
+        // 回调可能在自己的队列上释放最后一个监听者；对象必须由 FSEvents 持有。
         var context = FSEventStreamContext(
             version: 0, info: Unmanaged.passUnretained(listener).toOpaque(),
-            retain: nil, release: nil, copyDescription: nil
+            retain: { info in
+                guard let info else { return nil }
+                _ = Unmanaged<Listener>.fromOpaque(info).retain()
+                return info
+            },
+            release: { info in
+                guard let info else { return }
+                Unmanaged<Listener>.fromOpaque(info).release()
+            },
+            copyDescription: nil
         )
         let callback: FSEventStreamCallback = { _, info, count, rawPaths, rawFlags, _ in
             guard count > 0, let info else { return }
@@ -48,7 +57,8 @@ nonisolated final class GitFileEventWatcher {
                 events.append(Event(path: path as String, flags: rawFlags[index]))
             }
             if !events.isEmpty {
-                Unmanaged<Listener>.fromOpaque(info).takeUnretainedValue().notify(events)
+                let listener = Unmanaged<Listener>.fromOpaque(info).takeUnretainedValue()
+                listener.notify(events)
             }
         }
         let flags = FSEventStreamCreateFlags(
@@ -66,7 +76,6 @@ nonisolated final class GitFileEventWatcher {
             FSEventStreamRelease(stream)
             return nil
         }
-        self.listener = listener
         self.stream = stream
     }
 
@@ -74,8 +83,6 @@ nonisolated final class GitFileEventWatcher {
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
-        // The context does not retain the listener; finish queued callbacks first.
-        queue.sync {}
     }
 
     static func paths(
