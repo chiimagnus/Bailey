@@ -3,7 +3,7 @@
 **Goal：** 在原生编辑器和现有保存保护内交付 GB 按需、完整编辑和完整保存，
 取消普通文件的 8 MiB 拒绝门槛。
 
-**Non-goals：** 不换控件、不增加全局 Manager，不重做恢复或新增编码；
+**Non-goals：** 不换控件、不增加全局 Manager，不重做恢复或扩大现有编码清单；
 尚未迁移的 Diff 契约由 P3 处理，本阶段不安装／重启正式 App。
 
 **Approach：** 沿真实链先统一文档和原生适配，再接有界 IO，
@@ -17,12 +17,12 @@
 **Rules／准入：**
 - P1-T1／T2通过，且 P1-T4已按实验改写本文件后才能实施。
   下面是有源码锚点、顺序与验收的条件任务，不是已证明可行的技术路线。
-- 候选新增落点：`Bailey/Editor/TextDocument.swift`（正文版本与编辑），
-  `Bailey/Editor/NativeDocumentStorage.swift`（AppKit适配），
-  `Bailey/Workspace/WorkspaceFileSession.swift`（稳定源与 IO资源）。
-  P1先确定具体类型及签名；原型推翻候选时先修改计划，不边写边猜。
-- FileTab继续拥有文档生命周期；原生 storage只适配同一文档。
-  每个新类型须删除下列旧职责，不能只是转发壳或新协议。
+- 只要求**正文版本／原生适配／稳定 IO** 三项真实职责，不预定必须各新建一个 Manager／Protocol／文件。
+  `TextDocument`、`NativeDocumentStorage`、`WorkspaceFileSession` 仅为下文的候选锚点；
+  P1 以最少实际类型确定接口、删除的旧所有者和编译接入，不能为了匹配文件名制造三层壳。
+- `FileTab` 继续拥有文档生命周期；原生 storage 只适配同一文档。
+- 已有 `TextFileEncoding` 的 UTF-8／BOM、UTF-16 BOM、GBK／GB18030、Shift-JIS、Windows-1252、Latin-1、`mbcs` 和手动重开／另存是**必须维持的功能**；GB 改造不是重新引入 UTF-8-only。
+- 每个新类型都要替代并删除对应旧职责，不能只添加转发壳或新协议。
 - 复用 WorkspaceBackend的真实双实现边界，不新建通用文件系统、工厂或注册表。
 - 每 task先验证最终字节与原生结果，不把基础正确性留给阶段末尾。
   覆盖总集与逐任务核销见 `plan-p1.md#覆盖执行契约`、`plan-p1.md#验证条件总集`；
@@ -38,8 +38,12 @@
 修改 `Bailey/Editor/FileViewerView.swift` 的
 `FileTab.text/bufferedText/savedText/refreshDirtyState/writeCurrentText`，
 `SourceTextEditor.makeScrollView/Coordinator`，
-`NativeCodeTextView.text/attributedText/processStorageEdit`，
-以及 `Bailey/Workspace/Project.swift` 的 `ignoreGitPaths`。
+`NativeCodeTextView.text/attributedText/processStorageEdit`、
+`TextFileEncoding` 与 `FileTab.reopen`、
+`Bailey/Workspace/Project.swift` 的 `ignoreGitPaths`，
+以及 `Bailey/UI/Panes/TabSwitcherView.swift` 的 `filePreview/textExcerpt`。
+当前标签切换器会先读取整个 `file.text` 才截断到 7,000 UTF-16 单元；
+不能只改编辑器，保留这个隐式全文消费。
 新增 `BaileyTests/Editor/TextDocumentTests.swift`，调整实际受影响的文件／原生测试。
 新文件同 task接入编译和 XCTest枚举，不留孤立库。
 
@@ -50,16 +54,20 @@
 **实现、接入与删除：**
 1. 文档提供范围读取、局部替换、坐标和稳定快照迭代；
    FileTab保留目标、请求代次和保存队列，不再与原生缓冲互相同步完整 String。
-2. 删除 bufferedText／savedText及被替代的镜像同步链；
-   不保留让生产调用者继续全文物化的“兼容 text属性”。
-   保存暂在旧 8 MiB边界内适配现有 Data后端，
-   这是尚未迁移的唯一保存入口，不是并行的新旧保存模式；T2原位替换它。
+2. 删除 `bufferedText`／`savedText` 及被替代的镜像同步链；
+   原生 `NSTextStorage` 和 `FileTab` 不能各保留一份可写正文，
+   不留生产环境可调用的全文 `text` 兼容属性。迁移全部调用点，特别是标签预览、
+   `.gitignore` 追加、文件刷新及预览获取；只从文档取所需范围／行末信息。
+   旧 8 MiB 以内的单入口保存暂沿用现有 `Data` 后端，T2 **在同一入口原位删除**该过渡，
+   不另设新旧两条保存链或二次内容所有者。
 3. 原生变更只发一次既有 NSTextStorage事务。
    重挂载不重建文档／Undo，业务对象不反向读取窗口或控件树。
-4. 脏状态按原字节与保存基线判断，不能仅用规范等价 String、哈希或版本递增。
+4. 脏状态按**选定编码的原字节**与保存基线判断（包含 BOM／CRLF／仅编码差异），
+   不能仅用规范等价 String、哈希或版本递增。
    无法局部证明相等时比较稳定版本，较早结果不得清除较新草稿。
-5. .gitignore追加、换行选择、干净刷新及非视图等待接文档动作；
-   信息需要遍历时顺序扫描，不取全文字符串，挂载／未挂载均保留原生 Undo。
+5. `.gitignore` 追加、换行选择、干净刷新、非视图等待及 Dock 标签切换器预览接文档范围动作；
+   预览只取所需 7,000 单元窗口，不能先组装全文；信息需要遍历时顺序扫描，
+   挂载／未挂载均保留原生 Undo。
 6. 删除被新适配替代的 P1原型路径；原型回归转为正式回归，不留第二套内容管理器。
 
 **验证：**
@@ -81,10 +89,12 @@
 
 **Files／锚点：**
 新增候选 WorkspaceFileSession，修改 `WorkspaceBackend`、
-`LocalWorkspaceBackend.readSync/write`、`SSHWorkspaceBackend.read/write`、
-`SSHHostCommandRunner.run`、`ProcessRemoteCommandRunner`、`ProcessStdinWriter`、
+`LocalWorkspaceBackend.readSync/write/runSync`、`SSHWorkspaceBackend.read/write`、
+`SSHHostWorkspaces.execute`、`ProcessRemoteCommandRunner.run`、
 `RemoteCommands.atomicWriteCommand`；
-修改 `FileTab.readContent/loadedContent/reloadFromDiskIfClean/writeCurrentText`。
+修改 `FileTab.readContent/loadedContent/reloadFromDiskIfClean/writeCurrentText`、
+`TextFileEncoding.decode/encoded` 的**增量**等价协议。
+当前没有 `ProcessStdinWriter`；扩展现有**唯一** poll/pipe 所有者，不新建写线程或第二套子进程引擎。
 新增 `BaileyTests/Workspace/WorkspaceFileSessionTests.swift`，
 更新文件 IO测试、`RemoteCommandsTests` 和所有受影响的受控后端 conformer；
 真实远端复用 `BaileyTests/Files/SSHFileTreeLiveTests.swift` 的授权入口。
@@ -96,24 +106,35 @@
 
 当前直接 conformer 为两个生产后端，以及以下测试文件中的具体 fixture：
 `Files/{FileTabPersistenceTests,FileTreeTests}.swift`、
-`Git/{NativeDiffTabTests,GitExecutionTests,GitBranchActionTests,DiscardRemoteWorkspaceFixture}.swift`、
+`Git/{NativeDiffTabTests,GitExecutionTests,GitBranchActionTests,GitStatusModelTests,DiscardRemoteWorkspaceFixture}.swift`、
 `Workspace/{WindowCloseIntegrationTests,SSHFolderPickerTests,WorkspaceIdentityTests,PanelContextTests}.swift`，
-均位于 `BaileyTests/`。接口一旦变化，同 task 更新相应实现；
+均位于 `BaileyTests/`；`NativeDiffTabTests.swift` 内另有 `StagedTransitionBackend` 与
+`WindowsCodePageGitBackend`，均按真实调用链检查。当前 2 个生产实现、13 个测试实现；
+**先由 CodeGraph 核对变更时的全部 conformer**，而不是靠这张静态清单猜。
+接口一旦变化，同 task 更新相应实现；
 不能提供默认“读完整 Data 再切片”来绕过 conformer 改造。
 
-**Red：** 源变更、UTF-8／CRLF跨页、晚发现二进制、保存中新编辑／重命名、
-短读短写、空间不足、取消、旧版本发布；先证明故障确实发生在目标 IO路径。
+**Red：** 源变更（含同大小同 mtime）、UTF-8／UTF-16／GBK／GB18030 跨页编码单元、CRLF／BOM、
+声明 `coding: mbcs` 与手动重开／另存、晚发现编码无效或真实二进制、
+非普通文件／断链符号链接、保存中新编辑／重命名、
+短读短写、空间不足、取消、旧版本发布；先证明故障确实发生在目标 IO 路径。
 
 **实现、接入与删除：**
 1. 按 P1确定的协议打开稳定源，文档只保留需要的页、解码和索引；
    资源句柄／临时源／源身份有一个明确 owner。
-2. 文本装载不再经完整 Data→String。
-   先核对真实格式，不使图片扩展名的大文本先经 .max 全量下载再回退。
+2. 文本装载不再经完整 `Data → String`。
+   本机 `LocalWorkspaceBackend.readSync` 目前打开任意路径就尝试读完整内容，
+   应在同一文件会话入口依实际 `stat`／FD 类型区分普通文件、符号链接、
+   目录、FIFO／socket／设备：验证无法把非普通对象挂起为无响应读，也不得保存覆盖。
+   `TextFileEncoding` 先从有界前缀识别 BOM／首两行声明，必要时查询远端代码页；
+   分段解码、局部修改及流式重新编码均以该选择为真源，
+   覆盖 UTF-16 合法 NUL、跨页多字节字符、严格往返及无法编码拒写；
+   不使图片扩展名的大文本先经 `.max` 全量下载再回退。
    保留真实图片预览及既有错误分类，不扩大到新增图片能力。
 3. 部分可见、验证／索引进度、完整性和失败只增加必要事实；
    现有 content、reloadError、readOnlyReason能表达时不重复状态机。
    未访问区域失败保留草稿，取消不发布半份结果。
-4. 保存迭代冻结快照，校验、编码和 IO明确离开主 actor，
+4. 保存迭代冻结快照，按**原文编码与 BOM 语义**校验、转换，编码和 IO 明确离开主 actor，
    完整成功和目标核对后原子发布；在途新编辑仍脏。
    原位删除 T1的有界 Data保存适配，不拼完整 Data、不改成局部覆盖写。
    临时目标由本次写事务独占，不沿用远端固定 .bailey-tmp 名称；
@@ -122,12 +143,15 @@
 5. 区分缓存淘汰、源版本变更和 View重挂载；
    同字节刷新保留对象／Undo，重复激活不重传或重解码全部。
 6. 本机与 SSH 均接入稳定源、范围读取和流式原子保存。
-   远端块有背压与并发预算，不每行启动 SSH、不攒完整 stdout／stdin；
+   远端块有背压与并发预算，不每行／每页启动 SSH、不攒完整 stdout／stdin；
+   复用现有单进程 stdin／stdout／stderr 泵、取消和退出确认，不建立兼容版全读模式；
    超时区分连接、无进展和持续推进，不修改无关 Git／目录命令的时限。
 7. 区分发布前失败与发布后确认丢失；后者核验实际目标和源版本，
    不虚报原文件未变、不自动重试覆盖较新目标，不因不确定而清除草稿。
    取消只终止本次生产者，不动共享 master；故障后不回退本机。
-8. 删除两个后端文本链旧全读／全写旁路和 T1 的 Data 保存适配。
+8. 删除两个后端**文本链**旧全读／全写旁路和 T1 的 `Data` 保存适配。
+   不得误删图片、小型元数据和既有 Git 命令所需的独立 `read/write/runLimited` 路径，
+   也不得为新文本协议保留默认全文 fallback。
    WorkspaceError.tooLarge和其它业务的有界读取契约继续保留。
    不增加 backend 类型检查、远端 unsupported 占位或先全读再切页的默认实现。
 
@@ -136,6 +160,9 @@
 获授权后 `make test:SSHFileTreeLiveTests`，缺必需后端证据不能进入 T3 解除共享门槛。
 覆盖 E1／E2／E4、D、I、S、R；两个后端使用同一文档／IO 契约断言，
 小预算下遍历超过预算的真实正文，同时检查缓存、快照和完整目标。
+复用已有 `FileTabPersistenceTests` 的 BOM／编码／重连／保存保护与
+`RemoteCommandsTests` 的 pipe 取消、限额、stdin／stdout／stderr 交错测试；
+新增的仅是分段源、特殊文件不会阻塞和 GB 真实保存的未覆盖断言。
 短读写、进展／无进展、断线、旧结果及共享 master 取消在本 task 已须成立；
 注入与安全可得的真实系统错误分别报告，T4 只扩大组合，不代补正确性。
 
@@ -154,7 +181,10 @@
 `NativeCodeTextView.configureWrapping/processStorageEdit/setMarkedText/finishComposition`、
 `NativeMeasuredLineWidths`、`NativeTextLineIndex`、`TextCoordinateIndex`、
 `SyntaxHighlightCoordinator.init/didChangeContent/injectedCaptures`、
-`SourceTextEditor`、`EditorFind`、`FileTab.maxTextBytes/loadedContent`。
+`SourceTextEditor`、`EditorFind`、`FileTab.maxTextBytes/loadedContent`；
+还须复核 `NativeCodeTextView.setLongLineTruncation` 的全段样式遍历、
+`NativeMeasuredLineWidths` 的全行测量和 `SyntaxHighlightCoordinator.didChangeContent` 的全文 `String`／parser read handler。
+以上是正文加载的最后一条共同瓶颈链，不限于 `FileTab.readContent`。
 扩展现有 Editor各测试及 NativeFileTabTests，不为覆盖率机械增加目录。
 
 **Red：**
@@ -166,7 +196,7 @@
 1. 行／段落索引和宽度改用 P1实证的分页摘要／有界视口工作，
    删除首屏／局部编辑的整篇扫描和 per-line常驻对象。
    原生视图与容器仍同一有限宽度，长行命中和偏好语义不变。
-2. 组合输入和大范围 Undo使用范围事务、共享或可落盘片段；
+2. 组合输入和大范围 Undo 使用范围事务、共享或可落盘片段；
    删除 CompositionSnapshot全文及复原时的全文比较，
    不通过缩减 Undo、禁用多选区或 IME达标。
 3. Find／Replace保留实际可达选项和原生栏，范围访问、扫描、结果与全部替换有界；
@@ -177,7 +207,9 @@
 5. 取消落到索引、解析、预取、搜索的生产任务；
    不取消其它标签的共享 query编译，不只是丢回调。
 6. 本机与 SSH 完整原生能力及数据验证成立后，
-   从共享 FileTab 删除旧容量拒绝，所有普通文本入口遵循同一策略。
+   从共享 `FileTab` 删除旧容量拒绝，所有普通文本入口遵循同一策略。
+   `TabSwitcherView.filePreview`、`.gitignore` 和图片扩展名文本回退也必须是分段路径，
+   不得留隐藏全文“快路径”。
    资源错误准确反馈，不换更大的常量，不新建按机器分流的放行规则。
 
 **验证：**
@@ -200,28 +232,29 @@
 两后端 IO 已由 T2 实现、共享入口已由 T3 验证；本块不再承诺首次接通它们。
 
 **Files／锚点：**
-WorkspaceFileSession的远端接入、`SSHWorkspaceBackend`、
-`SSHHostCommandRunner.run`、`ProcessRemoteCommandRunner`、
-`ProcessStdinWriter`、`RemoteCommands`，
+`WorkspaceFileSession` 的远端接入、`SSHWorkspaceBackend`、
+`SSHHostWorkspaces.execute`、`ProcessRemoteCommandRunner.run`、
+`LocalWorkspaceBackend.runSync`、`RemoteCommands`，
 `FileTab.rebindWorkspace/setReadOnly/updatePath`。
 测试使用 `RemoteCommandsTests`、`FileTabPersistenceTests`、
 `SSHFileTreeLiveTests` 和 T2的受控 session测试。
 
-**Red：** 首屏前未完整下载；慢但有进展、短 stdin、断线、重连旧页、
-发布前失败，以及共享 master时取消的真实前置条件逐项确认。
+**Red：** **只验证 T2 单文档协议测试无法证明的交互**：两文件／两窗口共用连接时，
+取消其中一项下载、保存或项目关闭；同时另一项继续、重连并发生新编辑；
+核对在途任务的精确所有权和旧目标不可写。单文档短读写、格式和原子发布不在此重新实现。
 已读 `SSHGitRecoveryLiveTests` 的 private `InterruptibleSSHRunner`：
 它只令后续 `run` 失败，不能证明已经运行的传输中断或 producer 被取消。
 本块另以受控屏障确认在途阶段，再关闭本次拥有的通道／子进程；
 旧 fixture 仅复用为拒绝后续请求的证据，不复制或扩大其 private helper。
 
 **实现、接入与删除：**
-1. 将已实现的契约扩大到 Windows MSYS2／POSIX、冷／热页、
-   两文件／两窗／共享 master；核对实际吞吐、背压及本次资源归属。
+1. 将 T2 已实现的契约扩展为 Windows MSYS2／可用 POSIX 主机上的**双文件／双窗／共享 master**交错场景，
+   核对本次任务取消后其它文档和 query 照常运行；不重复 T2 的单文件格式／边界矩阵。
 2. 冻结原机器、连接和源版本；重连不重建用户文档，
    新通道不能悄悄覆盖用户已编辑的旧源片段。
-3. 核销读／写／预取／索引／关闭各阶段的慢进展、停顿、断线和重连组合，
+3. 核销**跨文件**读／写／预取／索引／关闭各阶段的慢进展、停顿、断线和重连组合，
    连接错误与正文错误不混淆；不以模拟 shell 代替两类真实系统证据。
-4. 发布前失败保留原目标；发布后断线／确认丢失核对真实远端完整版本，
+4. 在**另一文件仍在写入**时验证发布前失败保留原目标；发布后断线／确认丢失核对真实远端完整版本，
    保留草稿／Undo和明确错误，禁止盲重试或声称副作用已撤回。
    清理失败记录本次确切路径，不清理未知目录，不回退本机。
 5. 取消终止本次 producer，共享 master、query和其它文档继续存活；
@@ -255,13 +288,16 @@ editor文档仅导航远端契约。无实机授权时保留成果但验收未�
 只改新文档实际影响的动作，不趁机重构全部窗口。
 
 **步骤：**
-1. Files／Finder／恢复真实入口打开 GB文件；切标签、Dock、窗口激活
-   不重复全读／重建文档，原机身份和 Undo保留。
-2. 自动保存、Git前保存、文件操作互斥、同路径不同草稿、
-   关闭中其它窗新草稿均核对最终字节和关闭否决。
+1. Files／Finder／恢复真实入口打开 GB 文件；切标签、Dock、窗口激活
+   不重复全读／重建文档，原机身份和 Undo 保留。
+   选择目录／FIFO／socket 等非普通文件时，验证入口迅速给出可理解失败，
+   不让 UI、读任务或关闭保护永久等待；宿主能证明的情况不另建整套 GUI 测试。
+2. **仅核销应用级组合**：自动保存、Git 前保存、文件操作互斥、同路径不同草稿、
+   关闭中其它窗新草稿均核对最终字节和关闭否决；底层单文件保存已经由 T1～T3 证明，不重复一套协议测试。
 3. 持有旧宿主／scroll view，真关闭后检查正文、解析、页缓存、临时源释放；
    重挂载相反，必须保留原文档。
-4. GUI只补真实入口→GB首尾键盘编辑→Find定位修改→Undo／Redo→⌘S→关闭／重启重开。
+4. GUI 只补真实入口→GB 首尾键盘编辑→Find 定位修改→Undo／Redo→⌘S→关闭／重启重开，
+   以及 Dock 切换器的局部缩略预览不触发全文解码。
    文件流式核验，不读 XCUI textView.value或整篇 String；
    夹具生成／校验扩展现有测试支持，不搭另一套 GUI脚本系统。
 5. 远端 GUI、两窗前台保存、真实中文候选按授权及可行条件逐项执行；
