@@ -11,7 +11,10 @@ Bailey 是自由组装的 AI IDE，以原生终端工作区承载 CLI、文件�
 
 采用 Swift 6 与 MVVM + Observation，最低 macOS 15.6，支持 Apple Silicon。
 新 API 先核对实际 SDK 和部署目标，不为追新提高最低系统或增加旧实现包装。
-短状态操作保持同步，真实 IO 和耗时工作明确离开主 actor。
+短状态操作保持同步，真实 IO 和耗时计算明确离开主 actor。
+App 默认使用 MainActor 隔离；`async`、`await` 或在界面中创建 `Task {}` 不保证工作已移出主线程。
+后台任务由实际业务所有者负责取消、资源释放和结果身份校验；具体选型见
+[并发与生命周期](docs/standards.md#并发与生命周期)，验证见 [异步检查](docs/testing.md#架构与异步检查)。
 
 当前只做好 macOS App；iOS、iPadOS 与 visionOS 暂不进入开发和验收范围，也不为其预建跨平台接口、
 窗口包装或替代后端。平台范围的重新评估见 [架构边界](docs/architecture.md#平台范围)。
