@@ -3,39 +3,23 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "原生分页编辑与全文访问点的反证实验"
+title = "测量当前原生链与32/64MiB可行性"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "历史记录曾报告4GiB坐标与1GiB实验16/16成功；当前树无对应探针/证据，不能当成现行准入。新范围为FileTab真实原生链的未知长度、冷页与巨段落最小机制，完整产品矩阵归P2。24014251局部IME修复已恢复，必须保留。"
+note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "稳定源版本、分段 IO 与完整保存的协议实验"
+title = "选定单一正文所有者并完成最小原生验证"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "历史记录曾报告受控Shell/回环SSH及107/107；对应实验不在当前树。私有暂存修复现为5f1024e0，已实现且保留。新待验范围是稳定源、流式背压、全源编码校验及显式完整结束后的发布，不重做临时名修复。"
-
-[[tasks]]
-id = "P1-T3"
-title = "GB 两侧 Diff 的有界数据与精度实验"
-status = "pending"
-plan = "plan-p1.md#p1-t3"
-commit = ""
-note = "历史记录曾报告1GiB若干夹具与SHA256结果；当前缺可复验探针/证据，不能证明新路线通过。3d62c14b重复行修复和生产取消链已在当前源码。新待验范围是分页索引、最坏空间、精确稀疏变化与完整密集覆盖。"
-
-[[tasks]]
-id = "P1-T4"
-title = "固定决策、预算并具体化后续任务"
-status = "pending"
-plan = "plan-p1.md#p1-t4"
-commit = ""
-note = "历史No-Go属于旧调查；本轮纠正证据资格与循环门槛。待T1/T2/T3最小机制实证后分别固定接口、内存/磁盘/时间预算和准入，不要求P2/P3完整GUI及远端矩阵先行。源码研究完成不等于产品Go。"
+note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "统一正文真源并接通原生适配"
+title = "以单一正文重写文件挂载编辑和保存状态"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -43,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "接通本机与 SSH 的稳定源、分页装载和完整保存"
+title = "用现有本机与SSH后端完成无损有界读写"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
@@ -51,31 +35,15 @@ note = ""
 
 [[tasks]]
 id = "P2-T3"
-title = "清除全文原生热点，从共享入口开放 GB 编辑"
+title = "收敛全文派生热点并完成32MiB产品门禁"
 status = "pending"
 plan = "plan-p2.md#p2-t3"
 commit = ""
 note = ""
 
 [[tasks]]
-id = "P2-T4"
-title = "核销 SSH 恢复、共享连接与资源隔离的交互组合"
-status = "pending"
-plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P2-T5"
-title = "闭合工作区生命周期与完整 App 用户路径"
-status = "pending"
-plan = "plan-p2.md#p2-t5"
-commit = ""
-note = ""
-
-[[tasks]]
 id = "P3-T1"
-title = "用稳定分段来源替代 Diff 的全文读取依赖"
+title = "测量并修复实际Git Diff热点"
 status = "pending"
 plan = "plan-p3.md#p3-t1"
 commit = ""
@@ -83,33 +51,8 @@ note = ""
 
 [[tasks]]
 id = "P3-T2"
-title = "让差异计算和视口投影有界，删除三篇全文派生文档"
+title = "完成全链验收删除旧路径并交付"
 status = "pending"
 plan = "plan-p3.md#p3-t2"
 commit = ""
 note = ""
-
-[[tasks]]
-id = "P3-T3"
-title = "工作区 Diff 编辑复用同一 GB 文档，解除全部来源 5 MiB门槛"
-status = "pending"
-plan = "plan-p3.md#p3-t3"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P3-T4"
-title = "完整验收、证据核销与本地交付"
-status = "pending"
-plan = "plan-p3.md#p3-t4"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P1-T5"
-title = "固定最新 VS Code 源码并完成可追溯研究"
-status = "completed"
-plan = "plan-p1.md#p1-t5"
-commit = ""
-no_commit_reason = "纯源码研究与计划同步，无独立生产代码提交；研究、计划与完成状态随本次文档原子提交"
-note = "首轮固定530b702完成边界研究；本轮续查GitHub HEAD 15f8b54，相关源码未变，补齐33项成熟机制的调用链、Bailey最小接入、旧链删除与上游性质测试，写回P1-P3；更正Diff重基空实现，区分IME顺序会话、保存合并与生产取消边界。完成分工交叉审查及源码链接/任务导航校验。未运行VS Code或Bailey构建、GB/SSH/原生性能实验；产品准入与实现任务仍待各自证据。"
