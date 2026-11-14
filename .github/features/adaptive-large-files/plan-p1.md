@@ -1,86 +1,140 @@
-# P1：先测真实成本，再决定最小编辑器架构
+# P1：实测现有编辑器，确定一份正文如何工作
 
-**交付：** 一份可复测的 8／16／32／64 MiB 性能与行为基线，以及可实施的单一正文方案。
-此阶段只做必要的测量与最小原生验证，**不解禁文件容量、不迁入 GB 实现**。
-完整目标与不变量见 [需求](idea.md)。
+**交付：** 现有产品的性能／正确性基线、文件至磁盘的责任图、唯一正文的原生可行性证明。
+P1 **不修改正式文件容量**，也不为 32／64 MiB 引入新的文本存储树。
+目标和禁止事项见 [需求](idea.md)。
 
-## 为什么先验证
+## 现有调用链与问题
 
-`crh` 的真实路径是：
+已在 `crh` 的 `874f24de` 上使用 CodeGraph 与逐字源码核对；下面列的是执行路径，而不是将来的架构假设。
 
-`FileTab.readContent → WorkspaceBackend.read(Data) → TextFileEncoding.decode(String)`
-→ `SourceTextEditor.makeScrollView → textView.text = file.text`
-→ `NativeCodeTextView.processStorageEdit → FileTab.refreshDirtyState`
-→ `FileTab.writeCurrentText → WorkspaceBackend.write(Data)`。
+| 入口与所有者 | 当前实际工作 | 需要判定／消除的成本 |
+| --- | --- | --- |
+| `FileTab.readContent` → `WorkspaceBackend.read` → `TextFileEncoding.decode` | 本机／SSH 完整 `Data` → 解码后的 `String`；图片后缀使用 `.max` | 容量、IO 阻塞、峰值；异常路径不能转为无界读取 |
+| `FileTab.text` → `SourceTextEditor.makeScrollView` | `bufferedText` 与已挂载 `NSTextStorage` 互相取全文；首次设 `textView.text` | 不知道哪个是可写正文真源；每次投影和重载的生命周期 |
+| `NativeCodeTextView.processStorageEdit` → `SourceTextEditor.Coordinator` → `FileTab.refreshDirtyState` | 原生替换通知、字符频数表、反向取全文、可逆编辑猜测 | 每键耗时、远距多选区事务、精确 Undo／手工回保存点 |
+| `NativeTextLineIndex`／`NativeMeasuredLineWidths`／`configureWrapping` | 初始化全行索引；无折行时逐行测自然宽度；行数变化可重建 Fenwick | 首帧与输入回调在主线程处理大量行，长 Unicode 行可能整行物化 |
+| `SyntaxHighlightCoordinator.didChangeContent` → Tree-sitter／Neon | 读取当前全文接口，解析与绘制有独立异步工作 | 必须实际量测主线程与解析任务，不能凭 `Task` 断言已经后台化 |
+| `FileTab.save` → `writeCurrentText` → `WorkspaceBackend.write` | 手动／失焦各排队一个 `Task`；全文严格编码；原子写替换，无原字节版本条件 | 大文件同步编码、保存时新编辑、外部相同大小／mtime 改写被覆盖 |
+| `Project.ignoreGitPaths`／`TabSwitcherView.filePreview` | 为判断行尾与 7000 单元缩略图取 `file.text` 全文 | 改动窗口外依赖时不能重新增加隐式正文镜像 |
+| `PaneTab.save`／`Project`／`WorkspaceWindowModel` | 文件／Diff 分别保存；移动／关闭等待保存并保留各自目标身份 | 同路径多窗口、另存编码、待写任务与远端重连必须一起验收 |
+| `DiffTab` → `DiffNativeSurface`／`DiffEngine` | 工作区编辑另有原生文档、字符频数表与自己的无条件写入 | 不要只修 Files 而遗留同一真实文件的第二条覆盖入口 |
 
-当前 `FileTab` 同时保留 `bufferedText`、`savedText` 和原生文本反向读取，
-有 `nativeTextIsCurrent`、`nativeCodeUnitDelta`、`reversibleEdit` 等派生状态。
-`NativeMeasuredLineWidths`、初始行索引和高亮解析仍可能扫描全文。
-这使“仅把 8 MiB 改成 64 MiB”无法证明主线程、内存或状态正确。
+**根因并非 8 MiB 常量太小。** 当前许多操作默认“拿到整份 String 是便宜的”，
+同时以 AppKit 的原生存储和另一个 Swift 字符串表示同一份正在变化的正文。
+从状态拥有者、文字来源和保存确认三处重建最短可用链，
+而不是为增加容量再造 TextKit 分页器。
 
-[旧版研究](vscode-source-study.md)与备份 `back2026-11-14`（`867366cf`）提供三条教训：
+## 备份分支已证明哪些事情
 
-- **不能照搬 GB 分页。** 返回 `nil`／跳过冷段落让 TextKit 2 同步布局反复重试，
-  旧实验一度超过 10 GiB 内存；8 KiB 移动可见窗口只是隔离原型，未接入正式产品。
-- **机制通过不等于产品通过。** 旧分支的 1 GiB 编解码、SSH 管道和 Diff 外存实验
-  并未使正式 `FileTab` 解除 8 MiB 或正式 Diff 解除 5 MiB。
-- **日常安全边界值得保留。** `24014251` 的局部 IME/Undo、
-  `5f1024e0` 的私有原子暂存，以及备份 `c771a930` 的外部同大小／同时间戳改写回归
-  说明保存基线、文件身份和失败保稿必须真实验证；不要求搬运整套实现。
+原始提交、源码和实验留在 `back2026-11-14`；没有复制其代码或宣称新分支已通过这些实验。
 
-## <a id="p1-t1"></a>P1-T1：测量当前原生链与 32／64 MiB 可行性
+| 历史证据 | 可沿用的结论 | 不沿用的东西 |
+| --- | --- | --- |
+| `24014251` 与当前 `NativeEditorCompositionTests` | IME 标记输入、局部 UTF-16 替换与 Undo 必须不复制整篇文本 | 用另一套输入状态机替换 AppKit |
+| `3d62c14b`、`37badb70` | 重复行不能被误识别成整篇增删；旧 Diff 折叠坐标不能作用在新版本上 | 为此重写 GB 差异引擎 |
+| `6c8ce391`、`17e1af48` | FileTab 可通过明确正文版本移除多处脏状态镜像；多选区必须各自发布真实范围 | `VersionedTextDocument` 的持久平衡树、GB 快照优化、第二个并行文本 owner |
+| `2f96dab6`、`54030cf8`、`2eac38cf` | 本机 FIFO／设备及图片后缀是实际无界或阻塞输入；路径有 NUL 时不应被截断；BSD/GNU `stat` 参数不同 | 32 MiB 默认使用 APFS CoW、Windows 稳定租约或无限重试 |
+| `a3b6c751`、`c771a930` | SSH `cat` 提前结束可能成功发布残缺文件；同大小同 mtime 外部改写会覆盖。须真实 Red→Green | GB 的分块结束协议和后台流式服务；以“SHA+rename”冒称原子 CAS |
+| `4e4d8f66` | 未转义的 SSH 环境变量**名称**可以执行额外 shell 命令 | 为一处 quoting 错误新建 shell 命令框架 |
+| 隔离实验 `evidence-p1.md`（本机忽略文件） | TextKit 2 冷页同步重入曾达到 768,300 次请求及约 10 GiB 内存；窗口原型从未进入产品 | 返回 `nil`／跳段落、合成假字符、GB 可视窗口与自定义全局 AX 映射 |
 
-**入口：** `FileViewerView.swift`、`SourceTextEditor.swift`、`NativeCodeTextView.swift`、
-`NativeTextLineIndex.swift`、`SyntaxHighlightConfiguration.swift`；
-现有 `NativeEditorLayoutTests`、`FileTabPersistenceTests`、`NativePaneRetentionIntegrationTests`。
+其余备份提交也已逐条核对：`3e911b7c`／`647922e1`／`c9b1dda7`
+建立的严格 GB 分块编解码，`8dacfcff`／`b9d0d0c3` 的超大数据进程泵，
+`3dee18a5`／`f1163de8` 的跨平台租约与 GB 回放，
+以及 P1 原型的 GB 差异索引，都是**为已撤销目标增加的工程成本**。
+32／64 MiB 先采用 Foundation 完整文件路径；仅实测无法达标时再局部改良 IO，
+不因某个提交已经存在就迁移整条基础设施。
 
-- 先执行当前 8 MiB 宿主基线，记录首次可交互、主线程最长阻塞、
-  文首／文中／文末 30 次输入 p95、远距跳转、查找、保存耗时和增量峰值内存。
-- 在**临时测试文件**与原生组件中测量 16／32／64 MiB 的合法 UTF-8，
-  覆盖 10 万短行、长行、混合 CRLF／Unicode、折行与高亮。
-  现有限制仍生效时，不把直接原生组件测试冒充 `FileTab` 的成功打开。
-- 对比相同文件在首次挂载、重复挂载、A→B→A、关闭后释放的行为；
-  定位超过预算的真实调用点，不根据文件大小猜瓶颈。
-- 为 P2 固定明确预算：32 MiB 输入延迟建议门限 p95 ≤ 50 ms，
-  不能有长时间的主线程独占；内存、打开时间与 64 MiB 门限按实测明确写入任务记录。
-  若门限不合理，以机器、测量和可感知行为为依据修订，不能偷偷放宽来宣布通过。
+研究附件 [`vscode-source-study.md`](vscode-source-study.md) 与
+[`vscode-adoption.md`](vscode-adoption.md) 保留原时代的技术来源，
+**不是这条路线的实施清单**；不把其 33 项机制逐项变成新的 Todo。
 
-**完成判据：** 有可复测的命令、测试文件构造方式、真实数字与峰值来源；
-明确区分 8 MiB 产品基线、32／64 MiB 组件探索和正式 E2E。
-产生的日志放现有测试产物目录，不增建永久研究目录。
+<a id="p1-t1"></a>
+## P1-T1：用真实产品链测出开销和失效位置
 
-## <a id="p1-t2"></a>P1-T2：选定单一正文所有者并完成最小真实原生验证
+**范围：** `FileViewerView.swift`、`SourceTextEditor.swift`、`NativeCodeTextView.swift`、
+`NativeTextLineIndex.swift`、`SyntaxHighlightConfiguration.swift`、
+`TextFileEncoding.swift`、`WorkspaceBackend.swift`、`DiffViewerView.swift`。
 
-**入口：** `FileTab.text`／`savedText`／`refreshDirtyState`、
-`SourceTextEditor.Coordinator.currentText`、`NativeCodeTextView.processStorageEdit`。
+1. 重放 8 MiB 以内已有宿主回归、当前文本编辑/关闭与 Git 工作区测试。
+   记录实际发现／执行／跳过项目数，**不把 10 万行组件测试当成完整 `FileTab`**。
+2. 在**隔离临时本机真实文件**上量测 0、8 MiB 附近、16、32、64 MiB；
+   至少覆盖：10 万及更多短行、普通 Swift／Markdown、有非 ASCII 的混合行、
+   超长无换行行、LF／CRLF、无／有高亮、折行两态、短长不同宽度。
+   对历史发生过高内存重入的单个超长 Unicode 组合字符（30 万、85 万、120 万 UTF-16 单元），
+   在**隔离测试进程**设超时与内存退出条件，不用正式 App 或无界布局赌一次成功。
+   暂时超过 8 MiB 的输入在已编译原生组件中实验，**必须区分**“原生可行”和“用户打开成功”。
+3. 同次运行记录：打开到首次可见／可交互、文首中尾各 30 次输入及撤销、
+   17 次前后远跳、搜索／替换、编码、保存与关闭、空闲内存与并行打开五标签的峰值；
+   对照 Files 与可编辑 Diff 两条真实用户路径。
+4. 使用 Time Profiler／Allocations 与线程记录定位耗时，分辨读盘、复制、严格编码往返、
+   Tree-sitter 首次 parse、全部行测宽、Fenwick 结构修改和保存队列的实际成本。
+   记录 Debug/Release、硬件、macOS、Xcode、字体、宽度、文件内容和样本大小。
+5. 与 [`docs/testing.md`](../../../docs/testing.md#性能与内存测量) 对齐：
+   普通编辑 p95 ≤ 16 ms、10 万行 p95 ≤ 32 ms、连续主线程占用／滚动目标 16.7 ms；
+   首开、关闭后 RSS 回落和 32／64 MiB 的额外预算用**测量结果**制定，
+   不直接以放宽到 50 ms 掩盖性能下降。
 
-- 比较 **FileTab 持续拥有原生文本存储** 与 **FileTab 持有独立小文件正文**
-  两种简单方案，按真实挂载／卸载、Undo 和保存行为选一种；
-  一次只有一个权威可写正文，不允许两套镜像互相同步。
-- 在**真实 FileTab + NSTextView** 测试最小跨行输入、IME 组合、
-  多选区、退回保存点、背景保存中的新编辑、关闭释放；确认源、选区与 Undo 同步。
-  避免脱离产品入口的 `NSString` 幻灯片式演示。
-- 决定哪些原有入口直接沿用，哪些**随新链路接通而删除**：
-  `bufferedText` 的往返镜像、字符频数脏状态、旧保存任务链等仅在有等价行为后退休。
-  不顺手重写 Git 历史、Dock 或终端。
-- 如果 32 MiB 的原生完整编辑必须引入 GB 级窗口模拟／第二编辑器才能达标，
-  给出具体失败证据和更小可行范围，停止扩建并回到需求决策。
+**产出／验收：** 一份短的“操作 → 耗时/内存 → 责任函数 → 原始证据”表，
+明确哪些瓶颈在当前主线程、哪些已经由系统或已有依赖覆盖。
+对没有性能问题的路径明确**不改动**。测量命令和日志保留在现有忽略构建目录。
 
-**完成判据：** 方案能由开发者用一张调用链说明，
-有真实输入与保存的最小测试，以及将被取代的明确文件／符号清单；
-不预留未证实的插件层、存储树或复杂跨端协议。
+本次规划审查已实测
+`make test:FileTabPersistenceTests,NativeEditorCompositionTests,NativeEditorLayoutTests`：
+**99 项、0 失败、完整命令退出 0**，日志 `.build/plan-review/crh-editor-baseline-20261114.log`。
+其中裸原生控件的 10 万行 × 折行两态 × 首中尾六组，每组 30 次输入，
+实测 p95 为 **0.40～1.36 ms**；另一项十万行原生布局编辑测试 p95 约 **2.03 ms**。
+同一未修改产品代码的完整 `make test` 也退出 0：**972 项、17 项跳过、0 失败**，
+宿主 XCTest 约 897 秒，日志 `.build/plan-review/crh-full-baseline-20261114.log`。
+跳过项不等于真实 SSH 或完整 GUI 验收。
+这表明当前原生控件已有可观的日常编辑余量，**没有证明**
+32／64 MiB 在正式 FileTab 加载、高亮、保存与关闭时可用，也不支持重写整个 TextKit。
 
-## 阶段验收
+<a id="p1-t2"></a>
+## P1-T2：在真实 FileTab 上验证最简单的正文所有权
 
-- **容量／文本：** 0、1、旧 5／8 MiB 附近、16／32／64 MiB，
-  超限大小拒绝；超长无换行文本、10 万行、CRLF、BOM、中文／emoji／组合字符、NUL。
-- **交互／生命周期：** 折行、字体大小、滚动、查找、多个原生选区、输入法组合、Undo、
-  tab 切换／重挂载／关闭、多窗口和缓存释放；测量峰值而非只测打开成功。
-- **环境：** 当前 macOS／Xcode 与最低部署目标 SDK；
-  不创建 macOS 虚拟机，不在正式 Bailey 会话运行 GUI 自动化。
-- **结果：** `make test:NativeEditorLayoutTests,FileTabPersistenceTests,NativePaneRetentionIntegrationTests`
-  与真实原生组件测量；如测试入口命名改变先核对 Makefile。
-  后端、GUI、真实 SSH 尚未测的条件不得计入阶段完成。
+**优先候选：** 一个长生命周期标签拥有 `NSTextContentStorage`／`NSTextStorage`，
+一个 `NSTextView` 编辑它；不可变的原始读入字节／版本只用作保存基线。
+`NativeCodeTextView.init(contentStorage:)` 已是现成入口；不另建 Rope/Fragment Tree。
+这是一项**待证明的候选**，不是先写入接口再迫使产品适应的决定。
 
-任何单项异常（崩溃、卡死、全文丢失、IME 错序）均先定位修复或明确 No-Go，
-而非追加更多兜底框架或把 64 MiB 变成下一项必须交付的架构负担。
+- 用真实 `FileTab → SourceTextEditor → NativeCodeTextView` 检查可否在挂载前由标签持有文本存储，
+  再附着唯一原生编辑器，并在 A→B→A、窗口／Dock 重挂载、外部接受新版本、关闭释放时
+  维持选区与 Undo 的正确生命周期。
+- 以 `.gitignore` 自动追加的**尚未挂载标签**作为反例：
+  必须在无需造第二份可写 `String` 的前提下追加、写盘，并于稍后挂载时显示一致。
+  已挂载时的原生 Undo 必须保持；不为当前原本没有的离屏 Undo 另造状态机。
+  当前存储接口若做不到，比较“标签提前持有原生编辑器”与“一次性转移所有权”的成本，
+  选在真实 App 中状态最少、无需反复重建的路径。
+- 原生 `NSTextStorage.didProcessEditing` 的变更通知须成为唯一编辑事务入口；
+  Unicode 坐标使用 UTF-16；远距多选区独立通知每个真实变更范围，
+  不合并中间未改的大块文本。
+- 脏状态必须精确区分“位置变了／仅 Unicode 规范等价／手工改回同样字节／Undo 回保存点”。
+  **不能直接用 `revision != savedRevision` 代替内容比较**，也不能每键复制 32 MiB 全文。
+  候选是“当前 UTF-16 长度＋由被删／被插入字符更新的简单校验和”作为**只证明不同**的快速过滤，
+  过滤相等时才与保存基线做精确逐字节比较；校验和**绝不能独自证明内容相同**。
+  与现有字符频数表在实际替换、重新排列和相同字符重输上比较 p95、内存及正确性，
+  只有新方案实测更简单且不退化时才删除旧频数状态。
+- 首次失败、保存失败、刷新失败保留上一个可靠正文；
+  不保留一套 Swift 文本模型作为“隐藏备份”。真正需要恢复的数据只有明确定义的保存基线和草稿。
+
+**决策门槛：** 产出一张“唯一可写正文／不可变保存基线／派生视图／写入后端”的责任图，
+一组可复现的文件、IME、多光标与卸载测试，
+以及**明确要删除的可达旧符号**：
+`FileTab.bufferedText/nativeTextIsCurrent/reversibleEdit/restoredSavedBytes`、
+`SourceTextEditor.Coordinator.currentText` 等只在接入等价行为后退出；
+`DiffTab` 当前类似状态另归 P3 处理。
+
+若原生 TextKit 的完整 32 MiB 编辑确实受可复现的系统瓶颈限制，
+先给出完整原生失败证据和最小可行上限，回到需求决定；
+不得偷偷改为只读、增加 GB 窗口模拟或第二套编辑器。
+
+## P1 结束前的判断
+
+- **Go：** 真实原生文本存储的生命周期、Undo、Find/AX 与 32 MiB 组件输入可行，
+  性能热点与预算可定位，方案不要求另建分块文件引擎；进入 P2。
+- **No-Go：** 未能证明同步原生布局、输入或资源边界可接受；保留原 8 MiB 门限，
+  给出最小失败示例与修正方向，而不是把风险推给 P2。
+- 任何实验只影响本仓库生成的临时文件与隔离宿主测试；旧系统与真实 Windows SSH
+  缺少可用测试环境时记录原因与影响，不通过修改用户系统、正式 App 或新建 VM 补证。

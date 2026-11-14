@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "测量当前原生链与32/64MiB可行性"
+title = "测量现有文件编辑与Git链的真实成本"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "选定单一正文所有者并完成最小原生验证"
+title = "在真实FileTab验证唯一原生正文所有权"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "以单一正文重写文件挂载编辑和保存状态"
+title = "收紧本机SSH与图片读取的信任边界"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -27,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "用现有本机与SSH后端完成无损有界读写"
+title = "重实现FileTab原生正文与状态管理"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
@@ -35,15 +35,31 @@ note = ""
 
 [[tasks]]
 id = "P2-T3"
-title = "收敛全文派生热点并完成32MiB产品门禁"
+title = "重实现文件版本条件保存与完整发布"
 status = "pending"
 plan = "plan-p2.md#p2-t3"
 commit = ""
 note = ""
 
 [[tasks]]
+id = "P2-T4"
+title = "修复实测的主线程全文热点"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T5"
+title = "完整验收32MiB并独立判定64MiB"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
+commit = ""
+note = ""
+
+[[tasks]]
 id = "P3-T1"
-title = "测量并修复实际Git Diff热点"
+title = "让Git Worktree Diff使用相同的安全保存"
 status = "pending"
 plan = "plan-p3.md#p3-t1"
 commit = ""
@@ -51,8 +67,16 @@ note = ""
 
 [[tasks]]
 id = "P3-T2"
-title = "完成全链验收删除旧路径并交付"
+title = "核对Git Diff精度与独立容量门禁"
 status = "pending"
 plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "核销跨窗口GUI与全部产品验收"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
 commit = ""
 note = ""
