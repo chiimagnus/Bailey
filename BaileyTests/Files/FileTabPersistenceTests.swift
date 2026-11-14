@@ -1850,6 +1850,113 @@ final class NativeFileTabTests: XCTestCase {
         XCTAssertFalse(file.isDirty)
     }
 
+    func testHundredThousandLineDirtyStateDoesNotRescanOnEachNativeKeystroke() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".swift")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let original = String(repeating: "let word = \"中文 👋\"\n", count: 100_000)
+        try original.write(to: path, atomically: true, encoding: .utf8)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        var costs: [Double] = []
+        for _ in 0..<4 {
+            let start = CFAbsoluteTimeGetCurrent()
+            editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+            costs.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            editor.insertText("", replacementRange: NSRange(location: 0, length: 1))
+        }
+        costs.sort()
+        print("P2_NATIVE_DIRTY_HOT_INPUT median_ms=\(costs[2]) max_ms=\(costs[3])")
+        XCTAssertLessThan(costs[2], 32, "One inserted code unit must not rebuild the whole UTF-16 count map")
+        XCTAssertEqual(editor.string, original)
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testOffscreenNativeAppendAndPreviewStayBoundedAtTextCapacity() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let content = "head 中文👋\r\n" + String(repeating: "q", count: (8 << 20) - 1_000)
+        let original = Data(content.utf8)
+        XCTAssertLessThan(original.count, 8 << 20)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertNil(file.editorCoordinator)
+        let storage = file.nativeTextStorage
+        let atStart = file.previewExcerpt(aroundUTF16: nil)
+        XCTAssertLessThanOrEqual(atStart.text.utf16.count, 7_000)
+        XCTAssertTrue(atStart.text.hasPrefix("head 中文👋\r\n"))
+        let inMiddle = file.previewExcerpt(aroundUTF16: 1_000_000)
+        XCTAssertLessThanOrEqual(inMiddle.text.utf16.count, 7_000)
+        XCTAssertTrue(inMiddle.startsInsideLine)
+        XCTAssertEqual(file.lineEndingForAppend().newline, "\r\n")
+        XCTAssertEqual(file.lineEndingForAppend().separator, "\r\n")
+        file.appendText("\r\nignored\r\n")
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), original + Data("\r\nignored\r\n".utf8))
+    }
+
+    func testNativeDocumentHasOneFileTabOwnerBeforeMountAndAfterClose() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let original = "中文👋 first\r\nsecond\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let storage = file.nativeTextStorage
+        XCTAssertTrue(file.nativeContentStorage.textStorage === storage)
+        XCTAssertNil(file.editorCoordinator)
+        XCTAssertEqual(storage.string, original)
+
+        storage.replaceCharacters(in: NSRange(location: storage.length, length: 0),
+                                  with: "offline addition\n")
+        try await waitForFileTabState { file.isDirty }
+        XCTAssertEqual(file.text, original + "offline addition\n")
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertTrue(editor.textStorage === storage)
+        XCTAssertTrue(editor.nativeContentManager === file.nativeContentStorage)
+        editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(file.text.hasPrefix("X"))
+        XCTAssertTrue(storage.string.hasPrefix("X"))
+
+        host.rootView = AnyView(Color.clear)
+        try await waitForFileTabState { host.layoutSubtreeIfNeeded(); return file.editorView == nil }
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        host.rootView = AnyView(FileViewerView(file: file))
+        try await waitForFileTabState {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === editor
+        }
+        XCTAssertTrue(editor.textStorage === file.nativeTextStorage)
+        file.retireNativeEditor()
+        XCTAssertEqual(storage.length, 0, "Closing must release the original native buffer")
+        XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+    }
+
     func testDetachedEditorAppendKeepsSameNativeDocumentAndUndo() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let original = "first 中文👋\n"

@@ -21,7 +21,7 @@ enum LongLineDisplayWidth: Int, CaseIterable, Identifiable {
 }
 
 /// A single AppKit text editor backed by TextKit 2. Source and Diff both use it.
-/// The text storage is owned by the view retained by its tab, not by SwiftUI.
+/// File editors attach their tab-owned NSTextStorage; Diff retains its own view document.
 @MainActor
 class NativeCodeTextView: NSTextView {
     static let tabInterval: CGFloat = {
@@ -194,7 +194,7 @@ class NativeCodeTextView: NSTextView {
         let originalSelection: NSRange
         let originalLength: Int
         var changes: [CompositionChange] = []
-        var pending: (range: NSRange, removed: String)?
+        var pending: (range: NSRange, removed: String, originalLength: Int)?
     }
 
     private var composition: CompositionTransaction?
@@ -212,7 +212,8 @@ class NativeCodeTextView: NSTextView {
            NSMaxRange(affectedCharRange) <= storage.length {
             composition?.pending = (
                 affectedCharRange,
-                storage.attributedSubstring(from: affectedCharRange).string
+                storage.attributedSubstring(from: affectedCharRange).string,
+                storage.length
             )
         }
         return true
@@ -754,11 +755,22 @@ class NativeCodeTextView: NSTextView {
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
-        if let pending = composition?.pending, pending.range == previousRange {
-            composition?.changes.append(CompositionChange(
-                range: previousRange, removed: pending.removed, inserted: replacement
-            ))
-            composition?.pending = nil
+        // The edited range covers an entire paragraph on preloaded TextKit 2
+        // storage. Recover the actual IME replacement from its pre-edit range
+        // and the document-length delta, not from that paragraph-wide range.
+        if let pending = composition?.pending,
+           previousRange.location <= pending.range.location,
+           NSMaxRange(previousRange) >= NSMaxRange(pending.range),
+           storage.length >= pending.originalLength - pending.range.length {
+            let insertedLength = storage.length - pending.originalLength + pending.range.length
+            let insertedRange = NSRange(location: pending.range.location, length: insertedLength)
+            if NSMaxRange(insertedRange) <= storage.length {
+                composition?.changes.append(CompositionChange(
+                    range: pending.range, removed: pending.removed,
+                    inserted: storage.attributedSubstring(from: insertedRange).string
+                ))
+                composition?.pending = nil
+            }
         }
         let currentText = storage.string as NSString
         let previousParagraphCount = lineIndex?.lineCount

@@ -1103,7 +1103,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertFalse(editor.isEditable)
         XCTAssertEqual(editor.textStorage?.length, 0,
                        "A cached retired view must release its obsolete text bytes")
-        XCTAssertEqual(file.text, source)
+        XCTAssertTrue(file.text.isEmpty, "A retired file must not keep a second text buffer")
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), source)
     }
 

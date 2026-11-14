@@ -383,8 +383,7 @@ final class Project: nonisolated Identifiable {
               case .file(let file) = tab.content else { throw WorkspaceError.notFound }
         try await file.waitForTextBeforeAppending()
         guard isCurrent(), file.path == path else { throw CancellationError() }
-        let newline = file.text.contains("\r\n") ? "\r\n" : "\n"
-        let separator = file.text.isEmpty || file.text.hasSuffix("\n") ? "" : newline
+        let (newline, separator) = file.lineEndingForAppend()
         file.appendText(separator + patterns.joined(separator: newline) + newline)
         await file.save()
         guard isCurrent() else { throw CancellationError() }
