@@ -12,6 +12,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private struct PendingWrite {
         let path: String
         let data: Data
+        let expected: WorkspaceFileVersion?
         let finish: CheckedContinuation<Void, Error>
     }
 
@@ -41,6 +42,9 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         writingPath = nil
         if failing {
             pending.finish.resume(throwing: Rejection.simulated)
+        } else if let expected = pending.expected,
+                  !(files[pending.path].map(expected.matches) ?? false) {
+            pending.finish.resume(throwing: WorkspaceError.changedExternally)
         } else {
             files[pending.path] = pending.data
             pending.finish.resume()
@@ -62,9 +66,20 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         return data
     }
     func write(path: String, data: Data) async throws {
+        try await stageWrite(path: path, data: data, expected: nil)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        guard files[path].map(version.matches) ?? false else {
+            throw WorkspaceError.changedExternally
+        }
+        try await stageWrite(path: path, data: data, expected: version)
+    }
+    private func stageWrite(path: String, data: Data,
+                            expected: WorkspaceFileVersion?) async throws {
         try await withCheckedThrowingContinuation { continuation in
             writingPath = path
-            writing = PendingWrite(path: path, data: data, finish: continuation)
+            writing = PendingWrite(path: path, data: data, expected: expected,
+                                   finish: continuation)
         }
     }
 
@@ -99,6 +114,170 @@ private func waitForFileTabState(_ condition: () async -> Bool) async throws {
 @MainActor
 final class FileTabPersistenceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
+    func testSaveRefusesExternalSameSizeSameMtimeRewriteAndKeepsDraft() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("document.txt")
+        let baseline = Data("alpha 中🙂\n".utf8)
+        let external = Data("omega 中🙂\n".utf8)
+        XCTAssertEqual(baseline.count, external.count)
+        try baseline.write(to: path)
+        let modified = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: path.path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "Bailey draft 中文\n"
+        try external.write(to: path, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: path.path)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), external)
+        XCTAssertEqual(file.text, "Bailey draft 中文\n")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+    }
+
+    func testLocalConditionalWriteKeepsModeAndDoesNotFollowSymlink() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-cas-local-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = folder.appendingPathComponent("executable.sh")
+        let baseline = Data("echo first\n".utf8)
+        let update = Data("echo next\n".utf8)
+        try baseline.write(to: source)
+        try FileManager.default.setAttributes([.posixPermissions: 0o751],
+                                              ofItemAtPath: source.path)
+        let backend = LocalWorkspaceBackend.shared
+        try await backend.write(path: source.path, data: update,
+                                ifUnchanged: WorkspaceFileVersion(data: baseline))
+        XCTAssertEqual(try Data(contentsOf: source), update)
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: source.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue, 0o751)
+        let linked = folder.appendingPathComponent("linked.sh")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: source)
+        try await backend.write(path: linked.path, data: baseline,
+                                ifUnchanged: WorkspaceFileVersion(data: update))
+        XCTAssertEqual(try Data(contentsOf: linked), baseline)
+        XCTAssertEqual(try Data(contentsOf: source), update)
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: linked.path))
+        let removed = folder.appendingPathComponent("removed.sh")
+        try baseline.write(to: removed)
+        try FileManager.default.removeItem(at: removed)
+        do {
+            try await backend.write(path: removed.path, data: update,
+                                    ifUnchanged: WorkspaceFileVersion(data: baseline))
+            XCTFail("A removed source must not be resurrected")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removed.path))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)),
+                       Set([source.lastPathComponent, linked.lastPathComponent]))
+    }
+
+    func testLocalConditionalWriteSupportsLongLegalFileName() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-long-save-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent(String(repeating: "a", count: 240) + ".txt")
+        let original = Data("origin".utf8)
+        let updated = Data("updated".utf8)
+        try original.write(to: target)
+        try await LocalWorkspaceBackend.shared.write(
+            path: target.path, data: updated,
+            ifUnchanged: WorkspaceFileVersion(data: original)
+        )
+        XCTAssertEqual(try Data(contentsOf: target), updated)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       [target.lastPathComponent])
+    }
+
+    func testTwoIndependentFileTabsCannotOverwriteOneAnothersSavedRevision() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-same-file-cas-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent("shared.md")
+        try Data("shared baseline 中文\r\n".utf8).write(to: target)
+        let first = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        let second = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                             workspaceIdentity: nil)
+        try await first.waitForText()
+        try await second.waitForText()
+        first.autoSaveSuspendedForClose = true
+        second.autoSaveSuspendedForClose = true
+        first.text = "first editor revision\r\n"
+        second.text = "second independent draft\r\n"
+        await first.save()
+        XCTAssertNil(first.saveError)
+        XCTAssertFalse(first.isDirty)
+        await second.save()
+        XCTAssertEqual(try Data(contentsOf: target), Data("first editor revision\r\n".utf8))
+        XCTAssertEqual(second.text, "second independent draft\r\n")
+        XCTAssertTrue(second.isDirty)
+        XCTAssertNotNil(second.saveError)
+        XCTAssertEqual(first.text, "first editor revision\r\n")
+    }
+
+    func testExplicitEncodingChangeQueuedDuringWriteKeepsNewestDraftAndBothIntents() async throws {
+        let path = "/fixture/\(UUID().uuidString)-encoding-queue.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "first 中文"
+        let firstBytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("first 中文"))
+        let first = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        file.text = "second 中文👋"
+        let secondBytes = try XCTUnwrap(TextFileEncoding.utf16LEBOM.encoded("second 中文👋"))
+        let second = Task { await file.save(as: .utf16LEBOM) }
+        // Ensure the second save has joined the active writer before releasing it.
+        await Task.yield()
+        await backend.finishWrite()
+        try await waitForFileTabState {
+            let current = await backend.data(at: path)
+            let pending = await backend.writingPath
+            return current == firstBytes && pending == path
+        }
+        await backend.finishWrite()
+        await first.value
+        await second.value
+        let finalBytes = await backend.data(at: path)
+        XCTAssertEqual(finalBytes, secondBytes)
+        XCTAssertEqual(file.fileEncoding, .utf16LEBOM)
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(file.text, "second 中文👋")
+    }
+
+    func testSaveAfterExternalRestoreToOriginalBytesCanRecover() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-retry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("document.txt")
+        let baseline = Data("base\r\n中文🙂".utf8)
+        try baseline.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.text = "local revision\r\n中文🙂"
+        try Data("external".utf8).write(to: path)
+        await file.save()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), Data("external".utf8))
+        try baseline.write(to: path)
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), Data("local revision\r\n中文🙂".utf8))
+    }
 
     func testCanonicalEquivalentCleanReloadInstallsNewBytes() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
@@ -1217,13 +1396,19 @@ final class FileTabPersistenceTests: XCTestCase {
         let pathObserved = expectation(description: "FileTab rename updates its path")
         withObservationTracking({ _ = file.path }) { pathObserved.fulfill() }
         file.updatePath(renamed)
+        // A real rename moves the already accepted source entry. A write still
+        // aimed at the old path must fail, never recreate or overwrite it.
+        try await backend.rename(from: first, to: renamed)
         await fulfillment(of: [pathObserved], timeout: 1)
         await backend.finishWrite()
         await outdatedWrite.value
         XCTAssertEqual(file.path, renamed)
         XCTAssertTrue(file.isDirty, "Old path write must not claim new path was saved")
+        let staleOldPath = await backend.data(at: first)
+        XCTAssertNil(staleOldPath, "Stale in-flight save must not resurrect old path")
         let renamedBeforeSave = await backend.data(at: renamed)
-        XCTAssertNil(renamedBeforeSave)
+        XCTAssertEqual(renamedBeforeSave, Data("second draft🪨\r\n".utf8),
+                       "Rename must preserve the actual previous source version")
 
         let renamedWrite = Task { await file.save() }
         try await waitForFileTabState { await backend.writingPath == renamed }

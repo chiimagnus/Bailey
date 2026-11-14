@@ -1,4 +1,21 @@
+import CryptoKit
 import Foundation
+
+/// Immutable version of the raw bytes accepted by a document load/save.
+/// Not a filesystem identity and not an atomic compare-and-rename primitive.
+nonisolated struct WorkspaceFileVersion: Sendable, Equatable {
+    let byteCount: Int
+    let sha256: String
+
+    init(data: Data) {
+        byteCount = data.count
+        sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func matches(_ bytes: Data) -> Bool {
+        byteCount == bytes.count && sha256 == WorkspaceFileVersion(data: bytes).sha256
+    }
+}
 
 /// One directory entry, as the file tree needs it.
 nonisolated struct WorkspaceEntry: Sendable, Equatable {
@@ -31,6 +48,8 @@ nonisolated enum WorkspaceError: Error {
     case notFound
     case tooLarge
     case timedOut
+    /// An independent writer replaced the accepted source bytes before publish.
+    case changedExternally
 }
 
 /// The workspace a project's panels, editor and diff viewer operate on:
@@ -51,6 +70,9 @@ nonisolated protocol WorkspaceBackend: Sendable {
     /// `.notFound` when the path is gone.
     func read(path: String, maxBytes: Int) async throws -> Data
     func write(path: String, data: Data) async throws
+    /// Text save only: compare the accepted raw bytes before atomically publishing.
+    /// No default fallback to unconditional write is permitted.
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws
     func createFile(path: String) async throws
     func createDirectory(path: String) async throws
     /// Copy one file system entry without replacing an existing destination.

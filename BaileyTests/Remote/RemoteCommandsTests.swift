@@ -48,6 +48,14 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
     private var raceDestination: (path: String, directory: Bool)?
     private var stageInterruption: String?
     private var atomicSaveInterruption = false
+    enum WritePayloadFault { case truncated, corrupted, appended }
+    private var nextWritePayloadFault: WritePayloadFault?
+    private var targetMutationAfterStaging: String?
+    private var nextAcknowledgementLost = false
+
+    func corruptNextAtomicWrite(_ fault: WritePayloadFault) { nextWritePayloadFault = fault }
+    func mutateTargetAfterStaging(_ value: String) { targetMutationAfterStaging = value }
+    func loseNextWriteAcknowledgement() { nextAcknowledgementLost = true }
 
     func insertDestinationImmediatelyBeforeMove(_ path: String, asDirectory: Bool = false) {
         raceDestination = (path, asDirectory)
@@ -77,6 +85,17 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
             }
             command = command.replacingOccurrences(of: marker, with: marker + "; exit 70")
         }
+        if let mutation = targetMutationAfterStaging {
+            targetMutationAfterStaging = nil
+            let marker = #"[ "$actualHash" = "$3" ] || { echo "Remote upload checksum mismatch" >&2; exit 1; }"#
+            guard command.contains(marker) else {
+                return (98, Data(), Data("version check marker missing".utf8))
+            }
+            command = command.replacingOccurrences(
+                of: marker, with: marker + "; printf %s "
+                    + RemoteCommands.doubleQuote(mutation) + #" > "$1""#
+            )
+        }
         if let raceDestination {
             self.raceDestination = nil
             let marker = command.contains("mv -n -- ") ? "mv -n -- " : "mv -- "
@@ -85,10 +104,25 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
                 : "printf 'concurrent target' > \(RemoteCommands.quote(raceDestination.path)); "
             command = command.replacingOccurrences(of: marker, with: mutation + marker)
         }
+        var transmitted = stdin
+        if let fault = nextWritePayloadFault, var payload = transmitted,
+           command.contains(#"cat > "$stage/item""#) {
+            nextWritePayloadFault = nil
+            switch fault {
+            case .truncated: if !payload.isEmpty { payload.removeLast() }
+            case .corrupted: if !payload.isEmpty { payload[0] ^= 0x1 }
+            case .appended: payload.append(0xA5)
+            }
+            transmitted = payload
+        }
         let result = try await LocalWorkspaceBackend.shared.run(
             argv: ["/bin/sh", "-c", command], cwd: nil, env: nil,
-            stdin: stdin, timeout: timeout
+            stdin: transmitted, timeout: timeout
         )
+        if nextAcknowledgementLost, command.contains(#"cat > "$stage/item""#), result.status == 0 {
+            nextAcknowledgementLost = false
+            return (255, Data(), Data("SSH transport acknowledgement lost".utf8))
+        }
         return (result.status, result.stdout, result.stderr)
     }
 }
@@ -394,6 +428,79 @@ final class RemoteCommandsTests: XCTestCase {
         }
     }
 
+    func testSSHUploadVerificationRejectsTruncatedCorruptedAndAppendedStdin() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("quoted' 中文.bin")
+        let original = Data("old whole bytes".utf8)
+        let replacement = Data(repeating: 0x41, count: 100_000) + Data("末尾🙂".utf8)
+        let runner = LocalShellRunnerFixture()
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 10)
+        for fault in [LocalShellRunnerFixture.WritePayloadFault.truncated,
+                      .corrupted, .appended] {
+            try original.write(to: path)
+            await runner.corruptNextAtomicWrite(fault)
+            do {
+                try await backend.write(path: path.path, data: replacement)
+                XCTFail("Receiver must never publish altered payload \(fault)")
+            } catch let error as RemoteCommandFailure {
+                XCTAssertNotEqual(error.status, 0)
+            }
+            XCTAssertEqual(try Data(contentsOf: path), original)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                           [path.lastPathComponent], "Failed upload must remove private staging")
+        }
+        try await backend.write(path: path.path, data: replacement)
+        XCTAssertEqual(try Data(contentsOf: path), replacement)
+    }
+
+    func testSSHConditionalWriteRejectsLateTargetOverwriteAfterStaging() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("remote' 中🙂.txt")
+        let original = Data("source version".utf8)
+        let competitor = "rival! version"
+        XCTAssertEqual(original.count, Data(competitor.utf8).count)
+        try original.write(to: path)
+        let runner = LocalShellRunnerFixture()
+        await runner.mutateTargetAfterStaging(competitor)
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 10)
+        do {
+            try await backend.write(path: path.path, data: Data("Bailey revision".utf8),
+                                    ifUnchanged: WorkspaceFileVersion(data: original))
+            XCTFail("The second source check must reject external edits after staging")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), Data(competitor.utf8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       [path.lastPathComponent])
+    }
+
+    @MainActor
+    func testSSHFileTabReadBackAfterLostWriteAcknowledgement() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("remote-ack.txt")
+        try Data("previous version".utf8).write(to: path)
+        let runner = LocalShellRunnerFixture()
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 10)
+        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "new complete version 中文"
+        await runner.loseNextWriteAcknowledgement()
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data("new complete version 中文".utf8))
+        XCTAssertFalse(file.isDirty, "Read-back of the exact published bytes confirms success")
+        XCTAssertNil(file.saveError)
+        file.text = "subsequent write"
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data("subsequent write".utf8))
+    }
+
     func testSSHAtomicSaveNeverWritesThroughPreexistingTempSymlink() async throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-atomic-" + UUID().uuidString)
@@ -455,6 +562,23 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "original")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
                        ["target.txt"], "Failure must retire its own uncommitted staging directory")
+    }
+
+    func testSSHSaveSupportsLongLegalFileName() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-ssh-long-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent(String(repeating: "b", count: 240) + ".txt")
+        let baseline = Data("before".utf8)
+        let updated = Data("after".utf8)
+        try baseline.write(to: target)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        try await backend.write(path: target.path, data: updated,
+                                ifUnchanged: WorkspaceFileVersion(data: baseline))
+        XCTAssertEqual(try Data(contentsOf: target), updated)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       [target.lastPathComponent])
     }
 
     func testSSHAtomicSaveRejectsDirectoryWithoutMovingContentInside() async throws {
@@ -614,8 +738,8 @@ final class RemoteCommandsTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
-        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("chmod --reference="))
-        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("mv -f"))
+        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x", expectedBytes: 1, sha256: String(repeating: "a", count: 64)).contains("chmod --reference="))
+        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x", expectedBytes: 1, sha256: String(repeating: "a", count: 64)).contains("mv -f"))
     }
 
     func testSSHFileRenamePreservesDanglingSymlinksAndRejectsOccupiedDestinations() async throws {

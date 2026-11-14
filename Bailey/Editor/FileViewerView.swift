@@ -48,6 +48,8 @@ final class FileTab: nonisolated Identifiable {
     /// retyping the same characters) clears the dirty indicator rather than
     /// leaving it stuck on.
     @ObservationIgnored private var savedText = ""
+    /// Actual source bytes, not a re-encoding of decoded or normalized text.
+    @ObservationIgnored private var savedSourceVersion: WorkspaceFileVersion?
     /// Scroll position and cursor, written back by the editor as they
     /// change. Lives here (not in the view) so the state survives tab
     /// switches, and in the session snapshot so it survives relaunches. Not
@@ -86,6 +88,7 @@ final class FileTab: nonisolated Identifiable {
         coordinator?.retireObsoleteDocument()
         nativeTextStorage.setAttributedString(NSAttributedString(string: ""))
         savedText = ""
+        savedSourceVersion = nil
         pendingStorageChange = false
         nativeCodeUnitDelta = [:]
     }
@@ -156,11 +159,13 @@ final class FileTab: nonisolated Identifiable {
     /// An in-flight write must not claim to have saved a different target.
     @ObservationIgnored private var targetGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var saveLatestRequested = false
+    /// Encoding changes are explicit user actions, never merged or silently dropped.
+    @ObservationIgnored private var pendingEncodingSaves: [TextFileEncoding] = []
     @ObservationIgnored private var fileMutationHeld = false
     @ObservationIgnored private var saveDeferredUntilMutation = false
     @ObservationIgnored private var deletedFromWorkspace = false
     var isSaving: Bool { lastSaveTask != nil }
-    @ObservationIgnored private var saveRequestGeneration: UInt = 0
     @ObservationIgnored var autoSaveSuspendedForClose = false
     /// The workspace this file lives on. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
@@ -177,6 +182,7 @@ final class FileTab: nonisolated Identifiable {
         let encoding: TextFileEncoding?
         let imageFingerprint: Int?
         let decodingFailed: Bool
+        let sourceVersion: WorkspaceFileVersion?
     }
 
     func reopen(using encoding: TextFileEncoding?) {
@@ -412,7 +418,11 @@ final class FileTab: nonisolated Identifiable {
     /// A focus transition schedules one save, never a timed file-write loop.
     func autoSaveOnFocusLoss() {
         guard isDirty, !autoSaveSuspendedForClose else { return }
-        Task { await save() }
+        if lastSaveTask != nil {
+            saveLatestRequested = true
+        } else {
+            Task { [weak self] in await self?.save() }
+        }
     }
 
     /// Hold the original save target stable until all queued writes have completed.
@@ -444,8 +454,8 @@ final class FileTab: nonisolated Identifiable {
         readOnlyReason = String(localized: "This file was deleted. Copy your edits before closing.", table: "Editor")
     }
 
-    /// Serialize manual and focus-triggered writes. A later edit can never
-    /// land on disk before an older in-flight write completes.
+    /// One owned writer drains requests. Repeated ordinary saves only request
+    /// the latest edit; explicit encoding changes retain their own intent.
     func save(as encoding: TextFileEncoding? = nil) async {
         if fileMutationHeld {
             if encoding != nil {
@@ -455,62 +465,118 @@ final class FileTab: nonisolated Identifiable {
             saveDeferredUntilMutation = true
             return
         }
-        saveRequestGeneration &+= 1
-        let generation = saveRequestGeneration
-        let preceding = lastSaveTask
+        if let running = lastSaveTask {
+            if let encoding { pendingEncodingSaves.append(encoding) }
+            else { saveLatestRequested = true }
+            await running.value
+            return
+        }
         let task = Task { [weak self] in
-            await preceding?.value
-            await self?.writeCurrentText(as: encoding)
+            guard let self else { return }
+            var intent = encoding
+            while true {
+                await self.writeCurrentText(as: intent)
+                if !self.pendingEncodingSaves.isEmpty {
+                    intent = self.pendingEncodingSaves.removeFirst()
+                    self.saveLatestRequested = false
+                } else if self.saveLatestRequested {
+                    self.saveLatestRequested = false
+                    intent = nil
+                } else {
+                    break
+                }
+            }
+            self.lastSaveTask = nil
         }
         lastSaveTask = task
         await task.value
-        if saveRequestGeneration == generation { lastSaveTask = nil }
     }
 
     private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
         guard case .text = content, isDirty || (encoding != nil && encoding != fileEncoding) else { return }
-        let chosen = encoding ?? fileEncoding
-        if chosen != fileEncoding && TextFileEncoding.contradictsDeclaration(text, chosen: chosen) {
-            saveError = String(localized: "Update the declared coding header before changing the file encoding.", table: "Editor")
-            return
-        }
-        guard let bytes = chosen.encoded(text) else {
-            saveError = String(localized: "Text cannot be saved in \(chosen.name) without losing characters.", table: "Editor")
-            return
-        }
-        // Refused, not silently dropped: the save-error bar says why.
         if let readOnlyReason {
             saveError = readOnlyReason
             return
         }
         guard reloadError == nil else { return }
-        invalidateReload()
+        guard let expected = savedSourceVersion else {
+            saveError = String(localized: "Original file bytes are unknown. Reopen before saving.",
+                               table: "Editor")
+            return
+        }
+        // Freeze one real revision before leaving the main actor. Subsequent
+        // edits stay live in NSTextStorage and are rebased after publication.
         let written = text
         let deltaAtWrite = nativeCodeUnitDelta
+        let chosen = encoding ?? fileEncoding
         let savedPath = path
         let generation = targetGeneration
         let target = backend
+        let prepared = await TextFileEncoding.prepareSave(
+            written, as: chosen, checkDeclaration: chosen != fileEncoding
+        )
+        guard generation == targetGeneration, path == savedPath,
+              readOnlyReason == nil else { return }
+        let payload: TextFileEncoding.EncodedSave
+        switch prepared {
+        case .failure(.contradictsDeclaration):
+            saveError = String(localized:
+                "Update the declared coding header before changing the file encoding.",
+                table: "Editor")
+            return
+        case .failure(.cannotRoundTrip):
+            saveError = String(localized:
+                "Text cannot be saved in \(chosen.name) without losing characters.", table: "Editor")
+            return
+        case .success(let encoded):
+            payload = encoded
+        }
+        invalidateReload()
         do {
-            try await target.write(path: savedPath, data: bytes)
+            try await target.write(path: savedPath, data: payload.bytes, ifUnchanged: expected)
             guard generation == targetGeneration else { return }
-            fileEncoding = chosen
-            if encoding != nil { preferredEncoding = chosen }
-            savedText = written
-            // Rebase changes made during the write onto the new saved bytes.
-            if let deltaAtWrite, nativeCodeUnitDelta != nil {
-                for (unit, count) in deltaAtWrite {
-                    let updated = (nativeCodeUnitDelta?[unit] ?? 0) - count
-                    if updated == 0 { nativeCodeUnitDelta?.removeValue(forKey: unit) }
-                    else { nativeCodeUnitDelta?[unit] = updated }
-                }
-            }
-            refreshDirtyState()
-            saveError = nil
-            reloadError = nil
+            acceptPublishedText(written, encoding: chosen, wasExplicit: encoding != nil,
+                                version: payload.version, deltaAtWrite: deltaAtWrite)
         } catch {
             guard generation == targetGeneration else { return }
-            saveError = error.localizedDescription
+            if case WorkspaceError.changedExternally = error {
+                saveError = String(localized:
+                    "The file changed outside Bailey. Your edits remain unsaved.", table: "Editor")
+                return
+            }
+            // A transport error may mean the remote rename completed but its
+            // acknowledgement was lost. Resolve the actual bytes once, without
+            // attempting another write or destroying the local draft.
+            let actual = try? await target.read(path: savedPath, maxBytes: payload.bytes.count)
+            guard generation == targetGeneration else { return }
+            if let actual, payload.version.matches(actual) {
+                acceptPublishedText(written, encoding: chosen, wasExplicit: encoding != nil,
+                                    version: payload.version, deltaAtWrite: deltaAtWrite)
+            } else {
+                saveError = error.localizedDescription
+            }
         }
+    }
+
+    private func acceptPublishedText(
+        _ written: String, encoding: TextFileEncoding, wasExplicit: Bool,
+        version: WorkspaceFileVersion, deltaAtWrite: [UInt16: Int]?
+    ) {
+        fileEncoding = encoding
+        if wasExplicit { preferredEncoding = encoding }
+        savedText = written
+        savedSourceVersion = version
+        // Edits landing during I/O still belong to the next revision.
+        if let deltaAtWrite, nativeCodeUnitDelta != nil {
+            for (unit, count) in deltaAtWrite {
+                let updated = (nativeCodeUnitDelta?[unit] ?? 0) - count
+                if updated == 0 { nativeCodeUnitDelta?.removeValue(forKey: unit) }
+                else { nativeCodeUnitDelta?[unit] = updated }
+            }
+        }
+        refreshDirtyState()
+        saveError = nil
+        reloadError = nil
     }
 
     /// Re-read a clean preview when it returns on screen. Disk I/O happens off
@@ -541,10 +607,11 @@ final class FileTab: nonisolated Identifiable {
             }
             let loaded: LoadedContent
             do {
-                let (data, decoded) = try await Self.readContent(
+                let (data, decoded, sourceVersion) = try await Self.readContent(
                     path: expectedPath, backend: backend, override: self?.preferredEncoding
                 )
-                loaded = Self.loadedContent(path: expectedPath, data: data, decoded: decoded)
+                loaded = Self.loadedContent(path: expectedPath, data: data,
+                                            decoded: decoded, sourceVersion: sourceVersion)
             } catch {
                 let missingOrOversized: Bool
                 switch error {
@@ -571,7 +638,7 @@ final class FileTab: nonisolated Identifiable {
                 }
                 loaded = LoadedContent(content: .unavailable(reason), text: "",
                                        encoding: nil, imageFingerprint: nil,
-                                       decodingFailed: false)
+                                       decodingFailed: false, sourceVersion: nil)
             }
             guard !Task.isCancelled,
                   let self,
@@ -593,12 +660,17 @@ final class FileTab: nonisolated Identifiable {
             }
             self.reloadError = nil
             self.saveError = nil
-            guard !self.matches(loaded) else { return }
+            if self.matches(loaded) {
+                // Reload can accept changed bytes without changing decoded text.
+                self.savedSourceVersion = loaded.sourceVersion
+                return
+            }
             self.retireNativeEditor()
             self.content = loaded.content
             if let encoding = loaded.encoding { self.fileEncoding = encoding }
             self.installNativeDocument(loaded.text)
             self.savedText = loaded.text
+            self.savedSourceVersion = loaded.sourceVersion
             self.nativeCodeUnitDelta = [:]
             self.imageFingerprint = loaded.imageFingerprint
             self.reloadRevision &+= 1
@@ -638,7 +710,7 @@ final class FileTab: nonisolated Identifiable {
 
     @concurrent private static func readContent(
         path: String, backend: WorkspaceBackend, override: TextFileEncoding?
-    ) async throws -> (Data, Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?) {
+    ) async throws -> (Data, Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?, WorkspaceFileVersion?) {
         guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
@@ -663,17 +735,19 @@ final class FileTab: nonisolated Identifiable {
             let data = try await backend.read(path: path, maxBytes: info.size)
             guard data.count > maxTextBytes else {
                 return (data, await TextFileEncoding.decode(data, backend: backend,
-                                                             override: override))
+                                                             override: override), WorkspaceFileVersion(data: data))
             }
-            return (data, nil)
+            return (data, nil, nil)
         }
         let data = try await backend.read(path: path, maxBytes: maxTextBytes)
-        return (data, await TextFileEncoding.decode(data, backend: backend, override: override))
+        return (data, await TextFileEncoding.decode(data, backend: backend, override: override),
+                WorkspaceFileVersion(data: data))
     }
 
     private static func loadedContent(
         path: String, data: Data,
-        decoded: Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?
+        decoded: Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?,
+        sourceVersion: WorkspaceFileVersion?
     ) -> LoadedContent {
         let url = URL(fileURLWithPath: path)
         if imageExtensions.contains(url.pathExtension.lowercased()),
@@ -692,21 +766,22 @@ final class FileTab: nonisolated Identifiable {
                                                                       thumbnailOptions as CFDictionary) else {
                 return LoadedContent(
                     content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
-                    text: "", encoding: nil, imageFingerprint: nil, decodingFailed: false
+                    text: "", encoding: nil, imageFingerprint: nil, decodingFailed: false,
+                    sourceVersion: nil
                 )
             }
             let image = NSImage(size: NSSize(width: thumbnail.width, height: thumbnail.height))
             image.addRepresentation(NSBitmapImageRep(cgImage: thumbnail))
             return LoadedContent(
                 content: .image(image), text: "", encoding: nil,
-                imageFingerprint: data.hashValue, decodingFailed: false
+                imageFingerprint: data.hashValue, decodingFailed: false, sourceVersion: nil
             )
         }
         guard data.count <= maxTextBytes else {
             return LoadedContent(
                 content: .unavailable(String(localized: "File is too large to open", table: "Workspace")),
                 text: "", encoding: nil,
-                imageFingerprint: nil, decodingFailed: false
+                imageFingerprint: nil, decodingFailed: false, sourceVersion: nil
             )
         }
         guard let decoded else { preconditionFailure("Text input was not decoded") }
@@ -714,14 +789,14 @@ final class FileTab: nonisolated Identifiable {
         case .success(let document):
             return LoadedContent(content: .text, text: document.text,
                                  encoding: document.encoding, imageFingerprint: nil,
-                                 decodingFailed: false)
+                                 decodingFailed: false, sourceVersion: sourceVersion)
         case .failure(let failure):
             let unknownTextEncoding: Bool
             if case .binary = failure { unknownTextEncoding = false }
             else { unknownTextEncoding = true }
             return LoadedContent(content: .unavailable(failure.message), text: "",
                                  encoding: nil, imageFingerprint: nil,
-                                 decodingFailed: unknownTextEncoding)
+                                 decodingFailed: unknownTextEncoding, sourceVersion: nil)
         }
     }
 }

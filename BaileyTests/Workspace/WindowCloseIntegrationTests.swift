@@ -27,6 +27,12 @@ private actor WindowSaveFixture: WorkspaceBackend {
         return bytes
     }
     func write(path: String, data: Data) async throws {
+        try await performWrite(data, expected: nil)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await performWrite(data, expected: version)
+    }
+    private func performWrite(_ data: Data, expected: WorkspaceFileVersion?) async throws {
         writes += 1
         if pauseNextWrite {
             pauseNextWrite = false
@@ -34,6 +40,7 @@ private actor WindowSaveFixture: WorkspaceBackend {
             await withCheckedContinuation { resumePendingWrite = $0 }
         }
         if reject { throw Failure.writeRejected }
+        if let expected, !expected.matches(bytes) { throw WorkspaceError.changedExternally }
         bytes = data
     }
     func list(directory: String) async throws -> [WorkspaceEntry] { [] }

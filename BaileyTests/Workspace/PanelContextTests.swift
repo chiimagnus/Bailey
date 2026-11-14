@@ -48,6 +48,9 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func read(path: String, maxBytes: Int) async throws -> Data { Data() }
     func write(path: String, data: Data) async throws {}
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        throw WorkspaceError.changedExternally
+    }
     func createFile(path: String) async throws { created.append(path); try await Task.sleep(for: .milliseconds(100)) }
     func createDirectory(path: String) async throws {}
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }

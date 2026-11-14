@@ -60,6 +60,7 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         static let missing: Int32 = 44
         static let exists: Int32 = 45
         static let notRegular: Int32 = 46
+        static let changedExternally: Int32 = 47
     }
 
     // MARK: - Running
@@ -81,6 +82,7 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         case ExitCode.exists: return CocoaError(.fileWriteFileExists)
         case ExitCode.notRegular:
             return NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+        case ExitCode.changedExternally: return WorkspaceError.changedExternally
         default:
             let message = String(decoding: result.stderr, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -165,8 +167,20 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         return result.stdout
     }
 
-    func write(path: String, data: Data) async throws {
-        try await shell(RemoteCommands.atomicWriteCommand(path: path), stdin: data)
+    @concurrent func write(path: String, data: Data) async throws {
+        let version = WorkspaceFileVersion(data: data)
+        try await shell(RemoteCommands.atomicWriteCommand(
+            path: path, expectedBytes: version.byteCount, sha256: version.sha256
+        ), stdin: data)
+    }
+
+    @concurrent func write(path: String, data: Data,
+                           ifUnchanged version: WorkspaceFileVersion) async throws {
+        let written = WorkspaceFileVersion(data: data)
+        try await shell(RemoteCommands.atomicWriteCommand(
+            path: path, expectedBytes: written.byteCount, sha256: written.sha256,
+            ifUnchanged: version
+        ), stdin: data)
     }
 
     func createFile(path: String) async throws {

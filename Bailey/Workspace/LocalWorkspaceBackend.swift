@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -137,6 +138,103 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
 
     @concurrent func write(path: String, data: Data) async throws {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    /// FileTab's conditional save has its own commit contract. POSIX offers
+    /// atomic rename, not a universal compare-and-rename against outside writers.
+    @concurrent func write(path: String, data: Data,
+                           ifUnchanged version: WorkspaceFileVersion) async throws {
+        try Task.checkCancellation()
+        guard !path.utf8.contains(0) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        _ = try Self.verifyCurrentVersion(path: path, expected: version)
+        // Fixed sibling name: a valid 255-byte filename must not overflow NAME_MAX.
+        let parent = (path as NSString).deletingLastPathComponent
+        var template = Array((parent + "/.bailey-save.XXXXXXXX").utf8CString)
+        guard template.withUnsafeMutableBufferPointer({
+            Darwin.mkdtemp($0.baseAddress)
+        }) != nil else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let stage = String(cString: template)
+        defer { try? FileManager.default.removeItem(atPath: stage) }
+        let item = stage + "/item"
+        try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
+        _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
+        let originalMode = try Self.verifyCurrentVersion(path: path, expected: version)
+        if let originalMode {
+            guard chmod(item, mode_t(originalMode)) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
+        let stagedHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: item))
+        try stagedHandle.synchronize()
+        try stagedHandle.close()
+        try Task.checkCancellation()
+        let status = item.withCString { from in
+            path.withCString { to in Darwin.rename(from, to) }
+        }
+        guard status == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
+    /// Verify bytes through a bounded streaming, nonblocking regular-file FD,
+    /// without trusting mtime or a pathname's original inode. An identical-byte
+    /// replacement is accepted by policy; a symlink entry is replaced on commit.
+    private static func verifyCurrentVersion(
+        path: String, expected: WorkspaceFileVersion
+    ) throws -> Int? {
+        let fd = path.withCString { Darwin.open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC) }
+        guard fd >= 0 else {
+            let code = errno
+            if code == ENOENT || code == ENOTDIR { throw WorkspaceError.changedExternally }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = Darwin.stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size >= 0, UInt64(info.st_size) == UInt64(expected.byteCount) else {
+            throw WorkspaceError.changedExternally
+        }
+        let opened = info
+        var digest = SHA256()
+        var count = 0
+        while count < expected.byteCount {
+            try Task.checkCancellation()
+            let wanted = min(65_536, expected.byteCount - count)
+            guard let chunk = try handle.read(upToCount: wanted), !chunk.isEmpty else {
+                throw WorkspaceError.changedExternally
+            }
+            digest.update(data: chunk)
+            count += chunk.count
+        }
+        guard fstat(fd, &info) == 0, info.st_size >= 0,
+              UInt64(info.st_size) == UInt64(expected.byteCount),
+              info.st_dev == opened.st_dev, info.st_ino == opened.st_ino,
+              info.st_mtimespec.tv_sec == opened.st_mtimespec.tv_sec,
+              info.st_mtimespec.tv_nsec == opened.st_mtimespec.tv_nsec,
+              info.st_ctimespec.tv_sec == opened.st_ctimespec.tv_sec,
+              info.st_ctimespec.tv_nsec == opened.st_ctimespec.tv_nsec else {
+            throw WorkspaceError.changedExternally
+        }
+        // A pathname may be replaced while the open FD is being hashed.
+        // Verify that it still resolves to that FD, including through symlinks.
+        var current = Darwin.stat()
+        guard path.withCString({ fstatat(AT_FDCWD, $0, &current, 0) }) == 0,
+              current.st_dev == info.st_dev, current.st_ino == info.st_ino else {
+            throw WorkspaceError.changedExternally
+        }
+        let checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        guard checksum == expected.sha256 else { throw WorkspaceError.changedExternally }
+        guard lstat(path, &info) == 0 else { throw WorkspaceError.changedExternally }
+        switch info.st_mode & S_IFMT {
+        case S_IFREG: return Int(info.st_mode & 0o7777)
+        case S_IFLNK: return nil
+        default: throw WorkspaceError.changedExternally
+        }
     }
 
     /// The Finder-to-Files action copies on a background executor and never

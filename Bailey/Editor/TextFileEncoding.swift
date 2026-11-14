@@ -54,6 +54,28 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         return Data(signature) + contents
     }
 
+    enum SaveEncodingFailure: Error, Sendable {
+        case contradictsDeclaration
+        case cannotRoundTrip
+    }
+
+    struct EncodedSave: Sendable {
+        let bytes: Data
+        let version: WorkspaceFileVersion
+    }
+
+    /// The frozen native text is immutable; prepare its full encoding, strict
+    /// round trip, declaration check and new content hash off the main actor.
+    @concurrent static func prepareSave(
+        _ text: String, as chosen: TextFileEncoding, checkDeclaration: Bool
+    ) async -> Result<EncodedSave, SaveEncodingFailure> {
+        if checkDeclaration && contradictsDeclaration(text, chosen: chosen) {
+            return .failure(.contradictsDeclaration)
+        }
+        guard let bytes = chosen.encoded(text) else { return .failure(.cannotRoundTrip) }
+        return .success(EncodedSave(bytes: bytes, version: WorkspaceFileVersion(data: bytes)))
+    }
+
     func decoded(_ bytes: Data) -> String? {
         guard bytes.starts(with: signature) else { return nil }
         let contents = signature.isEmpty ? bytes : Data(bytes.dropFirst(signature.count))

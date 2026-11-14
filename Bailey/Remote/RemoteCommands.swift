@@ -264,11 +264,33 @@ nonisolated enum RemoteCommands {
     ///
     /// A private same-directory staging directory prevents stale symlinks
     /// and concurrent writes from sharing unpublished data.
-    static func atomicWriteCommand(path: String) -> String {
-        """
+    static func atomicWriteCommand(path: String, expectedBytes: Int, sha256: String,
+                                   ifUnchanged version: WorkspaceFileVersion? = nil) -> String {
+        let verifySource = version.map { _ in
+            """
+            [ -f "$1" ] || exit 47
+            [ "$(wc -c < "$1")" -eq "$4" ] || exit 47
+            currentHash=$(hash_stdin < "$1") || exit 1
+            currentHash=${currentHash%% *}
+            [ "$currentHash" = "$5" ] || exit 47
+            """
+        } ?? ""
+        let sourceArguments = version.map { " \($0.byteCount) \($0.sha256)" } ?? ""
+        return """
         sh -c '
         set -eu
-        stage=$(mktemp -d -- "$1.bailey-tmp.XXXXXXXX")
+        hash_stdin() {
+            if command -v sha256sum >/dev/null 2>&1; then
+                sha256sum
+            elif command -v shasum >/dev/null 2>&1; then
+                shasum -a 256
+            else
+                echo "Remote SHA-256 verification unavailable" >&2
+                return 1
+            fi
+        }
+        \(verifySource)
+        stage=$(mktemp -d -- "$(dirname -- "$1")/.bailey-save.XXXXXXXX")
         cleanup() {
             rm -f -- "$stage/item"
             rmdir -- "$stage" || :
@@ -276,6 +298,12 @@ nonisolated enum RemoteCommands {
         trap cleanup EXIT
         trap "exit 1" HUP INT TERM
         cat > "$stage/item"
+        actualBytes=$(wc -c < "$stage/item")
+        [ "$actualBytes" -eq "$2" ] || { echo "Incomplete remote upload" >&2; exit 1; }
+        actualHash=$(hash_stdin < "$stage/item") || exit 1
+        actualHash=${actualHash%% *}
+        [ "$actualHash" = "$3" ] || { echo "Remote upload checksum mismatch" >&2; exit 1; }
+        \(verifySource)
         if [ -f "$1" ] && [ ! -L "$1" ]; then
             chmod --reference="$1" "$stage/item" 2>/dev/null ||
                 chmod "$(stat -f %Lp -- "$1")" "$stage/item"
@@ -288,7 +316,7 @@ nonisolated enum RemoteCommands {
         fi
         trap - EXIT HUP INT TERM
         rmdir -- "$stage" || :
-        ' _ \(quote(path))
+        ' _ \(quote(path)) \(expectedBytes) \(sha256)\(sourceArguments)
         """
     }
 

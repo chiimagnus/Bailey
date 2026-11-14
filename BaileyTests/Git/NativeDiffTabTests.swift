@@ -7,7 +7,7 @@ import XCTest
 
 private actor DiffWorkspaceFixture: WorkspaceBackend {
     private var contents = Data("baseline😀\r\n".utf8)
-    private var pendingWrite: (Data, CheckedContinuation<Void, Error>)?
+    private var pendingWrite: (Data, WorkspaceFileVersion?, CheckedContinuation<Void, Error>)?
     private var pendingRead: CheckedContinuation<Data, Error>?
     private var pauseRead = false
     private(set) var writing = false
@@ -39,11 +39,13 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     }
 
     func finishWrite(failing: Bool = false) {
-        guard let (data, continuation) = pendingWrite else { return }
+        guard let (data, expected, continuation) = pendingWrite else { return }
         pendingWrite = nil
         writing = false
         if failing {
             continuation.resume(throwing: WorkspaceError.timedOut)
+        } else if let expected, !expected.matches(contents) {
+            continuation.resume(throwing: WorkspaceError.changedExternally)
         } else {
             contents = data
             continuation.resume()
@@ -58,10 +60,16 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         continuation?.resume(returning: data)
     }
     func write(path: String, data: Data) async throws {
+        try await stageWrite(data, expected: nil)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await stageWrite(data, expected: version)
+    }
+    private func stageWrite(_ data: Data, expected: WorkspaceFileVersion?) async throws {
         writes += 1
         try await withCheckedThrowingContinuation { continuation in
             writing = true
-            pendingWrite = (data, continuation)
+            pendingWrite = (data, expected, continuation)
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
@@ -187,6 +195,9 @@ private actor StagedTransitionBackend: WorkspaceBackend {
     func write(path: String, data: Data) async throws {
         try await LocalWorkspaceBackend.shared.write(path: path, data: data)
     }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data, ifUnchanged: version)
+    }
     func createFile(path: String) async throws {
         try await LocalWorkspaceBackend.shared.createFile(path: path)
     }
@@ -220,6 +231,9 @@ private struct WindowsCodePageGitBackend: WorkspaceBackend {
     }
     func write(path: String, data: Data) async throws {
         try await LocalWorkspaceBackend.shared.write(path: path, data: data)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data, ifUnchanged: version)
     }
     func createFile(path: String) async throws {
         try await LocalWorkspaceBackend.shared.createFile(path: path)

@@ -12,6 +12,10 @@ private actor IdentityWorkspaceFixture: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func read(path: String, maxBytes: Int) async throws -> Data { Data("remote\n".utf8) }
     func write(path: String, data: Data) async throws { writes += 1 }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        guard version.matches(Data()) else { throw WorkspaceError.changedExternally }
+        writes += 1
+    }
     func createFile(path: String) async throws {}
     func createDirectory(path: String) async throws {}
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }

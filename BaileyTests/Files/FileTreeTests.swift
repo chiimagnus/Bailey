@@ -65,6 +65,9 @@ private actor CountingFileBackend: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { try await base.readSymlinkDestination(path: path) }
     func read(path: String, maxBytes: Int) async throws -> Data { try await base.read(path: path, maxBytes: maxBytes) }
     func write(path: String, data: Data) async throws { try await base.write(path: path, data: data) }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await base.write(path: path, data: data, ifUnchanged: version)
+    }
     func createFile(path: String) async throws { try await base.createFile(path: path) }
     func createDirectory(path: String) async throws { try await base.createDirectory(path: path) }
     func copy(from: String, to: String) async throws {
