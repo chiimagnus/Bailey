@@ -74,6 +74,7 @@ final class FileTab: nonisolated Identifiable {
     /// editor, nils out when the pane unmounts.
     @ObservationIgnored weak var editorView: NSView?
     @ObservationIgnored var editorCoordinator: SourceTextEditor.Coordinator?
+    @ObservationIgnored var preparedLineWidths: (font: NSFont, widths: NativeMeasuredLineWidths.Prepared)?
 
     /// A true close or accepted replacement releases the old native document,
     /// independently of any cached SwiftUI/AppKit view lifetime.
@@ -85,6 +86,7 @@ final class FileTab: nonisolated Identifiable {
         let coordinator = editorCoordinator
         editorCoordinator = nil
         editorView = nil
+        preparedLineWidths = nil
         coordinator?.retireObsoleteDocument()
         nativeTextStorage.setAttributedString(NSAttributedString(string: ""))
         savedText = ""
@@ -121,6 +123,7 @@ final class FileTab: nonisolated Identifiable {
     /// notification; only direct edits require one deferred full reconciliation.
     private func nativeStorageDidChange() {
         guard case .text = content else { return }
+        preparedLineWidths = nil
         pendingStorageChange = true
         if !isDirty {
             isDirty = true
@@ -665,10 +668,27 @@ final class FileTab: nonisolated Identifiable {
                 self.savedSourceVersion = loaded.sourceVersion
                 return
             }
+            // First-frame horizontal extent must use the actual font width,
+            // but shaping a large document must never block the main actor.
+            var prepared: (font: NSFont, widths: NativeMeasuredLineWidths.Prepared)?
+            if case .text = loaded.content, !AppSettings.shared.wrapLines {
+                let font = TerminalFont.current()
+                if let descriptorData = try? NSKeyedArchiver.archivedData(
+                    withRootObject: font.fontDescriptor, requiringSecureCoding: true
+                ), let widths = await NativeMeasuredLineWidths.prepareAsync(
+                    loaded.text, descriptorData: descriptorData, fontSize: font.pointSize,
+                    tabInterval: NativeCodeTextView.tabInterval
+                ) {
+                    prepared = (font, widths)
+                }
+            }
+            guard !Task.isCancelled, self.reloadGeneration == generation,
+                  !self.isDirty, self.readOnlyReason == nil else { return }
             self.retireNativeEditor()
             self.content = loaded.content
             if let encoding = loaded.encoding { self.fileEncoding = encoding }
             self.installNativeDocument(loaded.text)
+            self.preparedLineWidths = prepared
             self.savedText = loaded.text
             self.savedSourceVersion = loaded.sourceVersion
             self.nativeCodeUnitDelta = [:]

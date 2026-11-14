@@ -129,6 +129,46 @@ final class TextCoordinateIndexTests: XCTestCase {
         }
     }
 
+    func testSequentialNativeLineRangesExactlyMatchIndexedOffsets() throws {
+        let sources = [
+            "",
+            "a\r\nb\nc\r中文👋\u{2028}next\u{2029}\n",
+            String(repeating: "line中文👋\r\nnext\u{2028}\n", count: 50_000)
+                + "最后一行\r"
+        ]
+        for source in sources {
+            for mode in [NativeTextLineIndex.BreakMode.native, .gitLF] {
+                var index = NativeTextLineIndex(source as NSString, breakMode: mode)
+                var row = 0
+                var previous = 0
+                index.forEachLineRange { start, end in
+                    XCTAssertEqual(start, previous)
+                    XCTAssertEqual(start, index.offset(atLine: row))
+                    XCTAssertTrue(end >= start && end <= index.length)
+                    previous = end
+                    row += 1
+                }
+                XCTAssertEqual(row, index.lineCount)
+                XCTAssertEqual(previous, index.length)
+
+                let prefix = "汉字\r\n"
+                let updated = prefix + source
+                index.replace(in: NSRange(location: 0, length: 0),
+                              replacementLength: prefix.utf16.count, text: updated as NSString)
+                var starts: [Int] = []
+                index.forEachLineRange { start, _ in starts.append(start) }
+                XCTAssertEqual(starts, (0..<index.lineCount).map(index.offset(atLine:)))
+                XCTAssertEqual(index.length, updated.utf16.count)
+                index.replace(in: NSRange(location: 0, length: prefix.utf16.count),
+                              replacementLength: 0, text: source as NSString)
+                starts.removeAll()
+                index.forEachLineRange { start, _ in starts.append(start) }
+                XCTAssertEqual(starts, (0..<index.lineCount).map(index.offset(atLine:)))
+                XCTAssertEqual(index.length, source.utf16.count)
+            }
+        }
+    }
+
     func testNativeLineIndexEditCosts() {
         let source = NSMutableString(string: String(repeating: "item line\n", count: 100_000))
         var index = NativeTextLineIndex(source)

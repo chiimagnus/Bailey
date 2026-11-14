@@ -77,6 +77,12 @@ struct SourceTextEditor: NSViewRepresentable {
     private func makeScrollView(coordinator: Coordinator) -> NSScrollView {
         let scrollView = RestorableScrollView()
         let textView = FocusReportingTextView(contentStorage: file.nativeContentStorage)
+        if let snapshot = file.preparedLineWidths {
+            if !wrapLines, snapshot.font.isEqual(font) {
+                _ = textView.installPreparedLineWidths(snapshot.widths, font: font)
+            }
+            file.preparedLineWidths = nil
+        }
         textView.onBecomeFirstResponder = onFocused
         textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
         scrollView.wantsLayer = true

@@ -173,6 +173,14 @@ class NativeCodeTextView: NSTextView {
     private(set) var gutterView: NativeLineNumberGutter?
     private var lineIndex: NativeTextLineIndex?
     private var measuredLineWidths: NativeMeasuredLineWidths?
+
+    func installPreparedLineWidths(_ prepared: NativeMeasuredLineWidths.Prepared,
+                                  font: NSFont) -> Bool {
+        guard let index = lineIndex, index.length == prepared.length,
+              index.lineCount == prepared.widths.count else { return false }
+        measuredLineWidths = NativeMeasuredLineWidths(font: font, prepared: prepared)
+        return true
+    }
     private var isWrappingLines = false
     var longLineDisplayWidth: LongLineDisplayWidth = .standard
     // nil means a replaced document still needs its paragraph styles reconciled.
@@ -811,7 +819,124 @@ class NativeCodeTextView: NSTextView {
 
 /// Cached natural line widths, updated only for the rows affected by an edit.
 @MainActor
-private final class NativeMeasuredLineWidths {
+final class NativeMeasuredLineWidths {
+    nonisolated struct Prepared: Sendable {
+        let length: Int
+        let widths: [CGFloat]
+        let maximum: CGFloat
+    }
+
+    init(font: NSFont, prepared: Prepared) {
+        self.font = font
+        widths = prepared.widths
+        maximum = prepared.maximum
+    }
+
+    @concurrent static func prepareAsync(
+        _ source: String, descriptorData: Data, fontSize: CGFloat, tabInterval: CGFloat
+    ) async -> Prepared? {
+        guard !Task.isCancelled else { return nil }
+        let text = source as NSString
+        let index = NativeTextLineIndex(text)
+        let count = index.lineCount
+        let workers = min(4, max(1, count / 10_000))
+        if workers == 1 {
+            guard let descriptor = try? NSKeyedUnarchiver.unarchivedObject(
+                ofClass: NSFontDescriptor.self, from: descriptorData
+            ), let font = NSFont(descriptor: descriptor, size: fontSize) else { return nil }
+            return scan(index: index, text: text, font: font,
+                        tabInterval: tabInterval, cancellable: true)
+        }
+
+        // One indexed document, four independent immutable CoreText measuring
+        // contexts at most. Reassembling in source order preserves exact widths.
+        var starts: [Int] = []
+        starts.reserveCapacity(count + 1)
+        index.forEachLineRange { start, _ in starts.append(start) }
+        starts.append(index.length)
+        let lineStarts = starts
+        let parts = await withTaskGroup(of: (Int, [CGFloat], CGFloat)?.self) { group in
+            for worker in 0..<workers {
+                let first = worker * count / workers
+                let last = (worker + 1) * count / workers
+                group.addTask {
+                    guard !Task.isCancelled,
+                          let descriptor = try? NSKeyedUnarchiver.unarchivedObject(
+                            ofClass: NSFontDescriptor.self, from: descriptorData
+                          ), let font = NSFont(descriptor: descriptor, size: fontSize) else {
+                        return nil
+                    }
+                    let text = source as NSString
+                    let fixedAdvance = font.isFixedPitch ? font.maximumAdvancement.width : nil
+                    let attributes: [NSAttributedString.Key: Any] = [.font: font]
+                    let paragraph = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+                    paragraph.defaultTabInterval = tabInterval
+                    let tabAttributes: [NSAttributedString.Key: Any] = [
+                        .font: font, .paragraphStyle: paragraph
+                    ]
+                    var cache: [String: CGFloat] = [:]
+                    var units = [UInt16](repeating: 0, count: 4_096)
+                    var widths: [CGFloat] = []
+                    widths.reserveCapacity(last - first)
+                    var widest: CGFloat = 0
+                    for row in first..<last {
+                        if row.isMultiple(of: 1_024), Task.isCancelled { return nil }
+                        let width = measure(start: lineStarts[row], end: lineStarts[row + 1],
+                                            text: text, fixedAdvance: fixedAdvance,
+                                            attributes: attributes, tabAttributes: tabAttributes,
+                                            cache: &cache, units: &units)
+                        widths.append(width)
+                        widest = max(widest, width)
+                    }
+                    return (worker, widths, widest)
+                }
+            }
+            var chunks = Array<(Int, [CGFloat], CGFloat)?>(repeating: nil, count: workers)
+            for await chunk in group {
+                if let chunk { chunks[chunk.0] = chunk }
+            }
+            return chunks
+        }
+        guard !Task.isCancelled, parts.allSatisfy({ $0 != nil }) else { return nil }
+        var result: [CGFloat] = []
+        result.reserveCapacity(count)
+        var maximum: CGFloat = 0
+        for part in parts {
+            guard let part else { return nil }
+            result.append(contentsOf: part.1)
+            maximum = max(maximum, part.2)
+        }
+        return Prepared(length: index.length, widths: result, maximum: maximum)
+    }
+
+    nonisolated private static func scan(
+        index: NativeTextLineIndex, text: NSString, font: NSFont,
+        tabInterval: CGFloat, cancellable: Bool
+    ) -> Prepared? {
+        var widths: [CGFloat] = []
+        widths.reserveCapacity(index.lineCount)
+        var cache: [String: CGFloat] = [:]
+        var units = [UInt16](repeating: 0, count: 4_096)
+        let fixedAdvance = font.isFixedPitch ? font.maximumAdvancement.width : nil
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let paragraph = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+        paragraph.defaultTabInterval = tabInterval
+        let tabAttributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
+        var widest: CGFloat = 0
+        var cancelled = false
+        index.forEachLineRange { start, end in
+            if cancellable, widths.count.isMultiple(of: 1_024), Task.isCancelled {
+                cancelled = true
+            }
+            guard !cancelled else { return }
+            let width = measure(start: start, end: end, text: text,
+                                fixedAdvance: fixedAdvance, attributes: attributes,
+                                tabAttributes: tabAttributes, cache: &cache, units: &units)
+            widths.append(width)
+            widest = max(widest, width)
+        }
+        return cancelled ? nil : Prepared(length: index.length, widths: widths, maximum: widest)
+    }
     let font: NSFont
     private var widths: [CGFloat]
     private(set) var maximum: CGFloat = 0
@@ -823,15 +948,11 @@ private final class NativeMeasuredLineWidths {
 
     init(index: NativeTextLineIndex, text: NSString, font: NSFont) {
         self.font = font
-        widths = []
-        widths.reserveCapacity(index.lineCount)
-        var cache: [String: CGFloat] = [:]
-        var units = [UInt16](repeating: 0, count: 4_096)
-        for row in 0..<index.lineCount {
-            widths.append(Self.measure(row: row, index: index, text: text,
-                                       font: font, cache: &cache, units: &units))
-        }
-        maximum = widths.max() ?? 0
+        let prepared = Self.scan(index: index, text: text, font: font,
+                                 tabInterval: NativeCodeTextView.tabInterval,
+                                 cancellable: false)!
+        widths = prepared.widths
+        maximum = prepared.maximum
     }
 
     func replace(
@@ -840,9 +961,18 @@ private final class NativeMeasuredLineWidths {
     ) {
         var cache: [String: CGFloat] = [:]
         var units = [UInt16](repeating: 0, count: 4_096)
-        let updated = changed.inserted.map {
-            Self.measure(row: $0, index: index, text: text, font: font,
-                         cache: &cache, units: &units)
+        let fixedAdvance = font.isFixedPitch ? font.maximumAdvancement.width : nil
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let paragraph = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+        paragraph.defaultTabInterval = NativeCodeTextView.tabInterval
+        let tabAttributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
+        let updated = changed.inserted.map { row in
+            let start = index.offset(atLine: row)
+            let end = row + 1 < index.lineCount
+                ? index.offset(atLine: row + 1) : text.length
+            return Self.measure(start: start, end: end, text: text,
+                                fixedAdvance: fixedAdvance, attributes: attributes,
+                                tabAttributes: tabAttributes, cache: &cache, units: &units)
         }
         let replacedMaximum = widths[changed.replaced].contains(maximum)
         widths.replaceSubrange(changed.replaced, with: updated)
@@ -854,17 +984,15 @@ private final class NativeMeasuredLineWidths {
         }
     }
 
-    private static func measure(
-        row: Int, index: NativeTextLineIndex, text: NSString, font: NSFont,
+    nonisolated private static func measure(
+        start: Int, end: Int, text: NSString, fixedAdvance: CGFloat?,
+        attributes: [NSAttributedString.Key: Any], tabAttributes: [NSAttributedString.Key: Any],
         cache: inout [String: CGFloat], units: inout [UInt16]
     ) -> CGFloat {
-        let start = index.offset(atLine: row)
-        guard start < text.length else { return 0 }
-        let next = row + 1 < index.lineCount
-            ? index.offset(atLine: row + 1) : text.length
-        var contentEnd = next
-        if next > start {
-            switch text.character(at: next - 1) {
+        guard start < end else { return 0 }
+        var contentEnd = end
+        if end > start {
+            switch text.character(at: end - 1) {
             case 10:
                 contentEnd -= 1
                 if contentEnd > start && text.character(at: contentEnd - 1) == 13 {
@@ -881,7 +1009,7 @@ private final class NativeMeasuredLineWidths {
 
         // Printable ASCII in a fixed-pitch font requires no glyph shaping.
         // Reuse one bounded buffer, not per-character Foundation calls.
-        if font.isFixedPitch {
+        if let fixedAdvance {
             var ascii = true
             var position = start
             while position < contentEnd && ascii {
@@ -896,19 +1024,26 @@ private final class NativeMeasuredLineWidths {
                 }
                 position += count
             }
-            if ascii { return CGFloat(length) * font.maximumAdvancement.width }
+            if ascii { return CGFloat(length) * fixedAdvance }
         }
 
         let line = text.substring(with: NSRange(location: start, length: length))
-        if let cached = cache[line] { return cached }
-        var attributes: [NSAttributedString.Key: Any] = [.font: font]
-        if line.contains("\t") {
-            let style = (NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle)
-            style.defaultTabInterval = NativeCodeTextView.tabInterval
-            attributes[.paragraphStyle] = style
+        // In a fixed-pitch font, substituting one printable ASCII digit for
+        // another leaves each glyph advance, tab stop and the full shaped line
+        // width unchanged. Reuse the exact CoreText result for code rows whose
+        // numeric values differ; never sum separately shaped fragments.
+        let key: String
+        if fixedAdvance != nil, line.utf8.contains(where: { $0 >= 48 && $0 <= 57 }) {
+            key = String(decoding: line.utf8.map { $0 >= 48 && $0 <= 57 ? 48 : $0 },
+                         as: UTF8.self)
+        } else {
+            key = line
         }
-        let width = (line as NSString).size(withAttributes: attributes).width
-        cache[line] = width
+        if let cached = cache[key] { return cached }
+        let width = (line as NSString).size(
+            withAttributes: line.contains("\t") ? tabAttributes : attributes
+        ).width
+        if cache.count < 4_096 { cache[key] = width }
         return width
     }
 }

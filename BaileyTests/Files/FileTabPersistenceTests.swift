@@ -2677,6 +2677,162 @@ final class NativeFileTabTests: XCTestCase {
                        "// edited B\nlet fileB = \"only B\"\n")
     }
 
+    func testCanceledWidthPreparationCannotPublishObsoleteFileAfterRename() async throws {
+        let settings = AppSettings.shared
+        let oldWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = oldWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-width-rename-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let old = root.appendingPathComponent("large.txt")
+        let next = root.appendingPathComponent("small.txt")
+        let largeText = (0..<100_000).map { row -> String in
+            "语言\(String(UnicodeScalar(0x4E00 + row % 20_000)!))👋\t// \(String(UnicodeScalar(0x4E00 + row / 20_000)!))\r\n"
+        }.joined()
+        try largeText.write(to: old, atomically: true, encoding: .utf8)
+        try "new target 中文👋\n".write(to: next, atomically: true, encoding: .utf8)
+        let file = FileTab(path: old.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        file.updatePath(next.path)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "new target 中文👋\n")
+        XCTAssertEqual(file.path, next.path)
+        XCTAssertEqual(file.preparedLineWidths?.widths.widths.count, 2)
+        // A canceled old worker must not publish a second, obsolete document.
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(file.text, "new target 中文👋\n")
+        XCTAssertNil(file.reloadError)
+    }
+
+    func testPreparedNativeWidthsInvalidateOnUnshownEditsAndFontMismatch() async throws {
+        let settings = AppSettings.shared
+        let oldWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = oldWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-prepared-width-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("unicode.txt")
+        try "短文字\n".write(to: target, atomically: true, encoding: .utf8)
+        let file = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertNotNil(file.preparedLineWidths)
+        file.text = String(repeating: "中文👋\t", count: 50)
+        XCTAssertNil(file.preparedLineWidths,
+                     "Editing before mounting must discard the old bytes' width snapshot")
+        let font = TerminalFont.current()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: font, palette: .theme(dark: false),
+            wrapLines: false, isFocused: false
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertEqual(editor.string, file.text)
+        XCTAssertGreaterThan(editor.frame.width, editor.enclosingScrollView!.contentView.bounds.width)
+
+        let another = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                              workspaceIdentity: nil)
+        try await another.waitForText()
+        XCTAssertNotNil(another.preparedLineWidths)
+        let larger = NSFont.monospacedSystemFont(ofSize: 24, weight: .regular)
+        XCTAssertFalse(another.preparedLineWidths!.font.isEqual(larger))
+        let otherWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        otherWindow.isReleasedWhenClosed = false
+        defer { otherWindow.close() }
+        let otherHost = NSHostingView(rootView: SourceTextEditor(
+            file: another, font: larger, palette: .theme(dark: false),
+            wrapLines: false, isFocused: false
+        ))
+        otherWindow.contentView = otherHost
+        otherWindow.orderFront(nil)
+        otherHost.layoutSubtreeIfNeeded()
+        let otherEditor = try XCTUnwrap(mountedEditor(in: otherHost))
+        XCTAssertEqual(otherEditor.font, larger)
+        XCTAssertNil(another.preparedLineWidths,
+                     "A mismatched typography snapshot must not persist after mounting")
+    }
+
+    func testFileTabColdUniqueUnicodeMountDoesNotBlockMainActorWithFullWidthShaping() async throws {
+        let settings = AppSettings.shared
+        let oldWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = oldWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-width-load-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("non-repeating.txt")
+        let source = (0..<100_000).map { row -> String in
+            let first = String(UnicodeScalar(0x4E00 + row % 20_000)!)
+            let second = String(UnicodeScalar(0x4E00 + row / 20_000)!)
+            return "语言\(second)\(first)👋\t// 中文\r\n"
+        }.joined() + String(repeating: "中文👋\t", count: 80)
+        try source.write(to: url, atomically: true, encoding: .utf8)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        let heartbeat = Task { @MainActor in
+            var last = CFAbsoluteTimeGetCurrent()
+            var longest = 0.0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(20))
+                let current = CFAbsoluteTimeGetCurrent()
+                longest = max(longest, (current - last) * 1_000)
+                last = current
+            }
+            return longest
+        }
+        await Task.yield()
+        let loadStarted = CFAbsoluteTimeGetCurrent()
+        try await file.waitForText()
+        let loadedMs = (CFAbsoluteTimeGetCurrent() - loadStarted) * 1_000
+        heartbeat.cancel()
+        let longestMainGap = await heartbeat.value
+        print("P2_FILETAB_BACKGROUND_UNIQUE rows=100000 load_ms=\(loadedMs) main_tick_max_ms=\(longestMainGap)")
+        XCTAssertLessThan(longestMainGap, 500, "Full font shaping must not monopolize the main actor")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: TerminalFont.current(),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        let started = CFAbsoluteTimeGetCurrent()
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("P2_FILETAB_FIRST_NATIVE_UNIQUE rows=100000 mounted_ms=\(elapsedMs)")
+        XCTAssertEqual(editor.string, source)
+        let font = TerminalFont.current()
+        let style = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+        style.defaultTabInterval = NativeCodeTextView.tabInterval
+        let tail = String(repeating: "中文👋\t", count: 80)
+        let exactWidth = (tail as NSString).size(withAttributes: [
+            .font: font, .paragraphStyle: style
+        ]).width
+        let clipWidth = try XCTUnwrap(editor.enclosingScrollView).contentView.bounds.width
+        let padding = (editor.textContainer?.lineFragmentPadding ?? 5) * 2
+        XCTAssertEqual(editor.frame.width, max(clipWidth, ceil(exactWidth + padding)),
+                       accuracy: 1, "The background font must match exact on-screen glyph widths")
+        XCTAssertLessThan(elapsedMs, 3_000,
+                          "Full-document font shaping must not block the actual file view")
+    }
+
     func testNativeEditorResignFirstResponderWritesRealFile() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
