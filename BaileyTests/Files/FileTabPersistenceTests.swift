@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Observation
 import SwiftUI
@@ -19,6 +20,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private var reading: [CheckedContinuation<Data, Error>] = []
     private var nextReadPaused = false
     private(set) var readCount = 0
+    private(set) var lastReadLimit: Int?
     private(set) var writingPath: String?
     private(set) var readingPath: String?
     var pendingReadCount: Int { reading.count }
@@ -49,6 +51,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
     func read(path: String, maxBytes: Int) async throws -> Data {
         readCount += 1
+        lastReadLimit = maxBytes
         guard let data = files[path] else { throw WorkspaceError.notFound }
         guard data.count <= maxBytes else { throw WorkspaceError.tooLarge }
         if nextReadPaused {
@@ -216,6 +219,14 @@ final class FileTabPersistenceTests: XCTestCase {
             localized: "Unknown text encoding. Choose an encoding to reopen.", table: "Workspace"
         ))
 
+        do {
+            _ = try await LocalWorkspaceBackend.shared.read(path: exactPath.path, maxBytes: .max)
+            XCTFail("Unbounded reads must not bypass byte budgets")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+            XCTAssertEqual(error.code, Int(EINVAL))
+        }
+
         let missing = FileTab(path: root.appendingPathComponent("missing.txt").path,
                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         do { try await missing.waitForText(); XCTFail("Expected missing read failure") } catch {}
@@ -224,6 +235,32 @@ final class FileTabPersistenceTests: XCTestCase {
         try Data("recovered".utf8).write(to: URL(fileURLWithPath: missing.path))
         try await missing.waitForText()
         XCTAssertEqual(missing.text, "recovered")
+    }
+
+    func testLocalBackendRejectsNonregularFilesRatherThanReturningEmptyText() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let deviceLink = root.appendingPathComponent("device-link")
+        try FileManager.default.createSymbolicLink(atPath: deviceLink.path,
+                                                    withDestinationPath: "/dev/null")
+        let fifo = root.appendingPathComponent("pipe")
+        let fifoLink = root.appendingPathComponent("pipe-link")
+        XCTAssertEqual(mkfifo(fifo.path, mode_t(0o600)), 0)
+        try FileManager.default.createSymbolicLink(atPath: fifoLink.path,
+                                                    withDestinationPath: fifo.path)
+        for path in ["/dev/null", deviceLink.path, root.path, fifo.path, fifoLink.path] {
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                let actual = try await LocalWorkspaceBackend.shared.read(path: path, maxBytes: 128)
+                XCTFail("Nonregular file must not be accepted as text: \(path), bytes=\(actual.count)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
+                              "FIFO and device reads must not block while waiting for input")
+        }
     }
 
     func testLocalSymbolicLinkUsesTargetContents() async throws {
@@ -240,6 +277,110 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
         XCTAssertFalse(file.isDirty)
         XCTAssertEqual(try Data(contentsOf: target), Data(original.utf8))
+    }
+
+    func testImageExtensionNeverAuthorizesUnboundedBackendRead() async throws {
+        let path = "/fixture/not-a-picture.png"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("plain text".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "plain text")
+        let limit = await backend.lastReadLimit
+        XCTAssertEqual(limit, 8 << 20,
+                       "An image-looking extension must not bypass the text size limit")
+    }
+
+    func testActualLargeImagePreviewKeepsIndependentBoundedRead() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2048, pixelsHigh: 2048,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let buffer = try XCTUnwrap(bitmap.bitmapData)
+        var entropy: UInt32 = 0x1234_5678
+        for i in 0..<(bitmap.bytesPerRow * bitmap.pixelsHigh) {
+            entropy ^= entropy << 13
+            entropy ^= entropy >> 17
+            entropy ^= entropy << 5
+            buffer[i] = UInt8(truncatingIfNeeded: entropy)
+        }
+        let pixels = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        XCTAssertGreaterThan(pixels.count, 8 << 20)
+        let path = root.appendingPathComponent("large-image.png")
+        try pixels.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await waitForFileTabState { if case .image = file.content { return true }; return false }
+        guard case .image(let preview) = file.content else {
+            return XCTFail("Real PNG larger than text limit must remain previewable")
+        }
+        XCTAssertEqual(preview.representations.first?.pixelsWide, 2048)
+        XCTAssertEqual(try Data(contentsOf: path), pixels)
+
+        let linked = root.appendingPathComponent("linked-image.png")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: path)
+        let linkedFile = FileTab(path: linked.path, backend: LocalWorkspaceBackend.shared,
+                                 workspaceIdentity: nil)
+        linkedFile.loadIfNeeded()
+        try await waitForFileTabState {
+            if case .loading = linkedFile.content { return false }
+            return true
+        }
+        guard case .image = linkedFile.content else {
+            return XCTFail("A symlink to a large regular image must retain image preview")
+        }
+    }
+
+    func testOversizedFakeImageCannotBypassTextCapacity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("not-an-image.png")
+        let original = Data(repeating: 0x41, count: (8 << 20) + 1)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await waitForFileTabState {
+            if case .unavailable = file.content { return true }
+            return false
+        }
+        guard case .unavailable = file.content else {
+            return XCTFail("An oversized renamed text file must not become editable")
+        }
+        XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
+    func testLargeImagePreviewUsesBoundedDecodedDimensions() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 5000, pixelsHigh: 2500,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let imageBytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let path = root.appendingPathComponent("wide-preview.png")
+        try imageBytes.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await waitForFileTabState { if case .image = file.content { return true }; return false }
+        guard case .image(let image) = file.content else {
+            return XCTFail("Valid image must remain previewable")
+        }
+        XCTAssertLessThanOrEqual(image.representations.first?.pixelsWide ?? .max, 4096)
+        XCTAssertLessThanOrEqual(image.representations.first?.pixelsHigh ?? .max, 4096)
+        XCTAssertEqual(try Data(contentsOf: path), imageBytes)
     }
 
     func testInvalidUTF8AndImageFallbackRespectTextCapacity() async throws {

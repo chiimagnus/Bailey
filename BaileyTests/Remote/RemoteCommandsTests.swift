@@ -93,6 +93,23 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
     }
 }
 
+private actor ReadLimitProbe: RemoteCommandRunner {
+    private(set) var requestedStdoutLimit: Int?
+
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data) {
+        (0, Data(repeating: 0x41, count: 1 << 20), Data())
+    }
+
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        requestedStdoutLimit = stdoutLimit
+        return (0, Data(repeating: 0x41, count: stdoutLimit), Data())
+    }
+}
+
 final class RemoteCommandsTests: XCTestCase {
     func testLocalCommandCompletionAndTimeoutIgnoreInheritedOutputPipe() async throws {
         for descriptor in [1, 2] {
@@ -198,6 +215,140 @@ final class RemoteCommandsTests: XCTestCase {
             stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
         )
         XCTAssertNotEqual(ignored.status, 0, "A successful exit cannot excuse dropped stdin bytes")
+    }
+
+    func testSSHWorkspaceEnvironmentNamesCannotChangeShellControlFlow() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-ssh-env-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = directory.appendingPathComponent("injected")
+        let dangerousKey = "TRIGGER; /usr/bin/touch \(RemoteCommands.quote(marker.path)); #"
+        let values: [(key: String, value: String)] = [
+            (dangerousKey, "literal-value"),
+            ("-u", "leading-hyphen"),
+            ("-S", "option-like-name"),
+            ("中文 空格;$`\"", "emoji 🙂 $PATH `echo broken` \" \\ \nline"),
+            ("line\nbreak", "actual\nnewline"),
+            ("NORMAL", "ordinary"),
+        ]
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture(), timeout: 5)
+        for (key, value) in values {
+            for bounded in [false, true] {
+                let argv = ["/usr/bin/python3", "-c",
+                            "import os,sys; sys.stdout.buffer.write(os.environ[sys.argv[1]].encode('utf-8'))",
+                            key]
+                let result: WorkspaceRunResult
+                if bounded {
+                    result = try await backend.runLimited(
+                        argv: argv, cwd: directory.path, env: [key: value], stdin: nil,
+                        timeout: 5, stdoutLimit: 65_536, stderrLimit: 65_536)
+                } else {
+                    result = try await backend.run(
+                        argv: argv, cwd: directory.path, env: [key: value],
+                        stdin: nil, timeout: 5)
+                }
+                XCTAssertEqual(result.status, 0, "key \(key), bounded \(bounded)")
+                XCTAssertEqual(result.stdout, Data(value.utf8),
+                               "Environment key and value must round-trip literally")
+                XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
+                               "An environment name must never execute an extra shell statement")
+            }
+        }
+        for invalidKey in ["", "A=B", "NUL\u{0000}name"] {
+            for bounded in [false, true] {
+                do {
+                    let argv = ["/usr/bin/true"]
+                    if bounded {
+                        _ = try await backend.runLimited(
+                            argv: argv, cwd: nil, env: [invalidKey: "v"], stdin: nil,
+                            timeout: 5, stdoutLimit: 65_536, stderrLimit: 65_536)
+                    } else {
+                        _ = try await backend.run(
+                            argv: argv, cwd: nil, env: [invalidKey: "v"], stdin: nil,
+                            timeout: 5)
+                    }
+                    XCTFail("Environment names containing '=' or empty must be rejected")
+                } catch let error as NSError {
+                    XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+                    XCTAssertEqual(error.code, Int(EINVAL))
+                }
+            }
+        }
+    }
+
+    func testSSHReadUsesTheActualBoundedRunnerForFiniteRequests() async throws {
+        let runner = ReadLimitProbe()
+        let backend = SSHWorkspaceBackend(runner: runner)
+        do {
+            _ = try await backend.read(path: "/fixture/file.txt", maxBytes: 12)
+            XCTFail("A remote 13-byte result exceeds the requested 12-byte limit")
+        } catch WorkspaceError.tooLarge {}
+        let bound = await runner.requestedStdoutLimit
+        XCTAssertEqual(bound, 13)
+    }
+
+    func testSSHReadRejectsSpecialFilesAndNULPathWithoutBlocking() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-ssh-read-kind-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let regular = directory.appendingPathComponent("file.txt")
+        let linked = directory.appendingPathComponent("file-link")
+        let fifo = directory.appendingPathComponent("pipe")
+        let fifoLink = directory.appendingPathComponent("pipe-link")
+        let emptyFile = directory.appendingPathComponent("empty")
+        try Data("hello".utf8).write(to: regular)
+        try Data().write(to: emptyFile)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: regular)
+        try FileManager.default.createSymbolicLink(at: fifoLink, withDestinationURL: fifo)
+        XCTAssertEqual(mkfifo(fifo.path, mode_t(0o600)), 0)
+
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture(), timeout: 2)
+        let linkedBytes = try await backend.read(path: linked.path, maxBytes: 5)
+        XCTAssertEqual(linkedBytes, Data("hello".utf8))
+        let emptyBytes = try await backend.read(path: emptyFile.path, maxBytes: 0)
+        XCTAssertEqual(emptyBytes, Data())
+        for path in [directory.path, fifo.path, fifoLink.path, "/dev/null"] {
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                _ = try await backend.read(path: path, maxBytes: 64)
+                XCTFail("Nonregular remote path must not succeed: \(path)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
+                              "FIFO or device access must not wait for an SSH timeout")
+        }
+        for (path, limit) in [(regular.path + "\u{0000}suffix", 8),
+                              (regular.path, -1), (regular.path, Int.max)] {
+            do {
+                _ = try await backend.read(path: path, maxBytes: limit)
+                XCTFail("Invalid read arguments must not run a truncated command")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+                XCTAssertEqual(error.code, Int(EINVAL))
+            }
+        }
+    }
+
+    func testSSHStatDetectsRegularFileAndSymlinkOnMacBSDStat() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let regular = root.appendingPathComponent("script.sh")
+        let link = root.appendingPathComponent("symlink")
+        try Data("abcd".utf8).write(to: regular)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: regular.path)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let actual = try await backend.stat(path: regular.path)
+        XCTAssertEqual(actual?.size, 4)
+        XCTAssertEqual(actual?.isRegular, true)
+        let symbolic = try await backend.stat(path: link.path)
+        XCTAssertEqual(symbolic?.isSymlink, true)
+        XCTAssertEqual(symbolic?.isRegular, true)
+        XCTAssertEqual(symbolic?.size, 4)
     }
 
     func testSSHBackendEnforcesByteLimitAndPreservesBinaryWrites() async throws {

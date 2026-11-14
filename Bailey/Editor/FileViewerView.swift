@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import ImageIO
 import Observation
 import SwiftUI
 
@@ -86,6 +87,8 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private nonisolated static let maxTextBytes = 8 << 20
+    private nonisolated static let maxImageBytes = 256 << 20
+    private nonisolated static let maxImagePixels = 32_000_000
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
@@ -573,9 +576,35 @@ final class FileTab: nonisolated Identifiable {
     @concurrent private static func readContent(
         path: String, backend: WorkspaceBackend, override: TextFileEncoding?
     ) async throws -> (Data, Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?) {
+        guard !path.utf8.contains(0) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
         let isImage = imageExtensions.contains((path as NSString).pathExtension.lowercased())
-        let data = try await backend.read(path: path, maxBytes: isImage ? .max : maxTextBytes)
-        guard data.count <= maxTextBytes else { return (data, nil) }
+        if isImage, let info = try await backend.stat(path: path), info.size > maxTextBytes {
+            guard (info.isRegular || info.isSymlink), info.size <= maxImageBytes else {
+                throw WorkspaceError.tooLarge
+            }
+            // A renamed text file must not make us read hundreds of MiB before
+            // discovering it is not an image. Check a bounded real header.
+            let probe = try await backend.runLimited(
+                argv: ["/usr/bin/head", "-c", "65536", "--", path],
+                cwd: nil, env: nil, stdin: nil, timeout: 25,
+                stdoutLimit: 65_536, stderrLimit: 16_384)
+            guard probe.status == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+            }
+            let source = CGImageSourceCreateIncremental(nil)
+            CGImageSourceUpdateData(source, probe.stdout as CFData, false)
+            guard CGImageSourceGetType(source) != nil else { throw WorkspaceError.tooLarge }
+            // Never use .max: the path may grow between stat and the actual read.
+            let data = try await backend.read(path: path, maxBytes: info.size)
+            guard data.count > maxTextBytes else {
+                return (data, await TextFileEncoding.decode(data, backend: backend,
+                                                             override: override))
+            }
+            return (data, nil)
+        }
+        let data = try await backend.read(path: path, maxBytes: maxTextBytes)
         return (data, await TextFileEncoding.decode(data, backend: backend, override: override))
     }
 
@@ -585,10 +614,28 @@ final class FileTab: nonisolated Identifiable {
     ) -> LoadedContent {
         let url = URL(fileURLWithPath: path)
         if imageExtensions.contains(url.pathExtension.lowercased()),
-           let image = NSImage(data: data) {
+           let source = CGImageSourceCreateWithData(data as CFData,
+                                                    [kCGImageSourceShouldCache: false] as CFDictionary),
+           CGImageSourceGetType(source) != nil {
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
+            let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
+            let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
+            let thumbnailOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 4096,
+            ]
+            guard width > 0, height > 0, width <= maxImagePixels / height,
+                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0,
+                                                                      thumbnailOptions as CFDictionary) else {
+                return LoadedContent(
+                    content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
+                    text: "", encoding: nil, imageFingerprint: nil, decodingFailed: false
+                )
+            }
+            let image = NSImage(size: NSSize(width: thumbnail.width, height: thumbnail.height))
+            image.addRepresentation(NSBitmapImageRep(cgImage: thumbnail))
             return LoadedContent(
-                content: .image(image),
-                text: "", encoding: nil,
+                content: .image(image), text: "", encoding: nil,
                 imageFingerprint: data.hashValue, decodingFailed: false
             )
         }

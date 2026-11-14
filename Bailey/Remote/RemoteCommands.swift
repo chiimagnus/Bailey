@@ -212,11 +212,14 @@ nonisolated enum RemoteCommands {
     /// broken symlink fails the second `stat`, leaving one line.
     static func statCommand(path: String) -> String {
         let quoted = quote(path)
-        // `--printf`, not `-c`: only the former interprets the tab and newline
-        // escapes, and `-c` would return the format string with them intact.
-        let format = "'%F\\t%s\\t%Y\\t%a\\n'"
-        return "stat --printf \(format) -- \(quoted) 2>/dev/null; "
-            + "stat -L --printf \(format) -- \(quoted) 2>/dev/null"
+        let gnu = "'%F\\t%s\\t%Y\\t%a\\n'"
+        let bsd = "'%HT\t%z\t%m\t%Lp'"
+        func line(follow: Bool) -> String {
+            let option = follow ? "-L " : ""
+            return "stat \(option)--printf \(gnu) -- \(quoted) 2>/dev/null"
+                + " || stat \(option)-f \(bsd) -- \(quoted) 2>/dev/null"
+        }
+        return line(follow: false) + "; " + line(follow: true)
     }
 
     struct RemoteStat: Equatable {
@@ -251,7 +254,7 @@ nonisolated enum RemoteCommands {
             let mtime = Int(fields[2]),
             let mode = UInt16(fields[3], radix: 8)
         else { return nil }
-        return (fields[0], size, mtime, mode)
+        return (fields[0].lowercased(), size, mtime, mode)
     }
 
     /// Replaces a file's contents from standard input without ever leaving it
