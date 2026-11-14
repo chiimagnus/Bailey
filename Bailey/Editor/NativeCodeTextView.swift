@@ -413,7 +413,7 @@ class NativeCodeTextView: NSTextView {
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         usesFindBar = true
         isIncrementalSearchingEnabled = true
-        resetDocumentIndex("")
+        resetDocumentIndex(textStorage?.string ?? "")
         if let textStorage {
             textEditObserver = NotificationCenter.default.addObserver(
                 forName: NSTextStorage.didProcessEditingNotification,

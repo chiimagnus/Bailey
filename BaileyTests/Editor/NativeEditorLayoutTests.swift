@@ -1463,4 +1463,56 @@ final class NativeEditorLayoutTests: XCTestCase {
             XCTAssertEqual(editor.text, source)
         }
     }
+
+    func testPreloadedTextKitStorageRetainsEditsAcrossRealViewRemount() throws {
+        let initial = "head 中文 👋\r\nsecond\n"
+        let storage = NSTextContentStorage()
+        let source = NSTextStorage(string: initial)
+        storage.textStorage = source
+        let editor = NativeCodeTextView(contentStorage: storage)
+        XCTAssertTrue(editor.textStorage === source)
+        XCTAssertEqual(editor.string, initial)
+        XCTAssertEqual(editor.lineNumber(atUTF16Offset: (initial as NSString).range(of: "second").location), 2)
+        editor.showsLineNumbers = true
+
+        let firstScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 740, height: 480))
+        firstScroll.documentView = editor
+        editor.configureWrapping(false, viewportWidth: 740)
+        let firstWindow = NSWindow(contentRect: firstScroll.frame, styleMask: [.titled],
+                                   backing: .buffered, defer: false)
+        firstWindow.isReleasedWhenClosed = false
+        firstWindow.contentView = firstScroll
+        firstWindow.orderFront(nil)
+        firstScroll.layoutSubtreeIfNeeded()
+        XCTAssertTrue(firstWindow.makeFirstResponder(editor))
+        editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(source.string, "X" + initial)
+        XCTAssertEqual(editor.nativeContentManager.length, ("X" + initial).utf16.count)
+        XCTAssertTrue(editor.undoManager?.canUndo == true)
+        editor.undoManager?.undo()
+        XCTAssertEqual(source.string, initial)
+
+        firstScroll.documentView = nil
+        firstWindow.close()
+        // The backing storage remains authoritative while its view is unmounted.
+        source.replaceCharacters(in: NSRange(location: 0, length: 0), with: "before ")
+        XCTAssertEqual(source.string, "before " + initial)
+        let secondScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 680, height: 460))
+        secondScroll.documentView = editor
+        let secondWindow = NSWindow(contentRect: secondScroll.frame, styleMask: [.titled],
+                                    backing: .buffered, defer: false)
+        secondWindow.isReleasedWhenClosed = false
+        defer { secondWindow.close() }
+        secondWindow.contentView = secondScroll
+        secondWindow.orderFront(nil)
+        editor.configureWrapping(true, viewportWidth: 680)
+        secondScroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.string, source.string)
+        editor.insertText("Y", replacementRange: NSRange(location: source.length, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(source.string.hasSuffix("Y"))
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.string, "before " + initial)
+    }
 }
