@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Copy Paths" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选路径"
+          }
+        }
+      }
+    },
+    "Copy Relative Paths" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选相对路径"
+          }
+        }
+      }
+    },
+    "Insert Absolute Paths in Terminal" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在终端中插入所选绝对路径"
+          }
+        }
+      }
+    },
     "Cut" : {
       "localizations" : {
         "zh-Hans" : {

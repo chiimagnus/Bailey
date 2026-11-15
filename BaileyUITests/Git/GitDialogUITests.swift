@@ -755,6 +755,57 @@ final class GitDialogUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
     }
 
+    func testBatchCherryPickSheetAppliesTwoSelectedCommitsWithoutChangingOtherRefs() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("base.txt", text: "base\n")
+        try fixture.initializeGit()
+        let original = try fixture.git(["rev-parse", "HEAD"])
+        try fixture.git(["switch", "-qc", "topic"])
+        for title in ["pick one", "pick two"] {
+            _ = try fixture.file(title + ".txt", text: title + "\n")
+            try fixture.git(["add", "--", title + ".txt"])
+            try fixture.git(["commit", "-qm", title])
+        }
+        let side = try fixture.git(["rev-parse", "HEAD"])
+        try fixture.git(["switch", "main"])
+        let app = try launchGit(fixture, language: "en")
+        let first = app.buttons["pick one"]
+        let second = app.buttons["pick two"]
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        first.click()
+        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
+        XCTAssertTrue(first.isSelected && second.isSelected)
+        second.rightClick()
+        let cherry = app.menuItems["Cherry Pick Selected Commits…"]
+        XCTAssertTrue(cherry.waitForExistence(timeout: 8))
+        cherry.click()
+        let sheet = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        XCTAssertTrue(sheet.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "Selected 2 commits"
+        )).firstMatch.exists)
+        XCTAssertTrue(sheet.checkBoxes["Record Origin"].exists)
+        XCTAssertTrue(sheet.checkBoxes["No Commit"].exists)
+        sheet.buttons["Cancel"].click()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), original)
+
+        second.rightClick()
+        app.menuItems["Cherry Pick Selected Commits…"].click()
+        let confirmed = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(confirmed.waitForExistence(timeout: 12))
+        confirmed.buttons["Yes, Cherry Pick Selected"].click()
+        let applied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["rev-list", "--count", "HEAD"])) == Data("3\n".utf8)
+                && (try? fixture.git(["show", "HEAD:pick two.txt"])) == Data("pick two\n".utf8)
+                && (try? fixture.git(["show", "HEAD:pick one.txt"])) == Data("pick one\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [applied], timeout: 30), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/heads/topic"]), side)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
+    }
+
     func testSquashSelectedCommitsUsesNativeMessageSheetAndRewritesOnlyTheRange() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("base.txt", text: "base\n")

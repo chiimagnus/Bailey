@@ -212,6 +212,18 @@ final class GitStatusModel {
         }
     }
 
+    nonisolated enum CommitBatchAction: CaseIterable, Sendable {
+        case cherryPick, revert, drop
+
+        var title: String {
+            switch self {
+            case .cherryPick: String(localized: "Cherry Pick Selected Commits…", table: "Git")
+            case .revert: String(localized: "Revert Selected Commits…", table: "Git")
+            case .drop: String(localized: "Drop Selected Commits…", table: "Git")
+            }
+        }
+    }
+
     nonisolated enum ResetMode: String, CaseIterable, Sendable {
         case soft, mixed, hard
 
@@ -338,6 +350,36 @@ final class GitStatusModel {
         return nil
     }
 
+    /// Rebase can drop a whole range only when it is linear, non-root and unbranched.
+    nonisolated static func batchDropPlan(
+        selected: [String], head: String?, parents: [String: [String]]
+    ) -> SquashPlan? {
+        guard let plan = squashPlan(selected: selected, head: head, parents: parents),
+              plan.parent != nil, dropCommitPossible(plan.oldest, head: head, parents: parents)
+        else { return nil }
+        return plan
+    }
+
+    /// Dependency order, with the visible Graph order breaking unrelated-branch ties.
+    nonisolated static func orderedBatchCommits(
+        _ hashes: [String], from commits: [RecentCommit], reverse: Bool
+    ) -> [String] {
+        let wanted = Set(hashes)
+        let byHash = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0) })
+        var visited: Set<String> = []
+        var ordered: [String] = []
+        func visit(_ hash: String) {
+            guard wanted.contains(hash), visited.insert(hash).inserted,
+                  let commit = byHash[hash] else { return }
+            for parent in commit.parentHashes { visit(parent) }
+            ordered.append(hash)
+        }
+        for commit in commits.reversed() where wanted.contains(commit.hash) {
+            visit(commit.hash)
+        }
+        return reverse ? ordered.reversed() : ordered
+    }
+
     nonisolated static func parseCommitTopology(_ output: String) -> [String: [String]]? {
         var parents: [String: [String]] = [:]
         for line in output.split(separator: "\n") {
@@ -412,6 +454,55 @@ final class GitStatusModel {
             terminalAction: action == .rebase ? interactiveLaunch : nil,
             expectedRef: selectedRef,
             prepare: prepare,
+            isCurrentTarget: {
+                self.isCurrent(target) && (isCurrentTarget?() ?? true)
+            }, completion: completion
+        )
+    }
+
+    func actOnCommits(
+        _ hashes: [String], action: CommitBatchAction, target: ActionTarget,
+        recordOrigin: Bool = false, noCommit: Bool = false,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let commits = recentCommits.filter { $0.stash == nil && $0.worktree == nil }
+        let byHash = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0) })
+        let selected = hashes.compactMap { byHash[$0] }
+        let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
+        guard isCurrent(target), repositoryOperation == nil, !isBusy,
+              hashes.count >= 2, Set(hashes).count == hashes.count,
+              selected.count == hashes.count,
+              selected.allSatisfy({ $0.parentHashes.count <= 1 })
+        else {
+            failImmediately(String(localized: "The selected Git commits changed. Select them again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        let ordered = Self.orderedBatchCommits(hashes, from: commits, reverse: action == .revert)
+        var dropCommit: String?
+        let arguments: [String]
+        switch action {
+        case .cherryPick:
+            arguments = ["cherry-pick"] + (recordOrigin ? ["-x"] : [])
+                + (noCommit ? ["--no-commit"] : []) + ordered
+        case .revert:
+            arguments = ["revert", "--no-edit"] + ordered
+        case .drop:
+            guard let plan = Self.batchDropPlan(
+                selected: hashes, head: headOID, parents: parents
+            ), let parent = plan.parent else {
+                failImmediately(String(localized: "The selected commits cannot all be dropped from this HEAD.", table: "Git"),
+                                completion: completion)
+                return
+            }
+            dropCommit = plan.oldest
+            arguments = ["rebase", "--onto", parent, plan.newest]
+        }
+        perform(
+            label: action.title, commands: [arguments], requiredStatus: .history,
+            dropCommit: dropCommit, prepare: prepare,
             isCurrentTarget: {
                 self.isCurrent(target) && (isCurrentTarget?() ?? true)
             }, completion: completion

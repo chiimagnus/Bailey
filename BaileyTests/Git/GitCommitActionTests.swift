@@ -53,6 +53,128 @@ final class GitCommitActionTests: XCTestCase {
         return try XCTUnwrap(model.recentCommits.first { $0.hash == hash })
     }
 
+    func testBatchCommitOrderPreservesAncestryAndReversesRevertOrder() {
+        func commit(_ hash: String, parents: [String]) -> GitStatusModel.RecentCommit {
+            .init(hash: hash, shortHash: hash, subject: hash,
+                  author: "Tester", date: .now, parentHashes: parents,
+                  references: [], files: [])
+        }
+        let commits = [
+            commit("side2", parents: ["side1"]), commit("main2", parents: ["main1"]),
+            commit("main1", parents: ["root"]), commit("side1", parents: ["root"]),
+        ]
+        XCTAssertEqual(GitStatusModel.orderedBatchCommits(
+            ["main2", "side2", "side1", "main1"], from: commits, reverse: false
+        ), ["side1", "main1", "main2", "side2"])
+        XCTAssertEqual(GitStatusModel.orderedBatchCommits(
+            ["main2", "side2", "side1", "main1"], from: commits, reverse: true
+        ), ["side2", "main2", "main1", "side1"])
+    }
+
+    func testBatchCherryPickUsesAncestryOrderAndKeepsCompleteChanges() async throws {
+        let original = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-qc", "topic"])
+        let first = try commit("topic one", text: "one\n")
+        let second = try commit("topic two", text: "two\n")
+        _ = try git(["switch", "main"])
+        _ = try await target(original)
+        model.actOnCommits([second, first], action: .cherryPick,
+                           target: model.actionTarget(), recordOrigin: true)
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["log", "-2", "--format=%s"]),
+                       "topic two\ntopic one")
+        XCTAssertEqual(try git(["log", "-2", "--format=%B"]).components(
+            separatedBy: "(cherry picked from commit "
+        ).count, 3)
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "3")
+        XCTAssertEqual(try git(["show", "HEAD:tracked.txt"]), "two")
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testBatchCherryPickNoCommitLeavesHeadAndStagesEverySelectedChange() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-qc", "topic"])
+        let first = try commit("topic first", text: "first\n")
+        let second = try commit("topic second", text: "second\n")
+        _ = try git(["switch", "main"])
+        _ = try await target(root)
+        model.actOnCommits([second, first], action: .cherryPick,
+                           target: model.actionTarget(), noCommit: true)
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), root)
+        XCTAssertEqual(try git(["show", ":tracked.txt"]), "second")
+        XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "tracked.txt")
+    }
+
+    func testBatchActionRejectsStaleHeadAndUnsafeMergeSelection() async throws {
+        let original = try git(["rev-parse", "HEAD"])
+        let first = try commit("first", text: "first\n")
+        let second = try commit("second", text: "second\n")
+        _ = try await target(second)
+        let staleTarget = model.actionTarget()
+        _ = try commit("external", text: "external\n")
+        model.actOnCommits([first, second], action: .drop, target: staleTarget)
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "external")
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "4")
+        XCTAssertEqual(try git(["rev-parse", "HEAD~3"]), original)
+    }
+
+    func testBatchRevertRunsNewestToOldestAndRestoresOriginalTree() async throws {
+        let originalTree = try git(["rev-parse", "HEAD^{tree}"])
+        let first = try commit("change one", text: "one\n")
+        let second = try commit("change two", text: "two\n")
+        _ = try await target(second)
+        model.actOnCommits([first, second], action: .revert, target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^{tree}"]), originalTree)
+        XCTAssertEqual(try git(["log", "-2", "--format=%s"]),
+                       "Revert \"change one\"\nRevert \"change two\"")
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testBatchDropRemovesOnlySelectedLinearCommitsAndPreservesNewerTree() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        let first = try commit("drop first", text: "one\n")
+        let second = try commit("drop second", text: "two\n")
+        let kept = directory.appendingPathComponent("kept.txt")
+        try "kept\n".write(to: kept, atomically: true, encoding: .utf8)
+        _ = try git(["add", "kept.txt"])
+        _ = try git(["commit", "-qm", "keep newer"])
+        let oldHead = try git(["rev-parse", "HEAD"])
+        _ = try await target(oldHead)
+        model.actOnCommits([first, second], action: .drop, target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertNotEqual(try git(["rev-parse", "HEAD"]), oldHead)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^"]), root)
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "2")
+        XCTAssertEqual(try git(["show", "HEAD:kept.txt"]), "kept")
+        XCTAssertEqual(try git(["show", "HEAD:tracked.txt"]), "root")
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testBatchDropRejectsForksAndNoncontiguousHistory() {
+        let linear = ["root": [String](), "a": ["root"], "b": ["a"], "c": ["b"], "head": ["c"]]
+        XCTAssertNotNil(GitStatusModel.batchDropPlan(
+            selected: ["a", "b"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.batchDropPlan(
+            selected: ["root", "a"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.batchDropPlan(
+            selected: ["a", "c"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.batchDropPlan(
+            selected: ["a", "b"], head: "head",
+            parents: linear.merging(["fork": ["a"]]) { _, new in new }
+        ))
+    }
+
     func testSquashPlanOnlyAcceptsAContinuousLinearPartOfHead() {
         let linear = [
             "root": [String](), "a": ["root"], "b": ["a"], "c": ["b"], "head": ["c"],

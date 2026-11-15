@@ -256,6 +256,68 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
+    func testGraphMultiSelectionUsesDedicatedCopyAndHistoryActionMenu() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("root.txt", text: "root\n")
+        try fixture.initializeGit()
+        for title in ["batch first", "batch second", "batch third"] {
+            _ = try fixture.file(title + ".txt", text: title + "\n")
+            try fixture.git(["add", "--", title + ".txt"])
+            try fixture.git(["commit", "-qm", title])
+        }
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let expected = [
+            try fixture.git(["rev-parse", "HEAD"]),
+            try fixture.git(["rev-parse", "HEAD^"]),
+        ].map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
+        }
+
+        let app = try launchGraph(fixture, language: "en")
+        let newest = app.buttons["batch third"]
+        let middle = app.buttons["batch second"]
+        let outside = app.buttons["batch first"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 25))
+        XCTAssertTrue(middle.waitForExistence(timeout: 25))
+        newest.click()
+        XCUIElement.perform(withKeyModifiers: .command) { middle.click() }
+        XCTAssertTrue(newest.isSelected && middle.isSelected)
+        XCTAssertFalse(outside.isSelected)
+
+        newest.rightClick()
+        let copy = app.menuItems["Copy Selected Commit Hashes"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Checkout Commit…"].exists)
+        XCTAssertFalse(app.menuItems["Create Branch at Commit…"].exists)
+        XCTAssertTrue(app.menuItems["Cherry Pick Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Revert Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Drop Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Squash Selected Commits…"].exists)
+        copy.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       expected.joined(separator: "\n"))
+        XCTAssertTrue(newest.isSelected && middle.isSelected)
+
+        middle.rightClick()
+        app.menuItems["Copy Selected Commit Subjects"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       "batch third\nbatch second")
+
+        outside.rightClick()
+        XCTAssertTrue(app.menuItems["Checkout Commit…"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Copy Selected Commit Hashes"].exists)
+        app.menuItems["Copy Commit Hash"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       String(decoding: try fixture.git(["rev-parse", "HEAD~2"]), as: UTF8.self)
+                           .trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertTrue(newest.isSelected && middle.isSelected && !outside.isSelected)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testGraphMultiSelectionSpansBranchesWithoutEnablingInvalidSquash() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("baseline.txt", text: "base\n")

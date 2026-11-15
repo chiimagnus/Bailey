@@ -1,6 +1,146 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Repository %@: %@" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仓库 %@：%@"
+          }
+        }
+      }
+    },
+    "Cherry Pick Selected Commits…" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拣选所选提交…"
+          }
+        }
+      }
+    },
+    "Revert Selected Commits…" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "撤销所选提交…"
+          }
+        }
+      }
+    },
+    "Drop Selected Commits…" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除所选提交…"
+          }
+        }
+      }
+    },
+    "Copy Selected Commit Hashes" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选提交哈希"
+          }
+        }
+      }
+    },
+    "Copy Selected Commit Subjects" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选提交标题"
+          }
+        }
+      }
+    },
+    "Copy Selected Commit Summaries" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选提交摘要"
+          }
+        }
+      }
+    },
+    "Copy Selected Items" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选项目"
+          }
+        }
+      }
+    },
+    "Selected %lld commits" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选择 %lld 条提交"
+          }
+        }
+      }
+    },
+    "Yes, Cherry Pick Selected" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，拣选所选提交"
+          }
+        }
+      }
+    },
+    "Yes, Revert Selected" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，撤销所选提交"
+          }
+        }
+      }
+    },
+    "Yes, Drop Selected" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，删除所选提交"
+          }
+        }
+      }
+    },
+    "The selected Git commits changed. Select them again." : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选 Git 提交已变化，请重新选择。"
+          }
+        }
+      }
+    },
+    "The selected commits cannot all be dropped from this HEAD." : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法从当前 HEAD 删除全部所选提交。"
+          }
+        }
+      }
+    },
     "Automatic" : {
       "localizations" : {
         "zh-Hans" : {

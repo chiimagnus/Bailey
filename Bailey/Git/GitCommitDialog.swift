@@ -75,6 +75,52 @@ final class GitCommitDialog {
 }
 
 @MainActor
+final class GitBatchCommitDialog {
+    let alert = NSAlert()
+    let recordOrigin = NSButton(
+        checkboxWithTitle: String(localized: "Record Origin", table: "Git"),
+        target: nil, action: nil
+    )
+    let noCommit = NSButton(
+        checkboxWithTitle: String(localized: "No Commit", table: "Git"),
+        target: nil, action: nil
+    )
+
+    init(action: GitStatusModel.CommitBatchAction, commits: [GitStatusModel.RecentCommit],
+         target: GitStatusModel.ActionTarget) {
+        precondition(commits.count >= 2)
+        alert.messageText = action.title
+        let summary = commits.prefix(5).map { "\($0.shortHash)  \($0.subject)" }
+            .joined(separator: "\n")
+        let remaining = commits.count > 5 ? "\n…" : ""
+        alert.informativeText = String(
+            localized: "Repository \(target.scope): \(target.repository)", table: "Git"
+        ) + "\n" + String(
+            localized: "Selected \(commits.count) commits", table: "Git"
+        ) + "\n" + summary + remaining
+        switch action {
+        case .cherryPick:
+            let controls = NSStackView(views: [recordOrigin, noCommit])
+            controls.orientation = .vertical
+            controls.alignment = .leading
+            controls.spacing = 8
+            controls.frame = NSRect(x: 0, y: 0, width: 350, height: controls.fittingSize.height)
+            alert.accessoryView = controls
+            alert.addButton(withTitle: String(localized: "Yes, Cherry Pick Selected", table: "Git"))
+        case .revert:
+            alert.addButton(withTitle: String(localized: "Yes, Revert Selected", table: "Git"))
+        case .drop:
+            alert.informativeText += "\n" + String(localized:
+                "This rewrites local history. Remote branches and tags are not force-pushed.", table: "Git")
+            alert.addButton(withTitle: String(localized: "Yes, Drop Selected", table: "Git"))
+        }
+        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = "\u{1b}"
+    }
+}
+
+@MainActor
 final class GitSquashDialog: NSObject, NSTextViewDelegate {
     let alert = NSAlert()
     let message = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 112))

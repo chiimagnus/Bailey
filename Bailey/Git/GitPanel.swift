@@ -1448,6 +1448,58 @@ struct GitPanel: View {
         }
     }
 
+    func presentCommitBatchDialog(
+        _ hashes: [String], action: GitStatusModel.CommitBatchAction
+    ) {
+        guard hashes.count >= 2, !model.isBusy, model.repositoryOperation == nil,
+              let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity) else { return }
+        let target = model.actionTarget()
+        let commits = model.recentCommits.filter {
+            $0.stash == nil && $0.worktree == nil && hashes.contains($0.hash)
+        }
+        guard commits.count == hashes.count,
+              commits.allSatisfy({ $0.parentHashes.count <= 1 }) else { return }
+        if action == .drop {
+            let parents = Dictionary(uniqueKeysWithValues: model.recentCommits.filter {
+                $0.stash == nil && $0.worktree == nil
+            }.map { ($0.hash, $0.parentHashes) })
+            guard GitStatusModel.batchDropPlan(
+                selected: hashes, head: model.headOID, parents: parents
+            ) != nil else { return }
+        }
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+        }
+        let dialog = GitBatchCommitDialog(action: action, commits: commits, target: target)
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            performOperation(.commitMenu) {
+                model.actOnCommits(
+                    hashes, action: action, target: target,
+                    recordOrigin: dialog.recordOrigin.state == .on,
+                    noCommit: dialog.noCommit.state == .on,
+                    prepare: {
+                        await manager.application.saveBeforeGitAction(
+                            repository: target.repository, scope: target.scope, isCurrent: isCurrent
+                        )
+                    }, isCurrentTarget: {
+                        isCurrent() && manager.application.canRunGitAction(
+                            repository: target.repository, scope: target.scope
+                        )
+                    }, completion: { _ in
+                        manager.application.reloadAfterGitAction(
+                            repository: target.repository, scope: target.scope
+                        )
+                    }
+                )
+            }
+        }
+    }
+
     func presentSquashDialog(_ hashes: [String]) {
         guard hashes.count >= 2, !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
@@ -1747,6 +1799,11 @@ struct GitPanel: View {
     // anchored to the visible sidebar, even for exceptionally long paths.
     private var changeList: some View {
         let changes = changesDisplay
+        let selected = model.selectedChanges
+        let allowsBatchMutation = selected.count < 2 || (
+            Set(selected.map(\.section)).count == 1
+                && selected.isSubset(of: Set(changes.selections))
+        )
         let graphCommits = model.graphCommits
         let graphTarget = model.actionTarget()
         return ScrollViewReader { proxy in
@@ -1770,7 +1827,8 @@ struct GitPanel: View {
                         menuActions: uncommittedMenuActions
                     )
                     if !mergeCollapsed {
-                        changedFileRows(changes.mergeRows)
+                        changedFileRows(changes.mergeRows,
+                                        allowsBatchMutation: allowsBatchMutation)
                     }
                 }
                 if changes.stagedCount > 0 {
@@ -1791,7 +1849,8 @@ struct GitPanel: View {
                         menuActions: uncommittedMenuActions
                     )
                     if !stagedCollapsed {
-                        changedFileRows(changes.stagedRows)
+                        changedFileRows(changes.stagedRows,
+                                        allowsBatchMutation: allowsBatchMutation)
                     }
                 }
                 if changes.changedCount > 0 {
@@ -1819,7 +1878,8 @@ struct GitPanel: View {
                         menuActions: uncommittedMenuActions
                     )
                     if !changesCollapsed {
-                        changedFileRows(changes.changedRows)
+                        changedFileRows(changes.changedRows,
+                                        allowsBatchMutation: allowsBatchMutation)
                     }
                 }
                 if filterText.isEmpty, model.hasHead || !graphCommits.isEmpty {
@@ -1917,6 +1977,7 @@ struct GitPanel: View {
                                 presentCommitDialog(commit, action: action)
                             },
                             squashAction: presentSquashDialog,
+                            commitBatchAction: presentCommitBatchDialog,
                             headOID: model.headOID,
                             canActOnStash: !model.isBusy && model.canUseCurrentStashes,
                             stashAction: { stash, action in
@@ -2006,16 +2067,26 @@ struct GitPanel: View {
                                  },
                                  onAttachedToWindow: focusGitChanges,
                                  onEditCommand: { action in
-                                     if case .selectAll = action {
+                                     switch action {
+                                     case .selectAll:
                                          model.selectAllChanges(visible: changes.selections)
+                                     case .copy:
+                                         if let target = model.selectedChanges.isEmpty
+                                             ? selectedChange : changes.selections.first(where: {
+                                                 model.selectedChanges.contains($0)
+                                             }) {
+                                             copyContextPaths(for: target, absolute: false)
+                                         }
+                                     default: break
                                      }
                                  },
                                  canEditCommand: { action in
-                                     if case .selectAll = action {
-                                         return isGitActive && hasCurrentPanelTarget
-                                             && !changes.navigation.isEmpty
+                                     guard isGitActive && hasCurrentPanelTarget else { return false }
+                                     switch action {
+                                     case .selectAll: return !changes.navigation.isEmpty
+                                     case .copy: return !model.selectedChanges.isEmpty || selectedChange != nil
+                                     default: return false
                                      }
-                                     return false
                                  })
             }
             .onAppear {
@@ -2190,29 +2261,60 @@ struct GitPanel: View {
         return extending || toggling
     }
 
-    /// Rows and compact directories resolve to current visible entries at action time.
-    /// A menu outside the selected set acts only on its own target.
-    private func selectedEntries(for target: ChangeSelection, kind: GitEntryRow.Kind) -> [GitStatusModel.Entry] {
+    /// Right-click inside a selection addresses the whole group; outside uses one target.
+    private func contextChanges(for target: ChangeSelection) -> [ChangeSelection] {
         guard hasCurrentPanelTarget, model.canUseCurrentStatus,
               target.scope == model.currentScope, target.repository == model.repoRoot
         else { return [] }
-        let keys = model.selectedChanges.contains(target)
-            ? model.selectedChanges.filter { $0.section == kind.rawValue }
-            : [target]
-        guard !keys.isEmpty else { return [] }
+        if model.selectedChanges.contains(target) {
+            let visible = changesDisplay.selections.filter {
+                model.selectedChanges.contains($0)
+            }
+            guard visible.count == model.selectedChanges.count else { return [] }
+            return visible
+        }
+        return [target]
+    }
+
+    private func isGroupContext(_ target: ChangeSelection) -> Bool {
+        model.selectedChanges.count > 1 && model.selectedChanges.contains(target)
+    }
+
+    private func canOperateSelectedChanges(_ target: ChangeSelection, kind: GitEntryRow.Kind) -> Bool {
+        let keys = contextChanges(for: target)
+        return !keys.isEmpty && keys.allSatisfy { $0.section == kind.rawValue }
+    }
+
+    private func contextPaths(for target: ChangeSelection, absolute: Bool) -> [String] {
+        let root = model.repoRoot
+        var seen: Set<String> = []
+        return contextChanges(for: target).compactMap { key in
+            let path = absolute ? (root as NSString).appendingPathComponent(key.path) : key.path
+            return seen.insert(path).inserted ? path : nil
+        }
+    }
+
+    private func copyContextPaths(for target: ChangeSelection, absolute: Bool) {
+        let paths = contextPaths(for: target, absolute: absolute)
+        guard !paths.isEmpty else { return }
+        copyToPasteboard(paths.joined(separator: "\n"))
+    }
+
+    /// A mixed STAGED / CHANGES / MERGE selection must never be partially mutated.
+    private func selectedEntries(for target: ChangeSelection, kind: GitEntryRow.Kind) -> [GitStatusModel.Entry] {
+        guard canOperateSelectedChanges(target, kind: kind) else { return [] }
         let entries: [GitStatusModel.Entry] = switch kind {
         case .merge: model.mergeEntries
         case .staged: model.stagedEntries
         case .unstaged: model.changedEntries
         }
         return GitStatusModel.entriesUnderSelection(
-            entries, selectedPaths: Set(keys.map(\.path))
+            entries, selectedPaths: Set(contextChanges(for: target).map(\.path))
         ).filter(matchesFilter)
     }
 
     private func focusContextChange(_ key: ChangeSelection) {
         guard hasCurrentPanelTarget else { return }
-        selectedChange = key
         contextChange = key
     }
 
@@ -2285,21 +2387,26 @@ struct GitPanel: View {
     }
 
     @ViewBuilder
-    private func changedFileRows(_ rows: [VisibleChange]) -> some View {
+    private func changedFileRows(
+        _ rows: [VisibleChange], allowsBatchMutation: Bool
+    ) -> some View {
         ForEach(rows, id: \.row.id) { change in
             if change.row.isDirectory {
-                directoryRow(change.row, kind: change.kind)
+                directoryRow(change.row, kind: change.kind,
+                             allowsBatchMutation: allowsBatchMutation)
                     .id(selection(for: change))
             } else if let entry = change.entry {
                 row(entry, kind: change.kind,
-                    showDirectory: settings.gitViewMode != .tree, displayRow: change.row)
+                    showDirectory: settings.gitViewMode != .tree,
+                    displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
                     .id(selection(for: change))
             }
         }
     }
 
     private func directoryRow(
-        _ item: TreeDisplayModel.Row, kind: GitEntryRow.Kind
+        _ item: TreeDisplayModel.Row, kind: GitEntryRow.Kind,
+        allowsBatchMutation: Bool
     ) -> some View {
         let stageTrigger = OperationTrigger.entry(path: item.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: item.path, operation: .unstage)
@@ -2328,7 +2435,8 @@ struct GitPanel: View {
         ) { active in
             GitChangeRowActions(
                 kind: kind, active: active,
-                disabled: model.isBusy || !model.canUseCurrentStatus,
+                disabled: model.isBusy || !model.canUseCurrentStatus
+                    || (isGroupContext(key) && !allowsBatchMutation),
                 isStageLoading: operationIsLoading(stageTrigger),
                 isUnstageLoading: operationIsLoading(unstageTrigger),
                 isDiscardLoading: operationIsLoading(discardTrigger),
@@ -2377,7 +2485,6 @@ struct GitPanel: View {
             },
             onContextClick: {
                 guard hasCurrentPanelTarget else { return }
-                selectedChange = cursor
                 contextChange = context
             },
             onMenuClosed: { dismissContextChange(context) }) {
@@ -2403,7 +2510,8 @@ struct GitPanel: View {
 
     private func row(
         _ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind,
-        showDirectory: Bool = true, displayRow: TreeDisplayModel.Row? = nil
+        showDirectory: Bool = true, displayRow: TreeDisplayModel.Row? = nil,
+        allowsBatchMutation: Bool
     ) -> some View {
         let stageTrigger = OperationTrigger.entry(path: entry.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: entry.path, operation: .unstage)
@@ -2427,6 +2535,22 @@ struct GitPanel: View {
             onContextClick: { focusContextChange(key) },
             onMenuClosed: { dismissContextChange(key) },
             isRemote: remoteName != nil,
+            multipleSelection: isGroupContext(key),
+            canBatchOperate: allowsBatchMutation,
+            copyBatchPaths: { copyContextPaths(for: key, absolute: true) },
+            copyBatchRelativePaths: { copyContextPaths(for: key, absolute: false) },
+            revealBatch: {
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    contextPaths(for: key, absolute: true).map { URL(fileURLWithPath: $0) }
+                )
+            },
+            insertBatchInTerminal: session.map { session in
+                {
+                    let paths = contextPaths(for: key, absolute: true)
+                    guard !paths.isEmpty else { return }
+                    session.sendCommand(paths.map(shellQuoted).joined(separator: " ") + " ")
+                }
+            },
             disabled: model.isBusy || !model.canUseCurrentStatus,
             isStageLoading: operationIsLoading(stageTrigger),
             isUnstageLoading: operationIsLoading(unstageTrigger),
@@ -2566,30 +2690,57 @@ struct GitPanel: View {
         path: String, target: ChangeSelection, kind: GitEntryRow.Kind,
         stageTrigger: OperationTrigger, unstageTrigger: OperationTrigger
     ) -> some View {
+        let multiple = isGroupContext(target)
         let available = !selectedEntries(for: target, kind: kind).isEmpty
-        if kind == .staged {
-            Button(String(localized: "Unstage Changes", table: "Sidebar")) {
-                performOperation(unstageTrigger) {
-                    model.unstageEntries(selectedEntries(for: target, kind: kind))
-                }
-            }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
-        } else {
-            Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
-                   : String(localized: "Stage Changes", table: "Sidebar")) {
-                performOperation(stageTrigger) {
-                    model.stageEntries(selectedEntries(for: target, kind: kind))
-                }
-            }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
-            if kind == .unstaged {
-                Button(String(localized: "Discard Changes…", table: "Sidebar")) {
-                    requestDiscard(selectedEntries(for: target, kind: kind),
-                                   trigger: .entry(path: path, operation: .discard))
+        if !multiple || canOperateSelectedChanges(target, kind: kind) {
+            if kind == .staged {
+                Button(String(localized: "Unstage Changes", table: "Sidebar")) {
+                    performOperation(unstageTrigger) {
+                        model.unstageEntries(selectedEntries(for: target, kind: kind))
+                    }
                 }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
-                if selectedEntries(for: target, kind: kind).contains(where: { $0.staged == "?" }) {
-                    Button(String(localized: "Add to .gitignore", table: "Git")) {
-                        ignorePaths([path], isDirectory: true)
-                    }.disabled(model.isBusy)
+            } else {
+                Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
+                       : String(localized: "Stage Changes", table: "Sidebar")) {
+                    performOperation(stageTrigger) {
+                        model.stageEntries(selectedEntries(for: target, kind: kind))
+                    }
+                }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
+                if kind == .unstaged {
+                    Button(String(localized: "Discard Changes…", table: "Sidebar")) {
+                        requestDiscard(selectedEntries(for: target, kind: kind),
+                                       trigger: .entry(path: path, operation: .discard))
+                    }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
+                    if !multiple && selectedEntries(for: target, kind: kind).contains(where: { $0.staged == "?" }) {
+                        Button(String(localized: "Add to .gitignore", table: "Git")) {
+                            ignorePaths([path], isDirectory: true)
+                        }.disabled(model.isBusy)
+                    }
                 }
+            }
+            Divider()
+        }
+        Button(multiple ? String(localized: "Copy Paths", table: "Sidebar")
+               : String(localized: "Copy Path", table: "Sidebar")) {
+            copyContextPaths(for: target, absolute: true)
+        }
+        Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
+               : String(localized: "Copy Relative Path", table: "Sidebar")) {
+            copyContextPaths(for: target, absolute: false)
+        }
+        if remoteName == nil {
+            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    contextPaths(for: target, absolute: true).map { URL(fileURLWithPath: $0) }
+                )
+            }
+        }
+        if let session {
+            Button(multiple ? String(localized: "Insert Absolute Paths in Terminal", table: "Sidebar")
+                   : String(localized: "Insert Absolute Path in Terminal", table: "Sidebar")) {
+                let paths = contextPaths(for: target, absolute: true)
+                guard !paths.isEmpty else { return }
+                session.sendCommand(paths.map(shellQuoted).joined(separator: " ") + " ")
             }
         }
     }
@@ -3018,6 +3169,12 @@ private struct GitEntryRow: View {
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
+    let multipleSelection: Bool
+    let canBatchOperate: Bool
+    let copyBatchPaths: () -> Void
+    let copyBatchRelativePaths: () -> Void
+    let revealBatch: () -> Void
+    let insertBatchInTerminal: (() -> Void)?
     let disabled: Bool
     let isStageLoading: Bool
     let isUnstageLoading: Bool
@@ -3049,7 +3206,8 @@ private struct GitEntryRow: View {
             open: openDiff
         ) { active in
             GitChangeRowActions(
-                kind: kind, active: active, disabled: disabled,
+                kind: kind, active: active,
+                disabled: disabled || (multipleSelection && !canBatchOperate),
                 isStageLoading: isStageLoading, isUnstageLoading: isUnstageLoading,
                 isDiscardLoading: isDiscardLoading,
                 stage: stage, unstage: unstage, discard: discard
@@ -3065,47 +3223,67 @@ private struct GitEntryRow: View {
 
     @ViewBuilder
     private var menu: some View {
-        if kind == .merge {
-            Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
-            Button(String(localized: "Open Conflicted File", table: "Sidebar")) { openFile() }
-        } else {
-            Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
-            Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
-        }
-        Divider()
-        if let openHead {
-            Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
-        }
-        switch kind {
-        case .merge:
-            Button(String(localized: "Mark Resolved (Stage)", table: "Sidebar")) { stage() }
-                .disabled(disabled)
-        case .staged:
-            Button(String(localized: "Unstage Changes", table: "Sidebar")) { unstage() }
-                .disabled(disabled)
-        case .unstaged:
-            Button(String(localized: "Stage Changes", table: "Sidebar")) { stage() }
-                .disabled(disabled)
-            Button(destructiveMenuTitle) { discard() }
-                .disabled(disabled)
-            if let ignore {
-                Button(String(localized: "Add to .gitignore", table: "Git"), action: ignore)
-                    .disabled(disabled)
+        if !multipleSelection {
+            if kind == .merge {
+                Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
+                Button(String(localized: "Open Conflicted File", table: "Sidebar")) { openFile() }
+            } else {
+                Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
+                Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
+            }
+            Divider()
+            if let openHead {
+                Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
             }
         }
-        Divider()
+        if !multipleSelection || canBatchOperate {
+            switch kind {
+            case .merge:
+                Button(String(localized: "Mark Resolved (Stage)", table: "Sidebar")) { stage() }
+                    .disabled(disabled)
+            case .staged:
+                Button(String(localized: "Unstage Changes", table: "Sidebar")) { unstage() }
+                    .disabled(disabled)
+            case .unstaged:
+                Button(String(localized: "Stage Changes", table: "Sidebar")) { stage() }
+                    .disabled(disabled)
+                Button(multipleSelection ? String(localized: "Discard Changes…", table: "Sidebar")
+                       : destructiveMenuTitle) { discard() }
+                    .disabled(disabled)
+                if !multipleSelection, let ignore {
+                    Button(String(localized: "Add to .gitignore", table: "Git"), action: ignore)
+                        .disabled(disabled)
+                }
+            }
+            Divider()
+        }
         if !isRemote {
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
+                if multipleSelection {
+                    revealBatch()
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
+                }
             }
         }
-        Button(String(localized: "Copy Path", table: "Sidebar")) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(absolutePath, forType: .string)
-        }
-        Button(String(localized: "Copy Relative Path", table: "Sidebar")) { copyRelativePath() }
-        if let insertInTerminal {
-            Button(String(localized: "Insert Absolute Path in Terminal", table: "Sidebar")) { insertInTerminal() }
+        if multipleSelection {
+            Button(String(localized: "Copy Paths", table: "Sidebar"), action: copyBatchPaths)
+            Button(String(localized: "Copy Relative Paths", table: "Sidebar"), action: copyBatchRelativePaths)
+            if let insertBatchInTerminal {
+                Button(String(localized: "Insert Absolute Paths in Terminal", table: "Sidebar"),
+                       action: insertBatchInTerminal)
+            }
+        } else {
+            Button(String(localized: "Copy Path", table: "Sidebar")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(absolutePath, forType: .string)
+            }
+            Button(String(localized: "Copy Relative Path", table: "Sidebar")) { copyRelativePath() }
+            if let insertInTerminal {
+                Button(String(localized: "Insert Absolute Path in Terminal", table: "Sidebar")) {
+                    insertInTerminal()
+                }
+            }
         }
     }
 

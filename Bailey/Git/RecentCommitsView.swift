@@ -221,6 +221,7 @@ struct RecentCommitsView: View {
     let canDropCommit: (Commit) -> Bool
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
     let squashAction: ([String]) -> Void
+    let commitBatchAction: ([String], GitStatusModel.CommitBatchAction) -> Void
     let headOID: String?
     let canActOnStash: Bool
     let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
@@ -266,6 +267,7 @@ struct RecentCommitsView: View {
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
         squashAction: @escaping ([String]) -> Void = { _ in },
+        commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void = { _, _ in },
         headOID: String? = nil,
         canActOnStash: Bool = true,
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
@@ -315,6 +317,7 @@ struct RecentCommitsView: View {
         self.canDropCommit = canDropCommit
         self.commitAction = commitAction
         self.squashAction = squashAction
+        self.commitBatchAction = commitBatchAction
         self.headOID = headOID
         self.canActOnStash = canActOnStash
         self.stashAction = stashAction
@@ -401,18 +404,24 @@ struct RecentCommitsView: View {
                     GitGraphScrollLog.record("graph-attached", owner: keyboardOwner)
                     onKeyboardAttached()
                 }, onEditCommand: { action in
-                    if case .selectAll = action {
+                    switch action {
+                    case .selectAll:
                         selection.selectAll(visible: commits.filter {
                             $0.stash == nil && $0.worktree == nil
                         }.map(commitRowID))
+                    case .copy:
+                        let rows = selection.ids.isEmpty
+                            ? Set([focusedRowID].compactMap { $0 }) : selection.ids
+                        copy(selectedClipboardText(for: rows))
+                    default: break
                     }
                 }, canEditCommand: { action in
-                    if case .selectAll = action {
-                        return isKeyboardActive && commits.contains {
-                            $0.stash == nil && $0.worktree == nil
-                        }
+                    guard isKeyboardActive else { return false }
+                    switch action {
+                    case .selectAll: return commits.contains { $0.stash == nil && $0.worktree == nil }
+                    case .copy: return !selection.ids.isEmpty || focusedRowID != nil
+                    default: return false
                     }
-                    return false
                 })
         }
         .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
@@ -804,10 +813,30 @@ struct RecentCommitsView: View {
         if !selectRow(commitRowID(commit), commit: isRealCommit) { toggle(commit) }
     }
 
-    private var selectedHistoryHashes: [String] {
+    private var selectedHistoryCommits: [Commit] {
         commits.filter {
             $0.stash == nil && $0.worktree == nil && selection.ids.contains(commitRowID($0))
-        }.map(\.hash)
+        }
+    }
+
+    private func isMultipleSelection(for id: String) -> Bool {
+        selection.ids.count > 1 && selection.ids.contains(id)
+    }
+
+    private func selectedClipboardText(for ids: Set<String>) -> String {
+        keyboardRows.compactMap { row -> String? in
+            guard ids.contains(row.id) else { return nil }
+            switch row.action {
+            case .commit(let commit):
+                return commit.worktree?.path ?? commit.stash?.selector ?? commit.hash
+            case .folder:
+                return row.id.components(separatedBy: "\u{0}").last
+            case .historicalFile(_, let file):
+                return file.path
+            case .worktreeFile(let worktree, let entry, _):
+                return worktree.path + "/" + entry.path
+            }
+        }.joined(separator: "\n")
     }
 
     private func toggle(_ commit: Commit) {
@@ -997,7 +1026,9 @@ struct RecentCommitsView: View {
 
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
-        if let worktree = commit.worktree {
+        if isMultipleSelection(for: commitRowID(commit)) {
+            multipleSelectionMenu()
+        } else if let worktree = commit.worktree {
             Button(String(localized: "Copy Worktree Path", table: "Git")) {
                 copy(worktree.path)
             }
@@ -1014,18 +1045,6 @@ struct RecentCommitsView: View {
             }
             .disabled(!canSwitchBranch)
             Divider()
-            if selection.ids.count >= 2, selection.ids.contains(commitRowID(commit)) {
-                let hashes = selectedHistoryHashes
-                let valid = hashes.count == selection.ids.count
-                    && GitStatusModel.squashPlan(
-                        selected: hashes, head: headOID, parents: commitParents
-                    ) != nil
-                Button(String(localized: "Squash Selected Commits…", table: "Git")) {
-                    squashAction(hashes)
-                }
-                .disabled(!canActOnCommit || !valid)
-                Divider()
-            }
             ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
                 Button(action.title) { commitAction(commit, action) }
                     .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
@@ -1034,6 +1053,43 @@ struct RecentCommitsView: View {
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
             Button(String(localized: "Copy Commit Subject", table: "Git")) {
                 copy(commit.subject)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func multipleSelectionMenu() -> some View {
+        let selected = selectedHistoryCommits
+        if selected.count == selection.ids.count {
+            let hashes = selected.map(\.hash)
+            let allOrdinary = selected.allSatisfy { $0.parentHashes.count <= 1 }
+            let canDrop = GitStatusModel.batchDropPlan(
+                selected: hashes, head: headOID, parents: commitParents
+            ) != nil
+            let canSquash = GitStatusModel.squashPlan(
+                selected: hashes, head: headOID, parents: commitParents
+            ) != nil
+            Button(String(localized: "Copy Selected Commit Hashes", table: "Git")) {
+                copy(hashes.joined(separator: "\n"))
+            }
+            Button(String(localized: "Copy Selected Commit Subjects", table: "Git")) {
+                copy(selected.map(\.subject).joined(separator: "\n"))
+            }
+            Button(String(localized: "Copy Selected Commit Summaries", table: "Git")) {
+                copy(selected.map { $0.hash + " " + $0.subject }.joined(separator: "\n"))
+            }
+            Divider()
+            ForEach(GitStatusModel.CommitBatchAction.allCases, id: \.self) { action in
+                Button(action.title) { commitBatchAction(hashes, action) }
+                    .disabled(!canActOnCommit || !allOrdinary || (action == .drop && !canDrop))
+            }
+            Button(String(localized: "Squash Selected Commits…", table: "Git")) {
+                squashAction(hashes)
+            }
+            .disabled(!canActOnCommit || !canSquash)
+        } else {
+            Button(String(localized: "Copy Selected Items", table: "Git")) {
+                copy(selectedClipboardText(for: selection.ids))
             }
         }
     }
@@ -1571,7 +1627,8 @@ struct RecentCommitsView: View {
                         ))
                     }
                     .contextMenu {
-                        folderMenu(path: node.path, root: worktree.path)
+                        folderMenu(path: node.path, root: worktree.path,
+                                   rowID: folderRowID(commit, section: section, path: node.path))
                     }
                 } else if let entry = byPath[node.path] {
                     worktreeFile(entry, row: node, staged: staged, section: section,
@@ -1620,17 +1677,21 @@ struct RecentCommitsView: View {
             contextTarget(for: id)
         }
         .contextMenu {
-            Button(staged
-                   ? String(localized: "Open Staged Diff", table: "Git")
-                   : String(localized: "Open Working Changes", table: "Git")) {
-                openWorktreeDiff(worktree, entry, staged)
-            }
-            Divider()
-            Button(String(localized: "Copy Absolute Path", table: "Git")) {
-                copy((worktree.path as NSString).appendingPathComponent(entry.path))
-            }
-            Button(String(localized: "Copy Relative Path", table: "Git")) {
-                copy(entry.path)
+            if isMultipleSelection(for: id) {
+                multipleSelectionMenu()
+            } else {
+                Button(staged
+                       ? String(localized: "Open Staged Diff", table: "Git")
+                       : String(localized: "Open Working Changes", table: "Git")) {
+                    openWorktreeDiff(worktree, entry, staged)
+                }
+                Divider()
+                Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                    copy((worktree.path as NSString).appendingPathComponent(entry.path))
+                }
+                Button(String(localized: "Copy Relative Path", table: "Git")) {
+                    copy(entry.path)
+                }
             }
         }
     }
@@ -1700,7 +1761,8 @@ struct RecentCommitsView: View {
                         ))
                     }
                     .contextMenu {
-                        folderMenu(path: node.path, root: repoRoot)
+                        folderMenu(path: node.path, root: repoRoot,
+                                   rowID: folderRowID(commit, section: section, path: node.path))
                     }
                 } else if let file = byPath[node.path] {
                     changedFile(file, row: node, in: commit, showDirectory: false,
@@ -1732,16 +1794,20 @@ struct RecentCommitsView: View {
                 contextRowID = context
             },
             onMenuClosed: { dismissContextRow(context) }) {
-                folderMenu(path: component.path, root: root)
+                folderMenu(path: component.path, root: root, rowID: context)
             })
     }
 
     @ViewBuilder
-    private func folderMenu(path: String, root: String) -> some View {
-        Button(String(localized: "Copy Absolute Path", table: "Git")) {
-            copy((root as NSString).appendingPathComponent(path))
+    private func folderMenu(path: String, root: String, rowID: String) -> some View {
+        if isMultipleSelection(for: rowID) {
+            multipleSelectionMenu()
+        } else {
+            Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                copy((root as NSString).appendingPathComponent(path))
+            }
+            Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
         }
-        Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
     }
 
     private func changedFile(
@@ -1770,33 +1836,37 @@ struct RecentCommitsView: View {
             contextTarget(for: historicalFileRowID(commit, file: file))
         }
         .contextMenu {
-            Button(String(localized: "Open Historical Diff", table: "Git")) {
-                openDiff(commit, file)
-            }
-            if file.status != "D" && commit.stash == nil {
-                Button(String(localized: "View File at Revision", table: "Git")) {
-                    fileAction(commit, file, .viewRevision)
+            if isMultipleSelection(for: historicalFileRowID(commit, file: file)) {
+                multipleSelectionMenu()
+            } else {
+                Button(String(localized: "Open Historical Diff", table: "Git")) {
+                    openDiff(commit, file)
                 }
-                .disabled(isBinaryFile(commit, file))
-                Button(String(localized: "Compare with Working File", table: "Git")) {
-                    fileAction(commit, file, .compareWorktree)
-                }
-                .disabled(isBinaryFile(commit, file))
-                Button(String(localized: "Open Working File", table: "Git")) {
-                    fileAction(commit, file, .openWorkingFile)
+                if file.status != "D" && commit.stash == nil {
+                    Button(String(localized: "View File at Revision", table: "Git")) {
+                        fileAction(commit, file, .viewRevision)
+                    }
+                    .disabled(isBinaryFile(commit, file))
+                    Button(String(localized: "Compare with Working File", table: "Git")) {
+                        fileAction(commit, file, .compareWorktree)
+                    }
+                    .disabled(isBinaryFile(commit, file))
+                    Button(String(localized: "Open Working File", table: "Git")) {
+                        fileAction(commit, file, .openWorkingFile)
+                    }
+                    Divider()
+                    Button(String(localized: "Reset File to Revision…", table: "Git")) {
+                        fileAction(commit, file, .resetFile)
+                    }
+                    .disabled(!canActOnCommit)
                 }
                 Divider()
-                Button(String(localized: "Reset File to Revision…", table: "Git")) {
-                    fileAction(commit, file, .resetFile)
+                Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                    copy((repoRoot as NSString).appendingPathComponent(file.path))
                 }
-                .disabled(!canActOnCommit)
-            }
-            Divider()
-            Button(String(localized: "Copy Absolute Path", table: "Git")) {
-                copy((repoRoot as NSString).appendingPathComponent(file.path))
-            }
-            Button(String(localized: "Copy Relative Path", table: "Git")) {
-                copy(file.path)
+                Button(String(localized: "Copy Relative Path", table: "Git")) {
+                    copy(file.path)
+                }
             }
         }
     }
