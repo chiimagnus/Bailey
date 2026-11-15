@@ -8,7 +8,9 @@ final class EditorNavigationUITests: XCTestCase {
         let original = "header\n" + String(repeating: "let value = \"中文 👋\"\n", count: 10_000)
             + "footer\n"
         let file = try fixture.file("navigation.swift", text: original)
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, project: fixture.root, clipboardIsReadOnly: true
+        )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
@@ -40,7 +42,9 @@ final class EditorNavigationUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "before 👩🏽‍💻 after\n"
         let file = try fixture.file("unicode.swift", text: original)
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, project: fixture.root, clipboardIsReadOnly: true
+        )
         app.typeKey("e", modifierFlags: [.command, .shift])
         let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 20))

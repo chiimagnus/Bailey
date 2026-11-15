@@ -48,6 +48,14 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
     private var raceDestination: (path: String, directory: Bool)?
     private var stageInterruption: String?
     private var atomicSaveInterruption = false
+    enum WritePayloadFault { case truncated, corrupted, appended }
+    private var nextWritePayloadFault: WritePayloadFault?
+    private var targetMutationAfterStaging: String?
+    private var nextAcknowledgementLost = false
+
+    func corruptNextAtomicWrite(_ fault: WritePayloadFault) { nextWritePayloadFault = fault }
+    func mutateTargetAfterStaging(_ value: String) { targetMutationAfterStaging = value }
+    func loseNextWriteAcknowledgement() { nextAcknowledgementLost = true }
 
     func insertDestinationImmediatelyBeforeMove(_ path: String, asDirectory: Bool = false) {
         raceDestination = (path, asDirectory)
@@ -77,6 +85,17 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
             }
             command = command.replacingOccurrences(of: marker, with: marker + "; exit 70")
         }
+        if let mutation = targetMutationAfterStaging {
+            targetMutationAfterStaging = nil
+            let marker = #"[ "$actualHash" = "$3" ] || { echo "Remote upload checksum mismatch" >&2; exit 1; }"#
+            guard command.contains(marker) else {
+                return (98, Data(), Data("version check marker missing".utf8))
+            }
+            command = command.replacingOccurrences(
+                of: marker, with: marker + "; printf %s "
+                    + RemoteCommands.doubleQuote(mutation) + #" > "$1""#
+            )
+        }
         if let raceDestination {
             self.raceDestination = nil
             let marker = command.contains("mv -n -- ") ? "mv -n -- " : "mv -- "
@@ -85,11 +104,43 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
                 : "printf 'concurrent target' > \(RemoteCommands.quote(raceDestination.path)); "
             command = command.replacingOccurrences(of: marker, with: mutation + marker)
         }
+        var transmitted = stdin
+        if let fault = nextWritePayloadFault, var payload = transmitted,
+           command.contains(#"cat > "$stage/item""#) {
+            nextWritePayloadFault = nil
+            switch fault {
+            case .truncated: if !payload.isEmpty { payload.removeLast() }
+            case .corrupted: if !payload.isEmpty { payload[0] ^= 0x1 }
+            case .appended: payload.append(0xA5)
+            }
+            transmitted = payload
+        }
         let result = try await LocalWorkspaceBackend.shared.run(
             argv: ["/bin/sh", "-c", command], cwd: nil, env: nil,
-            stdin: stdin, timeout: timeout
+            stdin: transmitted, timeout: timeout
         )
+        if nextAcknowledgementLost, command.contains(#"cat > "$stage/item""#), result.status == 0 {
+            nextAcknowledgementLost = false
+            return (255, Data(), Data("SSH transport acknowledgement lost".utf8))
+        }
         return (result.status, result.stdout, result.stderr)
+    }
+}
+
+private actor ReadLimitProbe: RemoteCommandRunner {
+    private(set) var requestedStdoutLimit: Int?
+
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data) {
+        (0, Data(repeating: 0x41, count: 1 << 20), Data())
+    }
+
+    func runLimited(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval,
+        stdoutLimit: Int, stderrLimit: Int
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        requestedStdoutLimit = stdoutLimit
+        return (0, Data(repeating: 0x41, count: stdoutLimit), Data())
     }
 }
 
@@ -200,13 +251,148 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertNotEqual(ignored.status, 0, "A successful exit cannot excuse dropped stdin bytes")
     }
 
+    func testSSHWorkspaceEnvironmentNamesCannotChangeShellControlFlow() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-ssh-env-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = directory.appendingPathComponent("injected")
+        let dangerousKey = "TRIGGER; /usr/bin/touch \(RemoteCommands.quote(marker.path)); #"
+        let values: [(key: String, value: String)] = [
+            (dangerousKey, "literal-value"),
+            ("-u", "leading-hyphen"),
+            ("-S", "option-like-name"),
+            ("中文 空格;$`\"", "emoji 🙂 $PATH `echo broken` \" \\ \nline"),
+            ("line\nbreak", "actual\nnewline"),
+            ("NORMAL", "ordinary"),
+        ]
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture(), timeout: 5)
+        for (key, value) in values {
+            for bounded in [false, true] {
+                let argv = ["/usr/bin/python3", "-c",
+                            "import os,sys; sys.stdout.buffer.write(os.environ[sys.argv[1]].encode('utf-8'))",
+                            key]
+                let result: WorkspaceRunResult
+                if bounded {
+                    result = try await backend.runLimited(
+                        argv: argv, cwd: directory.path, env: [key: value], stdin: nil,
+                        timeout: 5, stdoutLimit: 65_536, stderrLimit: 65_536)
+                } else {
+                    result = try await backend.run(
+                        argv: argv, cwd: directory.path, env: [key: value],
+                        stdin: nil, timeout: 5)
+                }
+                XCTAssertEqual(result.status, 0, "key \(key), bounded \(bounded)")
+                XCTAssertEqual(result.stdout, Data(value.utf8),
+                               "Environment key and value must round-trip literally")
+                XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
+                               "An environment name must never execute an extra shell statement")
+            }
+        }
+        for invalidKey in ["", "A=B", "NUL\u{0000}name"] {
+            for bounded in [false, true] {
+                do {
+                    let argv = ["/usr/bin/true"]
+                    if bounded {
+                        _ = try await backend.runLimited(
+                            argv: argv, cwd: nil, env: [invalidKey: "v"], stdin: nil,
+                            timeout: 5, stdoutLimit: 65_536, stderrLimit: 65_536)
+                    } else {
+                        _ = try await backend.run(
+                            argv: argv, cwd: nil, env: [invalidKey: "v"], stdin: nil,
+                            timeout: 5)
+                    }
+                    XCTFail("Environment names containing '=' or empty must be rejected")
+                } catch let error as NSError {
+                    XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+                    XCTAssertEqual(error.code, Int(EINVAL))
+                }
+            }
+        }
+    }
+
+    func testSSHReadUsesTheActualBoundedRunnerForFiniteRequests() async throws {
+        let runner = ReadLimitProbe()
+        let backend = SSHWorkspaceBackend(runner: runner)
+        do {
+            _ = try await backend.read(path: "/fixture/file.txt", maxBytes: 12)
+            XCTFail("A remote 13-byte result exceeds the requested 12-byte limit")
+        } catch WorkspaceError.tooLarge {}
+        let bound = await runner.requestedStdoutLimit
+        XCTAssertEqual(bound, 13)
+    }
+
+    func testSSHReadRejectsSpecialFilesAndNULPathWithoutBlocking() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-ssh-read-kind-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let regular = directory.appendingPathComponent("file.txt")
+        let linked = directory.appendingPathComponent("file-link")
+        let fifo = directory.appendingPathComponent("pipe")
+        let fifoLink = directory.appendingPathComponent("pipe-link")
+        let emptyFile = directory.appendingPathComponent("empty")
+        try Data("hello".utf8).write(to: regular)
+        try Data().write(to: emptyFile)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: regular)
+        try FileManager.default.createSymbolicLink(at: fifoLink, withDestinationURL: fifo)
+        XCTAssertEqual(mkfifo(fifo.path, mode_t(0o600)), 0)
+
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture(), timeout: 2)
+        let linkedBytes = try await backend.read(path: linked.path, maxBytes: 5)
+        XCTAssertEqual(linkedBytes, Data("hello".utf8))
+        let emptyBytes = try await backend.read(path: emptyFile.path, maxBytes: 0)
+        XCTAssertEqual(emptyBytes, Data())
+        for path in [directory.path, fifo.path, fifoLink.path, "/dev/null"] {
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                _ = try await backend.read(path: path, maxBytes: 64)
+                XCTFail("Nonregular remote path must not succeed: \(path)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
+                              "FIFO or device access must not wait for an SSH timeout")
+        }
+        for (path, limit) in [(regular.path + "\u{0000}suffix", 8),
+                              (regular.path, -1), (regular.path, Int.max)] {
+            do {
+                _ = try await backend.read(path: path, maxBytes: limit)
+                XCTFail("Invalid read arguments must not run a truncated command")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+                XCTAssertEqual(error.code, Int(EINVAL))
+            }
+        }
+    }
+
+    func testSSHStatDetectsRegularFileAndSymlinkOnMacBSDStat() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let regular = root.appendingPathComponent("script.sh")
+        let link = root.appendingPathComponent("symlink")
+        try Data("abcd".utf8).write(to: regular)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: regular.path)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let actual = try await backend.stat(path: regular.path)
+        XCTAssertEqual(actual?.size, 4)
+        XCTAssertEqual(actual?.isRegular, true)
+        let symbolic = try await backend.stat(path: link.path)
+        XCTAssertEqual(symbolic?.isSymlink, true)
+        XCTAssertEqual(symbolic?.isRegular, true)
+        XCTAssertEqual(symbolic?.size, 4)
+    }
+
     func testSSHBackendEnforcesByteLimitAndPreservesBinaryWrites() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
-        let limit = 8 << 20
-        for length in [0, limit - 1, limit, limit + 1] {
+        let limit = 32 << 20
+        for length in [0, 1, (8 << 20) - 1, 8 << 20, (8 << 20) + 1,
+                       16 << 20, limit - 1, limit, limit + 1, 64 << 20] {
             let path = root.appendingPathComponent("file' 中文 \(length).bin")
             let bytes = Data(repeating: 0x41, count: length)
             try bytes.write(to: path)
@@ -241,6 +427,79 @@ final class RemoteCommandsTests: XCTestCase {
         } catch let error as RemoteCommandFailure {
             XCTAssertEqual(error.status, 255)
         }
+    }
+
+    func testSSHUploadVerificationRejectsTruncatedCorruptedAndAppendedStdin() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("quoted' 中文.bin")
+        let original = Data("old whole bytes".utf8)
+        let replacement = Data(repeating: 0x41, count: 100_000) + Data("末尾🙂".utf8)
+        let runner = LocalShellRunnerFixture()
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 10)
+        for fault in [LocalShellRunnerFixture.WritePayloadFault.truncated,
+                      .corrupted, .appended] {
+            try original.write(to: path)
+            await runner.corruptNextAtomicWrite(fault)
+            do {
+                try await backend.write(path: path.path, data: replacement)
+                XCTFail("Receiver must never publish altered payload \(fault)")
+            } catch let error as RemoteCommandFailure {
+                XCTAssertNotEqual(error.status, 0)
+            }
+            XCTAssertEqual(try Data(contentsOf: path), original)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                           [path.lastPathComponent], "Failed upload must remove private staging")
+        }
+        try await backend.write(path: path.path, data: replacement)
+        XCTAssertEqual(try Data(contentsOf: path), replacement)
+    }
+
+    func testSSHConditionalWriteRejectsLateTargetOverwriteAfterStaging() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("remote' 中🙂.txt")
+        let original = Data("source version".utf8)
+        let competitor = "rival! version"
+        XCTAssertEqual(original.count, Data(competitor.utf8).count)
+        try original.write(to: path)
+        let runner = LocalShellRunnerFixture()
+        await runner.mutateTargetAfterStaging(competitor)
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 10)
+        do {
+            try await backend.write(path: path.path, data: Data("Bailey revision".utf8),
+                                    ifUnchanged: WorkspaceFileVersion(data: original))
+            XCTFail("The second source check must reject external edits after staging")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), Data(competitor.utf8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       [path.lastPathComponent])
+    }
+
+    @MainActor
+    func testSSHFileTabReadBackAfterLostWriteAcknowledgement() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("remote-ack.txt")
+        try Data("previous version".utf8).write(to: path)
+        let runner = LocalShellRunnerFixture()
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 10)
+        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "new complete version 中文"
+        await runner.loseNextWriteAcknowledgement()
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data("new complete version 中文".utf8))
+        XCTAssertFalse(file.isDirty, "Read-back of the exact published bytes confirms success")
+        XCTAssertNil(file.saveError)
+        file.text = "subsequent write"
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data("subsequent write".utf8))
     }
 
     func testSSHAtomicSaveNeverWritesThroughPreexistingTempSymlink() async throws {
@@ -304,6 +563,23 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "original")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
                        ["target.txt"], "Failure must retire its own uncommitted staging directory")
+    }
+
+    func testSSHSaveSupportsLongLegalFileName() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-ssh-long-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent(String(repeating: "b", count: 240) + ".txt")
+        let baseline = Data("before".utf8)
+        let updated = Data("after".utf8)
+        try baseline.write(to: target)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        try await backend.write(path: target.path, data: updated,
+                                ifUnchanged: WorkspaceFileVersion(data: baseline))
+        XCTAssertEqual(try Data(contentsOf: target), updated)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       [target.lastPathComponent])
     }
 
     func testSSHAtomicSaveRejectsDirectoryWithoutMovingContentInside() async throws {
@@ -463,8 +739,8 @@ final class RemoteCommandsTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
-        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("chmod --reference="))
-        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("mv -f"))
+        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x", expectedBytes: 1, sha256: String(repeating: "a", count: 64)).contains("chmod --reference="))
+        XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x", expectedBytes: 1, sha256: String(repeating: "a", count: 64)).contains("mv -f"))
     }
 
     func testSSHFileRenamePreservesDanglingSymlinksAndRejectsOccupiedDestinations() async throws {

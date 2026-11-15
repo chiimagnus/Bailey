@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -84,35 +85,156 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     }
 
     private static func readSync(path: String, maxBytes: Int) throws -> Data {
-        do {
-            // Keep one descriptor for the whole read: replacing the path while
-            // an agent writes cannot redirect us to a different, larger file.
-            // Seek checks catch growth without ever loading more than maxBytes.
-            let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
-            defer { try? handle.close() }
-            let initialSize = try handle.seekToEnd()
-            guard initialSize <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
-            try handle.seek(toOffset: 0)
-
-            var data = Data()
-            while data.count < maxBytes {
-                let remaining = min(64 * 1024, maxBytes - data.count)
-                guard let chunk = try handle.read(upToCount: remaining), !chunk.isEmpty else {
-                    break
-                }
-                data.append(chunk)
-            }
-            let finalSize = try handle.seekToEnd()
-            guard finalSize <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
-            return data
-        } catch let error as CocoaError
-            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
-            throw WorkspaceError.notFound
+        try Task.checkCancellation()
+        guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
+        // Nonblocking open is necessary *before* fstat: a FIFO must never wait
+        // for an unrelated writer before we can reject its file type.
+        let fd = path.withCString { Darwin.open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC) }
+        guard fd >= 0 else {
+            let code = errno
+            if code == ENOENT || code == ENOTDIR { throw WorkspaceError.notFound }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = Darwin.stat()
+        guard fstat(fd, &info) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+        }
+        guard info.st_size >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+        }
+        let length = UInt64(info.st_size)
+        guard length <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+
+        var data = Data()
+        while UInt64(data.count) < length {
+            try Task.checkCancellation()
+            let remaining = Int(min(65_536, length - UInt64(data.count)))
+            guard let chunk = try handle.read(upToCount: remaining), !chunk.isEmpty else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+            }
+            data.append(chunk)
+        }
+        // A changed length invalidates the read; never return a partial or
+        // mixed-length file as if it were the accepted full document.
+        guard fstat(fd, &info) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard info.st_size >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+        }
+        guard UInt64(info.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        guard UInt64(info.st_size) == length else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EBUSY))
+        }
+        return data
     }
 
     @concurrent func write(path: String, data: Data) async throws {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    /// FileTab's conditional save has its own commit contract. POSIX offers
+    /// atomic rename, not a universal compare-and-rename against outside writers.
+    @concurrent func write(path: String, data: Data,
+                           ifUnchanged version: WorkspaceFileVersion) async throws {
+        try Task.checkCancellation()
+        guard !path.utf8.contains(0) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        _ = try Self.verifyCurrentVersion(path: path, expected: version)
+        // Fixed sibling name: a valid 255-byte filename must not overflow NAME_MAX.
+        let parent = (path as NSString).deletingLastPathComponent
+        var template = Array((parent + "/.bailey-save.XXXXXXXX").utf8CString)
+        guard template.withUnsafeMutableBufferPointer({
+            Darwin.mkdtemp($0.baseAddress)
+        }) != nil else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let stage = String(cString: template)
+        defer { try? FileManager.default.removeItem(atPath: stage) }
+        let item = stage + "/item"
+        try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
+        _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
+        let originalMode = try Self.verifyCurrentVersion(path: path, expected: version)
+        if let originalMode {
+            guard chmod(item, mode_t(originalMode)) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
+        let stagedHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: item))
+        try stagedHandle.synchronize()
+        try stagedHandle.close()
+        try Task.checkCancellation()
+        let status = item.withCString { from in
+            path.withCString { to in Darwin.rename(from, to) }
+        }
+        guard status == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
+    /// Verify bytes through a bounded streaming, nonblocking regular-file FD,
+    /// without trusting mtime or a pathname's original inode. An identical-byte
+    /// replacement is accepted by policy; a symlink entry is replaced on commit.
+    private static func verifyCurrentVersion(
+        path: String, expected: WorkspaceFileVersion
+    ) throws -> Int? {
+        let fd = path.withCString { Darwin.open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC) }
+        guard fd >= 0 else {
+            let code = errno
+            if code == ENOENT || code == ENOTDIR { throw WorkspaceError.changedExternally }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = Darwin.stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size >= 0, UInt64(info.st_size) == UInt64(expected.byteCount) else {
+            throw WorkspaceError.changedExternally
+        }
+        let opened = info
+        var digest = SHA256()
+        var count = 0
+        while count < expected.byteCount {
+            try Task.checkCancellation()
+            let wanted = min(65_536, expected.byteCount - count)
+            guard let chunk = try handle.read(upToCount: wanted), !chunk.isEmpty else {
+                throw WorkspaceError.changedExternally
+            }
+            digest.update(data: chunk)
+            count += chunk.count
+        }
+        guard fstat(fd, &info) == 0, info.st_size >= 0,
+              UInt64(info.st_size) == UInt64(expected.byteCount),
+              info.st_dev == opened.st_dev, info.st_ino == opened.st_ino,
+              info.st_mtimespec.tv_sec == opened.st_mtimespec.tv_sec,
+              info.st_mtimespec.tv_nsec == opened.st_mtimespec.tv_nsec,
+              info.st_ctimespec.tv_sec == opened.st_ctimespec.tv_sec,
+              info.st_ctimespec.tv_nsec == opened.st_ctimespec.tv_nsec else {
+            throw WorkspaceError.changedExternally
+        }
+        // A pathname may be replaced while the open FD is being hashed.
+        // Verify that it still resolves to that FD, including through symlinks.
+        var current = Darwin.stat()
+        guard path.withCString({ fstatat(AT_FDCWD, $0, &current, 0) }) == 0,
+              current.st_dev == info.st_dev, current.st_ino == info.st_ino else {
+            throw WorkspaceError.changedExternally
+        }
+        let checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        guard checksum == expected.sha256 else { throw WorkspaceError.changedExternally }
+        guard lstat(path, &info) == 0 else { throw WorkspaceError.changedExternally }
+        switch info.st_mode & S_IFMT {
+        case S_IFREG: return Int(info.st_mode & 0o7777)
+        case S_IFLNK: return nil
+        default: throw WorkspaceError.changedExternally
+        }
     }
 
     /// The Finder-to-Files action copies on a background executor and never
@@ -264,15 +386,22 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         // link reads as "does not exist" here as it did inline.
         guard fm.fileExists(atPath: path, isDirectory: &isDirectory) else { return nil }
         let isSymlink = (try? fm.destinationOfSymbolicLink(atPath: path)) != nil
-        // Attributes describe the link rather than its target, so a symlink is
-        // never reported as a regular file — the editability gate this
-        // replaces drew the same conclusion the same way.
+        // Preserve the link's editability type, but expose a regular target's
+        // byte length so image previews can enforce their actual read budget.
         let attributes = try? fm.attributesOfItem(atPath: path)
+        var linkedFileSize: Int?
+        if isSymlink {
+            var target = Darwin.stat()
+            if path.withCString({ fstatat(AT_FDCWD, $0, &target, 0) }) == 0,
+               (target.st_mode & S_IFMT) == S_IFREG {
+                linkedFileSize = Int(target.st_size)
+            }
+        }
         return WorkspaceStat(
             isRegular: (attributes?[.type] as? FileAttributeType) == .typeRegular,
             isDirectory: isDirectory.boolValue,
             isSymlink: isSymlink,
-            size: (attributes?[.size] as? Int) ?? 0,
+            size: linkedFileSize ?? (attributes?[.size] as? Int) ?? 0,
             mtime: (attributes?[.modificationDate] as? Date) ?? .distantPast
         )
     }

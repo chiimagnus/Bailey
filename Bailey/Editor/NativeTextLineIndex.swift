@@ -3,7 +3,7 @@
 import Foundation
 
 /// UTF-16 line breaks with a Fenwick index; not a rendering engine.
-struct NativeTextLineIndex {
+nonisolated struct NativeTextLineIndex {
     enum BreakMode { case native, gitLF }
 
     private var lineLengths: [Int]
@@ -53,6 +53,18 @@ struct NativeTextLineIndex {
     }
 
     func offset(atLine row: Int) -> Int { lengths.sum(before: row) }
+
+    /// An entire-width pass visits every row in order; avoid two Fenwick
+    /// prefix searches per row when the physical lengths already are stored.
+    func forEachLineRange(_ visit: (_ start: Int, _ end: Int) -> Void) {
+        var start = 0
+        for size in lineLengths {
+            let end = start + size
+            visit(start, end)
+            start = end
+        }
+    }
+
     func row(at offset: Int) -> Int { min(lengths.containing(offset), lineCount - 1) }
 
     @discardableResult

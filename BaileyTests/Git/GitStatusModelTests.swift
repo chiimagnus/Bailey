@@ -50,6 +50,9 @@ private actor SuspendedGitStatusBackend: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func read(path: String, maxBytes: Int) async throws -> Data { throw WorkspaceError.notFound }
     func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        throw WorkspaceError.notFound
+    }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
@@ -694,6 +697,63 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.otherWorktrees.contains {
             $0.path == linkedRoot && $0.entries.contains { $0.path == "external.txt" }
         })
+    }
+
+    func testContinuousNativeFileEventsCannotStarveGitRefresh() async throws {
+        actor NativeCallbackCount {
+            var value = 0
+            func record() { value += 1 }
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-GitEventBurst-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"],
+            ["config", "user.name", "Event Burst Test"],
+            ["config", "user.email", "burst@invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["commit", "--allow-empty", "-qm", "initial"],
+        ] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+
+        // Observe the same native stream class as the real Git model, so a
+        // delayed or absent OS event cannot masquerade as a debounce failure.
+        let callbacks = NativeCallbackCount()
+        let probe = try XCTUnwrap(GitFileEventWatcher(paths: [directory.path], onChange: {
+            Task { await callbacks.record() }
+        }))
+        let producer = Task.detached(priority: .utility) {
+            for index in 0..<85 {
+                try Task.checkCancellation()
+                let file = directory.appendingPathComponent("burst-\(index).txt")
+                try Data("\(index)".utf8).write(to: file)
+                try await Task.sleep(for: .milliseconds(60))
+            }
+        }
+        defer { producer.cancel() }
+        let deadline = Date().addingTimeInterval(3)
+        var refreshedDuringBurst = false
+        while Date() < deadline {
+            if model.changedEntries.contains(where: { $0.path.hasPrefix("burst-") }) {
+                refreshedDuringBurst = true
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        producer.cancel()
+        _ = try? await producer.value
+        withExtendedLifetime(probe) {}
+        let nativeCallbacks = await callbacks.value
+        print("P2_GIT_NATIVE_BURST callbacks=\(nativeCallbacks) refreshed_while_writing=\(refreshedDuringBurst)")
+        XCTAssertGreaterThan(nativeCallbacks, 3,
+                             "The real native FSEvents stream must deliver multiple batches")
+        XCTAssertTrue(refreshedDuringBurst,
+                      "Continuous events must not cancel the 400 ms refresh forever")
     }
 
     func testLocalWatcherStopsFollowingPreviousWorkspace() async throws {

@@ -253,7 +253,7 @@ final class WorkspaceApplication {
         for content in contents {
             guard isCurrent() else { return false }
             await content.save()
-            guard isCurrent(), !content.isDirty else { return false }
+            guard isCurrent(), !content.hasUnresolvedSave else { return false }
         }
         return isCurrent() && canRunGitAction(repository: repository, scope: scope)
     }
@@ -261,14 +261,8 @@ final class WorkspaceApplication {
     func canRunGitAction(
         repository: String, scope: String, affectedPaths: [String]? = nil
     ) -> Bool {
-        gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths).allSatisfy {
-            guard !$0.isDirty else { return false }
-            switch $0 {
-            case .file(let file): return !file.isSaving
-            case .diff(let diff): return !diff.isSaving
-            case .session, .browser: return true
-            }
-        }
+        gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths)
+            .allSatisfy { !$0.hasUnresolvedSave }
     }
 
     func reloadAfterGitAction(

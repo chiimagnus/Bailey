@@ -59,6 +59,8 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     private enum ExitCode {
         static let missing: Int32 = 44
         static let exists: Int32 = 45
+        static let notRegular: Int32 = 46
+        static let changedExternally: Int32 = 47
     }
 
     // MARK: - Running
@@ -78,6 +80,9 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         switch result.status {
         case ExitCode.missing: return WorkspaceError.notFound
         case ExitCode.exists: return CocoaError(.fileWriteFileExists)
+        case ExitCode.notRegular:
+            return NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+        case ExitCode.changedExternally: return WorkspaceError.changedExternally
         default:
             let message = String(decoding: result.stderr, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -146,16 +151,36 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     /// Reads one byte past the cap so an oversized file can be told apart from
     /// one that happens to be exactly `maxBytes` long.
     func read(path: String, maxBytes: Int) async throws -> Data {
+        try Task.checkCancellation()
+        guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
         let quoted = RemoteCommands.quote(path)
-        let limit = maxBytes == .max ? nil : maxBytes + 1
-        let read = limit.map { "head -c \($0) -- \(quoted)" } ?? "cat -- \(quoted)"
-        let data = try await shell(requiring(path, read))
-        if let limit, data.count == limit { throw WorkspaceError.tooLarge }
-        return data
+        let limit = maxBytes + 1
+        let command = requiring(path,
+            "[ -f \(quoted) ] || exit \(ExitCode.notRegular); head -c \(limit) -- \(quoted)")
+        let result = try await runner.runLimited(
+            [command], stdin: nil, timeout: timeout,
+            stdoutLimit: limit, stderrLimit: 64 << 10)
+        guard result.status == 0 else { throw failure(command: command, result: result) }
+        if result.stdout.count == limit { throw WorkspaceError.tooLarge }
+        return result.stdout
     }
 
-    func write(path: String, data: Data) async throws {
-        try await shell(RemoteCommands.atomicWriteCommand(path: path), stdin: data)
+    @concurrent func write(path: String, data: Data) async throws {
+        let version = WorkspaceFileVersion(data: data)
+        try await shell(RemoteCommands.atomicWriteCommand(
+            path: path, expectedBytes: version.byteCount, sha256: version.sha256
+        ), stdin: data)
+    }
+
+    @concurrent func write(path: String, data: Data,
+                           ifUnchanged version: WorkspaceFileVersion) async throws {
+        let written = WorkspaceFileVersion(data: data)
+        try await shell(RemoteCommands.atomicWriteCommand(
+            path: path, expectedBytes: written.byteCount, sha256: written.sha256,
+            ifUnchanged: version
+        ), stdin: data)
     }
 
     func createFile(path: String) async throws {
@@ -301,13 +326,17 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         stdin: Data?, timeout: TimeInterval?, limits: (stdout: Int, stderr: Int)?
     ) async throws -> WorkspaceRunResult {
         guard !argv.isEmpty else { throw WorkspaceError.notFound }
+        guard env?.allSatisfy({ !$0.key.isEmpty && !$0.key.contains("=")
+            && !$0.key.utf8.contains(0) && !$0.value.utf8.contains(0) }) ?? true else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
         var command = ""
         if let cwd { command += "cd \(RemoteCommands.doubleQuote(cwd)) && " }
         if let env, !env.isEmpty {
-            let assignments = env.keys.sorted().map {
-                "\($0)=\(RemoteCommands.doubleQuote(env[$0]!))"
+            let assignments = env.sorted { $0.key < $1.key }.map {
+                RemoteCommands.doubleQuote("\($0.key)=\($0.value)")
             }
-            command += "env " + assignments.joined(separator: " ") + " "
+            command += "env -- " + assignments.joined(separator: " ") + " "
         }
         command += argv.map(RemoteCommands.doubleQuote).joined(separator: " ")
 

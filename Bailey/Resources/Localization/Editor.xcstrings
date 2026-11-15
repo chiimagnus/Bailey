@@ -81,6 +81,16 @@
         }
       }
     },
+    "Text exceeds the 32 MiB file limit. Reduce its size before saving." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文本超出 32 MiB 文件上限，请缩小内容后再保存。"
+          }
+        }
+      }
+    },
     "Could not refresh file; showing last loaded content." : {
       "localizations" : {
         "zh-Hans" : {

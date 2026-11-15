@@ -212,11 +212,14 @@ nonisolated enum RemoteCommands {
     /// broken symlink fails the second `stat`, leaving one line.
     static func statCommand(path: String) -> String {
         let quoted = quote(path)
-        // `--printf`, not `-c`: only the former interprets the tab and newline
-        // escapes, and `-c` would return the format string with them intact.
-        let format = "'%F\\t%s\\t%Y\\t%a\\n'"
-        return "stat --printf \(format) -- \(quoted) 2>/dev/null; "
-            + "stat -L --printf \(format) -- \(quoted) 2>/dev/null"
+        let gnu = "'%F\\t%s\\t%Y\\t%a\\n'"
+        let bsd = "'%HT\t%z\t%m\t%Lp'"
+        func line(follow: Bool) -> String {
+            let option = follow ? "-L " : ""
+            return "stat \(option)--printf \(gnu) -- \(quoted) 2>/dev/null"
+                + " || stat \(option)-f \(bsd) -- \(quoted) 2>/dev/null"
+        }
+        return line(follow: false) + "; " + line(follow: true)
     }
 
     struct RemoteStat: Equatable {
@@ -251,7 +254,7 @@ nonisolated enum RemoteCommands {
             let mtime = Int(fields[2]),
             let mode = UInt16(fields[3], radix: 8)
         else { return nil }
-        return (fields[0], size, mtime, mode)
+        return (fields[0].lowercased(), size, mtime, mode)
     }
 
     /// Replaces a file's contents from standard input without ever leaving it
@@ -261,11 +264,33 @@ nonisolated enum RemoteCommands {
     ///
     /// A private same-directory staging directory prevents stale symlinks
     /// and concurrent writes from sharing unpublished data.
-    static func atomicWriteCommand(path: String) -> String {
-        """
+    static func atomicWriteCommand(path: String, expectedBytes: Int, sha256: String,
+                                   ifUnchanged version: WorkspaceFileVersion? = nil) -> String {
+        let verifySource = version.map { _ in
+            """
+            [ -f "$1" ] || exit 47
+            [ "$(wc -c < "$1")" -eq "$4" ] || exit 47
+            currentHash=$(hash_stdin < "$1") || exit 1
+            currentHash=${currentHash%% *}
+            [ "$currentHash" = "$5" ] || exit 47
+            """
+        } ?? ""
+        let sourceArguments = version.map { " \($0.byteCount) \($0.sha256)" } ?? ""
+        return """
         sh -c '
         set -eu
-        stage=$(mktemp -d -- "$1.bailey-tmp.XXXXXXXX")
+        hash_stdin() {
+            if command -v sha256sum >/dev/null 2>&1; then
+                sha256sum
+            elif command -v shasum >/dev/null 2>&1; then
+                shasum -a 256
+            else
+                echo "Remote SHA-256 verification unavailable" >&2
+                return 1
+            fi
+        }
+        \(verifySource)
+        stage=$(mktemp -d -- "$(dirname -- "$1")/.bailey-save.XXXXXXXX")
         cleanup() {
             rm -f -- "$stage/item"
             rmdir -- "$stage" || :
@@ -273,6 +298,12 @@ nonisolated enum RemoteCommands {
         trap cleanup EXIT
         trap "exit 1" HUP INT TERM
         cat > "$stage/item"
+        actualBytes=$(wc -c < "$stage/item")
+        [ "$actualBytes" -eq "$2" ] || { echo "Incomplete remote upload" >&2; exit 1; }
+        actualHash=$(hash_stdin < "$stage/item") || exit 1
+        actualHash=${actualHash%% *}
+        [ "$actualHash" = "$3" ] || { echo "Remote upload checksum mismatch" >&2; exit 1; }
+        \(verifySource)
         if [ -f "$1" ] && [ ! -L "$1" ]; then
             chmod --reference="$1" "$stage/item" 2>/dev/null ||
                 chmod "$(stat -f %Lp -- "$1")" "$stage/item"
@@ -285,7 +316,7 @@ nonisolated enum RemoteCommands {
         fi
         trap - EXIT HUP INT TERM
         rmdir -- "$stage" || :
-        ' _ \(quote(path))
+        ' _ \(quote(path)) \(expectedBytes) \(sha256)\(sourceArguments)
         """
     }
 

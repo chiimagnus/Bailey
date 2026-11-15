@@ -190,9 +190,10 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated static let maxBytes = 5 << 20
     @ObservationIgnored private var savedNewContent = ""
-    @ObservationIgnored private var editableSnapshot = ""
-    var editedNewContent: String { nativeSurface?.editedText ?? editableSnapshot }
-    @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int] = [:]
+    /// Immutable raw bytes version accepted with the editable worktree snapshot.
+    @ObservationIgnored private var savedSourceVersion: WorkspaceFileVersion?
+    var editedNewContent: String { nativeSurface?.editedText ?? savedNewContent }
+    @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int]? = [:]
     @ObservationIgnored private var reversibleEdit: (
         range: NSRange, removed: String, inserted: String, wasClean: Bool
     )?
@@ -212,7 +213,8 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var saveDeferredUntilMutation = false
     @ObservationIgnored private var originalFileMovedOrDeleted = false
     var isSaving: Bool { lastSaveTask != nil }
-    @ObservationIgnored private var saveRequestGeneration: UInt = 0
+    @ObservationIgnored private var saveLatestRequested = false
+    @ObservationIgnored private var pendingEncodingSaves: [TextFileEncoding] = []
     @ObservationIgnored var autoSaveSuspendedForClose = false
     @ObservationIgnored private var targetGeneration: UInt = 0
     /// The workspace this diff reads. The tab keeps its own, so it never
@@ -509,6 +511,7 @@ final class DiffTab: nonisolated Identifiable {
             let new: String
             var newEncoding = git.newEncoding ?? .utf8
             var worktreeBytes: Data?
+            var sourceVersion: WorkspaceFileVersion?
             let editable: Bool
             if let newFromGit = git.newFromGit {
                 new = newFromGit
@@ -517,7 +520,8 @@ final class DiffTab: nonisolated Identifiable {
                 new = ""
                 editable = false
             } else {
-                let worktree: (text: String, error: String?, encoding: TextFileEncoding?, bytes: Data?)
+                let worktree: (text: String, error: String?, encoding: TextFileEncoding?,
+                               bytes: Data?, version: WorkspaceFileVersion?)
                 if case .worktree = source {
                     // File IO and metadata lookup are independent. On SSH,
                     // serializing them adds an avoidable full round trip.
@@ -536,6 +540,7 @@ final class DiffTab: nonisolated Identifiable {
                 new = worktree.text
                 newEncoding = worktree.encoding ?? .utf8
                 worktreeBytes = worktree.bytes
+                sourceVersion = worktree.version
                 if let error = worktree.error { failure = error }
             }
             var baseline = git.old
@@ -576,6 +581,7 @@ final class DiffTab: nonisolated Identifiable {
                 new: new, failure: failure,
                 snapshotOutdated: snapshotOutdated,
                 unmerged: git.unmerged, editable: editable, encoding: newEncoding,
+                sourceVersion: source == .worktree && editable ? sourceVersion : nil,
                 resolvedPath: source.isLive ? git.worktreePath : nil
             )
             // The connection may have dropped while these reads were in
@@ -609,6 +615,7 @@ final class DiffTab: nonisolated Identifiable {
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
             self.fileEncoding = result.encoding
+            self.savedSourceVersion = result.sourceVersion
             self.resolvedWorktreePath = result.resolvedPath
             let filteredBaselineChanged: Bool
             switch (self.editComparisonOld, result.editBaseline) {
@@ -648,7 +655,6 @@ final class DiffTab: nonisolated Identifiable {
                 self.editBufferRevision &+= 1
             }
             self.savedNewContent = result.new
-            self.editableSnapshot = result.new
             self.nativeCodeUnitDelta = [:]
             self.reversibleEdit = nil
             if self.isEditing { self.refreshEditDecorations(immediate: true) }
@@ -685,35 +691,37 @@ final class DiffTab: nonisolated Identifiable {
         let reverted = reversibleEdit.map { previous in
             previous.wasClean && previous.range.location == previousRange.location
                 && previousRange.length == previous.inserted.utf16.count
-                && replacement.utf8.elementsEqual(previous.removed.utf8)
+                && replacement.utf16.elementsEqual(previous.removed.utf16)
         } ?? false
-        let dirty: Bool
         if reverted {
             nativeCodeUnitDelta = [:]
             reversibleEdit = nil
-            dirty = false
-        } else if let removed {
-            Self.adjustCodeUnits(removed, by: -1, delta: &nativeCodeUnitDelta)
-            Self.adjustCodeUnits(replacement, by: 1, delta: &nativeCodeUnitDelta)
-            dirty = !nativeCodeUnitDelta.isEmpty
-                || !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
-            reversibleEdit = (previousRange, removed, replacement, previouslyClean)
+            isDirty = false
         } else {
-            reversibleEdit = nil
-            dirty = resynchronizeNativeDelta()
+            if let removed, var delta = nativeCodeUnitDelta {
+                Self.adjustCodeUnits(removed, by: -1, delta: &delta)
+                Self.adjustCodeUnits(replacement, by: 1, delta: &delta)
+                nativeCodeUnitDelta = delta
+                reversibleEdit = (previousRange, removed, replacement, previouslyClean)
+            } else {
+                nativeCodeUnitDelta = nil
+                reversibleEdit = nil
+            }
+            refreshNativeDirtyState()
         }
-        if isDirty != dirty { isDirty = dirty }
-        if previouslyClean && dirty { invalidateReload() }
+        if previouslyClean && isDirty { invalidateReload() }
         refreshEditDecorations()
     }
 
-    private func resynchronizeNativeDelta() -> Bool {
+    private func refreshNativeDirtyState() {
         let current = editedNewContent
-        var delta: [UInt16: Int] = [:]
-        Self.adjustCodeUnits(savedNewContent, by: -1, delta: &delta)
-        Self.adjustCodeUnits(current, by: 1, delta: &delta)
-        nativeCodeUnitDelta = delta
-        return !delta.isEmpty || !current.utf8.elementsEqual(savedNewContent.utf8)
+        if (current as NSString).length != (savedNewContent as NSString).length
+            || nativeCodeUnitDelta?.isEmpty == false {
+            isDirty = true
+        } else {
+            isDirty = !TextFileEncoding.hasIdenticalCodeUnits(current, savedNewContent)
+            if !isDirty { nativeCodeUnitDelta = [:] }
+        }
     }
 
     private static func adjustCodeUnits(_ text: String, by direction: Int,
@@ -1032,7 +1040,7 @@ final class DiffTab: nonisolated Identifiable {
         fileMutationHeld = true
         await lastSaveTask?.value
         if isDirty { await writeCurrentText() }
-        guard !isDirty else {
+        guard !isDirty, saveError == nil else {
             endFileMutation()
             return false
         }
@@ -1058,7 +1066,7 @@ final class DiffTab: nonisolated Identifiable {
         )
     }
 
-    /// Keep worktree writes in edit order across manual and automatic saves.
+    /// One write task coalesces repeated saves without dropping explicit encodings.
     func save(as encoding: TextFileEncoding? = nil) async {
         if fileMutationHeld {
             if encoding != nil {
@@ -1068,57 +1076,111 @@ final class DiffTab: nonisolated Identifiable {
             saveDeferredUntilMutation = true
             return
         }
-        saveRequestGeneration &+= 1
-        let generation = saveRequestGeneration
-        let preceding = lastSaveTask
+        if let running = lastSaveTask {
+            if let encoding { pendingEncodingSaves.append(encoding) }
+            else { saveLatestRequested = true }
+            await running.value
+            return
+        }
         let task = Task { [weak self] in
-            await preceding?.value
-            await self?.writeCurrentText(as: encoding)
+            guard let self else { return }
+            var intent = encoding
+            while true {
+                await self.writeCurrentText(as: intent)
+                if !self.pendingEncodingSaves.isEmpty {
+                    intent = self.pendingEncodingSaves.removeFirst()
+                    self.saveLatestRequested = false
+                } else if self.saveLatestRequested {
+                    self.saveLatestRequested = false
+                    intent = nil
+                } else {
+                    break
+                }
+            }
+            self.lastSaveTask = nil
         }
         lastSaveTask = task
         await task.value
-        if saveRequestGeneration == generation { lastSaveTask = nil }
     }
 
     private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
         guard isEditable, isDirty || (encoding != nil && encoding != fileEncoding) else { return }
-        let chosen = encoding ?? fileEncoding
-        let written = editedNewContent
-        if chosen != fileEncoding && TextFileEncoding.contradictsDeclaration(written, chosen: chosen) {
-            saveError = String(localized: "Update the declared coding header before changing the file encoding.", table: "Git")
-            return
-        }
-        guard let bytes = chosen.encoded(written) else {
-            saveError = String(localized: "Text cannot be saved in \(chosen.name) without losing characters.", table: "Git")
-            return
-        }
-        // Refused, not silently dropped: the save-error bar says why.
         if let readOnlyReason {
             saveError = readOnlyReason
             return
         }
-        let filePath = (repoRoot as NSString).appendingPathComponent(path)
+        guard let expected = savedSourceVersion else {
+            saveError = String(localized: "Original file bytes are unknown. Reopen before saving.",
+                               table: "Git")
+            return
+        }
+        let chosen = encoding ?? fileEncoding
+        let written = editedNewContent
         let target = backend
         let generation = targetGeneration
+        let filePath = (repoRoot as NSString).appendingPathComponent(path)
+        let prepared = await TextFileEncoding.prepareSave(
+            written, as: chosen, checkDeclaration: chosen != fileEncoding
+        )
+        guard generation == targetGeneration, readOnlyReason == nil, isEditable else { return }
+        let payload: TextFileEncoding.EncodedSave
+        switch prepared {
+        case .failure(.contradictsDeclaration):
+            saveError = String(localized: "Update the declared coding header before changing the file encoding.",
+                               table: "Git")
+            return
+        case .failure(.cannotRoundTrip):
+            saveError = String(localized: "Text cannot be saved in \(chosen.name) without losing characters.",
+                               table: "Git")
+            return
+        case .success(let encoded):
+            payload = encoded
+        }
+        guard payload.bytes.count <= Self.maxBytes else {
+            saveError = String(localized: "Text exceeds the 5 MiB diff limit. Reduce its size before saving.",
+                               table: "Git")
+            return
+        }
         invalidateReload()
         do {
-            try await target.write(path: filePath, data: bytes)
+            try await target.write(path: filePath, data: payload.bytes, ifUnchanged: expected)
             guard generation == targetGeneration, readOnlyReason == nil else { return }
-            fileEncoding = chosen
-            if encoding != nil { preferredEncoding = chosen }
-            savedNewContent = written
-            // An edit landing while the write was in flight stays dirty.
-            let dirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
-            if isDirty != dirty { isDirty = dirty }
-            if dirty { _ = resynchronizeNativeDelta() }
-            else { nativeCodeUnitDelta = [:] }
-            reversibleEdit = nil
-            saveError = nil
-            if !isDirty { reload() }
+            acceptPublishedText(written, encoding: chosen, explicit: encoding != nil,
+                                version: payload.version)
         } catch {
             guard generation == targetGeneration else { return }
-            saveError = error.localizedDescription
+            if case WorkspaceError.changedExternally = error {
+                saveError = String(localized: "The file changed outside Bailey. Your edits remain unsaved.",
+                                   table: "Git")
+                return
+            }
+            // The remote rename may have succeeded just before losing its reply.
+            // Confirm the final bytes; never retry an unconditional write.
+            let actual = try? await target.read(path: filePath, maxBytes: payload.bytes.count)
+            guard generation == targetGeneration, readOnlyReason == nil else { return }
+            if let actual, payload.version.matches(actual) {
+                acceptPublishedText(written, encoding: chosen, explicit: encoding != nil,
+                                    version: payload.version)
+            } else {
+                saveError = error.localizedDescription
+            }
         }
+    }
+
+    private func acceptPublishedText(
+        _ written: String, encoding: TextFileEncoding, explicit: Bool,
+        version: WorkspaceFileVersion
+    ) {
+        savedSourceVersion = version
+        fileEncoding = encoding
+        if explicit { preferredEncoding = encoding }
+        savedNewContent = written
+        // The frozen snapshot may differ from edits made while saving.
+        nativeCodeUnitDelta = nil
+        reversibleEdit = nil
+        refreshNativeDirtyState()
+        saveError = nil
+        if !isDirty { reload() }
     }
 
     private nonisolated enum GitContent {
@@ -1418,33 +1480,35 @@ final class DiffTab: nonisolated Identifiable {
     private nonisolated static func readWorktreeFile(
         root: String, path: String, backend: WorkspaceBackend,
         override: TextFileEncoding?
-    ) async -> (text: String, error: String?, encoding: TextFileEncoding?, bytes: Data?) {
+    ) async -> (text: String, error: String?, encoding: TextFileEncoding?,
+                bytes: Data?, version: WorkspaceFileVersion?) {
         let filePath = (root as NSString).appendingPathComponent(path)
         let symlink = (try? await backend.readSymlinkDestination(path: filePath)) ?? nil
         if let symlink {
             guard symlink.utf8.count <= maxBytes else {
-                return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil)
+                return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil, nil)
             }
-            return (symlink, nil, .utf8, Data(symlink.utf8))
+            return (symlink, nil, .utf8, Data(symlink.utf8), nil)
         }
         do {
             let data = try await backend.read(path: filePath, maxBytes: maxBytes)
             switch await TextFileEncoding.decode(data, backend: backend, override: override) {
             case .success(let document):
-                return (document.text, nil, document.encoding, data)
+                return (document.text, nil, document.encoding, data,
+                        WorkspaceFileVersion(data: data))
             case .failure(let failure):
-                return ("", failure.message, nil, nil)
+                return ("", failure.message, nil, nil, nil)
             }
         } catch WorkspaceError.tooLarge {
-            return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil)
+            return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil, nil)
         } catch WorkspaceError.notFound {
             // Deleted from the worktree: an empty "after" side is the diff.
-            return ("", nil, .utf8, Data())
+            return ("", nil, .utf8, Data(), nil)
         } catch {
             return ("", String(
                 localized: "Unable to read file: \(error.localizedDescription)", table: "Git",
                 comment: "Diff error followed by a system-provided error description."
-            ), nil, nil)
+            ), nil, nil, nil)
         }
     }
 }

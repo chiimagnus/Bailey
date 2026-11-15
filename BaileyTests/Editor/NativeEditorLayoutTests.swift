@@ -38,6 +38,9 @@ final class NativeEditorLayoutTests: XCTestCase {
         window.contentView = SourceEditorContainer(scrollView: scroll)
         window.orderFront(nil)
         scroll.layoutSubtreeIfNeeded()
+        // The container reserves its line-number gutter after the initial size.
+        // Match the App's geometry update using the actual native clip width.
+        editor.configureWrapping(wraps, viewportWidth: scroll.contentView.bounds.width)
         editor.layoutSubtreeIfNeeded()
         return (window, scroll, editor)
     }
@@ -1284,6 +1287,78 @@ final class NativeEditorLayoutTests: XCTestCase {
         }
     }
 
+    func testNativeFixedPitchDigitVariantsKeepExactComplexUnicodeAndTabWidth() throws {
+        let examples = (0..<300).map { index in
+            "number \(index) = 中文👋\t// Arabic مرحبا café é 👨‍👩‍👧‍👦 \(index * 3)"
+        } + [
+            "2️⃣ 123 \t👩🏽‍💻 ６７８",
+            "مرحبا 123\t中文👋 456",
+            "किताब\t123 👨‍👩‍👧‍👦",
+            "0123456789\t\t中文",
+            "tail 1\t2\t3",
+        ]
+        for font in [
+            NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            NSFont.monospacedSystemFont(ofSize: 24, weight: .regular),
+            NSFont.systemFont(ofSize: 13),
+        ] {
+            let style = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+            style.defaultTabInterval = NativeCodeTextView.tabInterval
+            let normal: [NSAttributedString.Key: Any] = [.font: font]
+            let tabs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: style]
+            let maximum = examples.map { line in
+                (line as NSString).size(withAttributes: line.contains("\t") ? tabs : normal).width
+            }.max() ?? 0
+            let (window, scroll, editor) = mount(
+                examples.joined(separator: "\n"), font: font, width: 420)
+            defer { window.close() }
+            let padding = (editor.textContainer?.lineFragmentPadding ?? 5) * 2
+            XCTAssertEqual(editor.frame.width, max(scroll.contentView.bounds.width,
+                                                   ceil(maximum + padding)), accuracy: 1,
+                "Cached digit variants must equal the real whole-line CoreText measurement")
+        }
+    }
+
+    func testColdUnwrappedHundredThousandUniqueUnicodeLineWidthsProfile() throws {
+        let source = (0..<100_000).map {
+            "line \($0) = \"中文👋\"\t// different content \($0)\r\n"
+        }.joined() + String(repeating: "中文👋\t", count: 80)
+        var costs: [Double] = []
+        for trial in 0..<30 {
+            let started = CFAbsoluteTimeGetCurrent()
+            let (window, scroll, editor) = mount(source, width: 820, wraps: false)
+            costs.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+            XCTAssertEqual(editor.string.utf16.count, source.utf16.count)
+            XCTAssertGreaterThan(editor.frame.width, scroll.contentView.bounds.width + 100,
+                "The distant Unicode/tab line must retain real horizontal reach, run=\(trial)")
+            window.close()
+        }
+        costs.sort()
+        print("P2_WIDTH_COLD_UNIQUE rows=100000 runs=30 median_ms=\(costs[15]) p95_ms=\(costs[28]) max_ms=\(costs[29])")
+        XCTAssertTrue(costs.allSatisfy { $0.isFinite && $0 > 0 })
+    }
+
+    func testColdUnwrappedDistinctUnicodeRowsDoNotDependOnNumericCache() throws {
+        let source = (0..<100_000).map { row -> String in
+            let first = String(UnicodeScalar(0x4E00 + row % 20_000)!)
+            let second = String(UnicodeScalar(0x4E00 + row / 20_000)!)
+            return "语言\(second)\(first)👋\t// 不同的文字\r\n"
+        }.joined() + String(repeating: "👋中文\t", count: 80)
+        var costs: [Double] = []
+        for run in 0..<3 {
+            let started = CFAbsoluteTimeGetCurrent()
+            let (window, scroll, editor) = mount(source, width: 820, wraps: false)
+            costs.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+            XCTAssertEqual(editor.string, source)
+            XCTAssertGreaterThan(editor.frame.width, scroll.contentView.bounds.width + 100,
+                                 "The distant long Unicode line must be reachable: \(run)")
+            window.close()
+        }
+        costs.sort()
+        print("P2_WIDTH_UNIQUE_NONNUMERIC rows=100000 runs=3 median_ms=\(costs[1]) max_ms=\(costs[2])")
+        XCTAssertTrue(costs.allSatisfy { $0.isFinite && $0 > 0 })
+    }
+
     func testUnwrappedDocumentWidthFitsActualTextWithoutPhantomHorizontalScroll() throws {
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         let candidates = [
@@ -1462,5 +1537,57 @@ final class NativeEditorLayoutTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(editor.frame.height, scroll.contentView.bounds.height)
             XCTAssertEqual(editor.text, source)
         }
+    }
+
+    func testPreloadedTextKitStorageRetainsEditsAcrossRealViewRemount() throws {
+        let initial = "head 中文 👋\r\nsecond\n"
+        let storage = NSTextContentStorage()
+        let source = NSTextStorage(string: initial)
+        storage.textStorage = source
+        let editor = NativeCodeTextView(contentStorage: storage)
+        XCTAssertTrue(editor.textStorage === source)
+        XCTAssertEqual(editor.string, initial)
+        XCTAssertEqual(editor.lineNumber(atUTF16Offset: (initial as NSString).range(of: "second").location), 2)
+        editor.showsLineNumbers = true
+
+        let firstScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 740, height: 480))
+        firstScroll.documentView = editor
+        editor.configureWrapping(false, viewportWidth: 740)
+        let firstWindow = NSWindow(contentRect: firstScroll.frame, styleMask: [.titled],
+                                   backing: .buffered, defer: false)
+        firstWindow.isReleasedWhenClosed = false
+        firstWindow.contentView = firstScroll
+        firstWindow.orderFront(nil)
+        firstScroll.layoutSubtreeIfNeeded()
+        XCTAssertTrue(firstWindow.makeFirstResponder(editor))
+        editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(source.string, "X" + initial)
+        XCTAssertEqual(editor.nativeContentManager.length, ("X" + initial).utf16.count)
+        XCTAssertTrue(editor.undoManager?.canUndo == true)
+        editor.undoManager?.undo()
+        XCTAssertEqual(source.string, initial)
+
+        firstScroll.documentView = nil
+        firstWindow.close()
+        // The backing storage remains authoritative while its view is unmounted.
+        source.replaceCharacters(in: NSRange(location: 0, length: 0), with: "before ")
+        XCTAssertEqual(source.string, "before " + initial)
+        let secondScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 680, height: 460))
+        secondScroll.documentView = editor
+        let secondWindow = NSWindow(contentRect: secondScroll.frame, styleMask: [.titled],
+                                    backing: .buffered, defer: false)
+        secondWindow.isReleasedWhenClosed = false
+        defer { secondWindow.close() }
+        secondWindow.contentView = secondScroll
+        secondWindow.orderFront(nil)
+        editor.configureWrapping(true, viewportWidth: 680)
+        secondScroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.string, source.string)
+        editor.insertText("Y", replacementRange: NSRange(location: source.length, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(source.string.hasSuffix("Y"))
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.string, "before " + initial)
     }
 }

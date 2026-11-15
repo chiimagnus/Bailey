@@ -76,7 +76,13 @@ struct SourceTextEditor: NSViewRepresentable {
 
     private func makeScrollView(coordinator: Coordinator) -> NSScrollView {
         let scrollView = RestorableScrollView()
-        let textView = FocusReportingTextView()
+        let textView = FocusReportingTextView(contentStorage: file.nativeContentStorage)
+        if let snapshot = file.preparedLineWidths {
+            if !wrapLines, snapshot.font.isEqual(font) {
+                _ = textView.installPreparedLineWidths(snapshot.widths, font: font)
+            }
+            file.preparedLineWidths = nil
+        }
         textView.onBecomeFirstResponder = onFocused
         textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
         scrollView.wantsLayer = true
@@ -95,9 +101,8 @@ struct SourceTextEditor: NSViewRepresentable {
         // Keep the scrolling text inside its pane, beside the fixed gutter.
         scrollView.clipsToBounds = true
 
-        // Configure typography before setting the text: the font/color
-        // setters restyle the whole document, and restyling after layout
-        // used to leave stale layout fragments that broke gutter numbering.
+        // Configure typography before first layout: restyling after layout
+        // can leave stale fragments and incorrect gutter numbering.
         textView.showsLineNumbers = true
         textView.highlightSelectedLine = true
         // Highlight every match as the query is typed in the find bar, the way
@@ -105,17 +110,17 @@ struct SourceTextEditor: NSViewRepresentable {
         // Native NSTextView.
         textView.isIncrementalSearchingEnabled = true
         apply(to: textView, scrollView: scrollView)
-        textView.text = file.text
-        // The first frame must size the actual document, not the empty buffer.
+        // The prefilled file-owned document is already the editor's TextKit source.
+        // The first frame must size that document, not an empty view buffer.
         // Long SVG lines otherwise wait for a later asynchronous resize pass.
         textView.configureWrapping(
             wrapLines, viewportWidth: max(scrollView.contentView.bounds.width, textView.frame.width)
         )
 
         // Tree-sitter syntax highlighting, for file types with
-        // a bundled grammar. Added after the text is set so the plugin's
-        // initial full-document parse — which runs when the view lands in a
-        // window — sees the whole document. The plugin only layers foreground
+        // a bundled grammar. The file-owned storage is already populated;
+        // the initial parse sees the whole document on first attachment.
+        // The plugin only layers foreground
         // colors as rendering attributes; the font stays bailey's (see
         // SyntaxHighlighting.theme).
         textView.updateSyntaxHighlighting(for: file.path)
@@ -124,7 +129,7 @@ struct SourceTextEditor: NSViewRepresentable {
         // observer starts overwriting `editorState` immediately.
         let state = file.editorState
         if let location = state.selectionLocation {
-            let limit = (textView.text ?? "").utf16.count
+            let limit = textView.textStorage?.length ?? 0
             let start = min(max(0, location), limit)
             let length = min(max(0, state.selectionLength ?? 0), limit - start)
             textView.textSelection = NSRange(location: start, length: length)
@@ -255,7 +260,7 @@ struct SourceTextEditor: NSViewRepresentable {
         let revision: UInt
         private(set) var scrollView: NSScrollView?
         private weak var textView: NativeCodeTextView?
-        private var pendingReplacement: (range: NSRange, removed: String, inserted: String)?
+        private var pendingReplacement: (range: NSRange, removed: String, inserted: String, originalLength: Int)?
         private var scrollObserver: (any NSObjectProtocol)?
         /// Last-applied focus state, so `updateNSView` can act only on the
         /// unfocused→focused edge.
@@ -322,8 +327,6 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
 
-        func currentText() -> String? { textView?.text }
-
         func appendText(_ suffix: String) -> Bool {
             guard let textView else { return false }
             return textView.appendDocumentText(suffix)
@@ -343,17 +346,28 @@ struct SourceTextEditor: NSViewRepresentable {
             guard view === textView, let file, file.editorCoordinator === self,
                   let replacementString, let storage = view.textStorage else { return true }
             pendingReplacement = (range, storage.attributedSubstring(from: range).string,
-                                  replacementString)
+                                  replacementString, storage.length)
             return true
         }
 
         private func handleNativeCharacterEdit(previousRange: NSRange,
                                                replacement: String) {
             guard let file, file.editorCoordinator === self else { return }
-            if let pendingReplacement, pendingReplacement.range == previousRange,
-               pendingReplacement.inserted.utf8.elementsEqual(replacement.utf8) {
-                file.recordNativeReplacement(at: previousRange,
-                    removing: pendingReplacement.removed, inserting: replacement)
+            // TextKit 2 reports the whole edited paragraph, not necessarily
+            // the caller's character replacement. Use the pre-edit delegate
+            // range only after verifying the actual storage length and bytes.
+            if let change = pendingReplacement,
+               previousRange.location <= change.range.location,
+               NSMaxRange(previousRange) >= NSMaxRange(change.range),
+               file.nativeTextStorage.length == change.originalLength
+                   - change.removed.utf16.count + change.inserted.utf16.count,
+               NSMaxRange(NSRange(location: change.range.location,
+                                   length: change.inserted.utf16.count)) <= file.nativeTextStorage.length,
+               file.nativeTextStorage.attributedSubstring(from: NSRange(
+                   location: change.range.location, length: change.inserted.utf16.count
+               )).string.utf8.elementsEqual(change.inserted.utf8) {
+                file.recordNativeReplacement(at: change.range,
+                    removing: change.removed, inserting: change.inserted)
             } else {
                 file.nativeTextChangedWithoutReplacement()
             }

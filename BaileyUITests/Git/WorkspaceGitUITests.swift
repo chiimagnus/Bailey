@@ -152,14 +152,10 @@ final class WorkspaceGitUITests: XCTestCase {
         let local = try WorkspaceUITestFixture(in: self)
         _ = try local.file("local.txt", text: "UI anchor\n")
         try local.initializeGit()
-        let actualHome = try XCTUnwrap(getpwuid(getuid()))
-        let actualSSHConfig = URL(fileURLWithPath: String(cString: actualHome.pointee.pw_dir))
-            .appendingPathComponent(".ssh/config")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: actualSSHConfig.path),
-                      "The UI fixture must use the real user's approved SSH alias file")
-        _ = try local.file(".ssh/config", text: "Include \(actualSSHConfig.path)\n")
+        try local.includeAuthorizedSSHHost(host)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: local.root, project: local.root
+            in: self, language: "en", configurationHome: local.root, project: local.root,
+            clipboardIsReadOnly: true
         )
         let window = app.windows.firstMatch
         let addProject = app.buttons["bailey.projects.addPicker"]
@@ -170,24 +166,7 @@ final class WorkspaceGitUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(openSSH.waitForExistence(timeout: 10))
         openSSH.click()
-        let hostChoice = app.buttons.matching(identifier: "bailey.sshFolderPicker.hostChoice")
-            .matching(NSPredicate(format: "value == %@", host)).firstMatch
-        XCTAssertTrue(hostChoice.waitForExistence(timeout: 15),
-                      "SSH picker must offer the authorized Windows host")
-        hostChoice.click()
-        let field = app.textFields["bailey.sshFolderPicker.path"]
-        XCTAssertTrue(field.waitForExistence(timeout: 40))
-        field.click()
-        app.typeKey("a", modifierFlags: .command)
-        field.typeText(root)
-        field.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
-        let confirmButton = app.buttons["bailey.sshFolderPicker.add"]
-        XCTAssertTrue(confirmButton.waitForExistence(timeout: 40))
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == true"), object: confirmButton
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 40), .completed)
-        confirmButton.click()
+        WorkspaceUITestSupport.selectSSHFolder(root, host: host, in: app)
 
         let projectLabel = (root as NSString).lastPathComponent + ", SSH · " + host
         let project = window.buttons.matching(identifier: "bailey.project.row")
@@ -258,7 +237,9 @@ final class WorkspaceGitUITests: XCTestCase {
             "1\t1\tfilter-lines.txt"
         )
 
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
         let window = app.windows.firstMatch
         app.typeKey("g", modifierFlags: [.command, .shift])
         let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
@@ -594,7 +575,9 @@ final class WorkspaceGitUITests: XCTestCase {
         let original = "let value = 2\n"
         let updated = "let value = 3 // 中文 👋\n"
         try original.write(to: file, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, project: fixture.root, clipboardIsReadOnly: true
+        )
 
         let window = app.windows.firstMatch
         app.typeKey("g", modifierFlags: [.command, .shift])

@@ -65,6 +65,9 @@ private actor CountingFileBackend: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { try await base.readSymlinkDestination(path: path) }
     func read(path: String, maxBytes: Int) async throws -> Data { try await base.read(path: path, maxBytes: maxBytes) }
     func write(path: String, data: Data) async throws { try await base.write(path: path, data: data) }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await base.write(path: path, data: data, ifUnchanged: version)
+    }
     func createFile(path: String) async throws { try await base.createFile(path: path) }
     func createDirectory(path: String) async throws { try await base.createDirectory(path: path) }
     func copy(from: String, to: String) async throws {
@@ -129,6 +132,109 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(tree.items.contains { $0.path == added.path })
     }
 
+    func testConcurrentSameTargetSyncReportsTheCompletedReadInsteadOfFalseFailure() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("real.swift")
+        try Data("actual directory entry".utf8).write(to: file)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await backend.delay(root.path)
+        let first = Task { await tree.sync(root: root.path, backend: backend) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingDirectory { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let awaiting = await backend.awaitingDirectory
+        XCTAssertTrue(awaiting, "The first read must be pending before a second Files refresh")
+        let release = Task {
+            try? await Task.sleep(for: .milliseconds(100))
+            await backend.release()
+        }
+        let secondSucceeded = await tree.sync(root: root.path, backend: backend)
+        await release.value
+        let firstSucceeded = await first.value
+        XCTAssertTrue(firstSucceeded)
+        XCTAssertTrue(secondSucceeded,
+                      "A coalesced refresh must report its completed disk read, not false failure")
+        XCTAssertEqual(tree.rootPath, root.path)
+        XCTAssertTrue(tree.items.contains { $0.path == file.path },
+                      "Both completed requests must observe the real disk entry")
+    }
+
+    func testConcurrentSameTargetSyncKeepsFailedDiskReadAsFailureUntilRecovered() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await backend.delay(root.path)
+        await backend.setUnavailable(true)
+        let first = Task { await tree.sync(root: root.path, backend: backend) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingDirectory { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let awaiting = await backend.awaitingDirectory
+        XCTAssertTrue(awaiting)
+        let release = Task {
+            try? await Task.sleep(for: .milliseconds(100))
+            await backend.release()
+        }
+        let secondSucceeded = await tree.sync(root: root.path, backend: backend)
+        await release.value
+        let firstSucceeded = await first.value
+        XCTAssertFalse(firstSucceeded)
+        XCTAssertFalse(secondSucceeded,
+                       "Failed shared SSH reads must not be misreported as healthy")
+        await backend.setUnavailable(false)
+        let recovered = await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(recovered, "A subsequent successful disk read must recover")
+    }
+
+    func testQueuedSameTargetSyncCannotClaimSuccessAfterRootSwitch() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let oldRoot = base.appendingPathComponent("old")
+        let newRoot = base.appendingPathComponent("new")
+        try FileManager.default.createDirectory(at: oldRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: newRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let oldFile = oldRoot.appendingPathComponent("old.swift")
+        let newFile = newRoot.appendingPathComponent("new.swift")
+        try Data("old".utf8).write(to: oldFile)
+        try Data("new".utf8).write(to: newFile)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await backend.delay(oldRoot.path)
+        let first = Task { await tree.sync(root: oldRoot.path, backend: backend) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingDirectory { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let awaiting = await backend.awaitingDirectory
+        XCTAssertTrue(awaiting)
+        let replacement = Task {
+            try? await Task.sleep(for: .milliseconds(100))
+            let succeeded = await tree.sync(root: newRoot.path, backend: backend)
+            await backend.release()
+            return succeeded
+        }
+        let outdated = await tree.sync(root: oldRoot.path, backend: backend)
+        let newSucceeded = await replacement.value
+        let firstSucceeded = await first.value
+        XCTAssertFalse(outdated, "A queued old-root refresh cannot validate the new workspace")
+        XCTAssertFalse(firstSucceeded)
+        XCTAssertTrue(newSucceeded)
+        XCTAssertEqual(tree.rootPath, newRoot.path)
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path })
+        XCTAssertFalse(tree.items.contains { $0.path == oldFile.path },
+                       "A late response cannot revive rows from an obsolete root")
+    }
+
     func testLocalFileEventsRefreshRealDiskChangesWithoutIdleListing() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -148,7 +254,10 @@ final class FileTreeTests: XCTestCase {
         let createdReadCount = await backend.requests[root.path, default: 0]
         try await Task.sleep(for: .seconds(10.2))
         let idleReadCount = await backend.requests[root.path, default: 0]
-        XCTAssertEqual(idleReadCount, createdReadCount, "Idle local Files must not query directories")
+        // FSEvents may finish delivering the earlier create as extra directory events.
+        // A two-second polling loop would issue at least five reads in this interval.
+        XCTAssertLessThan(idleReadCount - createdReadCount, 3,
+                          "Idle local Files must not periodically query directories")
 
         try FileManager.default.removeItem(at: file)
         try await waitForCondition("External delete must remove the real disk entry") {

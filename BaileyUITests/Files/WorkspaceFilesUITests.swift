@@ -126,36 +126,23 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "Real SSH fixture must not be mistaken for a local file")
 
         let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
         _ = try fixture.file(".config/bailey-dev/config.toml", text: """
             theme = "light"
             theme-light = "Ayu Light"
             theme-dark = "Adwaita Dark"
             """)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            clipboardIsReadOnly: true
         )
-        app.menuBarItems["Project"].click()
-        let addSSHItem = app.menuItems["Add SSH Files or Projects…"]
-        XCTAssertTrue(addSSHItem.waitForExistence(timeout: 12))
-        addSSHItem.click()
+        addSSHFolder(remoteRoot, host: host, in: app)
         let main = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
-        let sheet = main.sheets.firstMatch
-        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
-        let hostField = sheet.comboBoxes.firstMatch
-        let paths = sheet.textViews.firstMatch
-        XCTAssertTrue(hostField.waitForExistence(timeout: 12))
-        XCTAssertTrue(paths.waitForExistence(timeout: 12))
-        hostField.click()
-        hostField.typeKey("a", modifierFlags: .command)
-        hostField.typeText(host)
-        paths.click()
-        paths.typeText(remoteRoot)
-        sheet.buttons["Add"].click()
 
         let remoteProject = main.buttons.matching(identifier: "bailey.project.row")
             .matching(NSPredicate(format: "label CONTAINS %@", "SSH · " + host)).firstMatch
         XCTAssertTrue(remoteProject.waitForExistence(timeout: 20),
-                      "Real isolated SSH project must be added through its native sheet")
+                      "Real isolated SSH project must be added through its window picker")
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
@@ -263,26 +250,13 @@ final class WorkspaceFilesUITests: XCTestCase {
                 "cleaned", "Only this SSH GUI test directory may be deleted")
         }
         let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            clipboardIsReadOnly: true
         )
-        app.menuBarItems["Project"].click()
-        let add = app.menuItems["Add SSH Files or Projects…"]
-        XCTAssertTrue(add.waitForExistence(timeout: 12))
-        add.click()
         let window = app.windows.firstMatch
-        let sheet = window.sheets.firstMatch
-        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
-        let hostField = sheet.comboBoxes.firstMatch
-        let paths = sheet.textViews.firstMatch
-        XCTAssertTrue(hostField.waitForExistence(timeout: 12))
-        XCTAssertTrue(paths.waitForExistence(timeout: 12))
-        hostField.click()
-        hostField.typeKey("a", modifierFlags: .command)
-        hostField.typeText(host)
-        paths.click()
-        paths.typeText(remoteRoot)
-        sheet.buttons["Add"].click()
+        addSSHFolder(remoteRoot, host: host, in: app)
 
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 25))
@@ -340,6 +314,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             "ready")
 
         let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
         let source = try fixture.file(
             "finder-source/local-only.txt", text: "MAC_FINDER_SOURCE_UNIQUE_BYTES\n"
         )
@@ -354,21 +329,8 @@ final class WorkspaceFilesUITests: XCTestCase {
             in: self, language: "en", configurationHome: fixture.root,
             project: localWorkspace, clipboardIsReadOnly: true
         )
-        app.menuBarItems["Project"].click()
-        let addSSH = app.menuItems["Add SSH Files or Projects…"]
-        XCTAssertTrue(addSSH.waitForExistence(timeout: 12))
-        addSSH.click()
+        addSSHFolder(remoteRoot, host: host, in: app)
         let remoteWindow = app.windows.firstMatch
-        let sheet = remoteWindow.sheets.firstMatch
-        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
-        let hostField = sheet.comboBoxes.firstMatch
-        hostField.click()
-        hostField.typeKey("a", modifierFlags: .command)
-        hostField.typeText(host)
-        let paths = sheet.textViews.firstMatch
-        paths.click()
-        paths.typeText(remoteRoot)
-        sheet.buttons["Add"].click()
 
         let remoteProject = remoteWindow.buttons.matching(identifier: "bailey.project.row")
             .matching(NSPredicate(format: "label CONTAINS %@", "SSH · " + host)).firstMatch
@@ -483,27 +445,11 @@ final class WorkspaceFilesUITests: XCTestCase {
         // UI tests may only write inside their sandboxed temporary fixture.
         let fixture = try WorkspaceUITestFixture(in: self)
         let localTwin = try fixture.file("p3-git-中文.swift", text: "MAC_WRONG_MACHINE_BYTES\n")
+        try fixture.includeAuthorizedSSHHost(host)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            clipboardIsReadOnly: true
         )
-        func addSSH(_ remoteFolder: String) {
-            app.menuBarItems["Project"].click()
-            let add = app.menuItems["Add SSH Files or Projects…"]
-            XCTAssertTrue(add.waitForExistence(timeout: 10))
-            add.click()
-            let sheet = app.windows.firstMatch.sheets.firstMatch
-            XCTAssertTrue(sheet.waitForExistence(timeout: 10))
-            let hostField = sheet.comboBoxes.firstMatch
-            let paths = sheet.textViews.firstMatch
-            XCTAssertTrue(hostField.waitForExistence(timeout: 10))
-            XCTAssertTrue(paths.waitForExistence(timeout: 10))
-            hostField.click()
-            hostField.typeKey("a", modifierFlags: .command)
-            hostField.typeText(host)
-            paths.click()
-            paths.typeText(remoteFolder)
-            sheet.buttons["Add"].click()
-        }
         func quickOpen(_ name: String, at path: String, content: String) {
             app.typeKey("p", modifierFlags: .command)
             let search = app.textFields["bailey.commandPalette.search"]
@@ -528,7 +474,7 @@ final class WorkspaceFilesUITests: XCTestCase {
                            "The opened editor must contain real Windows bytes")
         }
 
-        addSSH(gitRoot)
+        addSSHFolder(gitRoot, host: host, in: app)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 25))
         files.click()
@@ -598,7 +544,7 @@ final class WorkspaceFilesUITests: XCTestCase {
                            "MAC_WRONG_MACHINE_BYTES\n")
         }
 
-        addSSH(plainRoot)
+        addSSHFolder(plainRoot, host: host, in: app)
         files.click()
         XCTAssertTrue(WorkspaceUITestSupport.fileRow(
             URL(fileURLWithPath: plainFile), in: app.windows.firstMatch
@@ -681,7 +627,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let files = try (0..<6).map { index in
             try fixture.file("rapid-\(index).swift", text: "let rapid = \(index)\n")
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
         let filesTab = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(filesTab.waitForExistence(timeout: 20))
 
@@ -1244,24 +1192,14 @@ final class WorkspaceFilesUITests: XCTestCase {
             + "printf 'beta remote\\n' > '\(secondPath)'")
         XCTAssertEqual(try runSSH(host: host, command: "cat '\(firstPath)'"), "alpha remote\n")
 
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        app.menuBarItems["Project"].click()
-        let addSSH = app.menuItems["Add SSH Files or Projects…"]
-        XCTAssertTrue(addSSH.waitForExistence(timeout: 10))
-        addSSH.click()
+        let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            clipboardIsReadOnly: true
+        )
+        addSSHFolder(remoteRoot, host: host, in: app)
         let window = app.windows.firstMatch
-        let addSheet = window.sheets.firstMatch
-        XCTAssertTrue(addSheet.waitForExistence(timeout: 10))
-        let hostField = addSheet.comboBoxes.firstMatch
-        let paths = addSheet.textViews.firstMatch
-        XCTAssertTrue(hostField.waitForExistence(timeout: 10))
-        XCTAssertTrue(paths.waitForExistence(timeout: 10))
-        hostField.click()
-        hostField.typeKey("a", modifierFlags: .command)
-        hostField.typeText(host)
-        paths.click()
-        paths.typeText(remoteRoot)
-        addSheet.buttons["Add"].click()
 
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 25))
@@ -1304,12 +1242,6 @@ final class WorkspaceFilesUITests: XCTestCase {
               !host.contains(where: { $0.isWhitespace || $0.isNewline }),
               ProcessInfo.processInfo.environment["BAILEY_P2_EXTERNAL_DISCONNECT"] == "1"
         else { throw XCTSkip("Requires a test-only Windows SSH host and Dev-master controller") }
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let clipboard = NSPasteboard.general
-            clipboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
-        }
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
         ).trimmingCharacters(in: .newlines)
@@ -1329,25 +1261,15 @@ final class WorkspaceFilesUITests: XCTestCase {
             + "printf 'REMOTE_B\\n' > '\(remoteB)' && "
             + "git -C '\(remoteRoot)' init -q -b main")
         let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
         let localTwin = try fixture.file("local-window/a-remote.txt", text: "LOCAL_ONLY\n")
         let localFolder = localTwin.deletingLastPathComponent()
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", configurationHome: fixture.root
         )
-        app.menuBarItems["Project"].click()
-        app.menuItems["Add SSH Files or Projects…"].click()
+        addSSHFolder(remoteRoot, host: host, in: app)
         let remoteWindowID = app.windows.firstMatch.identifier
         let remoteWindow = app.windows.matching(identifier: remoteWindowID).firstMatch
-        let sheet = remoteWindow.sheets.firstMatch
-        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
-        let hostField = sheet.comboBoxes.firstMatch
-        hostField.click()
-        hostField.typeKey("a", modifierFlags: .command)
-        hostField.typeText(host)
-        let paths = sheet.textViews.firstMatch
-        paths.click()
-        paths.typeText(remoteRoot)
-        sheet.buttons["Add"].click()
         let filesA = remoteWindow.descendants(matching: .any)
             .matching(identifier: "bailey.dock.files").firstMatch
         XCTAssertTrue(filesA.waitForExistence(timeout: 25))
@@ -1418,6 +1340,14 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertFalse(WorkspaceUITestSupport.fileRow(
             URL(fileURLWithPath: remoteNew), in: newWindow
         ).exists, "The local window must not display an unrelated Windows file")
+    }
+
+    private func addSSHFolder(_ root: String, host: String, in app: XCUIApplication) {
+        app.menuBarItems["Project"].click()
+        let add = app.menuItems["Add SSH Files or Projects…"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        add.click()
+        WorkspaceUITestSupport.selectSSHFolder(root, host: host, in: app)
     }
 
     private func runSSH(host: String, command: String) throws -> String {

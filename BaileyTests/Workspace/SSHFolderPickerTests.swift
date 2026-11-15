@@ -73,6 +73,9 @@ private actor PickerBackend: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func read(path: String, maxBytes: Int) async throws -> Data { throw WorkspaceError.notFound }
     func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        throw WorkspaceError.notFound
+    }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }

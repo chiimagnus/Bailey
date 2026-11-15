@@ -81,12 +81,8 @@ final class SSHWorkspaceFileEvents {
                               let project = owner, !members.isEmpty else { break observe }
                         switch event {
                         case .ready:
-                            // The new watcher starts before re-reading disk, closing
-                            // the gap between subscription and its first snapshot.
-                            guard (try? await backend.list(directory: target.root)) != nil,
-                                  generation == token, !Task.isCancelled else {
-                                break observe
-                            }
+                            // The watcher is live before the first disk snapshot.
+                            // Project.syncFiles performs that read and verifies its target.
                             let synced = await project.syncFiles(isCurrent: {
                                 project.matchesPanelTarget(target.identity)
                                     && project.panelContext?.connectionRevision == target.revision

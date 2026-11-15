@@ -7,7 +7,7 @@ import XCTest
 
 private actor DiffWorkspaceFixture: WorkspaceBackend {
     private var contents = Data("baseline😀\r\n".utf8)
-    private var pendingWrite: (Data, CheckedContinuation<Void, Error>)?
+    private var pendingWrite: (Data, WorkspaceFileVersion?, CheckedContinuation<Void, Error>)?
     private var pendingRead: CheckedContinuation<Data, Error>?
     private var pauseRead = false
     private(set) var writing = false
@@ -38,11 +38,14 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         shortGitBlob = true
     }
 
-    func finishWrite(failing: Bool = false) {
-        guard let (data, continuation) = pendingWrite else { return }
+    func finishWrite(failing: Bool = false, publishedBeforeFailure: Bool = false) {
+        guard let (data, expected, continuation) = pendingWrite else { return }
         pendingWrite = nil
         writing = false
-        if failing {
+        if let expected, !expected.matches(contents) {
+            continuation.resume(throwing: WorkspaceError.changedExternally)
+        } else if failing {
+            if publishedBeforeFailure { contents = data }
             continuation.resume(throwing: WorkspaceError.timedOut)
         } else {
             contents = data
@@ -58,10 +61,16 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         continuation?.resume(returning: data)
     }
     func write(path: String, data: Data) async throws {
+        try await stageWrite(data, expected: nil)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await stageWrite(data, expected: version)
+    }
+    private func stageWrite(_ data: Data, expected: WorkspaceFileVersion?) async throws {
         writes += 1
         try await withCheckedThrowingContinuation { continuation in
             writing = true
-            pendingWrite = (data, continuation)
+            pendingWrite = (data, expected, continuation)
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
@@ -187,6 +196,9 @@ private actor StagedTransitionBackend: WorkspaceBackend {
     func write(path: String, data: Data) async throws {
         try await LocalWorkspaceBackend.shared.write(path: path, data: data)
     }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data, ifUnchanged: version)
+    }
     func createFile(path: String) async throws {
         try await LocalWorkspaceBackend.shared.createFile(path: path)
     }
@@ -220,6 +232,9 @@ private struct WindowsCodePageGitBackend: WorkspaceBackend {
     }
     func write(path: String, data: Data) async throws {
         try await LocalWorkspaceBackend.shared.write(path: path, data: data)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        try await LocalWorkspaceBackend.shared.write(path: path, data: data, ifUnchanged: version)
     }
     func createFile(path: String) async throws {
         try await LocalWorkspaceBackend.shared.createFile(path: path)
@@ -992,6 +1007,54 @@ final class NativeDiffTabTests: XCTestCase {
         }.count
         XCTAssertGreaterThan(lastBlock, 8,
                              "Deep scrolling must locate the next virtual deletion block")
+    }
+
+    func testHundredThousandGitLFRowsReuseNativeIndexButPreserveOtherSeparators() {
+        let view = DiffTextView()
+        let source = (0..<100_000).map { "let row\($0) = \($0)\n" }.joined()
+        view.text = source
+        let started = CFAbsoluteTimeGetCurrent()
+        view.resetLiveGitLineIndex()
+        let initialMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("P3_GIT_LF_INDEX_100K cold_ms=\(initialMs)")
+        XCTAssertLessThan(initialMs, 25,
+                          "Pure LF must reuse the native paragraph index, not rescan 100K rows")
+        XCTAssertEqual(view.liveGitSourceLineCount, 100_000)
+        let expected = NativeTextLineIndex(gitLF: source)
+        for row in [0, 1, 29_999, 50_000, 99_999, 100_000] {
+            XCTAssertEqual(view.liveGitOffset(forLine: row), expected.offset(atLine: row))
+        }
+
+        // CRLF has the same native/Git LF boundaries, including Unicode content.
+        let crlf = String(repeating: "中文👋\r\n", count: 100_000)
+        view.text = crlf
+        view.resetLiveGitLineIndex()
+        let crlfExpected = NativeTextLineIndex(gitLF: crlf)
+        for row in [0, 1, 50_000, 99_999, 100_000] {
+            XCTAssertEqual(view.liveGitOffset(forLine: row), crlfExpected.offset(atLine: row))
+            XCTAssertEqual(view.lineNumber(atUTF16Offset: crlfExpected.offset(atLine: row)),
+                           row + 1)
+        }
+
+        // Bare CR and Unicode separators belong to native paragraphs, not Git LF.
+        let mixed = "a\rb\r\nc\u{2028}d\n猫"
+        view.text = mixed
+        view.resetLiveGitLineIndex()
+        let mixedIndex = NativeTextLineIndex(gitLF: mixed)
+        for offset in 0...mixed.utf16.count {
+            XCTAssertEqual(view.liveGitLine(atUTF16: offset), mixedIndex.row(at: offset))
+        }
+
+        // Both snapshots must continue to track genuine source edits independently.
+        view.text = source
+        view.resetLiveGitLineIndex()
+        let edit = NSRange(location: 0, length: 0)
+        view.textStorage?.replaceCharacters(in: edit, with: "插入\n")
+        XCTAssertNotNil(view.adjustLiveFoldSource(in: edit, replacement: "插入\n"))
+        let updated = NativeTextLineIndex(gitLF: view.string)
+        for row in [0, 1, 2, 50_000, 100_000] {
+            XCTAssertEqual(view.liveGitOffset(forLine: row), updated.offset(atLine: row))
+        }
     }
 
     func testHundredThousandLineFoldedColdScrollbarJumpsKeepSourceAndExtentAligned() {
@@ -5422,6 +5485,251 @@ final class NativeDiffTabTests: XCTestCase {
                       "The coherent reload must consume the final index OID")
     }
 
+    func testWorktreeDiffCannotOverwriteAnotherWindowFileTabSave() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let relative = "同名'文档.swift"
+        let path = directory.appendingPathComponent(relative)
+        let initial = "let item = 1\n"
+        try Data(initial.utf8).write(to: path)
+        for args in [["add", "--", relative], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let head = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path).stdout
+        let index = GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        let diff = DiffTab(repoRoot: directory.path, path: relative, source: .worktree,
+                           untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await file.waitForText()
+        try await wait { diff.canPresentNativeContent }
+        file.autoSaveSuspendedForClose = true
+        diff.autoSaveSuspendedForClose = true
+
+        // Two independent native hosts share the disk target, not a writable buffer.
+        let fileWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+        let diffWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+        for window in [fileWindow, diffWindow] { window.isReleasedWhenClosed = false }
+        defer { fileWindow.close(); diffWindow.close() }
+        fileWindow.contentView = NSHostingView(rootView: FileViewerView(file: file, isFocused: false))
+        diffWindow.contentView = NSHostingView(rootView: DiffViewerView(diff: diff))
+        fileWindow.orderFront(nil)
+        diffWindow.orderFront(nil)
+        fileWindow.contentView?.layoutSubtreeIfNeeded()
+        diffWindow.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(diff.isDirty)
+
+        file.text = "let item = 2\n"
+        try replaceNativeDiffText(diff, with: "let item = 3\n")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(diff.isDirty)
+        await file.save()
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data("let item = 2\n".utf8))
+        await diff.save()
+        XCTAssertNotNil(diff.saveError, "A different tab must not clobber FileTab's newer bytes")
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data("let item = 3\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: path), Data("let item = 2\n".utf8))
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path).stdout, head)
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
+    }
+
+    func testCleanWorktreeDiffEncodingWriteIsProtectedDuringTabAndBatchClose() async throws {
+        for batch in [false, true] {
+            for failing in [false, true] {
+                let backend = DiffWorkspaceFixture()
+                let diff = DiffTab(repoRoot: "/fixture", path: "encoding.txt", source: .worktree,
+                                   untracked: true, origPath: nil, backend: backend,
+                                   workspaceIdentity: nil, preferences: try isolatedPreferences())
+                try await wait { diff.canPresentNativeContent }
+                let project = Project(fallbackName: "Diff close", workspaceConfiguration: .standard)
+                let tab = PaneTab(content: .diff(diff))
+                project.append(tab)
+
+                let writing = Task { await diff.save(as: .utf8BOM) }
+                try await wait { await backend.writing }
+                XCTAssertFalse(diff.isDirty)
+                XCTAssertTrue(diff.isSaving)
+                XCTAssertTrue(tab.content.hasUnresolvedSave)
+
+                if batch { project.closeDiffs() } else { project.close(tab) }
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "An encoding-only Git write must not be closed before completion")
+
+                await backend.finishWrite(failing: failing)
+                await writing.value
+                if failing {
+                    try await wait { !diff.autoSaveSuspendedForClose }
+                    XCTAssertTrue(project.tabs.contains { $0 === tab },
+                                  "Failed Git encoding write must retain its tab")
+                    XCTAssertNotNil(diff.saveError)
+                    let stored = await backend.stored()
+                    XCTAssertEqual(stored, Data("baseline😀\r\n".utf8))
+                } else {
+                    try await wait { project.tabs.isEmpty }
+                    XCTAssertNil(diff.saveError)
+                    let stored = await backend.stored()
+                    XCTAssertEqual(stored, TextFileEncoding.utf8BOM.encoded("baseline😀\r\n"))
+                }
+            }
+        }
+    }
+
+    func testFailedCleanWorktreeDiffEncodingBlocksFileMutationAndGitOperations() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "failed-encoding.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        let app = WorkspaceApplication()
+        let manager = app.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "diff safety", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.append(PaneTab(content: .diff(diff)))
+
+        let converting = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await backend.writing }
+        await backend.finishWrite(failing: true)
+        await converting.value
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertFalse(diff.isSaving)
+        XCTAssertNotNil(diff.saveError)
+
+        XCTAssertFalse(app.canRunGitAction(repository: "/fixture", scope: "local"))
+        let gitReady = await app.saveBeforeGitAction(
+            repository: "/fixture", scope: "local", isCurrent: { true }
+        )
+        XCTAssertFalse(gitReady)
+
+        let accepted = await diff.beginFileMutation()
+        if accepted { diff.endFileMutation() }
+        XCTAssertFalse(accepted, "A failed clean conversion must block a path mutation")
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, Data("baseline😀\r\n".utf8))
+
+        let retry = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await backend.writing }
+        await backend.finishWrite()
+        await retry.value
+        XCTAssertNil(diff.saveError)
+        XCTAssertTrue(app.canRunGitAction(repository: "/fixture", scope: "local"))
+        let readyAfterSave = await app.saveBeforeGitAction(
+            repository: "/fixture", scope: "local", isCurrent: { true }
+        )
+        XCTAssertTrue(readyAfterSave)
+        let readyToMutate = await diff.beginFileMutation()
+        XCTAssertTrue(readyToMutate)
+        if readyToMutate { diff.endFileMutation() }
+        let saved = await backend.stored()
+        XCTAssertEqual(saved, TextFileEncoding.utf8BOM.encoded("baseline😀\r\n"))
+    }
+
+    func testFailedCleanWorktreeDiffEncodingRemainsUnresolvedAfterWriteEnds() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "failed-encoding.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        let tab = PaneTab(content: .diff(diff))
+
+        let writing = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await backend.writing }
+        await backend.finishWrite(failing: true)
+        await writing.value
+
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertFalse(diff.isSaving)
+        XCTAssertNotNil(diff.saveError)
+        XCTAssertTrue(tab.content.hasUnresolvedSave,
+                      "A failed Git worktree encoding conversion must not become discardable")
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, Data("baseline😀\r\n".utf8))
+    }
+
+    func testWorktreeDiffLostWriteAcknowledgementReconcilesPublishedBytes() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        diff.autoSaveSuspendedForClose = true
+        try replaceNativeDiffText(diff, with: "已保存但回执丢失👋\n")
+        let saving = Task { await diff.save() }
+        try await wait { await backend.writing }
+        await backend.finishWrite(failing: true, publishedBeforeFailure: true)
+        await saving.value
+        let writes = await backend.writes
+        let stored = await backend.stored()
+        XCTAssertEqual(writes, 1, "An ambiguous acknowledgement must not retry a write")
+        XCTAssertEqual(stored, Data("已保存但回执丢失👋\n".utf8))
+        XCTAssertNil(diff.saveError)
+        XCTAssertFalse(diff.isDirty)
+    }
+
+    func testWorktreeDiffRejectsEncodingThatWouldExceedFiveMiB() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("encoded-limit.txt")
+        let initial = Data("seed\n".utf8)
+        try initial.write(to: path)
+        let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                           source: .worktree, untracked: true, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        diff.autoSaveSuspendedForClose = true
+        let row = String(repeating: "0123456789", count: 8) + "\n"
+        let newText = String(repeating: row, count: (5 << 20) / (row.utf16.count * 2) + 1)
+        XCTAssertLessThan(newText.utf8.count, 5 << 20)
+        XCTAssertGreaterThan(try XCTUnwrap(TextFileEncoding.utf16LEBOM.encoded(newText)).count, 5 << 20)
+        try replaceNativeDiffText(diff, with: newText)
+        await diff.save(as: .utf16LEBOM)
+        XCTAssertNotNil(diff.saveError, "Oversized encoded output must not publish an unreadable Diff")
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), initial)
+        await diff.save()
+        XCTAssertNil(diff.saveError)
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data(newText.utf8))
+        XCTAssertEqual(diff.fileEncoding, .utf8)
+    }
+
+    func testWorktreeDiffRejectsExternalSameSizeAndMtimeWithoutLosingDraft() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let relative = "same-size.swift"
+        let path = directory.appendingPathComponent(relative)
+        let original = "let item = 1\n"
+        let external = "let item = 9\n"
+        let draft = "let item = 2\n"
+        try Data(original.utf8).write(to: path)
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: path.path)
+        let diff = DiffTab(repoRoot: directory.path, path: relative, source: .worktree,
+                           untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        diff.autoSaveSuspendedForClose = true
+        try replaceNativeDiffText(diff, with: draft)
+        try Data(external.utf8).write(to: path)
+        try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: path.path)
+        XCTAssertEqual(try Data(contentsOf: path).count, original.utf8.count)
+        XCTAssertEqual(try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path.path)[.modificationDate] as? Date), timestamp)
+        await diff.save()
+        XCTAssertNotNil(diff.saveError, "Same byte count and mtime cannot authorize an old snapshot")
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(draft.utf8))
+        XCTAssertEqual(try Data(contentsOf: path), Data(external.utf8))
+    }
+
     func testCanonicalEquivalentEditDuringDiffWriteRemainsDirty() async throws {
         let domain = "bailey-canonical-save-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
@@ -5785,6 +6093,37 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
     }
 
+    func testFourMiBUnknownNativeEditsDoNotRebuildEntireDirtyDictionary() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("large-native-edit.txt")
+        let row = String(repeating: "abc ", count: 40) + "\n"
+        let source = String(repeating: row, count: (4 << 20) / row.utf8.count)
+        try Data(source.utf8).write(to: path)
+        let diff = DiffTab(repoRoot: directory.path, path: path.lastPathComponent,
+                           source: .worktree, untracked: true, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        try await wait({ diff.canPresentNativeContent }, timeout: 30)
+        let surface = DiffNativeSurface(diff: diff)
+        surface.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        diff.nativeSurface = surface
+        surface.render()
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertFalse(diff.isDirty)
+
+        let started = CFAbsoluteTimeGetCurrent()
+        editor.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 1), with: "Q")
+        XCTAssertTrue(diff.isDirty)
+        editor.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 1), with: "a")
+        XCTAssertFalse(diff.isDirty)
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("P3_DIFF_UNKNOWN_DIRTY_4M elapsed_ms=\(elapsedMs)")
+        XCTAssertLessThan(elapsedMs, 1_200,
+                          "Unknown native changes must not rebuild a multi-MiB character-frequency map")
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(source.utf8))
+    }
+
     func testNativeDiffDirtyTrackerDistinguishesInitialLoadManualRevertAndUnicode() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -6048,6 +6387,171 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(diff.editedNewContent, "unsaved during outage")
         let retained = await backend.stored()
         XCTAssertEqual(retained, Data("second 中文🪨".utf8))
+    }
+
+    func testExactFiveMiBGitIndexWorktreeHistoryAndNativeSaveRemainLossless() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let filename = "exact-limit.swift"
+        let path = directory.appendingPathComponent(filename)
+        let rowCount = 20_480
+        let payload = String(repeating: "x", count: 247)
+        let originalRows = (0..<rowCount).map { String(format: "%08d", $0) + payload }
+        let original = originalRows.joined(separator: "\n") + "\n"
+        XCTAssertEqual(original.utf8.count, 5 << 20)
+        try Data(original.utf8).write(to: path)
+        for args in [["add", filename], ["commit", "-qm", "five MiB baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let head = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var stagedRows = originalRows
+        stagedRows[0].replaceSubrange(
+            stagedRows[0].startIndex..<stagedRows[0].index(
+                stagedRows[0].startIndex, offsetBy: 8), with: "stage000")
+        let stagedText = stagedRows.joined(separator: "\n") + "\n"
+        try Data(stagedText.utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", filename], in: directory.path).status, 0)
+        let stagedIndex = GitCommandExecution.run(
+            ["ls-files", "-s", "--", filename], in: directory.path).stdout
+
+        var worktreeRows = stagedRows
+        worktreeRows[rowCount / 2].replaceSubrange(
+            worktreeRows[rowCount / 2].startIndex..<worktreeRows[rowCount / 2].index(
+                worktreeRows[rowCount / 2].startIndex, offsetBy: 8), with: "work0000")
+        let worktreeText = worktreeRows.joined(separator: "\n") + "\n"
+        try Data(worktreeText.utf8).write(to: path)
+        let preferences = try isolatedPreferences()
+        let start = CFAbsoluteTimeGetCurrent()
+        let historical = DiffTab(repoRoot: directory.path, path: filename,
+                                 source: .revision(hash: head), untracked: false,
+                                 origPath: nil, backend: LocalWorkspaceBackend.shared,
+                                 workspaceIdentity: nil, preferences: preferences)
+        let staged = DiffTab(repoRoot: directory.path, path: filename,
+                             source: .staged, untracked: false, origPath: nil,
+                             backend: LocalWorkspaceBackend.shared,
+                             workspaceIdentity: nil, preferences: preferences)
+        let worktree = DiffTab(repoRoot: directory.path, path: filename,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil, preferences: preferences)
+        try await wait({ !historical.isLoading && !staged.isLoading
+            && !worktree.isLoading && staged.display != nil
+            && worktree.display != nil }, timeout: 60)
+        let readyMs = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertNil(historical.error)
+        XCTAssertNil(staged.error)
+        XCTAssertNil(worktree.error)
+        XCTAssertEqual(Data(historical.newContent.utf8), Data(original.utf8))
+        XCTAssertEqual(Data(staged.newContent.utf8), Data(stagedText.utf8))
+        XCTAssertEqual(Data(worktree.newContent.utf8), Data(worktreeText.utf8))
+        XCTAssertFalse(historical.isEditable)
+        XCTAssertFalse(staged.isEditable)
+        XCTAssertTrue(worktree.isEditable)
+        for tab in [staged, worktree] {
+            XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+                $0.kind == .added
+            }.count, 1)
+            XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+                $0.kind == .removed
+            }.count, 1)
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -950, y: -950, width: 800, height: 500),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let surface = DiffNativeSurface(diff: worktree)
+        worktree.nativeSurface = surface
+        window.contentView = surface
+        window.orderFront(nil)
+        let nativeStart = CFAbsoluteTimeGetCurrent()
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let nativeMs = (CFAbsoluteTimeGetCurrent() - nativeStart) * 1_000
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertEqual(Data(editor.string.utf8), Data(worktreeText.utf8))
+        XCTAssertFalse(worktree.isDirty)
+        editor.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 1),
+                                               with: "Z")
+        XCTAssertTrue(worktree.isDirty)
+        let expected = Data("Z".utf8) + Data(worktreeText.utf8.dropFirst())
+        await worktree.save()
+        XCTAssertNil(worktree.saveError)
+        XCTAssertFalse(worktree.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), expected)
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), head)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["ls-files", "-s", "--", filename], in: directory.path).stdout, stagedIndex)
+
+        let reopened = DiffTab(repoRoot: directory.path, path: filename,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil, preferences: preferences)
+        try await wait({ !reopened.isLoading && reopened.display != nil }, timeout: 60)
+        XCTAssertNil(reopened.error)
+        XCTAssertEqual(Data(reopened.newContent.utf8), expected)
+        var usage = rusage()
+        _ = getrusage(RUSAGE_SELF, &usage)
+        print("P3_DIFF_EXACT_5M ready_ms=\(readyMs) native_ms=\(nativeMs) "
+              + "process_peak_rss_mib=\(Double(usage.ru_maxrss) / 1_048_576) "
+              + "staged_and_head_unchanged=true saved_bytes=\(expected.count)")
+    }
+
+    func testDiffRejectsOversizeAcrossWorktreeStagedAndHistoryWithoutPartialText() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sizes = [(5 << 20) + 1, 8 << 20, 16 << 20, 32 << 20]
+        for size in sizes {
+            let filename = "oversize-\(size).txt"
+            try Data(repeating: 0x61, count: size)
+                .write(to: directory.appendingPathComponent(filename))
+        }
+        for args in [["add", "."], ["commit", "-qm", "oversize sources"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let revision = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tooLarge = String(localized: "File is too large to diff", table: "Git")
+        let preferences = try isolatedPreferences()
+
+        for size in sizes {
+            let filename = "oversize-\(size).txt"
+            let path = directory.appendingPathComponent(filename)
+            let oldIndex = GitCommandExecution.run(
+                ["ls-files", "-s", "--", filename], in: directory.path).stdout
+            for (label, source) in [
+                ("worktree", DiffTab.Source.worktree),
+                ("staged", .staged),
+                ("revision", .revision(hash: revision))
+            ] {
+                let tab = DiffTab(repoRoot: directory.path, path: filename, source: source,
+                                  untracked: false, origPath: nil,
+                                  backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                                  preferences: preferences)
+                try await wait({ !tab.isLoading }, timeout: 30)
+                XCTAssertEqual(tab.error, tooLarge, "\(label) \(size) bytes")
+                XCTAssertFalse(tab.hasLoadedContent, label)
+                XCTAssertFalse(tab.isEditable, label)
+                XCTAssertEqual(tab.newContent, "", label)
+                XCTAssertNil(tab.display, label)
+                if case .worktree = source { await tab.save() }
+            }
+            let actual = try Data(contentsOf: path)
+            XCTAssertEqual(actual.count, size)
+            XCTAssertEqual(actual.first, 0x61)
+            XCTAssertEqual(actual.last, 0x61)
+            XCTAssertEqual(GitCommandExecution.run(
+                ["ls-files", "-s", "--", filename], in: directory.path).stdout, oldIndex)
+            XCTAssertEqual(GitCommandExecution.run(
+                ["rev-parse", "HEAD"], in: directory.path).stdout
+                    .trimmingCharacters(in: .whitespacesAndNewlines), revision)
+            print("P3_DIFF_PRODUCT_LIMIT bytes=\(size) source_count=3 all_rejected=true")
+        }
     }
 
     func testWorktreeStagedHistoryBinarySizeAndSymlink() async throws {

@@ -68,7 +68,9 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let file = try fixture.file("incoming.swift", text: "let external = true\n")
         let unicode = try fixture.file("中文 🧪.swift", text: "let 测试 = 1\n")
         let nested = try fixture.file("nested/deep.md", text: "# hello\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, project: fixture.root, clipboardIsReadOnly: true
+        )
         WorkspaceUITestSupport.element("bailey.dock.git", in: app).click()
         let originalWindowCount = app.windows.count
         let bundle = try XCTUnwrap(
@@ -210,7 +212,7 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let folder = fixture.root.appendingPathComponent("restored", isDirectory: true)
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", configurationHome: fixture.root,
-            project: folder
+            project: folder, clipboardIsReadOnly: true
         )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let owner = app.windows.firstMatch

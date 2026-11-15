@@ -383,8 +383,7 @@ final class Project: nonisolated Identifiable {
               case .file(let file) = tab.content else { throw WorkspaceError.notFound }
         try await file.waitForTextBeforeAppending()
         guard isCurrent(), file.path == path else { throw CancellationError() }
-        let newline = file.text.contains("\r\n") ? "\r\n" : "\n"
-        let separator = file.text.isEmpty || file.text.hasSuffix("\n") ? "" : newline
+        let (newline, separator) = file.lineEndingForAppend()
         file.appendText(separator + patterns.joined(separator: newline) + newline)
         await file.save()
         guard isCurrent() else { throw CancellationError() }
@@ -553,16 +552,18 @@ final class Project: nonisolated Identifiable {
             if terminate { session.terminate() }
             removeTabWithContent(content.id)
         case .file, .diff:
-            guard content.isDirty else {
+            guard content.hasUnresolvedSave else {
                 removeTabWithContent(content.id)
                 return
             }
             // Closing is a focus transition, but it must not let a late
             // background save defeat an explicit Don't Save choice.
+            let hadPendingSave = content.isSaving
             content.suspendAutoSaveForClose(true)
             let window = closeSheetWindow
             Task { @MainActor in
-                _ = await saveBeforeClosing(content, in: window)
+                _ = await saveBeforeClosing(content, in: window,
+                                            hadPendingSave: hadPendingSave)
             }
         case .browser:
             removeTabWithContent(content.id)
@@ -607,9 +608,17 @@ final class Project: nonisolated Identifiable {
     /// This is `async` on purpose: awaiting the sheet means each prompt in a
     /// batch is presented only after the previous one has fully dismissed.
     @discardableResult
-    private func saveBeforeClosing(_ content: PaneContent, in window: NSWindow?) async -> Bool {
+    private func saveBeforeClosing(
+        _ content: PaneContent, in window: NSWindow?, hadPendingSave: Bool = false
+    ) async -> Bool {
+        let wasSaving = hadPendingSave || content.isSaving
         await content.save()
-        guard content.isDirty else {
+        // An encoding-only save may fail without ever making the text dirty.
+        if wasSaving && content.hasSaveError && !content.isDirty {
+            content.suspendAutoSaveForClose(false)
+            return true
+        }
+        guard content.hasUnresolvedSave else {
             removeTabWithContent(content.id)
             return false
         }
@@ -624,7 +633,7 @@ final class Project: nonisolated Identifiable {
         case .alertFirstButtonReturn: // Save
             await content.save()
             // Keep the tab open if the write failed; the error bar shows why.
-            guard !content.isDirty else {
+            guard !content.hasUnresolvedSave else {
                 content.suspendAutoSaveForClose(false)
                 return true
             }
@@ -645,8 +654,9 @@ final class Project: nonisolated Identifiable {
     private func closeBatch(_ targets: [PaneContent], completion: @escaping (Bool) -> Void = { _ in }) {
         dock.clearContextTarget()
         guard !isClosingPanels, !targets.contains(where: \.isClosing) else { return }
-        let dirtyContents = targets.filter(\.isDirty)
-        let cleanContents = targets.filter { !$0.isDirty }
+        let dirtyContents = targets.filter(\.hasUnresolvedSave)
+        let pendingSaves = Set(dirtyContents.filter(\.isSaving).map(\.id))
+        let cleanContents = targets.filter { !$0.hasUnresolvedSave }
 
         guard !dirtyContents.isEmpty else {
             cleanContents.forEach { closeContent($0) }
@@ -661,14 +671,15 @@ final class Project: nonisolated Identifiable {
             defer { isClosingPanels = false }
             for content in dirtyContents {
                 // Save on close first; only failures need the native prompt.
-                if await saveBeforeClosing(content, in: window) {
+                if await saveBeforeClosing(content, in: window,
+                                           hadPendingSave: pendingSaves.contains(content.id)) {
                     dirtyContents.forEach { $0.suspendAutoSaveForClose(false) }
                     completion(false)
                     return
                 }
             }
             while let content = cleanContents.first(where: { content in
-                content.isDirty && tabs.contains { $0.content.id == content.id }
+                content.hasUnresolvedSave && tabs.contains { $0.content.id == content.id }
             }) {
                 content.suspendAutoSaveForClose(true)
                 if await saveBeforeClosing(content, in: window) {

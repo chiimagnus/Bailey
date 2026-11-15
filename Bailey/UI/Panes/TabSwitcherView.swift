@@ -677,7 +677,7 @@ private struct TabContentThumbnail: View {
     private func filePreview(_ file: FileTab) -> some View {
         switch file.content {
         case .text:
-            Text(textExcerpt(file.text, aroundUTF16: file.editorState.selectionLocation))
+            Text(fileExcerpt(file))
                 .font(.system(size: 5.2, design: .monospaced))
                 .foregroundStyle(Color(nsColor: terminalForeground))
                 .lineSpacing(0)
@@ -725,17 +725,26 @@ private struct TabContentThumbnail: View {
 
     /// Bound the sampled UTF-16 range before splitting it into lines so a
     /// multi-megabyte editor or diff cannot make a tiny thumbnail expensive.
+    private func fileExcerpt(_ file: FileTab) -> String {
+        let excerpt = file.previewExcerpt(aroundUTF16: file.editorState.selectionLocation)
+        return formatExcerpt(excerpt.text, startsInsideLine: excerpt.startsInsideLine)
+    }
+
     private func textExcerpt(
         _ text: String, aroundUTF16 location: Int? = nil
     ) -> String {
         let source = text as NSString
         guard source.length > 0 else { return "" }
-
         let center = min(max(0, location ?? 0), source.length)
         let start = max(0, center - (location == nil ? 0 : 1_200))
         let length = min(7_000, source.length - start)
-        var sample = source.substring(with: NSRange(location: start, length: length))
-        if start > 0, let newline = sample.firstIndex(of: "\n") {
+        let sample = source.substring(with: NSRange(location: start, length: length))
+        return formatExcerpt(sample, startsInsideLine: start > 0)
+    }
+
+    private func formatExcerpt(_ excerpt: String, startsInsideLine: Bool) -> String {
+        var sample = excerpt
+        if startsInsideLine, let newline = sample.firstIndex(of: "\n") {
             sample.removeSubrange(...newline)
         }
 

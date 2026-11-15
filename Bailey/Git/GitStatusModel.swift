@@ -1060,6 +1060,7 @@ final class GitStatusModel {
         self.backend = targetBackend
         if targetChanged {
             pendingFileEvent?.cancel()
+            pendingFileEvent = nil
             localWatcher = nil
             localWatcherPaths = []
         }
@@ -1124,6 +1125,7 @@ final class GitStatusModel {
         localWatcherForeground = foreground
         if !foreground {
             pendingFileEvent?.cancel()
+            pendingFileEvent = nil
             localWatcher = nil
             localWatcherPaths = []
         } else {
@@ -1145,6 +1147,7 @@ final class GitStatusModel {
             ) : []
         guard paths != localWatcherPaths || localWatcher == nil else { return }
         pendingFileEvent?.cancel()
+        pendingFileEvent = nil
         localWatcher = nil
         localWatcherPaths = paths
         let generation = contextGeneration
@@ -1152,12 +1155,15 @@ final class GitStatusModel {
             Task { @MainActor [weak self] in
                 guard let self, self.localWatcherForeground,
                       self.contextGeneration == generation else { return }
-                self.pendingFileEvent?.cancel()
+                // Coalesce from the first event, not from the last. A stream
+                // of edits spaced less than 400 ms apart must still refresh.
+                guard self.pendingFileEvent == nil else { return }
                 self.pendingFileEvent = Task { [weak self] in
                     do { try await Task.sleep(for: .milliseconds(400)) }
                     catch { return }
                     guard let self, self.localWatcherForeground,
                           self.contextGeneration == generation else { return }
+                    self.pendingFileEvent = nil
                     self.refresh()
                 }
             }

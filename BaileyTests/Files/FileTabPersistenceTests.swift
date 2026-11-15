@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Observation
 import SwiftUI
@@ -11,6 +12,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private struct PendingWrite {
         let path: String
         let data: Data
+        let expected: WorkspaceFileVersion?
         let finish: CheckedContinuation<Void, Error>
     }
 
@@ -19,6 +21,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private var reading: [CheckedContinuation<Data, Error>] = []
     private var nextReadPaused = false
     private(set) var readCount = 0
+    private(set) var lastReadLimit: Int?
     private(set) var writingPath: String?
     private(set) var readingPath: String?
     var pendingReadCount: Int { reading.count }
@@ -39,6 +42,9 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         writingPath = nil
         if failing {
             pending.finish.resume(throwing: Rejection.simulated)
+        } else if let expected = pending.expected,
+                  !(files[pending.path].map(expected.matches) ?? false) {
+            pending.finish.resume(throwing: WorkspaceError.changedExternally)
         } else {
             files[pending.path] = pending.data
             pending.finish.resume()
@@ -49,6 +55,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
     func read(path: String, maxBytes: Int) async throws -> Data {
         readCount += 1
+        lastReadLimit = maxBytes
         guard let data = files[path] else { throw WorkspaceError.notFound }
         guard data.count <= maxBytes else { throw WorkspaceError.tooLarge }
         if nextReadPaused {
@@ -59,9 +66,20 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         return data
     }
     func write(path: String, data: Data) async throws {
+        try await stageWrite(path: path, data: data, expected: nil)
+    }
+    func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws {
+        guard files[path].map(version.matches) ?? false else {
+            throw WorkspaceError.changedExternally
+        }
+        try await stageWrite(path: path, data: data, expected: version)
+    }
+    private func stageWrite(path: String, data: Data,
+                            expected: WorkspaceFileVersion?) async throws {
         try await withCheckedThrowingContinuation { continuation in
             writingPath = path
-            writing = PendingWrite(path: path, data: data, finish: continuation)
+            writing = PendingWrite(path: path, data: data, expected: expected,
+                                   finish: continuation)
         }
     }
 
@@ -97,6 +115,170 @@ private func waitForFileTabState(_ condition: () async -> Bool) async throws {
 final class FileTabPersistenceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testSaveRefusesExternalSameSizeSameMtimeRewriteAndKeepsDraft() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("document.txt")
+        let baseline = Data("alpha 中🙂\n".utf8)
+        let external = Data("omega 中🙂\n".utf8)
+        XCTAssertEqual(baseline.count, external.count)
+        try baseline.write(to: path)
+        let modified = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: path.path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "Bailey draft 中文\n"
+        try external.write(to: path, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: path.path)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), external)
+        XCTAssertEqual(file.text, "Bailey draft 中文\n")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+    }
+
+    func testLocalConditionalWriteKeepsModeAndDoesNotFollowSymlink() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-cas-local-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = folder.appendingPathComponent("executable.sh")
+        let baseline = Data("echo first\n".utf8)
+        let update = Data("echo next\n".utf8)
+        try baseline.write(to: source)
+        try FileManager.default.setAttributes([.posixPermissions: 0o751],
+                                              ofItemAtPath: source.path)
+        let backend = LocalWorkspaceBackend.shared
+        try await backend.write(path: source.path, data: update,
+                                ifUnchanged: WorkspaceFileVersion(data: baseline))
+        XCTAssertEqual(try Data(contentsOf: source), update)
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: source.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue, 0o751)
+        let linked = folder.appendingPathComponent("linked.sh")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: source)
+        try await backend.write(path: linked.path, data: baseline,
+                                ifUnchanged: WorkspaceFileVersion(data: update))
+        XCTAssertEqual(try Data(contentsOf: linked), baseline)
+        XCTAssertEqual(try Data(contentsOf: source), update)
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: linked.path))
+        let removed = folder.appendingPathComponent("removed.sh")
+        try baseline.write(to: removed)
+        try FileManager.default.removeItem(at: removed)
+        do {
+            try await backend.write(path: removed.path, data: update,
+                                    ifUnchanged: WorkspaceFileVersion(data: baseline))
+            XCTFail("A removed source must not be resurrected")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removed.path))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)),
+                       Set([source.lastPathComponent, linked.lastPathComponent]))
+    }
+
+    func testLocalConditionalWriteSupportsLongLegalFileName() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-long-save-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent(String(repeating: "a", count: 240) + ".txt")
+        let original = Data("origin".utf8)
+        let updated = Data("updated".utf8)
+        try original.write(to: target)
+        try await LocalWorkspaceBackend.shared.write(
+            path: target.path, data: updated,
+            ifUnchanged: WorkspaceFileVersion(data: original)
+        )
+        XCTAssertEqual(try Data(contentsOf: target), updated)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path),
+                       [target.lastPathComponent])
+    }
+
+    func testTwoIndependentFileTabsCannotOverwriteOneAnothersSavedRevision() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-same-file-cas-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent("shared.md")
+        try Data("shared baseline 中文\r\n".utf8).write(to: target)
+        let first = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        let second = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                             workspaceIdentity: nil)
+        try await first.waitForText()
+        try await second.waitForText()
+        first.autoSaveSuspendedForClose = true
+        second.autoSaveSuspendedForClose = true
+        first.text = "first editor revision\r\n"
+        second.text = "second independent draft\r\n"
+        await first.save()
+        XCTAssertNil(first.saveError)
+        XCTAssertFalse(first.isDirty)
+        await second.save()
+        XCTAssertEqual(try Data(contentsOf: target), Data("first editor revision\r\n".utf8))
+        XCTAssertEqual(second.text, "second independent draft\r\n")
+        XCTAssertTrue(second.isDirty)
+        XCTAssertNotNil(second.saveError)
+        XCTAssertEqual(first.text, "first editor revision\r\n")
+    }
+
+    func testExplicitEncodingChangeQueuedDuringWriteKeepsNewestDraftAndBothIntents() async throws {
+        let path = "/fixture/\(UUID().uuidString)-encoding-queue.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "first 中文"
+        let firstBytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("first 中文"))
+        let first = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        file.text = "second 中文👋"
+        let secondBytes = try XCTUnwrap(TextFileEncoding.utf16LEBOM.encoded("second 中文👋"))
+        let second = Task { await file.save(as: .utf16LEBOM) }
+        // Ensure the second save has joined the active writer before releasing it.
+        await Task.yield()
+        await backend.finishWrite()
+        try await waitForFileTabState {
+            let current = await backend.data(at: path)
+            let pending = await backend.writingPath
+            return current == firstBytes && pending == path
+        }
+        await backend.finishWrite()
+        await first.value
+        await second.value
+        let finalBytes = await backend.data(at: path)
+        XCTAssertEqual(finalBytes, secondBytes)
+        XCTAssertEqual(file.fileEncoding, .utf16LEBOM)
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(file.text, "second 中文👋")
+    }
+
+    func testSaveAfterExternalRestoreToOriginalBytesCanRecover() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-retry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("document.txt")
+        let baseline = Data("base\r\n中文🙂".utf8)
+        try baseline.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.text = "local revision\r\n中文🙂"
+        try Data("external".utf8).write(to: path)
+        await file.save()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), Data("external".utf8))
+        try baseline.write(to: path)
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), Data("local revision\r\n中文🙂".utf8))
+    }
+
     func testCanonicalEquivalentCleanReloadInstallsNewBytes() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let composed = "café 中文👋\r\n"
@@ -116,6 +298,33 @@ final class FileTabPersistenceTests: XCTestCase {
         try await file.waitForText()
         XCTAssertEqual(file.reloadRevision, updated, "Identical bytes must not replace the document")
         XCTAssertFalse(file.isDirty)
+    }
+
+    func testExactDirtyComparisonRejectsCanonicallyEquivalentReorderingAndChunkBoundaryChange() async throws {
+        let cases: [(String, String)] = [
+            ("a\u{0301}\u{0323}", "a\u{0323}\u{0301}"),
+            (String(repeating: "A", count: 65_535) + "🐈\n",
+             String(repeating: "A", count: 65_535) + "🐕\n"),
+        ]
+        for (original, revised) in cases {
+            let path = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + ".txt")
+            try Data(original.utf8).write(to: path)
+            defer { try? FileManager.default.removeItem(at: path) }
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+            try await file.waitForText()
+            XCTAssertEqual(original.utf16.count, revised.utf16.count)
+            file.text = revised
+            XCTAssertTrue(file.isDirty, "Equal UTF-16 lengths cannot imply equal source bytes")
+            file.text = original
+            XCTAssertFalse(file.isDirty)
+            file.text = revised
+            await file.save()
+            XCTAssertNil(file.saveError)
+            XCTAssertFalse(file.isDirty)
+            XCTAssertEqual(try Data(contentsOf: path), Data(revised.utf8))
+        }
     }
 
     func testCanonicalEquivalentEditDuringWriteRemainsDirty() async throws {
@@ -174,12 +383,68 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.path, "/fixture/new.txt")
     }
 
+    func testSaveCannotCreateUnreopenableOversizedTextAndKeepsDraft() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let original = Data(repeating: 65, count: 32 << 20)
+        try original.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.text += "👋"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), original,
+                       "Saving a file above the readable limit must never publish it")
+        XCTAssertTrue(file.isDirty, "A refused write cannot discard the draft")
+        XCTAssertNotNil(file.saveError)
+        XCTAssertTrue(file.text.hasSuffix("👋"))
+
+        // A smaller revision must still save through the same version-checked path.
+        file.text = String(repeating: "A", count: (32 << 20) - 4) + "👋"
+        file.refreshDirtyState()
+        await file.save()
+        let expected = Data(file.text.utf8)
+        XCTAssertEqual(expected.count, 32 << 20)
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), expected)
+        let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+        try await reopened.waitForText()
+        XCTAssertEqual(Data(reopened.text.utf8), expected)
+    }
+
+    func testExplicitEncodingSaveCannotExceedReadableTextCapacity() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let original = Data(repeating: 65, count: 16 << 20)
+        try original.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        await file.save(as: .utf16LEBOM)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+        try await reopened.waitForText()
+        XCTAssertEqual(Data(reopened.text.utf8), original)
+    }
+
     func testLocalTextReadCapacityAndFailureKinds() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let limit = 8 << 20
-        for count in [0, limit - 1, limit, limit + 1] {
+        let limit = 32 << 20
+        for count in [0, 1, (8 << 20) - 1, 8 << 20, (8 << 20) + 1,
+                      16 << 20, limit - 1, limit, limit + 1, 64 << 20] {
             let path = root.appendingPathComponent("\(count).txt")
             try Data(repeating: 65, count: count).write(to: path)
             let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
@@ -216,6 +481,14 @@ final class FileTabPersistenceTests: XCTestCase {
             localized: "Unknown text encoding. Choose an encoding to reopen.", table: "Workspace"
         ))
 
+        do {
+            _ = try await LocalWorkspaceBackend.shared.read(path: exactPath.path, maxBytes: .max)
+            XCTFail("Unbounded reads must not bypass byte budgets")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, NSPOSIXErrorDomain)
+            XCTAssertEqual(error.code, Int(EINVAL))
+        }
+
         let missing = FileTab(path: root.appendingPathComponent("missing.txt").path,
                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         do { try await missing.waitForText(); XCTFail("Expected missing read failure") } catch {}
@@ -224,6 +497,32 @@ final class FileTabPersistenceTests: XCTestCase {
         try Data("recovered".utf8).write(to: URL(fileURLWithPath: missing.path))
         try await missing.waitForText()
         XCTAssertEqual(missing.text, "recovered")
+    }
+
+    func testLocalBackendRejectsNonregularFilesRatherThanReturningEmptyText() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let deviceLink = root.appendingPathComponent("device-link")
+        try FileManager.default.createSymbolicLink(atPath: deviceLink.path,
+                                                    withDestinationPath: "/dev/null")
+        let fifo = root.appendingPathComponent("pipe")
+        let fifoLink = root.appendingPathComponent("pipe-link")
+        XCTAssertEqual(mkfifo(fifo.path, mode_t(0o600)), 0)
+        try FileManager.default.createSymbolicLink(atPath: fifoLink.path,
+                                                    withDestinationPath: fifo.path)
+        for path in ["/dev/null", deviceLink.path, root.path, fifo.path, fifoLink.path] {
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                let actual = try await LocalWorkspaceBackend.shared.read(path: path, maxBytes: 128)
+                XCTFail("Nonregular file must not be accepted as text: \(path), bytes=\(actual.count)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
+                              "FIFO and device reads must not block while waiting for input")
+        }
     }
 
     func testLocalSymbolicLinkUsesTargetContents() async throws {
@@ -242,6 +541,110 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: target), Data(original.utf8))
     }
 
+    func testImageExtensionNeverAuthorizesUnboundedBackendRead() async throws {
+        let path = "/fixture/not-a-picture.png"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("plain text".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "plain text")
+        let limit = await backend.lastReadLimit
+        XCTAssertEqual(limit, 32 << 20,
+                       "An image-looking extension must not bypass the text size limit")
+    }
+
+    func testActualLargeImagePreviewKeepsIndependentBoundedRead() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2048, pixelsHigh: 2048,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let buffer = try XCTUnwrap(bitmap.bitmapData)
+        var entropy: UInt32 = 0x1234_5678
+        for i in 0..<(bitmap.bytesPerRow * bitmap.pixelsHigh) {
+            entropy ^= entropy << 13
+            entropy ^= entropy >> 17
+            entropy ^= entropy << 5
+            buffer[i] = UInt8(truncatingIfNeeded: entropy)
+        }
+        let pixels = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        XCTAssertGreaterThan(pixels.count, 8 << 20)
+        let path = root.appendingPathComponent("large-image.png")
+        try pixels.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await waitForFileTabState { if case .image = file.content { return true }; return false }
+        guard case .image(let preview) = file.content else {
+            return XCTFail("Real PNG larger than text limit must remain previewable")
+        }
+        XCTAssertEqual(preview.representations.first?.pixelsWide, 2048)
+        XCTAssertEqual(try Data(contentsOf: path), pixels)
+
+        let linked = root.appendingPathComponent("linked-image.png")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: path)
+        let linkedFile = FileTab(path: linked.path, backend: LocalWorkspaceBackend.shared,
+                                 workspaceIdentity: nil)
+        linkedFile.loadIfNeeded()
+        try await waitForFileTabState {
+            if case .loading = linkedFile.content { return false }
+            return true
+        }
+        guard case .image = linkedFile.content else {
+            return XCTFail("A symlink to a large regular image must retain image preview")
+        }
+    }
+
+    func testOversizedFakeImageCannotBypassTextCapacity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("not-an-image.png")
+        let original = Data(repeating: 0x41, count: (32 << 20) + 1)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await waitForFileTabState {
+            if case .unavailable = file.content { return true }
+            return false
+        }
+        guard case .unavailable = file.content else {
+            return XCTFail("An oversized renamed text file must not become editable")
+        }
+        XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
+    func testLargeImagePreviewUsesBoundedDecodedDimensions() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 5000, pixelsHigh: 2500,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let imageBytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let path = root.appendingPathComponent("wide-preview.png")
+        try imageBytes.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await waitForFileTabState { if case .image = file.content { return true }; return false }
+        guard case .image(let image) = file.content else {
+            return XCTFail("Valid image must remain previewable")
+        }
+        XCTAssertLessThanOrEqual(image.representations.first?.pixelsWide ?? .max, 4096)
+        XCTAssertLessThanOrEqual(image.representations.first?.pixelsHigh ?? .max, 4096)
+        XCTAssertEqual(try Data(contentsOf: path), imageBytes)
+    }
+
     func testInvalidUTF8AndImageFallbackRespectTextCapacity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -252,7 +655,7 @@ final class FileTabPersistenceTests: XCTestCase {
             ("invalid.txt", Data([0xff, 0xfe, 0x00]), binaryReason),
             ("embedded-nul.txt", Data([0x61, 0x00, 0x62]), binaryReason),
             ("invalid.png", Data([0xff, 0xfe, 0x00]), binaryReason),
-            ("oversized.png", Data(repeating: 0xff, count: (8 << 20) + 1), sizeReason),
+            ("oversized.png", Data(repeating: 0xff, count: (32 << 20) + 1), sizeReason),
         ] {
             let path = directory.appendingPathComponent(name)
             try data.write(to: path)
@@ -578,6 +981,67 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(stored, Data("existing\n".utf8))
         file.autoSaveSuspendedForClose = true
     }
+    func testFailedCleanEncodingSaveBlocksGitAndProtectedFileMutation() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "save safety", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let repository = "/fixture/git"
+        let path = repository + "/failed-encoding.txt"
+        let original = Data("original".utf8)
+        let backend = EditorWorkspaceFixture(path: path, contents: original)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await file.waitForText()
+        project.append(PaneTab(content: .file(file)))
+
+        let converting = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        await converting.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.isSaving)
+        XCTAssertNotNil(file.saveError)
+
+        XCTAssertFalse(workspaceApplication.canRunGitAction(repository: repository, scope: "ssh:fixture"))
+        let gitReady = await workspaceApplication.saveBeforeGitAction(
+            repository: repository, scope: "ssh:fixture", isCurrent: { true }
+        )
+        XCTAssertFalse(gitReady, "A Git action cannot supersede a failed clean encoding conversion")
+
+        var mutated = false
+        do {
+            try await workspaceApplication.withProtectedFiles(
+                paths: [path], workspace: "ssh:fixture"
+            ) {
+                mutated = true
+            }
+            XCTFail("A file rename/delete cannot run while an encoding conversion is unresolved")
+        } catch {}
+        XCTAssertFalse(mutated)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        let persisted = await backend.data(at: path)
+        XCTAssertEqual(persisted, original)
+
+        let retry = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await retry.value
+        XCTAssertNil(file.saveError)
+        XCTAssertTrue(workspaceApplication.canRunGitAction(repository: repository, scope: "ssh:fixture"))
+        let gitReadyAfterSave = await workspaceApplication.saveBeforeGitAction(
+            repository: repository, scope: "ssh:fixture", isCurrent: { true }
+        )
+        XCTAssertTrue(gitReadyAfterSave)
+        try await workspaceApplication.withProtectedFiles(paths: [path], workspace: "ssh:fixture") {
+            mutated = true
+        }
+        XCTAssertTrue(mutated, "A successful conversion must restore file mutation eligibility")
+        let saved = await backend.data(at: path)
+        XCTAssertEqual(saved, TextFileEncoding.utf8BOM.encoded("original"))
+    }
+
     func testGitPreparationWaitsForWritesAndNeverClosesOrLosesEditedTab() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
@@ -793,6 +1257,281 @@ final class FileTabPersistenceTests: XCTestCase {
         try await waitForFileTabState { !manager.projects.contains(where: { $0 === project }) }
         XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
                        "new draft while remote save is pending")
+    }
+
+    func testCleanEncodingWriteCannotBeSkippedByAnyCloseRoute() async throws {
+        enum CloseRoute: CaseIterable { case tab, batch, project, window, application }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let expected = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("original"))
+
+        for route in CloseRoute.allCases {
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            let project = try XCTUnwrap(manager.selectedProject)
+            let path = root.appendingPathComponent(UUID().uuidString + ".txt").path
+            let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+            try await file.waitForText()
+            let tab = PaneTab(content: .file(file))
+            project.append(tab)
+
+            let writing = Task { await file.save(as: .utf8BOM) }
+            try await waitForFileTabState { await backend.writingPath == path }
+            XCTAssertFalse(file.isDirty, "Encoding-only save must keep the text clean")
+            XCTAssertTrue(file.isSaving)
+            XCTAssertTrue(manager.hasUnsavedEditorsInWindow,
+                          "An active write must protect its window even without text edits")
+            XCTAssertTrue(workspaceApplication.hasUnsavedEditors,
+                          "An active write must protect application termination")
+
+            let closing: Task<Bool, Never>?
+            switch route {
+            case .tab:
+                project.close(tab)
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "Single-tab close must not retire an active writer")
+                closing = nil
+            case .batch:
+                project.closeFiles()
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "Batch close must not retire an active writer")
+                closing = nil
+            case .project:
+                manager.close(project)
+                XCTAssertTrue(manager.projects.contains { $0 === project },
+                              "Project close must not retire an active writer")
+                closing = nil
+            case .window:
+                closing = Task { await manager.saveBeforeWindowClose() }
+            case .application:
+                closing = Task { await workspaceApplication.saveBeforeTermination() }
+            }
+
+            await backend.finishWrite()
+            await writing.value
+            if let closing {
+                let approved = await closing.value
+                XCTAssertTrue(approved, "A completed successful write must permit close")
+            } else if route == .project {
+                try await waitForFileTabState { !manager.projects.contains { $0 === project } }
+            } else {
+                try await waitForFileTabState { project.tabs.isEmpty }
+            }
+            let persisted = await backend.data(at: path)
+            XCTAssertEqual(persisted, expected)
+        }
+    }
+
+    func testFailedCleanEncodingWriteVetoesAllCloseRoutes() async throws {
+        enum CloseRoute: CaseIterable { case tab, batch, project, window, application }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for route in CloseRoute.allCases {
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            let project = try XCTUnwrap(manager.selectedProject)
+            let path = root.appendingPathComponent(UUID().uuidString + ".txt").path
+            let original = Data("original".utf8)
+            let backend = EditorWorkspaceFixture(path: path, contents: original)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+            try await file.waitForText()
+            let tab = PaneTab(content: .file(file))
+            project.append(tab)
+
+            let writing = Task { await file.save(as: .utf8BOM) }
+            try await waitForFileTabState { await backend.writingPath == path }
+            XCTAssertTrue(file.isSaving)
+            XCTAssertFalse(file.isDirty)
+
+            let closing: Task<Bool, Never>?
+            var closeStarted = false
+            switch route {
+            case .tab:
+                project.close(tab)
+                closing = nil
+            case .batch:
+                project.closeFiles()
+                closing = nil
+            case .project:
+                manager.close(project)
+                closing = nil
+            case .window:
+                closing = Task {
+                    closeStarted = true
+                    return await manager.saveBeforeWindowClose()
+                }
+            case .application:
+                closing = Task {
+                    closeStarted = true
+                    return await workspaceApplication.saveBeforeTermination()
+                }
+            }
+            if closing != nil {
+                try await waitForFileTabState { closeStarted }
+            } else {
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "An active writer must remain open while its close is pending")
+                XCTAssertTrue(manager.projects.contains { $0 === project })
+            }
+
+            // Complete the write immediately, even if a close Task has not been scheduled yet.
+            await backend.finishWrite(failing: true)
+            await writing.value
+            if let closing {
+                let mayClose = await closing.value
+                XCTAssertFalse(mayClose, "A failed encoding write must veto this close attempt")
+            } else {
+                try await waitForFileTabState { !file.autoSaveSuspendedForClose }
+            }
+
+            XCTAssertTrue(manager.projects.contains { $0 === project },
+                          "A failed encoding write must preserve its project")
+            XCTAssertTrue(project.tabs.contains { $0 === tab },
+                          "A failed encoding write must preserve the file tab")
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNotNil(file.saveError)
+            let persisted = await backend.data(at: path)
+            XCTAssertEqual(persisted, original)
+        }
+    }
+
+    func testFailedEncodingConversionStillProtectsASecondCloseAttempt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let path = root.appendingPathComponent("failed-encoding.txt").path
+        let original = Data("original".utf8)
+        let backend = EditorWorkspaceFixture(path: path, contents: original)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        project.append(PaneTab(content: .file(file)))
+
+        let writing = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        await writing.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.isSaving)
+        XCTAssertNotNil(file.saveError)
+
+        XCTAssertTrue(project.tabs[0].content.hasUnresolvedSave,
+                      "A failed encoding conversion still represents an unresolved save intent")
+        XCTAssertTrue(manager.hasUnsavedEditorsInWindow)
+        XCTAssertTrue(workspaceApplication.hasUnsavedEditors)
+        let mayClose = await manager.saveBeforeWindowClose()
+        XCTAssertFalse(mayClose, "Retrying window close cannot discard the failed conversion")
+        let mayQuit = await workspaceApplication.saveBeforeTermination()
+        XCTAssertFalse(mayQuit, "Retrying Quit cannot silently discard the failed conversion")
+
+        manager.close(project)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(manager.projects.contains { $0 === project })
+        XCTAssertTrue(project.tabs.contains { $0.content.id == file.id })
+        let persisted = await backend.data(at: path)
+        XCTAssertEqual(persisted, original)
+    }
+
+    func testWindowCloseDetectsEncodingFailureAfterAnotherTabFinishesSaving() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+
+        let firstPath = root.appendingPathComponent("first.txt").path
+        let firstBackend = EditorWorkspaceFixture(path: firstPath, contents: Data("first original".utf8))
+        let first = FileTab(path: firstPath, backend: firstBackend, workspaceIdentity: nil)
+        try await first.waitForText()
+        project.append(PaneTab(content: .file(first)))
+        first.text = "first saved"
+        first.refreshDirtyState()
+
+        let secondPath = root.appendingPathComponent("encoding.txt").path
+        let original = Data("second original".utf8)
+        let secondBackend = EditorWorkspaceFixture(path: secondPath, contents: original)
+        let second = FileTab(path: secondPath, backend: secondBackend, workspaceIdentity: nil)
+        try await second.waitForText()
+        project.append(PaneTab(content: .file(second)))
+        let encoding = Task { await second.save(as: .utf8BOM) }
+        try await waitForFileTabState { await secondBackend.writingPath == secondPath }
+
+        let closing = Task { await manager.saveBeforeWindowClose() }
+        try await waitForFileTabState { await firstBackend.writingPath == firstPath }
+        await secondBackend.finishWrite(failing: true)
+        await encoding.value
+        XCTAssertNotNil(second.saveError)
+        XCTAssertFalse(second.isDirty)
+        await firstBackend.finishWrite()
+        let mayClose = await closing.value
+
+        XCTAssertFalse(mayClose, "Close must remember an encoding write pending at the start")
+        XCTAssertTrue(project.tabs.contains { $0.content.id == second.id })
+        let firstStored = await firstBackend.data(at: firstPath)
+        let secondStored = await secondBackend.data(at: secondPath)
+        XCTAssertEqual(firstStored, Data("first saved".utf8))
+        XCTAssertEqual(secondStored, original)
+    }
+
+    func testApplicationTerminationDetectsEncodingFailureInLaterWindow() async throws {
+        let previous = SessionStore.load()
+        let previousHistory = TerminalHistoryStore.load()
+        defer { SessionStore.save(previous); TerminalHistoryStore.save(previousHistory) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let firstWindow = workspaceApplication.makeWindow()
+        let secondWindow = workspaceApplication.makeWindow()
+        defer { firstWindow.windowClosed(); secondWindow.windowClosed() }
+        firstWindow.addLocalFolders([root])
+        secondWindow.addLocalFolders([root])
+        let firstProject = try XCTUnwrap(firstWindow.selectedProject)
+        let secondProject = try XCTUnwrap(secondWindow.selectedProject)
+
+        let firstPath = root.appendingPathComponent("blocking.txt").path
+        let firstBackend = EditorWorkspaceFixture(path: firstPath, contents: Data("old first".utf8))
+        let first = FileTab(path: firstPath, backend: firstBackend, workspaceIdentity: nil)
+        try await first.waitForText()
+        firstProject.append(PaneTab(content: .file(first)))
+        first.text = "new first"
+        first.refreshDirtyState()
+
+        let secondPath = root.appendingPathComponent("conversion.txt").path
+        let original = Data("old encoding".utf8)
+        let secondBackend = EditorWorkspaceFixture(path: secondPath, contents: original)
+        let second = FileTab(path: secondPath, backend: secondBackend, workspaceIdentity: nil)
+        try await second.waitForText()
+        secondProject.append(PaneTab(content: .file(second)))
+        let encoding = Task { await second.save(as: .utf8BOM) }
+        try await waitForFileTabState { await secondBackend.writingPath == secondPath }
+
+        let terminating = Task { await workspaceApplication.saveBeforeTermination() }
+        try await waitForFileTabState { await firstBackend.writingPath == firstPath }
+        await secondBackend.finishWrite(failing: true)
+        await encoding.value
+        XCTAssertFalse(second.isDirty)
+        XCTAssertNotNil(second.saveError)
+        await firstBackend.finishWrite()
+        let mayQuit = await terminating.value
+
+        XCTAssertFalse(mayQuit, "An earlier window save must not hide a failed encoding write elsewhere")
+        XCTAssertTrue(secondProject.tabs.contains { $0.content.id == second.id })
+        let firstStored = await firstBackend.data(at: firstPath)
+        let secondStored = await secondBackend.data(at: secondPath)
+        XCTAssertEqual(firstStored, Data("new first".utf8))
+        XCTAssertEqual(secondStored, original)
     }
 
     func testWindowCloseVetoesNewDraftCreatedInAnotherTabDuringPendingSave() async throws {
@@ -1076,13 +1815,19 @@ final class FileTabPersistenceTests: XCTestCase {
         let pathObserved = expectation(description: "FileTab rename updates its path")
         withObservationTracking({ _ = file.path }) { pathObserved.fulfill() }
         file.updatePath(renamed)
+        // A real rename moves the already accepted source entry. A write still
+        // aimed at the old path must fail, never recreate or overwrite it.
+        try await backend.rename(from: first, to: renamed)
         await fulfillment(of: [pathObserved], timeout: 1)
         await backend.finishWrite()
         await outdatedWrite.value
         XCTAssertEqual(file.path, renamed)
         XCTAssertTrue(file.isDirty, "Old path write must not claim new path was saved")
+        let staleOldPath = await backend.data(at: first)
+        XCTAssertNil(staleOldPath, "Stale in-flight save must not resurrect old path")
         let renamedBeforeSave = await backend.data(at: renamed)
-        XCTAssertNil(renamedBeforeSave)
+        XCTAssertEqual(renamedBeforeSave, Data("second draft🪨\r\n".utf8),
+                       "Rename must preserve the actual previous source version")
 
         let renamedWrite = Task { await file.save() }
         try await waitForFileTabState { await backend.writingPath == renamed }
@@ -1288,7 +2033,7 @@ final class FileTabPersistenceTests: XCTestCase {
         let largePath = "/fixture/\(UUID().uuidString).txt"
         let large = FileTab(
             path: largePath,
-            backend: EditorWorkspaceFixture(path: largePath, contents: Data(repeating: 0x41, count: (8 << 20) + 1)),
+            backend: EditorWorkspaceFixture(path: largePath, contents: Data(repeating: 0x41, count: (32 << 20) + 1)),
             workspaceIdentity: "ssh:fixture"
         )
         large.loadIfNeeded()
@@ -1709,6 +2454,113 @@ final class NativeFileTabTests: XCTestCase {
         XCTAssertFalse(file.isDirty)
     }
 
+    func testHundredThousandLineDirtyStateDoesNotRescanOnEachNativeKeystroke() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".swift")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let original = String(repeating: "let word = \"中文 👋\"\n", count: 100_000)
+        try original.write(to: path, atomically: true, encoding: .utf8)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        var costs: [Double] = []
+        for _ in 0..<4 {
+            let start = CFAbsoluteTimeGetCurrent()
+            editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+            costs.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            editor.insertText("", replacementRange: NSRange(location: 0, length: 1))
+        }
+        costs.sort()
+        print("P2_NATIVE_DIRTY_HOT_INPUT median_ms=\(costs[2]) max_ms=\(costs[3])")
+        XCTAssertLessThan(costs[2], 32, "One inserted code unit must not rebuild the whole UTF-16 count map")
+        XCTAssertEqual(editor.string, original)
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testOffscreenNativeAppendAndPreviewStayBoundedAtTextCapacity() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let content = "head 中文👋\r\n" + String(repeating: "q", count: (8 << 20) - 1_000)
+        let original = Data(content.utf8)
+        XCTAssertLessThan(original.count, 8 << 20)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertNil(file.editorCoordinator)
+        let storage = file.nativeTextStorage
+        let atStart = file.previewExcerpt(aroundUTF16: nil)
+        XCTAssertLessThanOrEqual(atStart.text.utf16.count, 7_000)
+        XCTAssertTrue(atStart.text.hasPrefix("head 中文👋\r\n"))
+        let inMiddle = file.previewExcerpt(aroundUTF16: 1_000_000)
+        XCTAssertLessThanOrEqual(inMiddle.text.utf16.count, 7_000)
+        XCTAssertTrue(inMiddle.startsInsideLine)
+        XCTAssertEqual(file.lineEndingForAppend().newline, "\r\n")
+        XCTAssertEqual(file.lineEndingForAppend().separator, "\r\n")
+        file.appendText("\r\nignored\r\n")
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), original + Data("\r\nignored\r\n".utf8))
+    }
+
+    func testNativeDocumentHasOneFileTabOwnerBeforeMountAndAfterClose() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let original = "中文👋 first\r\nsecond\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let storage = file.nativeTextStorage
+        XCTAssertTrue(file.nativeContentStorage.textStorage === storage)
+        XCTAssertNil(file.editorCoordinator)
+        XCTAssertEqual(storage.string, original)
+
+        storage.replaceCharacters(in: NSRange(location: storage.length, length: 0),
+                                  with: "offline addition\n")
+        try await waitForFileTabState { file.isDirty }
+        XCTAssertEqual(file.text, original + "offline addition\n")
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertTrue(editor.textStorage === storage)
+        XCTAssertTrue(editor.nativeContentManager === file.nativeContentStorage)
+        editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(file.text.hasPrefix("X"))
+        XCTAssertTrue(storage.string.hasPrefix("X"))
+
+        host.rootView = AnyView(Color.clear)
+        try await waitForFileTabState { host.layoutSubtreeIfNeeded(); return file.editorView == nil }
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        host.rootView = AnyView(FileViewerView(file: file))
+        try await waitForFileTabState {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === editor
+        }
+        XCTAssertTrue(editor.textStorage === file.nativeTextStorage)
+        file.retireNativeEditor()
+        XCTAssertEqual(storage.length, 0, "Closing must release the original native buffer")
+        XCTAssertFalse(editor.undoManager?.canUndo ?? true)
+    }
+
     func testDetachedEditorAppendKeepsSameNativeDocumentAndUndo() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let original = "first 中文👋\n"
@@ -1888,6 +2740,226 @@ final class NativeFileTabTests: XCTestCase {
         await file.save()
         XCTAssertEqual(try Data(contentsOf: path), data + Data(appended.utf8))
         XCTAssertFalse(file.isDirty)
+    }
+
+    func testSixtyFourMiBFileTabRemainsRejectedAfterIndependentCapacityTrial() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-64m-boundary-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("rejected.swift")
+        let original = Data(repeating: 0x41, count: 64 << 20)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        do {
+            try await file.waitForText()
+            XCTFail("64 MiB must not be opened as a partial writable file")
+        } catch {}
+        guard case .unavailable(let reason) = file.content else {
+            return XCTFail("Expected a capacity error")
+        }
+        XCTAssertEqual(reason, String(localized: "File is too large to open", table: "Workspace"))
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testThirtyTwoMiBFileTabActuallyEditsAndPublishesExactLocalBytes() async throws {
+        let limit = 32 << 20
+        let settings = AppSettings.shared
+        let previousWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = previousWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-filetab-32m-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("unicode.swift")
+        let row = "let row = \"中文👋\" // "
+            + String(repeating: "abc_DEF01", count: 32) + "\r\n"
+        // Leave room for a real save, so the new bytes remain reopenable.
+        let baselineBytes = limit - 64
+        let prefix = String(repeating: row, count: baselineBytes / row.utf8.count)
+        let source = prefix + String(repeating: "x", count: baselineBytes - prefix.utf8.count)
+        XCTAssertEqual(source.utf8.count, baselineBytes)
+        let originalBytes = Data(source.utf8)
+        try originalBytes.write(to: path)
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        let readStarted = CFAbsoluteTimeGetCurrent()
+        try await file.waitForText()
+        let loadMs = (CFAbsoluteTimeGetCurrent() - readStarted) * 1_000
+        XCTAssertEqual(Data(file.text.utf8), originalBytes)
+        file.autoSaveSuspendedForClose = true
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, isFocused: false))
+        let mountStarted = CFAbsoluteTimeGetCurrent()
+        window.contentView = host
+        window.orderFront(nil)
+        let deadline = Date().addingTimeInterval(20)
+        while mountedEditor(in: host) == nil, Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let mountedMs = (CFAbsoluteTimeGetCurrent() - mountStarted) * 1_000
+        XCTAssertEqual(editor.textStorage?.length, source.utf16.count)
+        print("P2_FILETAB_CAPACITY bytes=\(limit) load_ms=\(loadMs) mount_ms=\(mountedMs)")
+
+        let length = try XCTUnwrap(editor.textStorage).length
+        let navigationStarted = CFAbsoluteTimeGetCurrent()
+        for visit in 0..<17 {
+            let position = length * ((visit * 7) % 17) / 17
+            editor.scrollRangeToVisible(NSRange(location: position, length: 0))
+            editor.layoutSubtreeIfNeeded()
+            let visible = try XCTUnwrap(editor.nativeLayoutManager.textViewportLayoutController.viewportRange)
+            let range = NSRange(visible, in: editor.nativeContentManager)
+            XCTAssertLessThanOrEqual(range.location, position)
+            XCTAssertGreaterThanOrEqual(NSMaxRange(range), position)
+        }
+        print("P2_FILETAB_32M_PHASE navigation17_ms=\((CFAbsoluteTimeGetCurrent() - navigationStarted) * 1_000)")
+        let findStarted = CFAbsoluteTimeGetCurrent()
+        XCTAssertTrue(editor.usesFindBar)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        file.performFindAction(.show)
+        let scroll = try XCTUnwrap(editor.enclosingScrollView)
+        try await waitForFileTabState {
+            (scroll as NSTextFinderBarContainer).isFindBarVisible
+        }
+        let findHeight = scroll.findBarView?.bounds.height ?? 0
+        file.performFindAction(.replace)
+        try await waitForFileTabState {
+            (scroll as NSTextFinderBarContainer).isFindBarVisible
+        }
+        XCTAssertGreaterThanOrEqual(scroll.findBarView?.bounds.height ?? 0, findHeight)
+        file.performFindAction(.hide)
+        try await waitForFileTabState {
+            !(scroll as NSTextFinderBarContainer).isFindBarVisible
+        }
+        XCTAssertFalse(file.isDirty)
+        print("P2_FILETAB_32M_PHASE find_ms=\((CFAbsoluteTimeGetCurrent() - findStarted) * 1_000)")
+        let multiStarted = CFAbsoluteTimeGetCurrent()
+
+        // Two disjoint real selections must keep one undo transaction.
+        let originalText = source as NSString
+        let first = originalText.range(of: "中文👋")
+        let second = originalText.range(of: "中文👋", range: NSRange(
+            location: NSMaxRange(first), length: originalText.length - NSMaxRange(first)
+        ))
+        XCTAssertNotEqual(first.location, NSNotFound)
+        XCTAssertNotEqual(second.location, NSNotFound)
+        editor.selectedRanges = [NSValue(range: first), NSValue(range: second)]
+        editor.insertText("🪨", replacementRange: .notFound)
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertFalse(file.isDirty)
+        let multiMs = (CFAbsoluteTimeGetCurrent() - multiStarted) * 1_000
+        print("P2_FILETAB_32M_PHASE multi_ms=\(multiMs)")
+        XCTAssertEqual(file.text, source)
+        XCTAssertLessThan(multiMs, 3_000, "Multi-cursor undo must not rebuild the whole file on the main actor")
+        let imeStarted = CFAbsoluteTimeGetCurrent()
+
+        // Real marked-text composition must not copy or corrupt a large buffer.
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: .notFound)
+        editor.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: .notFound)
+        editor.insertText("你🐈", replacementRange: .notFound)
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertFalse(file.isDirty)
+        let imeMs = (CFAbsoluteTimeGetCurrent() - imeStarted) * 1_000
+        print("P2_FILETAB_32M_PHASE ime_ms=\(imeMs)")
+        XCTAssertEqual(file.text, source)
+        XCTAssertLessThan(imeMs, 3_000, "IME undo must not rebuild the whole file on the main actor")
+
+        let wrapStarted = CFAbsoluteTimeGetCurrent()
+        editor.configureWrapping(true, viewportWidth: scroll.contentView.bounds.width)
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        let wrapMs = (CFAbsoluteTimeGetCurrent() - wrapStarted) * 1_000
+        print("P2_FILETAB_32M_PHASE wrap_roundtrip_ms=\(wrapMs)")
+        XCTAssertEqual(editor.string, source)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertLessThan(wrapMs, 1_500, "Toggling wrap must not reshape every cached line again")
+        let originalAppearance = window.appearance
+        for appearance in [NSAppearance.Name.darkAqua, .aqua] {
+            window.appearance = NSAppearance(named: appearance)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertTrue(editor.textStorage === file.nativeTextStorage)
+            XCTAssertFalse(file.isDirty)
+        }
+        window.appearance = originalAppearance
+
+        // Each distant edit starts on a real logical row boundary, never in
+        // the middle of a UTF-16 surrogate pair. No full-text assertion per key.
+        let rowUnits = row.utf16.count
+        let rowCount = prefix.utf16.count / rowUnits
+        let distantStarted = CFAbsoluteTimeGetCurrent()
+        for visit in 0..<17 {
+            let rowIndex = rowCount * ((visit * 7) % 17) / 17
+            let offset = rowIndex * rowUnits
+            editor.insertText("Q", replacementRange: NSRange(location: offset, length: 0))
+            XCTAssertTrue(file.isDirty)
+            editor.insertText("", replacementRange: NSRange(location: offset, length: 1))
+            XCTAssertFalse(file.isDirty)
+        }
+        print("P2_FILETAB_32M_PHASE distant17_edits_ms=\((CFAbsoluteTimeGetCurrent() - distantStarted) * 1_000)")
+        XCTAssertEqual(Data(file.text.utf8), originalBytes)
+
+        for (label, offset) in [("head", 0), ("tail", source.utf16.count)] {
+            let insertedAt = CFAbsoluteTimeGetCurrent()
+            editor.insertText("Q", replacementRange: NSRange(location: offset, length: 0))
+            let insertedMs = (CFAbsoluteTimeGetCurrent() - insertedAt) * 1_000
+            let deletedAt = CFAbsoluteTimeGetCurrent()
+            editor.insertText("", replacementRange: NSRange(location: offset, length: 1))
+            let deletedMs = (CFAbsoluteTimeGetCurrent() - deletedAt) * 1_000
+            print("P2_FILETAB_32M_NATIVE_EDIT position=\(label) insert_ms=\(insertedMs) delete_ms=\(deletedMs)")
+            XCTAssertLessThan(deletedMs, 200, "Deleting the last typed character must not encode 32 MiB on the main actor")
+            XCTAssertEqual(file.text, source)
+        }
+        let before = "前缀👋\r\n"
+        editor.insertText(before, replacementRange: NSRange(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        let after = "\r\n末尾中文👋"
+        editor.insertText(after, replacementRange: NSRange(
+            location: try XCTUnwrap(editor.textStorage).length, length: 0
+        ))
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        editor.undoManager?.redo()
+        XCTAssertTrue(file.isDirty)
+
+        let expected = Data((before + source + after).utf8)
+        XCTAssertLessThanOrEqual(expected.count, limit)
+        XCTAssertEqual(Data(file.text.utf8), expected)
+        let saveStarted = CFAbsoluteTimeGetCurrent()
+        await file.save()
+        let saveMs = (CFAbsoluteTimeGetCurrent() - saveStarted) * 1_000
+        print("P2_FILETAB_CAPACITY_SAVE bytes=\(expected.count) save_ms=\(saveMs)")
+        XCTAssertNil(file.saveError)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), expected)
+
+        // Closing releases the single native owner even if an AppKit host
+        // still retains its old view until the next run loop.
+        let originalStorage = file.nativeTextStorage
+        file.retireNativeEditor()
+        XCTAssertEqual(originalStorage.length, 0)
+        XCTAssertNil(file.editorCoordinator)
+        XCTAssertNil(file.preparedLineWidths)
+        let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+        try await reopened.waitForText()
+        XCTAssertEqual(Data(reopened.text.utf8), expected)
     }
 
     func testNativeReadOnlyRejectsAXValueAndSelectionReplacement() {
@@ -2242,6 +3314,162 @@ final class NativeFileTabTests: XCTestCase {
                        "// edited A\nlet fileA = \"only A\"\n")
         XCTAssertEqual(try String(contentsOf: bPath, encoding: .utf8),
                        "// edited B\nlet fileB = \"only B\"\n")
+    }
+
+    func testCanceledWidthPreparationCannotPublishObsoleteFileAfterRename() async throws {
+        let settings = AppSettings.shared
+        let oldWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = oldWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-width-rename-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let old = root.appendingPathComponent("large.txt")
+        let next = root.appendingPathComponent("small.txt")
+        let largeText = (0..<100_000).map { row -> String in
+            "语言\(String(UnicodeScalar(0x4E00 + row % 20_000)!))👋\t// \(String(UnicodeScalar(0x4E00 + row / 20_000)!))\r\n"
+        }.joined()
+        try largeText.write(to: old, atomically: true, encoding: .utf8)
+        try "new target 中文👋\n".write(to: next, atomically: true, encoding: .utf8)
+        let file = FileTab(path: old.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        file.updatePath(next.path)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "new target 中文👋\n")
+        XCTAssertEqual(file.path, next.path)
+        XCTAssertEqual(file.preparedLineWidths?.widths.widths.count, 2)
+        // A canceled old worker must not publish a second, obsolete document.
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(file.text, "new target 中文👋\n")
+        XCTAssertNil(file.reloadError)
+    }
+
+    func testPreparedNativeWidthsInvalidateOnUnshownEditsAndFontMismatch() async throws {
+        let settings = AppSettings.shared
+        let oldWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = oldWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-prepared-width-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("unicode.txt")
+        try "短文字\n".write(to: target, atomically: true, encoding: .utf8)
+        let file = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertNotNil(file.preparedLineWidths)
+        file.text = String(repeating: "中文👋\t", count: 50)
+        XCTAssertNil(file.preparedLineWidths,
+                     "Editing before mounting must discard the old bytes' width snapshot")
+        let font = TerminalFont.current()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: font, palette: .theme(dark: false),
+            wrapLines: false, isFocused: false
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertEqual(editor.string, file.text)
+        XCTAssertGreaterThan(editor.frame.width, editor.enclosingScrollView!.contentView.bounds.width)
+
+        let another = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared,
+                              workspaceIdentity: nil)
+        try await another.waitForText()
+        XCTAssertNotNil(another.preparedLineWidths)
+        let larger = NSFont.monospacedSystemFont(ofSize: 24, weight: .regular)
+        XCTAssertFalse(another.preparedLineWidths!.font.isEqual(larger))
+        let otherWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        otherWindow.isReleasedWhenClosed = false
+        defer { otherWindow.close() }
+        let otherHost = NSHostingView(rootView: SourceTextEditor(
+            file: another, font: larger, palette: .theme(dark: false),
+            wrapLines: false, isFocused: false
+        ))
+        otherWindow.contentView = otherHost
+        otherWindow.orderFront(nil)
+        otherHost.layoutSubtreeIfNeeded()
+        let otherEditor = try XCTUnwrap(mountedEditor(in: otherHost))
+        XCTAssertEqual(otherEditor.font, larger)
+        XCTAssertNil(another.preparedLineWidths,
+                     "A mismatched typography snapshot must not persist after mounting")
+    }
+
+    func testFileTabColdUniqueUnicodeMountDoesNotBlockMainActorWithFullWidthShaping() async throws {
+        let settings = AppSettings.shared
+        let oldWrap = settings.wrapLines
+        settings.wrapLines = false
+        defer { settings.wrapLines = oldWrap }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-width-load-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("non-repeating.txt")
+        let source = (0..<100_000).map { row -> String in
+            let first = String(UnicodeScalar(0x4E00 + row % 20_000)!)
+            let second = String(UnicodeScalar(0x4E00 + row / 20_000)!)
+            return "语言\(second)\(first)👋\t// 中文\r\n"
+        }.joined() + String(repeating: "中文👋\t", count: 80)
+        try source.write(to: url, atomically: true, encoding: .utf8)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        let heartbeat = Task { @MainActor in
+            var last = CFAbsoluteTimeGetCurrent()
+            var longest = 0.0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(20))
+                let current = CFAbsoluteTimeGetCurrent()
+                longest = max(longest, (current - last) * 1_000)
+                last = current
+            }
+            return longest
+        }
+        await Task.yield()
+        let loadStarted = CFAbsoluteTimeGetCurrent()
+        try await file.waitForText()
+        let loadedMs = (CFAbsoluteTimeGetCurrent() - loadStarted) * 1_000
+        heartbeat.cancel()
+        let longestMainGap = await heartbeat.value
+        print("P2_FILETAB_BACKGROUND_UNIQUE rows=100000 load_ms=\(loadedMs) main_tick_max_ms=\(longestMainGap)")
+        XCTAssertLessThan(longestMainGap, 500, "Full font shaping must not monopolize the main actor")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: TerminalFont.current(),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        let started = CFAbsoluteTimeGetCurrent()
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("P2_FILETAB_FIRST_NATIVE_UNIQUE rows=100000 mounted_ms=\(elapsedMs)")
+        XCTAssertEqual(editor.string, source)
+        let font = TerminalFont.current()
+        let style = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
+        style.defaultTabInterval = NativeCodeTextView.tabInterval
+        let tail = String(repeating: "中文👋\t", count: 80)
+        let exactWidth = (tail as NSString).size(withAttributes: [
+            .font: font, .paragraphStyle: style
+        ]).width
+        let clipWidth = try XCTUnwrap(editor.enclosingScrollView).contentView.bounds.width
+        let padding = (editor.textContainer?.lineFragmentPadding ?? 5) * 2
+        XCTAssertEqual(editor.frame.width, max(clipWidth, ceil(exactWidth + padding)),
+                       accuracy: 1, "The background font must match exact on-screen glyph widths")
+        XCTAssertLessThan(elapsedMs, 3_000,
+                          "Full-document font shaping must not block the actual file view")
     }
 
     func testNativeEditorResignFirstResponderWritesRealFile() async throws {
