@@ -54,6 +54,34 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         return Data(signature) + contents
     }
 
+    /// Compare exact UTF-16 code units, not Swift's canonically equivalent
+    /// String equality. Bounded NSString reads avoid allocating/encoding a
+    /// second complete UTF-8 document on the main actor.
+    static func hasIdenticalCodeUnits(_ lhs: String, _ rhs: String) -> Bool {
+        let left = lhs as NSString
+        let right = rhs as NSString
+        guard left.length == right.length else { return false }
+        guard left.length > 0 else { return true }
+        let chunkSize = 65_536
+        var leftBuffer = [unichar](repeating: 0, count: chunkSize)
+        var rightBuffer = [unichar](repeating: 0, count: chunkSize)
+        return leftBuffer.withUnsafeMutableBufferPointer { leftUnits in
+            rightBuffer.withUnsafeMutableBufferPointer { rightUnits in
+                var position = 0
+                while position < left.length {
+                    let count = min(chunkSize, left.length - position)
+                    let range = NSRange(location: position, length: count)
+                    left.getCharacters(leftUnits.baseAddress!, range: range)
+                    right.getCharacters(rightUnits.baseAddress!, range: range)
+                    guard memcmp(leftUnits.baseAddress!, rightUnits.baseAddress!,
+                                 count * MemoryLayout<unichar>.size) == 0 else { return false }
+                    position += count
+                }
+                return true
+            }
+        }
+    }
+
     enum SaveEncodingFailure: Error, Sendable {
         case contradictsDeclaration
         case cannotRoundTrip

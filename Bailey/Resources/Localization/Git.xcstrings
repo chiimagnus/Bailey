@@ -71,6 +71,36 @@
         }
       }
     },
+    "Original file bytes are unknown. Reopen before saving." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认文件原始字节，请重新打开后再保存。"
+          }
+        }
+      }
+    },
+    "Text exceeds the 5 MiB diff limit. Reduce its size before saving." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文本超出 5 MiB 差异编辑上限，请缩小内容后再保存。"
+          }
+        }
+      }
+    },
+    "The file changed outside Bailey. Your edits remain unsaved." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件已在 Bailey 外部修改，当前草稿仍未保存。"
+          }
+        }
+      }
+    },
     "Text encoding changed:" : {
       "localizations" : {
         "zh-Hans" : {

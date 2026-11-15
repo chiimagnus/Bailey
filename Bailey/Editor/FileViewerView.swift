@@ -398,7 +398,7 @@ final class FileTab: nonisolated Identifiable {
                 || nativeCodeUnitDelta?.isEmpty == false {
                 dirty = true
             } else {
-                dirty = !Self.hasIdenticalCodeUnits(nativeTextStorage.string, savedText)
+                dirty = !TextFileEncoding.hasIdenticalCodeUnits(nativeTextStorage.string, savedText)
                 if !dirty { nativeCodeUnitDelta = [:] }
             }
         } else {
@@ -705,38 +705,10 @@ final class FileTab: nonisolated Identifiable {
         reloadGeneration &+= 1
     }
 
-    /// Compare exact UTF-16 code units, not Swift's canonically equivalent
-    /// String equality. Bounded NSString reads avoid allocating/encoding a
-    /// second complete UTF-8 document on the main actor.
-    private static func hasIdenticalCodeUnits(_ lhs: String, _ rhs: String) -> Bool {
-        let left = lhs as NSString
-        let right = rhs as NSString
-        guard left.length == right.length else { return false }
-        guard left.length > 0 else { return true }
-        let chunkSize = 65_536
-        var leftBuffer = [unichar](repeating: 0, count: chunkSize)
-        var rightBuffer = [unichar](repeating: 0, count: chunkSize)
-        return leftBuffer.withUnsafeMutableBufferPointer { leftUnits in
-            rightBuffer.withUnsafeMutableBufferPointer { rightUnits in
-                var position = 0
-                while position < left.length {
-                    let count = min(chunkSize, left.length - position)
-                    let range = NSRange(location: position, length: count)
-                    left.getCharacters(leftUnits.baseAddress!, range: range)
-                    right.getCharacters(rightUnits.baseAddress!, range: range)
-                    guard memcmp(leftUnits.baseAddress!, rightUnits.baseAddress!,
-                                 count * MemoryLayout<unichar>.size) == 0 else { return false }
-                    position += count
-                }
-                return true
-            }
-        }
-    }
-
     private func matches(_ loaded: LoadedContent) -> Bool {
         switch (content, loaded.content) {
         case (.text, .text):
-            return fileEncoding == loaded.encoding && Self.hasIdenticalCodeUnits(savedText, loaded.text)
+            return fileEncoding == loaded.encoding && TextFileEncoding.hasIdenticalCodeUnits(savedText, loaded.text)
         case (.image, .image):
             return imageFingerprint == loaded.imageFingerprint
         case (.unavailable(let current), .unavailable(let new)):
