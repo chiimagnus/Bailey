@@ -239,7 +239,9 @@ Shift 可横跨分支和 Merge；展开的文件及临时 Stash／Worktree 节�
 也可用 ⌘C 复制所选哈希（以换行分隔）；仅当选区全部为真实提交时，
 才出现 Cherry-pick、Revert、Drop 和 Squash。选择包含历史文件、Stash 或 Worktree 时，
 只提供复制选中项目，不将这些节点当成提交。
-选区外右键保持该行原有单项菜单，不能意外借用之前的选区。
+右键命中已选提交的标题、轨道节点、分支／Tag／Stash／Worktree 徽标时，
+都使用同一多选菜单；未选中的徽标仍保留原有的单个引用或 Worktree 菜单。
+未选中行右键不能意外借用之前的选区。
 创建 Branch／Tag、Checkout、Merge、Rebase、Reset 需要唯一目标，不出现在多选菜单。
 
 Cherry-pick 按真实父子依赖从旧到新执行，可选择记录来源或仅暂存；

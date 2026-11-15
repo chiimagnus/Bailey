@@ -340,9 +340,11 @@ Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or 
 `GitGraphSelectionTests` 验证 Git Graph 独立多选、⌘ 切换、Shift 范围、
 离散选区、全选和刷新清理；`GitCommitActionTests` 使用真实 Git 仓库验证
 批量 Cherry-pick、Revert、Drop、Squash 的依赖顺序、HEAD、作者、文件树、
-提交数量、索引选项和非法拓扑／过期目标拒绝；
+提交数量、索引选项和非法拓扑／过期目标拒绝，并验证部分执行后冲突的
+原生 Abort 恢复以及外部分叉变化后不错误重写历史；
 `GitNativeDialogTests` 核查批量确认项和无损取消默认值。
-`GitGraphUITests` 检验跨分支合法多选、不同单选／多选菜单、剪贴板最终内容；
+`GitGraphUITests` 检验跨分支合法多选、不同单选／多选菜单、
+Tag／Stash 徽标右键正确消费所属提交或混合选区、剪贴板最终内容；
 `GitDialogUITests` 核验合法多选后取消／确认历史写操作的最终 Git 历史。
 `WorkspaceFilesUITests` 与 `GitChangesUITests` 分别覆盖多选菜单与复制路径、
 混合分组不产生部分写入、右键不改游标或选区。

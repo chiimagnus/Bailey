@@ -1213,7 +1213,9 @@ struct RecentCommitsView: View {
             contextTarget(for: commitRowID(commit))
         }
         .contextMenu {
-            if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
+            if isMultipleSelection(for: commitRowID(commit)) {
+                multipleSelectionMenu()
+            } else if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
                 referenceActions(head, commit: commit)
             } else if let location = locations.first, locations.count == 1 {
                 worktreeActions(location)
@@ -1283,7 +1285,13 @@ struct RecentCommitsView: View {
         .background {
             contextTarget(for: commitRowID(commit))
         }
-        .contextMenu { stashActions(stash) }
+        .contextMenu {
+            if isMultipleSelection(for: commitRowID(commit)) {
+                multipleSelectionMenu()
+            } else {
+                stashActions(stash)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1317,7 +1325,7 @@ struct RecentCommitsView: View {
                 referenceBadge(primary, commit: commit, colorIndex: colorIndex)
             }
             if !hidden.isEmpty {
-                Menu {
+                let referencesMenu = Menu {
                     ForEach(hidden) { reference in
                         Menu(reference.name) {
                             referenceActions(reference, commit: commit)
@@ -1332,6 +1340,13 @@ struct RecentCommitsView: View {
                 .fixedSize()
                 .help(hidden.map(\.name).joined(separator: ", "))
                 .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
+                if isMultipleSelection(for: commitRowID(commit)) {
+                    referencesMenu
+                        .background { contextTarget(for: commitRowID(commit)) }
+                        .contextMenu { multipleSelectionMenu() }
+                } else {
+                    referencesMenu
+                }
             }
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -1393,7 +1408,13 @@ struct RecentCommitsView: View {
         .background {
             contextTarget(for: commitRowID(commit))
         }
-        .contextMenu { referenceActions(reference, commit: commit) }
+        .contextMenu {
+            if isMultipleSelection(for: commitRowID(commit)) {
+                multipleSelectionMenu()
+            } else {
+                referenceActions(reference, commit: commit)
+            }
+        }
     }
 
     @ViewBuilder

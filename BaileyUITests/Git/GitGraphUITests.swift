@@ -256,6 +256,113 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
+    func testStashBadgeInMixedSelectionShowsOnlyBatchCopyMenu() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let tracked = try fixture.file("stash-multi.txt", text: "baseline\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "unsaved\n".write(to: tracked, atomically: true, encoding: .utf8)
+        try fixture.git(["stash", "push", "-m", "multi-selection-stash"])
+        let stash = try fixture.git(["rev-parse", "stash@{0}"])
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty {
+                XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard))
+            }
+        }
+
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        let badge = app.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "stash@{0}"
+        )).firstMatch
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+        XCTAssertTrue(badge.waitForExistence(timeout: 25))
+        commit.click()
+        XCUIElement.perform(withKeyModifiers: .command) { badge.click() }
+        badge.rightClick()
+        let batchCopy = app.menuItems["Copy Selected Items"]
+        XCTAssertTrue(batchCopy.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Pop Stash…"].exists,
+                       "A Stash badge within mixed selection cannot offer single-Stash mutation")
+        XCTAssertFalse(app.menuItems["Squash Selected Commits…"].exists)
+        batchCopy.click()
+        let text = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let values = Set(text.split(separator: "\n").map(String.init))
+        XCTAssertEqual(values, Set([
+            String(decoding: head, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "stash@{0}",
+        ]))
+
+        badge.click()
+        badge.rightClick()
+        XCTAssertTrue(app.menuItems["Pop Stash…"].waitForExistence(timeout: 8),
+                      "Single-Stash context menu must stay available")
+        XCTAssertFalse(app.menuItems["Copy Selected Items"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", "stash@{0}"]), stash)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
+    }
+
+    func testSelectedCommitTagBadgeUsesBatchMenuButSingleTagKeepsItsActions() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("root.txt", text: "root\n")
+        try fixture.initializeGit()
+        _ = try fixture.file("tagged.txt", text: "tagged\n")
+        try fixture.git(["add", "tagged.txt"])
+        try fixture.git(["commit", "-qm", "tagged history"])
+        try fixture.git(["tag", "-a", "-m", "badge label", "multi-badge"])
+        let taggedHash = try fixture.git(["rev-parse", "HEAD"])
+        _ = try fixture.file("newest.txt", text: "newest\n")
+        try fixture.git(["add", "newest.txt"])
+        try fixture.git(["commit", "-qm", "newest history"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty {
+                XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard))
+            }
+        }
+
+        let app = try launchGraph(fixture, language: "en")
+        let newest = app.buttons["newest history"]
+        let tagged = app.buttons["tagged history"]
+        let badge = app.buttons["multi-badge"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 25))
+        XCTAssertTrue(tagged.waitForExistence(timeout: 25))
+        XCTAssertTrue(badge.waitForExistence(timeout: 25))
+        newest.click()
+        XCUIElement.perform(withKeyModifiers: .command) { tagged.click() }
+        XCTAssertTrue(newest.isSelected && tagged.isSelected)
+        badge.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Selected Commit Hashes"].waitForExistence(timeout: 8),
+                      "The tag badge belongs to the selected commit's batch context.")
+        XCTAssertFalse(app.menuItems["Delete Tag…"].exists,
+                       "Multi-select cannot expose a single-tag destructive action.")
+        app.menuItems["Copy Selected Commit Hashes"].click()
+        let hashes = [head, taggedHash].map {
+            String(decoding: $0, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       hashes.joined(separator: "\n"))
+
+        tagged.click()
+        XCTAssertFalse(newest.isSelected)
+        XCTAssertTrue(tagged.isSelected)
+        badge.rightClick()
+        XCTAssertTrue(app.menuItems["Delete Tag…"].waitForExistence(timeout: 8),
+                      "The ordinary tag action must remain available on a single selection.")
+        XCTAssertFalse(app.menuItems["Copy Selected Commit Hashes"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/multi-badge^{}"]), taggedHash)
+    }
+
     func testGraphMultiSelectionUsesDedicatedCopyAndHistoryActionMenu() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("root.txt", text: "root\n")

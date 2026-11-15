@@ -123,6 +123,80 @@ final class GitCommitActionTests: XCTestCase {
         XCTAssertEqual(try git(["rev-parse", "HEAD~3"]), original)
     }
 
+    func testBatchCherryPickConflictAfterFirstCommitCanAbortEntireSequence() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-qc", "topic"])
+        let file = directory.appendingPathComponent("new-feature.txt")
+        try "feature\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try git(["add", "new-feature.txt"])
+        _ = try git(["commit", "-qm", "add feature"])
+        let first = try git(["rev-parse", "HEAD"])
+        let conflicting = try commit("topic changes tracked", text: "topic\n")
+        _ = try git(["switch", "main"])
+        let main = try commit("main changes tracked", text: "main\n")
+        _ = try await target(main)
+        model.actOnCommits([conflicting, first], action: .cherryPick,
+                           target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "add feature")
+        XCTAssertFalse(try git(["ls-files", "-u"]).isEmpty)
+        XCTAssertNotNil(model.repositoryOperation)
+        XCTAssertEqual(try git(["show", "HEAD:new-feature.txt"]), "feature")
+
+        _ = try git(["cherry-pick", "--abort"])
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), main)
+        XCTAssertEqual(try git(["show", "HEAD:tracked.txt"]), "main")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+        XCTAssertNotEqual(try git(["rev-parse", "HEAD"]), root)
+    }
+
+    func testBatchRevertConflictAfterFirstRevertCanAbortEntireSequence() async throws {
+        let first = try commit("first tracked change", text: "first\n")
+        let marker = directory.appendingPathComponent("marker.txt")
+        try "marker\n".write(to: marker, atomically: true, encoding: .utf8)
+        _ = try git(["add", "marker.txt"])
+        _ = try git(["commit", "-qm", "second adds marker"])
+        let second = try git(["rev-parse", "HEAD"])
+        let originalHead = try commit("newer conflicting tracked change", text: "newer\n")
+        _ = try await target(originalHead)
+        model.actOnCommits([first, second], action: .revert, target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "Revert \"second adds marker\"")
+        XCTAssertFalse(try git(["ls-files", "-u"]).isEmpty)
+        XCTAssertNotNil(model.repositoryOperation)
+        _ = try git(["revert", "--abort"])
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), originalHead)
+        XCTAssertEqual(try git(["show", "HEAD:marker.txt"]), "marker")
+        XCTAssertEqual(try git(["show", "HEAD:tracked.txt"]), "newer")
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testBatchDropRechecksBranchesChangedAfterMenuSnapshot() async throws {
+        let initial = try git(["rev-parse", "HEAD"])
+        let first = try commit("drop candidate one", text: "one\n")
+        let second = try commit("drop candidate two", text: "two\n")
+        let newer = try commit("keep newer", text: "newer\n")
+        _ = try await target(newer)
+        let snapshot = model.actionTarget()
+        let tree = try git(["rev-parse", "HEAD^{tree}"])
+        // Create a real new fork without moving HEAD or changing the current worktree.
+        let side = try git(["commit-tree", tree, "-p", first, "-m", "later fork"])
+        _ = try git(["update-ref", "refs/heads/later-fork", side])
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+
+        model.actOnCommits([first, second], action: .drop, target: snapshot)
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^{tree}"]), tree)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/later-fork"]), side)
+        XCTAssertEqual(try git(["rev-parse", "HEAD~3"]), initial)
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
     func testBatchRevertRunsNewestToOldestAndRestoresOriginalTree() async throws {
         let originalTree = try git(["rev-parse", "HEAD^{tree}"])
         let first = try commit("change one", text: "one\n")
