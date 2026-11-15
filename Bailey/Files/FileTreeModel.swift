@@ -229,7 +229,7 @@ final class FileTreeModel {
     @ObservationIgnored private var isRebuilding = false
     @ObservationIgnored private var rebuildPending = false
     @ObservationIgnored private var refreshPending = false
-    @ObservationIgnored private var rebuildWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var rebuildWaiters: [CheckedContinuation<Bool, Never>] = []
     @ObservationIgnored private var changedDirectoriesPending: Set<String> = []
     @ObservationIgnored private var localFileEventMembers: Set<UUID> = []
     private static let defaultLocalFileEventMember = UUID()
@@ -758,7 +758,7 @@ final class FileTreeModel {
             refreshPending = false
             let waiters = rebuildWaiters
             rebuildWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
+            for waiter in waiters { waiter.resume(returning: false) }
         }
         self.backend = backend
         self.panelIdentity = panelIdentity
@@ -786,7 +786,7 @@ final class FileTreeModel {
             draft = nil
         }
         configureLocalFileWatcher() // Subscribe before reading the new root.
-        return await rebuild(refresh: true)
+        return await rebuild(refresh: true, awaitQueuedResult: true)
     }
 
     func toggle(_ item: Item) async {
@@ -1326,17 +1326,27 @@ final class FileTreeModel {
 
     private func awaitPendingRebuild() async {
         guard isRebuilding else { return }
-        await withCheckedContinuation { rebuildWaiters.append($0) }
+        _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            rebuildWaiters.append(continuation)
+        }
     }
 
     @discardableResult
-    private func rebuild(refresh: Bool = false, changed: Set<String> = []) async -> Bool {
+    private func rebuild(
+        refresh: Bool = false, changed: Set<String> = [], awaitQueuedResult: Bool = false
+    ) async -> Bool {
         guard !rootPath.isEmpty else { return false }
         if refresh { refreshPending = true }
         changedDirectoriesPending.formUnion(changed)
         if isRebuilding {
             rebuildPending = true
-            return false
+            guard awaitQueuedResult else { return false }
+            let waitingGeneration = rebuildGeneration
+            let completed = await withCheckedContinuation {
+                (continuation: CheckedContinuation<Bool, Never>) in
+                rebuildWaiters.append(continuation)
+            }
+            return waitingGeneration == rebuildGeneration && completed
         }
         isRebuilding = true
         let generation = rebuildGeneration
@@ -1454,7 +1464,7 @@ final class FileTreeModel {
             configureLocalFileWatcher()
             let waiters = rebuildWaiters
             rebuildWaiters.removeAll()
-            for waiter in waiters { waiter.resume() }
+            for waiter in waiters { waiter.resume(returning: !readFailed) }
         }
         return generation == rebuildGeneration && !readFailed
     }

@@ -217,6 +217,7 @@ final class ProjectFileIndexTests: XCTestCase {
             )
             XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
         }
+        var phase = "fixture setup"
         do {
             let gitRoot = root + "/git-repository"
             let plainRoot = root + "/plain-folder"
@@ -233,17 +234,20 @@ final class ProjectFileIndexTests: XCTestCase {
             try await run(["git", "add", "--", special, ".gitignore"], in: gitRoot)
             try await backend.write(path: plainRoot + "/child/远端目录.txt", data: Data("plain remote\n".utf8))
 
+            phase = "Git index"
             let gitIndex = try await ProjectFileIndex.loadRemote(in: gitRoot, backend: backend)
             XCTAssertFalse(gitIndex.limited)
             XCTAssertEqual(Set(gitIndex.files.map(\.relativePath)),
                            Set([special, ".gitignore", "new.swift"]))
             XCTAssertEqual(gitIndex.files.first(where: { $0.relativePath == special })?.absolutePath,
                            gitRoot + "/" + special)
+            phase = "plain directory index"
             let plainIndex = try await ProjectFileIndex.loadRemote(in: plainRoot, backend: backend)
             XCTAssertFalse(plainIndex.limited)
             XCTAssertEqual(plainIndex.files.map(\.relativePath), ["child/远端目录.txt"])
             // Recreate only this test's multiplexed SSH master; user sessions
             // and the Windows SSH service remain untouched.
+            phase = "close test SSH master"
             let closedForReconnect = try await Task.detached {
                 try ProcessRemoteCommandRunner.launch(
                     sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
@@ -251,14 +255,18 @@ final class ProjectFileIndexTests: XCTestCase {
                 )
             }.value
             XCTAssertEqual(closedForReconnect.status, 0)
+            phase = "reindex after SSH reconnect"
             let reconnected = try await ProjectFileIndex.loadRemote(in: plainRoot, backend: backend)
             XCTAssertEqual(reconnected.files.map(\.relativePath), ["child/远端目录.txt"],
                            "A fresh SSH connection must provide the same remote files")
+            phase = "read and delete Git file"
             let actualBytes = try await backend.read(path: gitRoot + "/" + special, maxBytes: 256)
             XCTAssertEqual(actualBytes, Data("remote tracked\n".utf8))
             try await backend.delete(paths: [gitRoot + "/" + special])
+            phase = "Git index after file deletion"
             let afterDelete = try await ProjectFileIndex.loadRemote(in: gitRoot, backend: backend)
             XCTAssertFalse(afterDelete.files.contains { $0.relativePath == special })
+            phase = "remote HOME restriction"
             let home = try await backend.run(
                 argv: ["/bin/sh", "-c", "printf '%s' \"$HOME\""],
                 cwd: nil, env: nil, stdin: nil, timeout: 25
@@ -272,6 +280,7 @@ final class ProjectFileIndexTests: XCTestCase {
                 // Expected, without traversing the user's actual HOME.
             }
         } catch {
+            print("BAILEY_WINDOWS_INDEX_FAILURE phase=\(phase) error=\(error)")
             try? await backend.delete(paths: [root])
             throw error
         }
