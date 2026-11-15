@@ -981,6 +981,67 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(stored, Data("existing\n".utf8))
         file.autoSaveSuspendedForClose = true
     }
+    func testFailedCleanEncodingSaveBlocksGitAndProtectedFileMutation() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "save safety", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let repository = "/fixture/git"
+        let path = repository + "/failed-encoding.txt"
+        let original = Data("original".utf8)
+        let backend = EditorWorkspaceFixture(path: path, contents: original)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await file.waitForText()
+        project.append(PaneTab(content: .file(file)))
+
+        let converting = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        await converting.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.isSaving)
+        XCTAssertNotNil(file.saveError)
+
+        XCTAssertFalse(workspaceApplication.canRunGitAction(repository: repository, scope: "ssh:fixture"))
+        let gitReady = await workspaceApplication.saveBeforeGitAction(
+            repository: repository, scope: "ssh:fixture", isCurrent: { true }
+        )
+        XCTAssertFalse(gitReady, "A Git action cannot supersede a failed clean encoding conversion")
+
+        var mutated = false
+        do {
+            try await workspaceApplication.withProtectedFiles(
+                paths: [path], workspace: "ssh:fixture"
+            ) {
+                mutated = true
+            }
+            XCTFail("A file rename/delete cannot run while an encoding conversion is unresolved")
+        } catch {}
+        XCTAssertFalse(mutated)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        let persisted = await backend.data(at: path)
+        XCTAssertEqual(persisted, original)
+
+        let retry = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await retry.value
+        XCTAssertNil(file.saveError)
+        XCTAssertTrue(workspaceApplication.canRunGitAction(repository: repository, scope: "ssh:fixture"))
+        let gitReadyAfterSave = await workspaceApplication.saveBeforeGitAction(
+            repository: repository, scope: "ssh:fixture", isCurrent: { true }
+        )
+        XCTAssertTrue(gitReadyAfterSave)
+        try await workspaceApplication.withProtectedFiles(paths: [path], workspace: "ssh:fixture") {
+            mutated = true
+        }
+        XCTAssertTrue(mutated, "A successful conversion must restore file mutation eligibility")
+        let saved = await backend.data(at: path)
+        XCTAssertEqual(saved, TextFileEncoding.utf8BOM.encoded("original"))
+    }
+
     func testGitPreparationWaitsForWritesAndNeverClosesOrLosesEditedTab() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
@@ -1196,6 +1257,281 @@ final class FileTabPersistenceTests: XCTestCase {
         try await waitForFileTabState { !manager.projects.contains(where: { $0 === project }) }
         XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
                        "new draft while remote save is pending")
+    }
+
+    func testCleanEncodingWriteCannotBeSkippedByAnyCloseRoute() async throws {
+        enum CloseRoute: CaseIterable { case tab, batch, project, window, application }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let expected = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("original"))
+
+        for route in CloseRoute.allCases {
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            let project = try XCTUnwrap(manager.selectedProject)
+            let path = root.appendingPathComponent(UUID().uuidString + ".txt").path
+            let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+            try await file.waitForText()
+            let tab = PaneTab(content: .file(file))
+            project.append(tab)
+
+            let writing = Task { await file.save(as: .utf8BOM) }
+            try await waitForFileTabState { await backend.writingPath == path }
+            XCTAssertFalse(file.isDirty, "Encoding-only save must keep the text clean")
+            XCTAssertTrue(file.isSaving)
+            XCTAssertTrue(manager.hasUnsavedEditorsInWindow,
+                          "An active write must protect its window even without text edits")
+            XCTAssertTrue(workspaceApplication.hasUnsavedEditors,
+                          "An active write must protect application termination")
+
+            let closing: Task<Bool, Never>?
+            switch route {
+            case .tab:
+                project.close(tab)
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "Single-tab close must not retire an active writer")
+                closing = nil
+            case .batch:
+                project.closeFiles()
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "Batch close must not retire an active writer")
+                closing = nil
+            case .project:
+                manager.close(project)
+                XCTAssertTrue(manager.projects.contains { $0 === project },
+                              "Project close must not retire an active writer")
+                closing = nil
+            case .window:
+                closing = Task { await manager.saveBeforeWindowClose() }
+            case .application:
+                closing = Task { await workspaceApplication.saveBeforeTermination() }
+            }
+
+            await backend.finishWrite()
+            await writing.value
+            if let closing {
+                let approved = await closing.value
+                XCTAssertTrue(approved, "A completed successful write must permit close")
+            } else if route == .project {
+                try await waitForFileTabState { !manager.projects.contains { $0 === project } }
+            } else {
+                try await waitForFileTabState { project.tabs.isEmpty }
+            }
+            let persisted = await backend.data(at: path)
+            XCTAssertEqual(persisted, expected)
+        }
+    }
+
+    func testFailedCleanEncodingWriteVetoesAllCloseRoutes() async throws {
+        enum CloseRoute: CaseIterable { case tab, batch, project, window, application }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for route in CloseRoute.allCases {
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            let project = try XCTUnwrap(manager.selectedProject)
+            let path = root.appendingPathComponent(UUID().uuidString + ".txt").path
+            let original = Data("original".utf8)
+            let backend = EditorWorkspaceFixture(path: path, contents: original)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+            try await file.waitForText()
+            let tab = PaneTab(content: .file(file))
+            project.append(tab)
+
+            let writing = Task { await file.save(as: .utf8BOM) }
+            try await waitForFileTabState { await backend.writingPath == path }
+            XCTAssertTrue(file.isSaving)
+            XCTAssertFalse(file.isDirty)
+
+            let closing: Task<Bool, Never>?
+            var closeStarted = false
+            switch route {
+            case .tab:
+                project.close(tab)
+                closing = nil
+            case .batch:
+                project.closeFiles()
+                closing = nil
+            case .project:
+                manager.close(project)
+                closing = nil
+            case .window:
+                closing = Task {
+                    closeStarted = true
+                    return await manager.saveBeforeWindowClose()
+                }
+            case .application:
+                closing = Task {
+                    closeStarted = true
+                    return await workspaceApplication.saveBeforeTermination()
+                }
+            }
+            if closing != nil {
+                try await waitForFileTabState { closeStarted }
+            } else {
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "An active writer must remain open while its close is pending")
+                XCTAssertTrue(manager.projects.contains { $0 === project })
+            }
+
+            // Complete the write immediately, even if a close Task has not been scheduled yet.
+            await backend.finishWrite(failing: true)
+            await writing.value
+            if let closing {
+                let mayClose = await closing.value
+                XCTAssertFalse(mayClose, "A failed encoding write must veto this close attempt")
+            } else {
+                try await waitForFileTabState { !file.autoSaveSuspendedForClose }
+            }
+
+            XCTAssertTrue(manager.projects.contains { $0 === project },
+                          "A failed encoding write must preserve its project")
+            XCTAssertTrue(project.tabs.contains { $0 === tab },
+                          "A failed encoding write must preserve the file tab")
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNotNil(file.saveError)
+            let persisted = await backend.data(at: path)
+            XCTAssertEqual(persisted, original)
+        }
+    }
+
+    func testFailedEncodingConversionStillProtectsASecondCloseAttempt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let path = root.appendingPathComponent("failed-encoding.txt").path
+        let original = Data("original".utf8)
+        let backend = EditorWorkspaceFixture(path: path, contents: original)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        project.append(PaneTab(content: .file(file)))
+
+        let writing = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        await writing.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.isSaving)
+        XCTAssertNotNil(file.saveError)
+
+        XCTAssertTrue(project.tabs[0].content.hasUnresolvedSave,
+                      "A failed encoding conversion still represents an unresolved save intent")
+        XCTAssertTrue(manager.hasUnsavedEditorsInWindow)
+        XCTAssertTrue(workspaceApplication.hasUnsavedEditors)
+        let mayClose = await manager.saveBeforeWindowClose()
+        XCTAssertFalse(mayClose, "Retrying window close cannot discard the failed conversion")
+        let mayQuit = await workspaceApplication.saveBeforeTermination()
+        XCTAssertFalse(mayQuit, "Retrying Quit cannot silently discard the failed conversion")
+
+        manager.close(project)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(manager.projects.contains { $0 === project })
+        XCTAssertTrue(project.tabs.contains { $0.content.id == file.id })
+        let persisted = await backend.data(at: path)
+        XCTAssertEqual(persisted, original)
+    }
+
+    func testWindowCloseDetectsEncodingFailureAfterAnotherTabFinishesSaving() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+
+        let firstPath = root.appendingPathComponent("first.txt").path
+        let firstBackend = EditorWorkspaceFixture(path: firstPath, contents: Data("first original".utf8))
+        let first = FileTab(path: firstPath, backend: firstBackend, workspaceIdentity: nil)
+        try await first.waitForText()
+        project.append(PaneTab(content: .file(first)))
+        first.text = "first saved"
+        first.refreshDirtyState()
+
+        let secondPath = root.appendingPathComponent("encoding.txt").path
+        let original = Data("second original".utf8)
+        let secondBackend = EditorWorkspaceFixture(path: secondPath, contents: original)
+        let second = FileTab(path: secondPath, backend: secondBackend, workspaceIdentity: nil)
+        try await second.waitForText()
+        project.append(PaneTab(content: .file(second)))
+        let encoding = Task { await second.save(as: .utf8BOM) }
+        try await waitForFileTabState { await secondBackend.writingPath == secondPath }
+
+        let closing = Task { await manager.saveBeforeWindowClose() }
+        try await waitForFileTabState { await firstBackend.writingPath == firstPath }
+        await secondBackend.finishWrite(failing: true)
+        await encoding.value
+        XCTAssertNotNil(second.saveError)
+        XCTAssertFalse(second.isDirty)
+        await firstBackend.finishWrite()
+        let mayClose = await closing.value
+
+        XCTAssertFalse(mayClose, "Close must remember an encoding write pending at the start")
+        XCTAssertTrue(project.tabs.contains { $0.content.id == second.id })
+        let firstStored = await firstBackend.data(at: firstPath)
+        let secondStored = await secondBackend.data(at: secondPath)
+        XCTAssertEqual(firstStored, Data("first saved".utf8))
+        XCTAssertEqual(secondStored, original)
+    }
+
+    func testApplicationTerminationDetectsEncodingFailureInLaterWindow() async throws {
+        let previous = SessionStore.load()
+        let previousHistory = TerminalHistoryStore.load()
+        defer { SessionStore.save(previous); TerminalHistoryStore.save(previousHistory) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let firstWindow = workspaceApplication.makeWindow()
+        let secondWindow = workspaceApplication.makeWindow()
+        defer { firstWindow.windowClosed(); secondWindow.windowClosed() }
+        firstWindow.addLocalFolders([root])
+        secondWindow.addLocalFolders([root])
+        let firstProject = try XCTUnwrap(firstWindow.selectedProject)
+        let secondProject = try XCTUnwrap(secondWindow.selectedProject)
+
+        let firstPath = root.appendingPathComponent("blocking.txt").path
+        let firstBackend = EditorWorkspaceFixture(path: firstPath, contents: Data("old first".utf8))
+        let first = FileTab(path: firstPath, backend: firstBackend, workspaceIdentity: nil)
+        try await first.waitForText()
+        firstProject.append(PaneTab(content: .file(first)))
+        first.text = "new first"
+        first.refreshDirtyState()
+
+        let secondPath = root.appendingPathComponent("conversion.txt").path
+        let original = Data("old encoding".utf8)
+        let secondBackend = EditorWorkspaceFixture(path: secondPath, contents: original)
+        let second = FileTab(path: secondPath, backend: secondBackend, workspaceIdentity: nil)
+        try await second.waitForText()
+        secondProject.append(PaneTab(content: .file(second)))
+        let encoding = Task { await second.save(as: .utf8BOM) }
+        try await waitForFileTabState { await secondBackend.writingPath == secondPath }
+
+        let terminating = Task { await workspaceApplication.saveBeforeTermination() }
+        try await waitForFileTabState { await firstBackend.writingPath == firstPath }
+        await secondBackend.finishWrite(failing: true)
+        await encoding.value
+        XCTAssertFalse(second.isDirty)
+        XCTAssertNotNil(second.saveError)
+        await firstBackend.finishWrite()
+        let mayQuit = await terminating.value
+
+        XCTAssertFalse(mayQuit, "An earlier window save must not hide a failed encoding write elsewhere")
+        XCTAssertTrue(secondProject.tabs.contains { $0.content.id == second.id })
+        let firstStored = await firstBackend.data(at: firstPath)
+        let secondStored = await secondBackend.data(at: secondPath)
+        XCTAssertEqual(firstStored, Data("new first".utf8))
+        XCTAssertEqual(secondStored, original)
     }
 
     func testWindowCloseVetoesNewDraftCreatedInAnotherTabDuringPendingSave() async throws {

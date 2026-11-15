@@ -83,7 +83,7 @@ final class WorkspaceWindowModel {
 
     var hasUnsavedEditorsInWindow: Bool {
         projects.contains { project in
-            project.tabs.contains { $0.content.isDirty }
+            project.tabs.contains { $0.content.hasUnresolvedSave }
         }
     }
 
@@ -91,12 +91,12 @@ final class WorkspaceWindowModel {
     /// same real file writes before native views and shells are torn down.
     func saveBeforeWindowClose() async -> Bool {
         for project in projects {
-            for tab in project.tabs where tab.content.isDirty {
+            for tab in project.tabs where tab.content.hasUnresolvedSave {
                 await tab.content.save()
-                guard !tab.content.isDirty else { return false }
+                guard !tab.content.hasUnresolvedSave else { return false }
             }
         }
-        // A previously clean tab can become dirty while another save awaits IO.
+        // Recheck all tabs: another save may have changed a clean buffer or failed.
         return !hasUnsavedEditorsInWindow
     }
 
@@ -488,27 +488,27 @@ final class WorkspaceWindowModel {
         guard projects.contains(where: { $0 === project }),
               !project.isClosingPanels,
               !project.tabs.contains(where: { $0.content.isClosing }) else { return }
-        let dirty = project.tabs.map(\.content).filter(\.isDirty)
-        guard !dirty.isEmpty else {
+        let unresolved = project.tabs.map(\.content).filter(\.hasUnresolvedSave)
+        guard !unresolved.isEmpty else {
             project.terminateAll()
             remove(project)
             return
         }
-        dirty.forEach { $0.suspendAutoSaveForClose(true) }
+        unresolved.forEach { $0.suspendAutoSaveForClose(true) }
         Task { [weak self, weak project] in
-            for content in dirty {
+            for content in unresolved {
                 await content.save()
-                guard !content.isDirty else {
+                guard !content.hasUnresolvedSave else {
                     // A failed or superseded write must not destroy the editor.
-                    dirty.forEach { $0.suspendAutoSaveForClose(false) }
+                    unresolved.forEach { $0.suspendAutoSaveForClose(false) }
                     return
                 }
             }
             guard let self, let project,
                   self.projects.contains(where: { $0 === project }) else { return }
             // New drafts in tabs skipped before an awaited save must survive.
-            guard !project.tabs.contains(where: { $0.content.isDirty }) else {
-                dirty.forEach { $0.suspendAutoSaveForClose(false) }
+            guard !project.tabs.contains(where: { $0.content.hasUnresolvedSave }) else {
+                unresolved.forEach { $0.suspendAutoSaveForClose(false) }
                 return
             }
             project.terminateAll()

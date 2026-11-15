@@ -66,6 +66,49 @@ private final class WindowCloseDelegateWitness: NSObject, NSWindowDelegate {
 final class WindowCloseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testFailedCleanEncodingRetryRequiresNativeSaveDiscardOrCancelChoice() async throws {
+        let project = Project(fallbackName: "encoding close", workspaceConfiguration: .standard)
+        let backend = WindowSaveFixture("original")
+        let file = FileTab(path: "/fixture/encoding.txt", backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let tab = PaneTab(content: .file(file))
+        project.append(tab)
+
+        await file.save(as: .utf8BOM)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.isSaving)
+        XCTAssertNotNil(file.saveError)
+
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 720, height: 520),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        project.onPresentationWindow = { window }
+        defer { window.close() }
+
+        project.close(tab)
+        try await wait { window.attachedSheet != nil }
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+        try await wait { window.attachedSheet == nil && !file.autoSaveSuspendedForClose }
+        XCTAssertTrue(project.tabs.contains { $0 === tab },
+                      "Save cannot silently dismiss an encoding conversion that still failed")
+        XCTAssertNotNil(file.saveError)
+
+        project.close(tab)
+        try await wait { window.attachedSheet != nil }
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertThirdButtonReturn)
+        try await wait { window.attachedSheet == nil && !file.autoSaveSuspendedForClose }
+        XCTAssertTrue(project.tabs.contains { $0 === tab }, "Cancel must preserve the file")
+
+        project.close(tab)
+        try await wait { window.attachedSheet != nil }
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
+        try await wait { project.tabs.isEmpty }
+        let stored = await backend.currentText()
+        XCTAssertEqual(stored, "original", "Only Don't Save may intentionally discard conversion")
+    }
+
     func testNewDraftDuringBatchSaveProtectsEarlierCleanBrowserAndTool() async throws {
         let project = Project(fallbackName: "new draft", workspaceConfiguration: .standard)
         let firstBackend = WindowSaveFixture("first original")

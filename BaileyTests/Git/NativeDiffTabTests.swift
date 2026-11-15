@@ -5540,6 +5540,120 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
     }
 
+    func testCleanWorktreeDiffEncodingWriteIsProtectedDuringTabAndBatchClose() async throws {
+        for batch in [false, true] {
+            for failing in [false, true] {
+                let backend = DiffWorkspaceFixture()
+                let diff = DiffTab(repoRoot: "/fixture", path: "encoding.txt", source: .worktree,
+                                   untracked: true, origPath: nil, backend: backend,
+                                   workspaceIdentity: nil, preferences: try isolatedPreferences())
+                try await wait { diff.canPresentNativeContent }
+                let project = Project(fallbackName: "Diff close", workspaceConfiguration: .standard)
+                let tab = PaneTab(content: .diff(diff))
+                project.append(tab)
+
+                let writing = Task { await diff.save(as: .utf8BOM) }
+                try await wait { await backend.writing }
+                XCTAssertFalse(diff.isDirty)
+                XCTAssertTrue(diff.isSaving)
+                XCTAssertTrue(tab.content.hasUnresolvedSave)
+
+                if batch { project.closeDiffs() } else { project.close(tab) }
+                XCTAssertTrue(project.tabs.contains { $0 === tab },
+                              "An encoding-only Git write must not be closed before completion")
+
+                await backend.finishWrite(failing: failing)
+                await writing.value
+                if failing {
+                    try await wait { !diff.autoSaveSuspendedForClose }
+                    XCTAssertTrue(project.tabs.contains { $0 === tab },
+                                  "Failed Git encoding write must retain its tab")
+                    XCTAssertNotNil(diff.saveError)
+                    let stored = await backend.stored()
+                    XCTAssertEqual(stored, Data("baseline😀\r\n".utf8))
+                } else {
+                    try await wait { project.tabs.isEmpty }
+                    XCTAssertNil(diff.saveError)
+                    let stored = await backend.stored()
+                    XCTAssertEqual(stored, TextFileEncoding.utf8BOM.encoded("baseline😀\r\n"))
+                }
+            }
+        }
+    }
+
+    func testFailedCleanWorktreeDiffEncodingBlocksFileMutationAndGitOperations() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "failed-encoding.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        let app = WorkspaceApplication()
+        let manager = app.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "diff safety", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.append(PaneTab(content: .diff(diff)))
+
+        let converting = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await backend.writing }
+        await backend.finishWrite(failing: true)
+        await converting.value
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertFalse(diff.isSaving)
+        XCTAssertNotNil(diff.saveError)
+
+        XCTAssertFalse(app.canRunGitAction(repository: "/fixture", scope: "local"))
+        let gitReady = await app.saveBeforeGitAction(
+            repository: "/fixture", scope: "local", isCurrent: { true }
+        )
+        XCTAssertFalse(gitReady)
+
+        let accepted = await diff.beginFileMutation()
+        if accepted { diff.endFileMutation() }
+        XCTAssertFalse(accepted, "A failed clean conversion must block a path mutation")
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, Data("baseline😀\r\n".utf8))
+
+        let retry = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await backend.writing }
+        await backend.finishWrite()
+        await retry.value
+        XCTAssertNil(diff.saveError)
+        XCTAssertTrue(app.canRunGitAction(repository: "/fixture", scope: "local"))
+        let readyAfterSave = await app.saveBeforeGitAction(
+            repository: "/fixture", scope: "local", isCurrent: { true }
+        )
+        XCTAssertTrue(readyAfterSave)
+        let readyToMutate = await diff.beginFileMutation()
+        XCTAssertTrue(readyToMutate)
+        if readyToMutate { diff.endFileMutation() }
+        let saved = await backend.stored()
+        XCTAssertEqual(saved, TextFileEncoding.utf8BOM.encoded("baseline😀\r\n"))
+    }
+
+    func testFailedCleanWorktreeDiffEncodingRemainsUnresolvedAfterWriteEnds() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "failed-encoding.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        let tab = PaneTab(content: .diff(diff))
+
+        let writing = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await backend.writing }
+        await backend.finishWrite(failing: true)
+        await writing.value
+
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertFalse(diff.isSaving)
+        XCTAssertNotNil(diff.saveError)
+        XCTAssertTrue(tab.content.hasUnresolvedSave,
+                      "A failed Git worktree encoding conversion must not become discardable")
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, Data("baseline😀\r\n".utf8))
+    }
+
     func testWorktreeDiffLostWriteAcknowledgementReconcilesPublishedBytes() async throws {
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "ack.txt", source: .worktree,

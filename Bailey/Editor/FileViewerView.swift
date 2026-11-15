@@ -430,7 +430,7 @@ final class FileTab: nonisolated Identifiable {
         fileMutationHeld = true
         await lastSaveTask?.value
         if isDirty { await writeCurrentText() }
-        guard !isDirty else {
+        guard !isDirty, saveError == nil else {
             endFileMutation()
             return false
         }
