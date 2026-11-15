@@ -2159,6 +2159,9 @@ struct GitPanel: View {
                     focusGitChanges()
                 }
             }
+            // One offscreen LazyVStack item contains the entire Graph. A different
+            // HEAD or repository must not inherit its cached history height.
+            .id(model.currentScope + "\u{0}" + model.repoRoot + "\u{0}" + (model.headOID ?? ""))
         }
     }
 
