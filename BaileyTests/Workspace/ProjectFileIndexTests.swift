@@ -41,6 +41,7 @@ private actor IndexAliasRunner: RemoteCommandRunner {
     let physicalDirectory: String
     let physicalHome: String
     private(set) var commands: [String] = []
+    private(set) var commandTimeouts: [TimeInterval] = []
 
     init(physicalDirectory: String, physicalHome: String) {
         self.physicalDirectory = physicalDirectory
@@ -52,6 +53,7 @@ private actor IndexAliasRunner: RemoteCommandRunner {
     ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
         let command = argv.joined(separator: " ")
         commands.append(command)
+        commandTimeouts.append(timeout)
         if command.contains("HOME") {
             return (0, Data("\(physicalDirectory)\0\(physicalHome)\0".utf8), Data())
         }
@@ -330,6 +332,9 @@ final class ProjectFileIndexTests: XCTestCase {
             } catch ProjectFileIndex.RemoteIndexError.restrictedRoot {
                 let commands = await runner.commands
                 XCTAssertEqual(commands.count, 1, "Do not run Git or enumeration on a restricted root")
+                let timeouts = await runner.commandTimeouts
+                XCTAssertEqual(timeouts, [25],
+                               "SSH root identity checks must share the index command time budget")
             } catch {
                 XCTFail("Wrong error for restricted alias \(alias.root): \(error)")
             }

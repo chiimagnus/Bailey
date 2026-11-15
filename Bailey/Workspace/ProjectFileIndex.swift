@@ -41,6 +41,7 @@ nonisolated enum ProjectFileIndex {
     private static let maxRemoteFiles = 10_000
     private static let maxRemoteDirectories = 400
     private static let maxGitBytes = 4 * 1_024 * 1_024
+    private static let remoteCommandTimeout: TimeInterval = 25
 
     /// Remote roots never touch the Mac filesystem or its Git client.
     static func loadRemote(in root: String, backend: WorkspaceBackend) async throws -> RemoteResult {
@@ -51,7 +52,7 @@ nonisolated enum ProjectFileIndex {
         let directories = try await backend.run(
             argv: ["/bin/sh", "-c",
                    "printf '%s\\0%s\\0' \"$(pwd -P)\" \"$(cd \"$HOME\" && pwd -P)\""],
-            cwd: root, env: nil, stdin: nil, timeout: 10
+            cwd: root, env: nil, stdin: nil, timeout: remoteCommandTimeout
         )
         let physical = directories.stdout.split(separator: 0)
         guard directories.status == 0, directories.stdout.last == 0,
@@ -143,7 +144,7 @@ nonisolated enum ProjectFileIndex {
         let result = try await backend.run(
             argv: ["/bin/sh", "-c", script], cwd: root,
             env: ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"],
-            stdin: nil, timeout: 25
+            stdin: nil, timeout: remoteCommandTimeout
         )
         guard !Task.isCancelled else { throw CancellationError() }
         guard result.status == 0 else {
