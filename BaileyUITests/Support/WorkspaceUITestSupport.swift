@@ -273,6 +273,39 @@ enum WorkspaceUITestSupport {
         }
     }
 
+    static func selectSSHFolder(_ root: String, host: String, in app: XCUIApplication) {
+        let dismiss = element("bailey.sshFolderPicker.dismiss", in: app)
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 15),
+                      "SSH uses the in-window picker, not the macOS folder sheet")
+        let hostChoice = app.buttons.matching(identifier: "bailey.sshFolderPicker.hostChoice")
+            .matching(NSPredicate(format: "value == %@", host)).firstMatch
+        XCTAssertTrue(hostChoice.waitForExistence(timeout: 15))
+        hostChoice.click()
+        let path = app.textFields["bailey.sshFolderPicker.path"]
+        XCTAssertTrue(path.waitForExistence(timeout: 40))
+        // The path field is visible before the real remote directory read
+        // finishes. Input must not race the host switch or focus transition.
+        let loading = app.staticTexts["Loading remote folders…"]
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            path.exists && !loading.exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 60), .completed)
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground)
+        path.click()
+        path.typeKey("a", modifierFlags: .command)
+        path.typeText(root)
+        XCTAssertEqual(path.value as? String, root)
+        let confirm = app.buttons["bailey.sshFolderPicker.add"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 40))
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: confirm
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 40), .completed)
+        confirm.click()
+        XCTAssertTrue(dismiss.waitForNonExistence(timeout: 40))
+    }
+
     static func element(_ id: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
@@ -434,6 +467,27 @@ struct WorkspaceUITestFixture {
                                                  withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    /// The temporary GUI HOME may reuse approved SSH aliases and Cloudflare
+    /// authorization without copying tokens or exposing real Bailey settings.
+    func includeAuthorizedSSHHost(_ host: String) throws {
+        guard !host.isEmpty, !host.contains(where: { $0.isWhitespace || $0.isNewline }),
+              let account = getpwuid(getuid()) else {
+            throw NSError(domain: "BaileyUITestSSH", code: 1)
+        }
+        let realHome = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
+        let config = realHome.appendingPathComponent(".ssh/config")
+        guard FileManager.default.fileExists(atPath: config.path) else {
+            throw NSError(domain: "BaileyUITestSSH", code: 2)
+        }
+        _ = try file(".ssh/config", text: "Include \(config.path)\n")
+        let cache = realHome.appendingPathComponent(".cloudflared")
+        if FileManager.default.fileExists(atPath: cache.path) {
+            try FileManager.default.createSymbolicLink(
+                at: root.appendingPathComponent(".cloudflared"), withDestinationURL: cache
+            )
+        }
     }
 
     @discardableResult

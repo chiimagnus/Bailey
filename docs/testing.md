@@ -273,6 +273,12 @@ XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称�
 正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。
 独立 UI 启动器使用临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实位于临时目录；
 仅改 `HOME` 不会改变 Foundation 的主目录。
+获授权的 Windows SSH GUI 测试只在一次性测试主目录中引用原 SSH 别名，
+并通过临时符号链接使用用户已批准的 Cloudflare Access 缓存；
+不复制令牌、不修改用户 SSH 配置，测试结束只解除链接，正式设置仍在隔离目录之外。
+没有授权时不能以共享缓存绕过原有 SSH 测试门禁。
+GUI 添加远端项目使用窗口内 `SSHFolderPickerView` 的主机、路径与确认控件，
+不再查找旧版系统 Sheet 的 `comboBox` 和 `textView`。
 **普通 UI 方法各自使用独立的 Bailey Dev 进程和临时数据**。
 测试前通过 `WorkspaceUITestSupport.launch(in:project:)` 将所属临时目录交给已有的
 `addLocalFolders()` 初始化工作区；不为非文件选择器测试反复点击 Add Folder、

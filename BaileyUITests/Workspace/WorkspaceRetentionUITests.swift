@@ -732,7 +732,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let original = try Data(contentsOf: file)
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", configurationHome: fixture.root,
-            project: folder
+            project: folder, clipboardIsReadOnly: true
         )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let owner = app.windows.firstMatch
