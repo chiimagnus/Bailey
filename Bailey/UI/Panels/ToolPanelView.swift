@@ -121,15 +121,6 @@ struct ToolPanelView: View {
     /// back the row's height when the session is local.
     @State private var remoteHeaderState = RemotePaneHeaderState.local
 
-    /// Git's terminal action can only target the selected project's machine.
-    private var gitActionSession: TerminalSession? {
-        guard let project = manager.selectedProject else { return nil }
-        if project.sshHost == nil, project.selectedSession?.workspaceIdentity != nil {
-            return nil
-        }
-        return project.selectedSession
-    }
-
     private var panelFontScale: CGFloat {
         CGFloat(settings.panelFontSize / AppSettings.defaultPanelFontSize)
     }
@@ -247,7 +238,6 @@ struct ToolPanelView: View {
                     model: git,
                     manager: manager,
                     project: manager.selectedProject,
-                    session: gitActionSession,
                     sshHost: manager.selectedProject?.sshHost,
                     openFile: { manager.openFile($0) },
                     openDiff: { entry, staged in

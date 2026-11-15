@@ -225,7 +225,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
-    func testCommandClickSecondCommitKeepsBothHistoricalDetailsIndependent() throws {
+    func testCommandClickAddsCommitWithoutChangingHistoricalDisclosure() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("first-history.txt", text: "first\n")
         try fixture.initializeGit()
@@ -241,11 +241,247 @@ final class GitGraphUITests: XCTestCase {
         first.click()
         XCTAssertTrue(historicalFile("first-history.txt", in: app).waitForExistence(timeout: 12))
         XCUIElement.perform(withKeyModifiers: .command) { second.click() }
-        XCTAssertTrue(historicalFile("second-history.txt", in: app).waitForExistence(timeout: 12))
+        XCTAssertTrue(first.isSelected)
+        XCTAssertTrue(second.isSelected, "Command-click must extend the Git Graph selection")
+        XCTAssertFalse(historicalFile("second-history.txt", in: app).exists,
+                       "Selecting a commit must not expand its files")
         XCTAssertTrue(historicalFile("first-history.txt", in: app).exists)
-        XCTAssertEqual(app.windows.firstMatch.descendants(matching: .any)
-            .matching(identifier: "bailey.git.history.file").count, 2,
-            "A modified click must only expand its own commit's normal historical files")
+        second.click()
+        XCTAssertTrue(second.isSelected)
+        XCTAssertFalse(first.isSelected, "Ordinary click replaces the selected set")
+        XCTAssertTrue(historicalFile("second-history.txt", in: app).waitForExistence(timeout: 12))
+        XCTAssertTrue(historicalFile("first-history.txt", in: app).exists,
+                      "Selection must not close a different commit's disclosure")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testStashBadgeInMixedSelectionShowsOnlyBatchCopyMenu() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let tracked = try fixture.file("stash-multi.txt", text: "baseline\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "unsaved\n".write(to: tracked, atomically: true, encoding: .utf8)
+        try fixture.git(["stash", "push", "-m", "multi-selection-stash"])
+        let stash = try fixture.git(["rev-parse", "stash@{0}"])
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty {
+                XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard))
+            }
+        }
+
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        let badge = app.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "stash@{0}"
+        )).firstMatch
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+        XCTAssertTrue(badge.waitForExistence(timeout: 25))
+        commit.click()
+        XCUIElement.perform(withKeyModifiers: .command) { badge.click() }
+        badge.rightClick()
+        let batchCopy = app.menuItems["Copy Selected Items"]
+        XCTAssertTrue(batchCopy.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Pop Stash…"].exists,
+                       "A Stash badge within mixed selection cannot offer single-Stash mutation")
+        XCTAssertFalse(app.menuItems["Squash Selected Commits…"].exists)
+        batchCopy.click()
+        let text = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let values = Set(text.split(separator: "\n").map(String.init))
+        XCTAssertEqual(values, Set([
+            String(decoding: head, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "stash@{0}",
+        ]))
+
+        badge.click()
+        badge.rightClick()
+        XCTAssertTrue(app.menuItems["Pop Stash…"].waitForExistence(timeout: 8),
+                      "Single-Stash context menu must stay available")
+        XCTAssertFalse(app.menuItems["Copy Selected Items"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", "stash@{0}"]), stash)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
+    }
+
+    func testSelectedCommitTagBadgeUsesBatchMenuButSingleTagKeepsItsActions() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("root.txt", text: "root\n")
+        try fixture.initializeGit()
+        _ = try fixture.file("tagged.txt", text: "tagged\n")
+        try fixture.git(["add", "tagged.txt"])
+        try fixture.git(["commit", "-qm", "tagged history"])
+        try fixture.git(["tag", "-a", "-m", "badge label", "multi-badge"])
+        let taggedHash = try fixture.git(["rev-parse", "HEAD"])
+        _ = try fixture.file("newest.txt", text: "newest\n")
+        try fixture.git(["add", "newest.txt"])
+        try fixture.git(["commit", "-qm", "newest history"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty {
+                XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard))
+            }
+        }
+
+        let app = try launchGraph(fixture, language: "en")
+        let newest = app.buttons["newest history"]
+        let tagged = app.buttons["tagged history"]
+        let badge = app.buttons["multi-badge"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 25))
+        XCTAssertTrue(tagged.waitForExistence(timeout: 25))
+        XCTAssertTrue(badge.waitForExistence(timeout: 25))
+        newest.click()
+        XCUIElement.perform(withKeyModifiers: .command) { tagged.click() }
+        XCTAssertTrue(newest.isSelected && tagged.isSelected)
+        badge.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Selected Commit Hashes"].waitForExistence(timeout: 8),
+                      "The tag badge belongs to the selected commit's batch context.")
+        XCTAssertFalse(app.menuItems["Delete Tag…"].exists,
+                       "Multi-select cannot expose a single-tag destructive action.")
+        app.menuItems["Copy Selected Commit Hashes"].click()
+        let hashes = [head, taggedHash].map {
+            String(decoding: $0, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       hashes.joined(separator: "\n"))
+
+        tagged.click()
+        XCTAssertFalse(newest.isSelected)
+        XCTAssertTrue(tagged.isSelected)
+        badge.rightClick()
+        XCTAssertTrue(app.menuItems["Delete Tag…"].waitForExistence(timeout: 8),
+                      "The ordinary tag action must remain available on a single selection.")
+        XCTAssertFalse(app.menuItems["Copy Selected Commit Hashes"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/multi-badge^{}"]), taggedHash)
+    }
+
+    func testGraphMultiSelectionUsesDedicatedCopyAndHistoryActionMenu() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("root.txt", text: "root\n")
+        try fixture.initializeGit()
+        for title in ["batch first", "batch second", "batch third"] {
+            _ = try fixture.file(title + ".txt", text: title + "\n")
+            try fixture.git(["add", "--", title + ".txt"])
+            try fixture.git(["commit", "-qm", title])
+        }
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let expected = [
+            try fixture.git(["rev-parse", "HEAD"]),
+            try fixture.git(["rev-parse", "HEAD^"]),
+        ].map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
+        }
+
+        let app = try launchGraph(fixture, language: "en")
+        let newest = app.buttons["batch third"]
+        let middle = app.buttons["batch second"]
+        let outside = app.buttons["batch first"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 25))
+        XCTAssertTrue(middle.waitForExistence(timeout: 25))
+        newest.click()
+        XCUIElement.perform(withKeyModifiers: .command) { middle.click() }
+        XCTAssertTrue(newest.isSelected && middle.isSelected)
+        XCTAssertFalse(outside.isSelected)
+
+        newest.rightClick()
+        let copy = app.menuItems["Copy Selected Commit Hashes"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Checkout Commit…"].exists)
+        XCTAssertFalse(app.menuItems["Create Branch at Commit…"].exists)
+        XCTAssertTrue(app.menuItems["Cherry Pick Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Revert Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Drop Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Squash Selected Commits…"].exists)
+        copy.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       expected.joined(separator: "\n"))
+        XCTAssertTrue(newest.isSelected && middle.isSelected)
+
+        middle.rightClick()
+        app.menuItems["Copy Selected Commit Subjects"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       "batch third\nbatch second")
+
+        outside.rightClick()
+        XCTAssertTrue(app.menuItems["Checkout Commit…"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Copy Selected Commit Hashes"].exists)
+        app.menuItems["Copy Commit Hash"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       String(decoding: try fixture.git(["rev-parse", "HEAD~2"]), as: UTF8.self)
+                           .trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertTrue(newest.isSelected && middle.isSelected && !outside.isSelected)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testGraphMultiSelectionSpansBranchesWithoutEnablingInvalidSquash() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("baseline.txt", text: "base\n")
+        try fixture.initializeGit()
+        try fixture.git(["switch", "-qc", "topic"])
+        _ = try fixture.file("topic.txt", text: "topic\n")
+        try fixture.git(["add", "topic.txt"])
+        try fixture.git(["commit", "-qm", "branch topic"])
+        try fixture.git(["switch", "main"])
+        _ = try fixture.file("main.txt", text: "main\n")
+        try fixture.git(["add", "main.txt"])
+        try fixture.git(["commit", "-qm", "branch main"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let main = app.buttons["branch main"]
+        let topic = app.buttons["branch topic"]
+        let root = app.buttons["E2E fixture history"]
+        XCTAssertTrue(main.waitForExistence(timeout: 25))
+        XCTAssertTrue(topic.waitForExistence(timeout: 25))
+        XCTAssertTrue(root.waitForExistence(timeout: 25))
+
+        main.click()
+        XCUIElement.perform(withKeyModifiers: .command) { topic.click() }
+        XCTAssertTrue(main.isSelected)
+        XCTAssertTrue(topic.isSelected)
+        XCTAssertFalse(root.isSelected)
+
+        topic.rightClick()
+        let squash = app.menuItems["Squash Selected Commits…"]
+        XCTAssertTrue(squash.waitForExistence(timeout: 8))
+        XCTAssertFalse(squash.isEnabled,
+                       "Multi-selection is valid across branches; squash is not.")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(main.isSelected)
+        XCTAssertTrue(topic.isSelected)
+
+        root.rightClick()
+        XCTAssertFalse(app.menuItems["Squash Selected Commits…"].exists,
+                       "A context target outside the selection cannot use the old selection.")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(main.isSelected)
+        XCTAssertTrue(topic.isSelected)
+
+        main.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { topic.click() }
+        XCTAssertTrue(main.isSelected)
+        XCTAssertTrue(topic.isSelected,
+                      "Shift selection must follow visual order, regardless of Git topology.")
+
+        app.typeKey("a", modifierFlags: .command)
+        XCTAssertTrue(main.isSelected)
+        XCTAssertTrue(topic.isSelected)
+        XCTAssertTrue(root.isSelected, "Cmd+A must select all loaded real commits.")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(main.isSelected)
+        XCTAssertFalse(topic.isSelected)
+        XCTAssertFalse(root.isSelected)
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
@@ -353,7 +589,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
-    func testRightClickDifferentCommitMovesGraphKeyboardCursorWithoutOpeningHistory() throws {
+    func testRightClickDifferentCommitPreservesGraphFocusAndSelection() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("first-commit.txt", text: "first\n")
         try fixture.initializeGit()
@@ -374,9 +610,12 @@ final class GitGraphUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let earlierFile = historicalFile("first-commit.txt", in: app)
         XCTAssertFalse(earlierFile.exists, "Context click must not expand a commit")
+        XCTAssertTrue(secondCommit.isSelected, "Right-click must preserve Selection")
+        XCTAssertFalse(firstCommit.isSelected, "Context target is not Selection")
         app.typeKey(" ", modifierFlags: [])
-        XCTAssertTrue(earlierFile.waitForExistence(timeout: 12),
-                      "Space must act on the right-clicked commit, not the prior keyboard row")
+        XCTAssertFalse(earlierFile.exists, "Context target must not move the keyboard cursor")
+        XCTAssertTrue(historicalFile("second-commit.txt", in: app).waitForExistence(timeout: 12),
+                      "Space must act on the previously focused commit")
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 

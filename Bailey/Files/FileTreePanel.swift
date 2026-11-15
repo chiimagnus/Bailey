@@ -518,7 +518,9 @@ private struct FileTreeRow: View {
               target == item.path || item.compactComponents.contains(where: { $0.path == target })
         else { return false }
         return menu.items.contains {
-            $0.accessibilityLabel() == String(localized: "Copy Relative Path", table: "Sidebar")
+            [String(localized: "Copy Relative Path", table: "Sidebar"),
+             String(localized: "Copy Relative Paths", table: "Sidebar")]
+                .contains($0.accessibilityLabel())
         }
     }
 
@@ -555,7 +557,8 @@ private struct FileTreeRow: View {
     private func rowMenu(for target: FileTreeModel.Item) -> some View {
         let selection = target.path == item.path
             ? model.contextSelection(for: item) : [target.path]
-        if target.isDirectory {
+        let multiple = selection.count > 1
+        if !multiple && target.isDirectory {
             let newFileTitle = String(localized: "New File…", table: "Sidebar")
             Button(newFileTitle) {
                 Task {
@@ -573,17 +576,21 @@ private struct FileTreeRow: View {
                 }
             }
             .badge("⌥⌘N")
-        } else {
+        } else if !multiple {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(target.path, true) }
             }
         }
         if !isRemote {
-            Button(String(localized: "Open in Default App", table: "Sidebar")) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: target.path))
+            if !multiple {
+                Button(String(localized: "Open in Default App", table: "Sidebar")) {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: target.path))
+                }
             }
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target.path)])
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    selection.map { URL(fileURLWithPath: $0) }
+                )
             }
         }
         Divider()
@@ -599,7 +606,7 @@ private struct FileTreeRow: View {
         }
         .badge("⌘C")
 
-        if target.isDirectory {
+        if !multiple && target.isDirectory {
             let pasteTitle = String(localized: "Paste", table: "Sidebar")
             Button(pasteTitle) {
                 if isCurrentTarget() { onCommand(.paste(into: target.path)) }
@@ -607,12 +614,14 @@ private struct FileTreeRow: View {
             .badge("⌘V")
         }
         Divider()
-        Button(String(localized: "Copy Path", table: "Sidebar")) {
+        Button(multiple ? String(localized: "Copy Paths", table: "Sidebar")
+               : String(localized: "Copy Path", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(selection.joined(separator: "\n"), forType: .string)
         }
-        Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+        Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
+               : String(localized: "Copy Relative Path", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
             let root = model.rootPath == "/" ? "/" : model.rootPath + "/"
             let paths = selection.filter { $0.hasPrefix(root) }
@@ -621,9 +630,11 @@ private struct FileTreeRow: View {
             NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         }
         Divider()
-        Button(String(localized: "Rename", table: "Sidebar")) {
-            guard isCurrentTarget() else { return }
-            model.beginRename(target)
+        if !multiple {
+            Button(String(localized: "Rename", table: "Sidebar")) {
+                guard isCurrentTarget() else { return }
+                model.beginRename(target)
+            }
         }
         let deleteTitle = isRemote ? String(localized: "Delete…", table: "Sidebar")
             : String(localized: "Move to Trash", table: "Sidebar")

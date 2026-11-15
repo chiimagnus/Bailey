@@ -12,6 +12,59 @@ final class GitNativeDialogTests: XCTestCase {
         )
     }
 
+    func testMultiCommitDialogsShowGroupAndOnlyRelevantOptions() {
+        let commits = (1...3).map { number in
+            GitStatusModel.RecentCommit(
+                hash: String(repeating: String(number), count: 40),
+                shortHash: String(repeating: String(number), count: 7),
+                subject: "Selected \(number)", author: "Tester", date: .now,
+                parentHashes: [], references: [], files: []
+            )
+        }
+        for action in GitStatusModel.CommitBatchAction.allCases {
+            let dialog = GitBatchCommitDialog(action: action, commits: commits, target: target)
+            XCTAssertTrue(dialog.alert.informativeText.contains(
+                String(localized: "Selected \(commits.count) commits", table: "Git")
+            ))
+            XCTAssertTrue(dialog.alert.informativeText.contains("Selected 1"))
+            XCTAssertTrue(dialog.alert.informativeText.contains("Selected 3"))
+            XCTAssertEqual(dialog.alert.buttons.count, 2)
+            XCTAssertEqual(dialog.alert.buttons[0].keyEquivalent, "\r")
+            XCTAssertEqual(dialog.alert.buttons[1].keyEquivalent, "\u{1b}")
+            if action == .cherryPick {
+                XCTAssertNotNil(dialog.alert.accessoryView)
+                XCTAssertEqual(dialog.recordOrigin.state, .off)
+                XCTAssertEqual(dialog.noCommit.state, .off)
+            } else {
+                XCTAssertNil(dialog.alert.accessoryView)
+            }
+            if action == .drop {
+                XCTAssertTrue(dialog.alert.informativeText.contains(String(localized:
+                    "This rewrites local history. Remote branches and tags are not force-pushed.",
+                    table: "Git"
+                )))
+            }
+        }
+    }
+
+    func testSquashNativeSheetRequiresMessageAndPreservesMultilineText() {
+        let sheet = GitSquashDialog(count: 2, suggestedMessage: "oldest", branch: "main")
+        XCTAssertEqual(sheet.message.string, "oldest")
+        XCTAssertTrue(sheet.alert.informativeText.contains("main"))
+        XCTAssertTrue(sheet.alert.buttons[0].isEnabled)
+        XCTAssertTrue(sheet.alert.window.initialFirstResponder === sheet.message)
+        XCTAssertEqual(sheet.alert.buttons[0].keyEquivalent, "\r")
+        XCTAssertEqual(sheet.alert.buttons[1].keyEquivalent, "\u{1b}")
+
+        sheet.message.string = "   \n "
+        sheet.textDidChange(Notification(name: NSText.didChangeNotification, object: sheet.message))
+        XCTAssertFalse(sheet.alert.buttons[0].isEnabled)
+        sheet.message.string = "新标题\n\n详细描述"
+        sheet.textDidChange(Notification(name: NSText.didChangeNotification, object: sheet.message))
+        XCTAssertTrue(sheet.alert.buttons[0].isEnabled)
+        XCTAssertEqual(sheet.commitMessage, "新标题\n\n详细描述")
+    }
+
     func testBranchNameFieldsUseRealNativeValidationAndKeepCheckoutDefaults() {
         let current = GitBranchDialog(kind: .create(checkout: true),
             title: "Create", detail: "HEAD")

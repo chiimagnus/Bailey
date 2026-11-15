@@ -1,6 +1,146 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Repository %@: %@" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仓库 %@：%@"
+          }
+        }
+      }
+    },
+    "Cherry Pick Selected Commits…" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拣选所选提交…"
+          }
+        }
+      }
+    },
+    "Revert Selected Commits…" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "撤销所选提交…"
+          }
+        }
+      }
+    },
+    "Drop Selected Commits…" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除所选提交…"
+          }
+        }
+      }
+    },
+    "Copy Selected Commit Hashes" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选提交哈希"
+          }
+        }
+      }
+    },
+    "Copy Selected Commit Subjects" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选提交标题"
+          }
+        }
+      }
+    },
+    "Copy Selected Commit Summaries" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选提交摘要"
+          }
+        }
+      }
+    },
+    "Copy Selected Items" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "复制所选项目"
+          }
+        }
+      }
+    },
+    "Selected %lld commits" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选择 %lld 条提交"
+          }
+        }
+      }
+    },
+    "Yes, Cherry Pick Selected" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，拣选所选提交"
+          }
+        }
+      }
+    },
+    "Yes, Revert Selected" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，撤销所选提交"
+          }
+        }
+      }
+    },
+    "Yes, Drop Selected" : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，删除所选提交"
+          }
+        }
+      }
+    },
+    "The selected Git commits changed. Select them again." : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选 Git 提交已变化，请重新选择。"
+          }
+        }
+      }
+    },
+    "The selected commits cannot all be dropped from this HEAD." : {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法从当前 HEAD 删除全部所选提交。"
+          }
+        }
+      }
+    },
     "Automatic" : {
       "localizations" : {
         "zh-Hans" : {
@@ -877,6 +1017,116 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "即使可快进也创建提交"
+          }
+        }
+      }
+    },
+    "Squash Selected Commits…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩所选提交…"
+          }
+        }
+      }
+    },
+    "Combine %lld selected commits into one." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将所选的 %lld 个提交压缩为一个。"
+          }
+        }
+      }
+    },
+    "This rewrites local history. Remote branches and tags are not force-pushed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此操作将重写本地历史，不会强制推送远端分支或标签。"
+          }
+        }
+      }
+    },
+    "Yes, Squash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认压缩"
+          }
+        }
+      }
+    },
+    "New Commit Message" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新提交信息"
+          }
+        }
+      }
+    },
+    "The selected commits are no longer a continuous linear range on HEAD." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选提交不再是当前 HEAD 上连续的线性提交范围。"
+          }
+        }
+      }
+    },
+    "The selected commits changed on disk. Refresh Git Graph and select them again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磁盘上的提交历史已变化，请刷新 Git Graph 后重新选择。"
+          }
+        }
+      }
+    },
+    "Squash requires a clean index and working tree." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩提交需要干净的暂存区和工作区。"
+          }
+        }
+      }
+    },
+    "Could not preserve the original commit author." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保留原提交的作者信息。"
+          }
+        }
+      }
+    },
+    "Squash finished but the resulting history did not match the selected range. Review Git history before continuing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩操作已结束，但生成的历史与所选范围不一致，请检查 Git 历史后再继续。"
+          }
+        }
+      }
+    },
+    "Squashed %lld commits into one." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 %lld 个提交压缩为一个。"
           }
         }
       }

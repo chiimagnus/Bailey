@@ -98,6 +98,60 @@ struct RecentCommitsView: View {
     enum HistoricalFileAction { case viewRevision, compareWorktree, openWorkingFile, resetFile }
     enum WorktreeAction { case open, revealInFinder, remove }
 
+    /// Git Graph selection is independent of history topology, focus, and disclosure.
+    struct Selection {
+        private(set) var ids: Set<String> = []
+        private(set) var anchor: String?
+        private var extendedRange: Set<String> = []
+
+        mutating func select(
+            _ id: String, visible: [String], extending: Bool = false,
+            toggling: Bool = false, fallbackAnchor: String? = nil
+        ) {
+            guard let end = visible.firstIndex(of: id) else { return }
+            if extending {
+                let source = [anchor, fallbackAnchor, id].compactMap { $0 }
+                    .first { visible.contains($0) } ?? id
+                let start = visible.firstIndex(of: source) ?? end
+                let range = Set(visible[min(start, end)...max(start, end)])
+                ids.subtract(extendedRange)
+                ids.formUnion(range)
+                extendedRange = range
+                anchor = source
+            } else {
+                extendedRange.removeAll()
+                if toggling {
+                    if !ids.insert(id).inserted { ids.remove(id) }
+                } else {
+                    ids = [id]
+                }
+                anchor = id
+            }
+        }
+
+        mutating func selectAll(visible: [String]) {
+            ids = Set(visible)
+            anchor = nil
+            extendedRange.removeAll()
+        }
+
+        mutating func clear() {
+            ids.removeAll()
+            anchor = nil
+            extendedRange.removeAll()
+        }
+
+        mutating func reconcile(visible: [String]) {
+            let valid = Set(visible)
+            ids.formIntersection(valid)
+            extendedRange.formIntersection(valid)
+            if let anchor, !valid.contains(anchor) {
+                self.anchor = nil
+                extendedRange.removeAll()
+            }
+        }
+    }
+
     static let badgeHeight: CGFloat = 16
     static let badgeIconSize: CGFloat = 16
     static let badgeFontSize: CGFloat = 9
@@ -111,8 +165,8 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
     @State private var localKeyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
-    @State private var selectedRowID: String?
-    @State private var explicitlySelectedRowID: String?
+    @State private var focusedRowID: String?
+    @State private var selection = Selection()
     @State private var contextRowID: String?
     @Environment(\.controlActiveState) private var controlActiveState
 
@@ -166,6 +220,9 @@ struct RecentCommitsView: View {
     let canActOnCommit: Bool
     let canDropCommit: (Commit) -> Bool
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
+    let squashAction: ([String]) -> Void
+    let commitBatchAction: ([String], GitStatusModel.CommitBatchAction) -> Void
+    let headOID: String?
     let canActOnStash: Bool
     let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
     let openWorktreeDiff: (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void
@@ -209,6 +266,9 @@ struct RecentCommitsView: View {
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
+        squashAction: @escaping ([String]) -> Void = { _ in },
+        commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void = { _, _ in },
+        headOID: String? = nil,
         canActOnStash: Bool = true,
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
         openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
@@ -256,6 +316,9 @@ struct RecentCommitsView: View {
         self.canActOnCommit = canActOnCommit
         self.canDropCommit = canDropCommit
         self.commitAction = commitAction
+        self.squashAction = squashAction
+        self.commitBatchAction = commitBatchAction
+        self.headOID = headOID
         self.canActOnStash = canActOnStash
         self.stashAction = stashAction
         self.openWorktreeDiff = openWorktreeDiff
@@ -330,16 +393,35 @@ struct RecentCommitsView: View {
                 onFocusChanged: { focused in
                     keyboardFocused = focused
                     GitGraphScrollLog.record(
-                        "graph-focus", owner: keyboardOwner, row: selectedRowID,
+                        "graph-focus", owner: keyboardOwner, row: focusedRowID,
                         detail: "focused=\(focused) active=\(isKeyboardActive)"
                     )
                     if focused {
-                        if selectedRowID == nil { selectedRowID = keyboardRows.first?.id }
+                        if focusedRowID == nil { focusedRowID = keyboardRows.first?.id }
                         onKeyboardFocused()
                     }
                 }, onAttachedToWindow: {
                     GitGraphScrollLog.record("graph-attached", owner: keyboardOwner)
                     onKeyboardAttached()
+                }, onEditCommand: { action in
+                    switch action {
+                    case .selectAll:
+                        selection.selectAll(visible: commits.filter {
+                            $0.stash == nil && $0.worktree == nil
+                        }.map(commitRowID))
+                    case .copy:
+                        let rows = selection.ids.isEmpty
+                            ? Set([focusedRowID].compactMap { $0 }) : selection.ids
+                        copy(selectedClipboardText(for: rows))
+                    default: break
+                    }
+                }, canEditCommand: { action in
+                    guard isKeyboardActive else { return false }
+                    switch action {
+                    case .selectAll: return commits.contains { $0.stash == nil && $0.worktree == nil }
+                    case .copy: return !selection.ids.isEmpty || focusedRowID != nil
+                    default: return false
+                    }
                 })
         }
         .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
@@ -347,30 +429,31 @@ struct RecentCommitsView: View {
         }
         .onChange(of: repoRoot) { _, _ in
             GitGraphScrollLog.record("repository-change", owner: keyboardOwner)
-            selectedRowID = nil
-            explicitlySelectedRowID = nil
+            focusedRowID = nil
+            selection.clear()
             contextRowID = nil
         }
         .onChange(of: selectionScope) { _, _ in
             GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
-            selectedRowID = nil
-            explicitlySelectedRowID = nil
+            focusedRowID = nil
+            selection.clear()
             contextRowID = nil
         }
+        .onChange(of: headOID) { _, _ in
+            selection.clear()
+        }
         .onChange(of: keyboardRows.map(\.id)) { _, ids in
-            if let explicitlySelectedRowID, !ids.contains(explicitlySelectedRowID) {
-                self.explicitlySelectedRowID = nil
-            }
+            selection.reconcile(visible: ids)
             if let contextRowID, !ids.contains(contextRowID) {
                 self.contextRowID = nil
             }
-            if let selectedRowID, !ids.contains(selectedRowID) {
-                self.selectedRowID = ids.first
-            } else if selectedRowID == nil && keyboardFocused {
-                selectedRowID = ids.first
+            if let focusedRowID, !ids.contains(focusedRowID) {
+                self.focusedRowID = ids.first
+            } else if focusedRowID == nil && keyboardFocused {
+                focusedRowID = ids.first
             }
         }
-        .onChange(of: selectedRowID) { previous, id in
+        .onChange(of: focusedRowID) { previous, id in
             if GitGraphScrollLog.enabled {
                 let index = id.flatMap { target in keyboardRows.firstIndex { $0.id == target } } ?? -1
                 GitGraphScrollLog.record(
@@ -382,7 +465,7 @@ struct RecentCommitsView: View {
             if keyboardFocused, let id { scrollToKeyboardRow(id) }
         }
         .onChange(of: keyboardFocused) { _, focused in
-            if focused, let selectedRowID { scrollToKeyboardRow(selectedRowID) }
+            if focused, let focusedRowID { scrollToKeyboardRow(focusedRowID) }
         }
         .onAppear {
             GitGraphScrollLog.record("graph-appear", owner: keyboardOwner)
@@ -543,7 +626,7 @@ struct RecentCommitsView: View {
     }
 
     private func isFocusedRow(_ id: String) -> Bool {
-        selectedRowID == id && listFocused
+        focusedRowID == id && listFocused
     }
 
     private func isDisplayedHistoryFile(_ file: Commit.FileChange, in commit: Commit) -> Bool {
@@ -563,13 +646,30 @@ struct RecentCommitsView: View {
             && diff.source == (staged ? .staged : .worktree)
     }
 
-    private func selectRow(_ id: String) {
-        explicitlySelectedRowID = id
+    private var commitParents: [String: [String]] {
+        Dictionary(uniqueKeysWithValues: commits.filter {
+            $0.stash == nil && $0.worktree == nil
+        }.map { ($0.hash, $0.parentHashes) })
+    }
+
+    /// Modifier selection does not expand commits, directories, or open a Diff.
+    /// Shift uses the rendered commit order, never the HEAD ancestry.
+    @discardableResult
+    private func selectRow(_ id: String, commit: Bool = false) -> Bool {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        let extending = flags.contains(.shift)
+        let toggling = flags.contains(.command) && !extending
+        let visible = commit ? commits.filter {
+            $0.stash == nil && $0.worktree == nil
+        }.map(commitRowID) : keyboardRows.map(\.id)
+        selection.select(id, visible: visible, extending: extending, toggling: toggling,
+                         fallbackAnchor: focusedRowID)
         focusRow(id)
+        return extending || toggling
     }
 
     private func focusRow(_ id: String) {
-        selectedRowID = id
+        focusedRowID = id
         if isKeyboardActive {
             onKeyboardFocused()
             keyboardOwner.focus()
@@ -577,7 +677,6 @@ struct RecentCommitsView: View {
     }
 
     private func selectContextRow(_ id: String) {
-        selectedRowID = id
         contextRowID = id
     }
 
@@ -613,9 +712,9 @@ struct RecentCommitsView: View {
 
     private func handleGraphKey(_ event: NSEvent) -> Bool {
         if GitGraphScrollLog.enabled {
-            let index = selectedRowID.flatMap { id in keyboardRows.firstIndex { $0.id == id } } ?? -1
+            let index = focusedRowID.flatMap { id in keyboardRows.firstIndex { $0.id == id } } ?? -1
             GitGraphScrollLog.record(
-                "key-down", owner: keyboardOwner, row: selectedRowID,
+                "key-down", owner: keyboardOwner, row: focusedRowID,
                 detail: "code=\(event.keyCode) cmd=\(event.modifierFlags.contains(.command)) "
                     + "shift=\(event.modifierFlags.contains(.shift)) index=\(index) "
                     + "focused=\(keyboardFocused) active=\(isKeyboardActive)"
@@ -626,7 +725,7 @@ struct RecentCommitsView: View {
         else { return false }
         let rows = keyboardRows
         guard !rows.isEmpty else { return false }
-        let current = selectedRowID.flatMap { id in rows.firstIndex { $0.id == id } }
+        let current = focusedRowID.flatMap { id in rows.firstIndex { $0.id == id } }
         if event.modifierFlags.contains(.command) {
             guard let current, event.keyCode == 125 || event.keyCode == 126,
                   case .commit(let selected) = rows[current].action,
@@ -638,33 +737,39 @@ struct RecentCommitsView: View {
             if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
             return true
         }
-        guard !event.modifierFlags.contains(.shift) else { return false }
+        let extending = event.modifierFlags.contains(.shift)
         switch event.keyCode {
-        case 125, 126: // Down / Up
+        case 125, 126: // Down / Up: Shift extends the selection, plain arrows move focus only.
             let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
             let next = max(0, min(rows.count - 1, start + (event.keyCode == 125 ? 1 : -1)))
-            selectedRowID = rows[next].id
+            if extending {
+                selection.select(rows[next].id, visible: rows.map(\.id), extending: true,
+                                 fallbackAnchor: current.map { rows[$0].id })
+            }
+            focusedRowID = rows[next].id
         case 49, 36, 76: // Space / Return / Enter: same action as clicking the current row
-            guard let current else { return false }
-            explicitlySelectedRowID = rows[current].id
+            guard !extending, let current else { return false }
+            selection.select(rows[current].id, visible: rows.map(\.id))
             activate(rows[current].action)
         case 124: // Right expands or enters the first visible child
-            guard let current else { return false }
+            guard !extending, let current else { return false }
             let row = rows[current]
             if row.isExpandable && !row.isExpanded {
                 activate(row.action)
             } else if rows.indices.contains(current + 1), rows[current + 1].parent == row.id {
-                selectedRowID = rows[current + 1].id
+                focusedRowID = rows[current + 1].id
             } else { return false }
         case 123: // Left collapses or selects the parent
-            guard let current else { return false }
+            guard !extending, let current else { return false }
             let row = rows[current]
             if row.isExpandable && row.isExpanded {
                 activate(row.action)
             } else if let parent = row.parent {
-                selectedRowID = parent
+                focusedRowID = parent
             } else { return false }
-        case 53: break // Escape leaves the keyboard cursor in place
+        case 53:
+            guard !extending else { return false }
+            selection.clear() // Escape clears selection without changing the keyboard cursor.
         default: return false
         }
         return true
@@ -704,8 +809,34 @@ struct RecentCommitsView: View {
     }
 
     private func selectAndToggle(_ commit: Commit) {
-        selectRow(commitRowID(commit))
-        toggle(commit)
+        let isRealCommit = commit.stash == nil && commit.worktree == nil
+        if !selectRow(commitRowID(commit), commit: isRealCommit) { toggle(commit) }
+    }
+
+    private var selectedHistoryCommits: [Commit] {
+        commits.filter {
+            $0.stash == nil && $0.worktree == nil && selection.ids.contains(commitRowID($0))
+        }
+    }
+
+    private func isMultipleSelection(for id: String) -> Bool {
+        selection.ids.count > 1 && selection.ids.contains(id)
+    }
+
+    private func selectedClipboardText(for ids: Set<String>) -> String {
+        keyboardRows.compactMap { row -> String? in
+            guard ids.contains(row.id) else { return nil }
+            switch row.action {
+            case .commit(let commit):
+                return commit.worktree?.path ?? commit.stash?.selector ?? commit.hash
+            case .folder:
+                return row.id.components(separatedBy: "\u{0}").last
+            case .historicalFile(_, let file):
+                return file.path
+            case .worktreeFile(let worktree, let entry, _):
+                return worktree.path + "/" + entry.path
+            }
+        }.joined(separator: "\n")
     }
 
     private func toggle(_ commit: Commit) {
@@ -741,7 +872,7 @@ struct RecentCommitsView: View {
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale,
-            isSelected: explicitlySelectedRowID == commitRowID(commit),
+            isSelected: selection.ids.contains(commitRowID(commit)),
             listActive: listFocused,
             focusRing: isFocusedRow(commitRowID(commit)),
             contextRing: contextRowID == commitRowID(commit),
@@ -799,8 +930,9 @@ struct RecentCommitsView: View {
                         .accessibilityValue(expanded
                             ? String(localized: "Expanded", table: "Git")
                             : String(localized: "Collapsed", table: "Git"))
-                        .accessibilityAddTraits(explicitlySelectedRowID == commitRowID(commit)
-                            ? .isSelected : [])
+                        .accessibilityAddTraits(
+                            selection.ids.contains(commitRowID(commit)) ? .isSelected : []
+                        )
                         Spacer(minLength: 0)
                     }
 
@@ -894,7 +1026,9 @@ struct RecentCommitsView: View {
 
     @ViewBuilder
     private func commitContextMenu(_ commit: Commit) -> some View {
-        if let worktree = commit.worktree {
+        if isMultipleSelection(for: commitRowID(commit)) {
+            multipleSelectionMenu()
+        } else if let worktree = commit.worktree {
             Button(String(localized: "Copy Worktree Path", table: "Git")) {
                 copy(worktree.path)
             }
@@ -919,6 +1053,43 @@ struct RecentCommitsView: View {
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
             Button(String(localized: "Copy Commit Subject", table: "Git")) {
                 copy(commit.subject)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func multipleSelectionMenu() -> some View {
+        let selected = selectedHistoryCommits
+        if selected.count == selection.ids.count {
+            let hashes = selected.map(\.hash)
+            let allOrdinary = selected.allSatisfy { $0.parentHashes.count <= 1 }
+            let canDrop = GitStatusModel.batchDropPlan(
+                selected: hashes, head: headOID, parents: commitParents
+            ) != nil
+            let canSquash = GitStatusModel.squashPlan(
+                selected: hashes, head: headOID, parents: commitParents
+            ) != nil
+            Button(String(localized: "Copy Selected Commit Hashes", table: "Git")) {
+                copy(hashes.joined(separator: "\n"))
+            }
+            Button(String(localized: "Copy Selected Commit Subjects", table: "Git")) {
+                copy(selected.map(\.subject).joined(separator: "\n"))
+            }
+            Button(String(localized: "Copy Selected Commit Summaries", table: "Git")) {
+                copy(selected.map { $0.hash + " " + $0.subject }.joined(separator: "\n"))
+            }
+            Divider()
+            ForEach(GitStatusModel.CommitBatchAction.allCases, id: \.self) { action in
+                Button(action.title) { commitBatchAction(hashes, action) }
+                    .disabled(!canActOnCommit || !allOrdinary || (action == .drop && !canDrop))
+            }
+            Button(String(localized: "Squash Selected Commits…", table: "Git")) {
+                squashAction(hashes)
+            }
+            .disabled(!canActOnCommit || !canSquash)
+        } else {
+            Button(String(localized: "Copy Selected Items", table: "Git")) {
+                copy(selectedClipboardText(for: selection.ids))
             }
         }
     }
@@ -1042,7 +1213,9 @@ struct RecentCommitsView: View {
             contextTarget(for: commitRowID(commit))
         }
         .contextMenu {
-            if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
+            if isMultipleSelection(for: commitRowID(commit)) {
+                multipleSelectionMenu()
+            } else if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
                 referenceActions(head, commit: commit)
             } else if let location = locations.first, locations.count == 1 {
                 worktreeActions(location)
@@ -1112,7 +1285,13 @@ struct RecentCommitsView: View {
         .background {
             contextTarget(for: commitRowID(commit))
         }
-        .contextMenu { stashActions(stash) }
+        .contextMenu {
+            if isMultipleSelection(for: commitRowID(commit)) {
+                multipleSelectionMenu()
+            } else {
+                stashActions(stash)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1146,7 +1325,7 @@ struct RecentCommitsView: View {
                 referenceBadge(primary, commit: commit, colorIndex: colorIndex)
             }
             if !hidden.isEmpty {
-                Menu {
+                let referencesMenu = Menu {
                     ForEach(hidden) { reference in
                         Menu(reference.name) {
                             referenceActions(reference, commit: commit)
@@ -1161,6 +1340,13 @@ struct RecentCommitsView: View {
                 .fixedSize()
                 .help(hidden.map(\.name).joined(separator: ", "))
                 .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
+                if isMultipleSelection(for: commitRowID(commit)) {
+                    referencesMenu
+                        .background { contextTarget(for: commitRowID(commit)) }
+                        .contextMenu { multipleSelectionMenu() }
+                } else {
+                    referencesMenu
+                }
             }
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -1222,7 +1408,13 @@ struct RecentCommitsView: View {
         .background {
             contextTarget(for: commitRowID(commit))
         }
-        .contextMenu { referenceActions(reference, commit: commit) }
+        .contextMenu {
+            if isMultipleSelection(for: commitRowID(commit)) {
+                multipleSelectionMenu()
+            } else {
+                referenceActions(reference, commit: commit)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1433,8 +1625,8 @@ struct RecentCommitsView: View {
                         contextRing: node.compactComponents.contains {
                             contextRowID == folderRowID(commit, section: section, path: $0.path)
                         },
-                        isSelected: explicitlySelectedRowID == folderRowID(
-                            commit, section: section, path: node.path),
+                        isSelected: selection.ids.contains(folderRowID(
+                            commit, section: section, path: node.path)),
                         listActive: listFocused,
                         compactSegment: { component, index in
                             folderSegment(component, index: index, row: node, commit: commit,
@@ -1442,9 +1634,10 @@ struct RecentCommitsView: View {
                         }
                     ) {
                         let folder = key + ":" + node.path
-                        selectRow(folderRowID(commit,
-                            section: section, path: node.path))
-                        toggleFolder(folder)
+                        if !selectRow(folderRowID(commit,
+                            section: section, path: node.path)) {
+                            toggleFolder(folder)
+                        }
                     }
                     .id(folderRowID(commit,
                         section: section, path: node.path))
@@ -1455,7 +1648,8 @@ struct RecentCommitsView: View {
                         ))
                     }
                     .contextMenu {
-                        folderMenu(path: node.path, root: worktree.path)
+                        folderMenu(path: node.path, root: worktree.path,
+                                   rowID: folderRowID(commit, section: section, path: node.path))
                     }
                 } else if let entry = byPath[node.path] {
                     worktreeFile(entry, row: node, staged: staged, section: section,
@@ -1489,15 +1683,14 @@ struct RecentCommitsView: View {
             row: row, scale: fontScale,
             directory: showDirectory ? entry.directory : nil,
             displayed: isDisplayedWorktreeFile(entry, staged: staged, in: worktree),
-            isSelected: explicitlySelectedRowID == id, listActive: listFocused,
+            isSelected: selection.ids.contains(id), listActive: listFocused,
             focusRing: isFocusedRow(id), contextRing: contextRowID == id,
             leadingInset: inset,
             accessibilityHint: staged
                 ? String(localized: "Open Staged Diff", table: "Git")
                 : String(localized: "Open Working Changes", table: "Git"),
             open: {
-                selectRow(id)
-                openWorktreeDiff(worktree, entry, staged)
+                if !selectRow(id) { openWorktreeDiff(worktree, entry, staged) }
             }
         ) { _ in EmptyView() }
         .id(id)
@@ -1505,17 +1698,21 @@ struct RecentCommitsView: View {
             contextTarget(for: id)
         }
         .contextMenu {
-            Button(staged
-                   ? String(localized: "Open Staged Diff", table: "Git")
-                   : String(localized: "Open Working Changes", table: "Git")) {
-                openWorktreeDiff(worktree, entry, staged)
-            }
-            Divider()
-            Button(String(localized: "Copy Absolute Path", table: "Git")) {
-                copy((worktree.path as NSString).appendingPathComponent(entry.path))
-            }
-            Button(String(localized: "Copy Relative Path", table: "Git")) {
-                copy(entry.path)
+            if isMultipleSelection(for: id) {
+                multipleSelectionMenu()
+            } else {
+                Button(staged
+                       ? String(localized: "Open Staged Diff", table: "Git")
+                       : String(localized: "Open Working Changes", table: "Git")) {
+                    openWorktreeDiff(worktree, entry, staged)
+                }
+                Divider()
+                Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                    copy((worktree.path as NSString).appendingPathComponent(entry.path))
+                }
+                Button(String(localized: "Copy Relative Path", table: "Git")) {
+                    copy(entry.path)
+                }
             }
         }
     }
@@ -1566,15 +1763,16 @@ struct RecentCommitsView: View {
                         contextRing: node.compactComponents.contains {
                             contextRowID == folderRowID(commit, section: section, path: $0.path)
                         },
-                        isSelected: explicitlySelectedRowID == folderRowID(
-                            commit, section: section, path: node.path),
+                        isSelected: selection.ids.contains(folderRowID(
+                            commit, section: section, path: node.path)),
                         listActive: listFocused,
                         compactSegment: { component, index in
                             folderSegment(component, index: index, row: node, commit: commit,
                                           section: section, root: repoRoot, collapseKey: section + ":" + node.path)
                         }) {
-                        selectRow(folderRowID(commit, section: section, path: node.path))
-                        toggleFolder(section + ":" + node.path)
+                        if !selectRow(folderRowID(commit, section: section, path: node.path)) {
+                            toggleFolder(section + ":" + node.path)
+                        }
                     }
                     .id(folderRowID(commit, section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
@@ -1584,7 +1782,8 @@ struct RecentCommitsView: View {
                         ))
                     }
                     .contextMenu {
-                        folderMenu(path: node.path, root: repoRoot)
+                        folderMenu(path: node.path, root: repoRoot,
+                                   rowID: folderRowID(commit, section: section, path: node.path))
                     }
                 } else if let file = byPath[node.path] {
                     changedFile(file, row: node, in: commit, showDirectory: false,
@@ -1610,24 +1809,26 @@ struct RecentCommitsView: View {
         return AnyView(TreeCompactSegment(component: component, index: index,
             isContextTarget: contextRowID == context,
             onClick: {
-                selectRow(cursor)
-                toggleFolder(collapseKey)
+                if !selectRow(cursor) { toggleFolder(collapseKey) }
             },
             onContextClick: {
-                selectedRowID = cursor
                 contextRowID = context
             },
             onMenuClosed: { dismissContextRow(context) }) {
-                folderMenu(path: component.path, root: root)
+                folderMenu(path: component.path, root: root, rowID: context)
             })
     }
 
     @ViewBuilder
-    private func folderMenu(path: String, root: String) -> some View {
-        Button(String(localized: "Copy Absolute Path", table: "Git")) {
-            copy((root as NSString).appendingPathComponent(path))
+    private func folderMenu(path: String, root: String, rowID: String) -> some View {
+        if isMultipleSelection(for: rowID) {
+            multipleSelectionMenu()
+        } else {
+            Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                copy((root as NSString).appendingPathComponent(path))
+            }
+            Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
         }
-        Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
     }
 
     private func changedFile(
@@ -1638,7 +1839,7 @@ struct RecentCommitsView: View {
             row: row, scale: fontScale,
             directory: showDirectory ? file.directory : nil,
             displayed: isDisplayedHistoryFile(file, in: commit),
-            isSelected: explicitlySelectedRowID == historicalFileRowID(commit, file: file),
+            isSelected: selection.ids.contains(historicalFileRowID(commit, file: file)),
             listActive: listFocused,
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
             contextRing: contextRowID == historicalFileRowID(commit, file: file),
@@ -1646,8 +1847,9 @@ struct RecentCommitsView: View {
             accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
             accessibilityID: "bailey.git.history.file",
             open: {
-                selectRow(historicalFileRowID(commit, file: file))
-                openDiff(commit, file)
+                if !selectRow(historicalFileRowID(commit, file: file)) {
+                    openDiff(commit, file)
+                }
             }
         ) { _ in EmptyView() }
         .id(historicalFileRowID(commit, file: file))
@@ -1655,33 +1857,37 @@ struct RecentCommitsView: View {
             contextTarget(for: historicalFileRowID(commit, file: file))
         }
         .contextMenu {
-            Button(String(localized: "Open Historical Diff", table: "Git")) {
-                openDiff(commit, file)
-            }
-            if file.status != "D" && commit.stash == nil {
-                Button(String(localized: "View File at Revision", table: "Git")) {
-                    fileAction(commit, file, .viewRevision)
+            if isMultipleSelection(for: historicalFileRowID(commit, file: file)) {
+                multipleSelectionMenu()
+            } else {
+                Button(String(localized: "Open Historical Diff", table: "Git")) {
+                    openDiff(commit, file)
                 }
-                .disabled(isBinaryFile(commit, file))
-                Button(String(localized: "Compare with Working File", table: "Git")) {
-                    fileAction(commit, file, .compareWorktree)
-                }
-                .disabled(isBinaryFile(commit, file))
-                Button(String(localized: "Open Working File", table: "Git")) {
-                    fileAction(commit, file, .openWorkingFile)
+                if file.status != "D" && commit.stash == nil {
+                    Button(String(localized: "View File at Revision", table: "Git")) {
+                        fileAction(commit, file, .viewRevision)
+                    }
+                    .disabled(isBinaryFile(commit, file))
+                    Button(String(localized: "Compare with Working File", table: "Git")) {
+                        fileAction(commit, file, .compareWorktree)
+                    }
+                    .disabled(isBinaryFile(commit, file))
+                    Button(String(localized: "Open Working File", table: "Git")) {
+                        fileAction(commit, file, .openWorkingFile)
+                    }
+                    Divider()
+                    Button(String(localized: "Reset File to Revision…", table: "Git")) {
+                        fileAction(commit, file, .resetFile)
+                    }
+                    .disabled(!canActOnCommit)
                 }
                 Divider()
-                Button(String(localized: "Reset File to Revision…", table: "Git")) {
-                    fileAction(commit, file, .resetFile)
+                Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                    copy((repoRoot as NSString).appendingPathComponent(file.path))
                 }
-                .disabled(!canActOnCommit)
-            }
-            Divider()
-            Button(String(localized: "Copy Absolute Path", table: "Git")) {
-                copy((repoRoot as NSString).appendingPathComponent(file.path))
-            }
-            Button(String(localized: "Copy Relative Path", table: "Git")) {
-                copy(file.path)
+                Button(String(localized: "Copy Relative Path", table: "Git")) {
+                    copy(file.path)
+                }
             }
         }
     }

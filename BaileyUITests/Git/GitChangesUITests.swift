@@ -138,7 +138,7 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
     }
 
-    func testRightClickAnotherGitChangeMovesKeyboardCursorWithoutOpeningDiff() throws {
+    func testRightClickAnotherGitChangePreservesKeyboardCursorWithoutOpeningDiff() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha.txt", text: "first old\n")
         let second = try fixture.file("beta.txt", text: "second old\n")
@@ -158,10 +158,10 @@ final class GitChangesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         let tab = window.buttons.matching(NSPredicate(
-            format: "label CONTAINS %@", "beta.txt"
+            format: "label CONTAINS %@", "alpha.txt"
         )).firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 15),
-                      "Return after context-click must browse the clicked Git change")
+                      "Return after context-click must browse the previously focused Git change")
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
                        Data(" M alpha.txt\n M beta.txt\n".utf8))
     }
@@ -1334,6 +1334,78 @@ final class GitChangesUITests: XCTestCase {
         for (name, file) in zip(names, files) {
             XCTAssertEqual(try Data(contentsOf: file), Data("\(name) after\n".utf8))
         }
+    }
+
+    func testGitChangesBatchMenuCopiesEverySelectedPathAndHidesSingleFileActions() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("copy-first.txt", text: "first before\n")
+        let second = try fixture.file("copy-second.txt", text: "second before\n")
+        try fixture.initializeGit()
+        try "first after\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second after\n".write(to: second, atomically: true, encoding: .utf8)
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let one = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        let two = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(one.waitForExistence(timeout: 25))
+        XCTAssertTrue(two.waitForExistence(timeout: 25))
+        one.click()
+        XCUIElement.perform(withKeyModifiers: .command) { two.click() }
+        one.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Paths"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Open File"].exists)
+        XCTAssertFalse(app.menuItems["Open Changes"].exists)
+        XCTAssertTrue(app.menuItems["Stage Changes"].exists)
+        app.menuItems["Copy Relative Paths"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       "copy-first.txt\ncopy-second.txt")
+        XCTAssertTrue(one.isSelected && two.isSelected)
+
+        two.rightClick()
+        app.menuItems["Copy Paths"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       first.path + "\n" + second.path)
+        XCTAssertEqual(try fixture.git(["show", ":copy-first.txt"]), Data("first before\n".utf8))
+        XCTAssertEqual(try fixture.git(["show", ":copy-second.txt"]), Data("second before\n".utf8))
+    }
+
+    func testGitChangesMixedStagedAndWorktreeSelectionCannotPartiallyMutate() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let staged = try fixture.file("mixed-staged.txt", text: "before staged\n")
+        let unstaged = try fixture.file("mixed-unstaged.txt", text: "before unstaged\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "after staged\n".write(to: staged, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "mixed-staged.txt"])
+        try "after unstaged\n".write(to: unstaged, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let one = WorkspaceUITestSupport.fileRow(staged, in: window, relativeTo: fixture.root)
+        let two = WorkspaceUITestSupport.fileRow(unstaged, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(one.waitForExistence(timeout: 25))
+        XCTAssertTrue(two.waitForExistence(timeout: 25))
+        one.click()
+        XCUIElement.perform(withKeyModifiers: .command) { two.click() }
+        XCTAssertTrue(one.isSelected && two.isSelected)
+        two.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Paths"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Stage Changes"].exists,
+                       "Mixed selection must not stage only a subset")
+        XCTAssertFalse(app.menuItems["Unstage Changes"].exists)
+        XCTAssertFalse(app.menuItems["Discard Changes…"].exists)
+        XCTAssertFalse(app.menuItems["Open File"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(one.isSelected && two.isSelected)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data("M  mixed-staged.txt\n M mixed-unstaged.txt\n".utf8))
     }
 
     func testGitMultiSelectContextOutsideSetChangesOnlyClickedIndexPath() throws {
