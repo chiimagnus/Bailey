@@ -26,7 +26,8 @@ Diff 见 [diff.md](diff.md)，共享树见 [files.md](files.md)。
 
 ## 刷新与显示
 
-**本机 Git 只由事件触发查询，不再定时轮询。** macOS FSEvents 监听仓库、
+**本机 Git 只由事件触发查询，不再定时轮询。** macOS FSEvents 以 `NoDefer` 尽早投递首批事件，
+Git 状态从首批事件起用 400 ms 窗口合并并刷新，不因持续事件反复延期；监听仓库、
 关联 Worktree 和共享 Git 元数据；连续变化合并后刷新。Git 面板隐藏时仍能更新底部状态栏。
 App 退到后台暂停监听，返回前台时重新校验；监听不可用时仍可手动刷新。
 Files 复用同一原生监听实现的路径／事件标志能力，但目录列表仍由 FileTreeModel 独立读取，

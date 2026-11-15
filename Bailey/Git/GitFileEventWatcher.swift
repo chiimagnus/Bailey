@@ -64,6 +64,7 @@ nonisolated final class GitFileEventWatcher {
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagWatchRoot |
             kFSEventStreamCreateFlagUseCFTypes |
+            kFSEventStreamCreateFlagNoDefer |
             (fileEvents ? kFSEventStreamCreateFlagFileEvents : 0)
         )
         guard let stream = FSEventStreamCreate(
