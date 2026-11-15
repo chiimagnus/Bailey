@@ -1163,16 +1163,21 @@ private struct BrowserAddressField: NSViewRepresentable {
                     )
                 }
             }
-            attemptFocus()
+            scheduleFocusAttempt()
         }
 
         func requestFocus(_ request: UInt) {
             pendingFocusRequest = request == handledFocusRequest ? nil : request
-            attemptFocus()
+            scheduleFocusAttempt()
         }
 
         @objc private func windowDidBecomeKey(_ notification: Notification) {
-            attemptFocus()
+            scheduleFocusAttempt()
+        }
+
+        private func scheduleFocusAttempt() {
+            // Native focus calls back into SwiftUI state; never enter it during updateNSView.
+            DispatchQueue.main.async { [weak self] in self?.attemptFocus() }
         }
 
         private func attemptFocus() {
