@@ -76,9 +76,11 @@ Shift 单击沿图谱可见提交顺序扩选（不检查 Git 祖先关系），
 Escape 只清空 Selection，方向键仅移动 Focus。普通单击与 Space／Return
 仍明确选择并展开／浏览对应行，修饰键点击不展开或打开文件。
 Selection 的活动色与失焦灰底、Focus 细边框和 Context Target 描边各自独立。
-右键不改选区或游标；选区内可以执行适用的批量菜单操作，
-选区外只作用于右键命中项。Squash 仅作为满足连续 HEAD 线性历史时
-可启用的批量操作，不限制图谱多选本身。
+右键不改选区或游标；多选中的 Git Graph 右键只显示批量复制与拓扑允许的
+Cherry-pick／Revert／Drop／Squash。混合文件及提交选区只能复制；
+选区外只作用于右键命中项，保留原单项菜单。
+同一原则用于 Files 与 Git Changes：选区内的菜单只提供全部所选项均可执行的动作；
+不能以批量菜单名义偷偷处理一部分，也不能把打开、重命名或 Reset 等单目标动作套到整组。
 Files 的当前展示文件不再独立绘制弱灰底：活动文件变化按 Auto Reveal 更新树的
 Focus／Selection，使旧文件不残留第二条灰底；不匹配的文件不伪选。
 Git Changes 同样由活动文件／Diff 标签自动定位匹配资源并更新 Selection，

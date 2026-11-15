@@ -1091,7 +1091,13 @@ final class WorkspaceFilesUITests: XCTestCase {
         let selectedMenu = try fileContextMenu(for: a, in: app)
         XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected,
                       "Context-clicking inside the selection must preserve all selected rows")
-        selectedMenu.menuItems["Copy Relative Path"].click()
+        XCTAssertFalse(selectedMenu.menuItems["Rename"].exists,
+                       "Multi-selection must not expose single-file Rename")
+        XCTAssertFalse(selectedMenu.menuItems["Open"].exists,
+                       "Multi-selection must not silently open only one file")
+        XCTAssertFalse(selectedMenu.menuItems["Open in Default App"].exists)
+        XCTAssertTrue(selectedMenu.menuItems["Copy"].exists)
+        selectedMenu.menuItems["Copy Relative Paths"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a.txt\nb.txt",
                        "Context-clicking a selected row must copy the selected relative paths")
         let deleteMenu = try fileContextMenu(for: a, in: app)
