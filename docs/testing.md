@@ -337,9 +337,12 @@ Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or 
 `BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；
 未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
-`GitCommitActionTests` 使用真实临时 Git 仓库验证连续历史 Squash 的 HEAD、
-作者、文件树、提交数量、污损工作区拒绝和非线性范围拒绝；
-`GitDialogUITests` 的隔离 Bailey Dev 场景检验 Shift 选择、原生提交信息弹窗和历史重写。
+`GitGraphSelectionTests` 验证 Git Graph 独立多选、⌘ 切换、Shift 范围、
+离散选区、全选和刷新清理；`GitCommitActionTests` 使用真实 Git 仓库验证
+Squash 的 HEAD、作者、文件树、提交数量及拒绝非法拓扑与污损工作区。
+`GitGraphUITests` 检验不同分支的合法多选、禁用的 Squash 菜单和
+右键目标独立性；`GitDialogUITests` 核验合法多选后取消／确认 Squash
+的原生弹窗和最终 Git 历史。
 `GitNativeDialogTests` 直接检查生产 NSAlert 及选项联动；
 `GitRemoteBranchActionTests` 在真实 Git 仓库检验旧 Fetch Ref 的拒写和重新确认。
 `GitDialogUITests` 只保留完整 Bailey Dev 的 Git Graph→菜单→原生 Sheet→真实操作、

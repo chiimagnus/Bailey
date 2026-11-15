@@ -53,38 +53,41 @@ final class GitCommitActionTests: XCTestCase {
         return try XCTUnwrap(model.recentCommits.first { $0.hash == hash })
     }
 
-    func testSquashRangeOnlyAcceptsContinuousFirstParentCommits() {
+    func testSquashPlanOnlyAcceptsAContinuousLinearPartOfHead() {
         let linear = [
             "root": [String](), "a": ["root"], "b": ["a"], "c": ["b"], "head": ["c"],
         ]
-        XCTAssertEqual(GitStatusModel.squashRange(
-            anchor: "b", endpoint: "c", head: "head", parents: linear
-        ), ["c", "b"])
-        XCTAssertEqual(GitStatusModel.squashRange(
-            anchor: "c", endpoint: "b", head: "head", parents: linear
-        ), ["c", "b"])
-        XCTAssertEqual(GitStatusModel.squashRange(
-            anchor: "a", endpoint: "root", head: "head", parents: linear
-        ), ["a", "root"])
-        XCTAssertNil(GitStatusModel.squashRange(
-            anchor: "a", endpoint: "c", head: "head",
-            parents: linear.merging(["head": ["c", "other"]]) { _, new in new }
-        ))
-        XCTAssertNil(GitStatusModel.squashRange(
-            anchor: "a", endpoint: "head", head: "head",
-            parents: linear.merging(["b": ["a", "other"]]) { _, new in new }
-        ))
-        XCTAssertNil(GitStatusModel.squashRange(
-            anchor: "a", endpoint: "missing", head: "head", parents: linear
-        ))
-        XCTAssertNil(GitStatusModel.squashRange(
-            anchor: "a", endpoint: "a", head: "head", parents: linear
-        ))
+        let expected = GitStatusModel.SquashPlan(
+            newest: "c", oldest: "b", parent: "a", newerCount: 1
+        )
+        XCTAssertEqual(GitStatusModel.squashPlan(
+            selected: ["b", "c"], head: "head", parents: linear
+        ), expected)
+        XCTAssertEqual(GitStatusModel.squashPlan(
+            selected: ["c", "b"], head: "head", parents: linear
+        ), expected)
+        XCTAssertEqual(GitStatusModel.squashPlan(
+            selected: ["root", "a"], head: "head", parents: linear
+        )?.parent, nil)
         XCTAssertNil(GitStatusModel.squashPlan(
             selected: ["a", "c"], head: "head", parents: linear
         ))
         XCTAssertNil(GitStatusModel.squashPlan(
+            selected: ["a", "missing"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.squashPlan(
+            selected: ["a"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.squashPlan(
             selected: ["b", "b"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.squashPlan(
+            selected: ["a", "b"], head: "head",
+            parents: linear.merging(["head": ["c", "other"]]) { _, new in new }
+        ))
+        XCTAssertNil(GitStatusModel.squashPlan(
+            selected: ["a", "b"], head: "head",
+            parents: linear.merging(["b": ["a", "other"]]) { _, new in new }
         ))
     }
 

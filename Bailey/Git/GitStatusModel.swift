@@ -338,28 +338,6 @@ final class GitStatusModel {
         return nil
     }
 
-    nonisolated static func squashRange(
-        anchor: String, endpoint: String, head: String?, parents: [String: [String]]
-    ) -> [String]? {
-        guard anchor != endpoint else { return nil }
-        for (newest, oldest) in [(anchor, endpoint), (endpoint, anchor)] {
-            var path = [newest]
-            var current = newest
-            var visited: Set<String> = [current]
-            while current != oldest, let ancestors = parents[current],
-                  ancestors.count == 1, let parent = ancestors.first,
-                  visited.insert(parent).inserted {
-                path.append(parent)
-                current = parent
-            }
-            if current == oldest,
-               squashPlan(selected: path, head: head, parents: parents) != nil {
-                return path
-            }
-        }
-        return nil
-    }
-
     nonisolated static func parseCommitTopology(_ output: String) -> [String: [String]]? {
         var parents: [String: [String]] = [:]
         for line in output.split(separator: "\n") {
