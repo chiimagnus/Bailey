@@ -114,6 +114,8 @@ struct RecentCommitsView: View {
     @State private var selectedRowID: String?
     @State private var explicitlySelectedRowID: String?
     @State private var contextRowID: String?
+    @State private var squashAnchorHash: String?
+    @State private var squashSelectedHashes: Set<String> = []
     @Environment(\.controlActiveState) private var controlActiveState
 
     private let providedKeyboardOwner: TreeKeyboardOwner?
@@ -166,6 +168,8 @@ struct RecentCommitsView: View {
     let canActOnCommit: Bool
     let canDropCommit: (Commit) -> Bool
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
+    let squashAction: ([String]) -> Void
+    let headOID: String?
     let canActOnStash: Bool
     let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
     let openWorktreeDiff: (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void
@@ -209,6 +213,8 @@ struct RecentCommitsView: View {
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
+        squashAction: @escaping ([String]) -> Void = { _ in },
+        headOID: String? = nil,
         canActOnStash: Bool = true,
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
         openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
@@ -256,6 +262,8 @@ struct RecentCommitsView: View {
         self.canActOnCommit = canActOnCommit
         self.canDropCommit = canDropCommit
         self.commitAction = commitAction
+        self.squashAction = squashAction
+        self.headOID = headOID
         self.canActOnStash = canActOnStash
         self.stashAction = stashAction
         self.openWorktreeDiff = openWorktreeDiff
@@ -350,14 +358,35 @@ struct RecentCommitsView: View {
             selectedRowID = nil
             explicitlySelectedRowID = nil
             contextRowID = nil
+            squashAnchorHash = nil
+            squashSelectedHashes = []
         }
         .onChange(of: selectionScope) { _, _ in
             GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
             selectedRowID = nil
             explicitlySelectedRowID = nil
             contextRowID = nil
+            squashAnchorHash = nil
+            squashSelectedHashes = []
+        }
+        .onChange(of: headOID) { _, _ in
+            squashAnchorHash = nil
+            squashSelectedHashes = []
         }
         .onChange(of: keyboardRows.map(\.id)) { _, ids in
+            if let squashAnchorHash,
+               !commits.contains(where: { $0.hash == squashAnchorHash
+                   && $0.stash == nil && $0.worktree == nil }) {
+                self.squashAnchorHash = nil
+                squashSelectedHashes = []
+            }
+            if !squashSelectedHashes.isEmpty,
+               GitStatusModel.squashPlan(
+                   selected: Array(squashSelectedHashes), head: headOID,
+                   parents: commitParents
+               ) == nil {
+                squashSelectedHashes = []
+            }
             if let explicitlySelectedRowID, !ids.contains(explicitlySelectedRowID) {
                 self.explicitlySelectedRowID = nil
             }
@@ -563,7 +592,17 @@ struct RecentCommitsView: View {
             && diff.source == (staged ? .staged : .worktree)
     }
 
+    private var commitParents: [String: [String]] {
+        Dictionary(uniqueKeysWithValues: commits.filter {
+            $0.stash == nil && $0.worktree == nil
+        }.map { ($0.hash, $0.parentHashes) })
+    }
+
     private func selectRow(_ id: String) {
+        squashSelectedHashes = []
+        squashAnchorHash = commits.first {
+            $0.stash == nil && $0.worktree == nil && commitRowID($0) == id
+        }?.hash
         explicitlySelectedRowID = id
         focusRow(id)
     }
@@ -579,6 +618,10 @@ struct RecentCommitsView: View {
     private func selectContextRow(_ id: String) {
         selectedRowID = id
         contextRowID = id
+        if !commits.contains(where: { squashSelectedHashes.contains($0.hash)
+            && $0.stash == nil && $0.worktree == nil && commitRowID($0) == id }) {
+            squashSelectedHashes = []
+        }
     }
 
     private func dismissContextRow(_ id: String) {
@@ -664,7 +707,7 @@ struct RecentCommitsView: View {
             } else if let parent = row.parent {
                 selectedRowID = parent
             } else { return false }
-        case 53: break // Escape leaves the keyboard cursor in place
+        case 53: squashSelectedHashes = [] // Escape clears the squash range, not the focus.
         default: return false
         }
         return true
@@ -704,6 +747,16 @@ struct RecentCommitsView: View {
     }
 
     private func selectAndToggle(_ commit: Commit) {
+        if NSEvent.modifierFlags.contains(.shift), let anchor = squashAnchorHash,
+           commit.stash == nil, commit.worktree == nil,
+           let range = GitStatusModel.squashRange(
+               anchor: anchor, endpoint: commit.hash, head: headOID, parents: commitParents
+           ) {
+            squashSelectedHashes = Set(range)
+            explicitlySelectedRowID = commitRowID(commit)
+            focusRow(commitRowID(commit))
+            return
+        }
         selectRow(commitRowID(commit))
         toggle(commit)
     }
@@ -741,7 +794,8 @@ struct RecentCommitsView: View {
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale,
-            isSelected: explicitlySelectedRowID == commitRowID(commit),
+            isSelected: explicitlySelectedRowID == commitRowID(commit)
+                || squashSelectedHashes.contains(commit.hash),
             listActive: listFocused,
             focusRing: isFocusedRow(commitRowID(commit)),
             contextRing: contextRowID == commitRowID(commit),
@@ -799,8 +853,10 @@ struct RecentCommitsView: View {
                         .accessibilityValue(expanded
                             ? String(localized: "Expanded", table: "Git")
                             : String(localized: "Collapsed", table: "Git"))
-                        .accessibilityAddTraits(explicitlySelectedRowID == commitRowID(commit)
-                            ? .isSelected : [])
+                        .accessibilityAddTraits(
+                            explicitlySelectedRowID == commitRowID(commit)
+                                || squashSelectedHashes.contains(commit.hash) ? .isSelected : []
+                        )
                         Spacer(minLength: 0)
                     }
 
@@ -911,6 +967,14 @@ struct RecentCommitsView: View {
             }
             .disabled(!canSwitchBranch)
             Divider()
+            if squashSelectedHashes.count >= 2,
+               squashSelectedHashes.contains(commit.hash) {
+                Button(String(localized: "Squash Selected Commits…", table: "Git")) {
+                    squashAction(Array(squashSelectedHashes))
+                }
+                .disabled(!canActOnCommit)
+                Divider()
+            }
             ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
                 Button(action.title) { commitAction(commit, action) }
                     .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))

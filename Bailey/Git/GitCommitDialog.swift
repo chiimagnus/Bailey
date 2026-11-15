@@ -73,3 +73,61 @@ final class GitCommitDialog {
         }
     }
 }
+
+@MainActor
+final class GitSquashDialog: NSObject, NSTextViewDelegate {
+    let alert = NSAlert()
+    let message = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 112))
+
+    var commitMessage: String {
+        message.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    init(count: Int, suggestedMessage: String, branch: String?) {
+        precondition(count >= 2)
+        super.init()
+        alert.messageText = String(localized: "Squash Selected Commits…", table: "Git")
+        let countLabel = String(localized: "Combine \(count) selected commits into one.", table: "Git",
+                                comment: "Number of commits to rewrite.")
+        let risk = String(localized:
+            "This rewrites local history. Remote branches and tags are not force-pushed.", table: "Git")
+        let branchName = branch ?? String(localized: "Detached HEAD", table: "Git")
+        alert.informativeText = branchName + "\n" + countLabel + "\n" + risk
+        alert.addButton(withTitle: String(localized: "Yes, Squash", table: "Git"))
+        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+
+        let label = NSTextField(labelWithString: String(localized: "New Commit Message", table: "Git"))
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 112).isActive = true
+
+        message.isRichText = false
+        message.isAutomaticQuoteSubstitutionEnabled = false
+        message.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        message.textContainer?.widthTracksTextView = true
+        message.isVerticallyResizable = true
+        message.autoresizingMask = [.width]
+        message.string = suggestedMessage
+        message.delegate = self
+        message.setAccessibilityIdentifier("bailey.git.squash.message")
+        scroll.documentView = message
+
+        let content = NSStackView(views: [label, scroll])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 8
+        content.frame = NSRect(x: 0, y: 0, width: 380, height: 140)
+        alert.accessoryView = content
+        alert.buttons[0].isEnabled = !commitMessage.isEmpty
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = "\u{1b}"
+        alert.window.initialFirstResponder = message
+    }
+
+    func textDidChange(_ notification: Notification) {
+        alert.buttons[0].isEnabled = !commitMessage.isEmpty
+    }
+}

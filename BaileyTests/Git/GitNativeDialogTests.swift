@@ -12,6 +12,24 @@ final class GitNativeDialogTests: XCTestCase {
         )
     }
 
+    func testSquashNativeSheetRequiresMessageAndPreservesMultilineText() {
+        let sheet = GitSquashDialog(count: 2, suggestedMessage: "oldest", branch: "main")
+        XCTAssertEqual(sheet.message.string, "oldest")
+        XCTAssertTrue(sheet.alert.informativeText.contains("main"))
+        XCTAssertTrue(sheet.alert.buttons[0].isEnabled)
+        XCTAssertTrue(sheet.alert.window.initialFirstResponder === sheet.message)
+        XCTAssertEqual(sheet.alert.buttons[0].keyEquivalent, "\r")
+        XCTAssertEqual(sheet.alert.buttons[1].keyEquivalent, "\u{1b}")
+
+        sheet.message.string = "   \n "
+        sheet.textDidChange(Notification(name: NSText.didChangeNotification, object: sheet.message))
+        XCTAssertFalse(sheet.alert.buttons[0].isEnabled)
+        sheet.message.string = "新标题\n\n详细描述"
+        sheet.textDidChange(Notification(name: NSText.didChangeNotification, object: sheet.message))
+        XCTAssertTrue(sheet.alert.buttons[0].isEnabled)
+        XCTAssertEqual(sheet.commitMessage, "新标题\n\n详细描述")
+    }
+
     func testBranchNameFieldsUseRealNativeValidationAndKeepCheckoutDefaults() {
         let current = GitBranchDialog(kind: .create(checkout: true),
             title: "Create", detail: "HEAD")

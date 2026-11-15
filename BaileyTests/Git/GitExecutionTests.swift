@@ -9,6 +9,7 @@ private actor GitBackendFixture: WorkspaceBackend {
     private(set) var arguments: [String] = []
     private(set) var directory: String?
     private(set) var environment: [String: String]?
+    private(set) var input: Data?
     private(set) var deadline: TimeInterval?
 
     func configure(failure: WorkspaceError?) { self.failure = failure }
@@ -17,6 +18,7 @@ private actor GitBackendFixture: WorkspaceBackend {
         arguments = argv
         directory = cwd
         environment = env
+        input = stdin
         deadline = timeout
         if let failure { throw failure }
         return result
@@ -37,6 +39,38 @@ private actor GitBackendFixture: WorkspaceBackend {
 }
 
 final class GitExecutionTests: XCTestCase {
+    func testSquashCommitAuthorEnvironmentAndStdinReachRemoteBackend() async {
+        let backend = GitBackendFixture()
+        let message = Data("中文标题\n\n提交正文\n".utf8)
+        await backend.configure(result: WorkspaceRunResult(
+            status: 0, stdout: Data("abc\n".utf8), stderr: Data()
+        ))
+        let result = await GitCommandExecution.runData(
+            ["commit-tree", "abc", "-F", "-"], in: "/synthetic/repo",
+            stdin: message, environment: [
+                "GIT_AUTHOR_NAME": "作者",
+                "GIT_AUTHOR_EMAIL": "author@example.invalid",
+                "GIT_AUTHOR_DATE": "2020-01-02T03:04:05+00:00",
+                "GIT_OPTIONAL_LOCKS": "1",
+                "GIT_TERMINAL_PROMPT": "1",
+                "LC_ALL": "en_US.UTF-8",
+            ], backend: backend
+        )
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, Data("abc\n".utf8))
+        let args = await backend.arguments
+        XCTAssertEqual(args, ["git", "commit-tree", "abc", "-F", "-"])
+        let forwarded = await backend.environment
+        XCTAssertEqual(forwarded?["GIT_AUTHOR_NAME"], "作者")
+        XCTAssertEqual(forwarded?["GIT_AUTHOR_EMAIL"], "author@example.invalid")
+        XCTAssertEqual(forwarded?["GIT_AUTHOR_DATE"], "2020-01-02T03:04:05+00:00")
+        XCTAssertEqual(forwarded?["GIT_OPTIONAL_LOCKS"], "0")
+        XCTAssertEqual(forwarded?["GIT_TERMINAL_PROMPT"], "0")
+        XCTAssertEqual(forwarded?["LC_ALL"], "C")
+        let input = await backend.input
+        XCTAssertEqual(input, message)
+    }
+
     func testFirstLoginEnvironmentLoadCannotCacheCancelledRequest() async {
         let result = await Task.detached(priority: .utility) {
             withUnsafeCurrentTask { $0?.cancel() }

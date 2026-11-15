@@ -71,8 +71,10 @@ Git Graph 历史文件行与 Git Changes 同名文件行使用不同的无障碍
 Focus 与 Selection 在同一行时两层同时生效。**Hover** 只强调未选中且未聚焦行。
 文件／资源树的无障碍 Selected 只反映明确 Selection，不从游标描边或当前展示内容推导。
 Git Graph 的提交、目录和历史／工作树文件通过单击或 Space／Return 明确建立单项 Selection，
-活动列表显示主题色底，失去键盘焦点后变灰；方向键只移动 Focus 细边框，
-右键只临时指定 Context Target，不改变原选中项。
+活动列表显示主题色底，失去键盘焦点后变灰；方向键只移动 Focus 细边框。
+在真实提交上 Shift 单击可按 HEAD 第一父链选中连续多个可压缩提交，
+不触发该次提交展开；选区内右键提供 Squash，选区外右键不沿用旧范围，
+Escape 清除范围选择但保留 Focus。右键仍只临时指定 Context Target，不改变原单项 Selection。
 Files 的当前展示文件不再独立绘制弱灰底：活动文件变化按 Auto Reveal 更新树的
 Focus／Selection，使旧文件不残留第二条灰底；不匹配的文件不伪选。
 Git Changes 同样由活动文件／Diff 标签自动定位匹配资源并更新 Selection，

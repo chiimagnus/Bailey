@@ -42,7 +42,8 @@ nonisolated enum GitCommandExecution {
     /// A single polling owner drains both streams without blocking separate threads.
     static func runData(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        stdoutLimit: Int? = nil, stdin: Data? = nil
+        stdoutLimit: Int? = nil, stdin: Data? = nil,
+        environment: [String: String] = [:]
     ) -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
         let started = ProcessInfo.processInfo.systemUptime
@@ -53,6 +54,7 @@ nonisolated enum GitCommandExecution {
             return (-2, Data(), String(localized: "Git did not respond in time.", table: "Git"))
         }
         var env = resolved.values
+        env.merge(environment) { _, value in value }
         env["GIT_OPTIONAL_LOCKS"] = "0"
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["LC_ALL"] = "C"
@@ -113,7 +115,8 @@ nonisolated enum GitCommandExecution {
 
     @concurrent static func runData(
         _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        stdoutLimit: Int? = nil, stdin: Data? = nil, backend: WorkspaceBackend
+        stdoutLimit: Int? = nil, stdin: Data? = nil,
+        environment: [String: String] = [:], backend: WorkspaceBackend
     ) async -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
         if Task.isCancelled {
@@ -121,11 +124,14 @@ nonisolated enum GitCommandExecution {
         }
         if backend is LocalWorkspaceBackend {
             return runData(args, in: dir, timeout: timeout,
-                           stdoutLimit: stdoutLimit, stdin: stdin)
+                           stdoutLimit: stdoutLimit, stdin: stdin, environment: environment)
         }
         do {
             let argv = ["git"] + args
-            let env = ["GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"]
+            var env = environment
+            env["GIT_OPTIONAL_LOCKS"] = "0"
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            env["LC_ALL"] = "C"
             let result: WorkspaceRunResult
             if let stdoutLimit {
                 result = try await backend.runLimited(

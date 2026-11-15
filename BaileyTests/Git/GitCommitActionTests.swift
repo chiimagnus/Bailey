@@ -53,6 +53,225 @@ final class GitCommitActionTests: XCTestCase {
         return try XCTUnwrap(model.recentCommits.first { $0.hash == hash })
     }
 
+    func testSquashRangeOnlyAcceptsContinuousFirstParentCommits() {
+        let linear = [
+            "root": [String](), "a": ["root"], "b": ["a"], "c": ["b"], "head": ["c"],
+        ]
+        XCTAssertEqual(GitStatusModel.squashRange(
+            anchor: "b", endpoint: "c", head: "head", parents: linear
+        ), ["c", "b"])
+        XCTAssertEqual(GitStatusModel.squashRange(
+            anchor: "c", endpoint: "b", head: "head", parents: linear
+        ), ["c", "b"])
+        XCTAssertEqual(GitStatusModel.squashRange(
+            anchor: "a", endpoint: "root", head: "head", parents: linear
+        ), ["a", "root"])
+        XCTAssertNil(GitStatusModel.squashRange(
+            anchor: "a", endpoint: "c", head: "head",
+            parents: linear.merging(["head": ["c", "other"]]) { _, new in new }
+        ))
+        XCTAssertNil(GitStatusModel.squashRange(
+            anchor: "a", endpoint: "head", head: "head",
+            parents: linear.merging(["b": ["a", "other"]]) { _, new in new }
+        ))
+        XCTAssertNil(GitStatusModel.squashRange(
+            anchor: "a", endpoint: "missing", head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.squashRange(
+            anchor: "a", endpoint: "a", head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.squashPlan(
+            selected: ["a", "c"], head: "head", parents: linear
+        ))
+        XCTAssertNil(GitStatusModel.squashPlan(
+            selected: ["b", "b"], head: "head", parents: linear
+        ))
+    }
+
+    func testSquashHeadCommitsKeepsExactTreeAndOldestAuthor() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        _ = try git(["config", "user.name", "New Committer"])
+        try "second".write(to: directory.appendingPathComponent("second.txt"),
+                           atomically: true, encoding: .utf8)
+        _ = try git(["add", "second.txt"])
+        _ = try git(["commit", "-qm", "second", "--author=Original Writer <author@example.invalid>"])
+        let oldest = try git(["rev-parse", "HEAD"])
+        let originalAuthorDate = try git(["log", "-1", "--format=%aI"])
+        let third = try commit("third", text: "third\n")
+        let fourth = try commit("fourth", text: "fourth\n")
+        let oldTree = try git(["rev-parse", "HEAD^{tree}"])
+        let selected = try await target(fourth)
+        XCTAssertEqual(selected.hash, fourth)
+        model.squashCommits([fourth, third, oldest], message: "合并提交\n\n真实正文", target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "2")
+        XCTAssertEqual(try git(["rev-parse", "HEAD^"]), root)
+        XCTAssertEqual(try git(["log", "-1", "--format=%B"]), "合并提交\n\n真实正文")
+        XCTAssertEqual(try git(["log", "-1", "--format=%an <%ae>"]), "Original Writer <author@example.invalid>")
+        XCTAssertEqual(try git(["log", "-1", "--format=%aI"]), originalAuthorDate)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^{tree}"]), oldTree)
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testSquashMiddleCommitsReplaysNewerHistoryAndKeepsTag() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        let oldest = try commit("oldest", text: "oldest\n")
+        let newer = try commit("newer", text: "newer\n")
+        _ = try git(["tag", "keep-original", oldest])
+        _ = try git(["branch", "preserve-oldest", oldest])
+        let after = try commit("after", text: "after\n")
+        let last = try commit("last", text: "last\n")
+        let oldTree = try git(["rev-parse", "HEAD^{tree}"])
+        _ = try await target(last)
+        model.squashCommits([oldest, newer], message: "middle squash", target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "4")
+        XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "last")
+        XCTAssertEqual(try git(["log", "-2", "--format=%s"]).split(separator: "\n").last, "after")
+        XCTAssertEqual(try git(["rev-parse", "HEAD~3"]), root)
+        XCTAssertEqual(try git(["log", "-1", "--format=%s", "HEAD~2"]), "middle squash")
+        XCTAssertEqual(try git(["rev-parse", "refs/tags/keep-original"]), oldest)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/preserve-oldest"]), oldest)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^{tree}"]), oldTree)
+    }
+
+    func testSquashCanIncludeRootCommitOnDetachedHEAD() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        let newer = try commit("newer", text: "更新内容\n")
+        let expectedTree = try git(["rev-parse", "HEAD^{tree}"])
+        _ = try git(["switch", "--detach", newer])
+        _ = try await target(newer)
+        model.squashCommits([root, newer], message: "压缩包含根提交", target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["branch", "--show-current"]), "")
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "1")
+        XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "压缩包含根提交")
+        XCTAssertEqual(try git(["rev-parse", "HEAD^{tree}"]), expectedTree)
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testSquashWorksWithSHA256GitObjects() async throws {
+        let repository = directory.appendingPathComponent("sha256")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        func git256(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: repository.path)
+            guard result.status == 0 else {
+                XCTFail(result.stderr)
+                throw WorkspaceError.notFound
+            }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git256(["init", "-q", "-b", "main", "--object-format=sha256"])
+        _ = try git256(["config", "user.name", "Synthetic"])
+        _ = try git256(["config", "user.email", "sha256@example.invalid"])
+        _ = try git256(["config", "commit.gpgsign", "false"])
+        try "旧版本\n".write(to: repository.appendingPathComponent("doc.txt"),
+                             atomically: true, encoding: .utf8)
+        _ = try git256(["add", "."])
+        _ = try git256(["commit", "-qm", "oldest"])
+        let oldest = try git256(["rev-parse", "HEAD"])
+        try "新版本\n".write(to: repository.appendingPathComponent("doc.txt"),
+                             atomically: true, encoding: .utf8)
+        _ = try git256(["add", "."])
+        _ = try git256(["commit", "-qm", "newer"])
+        let newest = try git256(["rev-parse", "HEAD"])
+        let tree = try git256(["rev-parse", "HEAD^{tree}"])
+        XCTAssertEqual(newest.count, 64)
+
+        let shaModel = GitStatusModel()
+        shaModel.sync(root: repository.path)
+        func settled() async throws {
+            let deadline = Date().addingTimeInterval(15)
+            while !shaModel.hasResolvedStatus || shaModel.isRefreshing || shaModel.isBusy {
+                guard Date() < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await settled()
+        shaModel.squashCommits([newest, oldest], message: "sha256 squash",
+                               target: shaModel.actionTarget())
+        try await settled()
+        XCTAssertNil(shaModel.lastError)
+        XCTAssertEqual(try git256(["rev-list", "--count", "HEAD"]), "1")
+        XCTAssertEqual(try git256(["rev-parse", "HEAD"]).count, 64)
+        XCTAssertEqual(try git256(["rev-parse", "HEAD^{tree}"]), tree)
+    }
+
+    func testSquashRejectsUnsignableCommitWithoutChangingHistory() async throws {
+        let older = try commit("older", text: "older\n")
+        let newer = try commit("newer", text: "newer\n")
+        _ = try git(["config", "commit.gpgsign", "true"])
+        _ = try git(["config", "gpg.program", "/usr/bin/false"])
+        _ = try await target(newer)
+        model.squashCommits([older, newer], message: "must be signed", target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^"]), older)
+        XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+    }
+
+    func testSquashRejectsMovedHeadAndBlankMessage() async throws {
+        let older = try commit("older", text: "older\n")
+        let newer = try commit("newer", text: "newer\n")
+        _ = try await target(newer)
+        model.squashCommits([older, newer], message: "  \n  ", target: model.actionTarget())
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+
+        let external = try commit("external", text: "external\n")
+        model.squashCommits([older, newer], message: "stale", target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), external)
+        XCTAssertEqual(try git(["show", "HEAD:tracked.txt"]), "external")
+    }
+
+    func testSquashRejectsDirtyIndexAndWorktreeWithoutMovingHead() async throws {
+        let older = try commit("older", text: "older\n")
+        let newer = try commit("newer", text: "newer\n")
+        for stage in [true, false] {
+            let path = directory.appendingPathComponent("tracked.txt")
+            try (stage ? "staged\n" : "unstaged\n").write(to: path, atomically: true, encoding: .utf8)
+            if stage { _ = try git(["add", "tracked.txt"]) }
+            _ = try await target(newer)
+            model.squashCommits([newer, older], message: "should not commit", target: model.actionTarget())
+            try await settle()
+            XCTAssertNotNil(model.lastError)
+            XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+            XCTAssertEqual(try String(contentsOf: path, encoding: .utf8),
+                           stage ? "staged\n" : "unstaged\n")
+            _ = try git(["reset", "--hard", newer])
+        }
+    }
+
+    func testSquashRejectsForeignBranchAndMergeHistory() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        let main = try commit("main", text: "main\n")
+        _ = try git(["switch", "-c", "side", root])
+        try "side\n".write(to: directory.appendingPathComponent("side.txt"),
+                              atomically: true, encoding: .utf8)
+        _ = try git(["add", "side.txt"])
+        _ = try git(["commit", "-qm", "side"])
+        let side = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "main"])
+        _ = try await target(main)
+        model.squashCommits([main, side], message: "bad", target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), main)
+        _ = try git(["merge", "--no-ff", "-m", "merge", "side"])
+        let merge = try git(["rev-parse", "HEAD"])
+        _ = try await target(merge)
+        model.squashCommits([merge, main], message: "bad merge", target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), merge)
+    }
+
     func testCheckoutAndRevertUseSelectedCommitIncludingRoot() async throws {
         let root = try git(["rev-parse", "HEAD"])
         let second = try commit("second", text: "second\n")

@@ -297,6 +297,69 @@ final class GitStatusModel {
                                 parents: Dictionary(uniqueKeysWithValues: recentCommits.map { ($0.hash, $0.parentHashes) }))
     }
 
+    nonisolated struct SquashPlan: Equatable, Sendable {
+        let newest: String
+        let oldest: String
+        let parent: String?
+        let newerCount: Int
+    }
+
+    /// Only a single-parent segment on the current HEAD ancestry can be rewritten.
+    nonisolated static func squashPlan(
+        selected: [String], head: String?, parents: [String: [String]]
+    ) -> SquashPlan? {
+        guard let head, selected.count >= 2,
+              Set(selected).count == selected.count else { return nil }
+        let wanted = Set(selected)
+        var current: String? = head
+        var visited = Set<String>()
+        var newest: String?
+        var count = 0
+        var newerCount = 0
+        while let hash = current, visited.insert(hash).inserted,
+              let ancestors = parents[hash] {
+            guard ancestors.count <= 1 else { return nil }
+            if wanted.contains(hash) {
+                if newest == nil { newest = hash }
+                count += 1
+                if count == wanted.count, let newest {
+                    return SquashPlan(
+                        newest: newest, oldest: hash, parent: ancestors.first,
+                        newerCount: newerCount
+                    )
+                }
+            } else if newest != nil {
+                return nil
+            } else {
+                newerCount += 1
+            }
+            current = ancestors.first
+        }
+        return nil
+    }
+
+    nonisolated static func squashRange(
+        anchor: String, endpoint: String, head: String?, parents: [String: [String]]
+    ) -> [String]? {
+        guard anchor != endpoint else { return nil }
+        for (newest, oldest) in [(anchor, endpoint), (endpoint, anchor)] {
+            var path = [newest]
+            var current = newest
+            var visited: Set<String> = [current]
+            while current != oldest, let ancestors = parents[current],
+                  ancestors.count == 1, let parent = ancestors.first,
+                  visited.insert(parent).inserted {
+                path.append(parent)
+                current = parent
+            }
+            if current == oldest,
+               squashPlan(selected: path, head: head, parents: parents) != nil {
+                return path
+            }
+        }
+        return nil
+    }
+
     nonisolated static func parseCommitTopology(_ output: String) -> [String: [String]]? {
         var parents: [String: [String]] = [:]
         for line in output.split(separator: "\n") {
@@ -374,6 +437,43 @@ final class GitStatusModel {
             isCurrentTarget: {
                 self.isCurrent(target) && (isCurrentTarget?() ?? true)
             }, completion: completion
+        )
+    }
+
+    private nonisolated struct SquashRequest: Sendable {
+        let selected: [String]
+        let message: String
+        let historyLimit: Int
+    }
+
+    func squashCommits(
+        _ hashes: [String], message: String, target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let title = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            failImmediately(String(localized: "Enter a commit message", table: "Git"),
+                            completion: completion)
+            return
+        }
+        let commits = recentCommits.filter { $0.stash == nil && $0.worktree == nil }
+        let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
+        guard isCurrent(target), repositoryOperation == nil, !isBusy,
+              hashes.allSatisfy({ ($0.count == 40 || $0.count == 64) && $0.allSatisfy(\.isHexDigit) }),
+              Self.squashPlan(selected: hashes, head: headOID, parents: parents) != nil else {
+            failImmediately(String(localized: "The selected commits are no longer a continuous linear range on HEAD.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        perform(
+            label: String(localized: "Squash Commits", table: "Git"),
+            commands: [], requiredStatus: .history,
+            squashHistory: SquashRequest(
+                selected: hashes, message: message, historyLimit: commits.count
+            ),
+            prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion
         )
     }
 
@@ -2719,6 +2819,7 @@ final class GitStatusModel {
         requiresStableUpstream: Bool = false,
         squashMessage: String? = nil,
         dropCommit: String? = nil,
+        squashHistory: SquashRequest? = nil,
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
         expectedWorktree: WorktreeLocation? = nil, expectedVacantWorktreeBranch: String? = nil,
@@ -2745,7 +2846,8 @@ final class GitStatusModel {
         let expectedHeadOID = headOID
         let expectedBranch = branch
         let expectedUpstream = upstream
-        guard !dir.isEmpty, !isBusy, (!commands.isEmpty || terminalAction != nil) else {
+        guard !dir.isEmpty, !isBusy,
+              (!commands.isEmpty || terminalAction != nil || squashHistory != nil) else {
             completion?(false)
             return
         }
@@ -2931,6 +3033,13 @@ final class GitStatusModel {
                         return CommandBatchResult(output: fileChangedMessage, failureCode: -1,
                                                   failureMessage: fileChangedMessage)
                     }
+                }
+                if let squashHistory {
+                    return await Self.runSquashHistory(
+                        squashHistory, in: dir, backend: backend,
+                        expectedHead: expectedHeadOID, expectedBranch: expectedBranch,
+                        isCurrent: isCurrent
+                    )
                 }
                 if squashMessage != nil {
                     guard await isCurrent() else {
@@ -3222,6 +3331,124 @@ final class GitStatusModel {
             completion?(result.failure == nil)
             self.refresh()
         }
+    }
+
+    /// Build the replacement Git object before changing any ref, then replay only
+    /// the newer commits through Git's own rebase/recovery machinery.
+    private nonisolated static func runSquashHistory(
+        _ request: SquashRequest, in directory: String, backend: WorkspaceBackend,
+        expectedHead: String?, expectedBranch: String?,
+        isCurrent: @escaping @MainActor () -> Bool
+    ) async -> CommandBatchResult {
+        func failed(_ message: String, code: Int32 = -1, command: [String]? = nil) -> CommandBatchResult {
+            CommandBatchResult(output: message, failureCode: code,
+                               failureMessage: message, failedCommand: command)
+        }
+        let changed = String(localized:
+            "The selected commits changed on disk. Refresh Git Graph and select them again.", table: "Git")
+        let stale = String(localized:
+            "The Git action target changed or edits could not be saved. No further Git commands were run.", table: "Git")
+        guard let expectedHead, await isCurrent() else { return failed(stale) }
+
+        let statusArgs = ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=no"]
+        let status = await GitCommandExecution.run(statusArgs, in: directory, backend: backend)
+        guard status.status == 0 else { return failed(changed) }
+        let live = parseStatus(status.stdout)
+        guard live.headOID == expectedHead, live.branch == expectedBranch else {
+            return failed(changed)
+        }
+        guard live.entries.isEmpty else {
+            return failed(String(localized:
+                "Squash requires a clean index and working tree.", table: "Git"))
+        }
+
+        let historyArgs = ["log", "--first-parent", "--format=%H %P",
+                           "--max-count=\(request.historyLimit)", "HEAD"]
+        let history = await GitCommandExecution.run(historyArgs, in: directory, backend: backend)
+        guard history.status == 0, let parents = parseCommitTopology(history.stdout),
+              let plan = squashPlan(selected: request.selected, head: expectedHead, parents: parents)
+        else { return failed(changed) }
+
+        let oldTreeArgs = ["rev-parse", expectedHead + "^{tree}"]
+        let oldTree = await GitCommandExecution.run(oldTreeArgs, in: directory, backend: backend)
+        let selectedTreeArgs = ["rev-parse", plan.newest + "^{tree}"]
+        let selectedTree = await GitCommandExecution.run(selectedTreeArgs, in: directory, backend: backend)
+        guard oldTree.status == 0, selectedTree.status == 0 else { return failed(changed) }
+        let tree = selectedTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Git's interactive squash retains the oldest commit's author.
+        let authorArgs = ["log", "-1", "--format=%an%x00%ae%x00%aI", plan.oldest]
+        let author = await GitCommandExecution.run(authorArgs, in: directory, backend: backend)
+        let authorParts = author.stdout.split(separator: "\0", omittingEmptySubsequences: false)
+        guard author.status == 0, authorParts.count == 3 else {
+            return failed(String(localized: "Could not preserve the original commit author.", table: "Git"))
+        }
+        let authorEnvironment = [
+            "GIT_AUTHOR_NAME": String(authorParts[0]),
+            "GIT_AUTHOR_EMAIL": String(authorParts[1]),
+            "GIT_AUTHOR_DATE": String(authorParts[2]).trimmingCharacters(in: .whitespacesAndNewlines),
+        ]
+        let signing = await GitCommandExecution.run(
+            ["config", "--bool", "--get", "commit.gpgsign"], in: directory, backend: backend
+        )
+        guard signing.status == 0 || signing.status == 1 else {
+            return failed(signing.stderr.isEmpty ? changed : signing.stderr, code: signing.status)
+        }
+        guard await isCurrent() else { return failed(stale) }
+
+        var createArgs = ["commit-tree", tree]
+        if let parent = plan.parent { createArgs += ["-p", parent] }
+        if signing.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true" {
+            createArgs.append("-S")
+        }
+        createArgs += ["-F", "-"]
+        let created = await GitCommandExecution.runData(
+            createArgs, in: directory, stdin: Data(request.message.utf8),
+            environment: authorEnvironment, backend: backend
+        )
+        let newHash = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard created.status == 0, (newHash.count == 40 || newHash.count == 64),
+              newHash.allSatisfy(\.isHexDigit) else {
+            let reason = created.stderr.isEmpty
+                ? String(localized: "Git command failed", table: "Git") : created.stderr
+            return failed(reason, code: created.status, command: createArgs)
+        }
+        // A failed or cancelled preflight leaves HEAD and all existing refs intact.
+        guard await isCurrent() else { return failed(stale) }
+        let liveStatus = await GitCommandExecution.run(statusArgs, in: directory, backend: backend)
+        guard liveStatus.status == 0 else { return failed(changed) }
+        let actual = parseStatus(liveStatus.stdout)
+        guard actual.headOID == expectedHead, actual.branch == expectedBranch,
+              actual.entries.isEmpty else { return failed(changed) }
+
+        let replayArgs = ["rebase", "--reapply-cherry-picks", "--empty=keep",
+                          "--onto", newHash, plan.newest]
+        let replay = await GitCommandExecution.run(replayArgs, in: directory, backend: backend)
+        let output = [replay.stdout, replay.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        guard replay.status == 0 else {
+            return failed(output.isEmpty ? String(localized: "Git command failed", table: "Git") : output,
+                          code: replay.status, command: replayArgs)
+        }
+        let finalTree = await GitCommandExecution.run(["rev-parse", "HEAD^{tree}"],
+                                                       in: directory, backend: backend)
+        let count = await GitCommandExecution.run(
+            ["rev-list", "--first-parent", "--count", "HEAD", "^" + newHash],
+            in: directory, backend: backend
+        )
+        guard finalTree.status == 0, count.status == 0,
+              finalTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                == oldTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+              count.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                == String(plan.newerCount) else {
+            return failed(String(localized:
+                "Squash finished but the resulting history did not match the selected range. Review Git history before continuing.",
+                table: "Git"))
+        }
+        let summary = String(localized: "Squashed \(request.selected.count) commits into one.", table: "Git",
+                             comment: "History rewrite completion summary.")
+        return CommandBatchResult(output: summary + "\n" + output,
+                                  failureCode: nil, failureMessage: nil)
     }
 
     private nonisolated struct CommandBatchResult: Sendable {

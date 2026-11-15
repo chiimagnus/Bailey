@@ -1448,6 +1448,50 @@ struct GitPanel: View {
         }
     }
 
+    func presentSquashDialog(_ hashes: [String]) {
+        guard hashes.count >= 2, !model.isBusy, model.repositoryOperation == nil,
+              let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity) else { return }
+        let target = model.actionTarget()
+        let current = model.recentCommits.filter { $0.stash == nil && $0.worktree == nil }
+        let parents = Dictionary(uniqueKeysWithValues: current.map { ($0.hash, $0.parentHashes) })
+        guard let plan = GitStatusModel.squashPlan(
+            selected: hashes, head: model.headOID, parents: parents
+        ), let oldest = current.first(where: { $0.hash == plan.oldest }) else { return }
+
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+        }
+        let dialog = GitSquashDialog(
+            count: hashes.count, suggestedMessage: oldest.subject, branch: model.branch
+        )
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent(),
+                  !dialog.commitMessage.isEmpty else { return }
+            performOperation(.commitMenu) {
+                model.squashCommits(
+                    hashes, message: dialog.commitMessage, target: target,
+                    prepare: {
+                        await manager.application.saveBeforeGitAction(
+                            repository: target.repository, scope: target.scope, isCurrent: isCurrent
+                        )
+                    }, isCurrentTarget: {
+                        isCurrent() && manager.application.canRunGitAction(
+                            repository: target.repository, scope: target.scope
+                        )
+                    }, completion: { _ in
+                        manager.application.reloadAfterGitAction(
+                            repository: target.repository, scope: target.scope
+                        )
+                    }
+                )
+            }
+        }
+    }
+
     // MARK: Commit box
 
     private var commitBox: some View {
@@ -1872,6 +1916,8 @@ struct GitPanel: View {
                             commitAction: { commit, action in
                                 presentCommitDialog(commit, action: action)
                             },
+                            squashAction: presentSquashDialog,
+                            headOID: model.headOID,
                             canActOnStash: !model.isBusy && model.canUseCurrentStashes,
                             stashAction: { stash, action in
                                 presentStashDialog(stash, action: action)
