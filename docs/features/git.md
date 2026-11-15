@@ -453,10 +453,10 @@ Git Changes 自动定位该行并替换旧选择；暂存与未暂存的同名�
 Stage／Unstage／Discard 行按钮和右键菜单在目标处于已选集合时作用于该集合，
 目标不在集合内时只操作该行；分组标题的 Stage All／Unstage All／Discard All 仍作用于整组。
 多个文件右键隐藏只打开一项 Diff／文件、HEAD 原文和单文件忽略规则，
-提供复制所选绝对／相对路径、Finder 定位（本机）及一次插入多个转义路径到终端；
+提供复制所选绝对／相对路径及 Finder 定位（本机）；
 ⌘C 复制当前 Git 选区的相对路径。单项菜单仍保留原能力。
 STAGED／CHANGES 同一路径是两个独立选择对象；跨 STAGED、CHANGES、MERGE 的混合选区
-只能进行复制／定位／终端路径操作，不显示只对其中一组生效的 Stage／Unstage／Discard，
+只能进行复制／定位，不显示只对其中一组生效的 Stage／Unstage／Discard，
 也不让行内批量按钮偷偷修改选区的一部分。MERGE 只能显式标记已解决，
 不能借混合选择暗中暂存冲突。批量 Git 操作执行时重新解析当前条目并核对真实 Section；
 Discard 仍逐文件指纹复核、原生确认，可取消且不修改未选择文件。

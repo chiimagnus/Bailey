@@ -21,16 +21,6 @@
         }
       }
     },
-    "Insert Absolute Paths in Terminal" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在终端中插入所选绝对路径"
-          }
-        }
-      }
-    },
     "Cut" : {
       "localizations" : {
         "zh-Hans" : {
@@ -969,16 +959,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "初始化终端的当前目录以开始跟踪更改。"
-          }
-        }
-      }
-    },
-    "Insert Absolute Path in Terminal" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在终端中插入绝对路径"
           }
         }
       }

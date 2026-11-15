@@ -40,7 +40,6 @@ struct GitPanel: View {
     let model: GitStatusModel
     let manager: WorkspaceWindowModel
     let project: Project?
-    let session: TerminalSession?
     let sshHost: String?
     let openFile: (String) -> Void
     let openDiff: (_ entry: GitStatusModel.Entry, _ staged: Bool) -> Void
@@ -2544,13 +2543,6 @@ struct GitPanel: View {
                     contextPaths(for: key, absolute: true).map { URL(fileURLWithPath: $0) }
                 )
             },
-            insertBatchInTerminal: session.map { session in
-                {
-                    let paths = contextPaths(for: key, absolute: true)
-                    guard !paths.isEmpty else { return }
-                    session.sendCommand(paths.map(shellQuoted).joined(separator: " ") + " ")
-                }
-            },
             disabled: model.isBusy || !model.canUseCurrentStatus,
             isStageLoading: operationIsLoading(stageTrigger),
             isUnstageLoading: operationIsLoading(unstageTrigger),
@@ -2587,10 +2579,7 @@ struct GitPanel: View {
                 }
             },
             absolutePath: model.absolutePath(for: entry),
-            copyRelativePath: { copyToPasteboard(entry.path) },
-            insertInTerminal: session.map { session in
-                { session.sendCommand(shellQuoted(model.absolutePath(for: entry)) + " ") }
-            }
+            copyRelativePath: { copyToPasteboard(entry.path) }
         )
     }
 
@@ -2733,14 +2722,6 @@ struct GitPanel: View {
                 NSWorkspace.shared.activateFileViewerSelecting(
                     contextPaths(for: target, absolute: true).map { URL(fileURLWithPath: $0) }
                 )
-            }
-        }
-        if let session {
-            Button(multiple ? String(localized: "Insert Absolute Paths in Terminal", table: "Sidebar")
-                   : String(localized: "Insert Absolute Path in Terminal", table: "Sidebar")) {
-                let paths = contextPaths(for: target, absolute: true)
-                guard !paths.isEmpty else { return }
-                session.sendCommand(paths.map(shellQuoted).joined(separator: " ") + " ")
             }
         }
     }
@@ -3147,10 +3128,6 @@ struct GitPanel: View {
         changesCollapsed = false
         historyCollapsed = false
     }
-
-    private func shellQuoted(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }
 
 private struct GitEntryRow: View {
@@ -3174,7 +3151,6 @@ private struct GitEntryRow: View {
     let copyBatchPaths: () -> Void
     let copyBatchRelativePaths: () -> Void
     let revealBatch: () -> Void
-    let insertBatchInTerminal: (() -> Void)?
     let disabled: Bool
     let isStageLoading: Bool
     let isUnstageLoading: Bool
@@ -3188,7 +3164,6 @@ private struct GitEntryRow: View {
     let discard: () -> Void
     let absolutePath: String
     let copyRelativePath: () -> Void
-    let insertInTerminal: (() -> Void)?
 
     @Environment(\.panelFontScale) private var fontScale
 
@@ -3269,21 +3244,12 @@ private struct GitEntryRow: View {
         if multipleSelection {
             Button(String(localized: "Copy Paths", table: "Sidebar"), action: copyBatchPaths)
             Button(String(localized: "Copy Relative Paths", table: "Sidebar"), action: copyBatchRelativePaths)
-            if let insertBatchInTerminal {
-                Button(String(localized: "Insert Absolute Paths in Terminal", table: "Sidebar"),
-                       action: insertBatchInTerminal)
-            }
         } else {
             Button(String(localized: "Copy Path", table: "Sidebar")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(absolutePath, forType: .string)
             }
             Button(String(localized: "Copy Relative Path", table: "Sidebar")) { copyRelativePath() }
-            if let insertInTerminal {
-                Button(String(localized: "Insert Absolute Path in Terminal", table: "Sidebar")) {
-                    insertInTerminal()
-                }
-            }
         }
     }
 
