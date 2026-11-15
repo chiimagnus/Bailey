@@ -260,6 +260,59 @@ final class DiffEngineTests: XCTestCase {
                        "An active cancel-aware path must produce exactly the old pure diff")
     }
 
+    func testFiveThroughThirtyTwoMiBSidesKeepExactSingleLineMutation() throws {
+        // Above 5 MiB is an isolated algorithm probe, not a product capacity release.
+        for sizeMiB in [5, 8, 16, 32] {
+            for rowCount in [1_000, 24_000, 100_000] {
+                try autoreleasepool {
+                    let bytes = sizeMiB << 20
+                    let rowWidth = bytes / rowCount
+                    let extra = bytes % rowCount
+                    let payload = String(repeating: "a", count: rowWidth - 9)
+                    let oldRows = (0..<rowCount).map { row in
+                        String(format: "%08d", row) + payload
+                            + (row < extra ? "b" : "")
+                    }
+                    var newRows = oldRows
+                    let middle = rowCount / 2
+                    newRows[middle].replaceSubrange(
+                        newRows[middle].startIndex..<newRows[middle].index(
+                            newRows[middle].startIndex, offsetBy: 8),
+                        with: "changed!"
+                    )
+                    let oldText = oldRows.joined(separator: "\n") + "\n"
+                    let newText = newRows.joined(separator: "\n") + "\n"
+                    XCTAssertEqual(oldText.utf8.count, bytes)
+                    XCTAssertEqual(newText.utf8.count, bytes)
+                    let start = CFAbsoluteTimeGetCurrent()
+                    let core = try XCTUnwrap(DiffCore.computeIfActive(
+                        oldText: oldText, newText: newText, cancellation: { false }
+                    ))
+                    let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+                    XCTAssertEqual(core.oldLines.count, rowCount)
+                    XCTAssertEqual(core.newLines.count, rowCount)
+                    XCTAssertFalse(core.oldMissingNewline)
+                    XCTAssertFalse(core.newMissingNewline)
+                    XCTAssertEqual(core.ops, [
+                        .equal(oldStart: 0, newStart: 0, count: middle),
+                        .delete(oldStart: middle, count: 1),
+                        .insert(newStart: middle, count: 1),
+                        .equal(oldStart: middle + 1, newStart: middle + 1,
+                               count: rowCount - middle - 1)
+                    ])
+                    // Verify the line splitter's complete bytes, not just hunk counts.
+                    XCTAssertEqual(core.oldLines.map(\.text).joined(separator: "\n") + "\n", oldText)
+                    XCTAssertEqual(core.newLines.map(\.text).joined(separator: "\n") + "\n", newText)
+                    var usage = rusage()
+                    _ = getrusage(RUSAGE_SELF, &usage)
+                    print("P3_DIFF_CAPACITY size_mib=\(sizeMiB) rows=\(rowCount) "
+                          + "side_bytes=\(bytes) compute_ms=\(elapsed) "
+                          + "process_peak_rss_mib=\(Double(usage.ru_maxrss) / 1_048_576)")
+                }
+            }
+        }
+    }
+
     func testCancellableCoreMatchesPureDiffForUnicodeNewlinesAndLargeFiles() {
         let long = (0..<24_000).map { "let value\($0) = \($0)\n" }.joined()
         let cases = [

@@ -15,7 +15,7 @@ final class DiffFoldLiveMutationTests: XCTestCase {
                 range: 5..<23,
                 separator: DiffCollapsedRun(baselineRange: 5..<23, direction: .both)
             )
-            editor.resetLiveGitLineIndex(text)
+            editor.resetLiveGitLineIndex()
             XCTAssertTrue(editor.setEditingFolds([originalFold]))
             let range = (text as NSString).range(of: "line 14")
             XCTAssertNotEqual(range.location, NSNotFound)

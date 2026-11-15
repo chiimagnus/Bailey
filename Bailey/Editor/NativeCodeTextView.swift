@@ -641,6 +641,17 @@ class NativeCodeTextView: NSTextView {
         measuredLineWidths = nil
     }
 
+    /// Git-LF rows coincide with native paragraphs when no bare CR or Unicode
+    /// paragraph separator is present. A value snapshot shares the existing
+    /// Fenwick index until an edit, instead of scanning the entire source again.
+    func nativeLineIndexForGitLF() -> NativeTextLineIndex? {
+        guard let index = lineIndex, let storage = textStorage,
+              index.length == storage.length, !index.hasNativeOnlySeparators else {
+            return nil
+        }
+        return index
+    }
+
     func updateGutter() {
         guard let gutterView else { return }
         let width = gutterWidth

@@ -564,10 +564,19 @@ final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
         return layoutChanged
     }
 
-    func resetLiveGitLineIndex(_ text: String) {
-        foldedGitLines = NativeTextLineIndex(gitLF: text)
-        liveGitSourceLineCount = text.isEmpty ? 0
-            : (foldedGitLines?.lineCount ?? 0) - (text.utf16.last == 10 ? 1 : 0)
+    func resetLiveGitLineIndex() {
+        guard let storage = textStorage else {
+            foldedGitLines = nil
+            liveGitSourceLineCount = 0
+            return
+        }
+        // Use only the actual native document. A same-length, older String
+        // must never authorize reuse of another document's row boundaries.
+        foldedGitLines = nativeLineIndexForGitLF()
+            ?? NativeTextLineIndex(gitLF: storage.string)
+        liveGitSourceLineCount = storage.length == 0 ? 0
+            : (foldedGitLines?.lineCount ?? 0)
+                - (storage.mutableString.character(at: storage.length - 1) == 10 ? 1 : 0)
     }
     var liveGitLineCount: Int? { foldedGitLines?.lineCount }
     func liveGitLine(atUTF16 offset: Int) -> Int? { foldedGitLines?.row(at: offset) }
@@ -1754,7 +1763,7 @@ final class DiffCodePaneView: NSView {
         textView.textContainerInset = .zero
         invalidateDocumentLayout()
         textView.text = text
-        textView.resetLiveGitLineIndex(text)
+        textView.resetLiveGitLineIndex()
         textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         applyContentHeightOverride()
     }

@@ -1009,6 +1009,54 @@ final class NativeDiffTabTests: XCTestCase {
                              "Deep scrolling must locate the next virtual deletion block")
     }
 
+    func testHundredThousandGitLFRowsReuseNativeIndexButPreserveOtherSeparators() {
+        let view = DiffTextView()
+        let source = (0..<100_000).map { "let row\($0) = \($0)\n" }.joined()
+        view.text = source
+        let started = CFAbsoluteTimeGetCurrent()
+        view.resetLiveGitLineIndex()
+        let initialMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        print("P3_GIT_LF_INDEX_100K cold_ms=\(initialMs)")
+        XCTAssertLessThan(initialMs, 25,
+                          "Pure LF must reuse the native paragraph index, not rescan 100K rows")
+        XCTAssertEqual(view.liveGitSourceLineCount, 100_000)
+        let expected = NativeTextLineIndex(gitLF: source)
+        for row in [0, 1, 29_999, 50_000, 99_999, 100_000] {
+            XCTAssertEqual(view.liveGitOffset(forLine: row), expected.offset(atLine: row))
+        }
+
+        // CRLF has the same native/Git LF boundaries, including Unicode content.
+        let crlf = String(repeating: "中文👋\r\n", count: 100_000)
+        view.text = crlf
+        view.resetLiveGitLineIndex()
+        let crlfExpected = NativeTextLineIndex(gitLF: crlf)
+        for row in [0, 1, 50_000, 99_999, 100_000] {
+            XCTAssertEqual(view.liveGitOffset(forLine: row), crlfExpected.offset(atLine: row))
+            XCTAssertEqual(view.lineNumber(atUTF16Offset: crlfExpected.offset(atLine: row)),
+                           row + 1)
+        }
+
+        // Bare CR and Unicode separators belong to native paragraphs, not Git LF.
+        let mixed = "a\rb\r\nc\u{2028}d\n猫"
+        view.text = mixed
+        view.resetLiveGitLineIndex()
+        let mixedIndex = NativeTextLineIndex(gitLF: mixed)
+        for offset in 0...mixed.utf16.count {
+            XCTAssertEqual(view.liveGitLine(atUTF16: offset), mixedIndex.row(at: offset))
+        }
+
+        // Both snapshots must continue to track genuine source edits independently.
+        view.text = source
+        view.resetLiveGitLineIndex()
+        let edit = NSRange(location: 0, length: 0)
+        view.textStorage?.replaceCharacters(in: edit, with: "插入\n")
+        XCTAssertNotNil(view.adjustLiveFoldSource(in: edit, replacement: "插入\n"))
+        let updated = NativeTextLineIndex(gitLF: view.string)
+        for row in [0, 1, 2, 50_000, 100_000] {
+            XCTAssertEqual(view.liveGitOffset(forLine: row), updated.offset(atLine: row))
+        }
+    }
+
     func testHundredThousandLineFoldedColdScrollbarJumpsKeepSourceAndExtentAligned() {
         let count = 100_000
         let source = (0..<count).map { "let row\($0) = \($0)" }.joined(separator: "\n")
@@ -6225,6 +6273,171 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(diff.editedNewContent, "unsaved during outage")
         let retained = await backend.stored()
         XCTAssertEqual(retained, Data("second 中文🪨".utf8))
+    }
+
+    func testExactFiveMiBGitIndexWorktreeHistoryAndNativeSaveRemainLossless() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let filename = "exact-limit.swift"
+        let path = directory.appendingPathComponent(filename)
+        let rowCount = 20_480
+        let payload = String(repeating: "x", count: 247)
+        let originalRows = (0..<rowCount).map { String(format: "%08d", $0) + payload }
+        let original = originalRows.joined(separator: "\n") + "\n"
+        XCTAssertEqual(original.utf8.count, 5 << 20)
+        try Data(original.utf8).write(to: path)
+        for args in [["add", filename], ["commit", "-qm", "five MiB baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let head = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var stagedRows = originalRows
+        stagedRows[0].replaceSubrange(
+            stagedRows[0].startIndex..<stagedRows[0].index(
+                stagedRows[0].startIndex, offsetBy: 8), with: "stage000")
+        let stagedText = stagedRows.joined(separator: "\n") + "\n"
+        try Data(stagedText.utf8).write(to: path)
+        XCTAssertEqual(GitCommandExecution.run(["add", filename], in: directory.path).status, 0)
+        let stagedIndex = GitCommandExecution.run(
+            ["ls-files", "-s", "--", filename], in: directory.path).stdout
+
+        var worktreeRows = stagedRows
+        worktreeRows[rowCount / 2].replaceSubrange(
+            worktreeRows[rowCount / 2].startIndex..<worktreeRows[rowCount / 2].index(
+                worktreeRows[rowCount / 2].startIndex, offsetBy: 8), with: "work0000")
+        let worktreeText = worktreeRows.joined(separator: "\n") + "\n"
+        try Data(worktreeText.utf8).write(to: path)
+        let preferences = try isolatedPreferences()
+        let start = CFAbsoluteTimeGetCurrent()
+        let historical = DiffTab(repoRoot: directory.path, path: filename,
+                                 source: .revision(hash: head), untracked: false,
+                                 origPath: nil, backend: LocalWorkspaceBackend.shared,
+                                 workspaceIdentity: nil, preferences: preferences)
+        let staged = DiffTab(repoRoot: directory.path, path: filename,
+                             source: .staged, untracked: false, origPath: nil,
+                             backend: LocalWorkspaceBackend.shared,
+                             workspaceIdentity: nil, preferences: preferences)
+        let worktree = DiffTab(repoRoot: directory.path, path: filename,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil, preferences: preferences)
+        try await wait({ !historical.isLoading && !staged.isLoading
+            && !worktree.isLoading && staged.display != nil
+            && worktree.display != nil }, timeout: 60)
+        let readyMs = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertNil(historical.error)
+        XCTAssertNil(staged.error)
+        XCTAssertNil(worktree.error)
+        XCTAssertEqual(Data(historical.newContent.utf8), Data(original.utf8))
+        XCTAssertEqual(Data(staged.newContent.utf8), Data(stagedText.utf8))
+        XCTAssertEqual(Data(worktree.newContent.utf8), Data(worktreeText.utf8))
+        XCTAssertFalse(historical.isEditable)
+        XCTAssertFalse(staged.isEditable)
+        XCTAssertTrue(worktree.isEditable)
+        for tab in [staged, worktree] {
+            XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+                $0.kind == .added
+            }.count, 1)
+            XCTAssertEqual(tab.display?.computation.unified.rows.filter {
+                $0.kind == .removed
+            }.count, 1)
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -950, y: -950, width: 800, height: 500),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let surface = DiffNativeSurface(diff: worktree)
+        worktree.nativeSurface = surface
+        window.contentView = surface
+        window.orderFront(nil)
+        let nativeStart = CFAbsoluteTimeGetCurrent()
+        surface.render()
+        surface.layoutSubtreeIfNeeded()
+        let nativeMs = (CFAbsoluteTimeGetCurrent() - nativeStart) * 1_000
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertEqual(Data(editor.string.utf8), Data(worktreeText.utf8))
+        XCTAssertFalse(worktree.isDirty)
+        editor.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 1),
+                                               with: "Z")
+        XCTAssertTrue(worktree.isDirty)
+        let expected = Data("Z".utf8) + Data(worktreeText.utf8.dropFirst())
+        await worktree.save()
+        XCTAssertNil(worktree.saveError)
+        XCTAssertFalse(worktree.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), expected)
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), head)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["ls-files", "-s", "--", filename], in: directory.path).stdout, stagedIndex)
+
+        let reopened = DiffTab(repoRoot: directory.path, path: filename,
+                               source: .worktree, untracked: false, origPath: nil,
+                               backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil, preferences: preferences)
+        try await wait({ !reopened.isLoading && reopened.display != nil }, timeout: 60)
+        XCTAssertNil(reopened.error)
+        XCTAssertEqual(Data(reopened.newContent.utf8), expected)
+        var usage = rusage()
+        _ = getrusage(RUSAGE_SELF, &usage)
+        print("P3_DIFF_EXACT_5M ready_ms=\(readyMs) native_ms=\(nativeMs) "
+              + "process_peak_rss_mib=\(Double(usage.ru_maxrss) / 1_048_576) "
+              + "staged_and_head_unchanged=true saved_bytes=\(expected.count)")
+    }
+
+    func testDiffRejectsOversizeAcrossWorktreeStagedAndHistoryWithoutPartialText() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sizes = [(5 << 20) + 1, 8 << 20, 16 << 20, 32 << 20]
+        for size in sizes {
+            let filename = "oversize-\(size).txt"
+            try Data(repeating: 0x61, count: size)
+                .write(to: directory.appendingPathComponent(filename))
+        }
+        for args in [["add", "."], ["commit", "-qm", "oversize sources"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let revision = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tooLarge = String(localized: "File is too large to diff", table: "Git")
+        let preferences = try isolatedPreferences()
+
+        for size in sizes {
+            let filename = "oversize-\(size).txt"
+            let path = directory.appendingPathComponent(filename)
+            let oldIndex = GitCommandExecution.run(
+                ["ls-files", "-s", "--", filename], in: directory.path).stdout
+            for (label, source) in [
+                ("worktree", DiffTab.Source.worktree),
+                ("staged", .staged),
+                ("revision", .revision(hash: revision))
+            ] {
+                let tab = DiffTab(repoRoot: directory.path, path: filename, source: source,
+                                  untracked: false, origPath: nil,
+                                  backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                                  preferences: preferences)
+                try await wait({ !tab.isLoading }, timeout: 30)
+                XCTAssertEqual(tab.error, tooLarge, "\(label) \(size) bytes")
+                XCTAssertFalse(tab.hasLoadedContent, label)
+                XCTAssertFalse(tab.isEditable, label)
+                XCTAssertEqual(tab.newContent, "", label)
+                XCTAssertNil(tab.display, label)
+                if case .worktree = source { await tab.save() }
+            }
+            let actual = try Data(contentsOf: path)
+            XCTAssertEqual(actual.count, size)
+            XCTAssertEqual(actual.first, 0x61)
+            XCTAssertEqual(actual.last, 0x61)
+            XCTAssertEqual(GitCommandExecution.run(
+                ["ls-files", "-s", "--", filename], in: directory.path).stdout, oldIndex)
+            XCTAssertEqual(GitCommandExecution.run(
+                ["rev-parse", "HEAD"], in: directory.path).stdout
+                    .trimmingCharacters(in: .whitespacesAndNewlines), revision)
+            print("P3_DIFF_PRODUCT_LIMIT bytes=\(size) source_count=3 all_rejected=true")
+        }
     }
 
     func testWorktreeStagedHistoryBinarySizeAndSymlink() async throws {
