@@ -390,8 +390,9 @@ final class RemoteCommandsTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
-        let limit = 8 << 20
-        for length in [0, limit - 1, limit, limit + 1] {
+        let limit = 32 << 20
+        for length in [0, 1, (8 << 20) - 1, 8 << 20, (8 << 20) + 1,
+                       16 << 20, limit - 1, limit, limit + 1, 64 << 20] {
             let path = root.appendingPathComponent("file' 中文 \(length).bin")
             let bytes = Data(repeating: 0x41, count: length)
             try bytes.write(to: path)

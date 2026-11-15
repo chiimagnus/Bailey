@@ -686,7 +686,8 @@ class NativeCodeTextView: NSTextView {
         let truncate: Bool
         var needsWrap = wraps
         if wraps {
-            measuredLineWidths = nil
+            // Preserve already measured widths across a temporary wrap mode.
+            // Character edits continue updating the cache via the line index.
             codeWidth = viewportWidth
             truncate = false
         } else if let index = lineIndex {

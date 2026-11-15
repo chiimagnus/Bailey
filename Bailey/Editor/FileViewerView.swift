@@ -145,7 +145,7 @@ final class FileTab: nonisolated Identifiable {
         if let nativeEditObserver { NotificationCenter.default.removeObserver(nativeEditObserver) }
     }
 
-    private nonisolated static let maxTextBytes = 8 << 20
+    private nonisolated static let maxTextBytes = 32 << 20
     private nonisolated static let maxImageBytes = 256 << 20
     private nonisolated static let maxImagePixels = 32_000_000
     private nonisolated static let imageExtensions: Set<String> = [
@@ -389,21 +389,17 @@ final class FileTab: nonisolated Identifiable {
         nativeCodeUnitDelta = delta
     }
 
-    /// Character-count deltas prove most edits dirty without reading the whole
-    /// document. Equal counts still require a byte-exact baseline comparison.
+    /// Known local edits update the small delta; untracked native Undo/IME
+    /// changes require a strict comparison, not a 32 MiB dictionary rebuild.
     func refreshDirtyState() {
         let dirty: Bool
         if case .text = content {
-            if nativeCodeUnitDelta == nil {
-                var delta: [UInt16: Int] = [:]
-                for unit in savedText.utf16 { delta[unit, default: 0] -= 1 }
-                for unit in nativeTextStorage.string.utf16 { delta[unit, default: 0] += 1 }
-                nativeCodeUnitDelta = delta.filter { $0.value != 0 }
-            }
-            if nativeCodeUnitDelta?.isEmpty == false {
+            if nativeTextStorage.length != (savedText as NSString).length
+                || nativeCodeUnitDelta?.isEmpty == false {
                 dirty = true
             } else {
-                dirty = !Self.hasIdenticalBytes(nativeTextStorage.string, savedText)
+                dirty = !Self.hasIdenticalCodeUnits(nativeTextStorage.string, savedText)
+                if !dirty { nativeCodeUnitDelta = [:] }
             }
         } else {
             dirty = false
@@ -533,6 +529,11 @@ final class FileTab: nonisolated Identifiable {
             return
         case .success(let encoded):
             payload = encoded
+        }
+        guard payload.bytes.count <= Self.maxTextBytes else {
+            saveError = String(localized:
+                "Text exceeds the 32 MiB file limit. Reduce its size before saving.", table: "Editor")
+            return
         }
         invalidateReload()
         do {
@@ -704,13 +705,30 @@ final class FileTab: nonisolated Identifiable {
         reloadGeneration &+= 1
     }
 
-    private static func hasIdenticalBytes(_ lhs: String, _ rhs: String) -> Bool {
-        var leftText = lhs
-        var rightText = rhs
-        return leftText.withUTF8 { left in
-            rightText.withUTF8 { right in
-                left.count == right.count
-                    && (left.isEmpty || memcmp(left.baseAddress, right.baseAddress, left.count) == 0)
+    /// Compare exact UTF-16 code units, not Swift's canonically equivalent
+    /// String equality. Bounded NSString reads avoid allocating/encoding a
+    /// second complete UTF-8 document on the main actor.
+    private static func hasIdenticalCodeUnits(_ lhs: String, _ rhs: String) -> Bool {
+        let left = lhs as NSString
+        let right = rhs as NSString
+        guard left.length == right.length else { return false }
+        guard left.length > 0 else { return true }
+        let chunkSize = 65_536
+        var leftBuffer = [unichar](repeating: 0, count: chunkSize)
+        var rightBuffer = [unichar](repeating: 0, count: chunkSize)
+        return leftBuffer.withUnsafeMutableBufferPointer { leftUnits in
+            rightBuffer.withUnsafeMutableBufferPointer { rightUnits in
+                var position = 0
+                while position < left.length {
+                    let count = min(chunkSize, left.length - position)
+                    let range = NSRange(location: position, length: count)
+                    left.getCharacters(leftUnits.baseAddress!, range: range)
+                    right.getCharacters(rightUnits.baseAddress!, range: range)
+                    guard memcmp(leftUnits.baseAddress!, rightUnits.baseAddress!,
+                                 count * MemoryLayout<unichar>.size) == 0 else { return false }
+                    position += count
+                }
+                return true
             }
         }
     }
@@ -718,7 +736,7 @@ final class FileTab: nonisolated Identifiable {
     private func matches(_ loaded: LoadedContent) -> Bool {
         switch (content, loaded.content) {
         case (.text, .text):
-            return fileEncoding == loaded.encoding && Self.hasIdenticalBytes(savedText, loaded.text)
+            return fileEncoding == loaded.encoding && Self.hasIdenticalCodeUnits(savedText, loaded.text)
         case (.image, .image):
             return imageFingerprint == loaded.imageFingerprint
         case (.unavailable(let current), .unavailable(let new)):

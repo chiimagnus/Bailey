@@ -435,16 +435,16 @@ final class SSHFileTreeLiveTests: XCTestCase {
             } catch { XCTFail("Could not close test-owned SSH socket: \(error)") }
         }
         do {
-            let limit = 8 << 20
+            let limit = 32 << 20
             let emoji = Data("👋".utf8)
             let exact = Data(repeating: 0x41, count: limit - emoji.count) + emoji
             let path = root + "/代码' boundary.swift"
-            print("EDITOR_CAP_LIVE beginning 8 MiB transfer")
+            print("EDITOR_CAP_LIVE beginning 32 MiB transfer")
             try await backend.write(path: path, data: exact)
-            print("EDITOR_CAP_LIVE finished 8 MiB upload")
+            print("EDITOR_CAP_LIVE finished 32 MiB upload")
             let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
             try await file.waitForText()
-            print("EDITOR_CAP_LIVE finished 8 MiB download")
+            print("EDITOR_CAP_LIVE finished 32 MiB download")
             XCTAssertEqual(Data(file.text.utf8), exact)
 
             var revised = file.text
@@ -462,7 +462,7 @@ final class SSHFileTreeLiveTests: XCTestCase {
             let overflowing = root + "/too-large.swift"
             try await backend.write(path: overflowing, data: exact + Data([0x21]))
             let rejected = FileTab(path: overflowing, backend: backend, workspaceIdentity: "ssh:\(host)")
-            do { try await rejected.waitForText(); XCTFail("Remote 8 MiB + 1 must be rejected") }
+            do { try await rejected.waitForText(); XCTFail("Remote 32 MiB + 1 must be rejected") }
             catch {
                 guard case .unavailable = rejected.content else { return XCTFail("Expected capacity placeholder") }
             }
