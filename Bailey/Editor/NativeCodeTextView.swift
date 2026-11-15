@@ -851,7 +851,9 @@ final class NativeMeasuredLineWidths {
         let text = source as NSString
         let index = NativeTextLineIndex(text)
         let count = index.lineCount
-        let workers = min(4, max(1, count / 10_000))
+        // Preserve CPU capacity for AppKit and the main actor even on small CI Macs.
+        let availableWorkers = max(1, ProcessInfo.processInfo.activeProcessorCount / 2)
+        let workers = min(4, availableWorkers, max(1, count / 10_000))
         if workers == 1 {
             guard let descriptor = try? NSKeyedUnarchiver.unarchivedObject(
                 ofClass: NSFontDescriptor.self, from: descriptorData

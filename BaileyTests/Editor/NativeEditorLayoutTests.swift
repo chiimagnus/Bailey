@@ -38,6 +38,9 @@ final class NativeEditorLayoutTests: XCTestCase {
         window.contentView = SourceEditorContainer(scrollView: scroll)
         window.orderFront(nil)
         scroll.layoutSubtreeIfNeeded()
+        // The container reserves its line-number gutter after the initial size.
+        // Match the App's geometry update using the actual native clip width.
+        editor.configureWrapping(wraps, viewportWidth: scroll.contentView.bounds.width)
         editor.layoutSubtreeIfNeeded()
         return (window, scroll, editor)
     }
