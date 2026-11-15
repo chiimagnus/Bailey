@@ -431,20 +431,26 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             XCTAssertFalse(tree.items.contains { $0.path == target })
 
             let subscription = SSHWindowsFileEvents.subscribe(
-                host: host, windowsRoot: native, leaseSeconds: 22
+                host: host, windowsRoot: native, leaseSeconds: 60
             )
             defer { subscription.cancel() }
-            let stream = subscription.events
+            var iterator = subscription.events.makeAsyncIterator()
+            let initialEvent = await iterator.next()
+            XCTAssertEqual(initialEvent, .ready)
+            guard initialEvent == .ready else { throw WorkspaceError.notFound }
+            try await backend.createFile(path: target)
+            // The event deadline starts after the independent SSH write finishes,
+            // not during its own handshake and transfer.
             let consumer = Task {
-                for await event in stream {
+                for await event in subscription.events {
                     switch event {
-                    case .ready:
-                        try await backend.createFile(path: target)
                     case .dirty:
                         await tree.sync(root: watchedRoot, backend: backend, scope: "ssh:windows-live")
                         if tree.items.contains(where: { $0.path == target }) { return true }
                     case .lost, .ended:
                         return false
+                    case .ready:
+                        continue
                     }
                 }
                 return false
