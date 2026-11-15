@@ -279,21 +279,37 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             )
             XCTAssertEqual(output.status, 0, "Dedicated SSH test master must exit")
         }
-        do {
-            let context = try XCTUnwrap(project.panelContext)
-            let initial = await project.syncFiles(isCurrent: { true })
-            XCTAssertNotNil(initial)
-            project.remoteFileEvents.subscribe(
-                id: first, project: project, host: host, root: root, context: context
-            )
-            project.remoteFileEvents.subscribe(
-                id: second, project: project, host: host, root: root, context: context
-            )
-            let deadline = Date().addingTimeInterval(16)
-            while !project.remoteFileEvents.healthy, Date() < deadline {
+        // The real Files panel rebinds on SSH connection revisions and retries
+        // failed initial reads through its two-second polling fallback.
+        func waitForWatcher(root: String, members: [UUID]) async throws {
+            let deadline = Date().addingTimeInterval(65)
+            var boundRevision: UInt64?
+            while Date() < deadline {
+                let context = try XCTUnwrap(project.panelContext)
+                if context.connectionRevision != boundRevision {
+                    for member in members {
+                        project.remoteFileEvents.subscribe(
+                            id: member, project: project, host: host, root: root, context: context
+                        )
+                    }
+                    boundRevision = context.connectionRevision
+                }
+                if project.remoteFileEvents.healthy { return }
                 try await Task.sleep(for: .milliseconds(100))
             }
-            XCTAssertTrue(project.remoteFileEvents.healthy, "Only a ready watcher with an initial disk read may disable polling")
+            XCTFail("The event stream did not become healthy after its SSH startup and disk read")
+        }
+        do {
+            var initial = await project.syncFiles(isCurrent: { true })
+            let initialDeadline = Date().addingTimeInterval(65)
+            while initial == nil, Date() < initialDeadline {
+                try await Task.sleep(for: .seconds(2))
+                initial = await project.syncFiles(isCurrent: { true })
+            }
+            XCTAssertNotNil(initial, "The real two-second polling fallback must initialize Files")
+            try await waitForWatcher(root: root, members: [first, second])
+            XCTAssertTrue(project.remoteFileEvents.healthy,
+                          "Only a ready watcher with an initial disk read may disable polling")
             project.remoteFileEvents.unsubscribe(id: first)
             XCTAssertTrue(project.remoteFileEvents.healthy, "A second Files panel must retain the shared watcher")
 
@@ -351,15 +367,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             let nextRoot = root + "/next"
             try await remote.createDirectory(path: nextRoot)
             project.customDirectory = nextRoot
-            let nextContext = try XCTUnwrap(project.panelContext)
-            project.remoteFileEvents.subscribe(
-                id: second, project: project, host: host,
-                root: nextRoot, context: nextContext
-            )
-            let reconnectDeadline = Date().addingTimeInterval(24)
-            while !project.remoteFileEvents.healthy, Date() < reconnectDeadline {
-                try await Task.sleep(for: .milliseconds(100))
-            }
+            try await waitForWatcher(root: nextRoot, members: [second])
             XCTAssertTrue(project.remoteFileEvents.healthy,
                           "A new root must establish a new independent subscription")
             let nextFile = nextRoot + "/new-scope.txt"
