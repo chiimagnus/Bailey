@@ -860,6 +860,151 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertNil(retiredFile, "The live Dock must not retain a closed 100k FileTab")
     }
 
+    func testFiveLargeFileTabsReleaseNativeDocumentsAfterRealProjectClose() async throws {
+        final class WeakFileOwner {
+            weak var file: FileTab?
+            init(_ file: FileTab) { self.file = file }
+        }
+
+        func currentResidentMiB() -> Double {
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(
+                MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size
+            )
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                }
+            }
+            XCTAssertEqual(result, KERN_SUCCESS)
+            return Double(info.resident_size) / 1_048_576
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-large-5tabs-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rssBefore = currentResidentMiB()
+        for (cycle, sizeMiB) in [0, 8, 16, 32, 32].enumerated() {
+            let limit = sizeMiB << 20
+            let source = String(repeating: String(repeating: "a", count: 511) + "\n",
+                                count: limit / 512)
+            XCTAssertEqual(source.utf8.count, limit)
+            var paths: [URL] = []
+            for index in 0..<5 {
+                let path = root.appendingPathComponent("cycle\(cycle)-\(index).txt")
+                let data = limit == 0 ? Data() : Data(String(index).utf8) + Data(source.utf8.dropFirst())
+                XCTAssertEqual(data.count, limit)
+                try data.write(to: path)
+                paths.append(path)
+            }
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            manager.openFile(paths[0].path)
+            let project = try XCTUnwrap(manager.selectedProject)
+            for path in paths.dropFirst() { project.openFile(path.path) }
+            XCTAssertEqual(project.tabs.count, 5)
+
+            let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
+            let window = NSWindow(
+                contentRect: NSRect(x: -950, y: -950, width: 1_600, height: 620),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            let deadline = Date().addingTimeInterval(90)
+            var mounted = false
+            while Date() < deadline {
+                host.layoutSubtreeIfNeeded()
+                mounted = project.tabs.allSatisfy { tab in
+                    guard case .file(let file) = tab.content,
+                          let scroll = file.editorView as? NSScrollView,
+                          let editor = scroll.documentView as? FocusReportingTextView else {
+                        return false
+                    }
+                    return file.nativeTextStorage.length == limit
+                        && editor.textStorage === file.nativeTextStorage
+                }
+                if mounted { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertTrue(mounted, "Five native document owners must really mount")
+            guard mounted else {
+                window.contentView = nil
+                window.close()
+                throw WorkspaceError.timedOut
+            }
+            let activeRSS = currentResidentMiB()
+            let oldOwners = project.tabs.compactMap { tab -> WeakFileOwner? in
+                guard case .file(let file) = tab.content else { return nil }
+                return WeakFileOwner(file)
+            }
+            let oldStorages = project.tabs.compactMap { tab -> NSTextStorage? in
+                guard case .file(let file) = tab.content else { return nil }
+                return file.nativeTextStorage
+            }
+            let cachedScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
+                guard case .file(let file) = tab.content else { return nil }
+                return file.editorView as? NSScrollView
+            }
+            XCTAssertEqual(oldOwners.count, 5)
+            XCTAssertEqual(cachedScrollViews.count, 5)
+            XCTAssertTrue(oldStorages.allSatisfy { $0.length == limit })
+
+            // Publish real bytes through the first editor before closing all five.
+            if let first = project.tabs.first,
+               case .file(let file) = first.content,
+               let scroll = file.editorView as? NSScrollView,
+               let editor = scroll.documentView as? FocusReportingTextView {
+                editor.insertText("Z", replacementRange: NSRange(location: 0, length: limit == 0 ? 0 : 1))
+                XCTAssertTrue(file.isDirty)
+                await file.save()
+                XCTAssertNil(file.saveError)
+                XCTAssertFalse(file.isDirty)
+                let actual = try Data(contentsOf: paths[0])
+                XCTAssertEqual(actual.count, max(1, limit))
+                XCTAssertEqual(actual.first, 90)
+                let reopened = FileTab(path: paths[0].path, backend: LocalWorkspaceBackend.shared,
+                                       workspaceIdentity: nil)
+                try await reopened.waitForText()
+                XCTAssertEqual(Data(reopened.text.utf8), actual,
+                               "Every size must round-trip its final saved bytes")
+                reopened.retireNativeEditor()
+            } else {
+                XCTFail("The first native editor must be mounted")
+            }
+
+            project.closeFiles()
+            XCTAssertTrue(project.tabs.isEmpty, "Real Project.closeFiles must retire all five tabs")
+            XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil })
+            XCTAssertTrue(oldStorages.allSatisfy { $0.length == 0 },
+                          "AppKit must not retain the retired text in cached views")
+            let releasedDeadline = Date().addingTimeInterval(20)
+            while oldOwners.contains(where: { $0.file != nil }), Date() < releasedDeadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertTrue(oldOwners.allSatisfy { $0.file == nil },
+                          "Closing all tabs must release every FileTab")
+            host.removeFromSuperview()
+            window.contentView = nil
+            window.close()
+            let postCloseRSS = currentResidentMiB()
+            print("P3_FIVE_LARGE_TABS cycle=\(cycle) each_mib=\(sizeMiB) "
+                  + "resident_before_mib=\(rssBefore) active_mib=\(activeRSS) "
+                  + "post_close_with_fixtures_mib=\(postCloseRSS) "
+                  + "retained_file_owners=\(oldOwners.filter { $0.file != nil }.count) "
+                  + "retained_text_bytes=\(oldStorages.reduce(0) { $0 + $1.length })")
+        }
+        // System allocators may keep free pages resident; RSS is diagnostic,
+        // not a substitute for the assertions about native owners and bytes.
+        print("P3_FIVE_LARGE_TABS_FINAL initial_mib=\(rssBefore) "
+              + "after_scopes_mib=\(currentResidentMiB())")
+    }
+
     func testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks() async throws {
         final class WeakEditor {
             weak var editor: FocusReportingTextView?

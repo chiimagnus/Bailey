@@ -213,7 +213,7 @@ Apple 原生实现，不再回退 STTextView。
 本机与 SSH 均先在目标目录中完整暂存并核验数据，再比对当前目标版本并原子替换入口；
 保留原有执行权限，不会沿符号链接覆盖链接目标。SSH 上传必须同时通过字节长度和 SHA-256 校验。
 远端发布成功但确认回执丢失时只读取目标核实结果，绝不盲目重试写入。
-普通的无条件工作区写入仍由独立 API 服务，工作区 Git Diff 的版本保护待 P3 接入。
+普通无条件工作区写入 API 仍服务于其它明确的文件操作；Files 与可编辑 Git Worktree Diff 均使用原始字节版本条件保存，不得回退到无条件写入。
 文件版本检查不等于文件系统原子 compare-and-swap：外部进程仍可能在最后一次比较后、重命名前竞争写入，
 没有跨进程协调协议时不能保证完全排除。
 
@@ -311,7 +311,8 @@ Git Ignore 在普通 `.gitignore` 标签持有的原生缓冲末尾插入规则�
 实体中文输入法候选须单独验收。`EditorHighlightingUITests` 保留 Swift 对纯文本的真实 App 像素对比；
 `NativeSyntaxHighlightingTests` 直接检查 Markdown、TSX、HTML、CSS 的原生 TextKit 着色、
 嵌入语言范围及正文不变。行号、Diff、滚动坐标与多标签释放也必须在真实 AppKit 窗口中检查；
-五个文件标签的实际释放由 `NativePaneRetentionIntegrationTests` 检查；
+五个文件标签的实际释放由 `NativePaneRetentionIntegrationTests` 检查，
+包括连续挂载五个 0／8／16／32 MiB 原生文本标签、真实字节保存与重开、关闭后旧正文清空与所有者释放；
 系统投递与关闭／恢复由 `WorkspaceWindowsUITests` 验证，不用 UI 标签计数冒充内存释放证据。
 具体环境、极端组合及完成标准由 [测试文档](../testing.md) 统一规定。
 
