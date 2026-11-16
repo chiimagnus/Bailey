@@ -1716,6 +1716,96 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("working version\n".utf8))
     }
 
+    func testNativeCommitsKeepGraphRailsAndRowsInteractiveWithoutSwitchingProject() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("original.txt", text: "original\n")
+        try fixture.initializeGit()
+        let app = try launchGraph(fixture, language: "en")
+        let window = app.windows.firstMatch
+        let input = WorkspaceUITestSupport.element("bailey.git.commit.message", in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 25))
+
+        var parentSubject = "E2E fixture history"
+        var parentFile = "original.txt"
+        var parentOID = String(decoding: try fixture.git(["rev-parse", "HEAD"]),
+                               as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        for index in 1...3 {
+            let path = "graph-refresh-\(index).txt"
+            let subject = "Graph refresh commit \(index)"
+            _ = try fixture.file(path, text: "revision \(index)\n")
+            try fixture.git(["add", "--", path])
+            XCTAssertTrue(app.buttons["Commit 1 Staged Files"].waitForExistence(timeout: 25),
+                          "Bailey must recognize the staged change before committing")
+
+            input.click()
+            input.typeKey("a", modifierFlags: .command)
+            input.typeText(subject)
+            app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
+            let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (try? fixture.git(["log", "-1", "--format=%s"])) == Data((subject + "\n").utf8)
+                    && (try? fixture.git(["status", "--porcelain=v1"])) == Data()
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 25), .completed,
+                           "⌘Return must commit the staged file through Bailey's native Git action")
+
+            let current = app.buttons[subject]
+            let parent = app.buttons[parentSubject]
+            XCTAssertTrue(current.waitForExistence(timeout: 25))
+            XCTAssertTrue(parent.waitForExistence(timeout: 12))
+            XCTAssertTrue(current.isHittable, "A refreshed HEAD row must be clickable")
+            XCTAssertTrue(parent.isHittable, "The previous row must remain clickable")
+            let oid = String(decoding: try fixture.git(["rev-parse", "HEAD"]),
+                             as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let node = app.buttons.matching(NSPredicate(format: "value == %@", oid)).firstMatch
+            let parentNode = app.buttons.matching(
+                NSPredicate(format: "value == %@", parentOID)).firstMatch
+            XCTAssertTrue(node.waitForExistence(timeout: 12))
+            XCTAssertTrue(parentNode.waitForExistence(timeout: 12))
+            XCTAssertEqual(node.frame.midX, parentNode.frame.midX, accuracy: 2,
+                           "A linear commit must connect to its parent in the same Graph lane")
+
+            let screenshot = window.screenshot()
+            let image = try XCTUnwrap(NSBitmapImageRep(
+                data: try XCTUnwrap(screenshot.image.tiffRepresentation)))
+            let scaleX = CGFloat(image.pixelsWide) / window.frame.width
+            let scaleY = CGFloat(image.pixelsHigh) / window.frame.height
+            let x = Int((node.frame.midX - window.frame.minX) * scaleX)
+            for fraction in [0.25, 0.75] {
+                let globalY = node.frame.midY
+                    + (parentNode.frame.midY - node.frame.midY) * fraction
+                let y = Int((globalY - window.frame.minY) * scaleY)
+                let rail = try XCTUnwrap(image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let background = try XCTUnwrap(image.colorAt(
+                    x: x + Int(10 * scaleX), y: y
+                )?.usingColorSpace(.deviceRGB))
+                let contrast = max(abs(rail.redComponent - background.redComponent),
+                                   abs(rail.greenComponent - background.greenComponent),
+                                   abs(rail.blueComponent - background.blueComponent))
+                XCTAssertGreaterThan(contrast, 0.08,
+                                     "The colored Graph rail must still paint between HEAD and parent")
+            }
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = "Native Git commit \(index): connected Graph"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+
+            current.click()
+            XCTAssertTrue(historicalFile(path, in: app).waitForExistence(timeout: 12),
+                          "The newly committed row must expand its actual historical file")
+            current.click()
+            XCTAssertTrue(historicalFile(path, in: app).waitForNonExistence(timeout: 12))
+            parent.click()
+            XCTAssertTrue(historicalFile(parentFile, in: app).waitForExistence(timeout: 12),
+                          "The previous row must still expand after HEAD refresh")
+            parent.click()
+            XCTAssertTrue(historicalFile(parentFile, in: app).waitForNonExistence(timeout: 12))
+            parentSubject = subject
+            parentFile = path
+            parentOID = oid
+        }
+        XCTAssertEqual(try fixture.git(["rev-list", "--count", "HEAD"]), Data("4\n".utf8))
+    }
+
     private func launchGraph(
         _ fixture: WorkspaceUITestFixture, configurationHome: URL? = nil, language: String? = nil
     ) throws -> XCUIApplication {
