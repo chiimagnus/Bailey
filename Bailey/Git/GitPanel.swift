@@ -1805,9 +1805,14 @@ struct GitPanel: View {
         )
         let graphCommits = model.graphCommits
         let graphTarget = model.actionTarget()
-        return ScrollViewReader { proxy in
+        // A ScrollView's horizontal containerRelativeFrame can refer to the window,
+        // not to this Dock group. Use the pane's real width for the document.
+        return GeometryReader { geometry in
+            ScrollViewReader { proxy in
             ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // Section headings and the Graph must be measured even when offscreen.
+            // Only the file rows and individual commit rows are lazy.
+            VStack(alignment: .leading, spacing: 0) {
                 if model.totalChangeCount == 0 {
                     cleanState
                 } else if changes.filteredCount == 0 {
@@ -2042,7 +2047,7 @@ struct GitPanel: View {
             }
             .padding(.horizontal, 6)
             .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: geometry.size.width, alignment: .leading)
             }
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) {
                 oldOffset, newOffset in
@@ -2158,6 +2163,7 @@ struct GitPanel: View {
                     GitGraphScrollLog.record("window-became-key", owner: graphKeyboardOwner)
                     focusGitChanges()
                 }
+            }
             }
         }
     }
@@ -2389,16 +2395,18 @@ struct GitPanel: View {
     private func changedFileRows(
         _ rows: [VisibleChange], allowsBatchMutation: Bool
     ) -> some View {
-        ForEach(rows, id: \.row.id) { change in
-            if change.row.isDirectory {
-                directoryRow(change.row, kind: change.kind,
-                             allowsBatchMutation: allowsBatchMutation)
-                    .id(selection(for: change))
-            } else if let entry = change.entry {
-                row(entry, kind: change.kind,
-                    showDirectory: settings.gitViewMode != .tree,
-                    displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
-                    .id(selection(for: change))
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(rows, id: \.row.id) { change in
+                if change.row.isDirectory {
+                    directoryRow(change.row, kind: change.kind,
+                                 allowsBatchMutation: allowsBatchMutation)
+                        .id(selection(for: change))
+                } else if let entry = change.entry {
+                    row(entry, kind: change.kind,
+                        showDirectory: settings.gitViewMode != .tree,
+                        displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
+                        .id(selection(for: change))
+                }
             }
         }
     }
