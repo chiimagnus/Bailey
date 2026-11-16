@@ -1,0 +1,106 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "固定全量方法账目和可比较的性能基线"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "消除 Git 图谱原生菜单的重复 AX 查询，保留真实命中"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "收紧 Git Graph 导航断言，保留真实 40 行可见性回归"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "删除重复的原生 Sheet 状态检查，保持各项实际路由"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T5"
+title = "精简 Changes／History／Diff 的重复 AX 步骤，不缩减真实链路"
+status = "pending"
+plan = "plan-p1.md#p1-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "消除共享树／文件操作的重复状态查询与测试路径"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "保留 Finder／文件选择器／SSH 的真实路径，删除等价夹具步骤"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "修复 Dock／窗口真实失败并消除重复检查"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T4"
+title = "只保留必要的主题／编辑器／终端／浏览器全 App 验证"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "核对并精简公共 UI 启动器实际不再使用的分支"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "复用现有 XCResult／CI 证据，明确失败与性能耗时"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "执行 Host／UI 全量和真实用户路径，报告可比耗时"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "复核覆盖与文档，交付实际验证结果"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
