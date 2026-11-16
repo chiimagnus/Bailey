@@ -153,11 +153,11 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        isCurrent() && acceptedDropOperation != []
+        operation(for: sender) != []
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let accepted = acceptedDropOperation
+        let accepted = operation(for: sender)
         defer { clearDragOperation() }
         guard isCurrent(), accepted != [] else { return false }
         if let source = sender.draggingSource as? FileTreeNativeDragView {
