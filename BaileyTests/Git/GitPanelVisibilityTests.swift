@@ -252,6 +252,262 @@ final class GitPanelVisibilityTests: XCTestCase {
             "The rewritten HEAD commit must paint in the real Dock, not leave an empty Graph")
     }
 
+    func testDenseGraphSurvivesThemeFontModeAndViewportMatrix() async throws {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-GitGraphMatrix-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let config = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-GitGraphMatrix-" + UUID().uuidString + ".toml")
+        defer { try? FileManager.default.removeItem(at: config) }
+
+        @discardableResult
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: repository.path)
+            guard result.status == 0 else {
+                throw NSError(domain: "GitGraphMatrix", code: Int(result.status),
+                              userInfo: [NSLocalizedDescriptionKey: result.stderr])
+            }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Bailey Graph Matrix"])
+        _ = try git(["config", "user.email", "matrix@example.invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try "base\n".write(to: repository.appendingPathComponent("base.txt"),
+                           atomically: true, encoding: .utf8)
+        _ = try git(["add", "base.txt"])
+        _ = try git(["commit", "-qm", "Dense graph base"])
+        let base = try git(["rev-parse", "HEAD"])
+        let tree = try git(["rev-parse", "HEAD^{tree}"])
+        for index in 0..<20 {
+            let tip = try git(["commit-tree", tree, "-p", base, "-m", "Dense topic \(index)"])
+            _ = try git(["update-ref", "refs/heads/topic-\(index)", tip])
+        }
+        var current = base
+        for index in 0..<4 {
+            current = try git(["commit-tree", tree, "-p", current, "-m", "Dense main \(index)"])
+        }
+        _ = try git(["update-ref", "refs/heads/main", current])
+        _ = try git(["update-ref",
+                     "refs/heads/超长图谱-" + String(repeating: "分支", count: 18),
+                     try git(["rev-parse", "refs/heads/topic-0"])])
+        _ = try git(["tag", "-a", "图谱-tag", "-m", "tag decoration",
+                     try git(["rev-parse", "refs/heads/topic-1"])])
+        let filename = "嵌套/" + String(repeating: "中🧪", count: 15) + ".txt"
+        let stagedFile = repository.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: stagedFile.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "Unicode staged change\n".write(
+            to: stagedFile, atomically: true, encoding: .utf8
+        )
+        _ = try git(["add", "--", filename])
+
+        let settings = AppSettings(configURL: config)
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        let project = Project(fallbackName: "matrix", workspaceConfiguration: .standard)
+        project.customDirectory = repository.path
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        func panel(scale: CGFloat, dark: Bool) -> some View {
+            GitPanel(settings: settings, model: model, manager: manager, project: project,
+                     sshHost: nil, openFile: { _ in }, openDiff: { _, _ in },
+                     openCommitDiff: { _, _ in })
+                .environment(\.panelFontScale, scale)
+                .environment(\.colorScheme, dark ? .dark : .light)
+                .background(Color(nsColor: Theme.terminal(dark: dark).sidebarNSColor))
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 900),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: panel(scale: 1, dark: true))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        manager.syncGitStatus(model)
+
+        let deadline = Date().addingTimeInterval(20)
+        while !model.hasResolvedStatus || model.isRefreshing
+                || model.recentCommits.count < 25 || model.stagedEntries.count != 1 {
+            guard Date() < deadline else {
+                XCTFail("Real Git Graph must load its 25 commits and Unicode staged change")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        let graph = CommitGraphLayout(commits: model.graphCommits)
+        XCTAssertGreaterThanOrEqual(graph.laneCount, 13,
+                                    "This fixture must actually exercise densely packed lanes")
+        let axStatus = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(
+                AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier),
+                kAXWindowsAttribute as CFString, &windows
+            ).rawValue
+        }.value
+        XCTAssertEqual(axStatus, AXError.success.rawValue)
+
+        func scrolls(in view: NSView) -> [NSScrollView] {
+            let own = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrolls)
+        }
+        func attribute(_ node: NSObject, _ key: String) -> Any? {
+            guard node.responds(to: NSSelectorFromString(key)) else { return nil }
+            return node.value(forKey: key)
+        }
+        func descendants(_ node: NSObject) -> [NSObject] {
+            let children = attribute(node, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(node, "accessibilityChildren") as? [NSObject] ?? []
+            return [node] + children.flatMap(descendants)
+        }
+        var combinations = 0
+        var heightByFont: [Double: CGFloat] = [:]
+        var darkBackground: NSColor?
+        for fontSize in [9.0, 14.0, 18.0] {
+            settings.panelFontSize = fontSize
+            for mode in [GitViewMode.tree, .list] {
+                settings.gitViewMode = mode
+                let rows = model.displayChanges(filter: "", mode: mode, closed: [])
+                XCTAssertEqual(rows.stagedRows.count, mode == .tree ? 2 : 1,
+                               "Tree mode must actually render a folder above the Unicode file")
+                for dark in [true, false] {
+                    window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    host.rootView = panel(
+                        scale: CGFloat(fontSize / AppSettings.defaultPanelFontSize), dark: dark
+                    )
+                    var stableScroll: NSScrollView?
+                    for size in [
+                        NSSize(width: 120, height: 280),
+                        NSSize(width: 160, height: 900),
+                        NSSize(width: 320, height: 900),
+                        NSSize(width: 520, height: 900),
+                    ] {
+                        window.setContentSize(size)
+                        try await Task.sleep(for: .milliseconds(35))
+                        host.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                        let scrolling = try XCTUnwrap(scrolls(in: host).first {
+                            $0.contentView.bounds.height > 80
+                                && $0.contentView.bounds.width > 70
+                        }, "The Git panel must keep a native ScrollView for every size")
+                        if let stableScroll {
+                            XCTAssertTrue(scrolling === stableScroll,
+                                          "Resizing must not replace the native scroll host")
+                        } else {
+                            stableScroll = scrolling
+                        }
+                        let documentWidth = try XCTUnwrap(scrolling.documentView?.frame.width)
+                        let viewportWidth = scrolling.contentView.bounds.width
+                        XCTAssertGreaterThan(viewportWidth, 75)
+                        XCTAssertLessThanOrEqual(documentWidth, viewportWidth + 2,
+                            "Graph must stay inside \(size), font \(fontSize), \(mode), dark=\(dark)")
+                        XCTAssertGreaterThan(scrolling.documentView?.frame.height ?? 0,
+                                             scrolling.contentView.bounds.height + 100,
+                            "The full Graph must contribute to scroll height without going blank")
+                        if size.width == 320 {
+                            let elements = (host.accessibilityChildren() as? [NSObject] ?? [])
+                                .flatMap(descendants)
+                            if mode == .tree && dark {
+                                heightByFont[fontSize] = scrolling.documentView?.frame.height
+                            }
+                            if mode == .tree && fontSize == 14 {
+                                let bitmap = try XCTUnwrap(
+                                    host.bitmapImageRepForCachingDisplay(in: host.bounds)
+                                )
+                                host.cacheDisplay(in: host.bounds, to: bitmap)
+                                let picture = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                                let proof = XCTAttachment(data: picture, uniformTypeIdentifier: "public.png")
+                                proof.name = dark ? "Dense Graph in dark appearance" : "Dense Graph in light appearance"
+                                proof.lifetime = .keepAlways
+                                add(proof)
+                                let backdrop = try XCTUnwrap(bitmap.colorAt(
+                                    x: bitmap.pixelsWide - 5, y: bitmap.pixelsHigh / 2
+                                )?.usingColorSpace(.sRGB))
+                                if dark {
+                                    darkBackground = backdrop
+                                } else {
+                                    let before = try XCTUnwrap(darkBackground)
+                                    let luminance: (NSColor) -> CGFloat = { color in
+                                        color.redComponent * 0.2126
+                                            + color.greenComponent * 0.7152
+                                            + color.blueComponent * 0.0722
+                                    }
+                                    XCTAssertGreaterThan(luminance(backdrop),
+                                                         luminance(before) + 0.25,
+                                        "Light appearance must actually repaint the Git panel")
+                                }
+                            }
+                            if fontSize == 9 && mode == .tree && dark {
+                                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                                host.cacheDisplay(in: host.bounds, to: bitmap)
+                                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                                attachment.name = "Dense Graph with Unicode refs and 20 tracks"
+                                attachment.lifetime = .keepAlways
+                                add(attachment)
+                            }
+                            XCTAssertTrue(elements.contains {
+                                attribute($0, "accessibilityRole") as? String == "AXButton"
+                                    && attribute($0, "accessibilityLabel") as? String
+                                        == "Dense main 3"
+                            }, "Current HEAD must remain accessible with \(mode), font \(fontSize)")
+                        }
+                        combinations += 1
+                    }
+                }
+            }
+        }
+        // At the most constrained width, verify the actual interactive commit
+        // control, not merely the graph's document size or accessibility label.
+        window.setContentSize(NSSize(width: 120, height: 280))
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let narrowScroll = try XCTUnwrap(scrolls(in: host).first {
+            $0.contentView.bounds.height > 80 && $0.contentView.bounds.width > 70
+        })
+        narrowScroll.contentView.scroll(to: .zero)
+        narrowScroll.reflectScrolledClipView(narrowScroll.contentView)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        func narrowCommitButton() throws -> NSObject {
+            let nodes = (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(descendants)
+            return try XCTUnwrap(nodes.first {
+                attribute($0, "accessibilityRole") as? String == "AXButton"
+                    && attribute($0, "accessibilityLabel") as? String == "Dense main 3"
+            }, "A 120pt Graph must still expose the current HEAD's native button")
+        }
+        let head = try XCTUnwrap(model.graphCommits.first { $0.subject == "Dense main 3" })
+        XCTAssertFalse(model.expandedCommitIDs.contains(head.id))
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+        for expanded in [true, false] {
+            let button = try narrowCommitButton()
+            XCTAssertTrue(button.responds(to: selector))
+            let perform = unsafeBitCast(button.method(for: selector), to: Action.self)
+            XCTAssertTrue(perform(button, selector),
+                          "A 120pt Git Graph row must accept the actual native AXPress")
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(model.expandedCommitIDs.contains(head.id), expanded,
+                           "The 120pt native click must toggle the correct commit")
+        }
+        XCTAssertEqual(combinations, 48)
+        let minimumHeight = try XCTUnwrap(heightByFont[9])
+        let maximumHeight = try XCTUnwrap(heightByFont[18])
+        XCTAssertGreaterThan(maximumHeight, minimumHeight + 100,
+                             "Graph layout must actually react to minimum/maximum panel typography")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), current)
+        XCTAssertEqual(try git(["-c", "core.quotePath=false", "status", "--porcelain=v1"]),
+                       "A  " + filename,
+                       "Layout, theme and mode must not mutate the real index or working tree")
+    }
+
     func testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite() async throws {
         let repository = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GitVisibility-" + UUID().uuidString)
@@ -611,13 +867,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         committedAttachment.name = "Native Git commit updates connected Graph without changing Project"
         committedAttachment.lifetime = .keepAlways
         add(committedAttachment)
-        let commitPNG = try XCTUnwrap(committedImage.representation(using: .png, properties: [:]))
-        let commitAttachment = XCTAttachment(data: commitPNG, uniformTypeIdentifier: "public.png")
-        commitAttachment.name = "Git Graph after native commit"
-        commitAttachment.lifetime = .keepAlways
-        add(commitAttachment)
-
-        // Exercise the same native row action as a click without stealing the user's desktop.
+        // Exercise the native keyboard row action without stealing the user's desktop.
         func sendGraphKey(_ keyCode: UInt16, characters: String) throws {
             let event = try XCTUnwrap(NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
@@ -641,5 +891,167 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertTrue(keyboardCollapsed)
         XCTAssertTrue(model.expandedCommitIDs.contains(previousCommit.id),
                       "Toggling a new commit must not collapse another existing commit")
+
+        // The same SwiftUI controls must remain accessible and respond to native
+        // AXPress after the HEAD changes; model-only keyboard tests cannot prove this.
+        let axStatus = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(
+                AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier),
+                kAXWindowsAttribute as CFString, &windows
+            ).rawValue
+        }.value
+        XCTAssertEqual(axStatus, AXError.success.rawValue)
+        func attribute(_ object: NSObject, _ key: String) -> Any? {
+            guard object.responds(to: NSSelectorFromString(key)) else { return nil }
+            return object.value(forKey: key)
+        }
+        func descendants(_ object: NSObject) -> [NSObject] {
+            let children = attribute(object, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(object, "accessibilityChildren") as? [NSObject] ?? []
+            return [object] + children.flatMap(descendants)
+        }
+        func commitButton(_ subject: String) throws -> NSObject {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let accessible = (host.accessibilityChildren() as? [NSObject] ?? [])
+                .flatMap(descendants)
+            return try XCTUnwrap(accessible.first {
+                attribute($0, "accessibilityRole") as? String == "AXButton"
+                    && attribute($0, "accessibilityLabel") as? String == subject
+            }, "A real, pressable Graph commit button must exist for \(subject)")
+        }
+        func pressCommit(_ subject: String) throws {
+            let row = try commitButton(subject)
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            XCTAssertTrue(row.responds(to: selector))
+            typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+            let perform = unsafeBitCast(row.method(for: selector), to: Action.self)
+            XCTAssertTrue(perform(row, selector),
+                          "Graph commit must perform the native accessibility click")
+        }
+        try pressCommit("Native Git Graph regression")
+        let axExpanded = try await waitFor { model.expandedCommitIDs.contains(updatedGraph[0].id) }
+        XCTAssertTrue(axExpanded)
+        try pressCommit("Native Git Graph regression")
+        let axCollapsed = try await waitFor { !model.expandedCommitIDs.contains(updatedGraph[0].id) }
+        XCTAssertTrue(axCollapsed)
+        try pressCommit("visible-history-0")
+        let parentCollapsed = try await waitFor { !model.expandedCommitIDs.contains(previousCommit.id) }
+        XCTAssertTrue(parentCollapsed)
+        try pressCommit("visible-history-0")
+        let parentExpanded = try await waitFor { model.expandedCommitIDs.contains(previousCommit.id) }
+        XCTAssertTrue(parentExpanded)
+
+        // A single successful refresh is insufficient: each new HEAD must update
+        // the native, still-mounted graph without destroying prior rows or rails.
+        var previousOID = updatedGraph[0].hash
+        for index in 1...5 {
+            let filename = "native-followup-\(index).txt"
+            try "followup \(index)\n".write(
+                to: repository.appendingPathComponent(filename), atomically: true, encoding: .utf8
+            )
+            _ = try git(["add", "--", filename])
+            model.refresh()
+            let stagedReady = try await waitFor {
+                !model.isRefreshing && model.stagedEntries.count == 1
+            }
+            XCTAssertTrue(stagedReady)
+            let subject = "Native followup \(index)"
+            model.commit(message: subject, includeAll: false)
+            let committed = try await waitFor {
+                !model.isBusy && !model.isRefreshing && model.graphCommits.first?.subject == subject
+            }
+            XCTAssertTrue(committed, "The \(index)th native commit must update the mounted Graph")
+            let records = model.graphCommits
+            let head = try XCTUnwrap(records.first)
+            let parent = try XCTUnwrap(records.dropFirst().first)
+            XCTAssertEqual(head.hash, try git(["rev-parse", "HEAD"]))
+            XCTAssertEqual(parent.hash, previousOID, "The \(index)th HEAD must retain its true parent")
+            let dag = CommitGraphLayout(commits: records)
+            XCTAssertEqual(dag.rows[0].node.lane, dag.rows[1].node.lane)
+            XCTAssertTrue(dag.rows[0].links.contains {
+                if case .outgoing(let rail) = $0 {
+                    return rail.lane == dag.rows[1].node.lane
+                }
+                return false
+            }, "The \(index)th HEAD must paint its outgoing rail")
+            XCTAssertTrue(dag.rows[1].links.contains {
+                if case .incoming(let rail) = $0 {
+                    return rail.lane == dag.rows[0].node.lane
+                }
+                return false
+            }, "The \(index)th parent must paint its incoming rail")
+            XCTAssertTrue(visibleScroll() === scroll, "Repeated commits must retain the scroll host")
+            XCTAssertEqual(Set(keyboardViews(in: host).map(ObjectIdentifier.init)),
+                           Set(originalKeyboardHosts.map(ObjectIdentifier.init)))
+            try pressCommit(subject)
+            let expanded = try await waitFor { model.expandedCommitIDs.contains(head.id) }
+            XCTAssertTrue(expanded, "The \(index)th HEAD must expand via real AXPress")
+            try pressCommit(subject)
+            let collapsed = try await waitFor { !model.expandedCommitIDs.contains(head.id) }
+            XCTAssertTrue(collapsed, "The \(index)th HEAD must collapse via real AXPress")
+            previousOID = head.hash
+        }
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "7")
+
+        // Amend rewrites an existing node rather than prepending another one:
+        // the obsolete HEAD must disappear without breaking its live replacement.
+        model.commit(message: "Native amended graph", includeAll: false, amend: true)
+        let amended = try await waitFor {
+            !model.isBusy && !model.isRefreshing
+                && model.graphCommits.first?.subject == "Native amended graph"
+        }
+        XCTAssertTrue(amended)
+        let amendedHead = try XCTUnwrap(model.graphCommits.first)
+        XCTAssertNotEqual(amendedHead.hash, previousOID)
+        XCTAssertEqual(amendedHead.hash, try git(["rev-parse", "HEAD"]))
+        XCTAssertFalse(model.graphCommits.contains { $0.hash == previousOID })
+        XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "7")
+        try pressCommit("Native amended graph")
+        let amendedExpanded = try await waitFor {
+            model.expandedCommitIDs.contains(amendedHead.id)
+        }
+        XCTAssertTrue(amendedExpanded, "Amended HEAD must remain clickable without changing Project")
+        try pressCommit("Native amended graph")
+        let amendedCollapsed = try await waitFor {
+            !model.expandedCommitIDs.contains(amendedHead.id)
+        }
+        XCTAssertTrue(amendedCollapsed)
+
+        // AXPress bypasses pointer hit-testing. Send a real AppKit mouseDown/up
+        // through the isolated offscreen NSWindow to catch stale hit regions.
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        func clickCommitInOffscreenWindow(_ subject: String) throws {
+            let element = try commitButton(subject)
+            let rect = try XCTUnwrap(
+                (attribute(element, "accessibilityFrame") as? NSValue)?.rectValue,
+                "A native Graph button must provide its onscreen hit rectangle"
+            )
+            let point = window.convertPoint(fromScreen: NSPoint(x: rect.midX, y: rect.midY))
+            XCTAssertTrue(window.contentView?.bounds.contains(point) == true,
+                          "The Graph button must be located within its NSWindow")
+            for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: kind, location: point, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 1, clickCount: 1, pressure: kind == .leftMouseDown ? 1 : 0
+                ))
+                window.sendEvent(event)
+            }
+        }
+        try clickCommitInOffscreenWindow("Native amended graph")
+        let clickedExpanded = try await waitFor {
+            model.expandedCommitIDs.contains(amendedHead.id)
+        }
+        XCTAssertTrue(clickedExpanded,
+                      "Actual mouse down/up must expand new HEAD after repeated commits")
+        try clickCommitInOffscreenWindow("Native amended graph")
+        let clickedCollapsed = try await waitFor {
+            !model.expandedCommitIDs.contains(amendedHead.id)
+        }
+        XCTAssertTrue(clickedCollapsed,
+                      "Actual mouse down/up must collapse new HEAD without changing Project")
     }
 }

@@ -198,7 +198,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `NativeGitHistoryFileTests`、`GitRemoteRefreshIntegrationTests`、`GitIgnoreIntegrationTests`、`GitUncommittedActionTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests` |
-| Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`（字号／宽度／车道数矩阵）、`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests`、`GitPanelVisibilityTests`（真实 Dock、离屏布局、刷新）；`GitGraphUITests`、`GitGraphGeometryUITests` 验证完整 App 的真实点击、像素、菜单与 Dock 尺寸 |
+| Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`（字号／宽度／车道数矩阵）、`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests`、`GitPanelVisibilityTests`（真实 Dock、离屏刷新、连续 Commit／Amend、48 组字号／主题／宽度极值及原生 AX／AppKit 鼠标命中）；`GitGraphUITests`、`GitGraphGeometryUITests` 验证完整 App 的真实点击、像素、菜单与 Dock 尺寸 |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff、Browser 和原生内容保留 | `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeDiffTabTests`、`NativeContentIdentityIntegrationTests`、`DiffEngineTests` |
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`NativeSyntaxHighlightingTests` |
