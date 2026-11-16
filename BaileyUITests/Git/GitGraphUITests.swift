@@ -1734,7 +1734,7 @@ final class GitGraphUITests: XCTestCase {
             let subject = "Graph refresh commit \(index)"
             _ = try fixture.file(path, text: "revision \(index)\n")
             try fixture.git(["add", "--", path])
-            XCTAssertTrue(app.buttons["Commit 1 Staged Files"].waitForExistence(timeout: 25),
+            XCTAssertTrue(app.buttons["Commit 1 Staged File"].waitForExistence(timeout: 25),
                           "Bailey must recognize the staged change before committing")
 
             input.click()
