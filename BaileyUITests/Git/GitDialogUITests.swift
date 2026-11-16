@@ -783,9 +783,8 @@ final class GitDialogUITests: XCTestCase {
         let sheet = app.windows.firstMatch.sheets.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 12))
         XCTAssertTrue(sheet.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@", "Selected 2 commits"
-        )).firstMatch.exists,
-                      "The native NSAlert must show the number of selected commits")
+            format: "label CONTAINS %@", "Selected 2 commits"
+        )).firstMatch.exists)
         XCTAssertTrue(sheet.checkBoxes["Record Origin"].exists)
         XCTAssertTrue(sheet.checkBoxes["No Commit"].exists)
         sheet.buttons["Cancel"].click()

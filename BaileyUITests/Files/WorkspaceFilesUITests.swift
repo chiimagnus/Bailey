@@ -1388,11 +1388,8 @@ final class WorkspaceFilesUITests: XCTestCase {
                       "Files must expose the clicked row's actual context menu")
         XCTAssertGreaterThan(popup.frame.width, 50,
                              "The context menu must have a visible frame")
-        XCTAssertTrue(
-            WorkspaceUITestSupport.menuItem("Copy Relative Path", in: popup).exists
-                || WorkspaceUITestSupport.menuItem("Copy Relative Paths", in: popup).exists,
-            "The live Files popup must expose its single- or multi-selection path operation"
-        )
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Copy Relative Path", in: popup).exists,
+                      "The live Files popup must expose its file operations")
         return popup
     }
 

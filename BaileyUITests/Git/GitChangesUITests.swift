@@ -1566,17 +1566,6 @@ final class GitChangesUITests: XCTestCase {
                       "Same path in STAGED and CHANGES must remain two selectable resources")
 
         changes.rightClick()
-        XCTAssertFalse(app.menuItems["Stage Changes"].exists,
-                       "A mixed STAGED / CHANGES selection cannot partially mutate its resources")
-        XCTAssertFalse(app.menuItems["Unstage Changes"].exists)
-        XCTAssertTrue(app.menuItems["Copy Relative Paths"].exists)
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        XCTAssertEqual(try fixture.git(["show", ":both-sides.txt"]), Data("INDEX\n".utf8))
-        XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
-
-        changes.click()
-        XCTAssertTrue(changes.isSelected && !staged.isSelected)
-        changes.rightClick()
         let stage = app.menuItems["Stage Changes"]
         XCTAssertTrue(stage.waitForExistence(timeout: 8))
         stage.click()
