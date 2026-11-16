@@ -506,6 +506,86 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertEqual(try git(["-c", "core.quotePath=false", "status", "--porcelain=v1"]),
                        "A  " + filename,
                        "Layout, theme and mode must not mutate the real index or working tree")
+
+        // Combine the two independent stressors: 1026 changed files above a
+        // dense 20-branch DAG. Neither the offscreen header nor its hit target
+        // may disappear when the shared scroll document grows substantially.
+        let previousHeight = try XCTUnwrap(narrowScroll.documentView?.frame.height)
+        for index in 0..<1025 {
+            try "staged \(index)\n".write(
+                to: repository.appendingPathComponent("mass-change-\(index).txt"),
+                atomically: true, encoding: .utf8
+            )
+        }
+        _ = try git(["add", "-A"])
+        model.refresh()
+        let bigChangesDeadline = Date().addingTimeInterval(25)
+        var increasedHeight: CGFloat = 0
+        while Date() < bigChangesDeadline {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            increasedHeight = narrowScroll.documentView?.frame.height ?? 0
+            if !model.isRefreshing && model.stagedEntries.count == 1026
+                && increasedHeight > previousHeight + 5_000 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(model.stagedEntries.count, 1026)
+        XCTAssertGreaterThan(increasedHeight, previousHeight + 5_000,
+                             "1,026 staged rows must enlarge the single native scroll document")
+        let liveScroll = try XCTUnwrap(scrolls(in: host).first {
+            $0.contentView.bounds.height > 80 && $0.contentView.bounds.width > 70
+        })
+        XCTAssertTrue(liveScroll === narrowScroll, "A large stage must not recreate the scroll host")
+        XCTAssertEqual(CommitGraphLayout(commits: model.graphCommits).laneCount, graph.laneCount,
+                       "Staging files must not change the real Git DAG or its lanes")
+        // The original Graph sits below the Changes section. Scroll through
+        // the moved boundary like the user instead of assuming its old offset
+        // remains valid after 1,025 additional rows.
+        let addedHeight = increasedHeight - previousHeight
+        var foundGraph: NSObject?
+        for step in 0..<14 {
+            let end = (liveScroll.documentView?.frame.height ?? increasedHeight)
+                - liveScroll.contentView.bounds.height
+            let offset = min(end, addedHeight + CGFloat(step) * 140)
+            liveScroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            liveScroll.reflectScrolledClipView(liveScroll.contentView)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let nodes = (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(descendants)
+            let row = nodes.first {
+                attribute($0, "accessibilityRole") as? String == "AXButton"
+                    && attribute($0, "accessibilityLabel") as? String == "Dense main 3"
+            }
+            if let row, let frame = (attribute(row, "accessibilityFrame") as? NSValue)?.rectValue {
+                let clippedToWindow = liveScroll.contentView.convert(
+                    liveScroll.contentView.bounds, to: nil
+                )
+                if clippedToWindow.intersects(window.convertFromScreen(frame)) {
+                    foundGraph = row
+                    break
+                }
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        let visibleGraph = try XCTUnwrap(foundGraph,
+            "The newly moved Graph must become visible and hittable when scrolling down from 1,026 Changes")
+        XCTAssertEqual(attribute(visibleGraph, "accessibilityLabel") as? String, "Dense main 3")
+        XCTAssertTrue(visibleGraph.responds(to: selector))
+        let perform = unsafeBitCast(visibleGraph.method(for: selector), to: Action.self)
+        XCTAssertTrue(perform(visibleGraph, selector),
+                      "Staging 1,026 files must not prevent clicking the existing Graph")
+        let expanded = model.expandedCommitIDs.contains(head.id)
+        XCTAssertTrue(expanded, "The dense HEAD must still expand after the shared scroll grows")
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let picture = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: picture, uniformTypeIdentifier: "public.png")
+        attachment.name = "Dense Graph after staging 1026 files in 120pt panel"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), current)
     }
 
     func testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite() async throws {
