@@ -336,6 +336,7 @@ struct RecentCommitsView: View {
 
     var body: some View {
         let _ = themeChanges.revision
+        let rowIDs = commits.map(\.id)
         let graph = CommitGraphLayout(commits: commits)
         let spacing = CommitGraphRails.spacing(
             lanes: graph.laneCount, viewportWidth: viewportWidth, scale: fontScale
@@ -377,6 +378,9 @@ struct RecentCommitsView: View {
                     }
                 }
             }
+            // Invalidate offscreen lazy-row geometry when history changes.
+            // Keep the enclosing keyboard host and ScrollView alive.
+            .id(rowIDs)
             if hasMoreCommits {
                 Color.clear.frame(height: 1)
                     .onAppear {
@@ -424,7 +428,7 @@ struct RecentCommitsView: View {
                     }
                 })
         }
-        .onChange(of: commits.map(\.id)) {
+        .onChange(of: rowIDs) {
             requestedLastCommit = nil
         }
         .onChange(of: repoRoot) { _, _ in

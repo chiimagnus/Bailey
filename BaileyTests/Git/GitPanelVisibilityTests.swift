@@ -5,6 +5,253 @@ import XCTest
 
 @MainActor
 final class GitPanelVisibilityTests: XCTestCase {
+    func testRealDockConstrainsGitScrollWidthToItsAllocatedPane() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-GitDockWidth-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        @discardableResult
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            guard result.status == 0 else {
+                throw NSError(domain: "GitDockWidth", code: Int(result.status),
+                              userInfo: [NSLocalizedDescriptionKey: result.stderr])
+            }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Bailey Width Test"])
+        try git(["config", "user.email", "width@example.invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try "hello\n".write(to: root.appendingPathComponent("file.txt"),
+                            atomically: true, encoding: .utf8)
+        try git(["add", "file.txt"])
+        try git(["commit", "-qm", "a real commit"])
+
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        let project = Project(fallbackName: "width", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.dock.select(.git)
+        let model = GitStatusModel()
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -2000, y: -2000, width: 900, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: model))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        manager.syncGitStatus(model)
+
+        let deadline = Date().addingTimeInterval(12)
+        while !model.isRepo || !model.hasResolvedStatus || model.isRefreshing {
+            guard Date() < deadline else {
+                XCTFail("The real Dock did not resolve its isolated Git repository")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+
+        func scrolls(in view: NSView) -> [NSScrollView] {
+            let own = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrolls)
+        }
+        func checkWidth(expected: CGFloat? = nil) throws {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let candidates = scrolls(in: host).map { ($0, $0.convert($0.bounds, to: host)) }
+            let scroll = try XCTUnwrap(candidates.first { _, frame in
+                frame.midX > host.bounds.width * 0.65 && frame.height > 140
+            })
+            let width = host.bounds.width
+            print("GIT_DOCK_SCROLL_FRAME \(scroll.1) host=\(host.bounds)")
+            XCTAssertGreaterThan(scroll.1.width, 100)
+            XCTAssertLessThanOrEqual(scroll.1.maxX, width + 2,
+                "Git scroll must never leave its real Dock pane")
+            XCTAssertLessThanOrEqual(scroll.1.width, width * 0.35,
+                "The Git group occupies a fraction of the window, not all of it")
+            if let documentWidth = scroll.0.documentView?.frame.width {
+                XCTAssertLessThanOrEqual(documentWidth, scroll.1.width + 2,
+                    "The inner Git Graph must not use the entire window width")
+            }
+            if let expected {
+                XCTAssertEqual(scroll.1.width, expected, accuracy: 4,
+                    "The Git panel must match its allocated Dock width")
+            }
+        }
+        try checkWidth(expected: 216)
+        for width in [700.0, 1_200.0, 1_380.0, 900.0] {
+            window.setContentSize(NSSize(width: width, height: 600))
+            try await Task.sleep(for: .milliseconds(50))
+            try checkWidth(expected: width * 0.24)
+        }
+        guard case .split(let outer) = project.dock.root,
+              case .split(let inner) = outer.second else {
+            XCTFail("The standard Dock must expose an actual right-side split")
+            return
+        }
+        let available = window.contentView!.bounds.width * 0.76 - 2
+        project.dock.resize(inner.id, to: 1 - 150 / available)
+        try await Task.sleep(for: .milliseconds(100))
+        try checkWidth(expected: 150)
+        func attachSnapshot(_ name: String) throws {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        try attachSnapshot("Real Dock Git panel at 150pt")
+        project.dock.resize(inner.id, to: 0.52 / 0.76)
+        try await Task.sleep(for: .milliseconds(100))
+        try checkWidth(expected: 216)
+
+        // Exceptionally long Unicode names must not expand the narrow sidebar.
+        let filename = String(repeating: "中文 🧪", count: 16) + ".txt"
+        try "unicode payload\n".write(to: root.appendingPathComponent(filename),
+                                      atomically: true, encoding: .utf8)
+        try git(["add", "--", filename])
+        model.refresh()
+        let updated = Date().addingTimeInterval(8)
+        while model.stagedEntries.count == 0 || model.isRefreshing {
+            guard Date() < updated else {
+                XCTFail("The real Git panel did not refresh its staged Unicode path")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        try checkWidth(expected: 216)
+        try attachSnapshot("Real Dock Git panel with long Unicode filename")
+
+        // The original blank-Graph bug needs to be exercised in the real Dock,
+        // not only in the separately mounted GitPanel.
+        let oldHead = try git(["rev-parse", "HEAD"])
+        let tree = try git(["rev-parse", "HEAD^{tree}"])
+        try git(["reset", "--hard", "HEAD"])
+        let unicodeURL = root.appendingPathComponent(filename)
+        if FileManager.default.fileExists(atPath: unicodeURL.path) {
+            try FileManager.default.removeItem(at: unicodeURL)
+        }
+        var tip = oldHead
+        for index in 0..<202 {
+            tip = try git(["commit-tree", tree, "-p", tip, "-m", "dock-history-\(index)"])
+        }
+        try git(["update-ref", "refs/heads/main", tip])
+        model.refresh()
+        let historyDeadline = Date().addingTimeInterval(15)
+        while model.recentCommits.count < 30 || model.isRefreshing {
+            guard Date() < historyDeadline else {
+                XCTFail("The full Dock did not load its expanded 203-commit history")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let scrolling = try XCTUnwrap(scrolls(in: host).first { candidate in
+            let frame = candidate.convert(candidate.bounds, to: host)
+            return frame.midX > host.bounds.width * 0.65 && frame.height > 140
+        })
+        let initialHistoryCount = model.recentCommits.count
+        let initialDocumentHeight = scrolling.documentView?.frame.height ?? 0
+        XCTAssertGreaterThan(initialDocumentHeight, 900,
+                             "The real Dock must lay out a long, scrollable Git Graph")
+        scrolling.contentView.scroll(to: NSPoint(x: 0, y: 155))
+        scrolling.reflectScrolledClipView(scrolling.contentView)
+        let paginationOffset = scrolling.contentView.bounds.minY
+        XCTAssertGreaterThan(paginationOffset, 50)
+        var priorCount = initialHistoryCount
+        for page in 1...6 {
+            XCTAssertTrue(model.hasMoreRecentCommits)
+            XCTAssertTrue(model.loadMoreCommits())
+            let pageDeadline = Date().addingTimeInterval(15)
+            while model.recentCommits.count <= priorCount || model.isLoadingMoreCommits {
+                guard Date() < pageDeadline else {
+                    XCTFail("Real Git Graph pagination did not finish page \(page)")
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(40))
+            }
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            XCTAssertGreaterThan(model.recentCommits.count, priorCount)
+            XCTAssertEqual(scrolling.contentView.bounds.minY, paginationOffset, accuracy: 6,
+                           "Appending history page \(page) must not jump the visible Git Graph")
+            priorCount = model.recentCommits.count
+        }
+        XCTAssertEqual(model.recentCommits.count, 203)
+        XCTAssertFalse(model.hasMoreRecentCommits)
+        print("GIT_DOCK_PAGINATION_OFFSETS before=\(paginationOffset) after=\(scrolling.contentView.bounds.minY) count=\(model.recentCommits.count)")
+        let expandedHeight = scrolling.documentView?.frame.height ?? 0
+        XCTAssertGreaterThan(expandedHeight, initialDocumentHeight + 200)
+        scrolling.contentView.scroll(to: NSPoint(x: 0, y: expandedHeight - 100))
+        scrolling.reflectScrolledClipView(scrolling.contentView)
+        window.displayIfNeeded()
+        try git(["update-ref", "refs/heads/main", oldHead])
+        model.refresh()
+        let shrinkDeadline = Date().addingTimeInterval(20)
+        while model.recentCommits.count != 1 || model.isRefreshing
+                || (scrolling.documentView?.frame.height ?? .infinity) > 900 {
+            guard Date() < shrinkDeadline else {
+                XCTFail("The offscreen history kept an obsolete Git Graph height in the real Dock")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(40))
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        XCTAssertEqual(model.graphCommits.count, 1)
+        let liveScroll = try XCTUnwrap(scrolls(in: host).first { candidate in
+            let frame = candidate.convert(candidate.bounds, to: host)
+            return frame.midX > host.bounds.width * 0.65 && frame.height > 140
+        })
+        XCTAssertTrue(liveScroll === scrolling,
+                      "History replacement must not destroy the real Dock scroll host")
+        let finalHeight = liveScroll.documentView?.frame.height ?? 0
+        let maxOffset = max(0, finalHeight - liveScroll.contentView.bounds.height)
+        XCTAssertLessThanOrEqual(liveScroll.contentView.bounds.minY, maxOffset + 1)
+        try checkWidth(expected: 216)
+        liveScroll.contentView.scroll(to: .zero)
+        liveScroll.reflectScrolledClipView(liveScroll.contentView)
+        try attachSnapshot("Real Dock Git Graph after deep-scroll history rewrite")
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let background = try XCTUnwrap(bitmap.colorAt(
+            x: bitmap.pixelsWide - 12, y: bitmap.pixelsHigh - 30
+        )?.usingColorSpace(.deviceRGB))
+        let sx = CGFloat(bitmap.pixelsWide) / host.bounds.width
+        let sy = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+        var commitPixels = 0
+        for y in Int(290 * sy)..<Int(360 * sy) {
+            for x in Int(705 * sx)..<Int(890 * sx) {
+                guard let rgb = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { continue }
+                if max(abs(rgb.redComponent - background.redComponent),
+                       max(abs(rgb.greenComponent - background.greenComponent),
+                           abs(rgb.blueComponent - background.blueComponent))) > 0.2 {
+                    commitPixels += 1
+                }
+            }
+        }
+        print("GIT_DOCK_COMMIT_ROW_PIXELS \(commitPixels)")
+        XCTAssertGreaterThan(commitPixels, 80,
+            "The rewritten HEAD commit must paint in the real Dock, not leave an empty Graph")
+    }
+
     func testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite() async throws {
         let repository = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GitVisibility-" + UUID().uuidString)

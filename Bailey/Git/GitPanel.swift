@@ -1805,7 +1805,10 @@ struct GitPanel: View {
         )
         let graphCommits = model.graphCommits
         let graphTarget = model.actionTarget()
-        return ScrollViewReader { proxy in
+        // A ScrollView's horizontal containerRelativeFrame can refer to the window,
+        // not to this Dock group. Use the pane's real width for the document.
+        return GeometryReader { geometry in
+            ScrollViewReader { proxy in
             ScrollView(.vertical) {
             // Section headings and the Graph must be measured even when offscreen.
             // Only the file rows and individual commit rows are lazy.
@@ -2044,8 +2047,7 @@ struct GitPanel: View {
             }
             .padding(.horizontal, 6)
             .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .containerRelativeFrame(.horizontal, alignment: .leading)
+            .frame(width: geometry.size.width, alignment: .leading)
             }
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) {
                 oldOffset, newOffset in
@@ -2161,6 +2163,7 @@ struct GitPanel: View {
                     GitGraphScrollLog.record("window-became-key", owner: graphKeyboardOwner)
                     focusGitChanges()
                 }
+            }
             }
         }
     }
