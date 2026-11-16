@@ -42,11 +42,12 @@ final class GitPanelVisibilityTests: XCTestCase {
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
         defer { window.close() }
         let host = NSHostingView(rootView: GitPanel(
             model: model, manager: manager, project: project, sshHost: nil,
             openFile: { _ in }, openDiff: { _, _ in }, openCommitDiff: { _, _ in }
-        ))
+        ).environment(\.colorScheme, .dark))
         // The actual Dock fixes the panel's width; a standalone host must do the same.
         host.sizingOptions = []
         window.contentView = host
@@ -63,6 +64,11 @@ final class GitPanelVisibilityTests: XCTestCase {
             scrollViews(in: host).first { $0.contentView.bounds.height > 200 }
         }
 
+        func keyboardViews(in view: NSView) -> [TreeKeyboardView] {
+            let own = (view as? TreeKeyboardView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(keyboardViews)
+        }
+
         func capture() throws -> NSBitmapImageRep {
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
@@ -72,13 +78,22 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
 
         func contrastingPixels(_ bitmap: NSBitmapImageRep, x: Range<Int>, y: Range<Int>) -> Int {
+            // The test window is sized in points; bitmap pixels can be Retina-scaled.
             // A light theme must not pass just because its empty background is white.
             guard let background = bitmap.colorAt(
                 x: bitmap.pixelsWide - 5, y: bitmap.pixelsHigh - 5
             )?.usingColorSpace(.deviceRGB) else { return 0 }
+            let xScale = CGFloat(bitmap.pixelsWide) / max(1, host.bounds.width)
+            let yScale = CGFloat(bitmap.pixelsHigh) / max(1, host.bounds.height)
+            let columns = Int(CGFloat(x.lowerBound) * xScale)..<min(
+                bitmap.pixelsWide, Int(CGFloat(x.upperBound) * xScale)
+            )
+            let rows = Int(CGFloat(y.lowerBound) * yScale)..<min(
+                bitmap.pixelsHigh, Int(CGFloat(y.upperBound) * yScale)
+            )
             var count = 0
-            for row in y where row < bitmap.pixelsHigh {
-                for column in x where column < bitmap.pixelsWide {
+            for row in rows {
+                for column in columns {
                     guard let rgb = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.deviceRGB)
                     else { continue }
                     if max(abs(rgb.redComponent - background.redComponent),
@@ -133,7 +148,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         let stagedLoaded = try await waitFor { model.stagedEntries.count == 1 && !model.isRefreshing }
         XCTAssertTrue(stagedLoaded)
 
-        for index in 0..<55 {
+        for index in 0..<1_024 {
             try "changed \(index)\n".write(
                 to: repository.appendingPathComponent("file-\(index).txt"),
                 atomically: true, encoding: .utf8
@@ -141,7 +156,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
         _ = try git(["add", "-A"])
         model.refresh()
-        let manyLoaded = try await waitFor { model.stagedEntries.count == 56 && !model.isRefreshing }
+        let manyLoaded = try await waitFor { model.stagedEntries.count == 1_025 && !model.isRefreshing }
         XCTAssertTrue(manyLoaded)
         let expandedHeight = scroll.documentView?.frame.height ?? 0
         XCTAssertGreaterThan(expandedHeight, initialHeight + 500)
@@ -155,22 +170,31 @@ final class GitPanelVisibilityTests: XCTestCase {
             model.totalChangeCount == 0 && !model.isRefreshing
                 && (scroll.documentView?.frame.height ?? .infinity) < expandedHeight - 500
         }
-        XCTAssertTrue(cleared, "Clearing 56 changes must shrink the scroll document without changing HEAD")
+        XCTAssertTrue(cleared, "Clearing 1,025 changes must shrink the scroll document without changing HEAD")
         XCTAssertTrue(visibleScroll() === scroll, "Ordinary Git status refresh must retain scroll identity")
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
         let sameHead = try capture()
-        XCTAssertGreaterThan(contrastingPixels(sameHead, x: 40..<310, y: 300..<440), 80,
+        XCTAssertGreaterThan(contrastingPixels(sameHead, x: 40..<310, y: 225..<290), 80,
                              "Existing Git Graph rows must remain visible after clearing changes")
+
+        let originalKeyboardHosts = keyboardViews(in: host)
+        XCTAssertEqual(originalKeyboardHosts.count, 2)
+        let nativeResponder = try XCTUnwrap(originalKeyboardHosts.last)
+        XCTAssertTrue(window.makeFirstResponder(nativeResponder))
 
         let rootCommit = try git(["rev-parse", "HEAD~79"])
         _ = try git(["reset", "--hard", rootCommit])
         model.refresh()
         let rewritten = try await waitFor {
             guard model.recentCommits.count == 1, !model.isRefreshing,
-                  let live = visibleScroll(), live !== scroll
+                  let live = visibleScroll()
             else { return false }
             return (live.documentView?.frame.height ?? .infinity) < 1_100
         }
-        XCTAssertTrue(rewritten, "Rewriting history must retire the previous offscreen Graph geometry")
+        XCTAssertTrue(rewritten, "Rewriting history must update the offscreen Graph height")
+        XCTAssertTrue(visibleScroll() === scroll,
+                      "Changing HEAD should update the Graph without replacing the native scroll host")
 
         let liveScroll = try XCTUnwrap(visibleScroll())
         let finalHeight = liveScroll.documentView?.frame.height ?? 0
@@ -180,21 +204,108 @@ final class GitPanelVisibilityTests: XCTestCase {
         let maxOffset = max(0, finalHeight - liveScroll.contentView.bounds.height)
         XCTAssertLessThanOrEqual(liveScroll.contentView.bounds.minY, maxOffset + 1)
 
+        liveScroll.contentView.scroll(to: .zero)
+        liveScroll.reflectScrolledClipView(liveScroll.contentView)
         let reduced = try capture()
-        XCTAssertGreaterThan(contrastingPixels(reduced, x: 40..<310, y: 320..<440), 80,
+        XCTAssertGreaterThan(contrastingPixels(reduced, x: 40..<310, y: 225..<290), 80,
                              "The actual commit row, not just the model or Graph header, must paint")
-        func keyboardViews(in view: NSView) -> [TreeKeyboardView] {
-            let own = (view as? TreeKeyboardView).map { [$0] } ?? []
-            return own + view.subviews.flatMap(keyboardViews)
-        }
+        XCTAssertGreaterThan(contrastingPixels(reduced, x: 80..<280, y: 135..<195), 80,
+                             "The clean working-tree state must be painted")
+        XCTAssertGreaterThan(contrastingPixels(reduced, x: 10..<180, y: 190..<230), 80,
+                             "The GIT GRAPH section header must be painted")
         let keyboards = keyboardViews(in: host)
-        XCTAssertEqual(keyboards.count, 2, "The remounted Git Changes and Graph must have one native keyboard host each")
+        XCTAssertEqual(keyboards.count, 2, "Git Changes and Graph must keep one native keyboard host each")
         XCTAssertTrue(keyboards.allSatisfy { $0.window === window })
+        XCTAssertEqual(Set(keyboards.map(ObjectIdentifier.init)),
+                       Set(originalKeyboardHosts.map(ObjectIdentifier.init)),
+                       "HEAD changes must not recreate the native keyboard hosts")
+        XCTAssertTrue(window.firstResponder === nativeResponder,
+                      "HEAD changes must preserve the active native keyboard responder")
 
         let image = try XCTUnwrap(reduced.representation(using: .png, properties: [:]))
         let attachment = XCTAttachment(data: image, uniformTypeIdentifier: "public.png")
         attachment.name = "Git Graph after offscreen history rewrite"
         attachment.lifetime = .keepAlways
         add(attachment)
+
+        // Updating another ref can rewrite the visible DAG without moving HEAD.
+        // The normal scroll host must update its content height without remounting.
+        let unchangedHead = try git(["rev-parse", "HEAD"])
+        let rootTree = try git(["rev-parse", "HEAD^{tree}"])
+        var tip = unchangedHead
+        for index in 0..<75 {
+            tip = try git(["commit-tree", rootTree, "-p", tip, "-m", "topic-history-\(index)"])
+        }
+        _ = try git(["update-ref", "refs/heads/topic", tip])
+        model.refresh()
+        let topicLoaded = try await waitFor {
+            !model.isRefreshing && model.recentCommits.count > 1
+        }
+        XCTAssertTrue(topicLoaded)
+        for _ in 0..<4 where model.hasMoreRecentCommits {
+            XCTAssertTrue(model.loadMoreCommits())
+            let completePage = try await waitFor { !model.isRefreshing && !model.isLoadingMoreCommits }
+            XCTAssertTrue(completePage)
+        }
+        let topicScroll = try XCTUnwrap(visibleScroll())
+        let largeHistoryHeight = topicScroll.documentView?.frame.height ?? 0
+        XCTAssertGreaterThan(largeHistoryHeight, finalHeight + 800)
+        topicScroll.contentView.scroll(to: NSPoint(
+            x: 0, y: max(0, largeHistoryHeight - topicScroll.contentView.bounds.height)
+        ))
+        topicScroll.reflectScrolledClipView(topicScroll.contentView)
+
+        _ = try git(["update-ref", "-d", "refs/heads/topic"])
+        model.refresh()
+        let topicRemoved = try await waitFor {
+            model.recentCommits.count == 1 && !model.isRefreshing
+                && (topicScroll.documentView?.frame.height ?? .infinity) < 1_100
+        }
+        XCTAssertTrue(topicRemoved)
+        for _ in 0..<10 {
+            try await Task.sleep(for: .milliseconds(100))
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), unchangedHead)
+        XCTAssertTrue(visibleScroll() === topicScroll,
+                      "A branch ref update must not unnecessarily reset keyboard and scroll identity")
+        let reducedHistoryHeight = topicScroll.documentView?.frame.height ?? 0
+        XCTAssertLessThan(reducedHistoryHeight, 1_100,
+                          "Removing a long-lived side branch must not leave a stale offscreen Graph")
+        topicScroll.contentView.scroll(to: .zero)
+        topicScroll.reflectScrolledClipView(topicScroll.contentView)
+        let afterRefRemoval = try capture()
+        XCTAssertGreaterThan(contrastingPixels(afterRefRemoval, x: 40..<310, y: 225..<290), 80,
+                             "The current HEAD commit must still be painted after ref-only history rewrite")
+
+        // Stash is another synthetic Graph node: changing it does not move HEAD.
+        let trackedFile = repository.appendingPathComponent("file-0.txt")
+        try "stash only\n".write(to: trackedFile, atomically: true, encoding: .utf8)
+        _ = try git(["stash", "push", "-m", "graph-visibility-stash"])
+        model.refresh()
+        let stashLoaded = try await waitFor {
+            !model.isRefreshing && model.graphCommits.contains { $0.stash != nil }
+        }
+        XCTAssertTrue(stashLoaded)
+        XCTAssertTrue(visibleScroll() === scroll)
+        let stashHeight = scroll.documentView?.frame.height ?? 0
+        XCTAssertGreaterThan(stashHeight, reducedHistoryHeight + 15)
+
+        _ = try git(["stash", "drop", "stash@{0}"])
+        model.refresh()
+        let stashRemoved = try await waitFor {
+            !model.isRefreshing && model.graphCommits.count == 1
+                && !model.graphCommits.contains(where: { $0.stash != nil })
+        }
+        XCTAssertTrue(stashRemoved)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), unchangedHead)
+        XCTAssertTrue(visibleScroll() === scroll)
+        XCTAssertLessThan(scroll.documentView?.frame.height ?? 0, stashHeight)
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let afterStashRemoval = try capture()
+        XCTAssertGreaterThan(contrastingPixels(afterStashRemoval, x: 40..<310, y: 225..<290), 80,
+                             "The current HEAD commit must remain painted after Stash removal")
     }
 }

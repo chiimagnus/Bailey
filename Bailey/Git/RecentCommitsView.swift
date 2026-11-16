@@ -424,23 +424,27 @@ struct RecentCommitsView: View {
                     }
                 })
         }
-        .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
+        .onChange(of: commits.map(\.id)) {
             requestedLastCommit = nil
         }
         .onChange(of: repoRoot) { _, _ in
             GitGraphScrollLog.record("repository-change", owner: keyboardOwner)
+            requestedLastCommit = nil
             focusedRowID = nil
             selection.clear()
             contextRowID = nil
         }
         .onChange(of: selectionScope) { _, _ in
             GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
+            requestedLastCommit = nil
             focusedRowID = nil
             selection.clear()
             contextRowID = nil
         }
         .onChange(of: headOID) { _, _ in
+            requestedLastCommit = nil
             selection.clear()
+            contextRowID = nil
         }
         .onChange(of: keyboardRows.map(\.id)) { _, ids in
             selection.reconcile(visible: ids)
