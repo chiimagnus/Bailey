@@ -11,7 +11,7 @@
   两个新增文件被隐藏。
 - 真实只读仓库 `~/.codex` 的提交 `3eb51c6`，
   `git show --name-status` 与 `git log --name-status`
-  都返回 **31 A、2 D**。不修改此仓库。
+  均包含 **31 A、2 D、3 M**，合计 36 条变更。不修改此仓库。
 - 来源：`GitStatusModel.recentCommitLogArguments` →
   `parseRecentCommits` → `RecentCommit.FileChange`；
   渲染：`RecentCommitsView.commitFiles` →
@@ -71,7 +71,7 @@
   测试目录折叠、Space／Return、方向键与父链、
   点击文件 Diff、复制路径及旧 gitlink 的准确错误；
   清理被修复替代的路径-only 判断，**不要删除** Stash 真实重复路径的 List 回退。
-- 用真实 `3eb51c6` 只读验收 33 条，验证交互且不改变仓库；
+- 用真实 `3eb51c6` 只读验收全部 36 条（31 A、2 D、3 M），验证交互且不改变仓库；
   保留 PR #87/#88 的图谱刷新、点击与拓扑缓存。
   同任务更新 `docs/features/git.md`；
   视觉／交互契约真的改变时才更新 `docs/ui.md`。

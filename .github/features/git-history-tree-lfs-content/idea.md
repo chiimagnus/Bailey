@@ -33,7 +33,7 @@ Git Diff 应显示 LFS 实际文件内容，而不是版本指针。
 ## 完成标准
 
 - 只读复现 [真实提交 3eb51c6](https://github.com/chiimagnus/.codex/commit/3eb51c679a51c4ebe0dc4a002239442dc02ceb6c)：
-  Git 有 **31 A、2 D**，展开的 Tree 完整呈现 33 条文件变更。
+  Git 有 **31 A、2 D、3 M**，展开的 Tree 完整呈现全部 36 条文件变更。
 - 用隔离真实 Git 仓库验证同路径文件／目录双向转换、
   历史数据、List／Tree、菜单与键盘，以及共享树调用者。
 - 用隔离 Git LFS 仓库验证历史／Staged／Worktree／原文预览，

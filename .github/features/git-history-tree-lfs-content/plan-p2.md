@@ -147,15 +147,20 @@ Git clean 判断为未变的内容不能画假增删；本机修改、EOL
 `BaileyUITests/Git/GitHistoryUITests.swift`、
 `WorkspaceGitUITests.swift`、
 `GitGraphUITests.swift`；
-需要时核对 `Bailey/Git/GitPanel.swift`、
-`RecentCommitsView.swift` 的历史文件菜单与二进制判定。
+并核对 `Bailey/Git/GitHistoricalFileLocator.swift` 的历史重命名解析；
+真实 SSH GUI 入口还须核对 `SSHFolderPickerModel.swift` 的首次握手与路径状态，
+必要时核对 `GitPanel.swift`、`RecentCommitsView.swift` 的历史菜单与二进制判定。
 
 - 增补**必要的完整 App** 用户路径：
   展开真实历史 LFS 文件→打开 Diff／只读原文→
   看到实际 CSV 差异；与 Staged／Worktree 交替浏览，
   完整保留 Git Graph 焦点与文件身份。
   低层可证明的内容、错误和边界留在宿主测试，不复制整套 GUI 矩阵。
+- 历史重命名的路径定位只比较不可变提交与 Index/HEAD；
+  不对实时工作区执行可能触发 LFS clean 并新增媒体缓存的 Git Diff。
+  用真实已提交、已暂存重命名和暂存内容降低相似度的场景核对最终路径、缓存与 Git 字节。
 - 与 P1 同路径文件／目录样本交叉验证；
+  SSH 首次连接期间手动输入目录时不得被默认目录覆盖；
   本机和已授权 Windows SSH 临时仓库核对真实最终内容，
   以及刷新、取消、切换项目和断线恢复。
   如果发现同源缺陷，修复归 P2-T1/T2 的所有者，不加 UI fallback。
