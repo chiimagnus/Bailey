@@ -65,7 +65,7 @@ enum TreeDisplayModel {
             var id: String { path }
         }
 
-        var id: String { namespace + path }
+        var id: String { namespace + path + (isDirectory ? "/" : "") }
         let name: String
         let path: String
         let isDirectory: Bool
@@ -198,19 +198,20 @@ enum TreeDisplayModel {
         var directories: [String: [String: Row]] = [:]
         var seen: Set<String> = []
         for file in files {
-            guard seen.insert(file.path).inserted else { continue }
+            guard seen.insert(file.path + (file.isDirectory ? "/" : "")).inserted else { continue }
             let components = file.path.split(separator: "/").map(String.init)
             var parent = ""
             for (index, name) in components.enumerated() {
                 let path = parent.isEmpty ? name : parent + "/" + name
+                let key = path + (index == components.count - 1 && !file.isDirectory ? "" : "/")
                 var row = index == components.count - 1
-                    ? file : (directories[parent]?[path] ?? Row(name: name, path: path, isDirectory: true))
+                    ? file : (directories[parent]?[key] ?? Row(name: name, path: path, isDirectory: true))
                 row.namespace = section + ":"
                 if row.isDirectory, let status = file.status,
                    status.directoryPriority > (row.status?.directoryPriority ?? 0) {
                     row.status = status
                 }
-                directories[parent, default: [:]][path] = row
+                directories[parent, default: [:]][key] = row
                 parent = path
             }
         }
