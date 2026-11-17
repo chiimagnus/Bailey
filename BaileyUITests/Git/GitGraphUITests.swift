@@ -34,7 +34,6 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(addedSecond.waitForExistence(timeout: 12))
 
         folder.click()
-        folder.click()
         XCTAssertTrue(addedFirst.waitForNonExistence(timeout: 12))
         XCTAssertTrue(deleted.exists, "Collapsing a directory must not hide the sibling deleted file")
         folder.click()

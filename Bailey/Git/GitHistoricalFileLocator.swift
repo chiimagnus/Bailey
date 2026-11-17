@@ -26,15 +26,14 @@ nonisolated enum GitHistoricalFileLocator {
             return .failed(error.localizedDescription)
         }
 
-        // Git may no longer recognize the rename against edited worktree
-        // bytes (similarity drops below its threshold). Check the committed
-        // revision-to-HEAD rename only if the direct comparison found none.
+        // Renames belong to Git's Index/commits, never the live worktree:
+        // a worktree diff can run LFS clean filters and create media merely
+        // while browsing a historical file. Index covers staged renames;
+        // HEAD recovers committed renames when staged edits reduce similarity.
         // NUL separators preserve arbitrary whitespace in Git pathnames.
-        for endpoint in [String?.none, "HEAD"] {
-            var args = ["diff", "--name-status", "-z", "--find-renames",
-                        "--diff-filter=R", revision]
-            if let endpoint { args.append(endpoint) }
-            args.append("--")
+        for comparison in [["--cached", revision], [revision, "HEAD"]] {
+            let args = ["diff", "--name-status", "-z", "--find-renames",
+                        "--diff-filter=R"] + comparison + ["--"]
             let history = await GitCommandExecution.runData(
                 args, in: root, stdoutLimit: renameLimit + 1, backend: backend
             )

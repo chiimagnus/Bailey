@@ -3,6 +3,98 @@ import XCTest
 
 @MainActor
 final class GitHistoryUITests: XCTestCase {
+    func testRealLFSHistoryStagedAndWorktreeShowCSVAcrossNativeDiffTabs() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        guard (try? fixture.git(["lfs", "version"])) != nil else {
+            throw XCTSkip("Git LFS must be installed for this real App E2E")
+        }
+        try fixture.git(["init", "-q", "-b", "main"])
+        for arguments in [
+            ["config", "user.name", "BaileyUITest"],
+            ["config", "user.email", "tests@example.invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["config", "filter.lfs.clean", "git-lfs clean -- %f"],
+            ["config", "filter.lfs.smudge", "git-lfs smudge -- %f"],
+            ["config", "filter.lfs.process", "git-lfs filter-process"],
+            ["config", "filter.lfs.required", "true"],
+        ] { try fixture.git(arguments) }
+        _ = try fixture.file(".gitattributes", text: "*.csv filter=lfs diff=lfs merge=lfs -text\n")
+        let path = "循环冲击.csv"
+        let initial = "strain,stress\n0,1\n1,3\n"
+        let revised = "strain,stress\n0,1\n1,9\n"
+        let staged = "strain,stress\n0,1\n1,15\n"
+        let worktree = "strain,stress\n0,1\n1,25\n"
+        let file = try fixture.file(path, text: initial)
+        try fixture.git(["add", "-A"])
+        try fixture.git(["commit", "-qm", "LFS baseline"])
+        let oldOID = try fixture.git(["rev-parse", "HEAD"])
+        try revised.write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", path])
+        try fixture.git(["commit", "-qm", "LFS revised CSV"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let pointer = try fixture.git(["show", "HEAD:" + path])
+        XCTAssertTrue(String(decoding: pointer, as: UTF8.self)
+            .hasPrefix("version https://git-lfs.github.com/spec/v1\n"),
+            "The fixture must store an actual LFS pointer, not an ordinary CSV blob")
+        XCTAssertNotEqual(oldOID, head)
+        try staged.write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", path])
+        let stagedOID = try fixture.git(["rev-parse", ":" + path])
+        try worktree.write(to: file, atomically: true, encoding: .utf8)
+        let gitStatus = try fixture.git(["-c", "core.quotePath=false", "status", "--porcelain=v1"])
+        XCTAssertEqual(gitStatus, Data("MM ".utf8) + Data(path.utf8)
+            + Data("\n".utf8), "The fixture needs both staged and unstaged LFS changes")
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        try showHistoricalFile(file, commit: "LFS revised CSV", fixture: fixture, app: app)
+        let history = historicalFileRow(file, fixture: fixture, window: window)
+        history.click()
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        layout.radioButtons.element(boundBy: 1).click()
+        func expectReadonlyDiff(_ old: String, _ new: String) {
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let values = Set(window.textViews.allElementsBoundByIndex
+                    .compactMap { $0.value as? String })
+                return values.contains(old) && values.contains(new)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed,
+                           "Real Git LFS Diff must display CSV bodies, never pointers")
+        }
+        expectReadonlyDiff(initial, revised)
+        XCTAssertTrue(app.buttons["LFS revised CSV"].exists,
+                      "Opening a historical LFS Diff must not hide the Git Graph")
+        openHistoricalMenu(file, fixture: fixture, window: window)
+        activateHistoricalMenu(.viewRevision, in: app)
+        let readable = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == revised }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [readable], timeout: 15), .completed,
+                       "Viewing an immutable LFS revision must show the full CSV body")
+
+        let changes = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", " + path))
+        XCTAssertTrue(changes.element(boundBy: 1).waitForExistence(timeout: 25),
+                      "Git Graph must keep distinct Staged and Worktree LFS file rows")
+        changes.element(boundBy: 0).click()
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        layout.radioButtons.element(boundBy: 1).click()
+        expectReadonlyDiff(revised, staged)
+        changes.element(boundBy: 1).click()
+        let editor = window.textViews["bailey.diff.worktree"]
+        let editable = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (editor.value as? String) == worktree
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [editable], timeout: 15), .completed,
+                       "Worktree must show real editable CSV bytes, not the stored pointer")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", ":" + path]), stagedOID)
+        XCTAssertEqual(try fixture.git(["-c", "core.quotePath=false", "status", "--porcelain=v1"]), gitStatus)
+        XCTAssertEqual(try Data(contentsOf: file), Data(worktree.utf8))
+    }
+
     func testRealCommitHistoryOpensImmutableRevisionWithoutChangingWorkingFile() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let historical = "first revision 中文 👋\n"

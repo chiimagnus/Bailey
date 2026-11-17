@@ -146,6 +146,137 @@ final class NativeGitHistoryFileTests: XCTestCase {
         XCTAssertEqual(try git(["show", selected + ":old.txt"], in: root), "old bytes")
     }
 
+    func testLFSRevisionToRenamedWorktreeUsesRealMediaWithoutCacheWrites() async throws {
+        let root = try lfsRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = "old-曲线.csv"
+        let renamed = "new-曲线.csv"
+        let initial = "strain,stress\n0,20\n1,40\n"
+        let modified = "strain,stress\n0,20\n1,65\n"
+        try Data(initial.utf8).write(to: root.appendingPathComponent(original))
+        _ = try git(["add", "-A"], in: root)
+        _ = try git(["commit", "-qm", "original LFS media"], in: root)
+        let revision = try git(["rev-parse", "HEAD"], in: root)
+        _ = try git(["mv", original, renamed], in: root)
+        _ = try git(["commit", "-qm", "LFS file rename"], in: root)
+        try Data(modified.utf8).write(to: root.appendingPathComponent(renamed))
+        let before = cachedLFSObjectNames(in: root)
+        let index = try git(["rev-parse", ":" + renamed], in: root)
+        let head = try git(["rev-parse", "HEAD"], in: root)
+        let comparison = DiffTab(
+            repoRoot: root.path, path: original, source: .revisionWorktree(hash: revision),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !comparison.isLoading && comparison.display != nil }
+        XCTAssertNil(comparison.error)
+        XCTAssertEqual(comparison.oldContent, initial)
+        XCTAssertEqual(comparison.newContent, modified)
+        XCTAssertEqual(comparison.resolvedWorktreePath, renamed)
+        XCTAssertFalse(comparison.isEditableNow)
+        XCTAssertEqual(cachedLFSObjectNames(in: root), before,
+                       "Navigating a historical LFS rename must not create new LFS media")
+        XCTAssertEqual(try git(["rev-parse", ":" + renamed], in: root), index)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), head)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(renamed)),
+                       Data(modified.utf8))
+
+        // A staged rewrite may make the old->Index similarity too low.
+        // The unchanged HEAD rename must still resolve the real working file.
+        let rewritten = "completely,different\n1,123456\n2,222222\n3,999999\n"
+        try Data(rewritten.utf8).write(to: root.appendingPathComponent(renamed))
+        _ = try git(["add", "--", renamed], in: root)
+        let lostInIndex = try git(
+            ["diff", "--cached", "--name-status", "--find-renames",
+             "--diff-filter=R", revision, "--"], in: root
+        )
+        XCTAssertEqual(lostInIndex, "", "The fixture must defeat direct index rename matching")
+        let inHEAD = try git(
+            ["diff", "--name-status", "--find-renames", "--diff-filter=R",
+             revision, "HEAD", "--"], in: root
+        )
+        XCTAssertTrue(inHEAD.hasPrefix("R100\t"))
+        let stagedCache = cachedLFSObjectNames(in: root)
+        let fallback = DiffTab(
+            repoRoot: root.path, path: original, source: .revisionWorktree(hash: revision),
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil
+        )
+        try await wait { !fallback.isLoading && fallback.display != nil }
+        XCTAssertNil(fallback.error)
+        XCTAssertEqual(fallback.oldContent, initial)
+        XCTAssertEqual(fallback.newContent, rewritten)
+        XCTAssertEqual(fallback.resolvedWorktreePath, renamed)
+        XCTAssertEqual(cachedLFSObjectNames(in: root), stagedCache)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(renamed)),
+                       Data(rewritten.utf8))
+    }
+
+    func testLFSStagedRenameResolvesViaIndexWithoutWorktreeClean() async throws {
+        let root = try lfsRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = "prior.csv"
+        let renamed = "renamed.csv"
+        let body = "strain,stress\n0,0\n1,4\n"
+        let modified = "strain,stress\n0,0\n1,9\n"
+        try Data(body.utf8).write(to: root.appendingPathComponent(original))
+        _ = try git(["add", "-A"], in: root)
+        _ = try git(["commit", "-qm", "staged rename initial"], in: root)
+        let revision = try git(["rev-parse", "HEAD"], in: root)
+        _ = try git(["mv", original, renamed], in: root)
+        let index = try git(["rev-parse", ":" + renamed], in: root)
+        try Data(modified.utf8).write(to: root.appendingPathComponent(renamed))
+        let before = cachedLFSObjectNames(in: root)
+        let comparison = DiffTab(
+            repoRoot: root.path, path: original,
+            source: .revisionWorktree(hash: revision), untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !comparison.isLoading && comparison.display != nil }
+        XCTAssertNil(comparison.error)
+        XCTAssertEqual(comparison.oldContent, body)
+        XCTAssertEqual(comparison.newContent, modified)
+        XCTAssertEqual(comparison.resolvedWorktreePath, renamed)
+        XCTAssertEqual(cachedLFSObjectNames(in: root), before)
+        XCTAssertEqual(try git(["rev-parse", ":" + renamed], in: root), index)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), revision)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(renamed)),
+                       Data(modified.utf8))
+    }
+
+    func testLFSStashHistoryShowsRealMediaWithoutWritingWorktree() async throws {
+        let root = try lfsRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "sample.csv"
+        let file = root.appendingPathComponent(path)
+        let before = "strain,stress\n0,12\n1,22\n"
+        let stashed = "strain,stress\n0,12\n1,82\n"
+        try Data(before.utf8).write(to: file)
+        _ = try git(["add", "-A"], in: root)
+        _ = try git(["commit", "-qm", "LFS stash base"], in: root)
+        let head = try git(["rev-parse", "HEAD"], in: root)
+        try Data(stashed.utf8).write(to: file)
+        _ = try git(["stash", "push", "-m", "LFS media stash"], in: root)
+        let stash = try git(["rev-parse", "stash@{0}"], in: root)
+        XCTAssertEqual(try Data(contentsOf: file), Data(before.utf8))
+        let media = cachedLFSObjectNames(in: root)
+        let diff = DiffTab(
+            repoRoot: root.path, path: path,
+            source: .commit(hash: stash, parent: head, status: "M"),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(diff.oldContent, before)
+        XCTAssertEqual(diff.newContent, stashed)
+        XCTAssertEqual(diff.display?.computation.unified.rows.filter { $0.kind == .added }.count, 1)
+        XCTAssertEqual(diff.display?.computation.unified.rows.filter { $0.kind == .removed }.count, 1)
+        XCTAssertEqual(cachedLFSObjectNames(in: root), media)
+        XCTAssertEqual(try Data(contentsOf: file), Data(before.utf8))
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), head)
+    }
+
     func testHistoricalDiffPreviewKeepsGitActiveAndExplicitActivationStillWorks() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
