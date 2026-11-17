@@ -65,6 +65,45 @@
 
 ## 发现项
 
+## 发现 F-03
+
+- 任务：`P2-T3`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`Bailey/Git/GitHistoricalFileLocator.swift:25`
+- 摘要：`历史文件定位对已由 stat 可选结果表达的缺失路径重复兜底`
+- 风险：`本机和 SSH 后端的 stat 都将路径不存在表达为 nil；额外的 notFound 异常分支在真实后端不可达，增加与协议语义不一致的兼容路径。`
+- 预期修复：`保留可选 stat 与真实连接错误反馈，移除 WorkspaceError.notFound 专门捕获分支。`
+- 验证：`make test:NativeGitHistoryFileTests,GitExecutionTests`
+- 解决证据：`0a881e99：依据 LocalWorkspaceBackend.statSync 与 SSHWorkspaceBackend.stat 的 nil 缺失约定移除两行永远无需的 notFound 捕获，保留真实异常反馈；修正误导性旧注释。make test:NativeGitHistoryFileTests,GitExecutionTests 完整运行 57 项、0 失败、1 项授权 Windows SSH 跳过，退出码 0；含无效提交、SHA-1/256、多段重命名、真实 LFS 和目录替换。git diff --check 通过。`
+
+
+## 发现 F-02
+
+- 任务：`P2-T3`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Git/GitHistoricalFileLocator.swift:34`
+- 摘要：`历史到 HEAD 及 HEAD 到 Index 各自重命名时整体路径定位失败`
+- 风险：`历史版本到暂存区累计修改降至 Git 重命名相似度阈值以下，但分段均为真实 R065；旧实现返回 missing，导致历史对工作区 Diff 读不到新路径。`
+- 预期修复：`只追踪真实 Git tree/Index 中可验证的两段重命名，验证磁盘文件实际存在；不使用会触发 LFS clean 的工作区 Git diff。`
+- 验证：`SHA-1/SHA-256、中文空格制表符换行路径 Red→Green，核对真实 Diff、HEAD、Index 和磁盘字节，运行相关宿主测试与 App 构建。`
+- 解决证据：`主工作区 commit b216b7cc（原隔离提交 78c11df1），SHA-1/SHA-256 的 Git rev→Index 无重命名、rev→HEAD 与 HEAD→Index 均为 R065，修复前 6 断言失败、修复后 NativeGitHistoryFileTests 36 项 0 失败（1 个无授权 Windows SSH 用例跳过）；HEAD、Index、当前文件原始字节均不变。`
+
+
+## 发现 F-01
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Git/DiffViewerView.swift:1663`
+- 摘要：`工作区旧文件被目录替代时读取错误阻止显示 Git 已确认的删除 Diff`
+- 风险：`真实 Git status 显示删除、git diff 能生成删除 Patch，但 DiffTab 把目录读取 ENOTSUP 当文件错误，无法查看原有内容与空新侧`
+- 预期修复：`在原有工作区读取失败边界确认当前路径为目录时视为文件缺失；其它特殊文件和权限错误仍维持报错；结合 exact Git OID 查询修复`
+- 验证：`用真实 SHA-1/256 工作区文件转目录复现 Red/Green；核对工作区/暂存/历史真实 Diff 与磁盘、HEAD、Index 无改动`
+- 解决证据：`707837c8：仅真实目录替代旧文件时将 Worktree 新侧视为缺失，其它 I/O 错误不吞；SHA-1/256 Worktree/Staged/History 实仓 Red→Green，新目录→文件反向回归通过；真实 GUI 新断言已编译未运行。`
+
+
 - **已修复：历史重命名查询有非预期媒体缓存写入**。
   使用受控 LFS 仓库实测：`git diff <历史提交>` 触及 live Worktree 后，
   对改写过的重命名文件运行 LFS clean，多产生一个本地对象。
@@ -216,3 +255,40 @@
 - 文档随每个代码提交更新对应 `docs/features/git.md`／`diff.md`、
   `files.md`；两个阶段计划计数已纠正至 36 条真实历史变更。
   未 push `main`，未替换正式 Bailey。
+
+## 独立后审（2026-11-18，代码提交 707837c8）
+
+以 `todo.toml` 五个任务及其实际依赖提交为主线，独立阅读生产调用链与测试源码；上述历史日志仅用于复核尚未关闭的风险，不作为正确性推定。
+
+| 任务／提交 | 逐提交检查、真实集成与旧路径处理 |
+| --- | --- |
+| P2-T1 `168b904d` | `DiffTab.gitContent` 以 Git OID 锁定历史／Index blob，Git LFS 从本机或 SSH 后端的 `LocalMediaDir` 读取，经真实字节数、SHA-256 和 5 MiB 限制验证；已由 `.commit/.revision/.staged` 生产调用。缓存缺失不把 pointer 当正文、不暗中下载。 |
+| P2-T2 `472b7906` | `gitComparisonBaseline` 为 LFS 与属性切换采用原文比对；非 LFS 保留 Git clean/EOL 的必要规范化，Worktree 条件保存保留真实字节版本；发现目录代替旧文件时 Worktree 误报非文件读取错误，见 F-01。 |
+| P2-T3 `5fcf9348` | `GitHistoricalFileLocator.resolve` 由历史／Index／HEAD 重命名查询推导路径，已移除会调用 LFS clean 的 live Worktree diff 探测；历史与暂存的真实仓库重命名和媒体缓存稳定测试均被发现且通过。 |
+| P2-T3 `9ad5eb5b` | `SSHFolderPickerModel.selectHost` 的首次握手尊重已输入绝对路径，旧的无条件盘符重置路径已删除；延迟握手 XCTest 与既有远端 GUI 证据对应实际 Add SSH 入口。 |
+| P2-T3 `da23b093` | `GitGraphUITests` 与 `GitHistoryUITests` 使用真实 App 入口，`NativeGitHistoryFileTests` 经 `SSHWorkspaceBackend` 使用 Windows Git LFS 真实文件；新增 GUI 删除 Diff 断言已编译，当前提交未实跑。 |
+| P2-T3 `d1286f9f` | `ProcessRemoteCommandRunner` 仅对有界下载或带 stdin 的上传按字节进展更新时间，普通命令保留总截止时限；`SSHFileTreeLiveTests` 计数包装器转发 `runLimited`，不是无界退化路径。 |
+| P2-T3 `b2a39e0c` | Windows watcher 的 READY、目录移动和 LOST 按实际阶段分别等待；测试后端 25 秒期限与生产保持一致，未修改产品 SSH 设置。 |
+| P2-T3 `b522e259` | 远端 Files 目录切换压力测试调用真实 `Project.syncFiles` 再重绑监听，不再以单独修改路径变量伪造真实入口；该测试由现有宿主 Target 发现。 |
+| 计划整理 `393d595c` | `todo.toml` 的五个任务均有真实原子提交，Git Graph/Files/LFS/SSH 入口关联已核对；该提交自身只涉及规划和历史审计，不含新生产逻辑。 |
+| 后审修复 `707837c8` | Tree 与 Index 精确查询、Worktree 目录替换按文件缺失处理；删除失效的递归／前缀查询，不新增二轨读取；更新 Git 执行基准、历史 GUI 和实际仓库回归。 |
+| 后审修复 `b216b7cc` | 历史→HEAD、HEAD→Index 两次可识别的重命名现可串联，解决累计内容变化导致的历史→Index 重命名丢失。`GitHistoricalFileLocator` 同时供 Git Graph 的「打开工作文件」和原生历史→工作区 Diff 使用，保留 Git LFS 无 clean 副作用的只读比较。新增 SHA-1／256、中文／空格／Tab／换行路径与 Git/Index/磁盘未改动的实仓回归；原隔离提交为 `78c11df1`，已整合进同一主工作区。 |
+
+**独立缺陷与修复**：P1-F-01 与本阶段 F-01 均由 `707837c8` 解决。真实提交下文件→目录造成 Historical/Staged/Worktree 删除 Diff 错误；反方向目录→文件的子文件删除也复测。Red：SHA-1/256 产生 20 条失败断言；Green：新增两条回归通过，1,200 后代、中文方括号文件名和只读对象查询均通过。F-02 经 `b216b7cc` 解决：历史→Index 无法整体识别时两段 R065 的真实重命名仍能定位最终文件；Red 6 条失败断言→Green，修复后 36 项、0 失败、1 个未授权 Windows SSH 跳过。其它 I/O、gitlink、LFS 缺失、损坏和格式限制继续正常报错，不视为多余围栏删除。
+
+**当前构建／测试证据**：
+- `make test:FileTreeTests,GitStatusModelTests,NativeGitHistoryFileTests,NativeDiffTabTests,DiffEngineTests,GitExecutionTests,SSHFolderPickerTests,RemoteLifetimeTests`：复核前 435 项（3 条远端条件跳过）、0 失败；首次修复后 436 项（3 条跳过）、0 失败，完整命令成功。
+- 追加大目录、Index 精确 Git pathspec 和逆向目录替换后的最终代码 `make test:NativeGitHistoryFileTests,GitExecutionTests`：56 项（1 条获授权 Windows SSH 条件跳过）、0 失败，退出码 0。专项 LFS、真正 SHA-256 仓库和 literal path 回归均通过。
+- `make build` 与 `make build:ui`：均返回成功；签名验证通过。GUI 新断言仅构建，未在独立图形会话运行。未替换正式 Bailey、未 push `main`。
+- 本次复审额外执行原隔离 `78c11df1` 的 `make test`：**1090 项、18 项未授权 Windows SSH 条件跳过、0 失败，完整退出码 0**。此全量结果对应 P2 重命名修复自身的基线，不能冒充同时含 P1 `707837c8` 的全量验证。
+- 将两笔修复合并至本地主工作区后，`main@b216b7cc` 执行 `make test:NativeGitHistoryFileTests,GitExecutionTests`：**57 项、1 个 Windows SSH 条件跳过、0 失败，完整退出码 0**。新增连续重命名与正反文件／目录互换回归共同通过；`git diff --check` 通过。合并时只保留两组测试，未覆盖已有改动；独立工作树属于本轮临时产物。
+- 真实 Git LFS 仓库另确认：文件重命名同时改写媒体时，Git 指针 SHA 变化可使差异只呈现删除／新增。没有足以证明文件对应关系的 Git 记录时不靠名称猜测，不能宣称所有 LFS 改名均可自动定位。
+
+**技术 Gate：仍为 No-Go（保留既有用户批准的测试豁免）**。不能因新增定点测试通过就声称最终完整宿主／Windows SSH／原生 GUI 全绿。旧版 Cloudflare 全量 `b522e259` 的 Git Clean 清理实际未生效，以及其它 SSH 命令 25 秒超时仍有失败记录，本轮未重新跑对应真实远端测试；缺少独占 GUI 会话，最新 GUI 断言未执行；未实测最低 macOS 15.6。未发现需要通过删除非 LFS clean/EOL、Stash List 回退、SSH 取消／时限、LFS SHA 校验等真实边界来换取表面绿色的证据。
+
+### 最终本地 main 整合复核（2026-11-18）
+
+- 已验证 `main@b216b7cc` 同时包含 P1 修复 `707837c8` 和 P2 修复 `b216b7cc`，新增历史连续重命名的生产源码与原隔离提交一致，没有留下重复合并提交。此前临时工作树、临时分支均已清理。
+- **整合后的完整宿主 `make test`：1092 项、18 项条件跳过、0 失败，退出码 0，`TEST SUCCEEDED`**。原生 Git 历史、文件／目录互换、LFS 真正媒体读取、Diff 编辑／保存和 SSH 本地模拟测试均在此次完整运行中通过。原始结果：`build/DerivedData-Dev/Logs/Test/Test-Bailey-2026.11.18_01-30-48-+0800.xcresult`；执行日志：`/tmp/bailey-audit-lfs-main-b216-full.log`。
+- `make build:ui`：`TEST BUILD SUCCEEDED`、退出码 0；`make build`：`BUILD SUCCEEDED`、退出码 0，正式构建产物经过 `codesign --verify --deep --strict`，没有安装或替换正式 Bailey，也没有 push `main`。
+- **门禁范围不变**：18 项条件跳过并不等于已重新连通并验证全部真实 Windows SSH；新增完整 App GUI 断言仍缺可独占的图形会话。因此宿主／构建验证为 **Go**，跨平台真实端到端技术门禁继续 **No-Go（既有人工豁免另记）**。
