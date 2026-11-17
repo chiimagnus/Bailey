@@ -1191,6 +1191,89 @@ final class DiffTab: nonisolated Identifiable {
         case failed(String)
     }
 
+    private nonisolated enum LFSPointer: Sendable {
+        case valid(sha256: String, size: Int)
+        case invalid
+    }
+
+    /// The immutable Git blob identifies the LFS object, even when current
+    /// .gitattributes no longer declares a filter for this historical path.
+    private nonisolated static func lfsPointer(in blob: Data) -> LFSPointer? {
+        let signature = "version https://git-lfs.github.com/spec/v1\n"
+        guard blob.starts(with: Data(signature.utf8)) else { return nil }
+        guard blob.count <= 1024, let text = String(data: blob, encoding: .utf8) else {
+            return .invalid
+        }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count == 4, lines[0] == signature.dropLast(), lines[3].isEmpty,
+              lines[1].hasPrefix("oid sha256:"), lines[2].hasPrefix("size ") else {
+            return .invalid
+        }
+        let digest = String(lines[1].dropFirst("oid sha256:".count))
+        let sizeText = String(lines[2].dropFirst("size ".count))
+        guard digest.utf8.count == 64,
+              digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              let size = Int(sizeText), size >= 0, String(size) == sizeText else {
+            return .invalid
+        }
+        return .valid(sha256: digest, size: size)
+    }
+
+    private nonisolated static func cachedLFSObject(
+        sha256: String, size: Int, in root: String, backend: WorkspaceBackend
+    ) async -> (data: Data?, failure: GitContent?) {
+        guard size <= maxBytes else { return (nil, .tooLarge) }
+        // `git lfs env` is local metadata only: unlike `cat-file --filters`,
+        // it never downloads missing LFS media. It respects custom lfs.storage.
+        let info = await GitCommandExecution.runData(
+            ["lfs", "env"], in: root, timeout: 60, stdoutLimit: 64 << 10, backend: backend
+        )
+        guard info.status == 0, let environment = String(data: info.stdout, encoding: .utf8) else {
+            let unavailable = String(localized: "Git LFS is unavailable", table: "Git")
+            let reason = info.stderr.isEmpty ? unavailable : unavailable + ": " + info.stderr
+            return (nil, .failed(reason))
+        }
+        let prefix = "LocalMediaDir="
+        guard let entry = environment.split(separator: "\n").first(where: { $0.hasPrefix(prefix) }) else {
+            return (nil, .failed(String(localized: "Git LFS did not report its local media directory", table: "Git")))
+        }
+        var directory = String(entry.dropFirst(prefix.count))
+        if !directory.hasPrefix("/") {
+            // Git LFS on Windows reports a native drive path even when Bailey's
+            // SSH workspace uses MSYS2 paths. Resolve on that same machine.
+            let converted = try? await backend.runLimited(
+                argv: ["cygpath", "-u", directory], cwd: root, env: nil, stdin: nil,
+                timeout: 30, stdoutLimit: 4096, stderrLimit: 4096
+            )
+            guard let converted, converted.status == 0,
+                  let path = String(data: converted.stdout, encoding: .utf8) else {
+                return (nil, .failed(String(localized: "Unable to resolve Git LFS media directory", table: "Git")))
+            }
+            directory = path.trimmingCharacters(in: .newlines)
+        }
+        guard directory.hasPrefix("/") else {
+            return (nil, .failed(String(localized: "Git LFS reported an unsupported media directory path", table: "Git")))
+        }
+        let media = (directory as NSString).appendingPathComponent(
+            "\(sha256.prefix(2))/\(sha256.dropFirst(2).prefix(2))/\(sha256)"
+        )
+        let bytes: Data
+        do {
+            bytes = try await backend.read(path: media, maxBytes: maxBytes)
+        } catch WorkspaceError.notFound {
+            return (nil, .failed(String(localized: "Git LFS object is not cached locally; run git lfs fetch to obtain it", table: "Git")))
+        } catch WorkspaceError.tooLarge {
+            return (nil, .tooLarge)
+        } catch {
+            return (nil, .failed(String(localized: "Unable to read Git LFS object", table: "Git") + ": " + error.localizedDescription))
+        }
+        let version = WorkspaceFileVersion(data: bytes)
+        guard version.byteCount == size, version.sha256 == sha256 else {
+            return (nil, .failed(String(localized: "Git LFS object failed size or SHA-256 verification", table: "Git")))
+        }
+        return (bytes, nil)
+    }
+
     /// Resolve path metadata once; reading a stable OID must not follow a
     /// moving index or ref between the size query and blob read.
     private nonisolated enum GitLocation {
@@ -1269,7 +1352,22 @@ final class DiffTab: nonisolated Identifiable {
         guard data.count == start + byteCount + 1, data.last == 10 else {
             return (.failed(String(localized: "Incomplete Git content", table: "Git")), selection.isUnmerged)
         }
-        let blob = Data(data[start..<(start + byteCount)])
+        var blob = Data(data[start..<(start + byteCount)])
+        if let pointer = lfsPointer(in: blob) {
+            switch pointer {
+            case .invalid:
+                return (.failed(String(localized: "Invalid Git LFS pointer", table: "Git")), selection.isUnmerged)
+            case .valid(let digest, let size):
+                let local = await cachedLFSObject(
+                    sha256: digest, size: size, in: root, backend: backend
+                )
+                if let failure = local.failure { return (failure, selection.isUnmerged) }
+                guard let content = local.data else {
+                    return (.failed(String(localized: "Unable to read Git LFS object", table: "Git")), selection.isUnmerged)
+                }
+                blob = content
+            }
+        }
         switch await TextFileEncoding.decode(blob, backend: backend, override: override) {
         case .success(let document):
             return (.content(document, oid: oid), selection.isUnmerged)

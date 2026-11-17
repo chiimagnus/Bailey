@@ -24,6 +24,12 @@ Split 左侧折叠基线与右侧可编辑正文对齐，新增／删除行按�
   干净工作区文件也可以直接编辑；保存不等于暂存或提交。
 - **先判断原始字节。** 任一侧超过 5 MiB 或确实包含二进制时不提供文本 Diff；
   这一上限独立于 Files 的 32 MiB 完整编辑能力，不能因文件编辑支持更大正文便自动提高 Diff 容量。
+  Git 历史与 Index 的 LFS 文件先锁定 Git Blob OID，识别 pointer，再从 Git LFS 当前机器的
+  `LocalMediaDir` 读取真正媒体，按 pointer 的 size／SHA-256 校验后才解码；
+  自定义 `lfs.storage` 和 Windows SSH 路径由仓库的 Git LFS 环境确定。
+  LFS 的 5 MiB 上限针对真实媒体正文而非 pointer；本地未缓存、对象损坏、超限或工具不可用时
+  明确报错，不展示 pointer 冒充内容，也不在浏览 Diff 时隐式联网下载。
+  历史 Blob 是否为 LFS 由其不可变内容决定，不能受当前 `.gitattributes` 改动影响。
   UTF-8、UTF BOM、`coding:` 及 Windows `mbcs` 使用与 Files 一致的严格编码规则，
   未能判定的非 UTF-8 文本显示编码选择入口，而不是冒充二进制。
   不能先丢掉 NUL、无效字节或进行有损解码再比较；`hash-object --path` 必须接收工作区原始字节，
