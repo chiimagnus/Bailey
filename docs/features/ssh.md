@@ -31,7 +31,10 @@ GUI 启动时将应用级 `WorkspaceApplication` 显式提供给已存在的 `Ba
 `ControlPersist=180` 以及按有效主机、用户、端口与跳板隔离的 `%C` socket；
 标签关闭不主动关闭共享连接。固定主机的文件／Git 后台命令在新建 SSH 连接时启用标准压缩，
 已存在的 master 不重新协商。后台命令使用 `BatchMode=yes`，不弹出交互式认证，也不跨机器回退到本机。
-连接超时遵循用户的 OpenSSH 配置，并受每次命令的总截止时间约束；
+连接遵循用户的 OpenSSH 配置。普通命令仍受总耗时限制；
+传输 stdin 数据或有界 stdout 数据时，只有实际写入／读取字节才能刷新无进展超时，
+不能因仍在传输大文件而按总耗时中断。仅有 stderr 输出不延长期限；
+取消、输出容量限制、未完整传输与远端校验失败仍必须报错。
 选择远端主机时首次握手最多等待 30 秒，以兼容需要额外认证握手的 SSH 代理。
 首次握手未完成时若已输入远端绝对路径，初始化后优先进入该路径，
 不能以默认主目录或 Windows 盘符列表覆盖输入；目录导航仍按请求代次丢弃过期结果。
@@ -134,7 +137,8 @@ Files／Git 的异步发布同时核对当前项目许可、`PanelContext.Identi
 `NativeFileTabTests` 通过固定主机的 `SSHHostWorkspaces` 状态验证原生编辑器的只读、缓冲与 Undo，
 不用终端 `RemoteConnection` 模拟 Files 断线。受控后端只能证明这些逻辑，不能证明真实传输；
 `SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取、
-单目录失败隔离和文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；
+单目录失败隔离、32 MiB 文件上传／下载／原字节保存及超限拒绝，
+以及文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；
 显式 `BAILEY_SSH_BENCHMARK=1` 时再测冷加载与 30 次热路径的中位数/p95。
 `SSHGitRecoveryLiveTests` 使用另一个专用 master 和 Windows 临时仓库，模拟仅该测试传输失联，
 验证 Git Graph 保留、写操作拒绝、恢复后重新允许暂存；

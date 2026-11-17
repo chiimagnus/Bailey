@@ -273,8 +273,9 @@ XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称�
 正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。
 独立 UI 启动器使用临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实位于临时目录；
 仅改 `HOME` 不会改变 Foundation 的主目录。
-获授权的 Windows SSH GUI 测试只在一次性测试主目录中引用原 SSH 别名，
-并通过临时符号链接使用用户已批准的 Cloudflare Access 缓存；
+获授权的 Windows SSH GUI 测试只在一次性测试主目录中引用原 SSH 别名。
+测试夹具在存在 Cloudflare Access 缓存时会建立临时符号链接；
+使用直连 Tailscale 的 `windows-tailscale` 别名时不依赖该缓存或 Cloudflare 代理。
 不复制令牌、不修改用户 SSH 配置，测试结束只解除链接，正式设置仍在隔离目录之外。
 没有授权时不能以共享缓存绕过原有 SSH 测试门禁。
 GUI 添加远端项目使用窗口内 `SSHFolderPickerView` 的主机、路径与确认控件，
@@ -368,10 +369,10 @@ CRLF Split 失焦自动保存的原始 Unicode 字节及 Staged 只读差异；
 不以模型测试替代。
 `SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、
 拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。
-当前已获授权的 `windows` 主机完整执行命令是：
+通过已授权 `windows-tailscale` SSH 别名执行完整 Windows 实机宿主测试：
 
 ```sh
-BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test
+BAILEY_P4_TEST_SSH_HOST=windows-tailscale TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows-tailscale make test
 ```
 
 必须核对原生 XCTest 的实际执行总数、0 failures、0 skipped 和 Windows SSH 用例的 passed 记录；

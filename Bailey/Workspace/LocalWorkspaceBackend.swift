@@ -454,7 +454,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int? = nil, stderrLimit: Int? = nil,
         preservePartialOnTimeout: Bool = false,
-        honorTaskCancellation: Bool = true
+        honorTaskCancellation: Bool = true,
+        resetTimeoutOnTransferProgress: Bool = false
     ) throws -> WorkspaceRunResult {
         if honorTaskCancellation { try Task.checkCancellation() }
         guard let executable = argv.first else { throw WorkspaceError.notFound }
@@ -516,7 +517,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         if inputData.isEmpty { closeInput() }
 
-        let deadline = timeout.map { ProcessInfo.processInfo.systemUptime + $0 }
+        var deadline = timeout.map { ProcessInfo.processInfo.systemUptime + $0 }
         var openFDs: Set<Int32> = [outFD, errFD]
         var outData = Data()
         var errData = Data()
@@ -569,6 +570,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                         }
                         if written > 0 {
                             inputOffset += written
+                            if resetTimeoutOnTransferProgress, let timeout {
+                                deadline = ProcessInfo.processInfo.systemUptime + timeout
+                            }
                             if inputOffset == inputData.count { closeInput() }
                         } else if written == 0 {
                             inputError = NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
@@ -590,6 +594,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                             throw WorkspaceError.tooLarge
                         }
                         outData.append(buffer, count: count)
+                        if resetTimeoutOnTransferProgress, let timeout {
+                            deadline = ProcessInfo.processInfo.systemUptime + timeout
+                        }
                     } else {
                         if let stderrLimit, count > stderrLimit - errData.count {
                             throw WorkspaceError.tooLarge

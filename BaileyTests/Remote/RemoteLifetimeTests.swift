@@ -44,6 +44,71 @@ final class RemoteLifetimeTests: XCTestCase {
                        "A separate SSH master cannot invalidate the workspace connection")
     }
 
+    func testLargeSSHTransfersKeepDeadlineWhileMakingProgress() throws {
+        let payload = Data(repeating: 0x41, count: 512 * 1024)
+        let slowUpload = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/usr/bin/perl",
+            arguments: ["-e", """
+                my $n = 0;
+                while (1) {
+                    my $read = read(STDIN, my $chunk, 8192);
+                    die "read failed" unless defined $read;
+                    last if $read == 0;
+                    $n += $read;
+                    select undef, undef, undef, 0.03;
+                }
+                print $n;
+                """],
+            stdin: payload, timeout: 0.35
+        )
+        XCTAssertEqual(slowUpload.status, 0)
+        XCTAssertEqual(slowUpload.stdout, Data(String(payload.count).utf8))
+
+        let slowDownload = try ProcessRemoteCommandRunner.launch(
+            sshPath: "/usr/bin/perl",
+            arguments: ["-e", """
+                $| = 1;
+                for (1..32) {
+                    print "x" x 8192;
+                    select undef, undef, undef, 0.03;
+                }
+                """],
+            stdin: nil, timeout: 0.35,
+            stdoutLimit: 256 * 1024, stderrLimit: 1024
+        )
+        XCTAssertEqual(slowDownload.status, 0)
+        XCTAssertEqual(slowDownload.stdout.count, 256 * 1024)
+    }
+
+    func testUnboundedSSHCommandKeepsTotalDeadlineDespiteOutput() throws {
+        let start = Date()
+        XCTAssertThrowsError(try ProcessRemoteCommandRunner.launch(
+            sshPath: "/usr/bin/perl",
+            arguments: ["-e", "$| = 1; for (1..40) { print '.'; select undef, undef, undef, 0.06; }"],
+            stdin: nil, timeout: 0.35
+        )) { error in
+            guard case WorkspaceError.timedOut = error else {
+                return XCTFail("Expected ordinary command timeout, got \(error)")
+            }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.5)
+    }
+
+    func testLargeSSHTransferStillTimesOutWhenProgressStops() throws {
+        let start = Date()
+        XCTAssertThrowsError(try ProcessRemoteCommandRunner.launch(
+            sshPath: "/usr/bin/perl",
+            arguments: ["-e", "$| = 1; print 'start'; sleep 2;"],
+            stdin: nil, timeout: 0.35,
+            stdoutLimit: 256 * 1024, stderrLimit: 1024
+        )) { error in
+            guard case WorkspaceError.timedOut = error else {
+                return XCTFail("Expected transfer inactivity timeout, got \(error)")
+            }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.5)
+    }
+
     func testIndependentCommandRunnerPreservesStreamsAndBoundsPipes() throws {
         let normal = try ProcessRemoteCommandRunner.launch(
             sshPath: "/bin/sh",
