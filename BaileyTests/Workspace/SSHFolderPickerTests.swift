@@ -12,6 +12,9 @@ private actor PickerBackend: WorkspaceBackend {
     private var heldPaths = Set<String>()
     private var blocked: [String: CheckedContinuation<WorkspaceStat?, Error>] = [:]
     private var observers: [String: CheckedContinuation<Void, Never>] = [:]
+    private var holdStartup = false
+    private var blockedStartup: CheckedContinuation<Void, Never>?
+    private var startupObserver: CheckedContinuation<Void, Never>?
 
     init(
         startup: String,
@@ -24,6 +27,16 @@ private actor PickerBackend: WorkspaceBackend {
     }
 
     func hold(_ path: String) { heldPaths.insert(path) }
+    func suspendStartup() { holdStartup = true }
+    func waitForStartup() async {
+        if blockedStartup != nil { return }
+        await withCheckedContinuation { startupObserver = $0 }
+    }
+    func releaseStartup() {
+        holdStartup = false
+        blockedStartup?.resume()
+        blockedStartup = nil
+    }
 
     func waitForStat(_ path: String) async {
         if blocked[path] != nil { return }
@@ -67,6 +80,13 @@ private actor PickerBackend: WorkspaceBackend {
     ) async throws -> WorkspaceRunResult {
         runCount += 1
         startupTimeout = timeout
+        if holdStartup {
+            await withCheckedContinuation { continuation in
+                blockedStartup = continuation
+                startupObserver?.resume()
+                startupObserver = nil
+            }
+        }
         return WorkspaceRunResult(status: 0, stdout: startup, stderr: Data())
     }
 
@@ -102,6 +122,24 @@ final class SSHFolderPickerTests: XCTestCase {
         XCTAssertNil(model.host)
         let callsAfterInvalidHost = await backend.runCount
         XCTAssertEqual(callsAfterInvalidHost, 0)
+    }
+
+    func testTypedRemotePathDuringWindowsHostStartupIsNotResetToDriveRoot() async {
+        let backend = PickerBackend(
+            startup: "/c/Users/Admin\nDRIVE:d\nDRIVE:c\n",
+            directories: ["/tmp/bailey-git-ui-Example": []]
+        )
+        await backend.suspendStartup()
+        let model = SSHFolderPickerModel(hosts: ["windows"], backendForHost: { _ in backend })
+        let initial = Task { await model.selectHost("windows") }
+        await backend.waitForStartup()
+        model.editInput("/tmp/bailey-git-ui-Example")
+        await backend.releaseStartup()
+        await initial.value
+        XCTAssertEqual(model.directory, "/tmp/bailey-git-ui-Example")
+        XCTAssertEqual(model.input, "/tmp/bailey-git-ui-Example/")
+        XCTAssertEqual(model.addPath, "/tmp/bailey-git-ui-Example")
+        XCTAssertFalse(model.isLoading)
     }
 
     func testWindowsRootAndDriveSelection() async {

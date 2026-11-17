@@ -16,6 +16,15 @@ private actor CountingLiveSSHRunner: RemoteCommandRunner {
         calls += 1
         return try await base.run(argv, stdin: stdin, timeout: timeout)
     }
+
+    func runLimited(_ argv: [String], stdin: Data?, timeout: TimeInterval,
+                    stdoutLimit: Int, stderrLimit: Int) async throws
+        -> (status: Int32, stdout: Data, stderr: Data)
+    {
+        calls += 1
+        return try await base.runLimited(argv, stdin: stdin, timeout: timeout,
+                                         stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
+    }
 }
 
 @MainActor

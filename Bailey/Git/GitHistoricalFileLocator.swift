@@ -1,9 +1,8 @@
 import Foundation
 
-/// Resolve Git Graph's "Open File" and "Diff with Working File" semantics:
-/// keep the historical path when it still exists; only then look for a rename
-/// between the selected revision and today's worktree. Never use Mac files
-/// when the selected backend belongs to an SSH workspace.
+/// Resolve historical "Open File" and "Diff with Working File" paths:
+/// prefer an existing original path, otherwise follow Git tree/Index renames
+/// and confirm the result through the selected local or SSH backend.
 nonisolated enum GitHistoricalFileLocator {
     enum Result: Equatable, Sendable {
         case found(String)
@@ -16,25 +15,23 @@ nonisolated enum GitHistoricalFileLocator {
     static func resolve(
         root: String, path: String, revision: String, backend: WorkspaceBackend
     ) async -> Result {
-        let current = (root as NSString).appendingPathComponent(path)
-        do {
-            if let stat = try await backend.stat(path: current),
-               stat.isRegular || stat.isSymlink { return .found(path) }
-        } catch WorkspaceError.notFound {
-            // The old path is absent; the selected revision may have been renamed.
-        } catch {
-            return .failed(error.localizedDescription)
+        func onDisk(_ relativePath: String) async -> Result {
+            do {
+                let file = (root as NSString).appendingPathComponent(relativePath)
+                if let stat = try await backend.stat(path: file),
+                   stat.isRegular || stat.isSymlink { return .found(relativePath) }
+                return .missing
+            } catch {
+                return .failed(error.localizedDescription)
+            }
         }
 
-        // Git may no longer recognize the rename against edited worktree
-        // bytes (similarity drops below its threshold). Check the committed
-        // revision-to-HEAD rename only if the direct comparison found none.
-        // NUL separators preserve arbitrary whitespace in Git pathnames.
-        for endpoint in [String?.none, "HEAD"] {
-            var args = ["diff", "--name-status", "-z", "--find-renames",
-                        "--diff-filter=R", revision]
-            if let endpoint { args.append(endpoint) }
-            args.append("--")
+        // Only compare Git trees and the Index. Consulting the live worktree
+        // through Git diff would run LFS clean filters and create media.
+        // NUL separators preserve whitespace, Unicode and newlines in paths.
+        func renamed(_ source: String, comparing revisions: [String]) async -> Result {
+            let args = ["diff", "--name-status", "-z", "--find-renames",
+                        "--diff-filter=R"] + revisions + ["--"]
             let history = await GitCommandExecution.runData(
                 args, in: root, stdoutLimit: renameLimit + 1, backend: backend
             )
@@ -57,15 +54,33 @@ nonisolated enum GitHistoricalFileLocator {
                       change.hasPrefix("R") else {
                     return .failed(String(localized: "Unable to parse Git rename results", table: "Git"))
                 }
-                guard old == path else { continue }
-                do {
-                    if let stat = try await backend.stat(
-                        path: (root as NSString).appendingPathComponent(new)),
-                       stat.isRegular || stat.isSymlink { return .found(new) }
-                } catch WorkspaceError.notFound {
-                    continue
-                } catch {
-                    return .failed(error.localizedDescription)
+                if old == source { return .found(new) }
+            }
+            return .missing
+        }
+
+        let original = await onDisk(path)
+        guard original == .missing else { return original }
+        for comparison in [["--cached", revision], [revision, "HEAD"]] {
+            switch await renamed(path, comparing: comparison) {
+            case .failed(let message):
+                return .failed(message)
+            case .missing:
+                continue
+            case .found(let candidate):
+                let current = await onDisk(candidate)
+                guard current == .missing else { return current }
+                // A committed rename can be renamed again in the Index.
+                // Cumulative edits can hide the direct revision-to-Index rename
+                // even though Git recognizes each individual rename.
+                if comparison == [revision, "HEAD"] {
+                    switch await renamed(candidate, comparing: ["--cached", "HEAD"]) {
+                    case .failed(let message): return .failed(message)
+                    case .missing: break
+                    case .found(let staged):
+                        let latest = await onDisk(staged)
+                        guard latest == .missing else { return latest }
+                    }
                 }
             }
         }

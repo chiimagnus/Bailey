@@ -24,10 +24,21 @@ Split 左侧折叠基线与右侧可编辑正文对齐，新增／删除行按�
   干净工作区文件也可以直接编辑；保存不等于暂存或提交。
 - **先判断原始字节。** 任一侧超过 5 MiB 或确实包含二进制时不提供文本 Diff；
   这一上限独立于 Files 的 32 MiB 完整编辑能力，不能因文件编辑支持更大正文便自动提高 Diff 容量。
+  Git 历史与 Index 的 LFS 文件先锁定 Git Blob OID，识别 pointer，再从 Git LFS 当前机器的
+  `LocalMediaDir` 读取真正媒体，按 pointer 的 size／SHA-256 校验后才解码；
+  自定义 `lfs.storage` 和 Windows SSH 路径由仓库的 Git LFS 环境确定。
+  LFS 的 5 MiB 上限针对真实媒体正文而非 pointer；本地未缓存、对象损坏、超限或工具不可用时
+  明确报错，不展示 pointer 冒充内容，也不在浏览 Diff 时隐式联网下载。
+  历史 Blob 是否为 LFS 由其不可变内容决定，不能受当前 `.gitattributes` 改动影响。
   UTF-8、UTF BOM、`coding:` 及 Windows `mbcs` 使用与 Files 一致的严格编码规则，
   未能判定的非 UTF-8 文本显示编码选择入口，而不是冒充二进制。
-  不能先丢掉 NUL、无效字节或进行有损解码再比较；`hash-object --path` 必须接收工作区原始字节，
-  再由 Git 按 `.gitattributes`／clean filter 计算规范化 OID。
+  不能先丢掉 NUL、无效字节或进行有损解码再比较；**非 LFS** 路径的
+  `hash-object --path` 必须接收工作区原始字节，再由 Git 按 `.gitattributes`／clean filter
+  计算规范化 OID。对旧 Blob 为 LFS pointer、或当前 filter 已变为 LFS 的工作区文件，
+  直接比较真实媒体与原始可编辑正文，不使用 Git pointer 的 Patch 行坐标，也不运行
+  会产生 LFS 对象的 `hash-object`／clean filter。仅从 Git 比对 LFS 时重新核对原始字节和旧 OID。
+  工作区仍是 LFS pointer 占位文件时明确报错，不开放可写 Diff；
+  文件保存仍执行原有条件写入，不得以 Git 暂存区或 LFS 缓存代替工作区原始字节。
   仅编码字节变化、解码后文字相同时，仍显示 Git 变更及编码差异，不误报「无修改」；
   带 BOM 的工作区文本遇到 Git EOL／clean 规则时，以原字节计算 Git OID；规范化内容一致则不产生假差异。
   Staged／历史为只读；可编辑 Worktree 保存沿用原编码，明确选定新编码时
@@ -210,8 +221,10 @@ Unicode 规范等价不意味着 Git 原文相同。
 查看历史文件原文复用同一标签拥有的原生 TextKit 表面，
 不显示整篇「新增行」或空文件的「没有变化」占位。只读原文和 Diff 均允许选择、复制文本，
 但不向辅助功能声明值可写，也拒绝直接的辅助功能文本替换。
-历史版本对工作区的 Diff 会在重新选中时读取最新工作文件，遇到真实重命名则解析当前路径；
-历史 blob 本身保持不可修改。所有来源共用 5 MiB、真实二进制及严格文本编码校验，
+历史版本对工作区的 Diff 会在重新选中时读取最新工作文件；历史路径已消失时，
+先按 Index，再按 HEAD 的 Git 重命名记录定位，必要时继续追踪 HEAD→Index 的二次重命名。
+不对实时工作区执行会触发 LFS clean 的 Git Diff；历史 blob 本身保持不可修改。
+所有来源共用 5 MiB、真实二进制及严格文本编码校验，
 Git 命令失败不能被替换成空内容。
 
 文本尺寸、固定行高和只读替换时的滚动是实际依赖契约。只读 Diff 和工作区编辑均沿用原生字宽：
@@ -259,7 +272,10 @@ Diff 与文件编辑共享 NSTextStorage 的 Undo 通知和只读辅助功能写
 通常导航可刷新干净文件，未保存编辑阻止旧读取覆盖正文。
 已成功加载的不可变历史标签再次打开时复用原文，不重新查询 Git；live 文件重新选择时继续检查外部变化。
 
-Git 内容先通过原始 NUL 分隔的 index／tree metadata 匹配字面路径，
+Git 内容先通过原始 NUL 分隔的 index／tree metadata 精确匹配目标路径，
+Index 查询在 Git 端排除目录后代，不允许大量无关条目耗尽元数据容量；
+旧文件被目录取代时，历史、暂存和工作区的对应新侧为空，
+gitlink 和其它非文本对象仍按原有错误边界处理。
 锁定 blob OID 后用一次 `git cat-file --batch` 核对对象类型、大小、完整字节和结束标记，
 避免两次独立对象读取。Blob、metadata、patch 和 clean filter 的短输出
 在本机与 SSH 的实际进程管道处设独立上限；超限即失败，不能以截断前缀作为成功结果，

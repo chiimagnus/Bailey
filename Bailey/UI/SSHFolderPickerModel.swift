@@ -186,7 +186,11 @@ final class SSHFolderPickerModel {
             }
             guard isCurrent(request, host: alias) else { return }
             windowsDrives = location.drives
-            await navigate(to: location.drives.isEmpty ? location.home : "/")
+            // The user may type an absolute path before the first SSH handshake ends.
+            // Prefer that path instead of replacing it with the default drive list.
+            let destination = Self.remotePath(input)
+                ?? (location.drives.isEmpty ? location.home : "/")
+            await navigate(to: destination)
         } catch {
             guard isCurrent(request, host: alias) else { return }
             isLoading = false

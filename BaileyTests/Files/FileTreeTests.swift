@@ -3808,6 +3808,58 @@ final class FileTreeTests: XCTestCase {
         }
     }
 
+    func testSharedTreePreservesFileAndDirectoryWithTheSamePath() {
+        for (fileStatus, childStatus) in [
+            (TreeDisplayModel.Status.deleted, TreeDisplayModel.Status.added),
+            (.added, .deleted),
+        ] {
+            let changes = [
+                TreeDisplayModel.Row(name: "tool", path: "pkg/tool", isDirectory: false,
+                                     status: fileStatus),
+                TreeDisplayModel.Row(name: "a.swift", path: "pkg/tool/a.swift", isDirectory: false,
+                                     status: childStatus),
+                TreeDisplayModel.Row(name: "b.swift", path: "pkg/tool/sub/b.swift", isDirectory: false,
+                                     status: childStatus),
+                TreeDisplayModel.Row(name: "neighbor", path: "pkg/neighbor", isDirectory: false,
+                                     status: .modified),
+            ]
+            for input in [changes, Array(changes.reversed())] {
+                let rows = TreeDisplayModel.pathRows(input, section: "history", collapsed: [])
+                let leaves = rows.filter { !$0.isDirectory }
+                XCTAssertEqual(Set(leaves.map(\.path)), Set(changes.map(\.path)))
+                XCTAssertEqual(leaves.count, changes.count)
+                let namesakes = rows.filter { $0.path == "pkg/tool" }
+                XCTAssertEqual(namesakes.count, 2)
+                XCTAssertEqual(Set(namesakes.map(\.id)).count, 2,
+                               "File and directory must have distinct SwiftUI identities")
+                XCTAssertEqual(namesakes.first(where: { $0.isDirectory })?.status, childStatus)
+                XCTAssertEqual(namesakes.first(where: { !$0.isDirectory })?.status, fileStatus)
+                XCTAssertEqual(rows.first(where: { $0.path == "pkg" })?.status, .deleted)
+
+                let collapsed = TreeDisplayModel.pathRows(
+                    input, section: "history", collapsed: ["history:pkg/tool"]
+                )
+                XCTAssertEqual(collapsed.filter { !$0.isDirectory }.map(\.path).sorted(),
+                               ["pkg/neighbor", "pkg/tool"])
+                XCTAssertEqual(collapsed.first(where: { $0.path == "pkg/tool" && $0.isDirectory })?
+                    .isExpanded, false)
+            }
+        }
+    }
+
+    func testSharedTreePreservesExistingFileRowIdentityAndCompaction() {
+        let files = [
+            TreeDisplayModel.Row(name: "one", path: "root/folder/one", isDirectory: false),
+            TreeDisplayModel.Row(name: "two", path: "root/folder/two", isDirectory: false),
+        ]
+        let rows = TreeDisplayModel.pathRows(files, section: "ordinary", collapsed: [])
+        XCTAssertEqual(rows.first?.displayName, "root / folder")
+        XCTAssertEqual(rows.first?.id, "ordinary:root/folder/")
+        XCTAssertEqual(rows.filter { !$0.isDirectory }.map(\.id).sorted(),
+                       ["ordinary:root/folder/one", "ordinary:root/folder/two"])
+        XCTAssertEqual(TreeDisplayModel.pathRows([], section: "ordinary", collapsed: []), [])
+    }
+
     func testSharedTreeStatusAndCompaction() {
         let statuses: [(Character, TreeDisplayModel.Status)] = [
             ("M", .modified), ("A", .added), ("?", .untracked), ("D", .deleted),

@@ -3427,6 +3427,96 @@
         }
       }
     },
+    "Git LFS is unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 不可用"
+          }
+        }
+      }
+    },
+    "Git LFS did not report its local media directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 未返回本地对象目录"
+          }
+        }
+      }
+    },
+    "Unable to resolve Git LFS media directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法解析 Git LFS 对象目录"
+          }
+        }
+      }
+    },
+    "Git LFS reported an unsupported media directory path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 返回了不支持的对象目录路径"
+          }
+        }
+      }
+    },
+    "Git LFS object is not cached locally; run git lfs fetch to obtain it" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 对象未在本地缓存；请运行 git lfs fetch 获取"
+          }
+        }
+      }
+    },
+    "Unable to read Git LFS object" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 Git LFS 对象"
+          }
+        }
+      }
+    },
+    "Git LFS object failed size or SHA-256 verification" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 对象未通过大小或 SHA-256 校验"
+          }
+        }
+      }
+    },
+    "Git LFS worktree is still a pointer; restore its actual content before editing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 工作区文件仍为指针；编辑前请还原真实内容"
+          }
+        }
+      }
+    },
+    "Invalid Git LFS pointer" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 指针无效"
+          }
+        }
+      }
+    },
     "The selected file changed since the confirmation opened. Review it and try again." : {
       "localizations" : {
         "zh-Hans" : {

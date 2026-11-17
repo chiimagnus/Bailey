@@ -1,0 +1,42 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "让共享树正确表达同路径文件与目录"
+status = "completed"
+plan = "plan-p1.md#p1-t1"
+commit = "62d48eefa5ca1513f045ff17541f2750d54b9e23"
+note = "Red→Green；共享树/历史/状态宿主194项通过"
+
+[[tasks]]
+id = "P1-T2"
+title = "让真实历史、Tree/List 和交互共享同一完整集合"
+status = "completed"
+plan = "plan-p1.md#p1-t2"
+commit = "d28bf591415ee293e6ef2c874e3b891e3645dc86"
+note = "SHA-1/256真仓库与生产模型36条全部通过；build:ui通过；GUI执行移交P2-T3独立会话"
+
+[[tasks]]
+id = "P2-T1"
+title = "离线解析锁定的 LFS 指针并读取经校验的真实字节"
+status = "completed"
+plan = "plan-p2.md#p2-t1"
+commit = "168b904d77eeb281d5e0d2b2754033aa37b26cde"
+note = "真实 LFS Red→Green；SHA-1/256、编码、缓存、5MiB；46项通过"
+
+[[tasks]]
+id = "P2-T2"
+title = "用真实 LFS 正文计算差异并守住 Git 规范化与保存边界"
+status = "completed"
+plan = "plan-p2.md#p2-t2"
+commit = "472b7906ecc4fa7c48776ff9218d74feb684825d"
+note = "LFS真实媒体与非LFS clean/EOL 回归：227项执行/2个远端跳过/0失败；无新增缓存、GBK保存和外部竞争；提交已完成"
+
+[[tasks]]
+id = "P2-T3"
+title = "以隔离真实仓库和 Bailey Dev 完成跨来源验收"
+status = "completed"
+plan = "plan-p2.md#p2-t3"
+commit = "da23b093cef9a1c441414290270e60a9235eb84b"
+note = "代码与定点验收已完成：5项GUI、7项Windows Tailscale SSH跨模块及单独Windows LFS/Diff通过；对应提交5fcf9348/9ad5eb5b/da23b093。最新全量make test 4项Windows SSH超时，用户要求不再测试并已终止；阶段审计No-Go，不冒充全绿。"

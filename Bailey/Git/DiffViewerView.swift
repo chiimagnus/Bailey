@@ -402,6 +402,7 @@ final class DiffTab: nonisolated Identifiable {
                 var unmerged = false
                 var oldOID: String?
                 var oldFromIndex = false
+                var oldIsLFS = false
                 var stagedOutdated = false
                 func take(_ result: (text: String, error: String?)) -> String {
                     if let error = result.error { failure = error }
@@ -443,6 +444,7 @@ final class DiffTab: nonisolated Identifiable {
                     old = take((revision.text, revision.error))
                     oldEncoding = revision.encoding
                     oldOID = revision.oid
+                    oldIsLFS = revision.isLFS
                     switch await GitHistoricalFileLocator.resolve(
                         root: root, path: path, revision: hash, backend: backend
                     ) {
@@ -499,12 +501,14 @@ final class DiffTab: nonisolated Identifiable {
                         oldEncoding = earlier.encoding
                         oldOID = earlier.oid
                         oldFromIndex = earlier.fromIndex
+                        oldIsLFS = earlier.isLFS
                     }
                 }
                 return (old: old, oldEncoding: oldEncoding,
                         newFromGit: newFromGit, newEncoding: newFromGitEncoding,
                         worktreePath: worktreePath, failure: failure, unmerged: unmerged,
-                        stagedOutdated: stagedOutdated, oldOID: oldOID, oldFromIndex: oldFromIndex)
+                        stagedOutdated: stagedOutdated, oldOID: oldOID,
+                        oldFromIndex: oldFromIndex, oldIsLFS: oldIsLFS)
             }), !Task.isCancelled else { return }
 
             var failure = git.failure
@@ -552,7 +556,8 @@ final class DiffTab: nonisolated Identifiable {
                 let projected = await Self.gitComparisonBaseline(
                     source: source, oldPath: oldPath, path: path,
                     worktreePath: git.worktreePath, oldFromIndex: git.oldFromIndex,
-                    root: root, oldOID: oldOID, old: git.old, worktree: new,
+                    root: root, oldOID: oldOID, oldIsLFS: git.oldIsLFS,
+                    old: git.old, worktree: new,
                     oldEncoding: git.oldEncoding, newEncoding: newEncoding,
                     worktreeBytes: worktreeBytes, override: chosenEncoding, backend: backend
                 )
@@ -1185,10 +1190,93 @@ final class DiffTab: nonisolated Identifiable {
 
     private nonisolated enum GitContent {
         case missing
-        case content(TextFileEncoding.Document, oid: String)
+        case content(TextFileEncoding.Document, oid: String, isLFS: Bool)
         case binary
         case tooLarge
         case failed(String)
+    }
+
+    private nonisolated enum LFSPointer: Sendable {
+        case valid(sha256: String, size: Int)
+        case invalid
+    }
+
+    /// The immutable Git blob identifies the LFS object, even when current
+    /// .gitattributes no longer declares a filter for this historical path.
+    private nonisolated static func lfsPointer(in blob: Data) -> LFSPointer? {
+        let signature = "version https://git-lfs.github.com/spec/v1\n"
+        guard blob.starts(with: Data(signature.utf8)) else { return nil }
+        guard blob.count <= 1024, let text = String(data: blob, encoding: .utf8) else {
+            return .invalid
+        }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count == 4, lines[0] == signature.dropLast(), lines[3].isEmpty,
+              lines[1].hasPrefix("oid sha256:"), lines[2].hasPrefix("size ") else {
+            return .invalid
+        }
+        let digest = String(lines[1].dropFirst("oid sha256:".count))
+        let sizeText = String(lines[2].dropFirst("size ".count))
+        guard digest.utf8.count == 64,
+              digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              let size = Int(sizeText), size >= 0, String(size) == sizeText else {
+            return .invalid
+        }
+        return .valid(sha256: digest, size: size)
+    }
+
+    private nonisolated static func cachedLFSObject(
+        sha256: String, size: Int, in root: String, backend: WorkspaceBackend
+    ) async -> (data: Data?, failure: GitContent?) {
+        guard size <= maxBytes else { return (nil, .tooLarge) }
+        // `git lfs env` is local metadata only: unlike `cat-file --filters`,
+        // it never downloads missing LFS media. It respects custom lfs.storage.
+        let info = await GitCommandExecution.runData(
+            ["lfs", "env"], in: root, timeout: 60, stdoutLimit: 64 << 10, backend: backend
+        )
+        guard info.status == 0, let environment = String(data: info.stdout, encoding: .utf8) else {
+            let unavailable = String(localized: "Git LFS is unavailable", table: "Git")
+            let reason = info.stderr.isEmpty ? unavailable : unavailable + ": " + info.stderr
+            return (nil, .failed(reason))
+        }
+        let prefix = "LocalMediaDir="
+        guard let entry = environment.split(separator: "\n").first(where: { $0.hasPrefix(prefix) }) else {
+            return (nil, .failed(String(localized: "Git LFS did not report its local media directory", table: "Git")))
+        }
+        var directory = String(entry.dropFirst(prefix.count))
+        if !directory.hasPrefix("/") {
+            // Git LFS on Windows reports a native drive path even when Bailey's
+            // SSH workspace uses MSYS2 paths. Resolve on that same machine.
+            let converted = try? await backend.runLimited(
+                argv: ["cygpath", "-u", directory], cwd: root, env: nil, stdin: nil,
+                timeout: 30, stdoutLimit: 4096, stderrLimit: 4096
+            )
+            guard let converted, converted.status == 0,
+                  let path = String(data: converted.stdout, encoding: .utf8) else {
+                return (nil, .failed(String(localized: "Unable to resolve Git LFS media directory", table: "Git")))
+            }
+            directory = path.trimmingCharacters(in: .newlines)
+        }
+        guard directory.hasPrefix("/") else {
+            return (nil, .failed(String(localized: "Git LFS reported an unsupported media directory path", table: "Git")))
+        }
+        let media = (directory as NSString).appendingPathComponent(
+            "\(sha256.prefix(2))/\(sha256.dropFirst(2).prefix(2))/\(sha256)"
+        )
+        let bytes: Data
+        do {
+            bytes = try await backend.read(path: media, maxBytes: maxBytes)
+        } catch WorkspaceError.notFound {
+            return (nil, .failed(String(localized: "Git LFS object is not cached locally; run git lfs fetch to obtain it", table: "Git")))
+        } catch WorkspaceError.tooLarge {
+            return (nil, .tooLarge)
+        } catch {
+            return (nil, .failed(String(localized: "Unable to read Git LFS object", table: "Git") + ": " + error.localizedDescription))
+        }
+        let version = WorkspaceFileVersion(data: bytes)
+        guard version.byteCount == size, version.sha256 == sha256 else {
+            return (nil, .failed(String(localized: "Git LFS object failed size or SHA-256 verification", table: "Git")))
+        }
+        return (bytes, nil)
     }
 
     /// Resolve path metadata once; reading a stable OID must not follow a
@@ -1202,37 +1290,39 @@ final class DiffTab: nonisolated Identifiable {
         _ locations: [GitLocation], in root: String, backend: WorkspaceBackend,
         override: TextFileEncoding?
     ) async -> (text: String, error: String?, isUnmerged: Bool,
-                 oid: String?, fromIndex: Bool, encoding: TextFileEncoding?) {
+                 oid: String?, fromIndex: Bool, encoding: TextFileEncoding?, isLFS: Bool) {
         var isUnmerged = false
         for location in locations {
             let result = await gitContent(location, in: root, backend: backend, override: override)
             isUnmerged = isUnmerged || result.isUnmerged
             switch result.content {
             case .missing: continue
-            case .content(let document, let oid):
+            case .content(let document, let oid, let isLFS):
                 let fromIndex: Bool
                 if case .index = location { fromIndex = true } else { fromIndex = false }
-                return (document.text, nil, isUnmerged, oid, fromIndex, document.encoding)
-            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged, nil, false, nil)
-            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged, nil, false, nil)
-            case .failed(let message): return ("", message, isUnmerged, nil, false, nil)
+                return (document.text, nil, isUnmerged, oid, fromIndex, document.encoding, isLFS)
+            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged, nil, false, nil, false)
+            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged, nil, false, nil, false)
+            case .failed(let message): return ("", message, isUnmerged, nil, false, nil, false)
             }
         }
-        return ("", nil, isUnmerged, nil, false, nil)
+        return ("", nil, isUnmerged, nil, false, nil, false)
     }
 
     private nonisolated static func requiredGitContent(
         _ location: GitLocation, in root: String, backend: WorkspaceBackend,
         override: TextFileEncoding?
-    ) async -> (text: String, error: String?, oid: String?, encoding: TextFileEncoding?) {
+    ) async -> (text: String, error: String?, oid: String?,
+                 encoding: TextFileEncoding?, isLFS: Bool) {
         let result = await gitContent(location, in: root, backend: backend, override: override)
         switch result.content {
-        case .content(let document, let oid): return (document.text, nil, oid, document.encoding)
+        case .content(let document, let oid, let isLFS):
+            return (document.text, nil, oid, document.encoding, isLFS)
         case .missing:
-            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"), nil, nil)
-        case .binary: return ("", String(localized: "Binary file", table: "Git"), nil, nil)
-        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil)
-        case .failed(let message): return ("", message, nil, nil)
+            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"), nil, nil, false)
+        case .binary: return ("", String(localized: "Binary file", table: "Git"), nil, nil, false)
+        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), nil, nil, false)
+        case .failed(let message): return ("", message, nil, nil, false)
         }
     }
 
@@ -1269,10 +1359,26 @@ final class DiffTab: nonisolated Identifiable {
         guard data.count == start + byteCount + 1, data.last == 10 else {
             return (.failed(String(localized: "Incomplete Git content", table: "Git")), selection.isUnmerged)
         }
-        let blob = Data(data[start..<(start + byteCount)])
+        var blob = Data(data[start..<(start + byteCount)])
+        let pointer = lfsPointer(in: blob)
+        if let pointer {
+            switch pointer {
+            case .invalid:
+                return (.failed(String(localized: "Invalid Git LFS pointer", table: "Git")), selection.isUnmerged)
+            case .valid(let digest, let size):
+                let local = await cachedLFSObject(
+                    sha256: digest, size: size, in: root, backend: backend
+                )
+                if let failure = local.failure { return (failure, selection.isUnmerged) }
+                guard let content = local.data else {
+                    return (.failed(String(localized: "Unable to read Git LFS object", table: "Git")), selection.isUnmerged)
+                }
+                blob = content
+            }
+        }
         switch await TextFileEncoding.decode(blob, backend: backend, override: override) {
         case .success(let document):
-            return (.content(document, oid: oid), selection.isUnmerged)
+            return (.content(document, oid: oid, isLFS: pointer != nil), selection.isUnmerged)
         case .failure(.binary):
             return (.binary, selection.isUnmerged)
         case .failure(let failure):
@@ -1288,10 +1394,14 @@ final class DiffTab: nonisolated Identifiable {
         switch location {
         case .index(let name, _):
             path = name
-            args = ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name]
+            // A literal pathspec includes directory descendants. Exclude that
+            // subtree in Git itself so a reused directory cannot exhaust the
+            // metadata budget before we can determine the exact index entry.
+            args = ["--no-literal-pathspecs", "ls-files", "--stage", "-z", "--",
+                    ":(literal)" + name, ":(exclude,literal)" + name + "/"]
         case .tree(let revision, let name):
             path = name
-            args = ["--literal-pathspecs", "ls-tree", "-rz", "--full-tree", revision, "--", name]
+            args = ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", revision, "--", name]
         }
         let limit = 1 << 16
         let metadata = await GitCommandExecution.runData(
@@ -1347,7 +1457,12 @@ final class DiffTab: nonisolated Identifiable {
                 oid = String(fields[1])
                 stage = parsedStage
             case .tree:
-                guard fields.count == 3, fields[1] == "blob" else {
+                guard fields.count == 3 else {
+                    return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+                }
+                // A directory replacing this file is an absent file, not a Git blob.
+                if fields[1] == "tree" { continue }
+                guard fields[1] == "blob" else {
                     return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
                 }
                 oid = String(fields[2])
@@ -1388,11 +1503,17 @@ final class DiffTab: nonisolated Identifiable {
     /// The actual blob and editable buffer are never rewritten.
     private nonisolated static func gitComparisonBaseline(
         source: Source, oldPath: String, path: String, worktreePath: String,
-        oldFromIndex: Bool, root: String, oldOID: String, old: String,
+        oldFromIndex: Bool, root: String, oldOID: String, oldIsLFS: Bool, old: String,
         worktree: String, oldEncoding: TextFileEncoding?, newEncoding: TextFileEncoding,
         worktreeBytes: Data?, override: TextFileEncoding?, backend: WorkspaceBackend
     ) async -> (content: GitWorktreeComparison.Content?, core: DiffCore?,
                 error: String?, outdated: Bool) {
+        let pointerOnly = worktreeBytes.flatMap { lfsPointer(in: $0) } != nil
+        let checkoutError = String(
+            localized: "Git LFS worktree is still a pointer; restore its actual content before editing",
+            table: "Git"
+        )
+        if oldIsLFS && pointerOnly { return (nil, nil, checkoutError, false) }
         let comparison: [String]
         switch source {
         case .worktree where oldPath == path:
@@ -1402,7 +1523,56 @@ final class DiffTab: nonisolated Identifiable {
         default:
             return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
         }
-        guard let bytes = worktreeBytes, let oldEncoding, oldEncoding == newEncoding else {
+        guard let bytes = worktreeBytes else {
+            return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
+        }
+        let currentUsesLFS: Bool
+        if oldIsLFS {
+            currentUsesLFS = false
+        } else {
+            // A file committed before LFS was enabled has no pointer in its
+            // old Git blob. The current filter alone still makes Git patches
+            // describe LFS pointers and can write new media during hash-object.
+            let attributes = await GitCommandExecution.runData(
+                ["--literal-pathspecs", "check-attr", "-z", "filter", "--", worktreePath],
+                in: root, timeout: 60, stdoutLimit: 4096, backend: backend
+            )
+            let fields = attributes.stdout.split(separator: 0)
+            guard attributes.status == 0, attributes.stdout.last == 0,
+                  fields.count == 3, Data(fields[0]) == Data(worktreePath.utf8),
+                  fields[1] == Data("filter".utf8) else {
+                return (nil, nil, attributes.stderr.isEmpty
+                    ? String(localized: "Unable to read Git content", table: "Git")
+                    : attributes.stderr, false)
+            }
+            currentUsesLFS = fields[2] == Data("lfs".utf8)
+        }
+        if oldIsLFS || currentUsesLFS {
+            // Git's patch describes a pointer instead of the actual media.
+            // Never run a clean filter on LFS worktree bytes just to render Diff.
+            if pointerOnly { return (nil, nil, checkoutError, false) }
+            let current = await readWorktreeFile(
+                root: root, path: worktreePath, backend: backend, override: override
+            )
+            if let error = current.error { return (nil, nil, error, false) }
+            guard current.bytes == bytes else { return (nil, nil, nil, true) }
+            let location: GitLocation
+            switch source {
+            case .worktree:
+                location = oldFromIndex
+                    ? .index(path: oldPath, stages: [0, 2, 1])
+                    : .tree(revision: "HEAD", path: oldPath)
+            case .revisionWorktree(let revision):
+                location = .tree(revision: revision, path: path)
+            default:
+                return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
+            }
+            let selected = await gitObject(location, in: root, backend: backend)
+            if let error = selected.error { return (nil, nil, error, false) }
+            guard selected.oid == oldOID else { return (nil, nil, nil, true) }
+            return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
+        }
+        guard let oldEncoding, oldEncoding == newEncoding else {
             return (.init(old: old, new: worktree, editBaseline: nil), nil, nil, false)
         }
         let failure = String(localized: "Unable to read Git content", table: "Git")
@@ -1505,6 +1675,10 @@ final class DiffTab: nonisolated Identifiable {
             // Deleted from the worktree: an empty "after" side is the diff.
             return ("", nil, .utf8, Data(), nil)
         } catch {
+            // Git can report deletion when a new directory occupies the old file path.
+            if let stat = try? await backend.stat(path: filePath), stat.isDirectory {
+                return ("", nil, .utf8, Data(), nil)
+            }
             return ("", String(
                 localized: "Unable to read file: \(error.localizedDescription)", table: "Git",
                 comment: "Diff error followed by a system-provided error description."

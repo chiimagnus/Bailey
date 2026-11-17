@@ -394,12 +394,16 @@ nonisolated enum ProcessRemoteCommandRunner {
     ) -> (status: Int32, stdout: Data, stderr: Data) {
         var environment = ProcessInfo.processInfo.environment
         environment["LC_ALL"] = "C"
+        // Transfers need an inactivity deadline; ordinary commands still
+        // use their original total timeout.
+        let streaming = (stdin?.count ?? 0) > 0 || stdoutLimit != nil
         do {
             let result = try LocalWorkspaceBackend.runSync(
                 argv: [sshPath] + arguments, cwd: nil, env: environment,
                 stdin: stdin, timeout: timeout,
                 stdoutLimit: stdoutLimit, stderrLimit: stderrLimit,
-                preservePartialOnTimeout: true
+                preservePartialOnTimeout: true,
+                resetTimeoutOnTransferProgress: streaming
             )
             var details = result.stderr
             if result.status == -2 {
