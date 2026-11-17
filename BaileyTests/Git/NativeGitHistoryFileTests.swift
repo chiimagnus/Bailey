@@ -503,6 +503,148 @@ final class NativeGitHistoryFileTests: XCTestCase {
         XCTAssertEqual(worktree.newContent, "worktree\r\n")
     }
 
+    func testAuthorizedWindowsSSHLFSReadsVerifiedMediaAcrossGitSources() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Real Windows LFS requires an explicitly authorized SSH test host")
+        }
+        let socket = "/tmp/bailey-remote-lfs-" + UUID().uuidString + ".sock"
+        let backend = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 60
+        )
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-remote-lfs-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 60
+        )
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard root.range(of: #"^/tmp/bailey-remote-lfs-[A-Za-z0-9]{6}$"#,
+                         options: .regularExpression).map({
+                             $0.lowerBound == root.startIndex && $0.upperBound == root.endIndex
+                         }) == true else {
+            throw WorkspaceError.notFound
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not clean test-owned remote LFS repository: \(error)") }
+            if FileManager.default.fileExists(atPath: socket) {
+                do {
+                    let closed = try await Task.detached {
+                        try ProcessRemoteCommandRunner.launch(
+                            sshPath: "/usr/bin/ssh",
+                            arguments: ["-S", socket, "-O", "exit", host],
+                            stdin: nil, timeout: 15
+                        )
+                    }.value
+                    XCTAssertEqual(closed.status, 0)
+                } catch { XCTFail("Could not close test-owned SSH master: \(error)") }
+            }
+        }
+        func command(_ argv: [String]) async throws -> Data {
+            let result = try await backend.run(
+                argv: argv, cwd: root, env: nil, stdin: nil, timeout: 60
+            )
+            XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+            guard result.status == 0 else { throw WorkspaceError.notFound }
+            return result.stdout
+        }
+
+        do {
+            let setup = """
+            set -eu
+            git init -q -b main
+            git config user.name 'Bailey Windows LFS'
+            git config user.email fixture@invalid
+            git config commit.gpgsign false
+            git config core.hooksPath .git/hooks
+            git config filter.lfs.clean 'git-lfs clean -- %f'
+            git config filter.lfs.smudge 'git-lfs smudge -- %f'
+            git config filter.lfs.process 'git-lfs filter-process'
+            git config filter.lfs.required true
+            git config lfs.storage "$(cygpath -w "$PWD/.git/custom-lfs")"
+            """
+            let prepared = try await backend.run(
+                argv: ["sh", "-s"], cwd: root, env: nil,
+                stdin: Data(setup.utf8), timeout: 60
+            )
+            XCTAssertEqual(prepared.status, 0, String(decoding: prepared.stderr, as: UTF8.self))
+            guard prepared.status == 0 else { throw WorkspaceError.notFound }
+
+            let path = "试验 curve.csv"
+            let initial = "strain,stress\n0,12\n1,44\n"
+            let stagedText = "strain,stress\n0,12\n1,55\n"
+            let worktreeText = "strain,stress\n0,12\n1,66\n"
+            try await backend.write(
+                path: root + "/.gitattributes",
+                data: Data("*.csv filter=lfs diff=lfs merge=lfs -text\n".utf8)
+            )
+            try await backend.write(path: root + "/" + path, data: Data(initial.utf8))
+            _ = try await command(["git", "add", "-A"])
+            _ = try await command(["git", "commit", "-qm", "LFS historical CSV"])
+            let revision = String(decoding: try await command(
+                ["git", "rev-parse", "HEAD"]), as: UTF8.self
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            let pointer = String(decoding: try await command(
+                ["git", "show", "HEAD:" + path]), as: UTF8.self
+            )
+            XCTAssertTrue(pointer.hasPrefix("version https://git-lfs.github.com/spec/v1\n"))
+            XCTAssertFalse(pointer.contains("strain,stress"))
+            let lfsEnv = String(decoding: try await command(
+                ["git", "lfs", "env"]), as: UTF8.self
+            )
+            XCTAssertTrue(lfsEnv.contains("LocalMediaDir="))
+            XCTAssertTrue(lfsEnv.contains("custom-lfs"))
+
+            try await backend.write(path: root + "/" + path, data: Data(stagedText.utf8))
+            _ = try await command(["git", "add", "--", path])
+            let stagedOID = try await command(["git", "rev-parse", ":" + path])
+            try await backend.write(path: root + "/" + path, data: Data(worktreeText.utf8))
+            let cached = try await command(
+                ["sh", "-c", "find .git/custom-lfs/objects -type f | sort"]
+            )
+            let tabs: [DiffTab] = [
+                DiffTab(repoRoot: root, path: path, source: .revision(hash: revision),
+                        untracked: false, origPath: nil, backend: backend, workspaceIdentity: nil),
+                DiffTab(repoRoot: root, path: path, source: .staged,
+                        untracked: false, origPath: nil, backend: backend, workspaceIdentity: nil),
+                DiffTab(repoRoot: root, path: path, source: .worktree,
+                        untracked: false, origPath: nil, backend: backend, workspaceIdentity: nil),
+                DiffTab(repoRoot: root, path: path, source: .revisionWorktree(hash: revision),
+                        untracked: false, origPath: nil, backend: backend, workspaceIdentity: nil),
+            ]
+            let deadline = Date().addingTimeInterval(180)
+            while tabs.contains(where: \.isLoading) {
+                guard Date() < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(75))
+            }
+            for tab in tabs { XCTAssertNil(tab.error, tab.error ?? "") }
+            XCTAssertEqual(tabs[0].newContent, initial)
+            XCTAssertEqual(tabs[1].oldContent, initial)
+            XCTAssertEqual(tabs[1].newContent, stagedText)
+            XCTAssertEqual(tabs[2].oldContent, stagedText)
+            XCTAssertEqual(tabs[2].newContent, worktreeText)
+            XCTAssertEqual(tabs[3].oldContent, initial)
+            XCTAssertEqual(tabs[3].newContent, worktreeText)
+            XCTAssertTrue(tabs[2].isEditableNow)
+            XCTAssertFalse(tabs[0].isEditableNow)
+            let cachedAfter = try await command(
+                ["sh", "-c", "find .git/custom-lfs/objects -type f | sort"]
+            )
+            let fileAfter = try await backend.read(path: root + "/" + path, maxBytes: 4096)
+            let indexedAfter = try await command(["git", "rev-parse", ":" + path])
+            let headAfter = try await command(["git", "rev-parse", "HEAD"])
+            XCTAssertEqual(cachedAfter, cached, "Diff must not create new LFS media")
+            XCTAssertEqual(fileAfter, Data(worktreeText.utf8))
+            XCTAssertEqual(indexedAfter, stagedOID)
+            XCTAssertEqual(String(decoding: headAfter, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), revision)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
     func testLFSRevisionCommitAndStagedUseRealCachedContentAfterAttributesChange() async throws {
         let root = try lfsRepository()
         defer { try? FileManager.default.removeItem(at: root) }

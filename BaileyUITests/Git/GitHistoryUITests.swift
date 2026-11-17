@@ -5,9 +5,18 @@ import XCTest
 final class GitHistoryUITests: XCTestCase {
     func testRealLFSHistoryStagedAndWorktreeShowCSVAcrossNativeDiffTabs() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        guard (try? fixture.git(["lfs", "version"])) != nil else {
-            throw XCTSkip("Git LFS must be installed for this real App E2E")
+        let lfsBin = "/opt/homebrew/bin"
+        guard FileManager.default.isExecutableFile(atPath: lfsBin + "/git-lfs") else {
+            throw XCTSkip("Real Git LFS is not installed")
         }
+        // The XCTest Runner's PATH omits Homebrew, even when Git LFS is installed.
+        let previousPath = ProcessInfo.processInfo.environment["PATH"]
+        setenv("PATH", lfsBin + ":" + (previousPath ?? "/usr/bin:/bin"), 1)
+        defer {
+            if let previousPath { setenv("PATH", previousPath, 1) }
+            else { unsetenv("PATH") }
+        }
+        try fixture.git(["lfs", "version"])
         try fixture.git(["init", "-q", "-b", "main"])
         for arguments in [
             ["config", "user.name", "BaileyUITest"],
