@@ -16,24 +16,25 @@ nonisolated enum GitHistoricalFileLocator {
     static func resolve(
         root: String, path: String, revision: String, backend: WorkspaceBackend
     ) async -> Result {
-        let current = (root as NSString).appendingPathComponent(path)
-        do {
-            if let stat = try await backend.stat(path: current),
-               stat.isRegular || stat.isSymlink { return .found(path) }
-        } catch WorkspaceError.notFound {
-            // The old path is absent; the selected revision may have been renamed.
-        } catch {
-            return .failed(error.localizedDescription)
+        func onDisk(_ relativePath: String) async -> Result {
+            do {
+                let file = (root as NSString).appendingPathComponent(relativePath)
+                if let stat = try await backend.stat(path: file),
+                   stat.isRegular || stat.isSymlink { return .found(relativePath) }
+                return .missing
+            } catch WorkspaceError.notFound {
+                return .missing
+            } catch {
+                return .failed(error.localizedDescription)
+            }
         }
 
-        // Renames belong to Git's Index/commits, never the live worktree:
-        // a worktree diff can run LFS clean filters and create media merely
-        // while browsing a historical file. Index covers staged renames;
-        // HEAD recovers committed renames when staged edits reduce similarity.
-        // NUL separators preserve arbitrary whitespace in Git pathnames.
-        for comparison in [["--cached", revision], [revision, "HEAD"]] {
+        // Only compare Git trees and the Index. Consulting the live worktree
+        // through Git diff would run LFS clean filters and create media.
+        // NUL separators preserve whitespace, Unicode and newlines in paths.
+        func renamed(_ source: String, comparing revisions: [String]) async -> Result {
             let args = ["diff", "--name-status", "-z", "--find-renames",
-                        "--diff-filter=R"] + comparison + ["--"]
+                        "--diff-filter=R"] + revisions + ["--"]
             let history = await GitCommandExecution.runData(
                 args, in: root, stdoutLimit: renameLimit + 1, backend: backend
             )
@@ -56,15 +57,33 @@ nonisolated enum GitHistoricalFileLocator {
                       change.hasPrefix("R") else {
                     return .failed(String(localized: "Unable to parse Git rename results", table: "Git"))
                 }
-                guard old == path else { continue }
-                do {
-                    if let stat = try await backend.stat(
-                        path: (root as NSString).appendingPathComponent(new)),
-                       stat.isRegular || stat.isSymlink { return .found(new) }
-                } catch WorkspaceError.notFound {
-                    continue
-                } catch {
-                    return .failed(error.localizedDescription)
+                if old == source { return .found(new) }
+            }
+            return .missing
+        }
+
+        let original = await onDisk(path)
+        guard original == .missing else { return original }
+        for comparison in [["--cached", revision], [revision, "HEAD"]] {
+            switch await renamed(path, comparing: comparison) {
+            case .failed(let message):
+                return .failed(message)
+            case .missing:
+                continue
+            case .found(let candidate):
+                let current = await onDisk(candidate)
+                guard current == .missing else { return current }
+                // A committed rename can be renamed again in the Index.
+                // Cumulative edits can hide the direct revision-to-Index rename
+                // even though Git recognizes each individual rename.
+                if comparison == [revision, "HEAD"] {
+                    switch await renamed(candidate, comparing: ["--cached", "HEAD"]) {
+                    case .failed(let message): return .failed(message)
+                    case .missing: break
+                    case .found(let staged):
+                        let latest = await onDisk(staged)
+                        guard latest == .missing else { return latest }
+                    }
                 }
             }
         }

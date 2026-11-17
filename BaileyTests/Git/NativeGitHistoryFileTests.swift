@@ -300,6 +300,71 @@ final class NativeGitHistoryFileTests: XCTestCase {
         XCTAssertTrue(try git(["status", "--porcelain=v1"], in: root).isEmpty)
     }
 
+    func testHistoricalRenameAcrossCommittedAndStagedStepsResolvesFinalFile() async throws {
+        for format in ["sha1", "sha256"] {
+            let root = try repository(objectFormat: format)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let original = "old 文件.csv"
+            let middle = "mid\t草稿.csv"
+            let current = "new\n最终.csv"
+            let baseLines = (1...100).map {
+                String(format: "common-line-%03d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", $0)
+            }
+            let midLines = Array(baseLines.prefix(65)) + (66...100).map {
+                String(format: "mid-change-%03d-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", $0)
+            }
+            let latestLines = (1...34).map {
+                String(format: "new-change-%03d-cccccccccccccccccccccccccccccccccccc", $0)
+            } + Array(midLines.dropFirst(34))
+            func bytes(_ lines: [String]) -> Data {
+                Data((lines.joined(separator: "\n") + "\n").utf8)
+            }
+            let originalBytes = bytes(baseLines)
+            let currentBytes = bytes(latestLines)
+            try originalBytes.write(to: root.appendingPathComponent(original))
+            _ = try git(["add", "-A"], in: root)
+            _ = try git(["commit", "-qm", "initial"], in: root)
+            let revision = try git(["rev-parse", "HEAD"], in: root)
+
+            _ = try git(["mv", original, middle], in: root)
+            try bytes(midLines).write(to: root.appendingPathComponent(middle))
+            _ = try git(["add", "-A"], in: root)
+            _ = try git(["commit", "-qm", "committed rename"], in: root)
+            let head = try git(["rev-parse", "HEAD"], in: root)
+            _ = try git(["mv", middle, current], in: root)
+            try currentBytes.write(to: root.appendingPathComponent(current))
+            _ = try git(["add", "-A"], in: root)
+            let index = try git(["rev-parse", ":" + current], in: root)
+
+            // Each immutable step is a real Git rename, but their combined
+            // similarity is too low for revision-to-index rename detection.
+            XCTAssertTrue(try git(["diff", "--cached", revision, "--name-status",
+                                   "--find-renames", "--diff-filter=R"], in: root).isEmpty)
+            XCTAssertTrue(try git(["diff", revision, "HEAD", "--name-status",
+                                   "--find-renames", "--diff-filter=R"], in: root).hasPrefix("R"))
+            XCTAssertTrue(try git(["diff", "--cached", "HEAD", "--name-status",
+                                   "--find-renames", "--diff-filter=R"], in: root).hasPrefix("R"))
+
+            let located = await GitHistoricalFileLocator.resolve(
+                root: root.path, path: original, revision: revision,
+                backend: LocalWorkspaceBackend.shared
+            )
+            XCTAssertEqual(located, .found(current))
+            let diff = DiffTab(repoRoot: root.path, path: original,
+                source: .revisionWorktree(hash: revision), untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await wait { !diff.isLoading }
+            XCTAssertNil(diff.error)
+            XCTAssertEqual(diff.resolvedWorktreePath, current)
+            XCTAssertEqual(diff.oldContent, String(decoding: originalBytes, as: UTF8.self))
+            XCTAssertEqual(diff.newContent, String(decoding: currentBytes, as: UTF8.self))
+            XCTAssertFalse(diff.isEditableNow)
+            XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), head)
+            XCTAssertEqual(try git(["rev-parse", ":" + current], in: root), index)
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(current)), currentBytes)
+        }
+    }
+
     func testLFSRevisionToRenamedWorktreeUsesRealMediaWithoutCacheWrites() async throws {
         let root = try lfsRepository()
         defer { try? FileManager.default.removeItem(at: root) }
