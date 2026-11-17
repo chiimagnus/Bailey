@@ -6261,6 +6261,24 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    private func lfsRepository() throws -> URL {
+        guard GitCommandExecution.run(["lfs", "version"],
+                                      in: FileManager.default.temporaryDirectory.path).status == 0 else {
+            throw XCTSkip("Git LFS is not installed on this test host")
+        }
+        let root = try repository()
+        for args in [
+            ["config", "core.hooksPath", ".git/hooks"],
+            ["lfs", "install", "--local"],
+            ["config", "core.hooksPath", "/dev/null"],
+            ["lfs", "track", "*.csv"],
+        ] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        return root
+    }
+
     private func repository() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -7406,6 +7424,108 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(rendered.string, computed.unified.text)
             XCTAssertFalse(colored.isEmpty, "No native foreground colors for \(path)")
         }
+    }
+
+    func testLFSWorktreeNativeEditSaveAndExternalWriterConflictKeepRawBytes() async throws {
+        let root = try lfsRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "sheets/层理.csv"
+        let file = root.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let baseline = "strain,stress\n0,1\n1,5\n"
+        let modified = "strain,stress\n0,1\n1,6\n"
+        let saved = "strain,stress\n0,1\n1,8\n"
+        let competing = "strain,stress\n0,1\n1,7\n"
+        try Data(baseline.utf8).write(to: file)
+        for args in [["add", "-A"], ["commit", "-qm", "original LFS CSV"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let commit = GitCommandExecution.run(["rev-parse", "HEAD"], in: root.path).stdout
+        let stage = GitCommandExecution.run(["ls-files", "--stage", "--", path], in: root.path).stdout
+        func media() -> Set<String> {
+            let objects = root.appendingPathComponent(".git/lfs/objects")
+            let files = FileManager.default.enumerator(at: objects,
+                                                        includingPropertiesForKeys: [.isRegularFileKey])
+            return Set((files?.allObjects as? [URL] ?? []).map(\.lastPathComponent)
+                .filter { $0.utf8.count == 64 })
+        }
+        let originalMedia = media()
+        try Data(modified.utf8).write(to: file)
+        let diff = DiffTab(repoRoot: root.path, path: path, source: .worktree,
+                           untracked: false, origPath: nil,
+                           backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                           preferences: try isolatedPreferences())
+        diff.autoSaveSuspendedForClose = true
+        try await wait { !diff.isLoading && diff.display != nil }
+        XCTAssertNil(diff.error)
+        XCTAssertTrue(diff.isEditableNow)
+        XCTAssertEqual(diff.oldContent, baseline)
+        XCTAssertEqual(diff.newContent, modified)
+        try replaceNativeDiffText(diff, with: saved)
+        XCTAssertTrue(diff.isDirty)
+        await diff.save()
+        XCTAssertNil(diff.saveError)
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertEqual(try Data(contentsOf: file), Data(saved.utf8))
+        XCTAssertEqual(media(), originalMedia,
+                       "Native Diff saving worktree bytes must not clean to a new LFS media object")
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: root.path).stdout, commit)
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "--stage", "--", path], in: root.path).stdout, stage)
+
+        let stale = DiffTab(repoRoot: root.path, path: path, source: .worktree,
+                            untracked: false, origPath: nil,
+                            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                            preferences: try isolatedPreferences())
+        stale.autoSaveSuspendedForClose = true
+        try await wait { !stale.isLoading && stale.display != nil }
+        try replaceNativeDiffText(stale, with: modified)
+        XCTAssertEqual(saved.utf8.count, competing.utf8.count)
+        try Data(competing.utf8).write(to: file)
+        await stale.save()
+        XCTAssertNotNil(stale.saveError,
+                        "An external writer must never be overwritten by a stale LFS editor")
+        XCTAssertTrue(stale.isDirty)
+        XCTAssertEqual(try Data(contentsOf: file), Data(competing.utf8))
+        XCTAssertEqual(media(), originalMedia)
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "--stage", "--", path], in: root.path).stdout, stage)
+    }
+
+    func testLFSWorktreeGBKNativeSaveRetainsEncodingAndRealBytes() async throws {
+        let root = try lfsRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "曲线数据.csv"
+        let file = root.appendingPathComponent(path)
+        let previous = "# coding: gbk\n角度,强度\n0,10\n"
+        let current = "# coding: gbk\n角度,强度\n0,20\n"
+        let edited = "# coding: gbk\n角度,强度\n0,30\n"
+        let previousBytes = try XCTUnwrap(TextFileEncoding.gbk.encoded(previous))
+        let currentBytes = try XCTUnwrap(TextFileEncoding.gbk.encoded(current))
+        let editedBytes = try XCTUnwrap(TextFileEncoding.gbk.encoded(edited))
+        try previousBytes.write(to: file)
+        for args in [["add", "-A"], ["commit", "-qm", "GBK LFS media"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let index = GitCommandExecution.run(["ls-files", "--stage", "--", path], in: root.path).stdout
+        try currentBytes.write(to: file)
+        let tab = DiffTab(repoRoot: root.path, path: path, source: .worktree,
+                          untracked: false, origPath: nil,
+                          backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                          preferences: try isolatedPreferences())
+        tab.autoSaveSuspendedForClose = true
+        try await wait { !tab.isLoading && tab.display != nil }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.oldContent, previous)
+        XCTAssertEqual(tab.newContent, current)
+        XCTAssertEqual(tab.fileEncoding, .gbk)
+        try replaceNativeDiffText(tab, with: edited)
+        await tab.save()
+        XCTAssertNil(tab.saveError)
+        XCTAssertFalse(tab.isDirty)
+        XCTAssertEqual(try Data(contentsOf: file), editedBytes)
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "--stage", "--", path], in: root.path).stdout, index)
     }
 
     func testGitWorktreeDiffUsesGitEOLRulesWithoutChangingEditorBytes() async throws {

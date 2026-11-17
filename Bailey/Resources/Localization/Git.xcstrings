@@ -3497,6 +3497,16 @@
         }
       }
     },
+    "Git LFS worktree is still a pointer; restore its actual content before editing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git LFS 工作区文件仍为指针；编辑前请还原真实内容"
+          }
+        }
+      }
+    },
     "Invalid Git LFS pointer" : {
       "localizations" : {
         "zh-Hans" : {

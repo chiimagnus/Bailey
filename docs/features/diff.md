@@ -32,8 +32,13 @@ Split 左侧折叠基线与右侧可编辑正文对齐，新增／删除行按�
   历史 Blob 是否为 LFS 由其不可变内容决定，不能受当前 `.gitattributes` 改动影响。
   UTF-8、UTF BOM、`coding:` 及 Windows `mbcs` 使用与 Files 一致的严格编码规则，
   未能判定的非 UTF-8 文本显示编码选择入口，而不是冒充二进制。
-  不能先丢掉 NUL、无效字节或进行有损解码再比较；`hash-object --path` 必须接收工作区原始字节，
-  再由 Git 按 `.gitattributes`／clean filter 计算规范化 OID。
+  不能先丢掉 NUL、无效字节或进行有损解码再比较；**非 LFS** 路径的
+  `hash-object --path` 必须接收工作区原始字节，再由 Git 按 `.gitattributes`／clean filter
+  计算规范化 OID。对旧 Blob 为 LFS pointer、或当前 filter 已变为 LFS 的工作区文件，
+  直接比较真实媒体与原始可编辑正文，不使用 Git pointer 的 Patch 行坐标，也不运行
+  会产生 LFS 对象的 `hash-object`／clean filter。仅从 Git 比对 LFS 时重新核对原始字节和旧 OID。
+  工作区仍是 LFS pointer 占位文件时明确报错，不开放可写 Diff；
+  文件保存仍执行原有条件写入，不得以 Git 暂存区或 LFS 缓存代替工作区原始字节。
   仅编码字节变化、解码后文字相同时，仍显示 Git 变更及编码差异，不误报「无修改」；
   带 BOM 的工作区文本遇到 Git EOL／clean 规则时，以原字节计算 Git OID；规范化内容一致则不产生假差异。
   Staged／历史为只读；可编辑 Worktree 保存沿用原编码，明确选定新编码时
