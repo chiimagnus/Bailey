@@ -1,0 +1,42 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "让共享树正确表达同路径文件与目录"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "让真实历史、Tree/List 和交互共享同一完整集合"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "离线解析锁定的 LFS 指针并读取经校验的真实字节"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "用真实 LFS 正文计算差异并守住 Git 规范化与保存边界"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "以隔离真实仓库和 Bailey Dev 完成跨来源验收"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
