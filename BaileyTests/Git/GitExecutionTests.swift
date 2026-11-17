@@ -95,7 +95,8 @@ final class GitExecutionTests: XCTestCase {
             var durations: [String: [Double]] = [:]
             for _ in 0..<30 {
                 for (phase, arguments) in [
-                    ("metadata", ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name]),
+                    ("metadata", ["--no-literal-pathspecs", "ls-files", "--stage", "-z", "--",
+                     ":(literal)" + name, ":(exclude,literal)" + name + "/"]),
                     ("size", ["cat-file", "-s", oid]),
                     ("blob", ["cat-file", "blob", oid])
                 ] {
@@ -176,12 +177,13 @@ final class GitExecutionTests: XCTestCase {
 
         // These are the two independent metadata calls made by a Staged Diff.
         let tree = GitCommandExecution.runData(
-            ["--literal-pathspecs", "ls-tree", "-rz", "--full-tree", "HEAD", "--", name],
+            ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", "HEAD", "--", name],
             in: directory.path)
         XCTAssertEqual(tree.status, 0)
         XCTAssertEqual(git(["reset", "--hard", afterHead]).status, 0)
         let index = GitCommandExecution.runData(
-            ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name],
+            ["--no-literal-pathspecs", "ls-files", "--stage", "-z", "--",
+                     ":(literal)" + name, ":(exclude,literal)" + name + "/"],
             in: directory.path)
         XCTAssertEqual(index.status, 0)
         XCTAssertEqual(git(["diff", "--cached", "--quiet"]).status, 0)

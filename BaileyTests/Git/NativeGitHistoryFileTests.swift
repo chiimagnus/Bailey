@@ -146,6 +146,160 @@ final class NativeGitHistoryFileTests: XCTestCase {
         XCTAssertEqual(try git(["show", selected + ":old.txt"], in: root), "old bytes")
     }
 
+    func testHistoricalDeletedFileReplacedByDirectoryOpensEmptyDeletionDiff() async throws {
+        for format in ["sha1", "sha256"] {
+            let root = try repository(objectFormat: format)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let oldText = "old history body\n"
+            try Data(oldText.utf8).write(to: root.appendingPathComponent("reused"))
+            _ = try git(["add", "-A"], in: root)
+            _ = try git(["commit", "-qm", "old file"], in: root)
+            let parent = try git(["rev-parse", "HEAD"], in: root)
+
+            try FileManager.default.removeItem(at: root.appendingPathComponent("reused"))
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent("reused"), withIntermediateDirectories: true
+            )
+            let addedText = "new folder child\n"
+            try Data(addedText.utf8).write(to: root.appendingPathComponent("reused/child.txt"))
+            let worktree = DiffTab(
+                repoRoot: root.path, path: "reused", source: .worktree,
+                untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            )
+            try await wait { !worktree.isLoading }
+            XCTAssertNil(worktree.error)
+            XCTAssertEqual(worktree.oldContent, oldText)
+            XCTAssertEqual(worktree.newContent, "")
+            XCTAssertTrue(worktree.hasChanges)
+
+            // A pathspec for "reused" also matches its descendants. Populate
+            // enough staged children to exceed the 64 KiB metadata budget if
+            // the Git query enumerates them instead of selecting only the file.
+            for index in 0..<1_200 {
+                try Data("leaf\n".utf8).write(
+                    to: root.appendingPathComponent("reused/leaf-\(index).txt")
+                )
+            }
+            let specialPath = "literal[中] name.csv"
+            let specialText = "strain,stress\n0,1\n"
+            try Data(specialText.utf8).write(to: root.appendingPathComponent(specialPath))
+            _ = try git(["add", "-A"], in: root)
+            let special = DiffTab(
+                repoRoot: root.path, path: specialPath, source: .staged,
+                untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            )
+            try await wait { !special.isLoading }
+            XCTAssertNil(special.error)
+            XCTAssertEqual(special.newContent, specialText)
+            let staged = DiffTab(
+                repoRoot: root.path, path: "reused", source: .staged,
+                untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            )
+            try await wait { !staged.isLoading }
+            XCTAssertNil(staged.error)
+            XCTAssertEqual(staged.oldContent, oldText)
+            XCTAssertEqual(staged.newContent, "")
+            XCTAssertTrue(staged.hasChanges)
+
+            _ = try git(["commit", "-qm", "file to directory"], in: root)
+            let head = try git(["rev-parse", "HEAD"], in: root)
+
+            let deleted = DiffTab(
+                repoRoot: root.path, path: "reused",
+                source: .commit(hash: head, parent: parent, status: "D"),
+                untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            )
+            let directory = DiffTab(
+                repoRoot: root.path, path: "reused", source: .revision(hash: head),
+                untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            )
+            let added = DiffTab(
+                repoRoot: root.path, path: "reused/child.txt",
+                source: .commit(hash: head, parent: parent, status: "A"),
+                untracked: false, origPath: nil,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            )
+            try await wait { !deleted.isLoading && !directory.isLoading && !added.isLoading }
+            XCTAssertNil(deleted.error)
+            XCTAssertEqual(deleted.oldContent, oldText)
+            XCTAssertEqual(deleted.newContent, "")
+            XCTAssertTrue(deleted.hasChanges)
+            XCTAssertEqual(directory.error, String(
+                localized: "Selected Git revision does not contain this file", table: "Git"
+            ))
+            XCTAssertNil(added.error)
+            XCTAssertEqual(added.newContent, addedText)
+            XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), head)
+            XCTAssertTrue(try git(["status", "--porcelain=v1"], in: root).isEmpty)
+        }
+    }
+
+    func testHistoricalDirectoryReplacedByFileRetainsDeletedChild() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("reused"), withIntermediateDirectories: true
+        )
+        let childText = "old child\n"
+        try Data(childText.utf8).write(
+            to: root.appendingPathComponent("reused/child.txt")
+        )
+        _ = try git(["add", "-A"], in: root)
+        _ = try git(["commit", "-qm", "old directory"], in: root)
+        let parent = try git(["rev-parse", "HEAD"], in: root)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("reused"))
+        let newText = "replacement file\n"
+        try Data(newText.utf8).write(to: root.appendingPathComponent("reused"))
+        let worktree = DiffTab(
+            repoRoot: root.path, path: "reused/child.txt", source: .worktree,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !worktree.isLoading }
+        XCTAssertNil(worktree.error)
+        XCTAssertEqual(worktree.oldContent, childText)
+        XCTAssertEqual(worktree.newContent, "")
+        _ = try git(["add", "-A"], in: root)
+        let staged = DiffTab(
+            repoRoot: root.path, path: "reused/child.txt", source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !staged.isLoading }
+        XCTAssertNil(staged.error)
+        XCTAssertEqual(staged.oldContent, childText)
+        XCTAssertEqual(staged.newContent, "")
+
+        _ = try git(["commit", "-qm", "directory to file"], in: root)
+        let head = try git(["rev-parse", "HEAD"], in: root)
+        let deleted = DiffTab(
+            repoRoot: root.path, path: "reused/child.txt",
+            source: .commit(hash: head, parent: parent, status: "D"),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        let added = DiffTab(
+            repoRoot: root.path, path: "reused",
+            source: .commit(hash: head, parent: parent, status: "A"),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !deleted.isLoading && !added.isLoading }
+        XCTAssertNil(deleted.error)
+        XCTAssertEqual(deleted.oldContent, childText)
+        XCTAssertEqual(deleted.newContent, "")
+        XCTAssertNil(added.error)
+        XCTAssertEqual(added.newContent, newText)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), head)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"], in: root).isEmpty)
+    }
+
     func testLFSRevisionToRenamedWorktreeUsesRealMediaWithoutCacheWrites() async throws {
         let root = try lfsRepository()
         defer { try? FileManager.default.removeItem(at: root) }

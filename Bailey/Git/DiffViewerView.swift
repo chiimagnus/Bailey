@@ -1394,10 +1394,14 @@ final class DiffTab: nonisolated Identifiable {
         switch location {
         case .index(let name, _):
             path = name
-            args = ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name]
+            // A literal pathspec includes directory descendants. Exclude that
+            // subtree in Git itself so a reused directory cannot exhaust the
+            // metadata budget before we can determine the exact index entry.
+            args = ["--no-literal-pathspecs", "ls-files", "--stage", "-z", "--",
+                    ":(literal)" + name, ":(exclude,literal)" + name + "/"]
         case .tree(let revision, let name):
             path = name
-            args = ["--literal-pathspecs", "ls-tree", "-rz", "--full-tree", revision, "--", name]
+            args = ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", revision, "--", name]
         }
         let limit = 1 << 16
         let metadata = await GitCommandExecution.runData(
@@ -1453,7 +1457,12 @@ final class DiffTab: nonisolated Identifiable {
                 oid = String(fields[1])
                 stage = parsedStage
             case .tree:
-                guard fields.count == 3, fields[1] == "blob" else {
+                guard fields.count == 3 else {
+                    return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+                }
+                // A directory replacing this file is an absent file, not a Git blob.
+                if fields[1] == "tree" { continue }
+                guard fields[1] == "blob" else {
                     return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
                 }
                 oid = String(fields[2])
@@ -1666,6 +1675,10 @@ final class DiffTab: nonisolated Identifiable {
             // Deleted from the worktree: an empty "after" side is the diff.
             return ("", nil, .utf8, Data(), nil)
         } catch {
+            // Git can report deletion when a new directory occupies the old file path.
+            if let stat = try? await backend.stat(path: filePath), stat.isDirectory {
+                return ("", nil, .utf8, Data(), nil)
+            }
             return ("", String(
                 localized: "Unable to read file: \(error.localizedDescription)", table: "Git",
                 comment: "Diff error followed by a system-provided error description."

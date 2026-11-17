@@ -38,9 +38,20 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(deleted.exists, "Collapsing a directory must not hide the sibling deleted file")
         folder.click()
         XCTAssertTrue(addedFirst.waitForExistence(timeout: 12))
+        deleted.click()
+        let layout = app.windows.firstMatch.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        layout.radioButtons.element(boundBy: 1).click()
+        let deletedContent = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.windows.firstMatch.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String) == "previous file body\n"
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [deletedContent], timeout: 15), .completed,
+                       "Deleted file must show its old body even when a directory reuses its path")
         addedFirst.click()
-        XCTAssertTrue(app.windows.firstMatch.radioGroups["bailey.diff.layout"]
-            .waitForExistence(timeout: 15), "New file must open its actual Git history Diff")
+        XCTAssertTrue(layout.waitForExistence(timeout: 15),
+                      "New file must open its actual Git history Diff")
         XCTAssertEqual(try Data(contentsOf: first), Data("new first body\n".utf8))
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)

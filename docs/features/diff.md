@@ -271,7 +271,10 @@ Diff 与文件编辑共享 NSTextStorage 的 Undo 通知和只读辅助功能写
 通常导航可刷新干净文件，未保存编辑阻止旧读取覆盖正文。
 已成功加载的不可变历史标签再次打开时复用原文，不重新查询 Git；live 文件重新选择时继续检查外部变化。
 
-Git 内容先通过原始 NUL 分隔的 index／tree metadata 匹配字面路径，
+Git 内容先通过原始 NUL 分隔的 index／tree metadata 精确匹配目标路径，
+Index 查询在 Git 端排除目录后代，不允许大量无关条目耗尽元数据容量；
+旧文件被目录取代时，历史、暂存和工作区的对应新侧为空，
+gitlink 和其它非文本对象仍按原有错误边界处理。
 锁定 blob OID 后用一次 `git cat-file --batch` 核对对象类型、大小、完整字节和结束标记，
 避免两次独立对象读取。Blob、metadata、patch 和 clean filter 的短输出
 在本机与 SSH 的实际进程管道处设独立上限；超限即失败，不能以截断前缀作为成功结果，
