@@ -19,7 +19,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             throw XCTSkip("Requires an authorized isolated Windows SSH host")
         }
         let socket = "/tmp/bailey-p2-reap-\(UUID().uuidString.prefix(8)).sock"
-        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
         let created = try await backend.run(
             argv: ["mktemp", "-d", "/tmp/bailey-p2-reap-XXXXXX"],
             cwd: nil, env: nil, stdin: nil, timeout: 25
@@ -124,7 +124,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST=windows for an authorized SSH test")
         }
         let socket = "/tmp/bailey-p2-vanish-\(UUID().uuidString.prefix(8)).sock"
-        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
         let result = try await backend.run(
             argv: ["mktemp", "-d", "/tmp/bailey-p2-vanish-XXXXXX"],
             cwd: nil, env: nil, stdin: nil, timeout: 25
@@ -158,33 +158,45 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             XCTAssertEqual(closed.status, 0)
         }
         do {
+            // Allow the real 30-second SSH watcher startup and remote rename
+            // separately. A shared 16-second deadline cancels a healthy watcher.
             let subscription = SSHWindowsFileEvents.subscribe(
-                host: host, windowsRoot: native, leaseSeconds: 25
+                host: host, windowsRoot: native, leaseSeconds: 60
             )
             defer { subscription.cancel() }
-            let stream = subscription.events
+            let ready = expectation(description: "Windows watcher READY")
+            let lost = expectation(description: "Windows watcher LOST after root moves")
+            var sawReady = false
+            var renameRequested = false
             let consumer = Task {
-                for await event in stream {
+                for await event in subscription.events {
                     switch event {
                     case .ready:
-                        try await backend.rename(from: root, to: moved)
+                        sawReady = true
+                        ready.fulfill()
                     case .lost:
-                        return true
+                        if renameRequested { lost.fulfill() }
+                        else { XCTFail("Windows watcher reported LOST before the root moved") }
+                        return
                     case .ended:
-                        return false
+                        XCTFail("Windows watcher ended without reporting root loss")
+                        return
                     case .dirty:
                         continue
                     }
                 }
-                return false
             }
-            let deadline = Task {
-                try? await Task.sleep(for: .seconds(16))
-                consumer.cancel()
-            }
-            let lost = try await consumer.value
-            deadline.cancel()
-            XCTAssertTrue(lost, "Moving an active Windows watch root must restore the polling fallback")
+            defer { consumer.cancel() }
+            await fulfillment(of: [ready], timeout: 32)
+            guard sawReady else { throw WorkspaceError.timedOut }
+
+            renameRequested = true
+            try await backend.rename(from: root, to: moved)
+            await fulfillment(of: [lost], timeout: 16)
+            let oldRoot = try await backend.stat(path: root)
+            let movedRoot = try await backend.stat(path: moved)
+            XCTAssertNil(oldRoot)
+            XCTAssertEqual(movedRoot?.isDirectory, true)
         } catch {
             await cleanup()
             throw error
@@ -197,7 +209,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST=windows for an authorized SSH test")
         }
         let socket = "/tmp/bailey-p2-symlink-\(UUID().uuidString.prefix(8)).sock"
-        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
         let created = try await backend.run(
             argv: ["mktemp", "-d", "/tmp/bailey-p2-symlink-XXXXXX"],
             cwd: nil, env: nil, stdin: nil, timeout: 25
@@ -251,7 +263,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST=windows for an authorized SSH test")
         }
         let socket = "/tmp/bailey-p2-owner-\(UUID().uuidString.prefix(8)).sock"
-        let remote = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        let remote = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
         let created = try await remote.run(
             argv: ["mktemp", "-d", "/tmp/bailey-p2-owner-XXXXXX"],
             cwd: nil, env: nil, stdin: nil, timeout: 25
@@ -396,7 +408,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST=windows for an authorized SSH test")
         }
         let socket = "/tmp/bailey-p2-files-\(UUID().uuidString.prefix(8)).sock"
-        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
         let directory = try await backend.run(
             argv: ["mktemp", "-d", "/tmp/bailey-p2-live-XXXXXX"],
             cwd: nil, env: nil, stdin: nil, timeout: 25
