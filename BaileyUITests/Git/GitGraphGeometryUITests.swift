@@ -563,10 +563,11 @@ final class GitGraphGeometryUITests: XCTestCase {
         XCTAssertTrue(overflow.isHittable,
                       "All 33 remote references must remain reachable in a real 150pt Git panel")
         overflow.click()
+        // One AX snapshot materializes native submenu items that a sequence of
+        // independent lazy lookups may otherwise miss while the menu is open.
+        let visibleReferences = Set(app.menuItems.allElementsBoundByIndex.map(\.title))
         for index in 0..<33 {
-            let reference = app.menuItems.matching(NSPredicate(
-                format: "title == %@", "remote-\(index)/main")).firstMatch
-            XCTAssertTrue(reference.waitForExistence(timeout: 8),
+            XCTAssertTrue(visibleReferences.contains("remote-\(index)/main"),
                           "Every configured remote must keep its own native menu target")
         }
         let last = app.menuItems.matching(NSPredicate(
