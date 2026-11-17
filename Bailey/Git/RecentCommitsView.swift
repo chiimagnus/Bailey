@@ -87,6 +87,18 @@ struct GitGraphReferenceGroup {
     }
 }
 
+@MainActor
+final class CommitGraphLayoutCache {
+    private var cached: (commits: [GitStatusModel.RecentCommit], layout: CommitGraphLayout)?
+
+    func layout(for commits: [GitStatusModel.RecentCommit]) -> CommitGraphLayout {
+        if let cached, cached.commits == commits { return cached.layout }
+        let layout = CommitGraphLayout(commits: commits)
+        cached = (commits, layout)
+        return layout
+    }
+}
+
 /// Commit history shares the file-tree rows while drawing its own real Git DAG.
 struct RecentCommitsView: View {
     typealias Commit = GitStatusModel.RecentCommit
@@ -163,6 +175,7 @@ struct RecentCommitsView: View {
     @Binding private var collapsedFolders: Set<String>
     @State private var requestedLastCommit: String?
     @State private var viewportWidth: CGFloat = 0
+    @State private var layoutCache = CommitGraphLayoutCache()
     @State private var localKeyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var focusedRowID: String?
@@ -336,7 +349,7 @@ struct RecentCommitsView: View {
 
     var body: some View {
         let _ = themeChanges.revision
-        let graph = CommitGraphLayout(commits: commits)
+        let graph = layoutCache.layout(for: commits)
         let spacing = CommitGraphRails.spacing(
             lanes: graph.laneCount, viewportWidth: viewportWidth, scale: fontScale
         )
@@ -731,7 +744,8 @@ struct RecentCommitsView: View {
                   case .commit(let selected) = rows[current].action,
                   let next = Self.navigationTarget(
                     commits: commits, current: selected, parent: event.keyCode == 125,
-                    alternate: event.modifierFlags.contains(.shift)
+                    alternate: event.modifierFlags.contains(.shift),
+                    layout: event.keyCode == 126 ? layoutCache.layout(for: commits) : nil
                   ) else { return false }
             focusRow(commitRowID(next))
             if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
@@ -782,7 +796,8 @@ struct RecentCommitsView: View {
 
     /// Navigate only real Git commits. Worktree and Stash pseudo nodes never form edges.
     static func navigationTarget(
-        commits: [Commit], current: Commit, parent: Bool, alternate: Bool
+        commits: [Commit], current: Commit, parent: Bool, alternate: Bool,
+        layout: CommitGraphLayout? = nil
     ) -> Commit? {
         guard current.stash == nil, current.worktree == nil else { return nil }
         let real = commits.filter { $0.stash == nil && $0.worktree == nil }
@@ -791,7 +806,7 @@ struct RecentCommitsView: View {
             guard current.parentHashes.indices.contains(index) else { return nil }
             return real.first { $0.hash == current.parentHashes[index] }
         }
-        let layout = CommitGraphLayout(commits: commits)
+        let layout = layout ?? CommitGraphLayout(commits: commits)
         let lanes = Dictionary(uniqueKeysWithValues: zip(commits, layout.rows).compactMap {
             commit, row -> (String, Int)? in
             commit.stash == nil && commit.worktree == nil ? (commit.hash, row.node.lane) : nil
