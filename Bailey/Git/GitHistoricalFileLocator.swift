@@ -1,9 +1,8 @@
 import Foundation
 
-/// Resolve Git Graph's "Open File" and "Diff with Working File" semantics:
-/// keep the historical path when it still exists; only then look for a rename
-/// between the selected revision and today's worktree. Never use Mac files
-/// when the selected backend belongs to an SSH workspace.
+/// Resolve historical "Open File" and "Diff with Working File" paths:
+/// prefer an existing original path, otherwise follow Git tree/Index renames
+/// and confirm the result through the selected local or SSH backend.
 nonisolated enum GitHistoricalFileLocator {
     enum Result: Equatable, Sendable {
         case found(String)
@@ -21,8 +20,6 @@ nonisolated enum GitHistoricalFileLocator {
                 let file = (root as NSString).appendingPathComponent(relativePath)
                 if let stat = try await backend.stat(path: file),
                    stat.isRegular || stat.isSymlink { return .found(relativePath) }
-                return .missing
-            } catch WorkspaceError.notFound {
                 return .missing
             } catch {
                 return .failed(error.localizedDescription)
