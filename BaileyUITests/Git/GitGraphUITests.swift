@@ -4,6 +4,49 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testHistoricalTreeKeepsDeletedFileBesideDirectoryReusingItsPath() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let oldFile = try fixture.file("reused", text: "previous file body\n")
+        try fixture.initializeGit()
+        try FileManager.default.removeItem(at: oldFile)
+        let first = try fixture.file("reused/first.txt", text: "new first body\n")
+        _ = try fixture.file("reused/second.txt", text: "new second body\n")
+        try fixture.git(["add", "-A"])
+        try fixture.git(["commit", "-qm", "file replaced with directory"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let expected = try fixture.git(["diff", "--name-status", "--no-renames", "HEAD^", "HEAD"])
+        XCTAssertTrue(String(decoding: expected, as: UTF8.self).contains("D\treused\n"))
+
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["file replaced with directory"]
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+        commit.click()
+        let deleted = historicalFile("reused", in: app)
+        let addedFirst = historicalFile("reused/first.txt", in: app)
+        let addedSecond = historicalFile("reused/second.txt", in: app)
+        let folder = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "reused")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 12))
+        XCTAssertTrue(deleted.waitForExistence(timeout: 12),
+                      "Deleted file must coexist with the new folder at the same Git path")
+        XCTAssertTrue(addedFirst.waitForExistence(timeout: 12))
+        XCTAssertTrue(addedSecond.waitForExistence(timeout: 12))
+
+        folder.click()
+        folder.click()
+        XCTAssertTrue(addedFirst.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(deleted.exists, "Collapsing a directory must not hide the sibling deleted file")
+        folder.click()
+        XCTAssertTrue(addedFirst.waitForExistence(timeout: 12))
+        addedFirst.click()
+        XCTAssertTrue(app.windows.firstMatch.radioGroups["bailey.diff.layout"]
+            .waitForExistence(timeout: 15), "New file must open its actual Git history Diff")
+        XCTAssertEqual(try Data(contentsOf: first), Data("new first body\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testHostedCommitMenuKeepsRemoteSetupOutOfMainPanel() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("hosted.txt", text: "remote context\n")

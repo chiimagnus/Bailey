@@ -443,6 +443,93 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(GitStatusModel.parseGitFileChanges(Data()), [])
     }
 
+    func testRealHistoryRetainsBothKindsOfNodesWhenPathsAreReused() async throws {
+        for format in ["sha1", "sha256"] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Bailey-History-Paths-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            func git(_ args: [String]) -> String {
+                let result = GitCommandExecution.run(args, in: root.path, timeout: 20)
+                XCTAssertEqual(result.status, 0, result.stderr)
+                return result.stdout.trimmingCharacters(in: .newlines)
+            }
+            func write(_ path: String, _ text: String) throws {
+                let url = root.appendingPathComponent(path)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try Data(text.utf8).write(to: url)
+            }
+            _ = git(["init", "-q", "-b", "main", "--object-format=\(format)"])
+            for args in [
+                ["config", "user.name", "History"],
+                ["config", "user.email", "history@invalid"],
+                ["config", "commit.gpgsign", "false"],
+                ["config", "diff.renames", "false"],
+            ] { _ = git(args) }
+            try write("pkg/tool", "an old plain file\n")
+            try write("pkg/dirToFile/inside.txt", "an old nested file\n")
+            _ = git(["add", "-A"])
+            _ = git(["commit", "-qm", "base"])
+            let base = git(["rev-parse", "HEAD"])
+            _ = git(["update-index", "--add", "--cacheinfo", "160000,\(base),pkg/link"])
+            _ = git(["commit", "-qm", "gitlink"])
+
+            try FileManager.default.removeItem(at: root.appendingPathComponent("pkg/tool"))
+            try FileManager.default.removeItem(at: root.appendingPathComponent("pkg/dirToFile"))
+            _ = git(["rm", "--cached", "--", "pkg/link"])
+            try write("pkg/tool/a.swift", "new nested Swift content\n")
+            try write("pkg/tool/中 文.txt", "Chinese filename\n")
+            try write("pkg/tool/n\nline.txt", "a path with a newline\n")
+            try write("pkg/dirToFile", "new leaf replacement\n")
+            try write("pkg/link/from-gitlink.txt", "new gitlink descendant\n")
+            _ = git(["add", "-A"])
+            _ = git(["commit", "-qm", "replace paths"])
+            let head = git(["rev-parse", "HEAD"])
+            let expected = Set([
+                "D|pkg/tool", "A|pkg/tool/a.swift", "A|pkg/tool/中 文.txt",
+                "A|pkg/tool/n\nline.txt", "D|pkg/dirToFile/inside.txt",
+                "A|pkg/dirToFile", "D|pkg/link", "A|pkg/link/from-gitlink.txt",
+            ])
+            let raw = git(["diff", "--name-status", "-z", "--no-renames", "HEAD^", "HEAD"])
+            let parsed = try XCTUnwrap(GitStatusModel.parseGitFileChanges(Data(raw.utf8)))
+            XCTAssertEqual(Set(parsed.map { "\($0.status)|\($0.path)" }), expected)
+            XCTAssertEqual(parsed.count, expected.count)
+
+            let model = GitStatusModel()
+            model.sync(root: root.path)
+            try await wait { model.canUseCurrentHistory
+                && model.recentCommits.contains(where: { $0.hash == head }) }
+            let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == head })
+            XCTAssertEqual(Set(commit.files.map { "\($0.status)|\($0.path)" }), expected)
+            XCTAssertEqual(commit.files.count, parsed.count)
+            let rows = commit.files.map {
+                TreeDisplayModel.Row(name: $0.fileName, path: $0.path,
+                                     isDirectory: false, status: .init($0.status))
+            }
+            let tree = TreeDisplayModel.pathRows(rows, section: "commit", collapsed: [])
+            let leaves = tree.filter { !$0.isDirectory }
+            XCTAssertEqual(Set(leaves.map(\.id)).count, expected.count)
+            XCTAssertEqual(Set(leaves.map(\.path)), Set(commit.files.map(\.path)))
+            for change in commit.files {
+                XCTAssertEqual(leaves.first(where: { $0.path == change.path })?.status,
+                               TreeDisplayModel.Status(change.status))
+            }
+            XCTAssertEqual(leaves.count, commit.files.count)
+            for path in ["pkg/tool", "pkg/dirToFile", "pkg/link"] {
+                XCTAssertTrue(tree.contains { $0.path == path && $0.isDirectory })
+                XCTAssertTrue(tree.contains { $0.path == path && !$0.isDirectory })
+            }
+            let folded = TreeDisplayModel.pathRows(
+                rows, section: "commit", collapsed: ["commit:pkg/tool"]
+            )
+            XCTAssertTrue(folded.contains { $0.path == "pkg/tool" && !$0.isDirectory })
+            XCTAssertFalse(folded.contains { $0.path == "pkg/tool/a.swift" })
+            XCTAssertEqual(git(["rev-parse", "HEAD"]), head)
+            XCTAssertTrue(git(["status", "--porcelain=v1"]).isEmpty)
+        }
+    }
+
     func testCommitNavigationUsesRealParentsAndChildrenForMergeBranches() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-Graph-Navigation-" + UUID().uuidString)
