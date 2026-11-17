@@ -833,12 +833,22 @@ final class GitStatusModel {
 
     private(set) var refsByName: [String: GitRef] = [:]
 
+    @ObservationIgnored private var knownRemotesCache: (
+        commits: [RecentCommit], refs: [String: GitRef], remotes: [String],
+        value: [String: Set<String>]
+    )?
+
     /// A local tracking ref proves known fetched/pushed history, not live server state.
     var knownRemotesByCommit: [String: Set<String>] {
         guard canUseCurrentReferences, hasCurrentHistory else { return [:] }
-        return Self.knownRemotesByCommit(
+        if let cached = knownRemotesCache,
+           cached.commits == recentCommits, cached.refs == refsByName,
+           cached.remotes == remotes { return cached.value }
+        let value = Self.knownRemotesByCommit(
             recentCommits, refsByName: refsByName, remotes: remotes
         )
+        knownRemotesCache = (recentCommits, refsByName, remotes, value)
+        return value
     }
 
     nonisolated static func knownRemotesByCommit(
@@ -971,12 +981,22 @@ final class GitStatusModel {
 
     private(set) var stashFilesByOID: [String: StashFilesState] = [:]
     @ObservationIgnored private var stashFileTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var graphCommitsCache: (
+        commits: [RecentCommit], stashes: [Stash], worktrees: [WorktreeChanges],
+        locations: [WorktreeLocation], value: [RecentCommit]
+    )?
+
     var graphCommits: [RecentCommit] {
-        Self.graphCommits(
-            recentCommits, stashes: stashes,
-            worktrees: ([currentWorktree].compactMap { $0 } + otherWorktrees),
-            locations: worktreeLocations
-        )
+        let worktrees = [currentWorktree].compactMap { $0 } + otherWorktrees
+        if let cached = graphCommitsCache,
+           cached.commits == recentCommits, cached.stashes == stashes,
+           cached.worktrees == worktrees, cached.locations == worktreeLocations {
+            return cached.value
+        }
+        let value = Self.graphCommits(recentCommits, stashes: stashes,
+                                      worktrees: worktrees, locations: worktreeLocations)
+        graphCommitsCache = (recentCommits, stashes, worktrees, worktreeLocations, value)
+        return value
     }
 
     /// A stash follows its base commit; each dirty checkout follows its own
@@ -3696,6 +3716,8 @@ final class GitStatusModel {
         changedEntries = []
         entryMembership.removeAll()
         changeDisplayCache = nil
+        graphCommitsCache = nil
+        knownRemotesCache = nil
         directoryDecorations = [:]
         fileDecorations = [:]
         ignoredPaths = []

@@ -2139,7 +2139,7 @@ struct GitPanel: View {
                     focusGitChanges()
                 }
             }
-            .onChange(of: model.graphCommits.map(\.id)) { _, _ in
+            .onChange(of: graphCommits.map(\.id)) { _, _ in
                 if isGitActive && changes.navigation.isEmpty { focusGitChanges() }
             }
             .onChange(of: changes.revision) { _, _ in

@@ -173,19 +173,22 @@ nonisolated struct CommitGraphLayout {
         }
 
         for index in graph.indices {
-            var seen: Set<Link> = []
-            graph[index].links = graph[index].links.filter { seen.insert($0).inserted }
-            let bottom = graph[index].links.compactMap { link -> Rail? in
+            let count = graph[index].links.count
+            var links = Set<Link>(minimumCapacity: count)
+            var rails = Set<Rail>(minimumCapacity: count)
+            graph[index].links = graph[index].links.filter { link in
+                guard links.insert(link).inserted else { return false }
                 switch link {
                 case .outgoing(let rail), .through(let rail):
-                    return rail
+                    rails.insert(rail)
                 case .depart(_, let to, let color):
-                    return Rail(lane: to, color: color)
+                    rails.insert(Rail(lane: to, color: color))
                 case .incoming, .arrive:
-                    return nil
+                    break
                 }
+                return true
             }
-            graph[index].bottomRails = Array(Set(bottom)).sorted {
+            graph[index].bottomRails = rails.sorted {
                 $0.lane == $1.lane ? $0.color < $1.color : $0.lane < $1.lane
             }
         }

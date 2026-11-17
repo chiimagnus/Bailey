@@ -546,6 +546,66 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertTrue(graph.rows.last?.bottomRails.isEmpty == true)
     }
 
+    func testLargeGraphProjectionAndRemoteReachabilityHaveMeasuredCost() {
+        let history = (0..<5_000).map { index in
+            commit("main-\(index)", parents: index == 4_999 ? [] : ["main-\(index + 1)"],
+                   current: index == 0)
+        }
+        let stashes: [GitStatusModel.Stash] = (0..<120).map { index in
+            .init(selector: "stash@{\(index)}", oid: "stash-\(index)",
+                  message: "saved", baseHash: "main-\(index * 40)",
+                  untrackedFilesHash: nil, author: "Tester", date: .distantPast)
+        }
+        let remoteNames = (0..<12).map { "remote-\($0)" }
+        let refs = Dictionary(uniqueKeysWithValues: remoteNames.enumerated().map { index, remote in
+            ("refs/remotes/\(remote)/main",
+             GitStatusModel.GitRef(oid: "main-\(index * 350)", symbolic: nil,
+                                   objectType: "commit"))
+        })
+        var assemble: [Double] = []
+        var reachability: [Double] = []
+        for _ in 0..<30 {
+            let start = ProcessInfo.processInfo.systemUptime
+            let projected = GitStatusModel.graphCommits(history, stashes: stashes)
+            assemble.append(ProcessInfo.processInfo.systemUptime - start)
+            XCTAssertEqual(projected.count, 5_120)
+            let remoteStart = ProcessInfo.processInfo.systemUptime
+            let known = GitStatusModel.knownRemotesByCommit(
+                history, refsByName: refs, remotes: remoteNames)
+            reachability.append(ProcessInfo.processInfo.systemUptime - remoteStart)
+            XCTAssertTrue(known["main-0"]?.contains("remote-0") == true)
+        }
+        print(String(format: "Git projection 5000 commits + 120 stashes: median %.4f s",
+                     assemble.sorted()[15]))
+        print(String(format: "Git reachability 5000 commits + 12 remotes: median %.4f s",
+                     reachability.sorted()[15]))
+    }
+
+    func testCachedGraphLayoutReusesUnchangedTopologyAndRecomputesChangedHEAD() {
+        let cache = CommitGraphLayoutCache()
+        let original = [
+            commit("head", parents: ["base"], current: true),
+            commit("side", parents: ["base"]),
+            commit("base"),
+        ]
+        let first = cache.layout(for: original)
+        let reused = cache.layout(for: original)
+        XCTAssertEqual(first.rows.withUnsafeBufferPointer { $0.baseAddress },
+                       reused.rows.withUnsafeBufferPointer { $0.baseAddress })
+        XCTAssertEqual(first.knownHeadHistory, Set(["head", "base"]))
+
+        let updated = [
+            commit("head", parents: ["base"]),
+            commit("side", parents: ["base"], current: true),
+            commit("base"),
+        ]
+        let refreshed = cache.layout(for: updated)
+        XCTAssertEqual(refreshed.knownHeadHistory, Set(["side", "base"]))
+        XCTAssertEqual(refreshed.rows[1].node.lane, 0)
+        XCTAssertEqual(refreshed.rows.withUnsafeBufferPointer { $0.baseAddress },
+                       cache.layout(for: updated).rows.withUnsafeBufferPointer { $0.baseAddress })
+    }
+
     func testThousandRowsWithThirtyParallelRefsDoNotCreatePhantomConnections() {
         let sideTips = (0..<30).map { index in
             commit("side-\(index)", parents: ["root"])
@@ -609,6 +669,19 @@ final class CommitGraphLayoutTests: XCTestCase {
         let repeated = CommitGraphLayout(commits: history)
         XCTAssertEqual(graph.rows.map(\.node), repeated.rows.map(\.node))
         XCTAssertEqual(graph.laneCount, repeated.laneCount)
+
+        let cache = CommitGraphLayoutCache()
+        let first = cache.layout(for: history)
+        var reuseTimes: [Double] = []
+        for _ in 0..<30 {
+            let start = ProcessInfo.processInfo.systemUptime
+            let reused = cache.layout(for: history)
+            reuseTimes.append(ProcessInfo.processInfo.systemUptime - start)
+            XCTAssertEqual(first.rows.withUnsafeBufferPointer { $0.baseAddress },
+                           reused.rows.withUnsafeBufferPointer { $0.baseAddress })
+        }
+        print(String(format: "5000 Git rows / 150 lanes warm cache: median %.6f s, p95 %.6f s",
+                     reuseTimes.sorted()[15], reuseTimes.sorted()[28]))
     }
 
     func testOnlyLoadedGitAncestorsAreProvenReachableFromHEAD() {
