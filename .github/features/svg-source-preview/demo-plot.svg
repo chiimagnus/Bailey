@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520">
+ <defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+   <stop stop-color="#ffffff"/><stop offset="1" stop-color="#f5f7fa"/>
+  </linearGradient>
+  <clipPath id="plot"><rect x="120" y="108" width="700" height="300"/></clipPath>
+ </defs>
+ <rect width="900" height="520" fill="url(#bg)"/>
+ <text x="120" y="55" font-family="-apple-system,sans-serif" font-size="25" font-weight="600" fill="#293445">Stress–strain response</text>
+ <text x="120" y="78" font-family="-apple-system,sans-serif" font-size="12" fill="#8390a3">SHPB · shale specimens · dynamic compression</text>
+ <g stroke="#e3e8ee" stroke-width="1">
+  <path d="M120 108H820M120 168H820M120 228H820M120 288H820M120 348H820M120 408H820"/>
+  <path d="M120 108V408M260 108V408M400 108V408M540 108V408M680 108V408M820 108V408"/>
+ </g>
+ <path d="M120 108V408H820" stroke="#8290a4" stroke-width="1.3" fill="none"/>
+ <g fill="#768398" font-size="12" font-family="-apple-system,sans-serif">
+  <text x="101" y="412" text-anchor="end">0</text><text x="101" y="352" text-anchor="end">40</text><text x="101" y="292" text-anchor="end">80</text><text x="101" y="232" text-anchor="end">120</text><text x="101" y="172" text-anchor="end">160</text>
+  <text x="120" y="429" text-anchor="middle">0</text><text x="400" y="429" text-anchor="middle">1.0</text><text x="680" y="429" text-anchor="middle">2.0</text>
+  <text x="475" y="461" text-anchor="middle">Strain (%)</text><text x="36" y="255" transform="rotate(-90 36 255)" text-anchor="middle">Stress (MPa)</text>
+ </g>
+ <g clip-path="url(#plot)" fill="none" stroke-linecap="round" stroke-width="3.4">
+  <path d="M120 405 C185 386 252 312 319 240 S445 176 511 184 S650 270 750 345 S800 363 820 372" stroke="#5f9de5"/>
+  <path d="M120 405 C185 389 267 284 350 197 S474 135 536 151 S682 248 762 315 S795 325 820 337" stroke="#9976c7"/>
+  <path d="M120 405 C203 379 279 265 375 176 S503 150 565 158 S711 226 789 292 S795 302 820 315" stroke="#439e85"/>
+ </g>
+ <g font-size="12" font-family="-apple-system,sans-serif" fill="#58677d">
+  <path d="M585 54h32" stroke="#5f9de5" stroke-width="3"/><text x="629" y="58">0 MPa</text>
+  <path d="M700 54h32" stroke="#9976c7" stroke-width="3"/><text x="744" y="58">5 MPa</text>
+  <path d="M585 78h32" stroke="#439e85" stroke-width="3"/><text x="629" y="82">10 MPa</text>
+ </g>
+</svg>
