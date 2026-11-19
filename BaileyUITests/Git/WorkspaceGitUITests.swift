@@ -93,6 +93,7 @@ final class WorkspaceGitUITests: XCTestCase {
         func ssh(_ script: String) throws -> String {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            // The sandboxed UI Runner cannot bind an OpenSSH master socket.
             process.arguments = [
                 "-T", "-o", "ControlMaster=no", "-o", "ControlPath=none",
                 "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "--", host, "sh -s",

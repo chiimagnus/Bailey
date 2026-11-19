@@ -183,11 +183,6 @@ final class GitGraphGeometryUITests: XCTestCase {
     }
 
     private func verifySpecialGraphColors(theme: String) throws {
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("tagged.txt", text: "tagged contents\n")
         try fixture.initializeGit()
@@ -529,11 +524,6 @@ final class GitGraphGeometryUITests: XCTestCase {
     }
 
     func testAllThirtyThreeRemoteReferencesRemainInTheNativeOverflowMenu() throws {
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("many-refs.txt", text: "same immutable object\n")
         try fixture.initializeGit()
@@ -563,9 +553,11 @@ final class GitGraphGeometryUITests: XCTestCase {
         XCTAssertTrue(overflow.isHittable,
                       "All 33 remote references must remain reachable in a real 150pt Git panel")
         overflow.click()
-        // One AX snapshot materializes native submenu items that a sequence of
-        // independent lazy lookups may otherwise miss while the menu is open.
-        let visibleReferences = Set(app.menuItems.allElementsBoundByIndex.map(\.title))
+        // Limit the AX snapshot to actual remote references, not every menu
+        // in the app and its nested menus.
+        let visibleReferences = Set(app.menuItems.matching(NSPredicate(
+            format: "title BEGINSWITH %@", "remote-"
+        )).allElementsBoundByIndex.map(\.title))
         for index in 0..<33 {
             XCTAssertTrue(visibleReferences.contains("remote-\(index)/main"),
                           "Every configured remote must keep its own native menu target")
