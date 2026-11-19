@@ -26,4 +26,4 @@ Bailey 已能预览 PNG、JPEG、GIF、HEIC、WebP 等图片的受限缩略图�
 - 大图、透明、不同 DPI、颜色空间、Exif 旋转、畸形图片、GIF、权限错误、导出中断和源文件外部更新都具备明确行为。
 - 不把 4K 缩略图冒充 100% 原像素查看；大图按需解码有界区域，避免主线程爆内存。
 
-[交互 HTML](prototype.html)。
+[统一交互 HTML · 图片](../prototype.html?format=image)。

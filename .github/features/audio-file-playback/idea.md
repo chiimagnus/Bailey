@@ -22,4 +22,4 @@
 - 长录音、有声多轨、空文件、损坏文件、可变码率和非 ASCII 路径不会阻塞 UI；内存占用有界。
 - 任何纯播放操作前后源文件 checksum 一致。原型只是交互示意，实际播放能力以平台 AVFoundation 支持为准。
 
-[交互 HTML](prototype.html)。
+[统一交互 HTML · 音频](../prototype.html?format=audio)。

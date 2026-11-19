@@ -27,4 +27,4 @@ CSV 现在只能作为普通文本打开。用户需要直接按行列阅读、�
 - 10 万行级滚动和搜索不阻塞主线程；多窗口同一文件不绕过现有保存冲突。
 - 受控宿主文件 IO／TextKit 测试与隔离 Bailey Dev 实际双击、切换、编辑、保存验证，不拿 HTML 演示代替产品验收。
 
-[交互 HTML 原型](prototype.html)仅用于确认 UI/UX，不代表已实现功能。
+[统一交互 HTML · CSV](../prototype.html?format=csv)仅用于确认 UI/UX，不代表已实现功能。

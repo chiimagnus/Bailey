@@ -18,4 +18,4 @@ SVG 是可编辑的 XML 矢量文件，也可能包含活动内容。Bailey 默�
 - 真实 Dock 窄宽、原生焦点、窗口切换、重新加载与 Undo／Redo 一致。宿主运行安全测试，Bailey Dev 验证实际交互。
 - HTML 原型仅模拟交互；正式 SVG 使用 SwiftDraw 原生绘制，尚须验证真实渲染精度和恶意 XML／外部资源输入边界。
 
-[交互 HTML](prototype.html)。
+[统一交互 HTML · SVG](../prototype.html?format=svg)。

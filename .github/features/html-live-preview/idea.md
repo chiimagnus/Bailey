@@ -24,4 +24,4 @@ Bailey 应把 HTML 当成可编辑的源码文件，同时能在同一文件标�
 - 内联 HTML／CSS 正确显示；脚本、外链、`file://`、iframe、恶意事件处理、过大的页面和语法中间态均有明确安全结果。
 - 真实 Bailey Dev 进行窗口、窄 Dock、深浅主题、滚动、资源生命周期和保存恢复验收。
 
-[交互原型](prototype.html)仅模拟静态预览和菜单交互。
+[统一交互原型 · HTML](../prototype.html?format=html)仅模拟静态预览和菜单交互。

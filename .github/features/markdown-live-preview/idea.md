@@ -46,4 +46,4 @@ Bailey 的 Markdown 首先是可编辑的文本文件。
 - 文本输入、中文 IME、撤销／保存、很长文件、多窗口、窄 Dock、主题、相对资源重命名／外部修改以及辅助功能均需经过宿主和隔离 Bailey Dev 测试。
 - 原型只是**交互展示**，不是完整 CommonMark／Mermaid 编译器；正式实施必须分别通过解析器与安全验收。
 
-[可交互原型](prototype.html)
+[统一交互原型 · Markdown](../prototype.html?format=md)
