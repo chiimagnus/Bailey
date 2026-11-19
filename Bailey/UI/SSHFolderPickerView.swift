@@ -7,6 +7,7 @@ struct SSHFolderPickerView: View {
     @State private var model: SSHFolderPickerModel
     @FocusState private var inputFocused: Bool
     @FocusState private var hostChoicesFocused: Bool
+    @FocusState private var pickerFocused: Bool
     @State private var highlightedHost = 0
 
     let onCancel: () -> Void
@@ -41,7 +42,15 @@ struct SSHFolderPickerView: View {
                 .padding(.top, 110)
         }
         .ignoresSafeArea()
-        .task { if model.host == nil { hostChoicesFocused = true } }
+        .focusable()
+        .focused($pickerFocused)
+        .focusEffectDisabled()
+        .task {
+            if model.host == nil {
+                if model.hosts.isEmpty { pickerFocused = true }
+                else { hostChoicesFocused = true }
+            }
+        }
         .onExitCommand(perform: onCancel)
         .onChange(of: model.host) { _, host in
             if host != nil { DispatchQueue.main.async { inputFocused = true } }

@@ -63,14 +63,14 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         removeUnusedViewMenu()
         configureDeleteShortcut()
+        workspace.applicationBecameActive()
     }
 
     @objc private func menuDidBeginTracking(_ notification: Notification) {
+        // AppKit tracks the main menu itself, not the Panel / Project submenus.
         guard let menu = notification.object as? NSMenu,
-              let mainMenu = NSApp.mainMenu, menu.supermenu === mainMenu,
-              menu.title == String(localized: "Panel", table: "Interface")
-                  || menu.title == String(localized: "Project", table: "Interface"),
-              trackedPresentationMenu == nil else { return }
+              let mainMenu = NSApp.mainMenu,
+              menu === mainMenu, trackedPresentationMenu == nil else { return }
         trackedPresentationMenu = menu
         let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
         menuPresentation.beginTracking(

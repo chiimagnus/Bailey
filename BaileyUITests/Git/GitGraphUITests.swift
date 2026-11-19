@@ -317,14 +317,6 @@ final class GitGraphUITests: XCTestCase {
         try "unsaved\n".write(to: tracked, atomically: true, encoding: .utf8)
         try fixture.git(["stash", "push", "-m", "multi-selection-stash"])
         let stash = try fixture.git(["rev-parse", "stash@{0}"])
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty {
-                XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard))
-            }
-        }
-
         let app = try launchGraph(fixture, language: "en")
         let commit = app.buttons["E2E fixture history"]
         let badge = app.buttons.matching(NSPredicate(
@@ -373,14 +365,6 @@ final class GitGraphUITests: XCTestCase {
         try fixture.git(["add", "newest.txt"])
         try fixture.git(["commit", "-qm", "newest history"])
         let head = try fixture.git(["rev-parse", "HEAD"])
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty {
-                XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard))
-            }
-        }
-
         let app = try launchGraph(fixture, language: "en")
         let newest = app.buttons["newest history"]
         let tagged = app.buttons["tagged history"]
@@ -430,12 +414,6 @@ final class GitGraphUITests: XCTestCase {
             try fixture.git(["rev-parse", "HEAD"]),
             try fixture.git(["rev-parse", "HEAD^"]),
         ].map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
-
         let app = try launchGraph(fixture, language: "en")
         let newest = app.buttons["batch third"]
         let middle = app.buttons["batch second"]
@@ -681,11 +659,6 @@ final class GitGraphUITests: XCTestCase {
     }
 
     private func verifyGraphInteractions(language: String) throws {
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("nested/history.txt", text: "committed history\n")
         try fixture.initializeGit()
@@ -1099,11 +1072,6 @@ final class GitGraphUITests: XCTestCase {
     }
 
     func testHistoricalTagBadgeTogglesItsCommitAndKeepsOnlyTagActions() throws {
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("tagged-history.txt", text: "old tagged revision\n")
         try fixture.initializeGit()
@@ -1221,13 +1189,8 @@ final class GitGraphUITests: XCTestCase {
         try fixture.initializeGit()
         let head = String(decoding: try fixture.git(["rev-parse", "HEAD"]), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let previous = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !previous.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(previous)) }
-        }
-        NSPasteboard.general.clearContents()
         let app = try launchGraph(fixture)
+        NSPasteboard.general.clearContents()
         let commit = app.buttons.matching(NSPredicate(
             format: "label == %@", "E2E fixture history")).firstMatch
         let hashButton = app.buttons.matching(NSPredicate(
@@ -1262,11 +1225,6 @@ final class GitGraphUITests: XCTestCase {
         let head = try fixture.git(["rev-parse", "HEAD"])
         XCTAssertEqual(try fixture.git(["symbolic-ref", "refs/remotes/upstream/HEAD"]),
                        Data("refs/remotes/upstream/main\n".utf8))
-        let prior = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !prior.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(prior)) }
-        }
         let app = try launchGraph(fixture)
         let overflow = app.menuButtons.matching(NSPredicate(
             format: "title CONTAINS %@ AND title CONTAINS %@",

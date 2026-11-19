@@ -97,6 +97,8 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(stage.isEnabled, "A readable snapshot must not authorize writes")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        expectSplit(old: "first INDEX\n", new: "first WORKTREE\n", worktree: true)
+        secondRow.click()
         expectSplit(old: "second HEAD\n", new: "second WORKTREE\n", worktree: true)
         secondRow.rightClick()
         let openHead = app.menuItems["Open HEAD File"]
@@ -1343,11 +1345,6 @@ final class GitChangesUITests: XCTestCase {
         try fixture.initializeGit()
         try "first after\n".write(to: first, atomically: true, encoding: .utf8)
         try "second after\n".write(to: second, atomically: true, encoding: .utf8)
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        addTeardownBlock { @MainActor in
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
@@ -1358,11 +1355,16 @@ final class GitChangesUITests: XCTestCase {
         one.click()
         XCUIElement.perform(withKeyModifiers: .command) { two.click() }
         one.rightClick()
-        XCTAssertTrue(app.menuItems["Copy Relative Paths"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.menuItems["Open File"].exists)
-        XCTAssertFalse(app.menuItems["Open Changes"].exists)
-        XCTAssertTrue(app.menuItems["Stage Changes"].exists)
-        app.menuItems["Copy Relative Paths"].click()
+        let copyRelative = app.menuItems["Copy Relative Paths"]
+        XCTAssertTrue(copyRelative.waitForExistence(timeout: 8))
+        let menuTitles = Set(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Stage Changes", "Open File", "Open Changes"]
+        )).allElementsBoundByIndex.map(\.title))
+        XCTAssertTrue(menuTitles.contains("Stage Changes"))
+        for forbidden in ["Open File", "Open Changes"] {
+            XCTAssertFalse(menuTitles.contains(forbidden), "Batch menu unexpectedly includes \(forbidden)")
+        }
+        copyRelative.click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string),
                        "copy-first.txt\ncopy-second.txt")
         XCTAssertTrue(one.isSelected && two.isSelected)
@@ -1396,11 +1398,14 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertTrue(one.isSelected && two.isSelected)
         two.rightClick()
         XCTAssertTrue(app.menuItems["Copy Relative Paths"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.menuItems["Stage Changes"].exists,
-                       "Mixed selection must not stage only a subset")
-        XCTAssertFalse(app.menuItems["Unstage Changes"].exists)
-        XCTAssertFalse(app.menuItems["Discard Changes…"].exists)
-        XCTAssertFalse(app.menuItems["Open File"].exists)
+        let forbiddenTitles = ["Stage Changes", "Unstage Changes", "Discard Changes…", "Open File"]
+        let menuTitles = Set(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", forbiddenTitles
+        )).allElementsBoundByIndex.map(\.title))
+        for forbidden in forbiddenTitles {
+            XCTAssertFalse(menuTitles.contains(forbidden),
+                           "Mixed selection must not offer \(forbidden)")
+        }
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(one.isSelected && two.isSelected)
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
@@ -1565,6 +1570,22 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertTrue(staged.isSelected && changes.isSelected,
                       "Same path in STAGED and CHANGES must remain two selectable resources")
 
+        changes.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Paths"].waitForExistence(timeout: 8))
+        let dangerous = ["Stage Changes", "Unstage Changes", "Discard Changes…"]
+        let menuTitles = Set(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", dangerous
+        )).allElementsBoundByIndex.map(\.title))
+        XCTAssertTrue(menuTitles.isEmpty,
+                      "Selecting staged and unstaged versions must never mutate only one section")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(try fixture.git(["show", ":both-sides.txt"]), Data("INDEX\n".utf8))
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data("MM both-sides.txt\n".utf8))
+
+        changes.click()
+        XCTAssertTrue(changes.isSelected && !staged.isSelected,
+                      "A plain click must select only the unstaged version")
         changes.rightClick()
         let stage = app.menuItems["Stage Changes"]
         XCTAssertTrue(stage.waitForExistence(timeout: 8))

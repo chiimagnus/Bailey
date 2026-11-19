@@ -2837,15 +2837,25 @@ final class NativeDiffTabTests: XCTestCase {
                                    untracked: false, origPath: nil,
                                    backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
                                    preferences: preferences)
-                try await wait({ diff.canPresentNativeContent }, pollingInterval: .milliseconds(1),
-                               timeout: 25)
-                XCTAssertNil(diff.error)
+                try await wait({
+                    diff.canPresentNativeContent || (!diff.isLoading && diff.error != nil)
+                }, pollingInterval: .milliseconds(1), timeout: 25)
+                if let error = diff.error {
+                    throw NSError(domain: "BaileyNativeDiffReadiness", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey:
+                                    "\(lineCount) lines, \(source): \(error)"])
+                }
                 XCTAssertTrue(diff.hasChanges)
                 let model = (CFAbsoluteTimeGetCurrent() - start) * 1_000
                 let installedAt = CFAbsoluteTimeGetCurrent()
                 let surface = DiffNativeSurface(diff: diff)
                 diff.nativeSurface = surface
                 window.contentView = surface
+                // Every measured tab owns its native TextKit document until this iteration ends.
+                defer {
+                    window.contentView = nil
+                    diff.retireNativeSurface()
+                }
                 let renderStart = CFAbsoluteTimeGetCurrent()
                 surface.render()
                 let layoutStart = CFAbsoluteTimeGetCurrent()

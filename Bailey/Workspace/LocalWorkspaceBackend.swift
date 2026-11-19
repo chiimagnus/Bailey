@@ -522,6 +522,35 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         var outData = Data()
         var errData = Data()
         var buffer = [UInt8](repeating: 0, count: 8_192)
+        func readAvailableOutput(_ fd: Int32) throws -> Bool {
+            while true {
+                let count = Darwin.read(fd, &buffer, buffer.count)
+                if count > 0 {
+                    if fd == outFD {
+                        if let stdoutLimit, count > stdoutLimit - outData.count {
+                            throw WorkspaceError.tooLarge
+                        }
+                        outData.append(buffer, count: count)
+                        if resetTimeoutOnTransferProgress, let timeout {
+                            deadline = ProcessInfo.processInfo.systemUptime + timeout
+                        }
+                    } else {
+                        if let stderrLimit, count > stderrLimit - errData.count {
+                            throw WorkspaceError.tooLarge
+                        }
+                        errData.append(buffer, count: count)
+                    }
+                    return true
+                }
+                if count == 0 {
+                    openFDs.remove(fd)
+                    return false
+                }
+                if errno == EINTR { continue }
+                if errno == EAGAIN { return false }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
         while !openFDs.isEmpty || process.isRunning {
             if honorTaskCancellation { try Task.checkCancellation() }
             if let deadline, ProcessInfo.processInfo.systemUptime >= deadline,
@@ -557,9 +586,15 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 if errno == EINTR { continue }
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
-            // Drain already-buffered output; a descendant's inherited handle
-            // cannot extend the lifetime of a completed direct command.
-            if ready == 0 && !process.isRunning { break }
+            // A short-lived command can finish before poll reports its final
+            // bytes. Drain each nonblocking pipe directly before returning;
+            // never wait for an unrelated descendant to close an inherited FD.
+            if ready == 0 && !process.isRunning {
+                for fd in openFDs.sorted() {
+                    while try readAvailableOutput(fd) {}
+                }
+                break
+            }
             for entry in fds where entry.revents != 0 {
                 if let inFD, entry.fd == inFD {
                     if entry.revents & Int16(POLLOUT) != 0 {
@@ -587,27 +622,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                     }
                     continue
                 }
-                let count = Darwin.read(entry.fd, &buffer, buffer.count)
-                if count > 0 {
-                    if entry.fd == outFD {
-                        if let stdoutLimit, count > stdoutLimit - outData.count {
-                            throw WorkspaceError.tooLarge
-                        }
-                        outData.append(buffer, count: count)
-                        if resetTimeoutOnTransferProgress, let timeout {
-                            deadline = ProcessInfo.processInfo.systemUptime + timeout
-                        }
-                    } else {
-                        if let stderrLimit, count > stderrLimit - errData.count {
-                            throw WorkspaceError.tooLarge
-                        }
-                        errData.append(buffer, count: count)
-                    }
-                } else if count == 0 {
-                    openFDs.remove(entry.fd)
-                } else if errno != EAGAIN && errno != EINTR {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                }
+                _ = try readAvailableOutput(entry.fd)
             }
         }
         if honorTaskCancellation { try Task.checkCancellation() }

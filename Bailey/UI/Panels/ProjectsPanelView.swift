@@ -23,6 +23,7 @@ struct ProjectsPanelView: View {
         return project.dock.activeGroupID == group.id && group.selected == .projects
             && manager.attachedWindow?.isKeyWindow == true && NSApp.isActive
             && controlActiveState == .key && !manager.isCommandPaletteVisible
+            && !manager.isSSHFolderPickerVisible
             && manager.attachedWindow?.attachedSheet == nil
     }
 

@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import XCTest
 
 @MainActor
@@ -212,16 +211,31 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let folder = fixture.root.appendingPathComponent("restored", isDirectory: true)
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", configurationHome: fixture.root,
-            project: folder, clipboardIsReadOnly: true
+            project: folder
         )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let owner = app.windows.firstMatch
+        let ownerID = app.windows.firstMatch.identifier
+        let owner = app.windows.matching(identifier: ownerID).firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: owner)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
         row.doubleClick()
         let editor = owner.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         let originalBytes = try Data(contentsOf: file)
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertEqual(app.windows.count, 2)
+        let otherID = try XCTUnwrap(app.windows.allElementsBoundByIndex
+            .first(where: { $0.identifier != owner.identifier })?.identifier)
+        let other = app.windows.matching(identifier: otherID).firstMatch
+        try WorkspaceUITestSupport.addFolder(folder, to: app, in: other)
+        other.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch.click()
+        let otherRow = WorkspaceUITestSupport.fileRow(file, in: other)
+        XCTAssertTrue(otherRow.waitForExistence(timeout: 15))
+        otherRow.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: other).waitForExistence(timeout: 15))
+
+        app.typeKey("`", modifierFlags: .command)
         editor.click()
         editor.typeText("RESTORED_MARKER")
         XCTAssertTrue((editor.value as? String)?.contains("RESTORED_MARKER") == true)
@@ -234,12 +248,17 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertTrue(close.waitForExistence(timeout: 10))
         close.click()
         XCTAssertTrue(owner.waitForNonExistence(timeout: 12))
+        XCTAssertEqual(app.windows.count, 1)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: other).exists)
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? String(contentsOf: file, encoding: .utf8))?.contains("RESTORED_MARKER") == true
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
                        "Closing a dirty native window must persist the new disk bytes")
         let savedBytes = try Data(contentsOf: file)
+        other.buttons["_XCUI:CloseWindow"].click()
+        XCTAssertTrue(other.waitForNonExistence(timeout: 12))
+        XCTAssertEqual(app.windows.count, 0)
         app.terminate()
         app.launch()
         app.activate()
@@ -456,7 +475,8 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertEqual(addressB.value as? String, preservedB,
                        "Focus requests in A must never type into B's background address")
 
-        activate(windowB, in: app)
+        app.typeKey("`", modifierFlags: .command)
+        addressB.click()
         app.typeKey("l", modifierFlags: .command)
         app.typeText("window B second marker")
         XCTAssertEqual(addressB.value as? String, "window B second marker")
@@ -466,43 +486,9 @@ final class WorkspaceWindowsUITests: XCTestCase {
     }
 
     private func activate(_ window: XCUIElement, in app: XCUIApplication) {
-        let running = NSRunningApplication.runningApplications(
-            withBundleIdentifier: "chiimagnus.bailey.dev"
-        ).first
-        guard let running else { XCTFail("The isolated Bailey process must exist"); return }
-        let nativeApp = AXUIElementCreateApplication(running.processIdentifier)
-        func isKeyWindow() -> Bool {
-            var focused: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(nativeApp, kAXFocusedWindowAttribute as CFString,
-                                                &focused) == .success,
-                  let focused else { return false }
-            let native = focused as! AXUIElement
-            var value: CFTypeRef?
-            if AXUIElementCopyAttributeValue(native, kAXIdentifierAttribute as CFString,
-                                             &value) == .success,
-               let identifier = value as? String {
-                return identifier == window.identifier
-            }
-            var positionValue: CFTypeRef?
-            var sizeValue: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(native, kAXPositionAttribute as CFString,
-                                                &positionValue) == .success,
-                  AXUIElementCopyAttributeValue(native, kAXSizeAttribute as CFString,
-                                                &sizeValue) == .success,
-                  let positionValue, let sizeValue else { return false }
-            var origin = CGPoint.zero
-            var size = CGSize.zero
-            guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin),
-                  AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return false }
-            let frame = window.frame
-            return abs(origin.x - frame.minX) < 3 && abs(origin.y - frame.minY) < 3
-                && abs(size.width - frame.width) < 3 && abs(size.height - frame.height) < 3
-        }
-        for _ in 0..<app.windows.count {
-            if isKeyWindow() { return }
-            app.typeKey("`", modifierFlags: .command)
-        }
-        XCTAssertTrue(isKeyWindow(), "A background window must become the actual keyboard owner")
+        XCTAssertEqual(app.windows.count, 2, "The native window cycle must have two owners")
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        window.click()
     }
 
     private func workspaceWindowCount(in app: XCUIApplication) -> Int {

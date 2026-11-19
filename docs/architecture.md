@@ -30,6 +30,7 @@ Bailey 自有 SwiftUI 状态采用 **MVVM + Observation**。
 协议用于这种实际替换或测试边界，不为每个具体类型制造接口。
 本机 Git、工作区与 SSH 客户端命令复用一个非阻塞进程管道所有者，
 在同一 `poll` 循环写 stdin、读取 stdout/stderr，并于直接子进程退出后收完已缓冲字节；
+进程已退出时，`poll` 暂无就绪事件仍须非阻塞排空输出，不能将退出码 0 和空输出误判为有效结果。
 不等待后代进程关闭继承的管道，也不另起 stdin 写入线程。
 输出预算、超时、取消由同一所有者执行并回收到真正的子进程，
 不得只用展示代次丢弃旧结果。
@@ -83,8 +84,8 @@ Bailey 复用 SwiftUI Observation、AppKit、现有 Dock/Tab 与后端，不机�
 `WorkspaceWindowModel` 保留单窗项目、选择、焦点与原生宿主。
 `Project`／`DockNode`／`PaneTab` 继续拥有项目布局、局部状态与长期原生内容；
 创建 SwiftUI View 的中间对象不会登记或提前认领窗口。
-隔离测试的首窗请求还需排除已登记、但尚未附着 `NSWindow` 的场景，
-以免在原生挂载前再次打开相同窗口。
+隔离 Dev 抑制自动首窗；`Commands` 先登记开窗动作，只有 AppKit 确认应用已激活后
+才请求一次首窗。请求期间与已登记但尚未附着 `NSWindow` 的场景均不得重复开窗。
 应用级窗口请求只查询本 `WorkspaceApplication` 登记的窗口，不遍历全局 `NSApp.windows` 猜测归属；
 在最后一个窗口关闭后，连续的 Finder 请求只触发一次新建窗口，并在真正挂载后交付。
 

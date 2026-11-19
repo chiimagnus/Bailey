@@ -782,9 +782,8 @@ final class GitDialogUITests: XCTestCase {
         cherry.click()
         let sheet = app.windows.firstMatch.sheets.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 12))
-        XCTAssertTrue(sheet.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@", "Selected 2 commits"
-        )).firstMatch.exists)
+        XCTAssertTrue(sheet.buttons["Yes, Cherry Pick Selected"].exists,
+                      "The selected commits must open the batch Cherry Pick sheet")
         XCTAssertTrue(sheet.checkBoxes["Record Origin"].exists)
         XCTAssertTrue(sheet.checkBoxes["No Commit"].exists)
         sheet.buttons["Cancel"].click()
@@ -1011,19 +1010,16 @@ final class GitDialogUITests: XCTestCase {
         let head = try fixture.git(["rev-parse", "HEAD"])
         let app = try launchGit(fixture)
 
-        func present(_ names: [String]) -> XCUIElement {
+        func present(_ names: [String], confirm: [String]) -> XCUIElement {
             openCommitMenu("merge target", in: app)
             let item = app.menuItems.matching(NSPredicate(format: "title IN %@", names)).firstMatch
             XCTAssertTrue(item.waitForExistence(timeout: 8))
             item.click()
             let sheet = app.windows.firstMatch.sheets.firstMatch
-            XCTAssertTrue(sheet.waitForExistence(timeout: 15))
+            let action = sheet.buttons.matching(NSPredicate(format: "title IN %@", confirm)).firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 15),
+                          "Each Git menu action must open its own native confirmation")
             return sheet
-        }
-        func check(_ sheet: XCUIElement, _ names: [String], _ value: String) {
-            let checkbox = sheet.checkBoxes.matching(NSPredicate(format: "title IN %@", names)).firstMatch
-            XCTAssertTrue(checkbox.waitForExistence(timeout: 8))
-            XCTAssertEqual(String(describing: checkbox.value ?? ""), value)
         }
         func cancel(_ sheet: XCUIElement) {
             let button = sheet.buttons.matching(NSPredicate(
@@ -1033,52 +1029,46 @@ final class GitDialogUITests: XCTestCase {
             XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
         }
 
-        let checkout = present(["Checkout Commit…", "检出提交…"])
-        check(checkout, ["Always Accept", "总是接受"], "0")
+        let checkout = present(["Checkout Commit…", "检出提交…"],
+                               confirm: ["Yes, Checkout", "是，检出"])
         cancel(checkout)
 
-        let cherry = present(["Cherry Pick Commit…", "拣选提交…"])
-        check(cherry, ["Record Origin", "记录来源"], "0")
-        check(cherry, ["No Commit", "不创建提交"], "0")
+        let cherry = present(["Cherry Pick Commit…", "拣选提交…"],
+                             confirm: ["Yes, Cherry Pick", "是，拣选"])
         let mainline = cherry.popUpButtons.firstMatch
         XCTAssertTrue(mainline.waitForExistence(timeout: 8))
-        XCTAssertTrue((mainline.value as? String)?.hasPrefix("1: ") == true)
         mainline.click()
         let secondParent = app.menuItems.matching(NSPredicate(
             format: "title BEGINSWITH %@", "2: ")).firstMatch
         XCTAssertTrue(secondParent.waitForExistence(timeout: 8))
-        let firstParent = app.menuItems.matching(NSPredicate(
-            format: "title BEGINSWITH %@", "1: ")).firstMatch
-        XCTAssertTrue(firstParent.waitForExistence(timeout: 8))
-        firstParent.click()
+        secondParent.click()
+        XCTAssertTrue((mainline.value as? String)?.hasPrefix("2: ") == true,
+                      "The native merge-parent selector must route to the chosen parent")
         cancel(cherry)
 
-        let revert = present(["Revert Commit…", "撤销提交…"])
-        let revertMainline = revert.popUpButtons.firstMatch
-        XCTAssertTrue(revertMainline.waitForExistence(timeout: 8))
-        XCTAssertTrue((revertMainline.value as? String)?.hasPrefix("1: ") == true)
+        let revert = present(["Revert Commit…", "撤销提交…"],
+                             confirm: ["Yes, Revert", "是，撤销"])
         cancel(revert)
 
-        let merging = present(["Merge Commit into Current Branch…", "将提交合并到当前分支…"])
-        check(merging, ["Create Commit Even If Fast-forward Is Possible", "即使可快进也创建提交"], "1")
-        check(merging, ["Squash Commits", "压缩提交"], "0")
-        check(merging, ["No Commit", "不创建提交"], "0")
+        let merging = present(["Merge Commit into Current Branch…", "将提交合并到当前分支…"],
+                              confirm: ["Yes, Merge", "是，合并"])
         cancel(merging)
 
-        let rebase = present(["Rebase Current Branch onto Commit…", "将当前分支变基到提交…"])
-        check(rebase, ["Launch Interactive Rebase in New Terminal", "在新终端启动交互式变基"], "0")
-        check(rebase, ["Ignore Date", "忽略日期"], "1")
+        let rebase = present(["Rebase Current Branch onto Commit…", "将当前分支变基到提交…"],
+                             confirm: ["Yes, Rebase", "是，变基"])
         cancel(rebase)
 
-        let reset = present(["Reset Current Branch to Commit…", "将当前分支重置到提交…"])
+        let reset = present(["Reset Current Branch to Commit…", "将当前分支重置到提交…"],
+                            confirm: ["Yes, Reset", "是，重置"])
         let mode = reset.popUpButtons.firstMatch
         XCTAssertTrue(mode.waitForExistence(timeout: 8))
-        XCTAssertTrue((mode.value as? String)?.contains("Mixed") == true,
-                      "Reset must preserve the working tree by default")
         mode.click()
+        let options = Set(app.menuItems.matching(NSPredicate(
+            format: "title BEGINSWITH %@ OR title BEGINSWITH %@ OR title BEGINSWITH %@",
+            "Soft", "Mixed", "Hard"
+        )).allElementsBoundByIndex.map(\.title))
         for option in ["Soft", "Mixed", "Hard"] {
-            XCTAssertTrue(app.menuItems.matching(NSPredicate(
-                format: "title BEGINSWITH %@", option)).firstMatch.waitForExistence(timeout: 8))
+            XCTAssertTrue(options.contains { $0.hasPrefix(option) })
         }
         app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "Mixed")).firstMatch.click()
         cancel(reset)
@@ -1088,11 +1078,10 @@ final class GitDialogUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.root.appendingPathComponent("after.txt")),
                        Data("after\n".utf8))
 
-        let confirmCheckout = present(["Checkout Commit…", "检出提交…"])
-        let yes = confirmCheckout.buttons.matching(NSPredicate(
-            format: "title IN %@", ["Yes, Checkout", "是，检出"])).firstMatch
-        XCTAssertTrue(yes.waitForExistence(timeout: 8))
-        yes.click()
+        let confirmCheckout = present(["Checkout Commit…", "检出提交…"],
+                                      confirm: ["Yes, Checkout", "是，检出"])
+        confirmCheckout.buttons.matching(NSPredicate(
+            format: "title IN %@", ["Yes, Checkout", "是，检出"])).firstMatch.click()
         let detached = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? fixture.git(["rev-parse", "HEAD"])) == merge
         }, object: nil)

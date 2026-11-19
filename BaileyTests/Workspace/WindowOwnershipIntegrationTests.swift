@@ -800,7 +800,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
                        "A scene already registered before native attachment must not launch a duplicate window")
     }
 
-    func testOneExplicitInitialSceneOwnsPendingFoldersWithoutDuplicateWindowRequests() throws {
+    func testInitialWindowOpensOnlyAfterAppActivationAndRetainsPendingFolders() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -808,14 +808,34 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         var extraWindows = 0
         application.openDirectories([folder.path])
         application.registerWindowOpener { extraWindows += 1 }
-        XCTAssertEqual(extraWindows, 1,
-                       "The suppressed initial WindowGroup needs exactly one explicit opening request")
+        XCTAssertEqual(extraWindows, 0,
+                       "Commands may register the opener before AppKit finishes activating")
         application.registerWindowOpener { extraWindows += 1 }
-        XCTAssertEqual(extraWindows, 1,
-                       "Reevaluating the menu or scene must not create a second initial window")
+        XCTAssertEqual(extraWindows, 0,
+                       "The early Commands reevaluation must not open a premature scene")
+        application.applicationBecameActive()
+        XCTAssertEqual(extraWindows, 1, "Activation opens the isolated first scene exactly once")
+        application.applicationBecameActive()
+        application.registerWindowOpener { extraWindows += 1 }
+        XCTAssertEqual(extraWindows, 1, "Repeated activation and menu rebuilding must not duplicate it")
         let manager = application.makeWindow()
         defer { manager.windowClosed() }
         XCTAssertEqual(manager.selectedProject?.name, folder.lastPathComponent)
+        XCTAssertEqual(application.windowCount, 1)
+    }
+
+    func testActivationBeforeCommandsRegistrationStillOpensOnlyOneScene() throws {
+        let application = WorkspaceApplication()
+        application.applicationBecameActive()
+        var requests = 0
+        application.registerWindowOpener { requests += 1 }
+        XCTAssertEqual(requests, 1,
+                       "Late Commands registration must open the initial scene after activation")
+        application.applicationBecameActive()
+        application.registerWindowOpener { requests += 1 }
+        XCTAssertEqual(requests, 1)
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
         XCTAssertEqual(application.windowCount, 1)
     }
 
@@ -830,7 +850,9 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let application = WorkspaceApplication()
         var requests = 0
         application.registerWindowOpener { requests += 1 }
-        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(requests, 0)
+        application.applicationBecameActive()
+        XCTAssertEqual(requests, 1, "AppKit activation opens the isolated first window")
         let first = application.makeWindow()
         let firstWindow = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 300, height: 200),
                                    styleMask: [.titled], backing: .buffered, defer: false)
