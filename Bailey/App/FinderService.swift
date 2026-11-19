@@ -63,6 +63,7 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         removeUnusedViewMenu()
         configureDeleteShortcut()
+        workspace.applicationBecameActive()
     }
 
     @objc private func menuDidBeginTracking(_ notification: Notification) {

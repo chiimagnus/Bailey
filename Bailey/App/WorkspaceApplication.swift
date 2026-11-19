@@ -20,6 +20,7 @@ final class WorkspaceApplication {
     private var pendingRestores: [SessionSnapshot]
     private var pendingHistories: [String: String]
     private var windowOpener: (() -> Void)?
+    private var hasActivatedApp = false
     private var didAttachAnyWindow = false
     private var isOpeningWindow = false
     private var didReopenWindows = false
@@ -559,18 +560,25 @@ final class WorkspaceApplication {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
 
+    func applicationBecameActive() {
+        hasActivatedApp = true
+        requestInitialWindowIfNeeded()
+    }
+
     func registerWindowOpener(_ open: @escaping () -> Void) {
         windowOpener = open
         deliverPendingExternalFiles()
-        if BaileyInstanceMode.isIsolated && windows.isEmpty
-            && !didAttachAnyWindow && !isOpeningWindow {
-            // Isolated launch suppresses SwiftUI's implicit first scene. Open
-            // exactly one here, even if SwiftUI reevaluates Commands before attachment.
-            isOpeningWindow = true
-            open()
-        } else {
-            requestWindowForPendingDirectories()
-        }
+        requestInitialWindowIfNeeded()
+        requestWindowForPendingDirectories()
+    }
+
+    private func requestInitialWindowIfNeeded() {
+        // SwiftUI builds Commands before activation, when openWindow may not yet create a scene.
+        guard BaileyInstanceMode.isIsolated, hasActivatedApp,
+              windows.isEmpty, !didAttachAnyWindow, !isOpeningWindow,
+              let windowOpener else { return }
+        isOpeningWindow = true
+        windowOpener()
     }
 
     /// Ordinary launches leave the initial window to SwiftUI. After every
