@@ -186,6 +186,8 @@ SwiftUI 禁用背景自动拖动，三组的真实留白仍可移动窗口；双
 不使用额外的系统「显示」菜单或 macOS 原生窗口标签页，避免与 Bailey Dock 重复。
 
 所有窗口相关命令通过当前 key window 的 `@FocusedValue` 路由；
+系统菜单的跟踪通知由 `NSApp.mainMenu` 发出，而非各 Panel／Project 子菜单；
+展开期间两者的标题与图标固定为打开时的值，结束跟踪后才显示最新内容。
 Edit 的剪切／复制／粘贴／删除／全选由当前原生第一响应者执行；Files 不额外提供重复的删除菜单项。
 Dock 标签右键显示 ⌘W 提示。
 原生菜单跟踪期间可执行本次有效的 Close／Close Panel；

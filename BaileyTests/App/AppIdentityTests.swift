@@ -219,9 +219,9 @@ final class AppIdentityTests: XCTestCase {
         }
 
         XCTAssertNil(presentation.tracked)
-        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
-        XCTAssertNil(presentation.tracked, "The menu bar itself does not present the Panel rows")
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: panel)
+        XCTAssertNil(presentation.tracked, "A submenu does not own native menu-bar tracking")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: mainMenu)
         XCTAssertNotNil(presentation.tracked)
         XCTAssertEqual(changes.withLock { $0 }, 0,
                        "Opening a menu must not invalidate native Window commands")
@@ -231,9 +231,9 @@ final class AppIdentityTests: XCTestCase {
                         "Unrelated popup tracking must not release the system menu snapshot")
         XCTAssertEqual(changes.withLock { $0 }, 0)
 
-        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
-        XCTAssertNotNil(presentation.tracked)
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: panel)
+        XCTAssertNotNil(presentation.tracked)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: mainMenu)
         XCTAssertNil(presentation.tracked)
         XCTAssertEqual(changes.withLock { $0 }, 1,
                        "Refresh the snapshot only after AppKit ends menu tracking")
