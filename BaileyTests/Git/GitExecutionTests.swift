@@ -128,6 +128,39 @@ final class GitExecutionTests: XCTestCase {
         }
     }
 
+    func testConcurrentShortLivedGitCommandsReturnTheirCompleteOutput() async throws {
+        let root = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "short-lived-output.swift"
+        let contents = Data("let answer = 42\n".utf8)
+        try contents.write(to: root.appendingPathComponent(name))
+        let expected = Data((name + "\0filter\0unspecified\0").utf8)
+        let args = ["--literal-pathspecs", "check-attr", "-z", "filter", "--", name]
+        await withTaskGroup(of: [String].self) { group in
+            for worker in 0..<8 {
+                group.addTask {
+                    var failures: [String] = []
+                    for iteration in 0..<64 {
+                        let result = await GitCommandExecution.runData(
+                            args, in: root.path, timeout: 10,
+                            stdoutLimit: 4096, backend: LocalWorkspaceBackend.shared
+                        )
+                        if result.status != 0 || result.stdout != expected || !result.stderr.isEmpty {
+                            failures.append("worker=\(worker) iteration=\(iteration) "
+                                + "status=\(result.status) stdoutBytes=\(result.stdout.count) "
+                                + "stderr=\(result.stderr)")
+                        }
+                    }
+                    return failures
+                }
+            }
+            for await failures in group {
+                XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name)), contents)
+    }
+
     func testConcurrentRepositoryDiscoveryAlwaysReturnsItsActualRoot() async throws {
         let roots = try [makeRepository(), makeRepository()]
         defer { for root in roots { try? FileManager.default.removeItem(at: root) } }
