@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bailey — index.html</title>
+<style>
+:root{color-scheme:dark;--bg:#1b1b1f;--side:#1d1d21;--head:#1a1a1e;--raised:#29292f;--line:#323239;--ink:#d6d7df;--sub:#8d909d;--dim:#60636f;--focus:#73a6f4;--focusfill:#253550;--select:#303036;--soft:#232329;--mono:SFMono-Regular,Menlo,Consolas,monospace;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{color:var(--ink);font:12px/1.45 var(--font);background:var(--bg);-webkit-font-smoothing:antialiased}button,input,textarea{font:inherit;color:inherit}button{cursor:pointer;border:0;background:none}a{text-decoration:none;color:inherit}a:hover{color:var(--ink)}button:focus-visible,a:focus-visible,textarea:focus-visible,input:focus-visible{outline:1px solid var(--focus);outline-offset:2px}::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#77778067;border:2px solid transparent;border-radius:7px;background-clip:padding-box}::-webkit-scrollbar-track{background:none}
+.shell{display:grid;grid-template-columns:250px minmax(340px,1fr) 244px;width:100vw;height:100dvh}.left,.center,.right{min-width:0;height:100%;display:flex;flex-direction:column;overflow:hidden}.left,.right{background:var(--side)}.left{border-right:1px solid var(--line)}.right{border-left:1px solid var(--line)}
+.tabs{height:35px;min-height:35px;display:flex;align-items:center;background:var(--head);border-bottom:1px solid var(--line);padding:0 7px;gap:5px}.window-dots{display:flex;gap:7px;margin:0 7px 0 7px}.window-dots i{width:11px;height:11px;border-radius:50%;background:#494a50;border:1px solid #575960;display:inline-block}.head-name{font-size:11px;padding:3px 7px;background:#303036;border-radius:5px;color:#b1b3bd;max-width:142px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.plus{color:var(--sub);font-size:16px;padding:3px 7px;margin-left:auto;line-height:1}
+.tab{height:27px;display:flex;align-items:center;gap:7px;padding:4px 9px;border-radius:6px;min-width:0;max-width:205px;white-space:nowrap;color:var(--sub);cursor:pointer;font-size:11.5px;user-select:none}.tab.active{background:#283955;color:#dce8ff}.tab .fmark{width:13px;flex:none;text-align:center;font-size:9px;font-weight:700}.tab .name{min-width:0;text-overflow:ellipsis;overflow:hidden}.tab .close{display:none;color:#aab6c8;padding:0 2px}.tab.active:hover .close{display:block}.tab .dirty{width:5px;height:5px;border-radius:50%;background:var(--sub);display:none;flex:none}.tab.changed .dirty{display:block}.tab:focus-visible{outline:1px solid var(--focus)}
+.stage{position:relative;flex:1;min-height:0;min-width:0;overflow:hidden;background:var(--bg)}
+.git-head{padding:10px 10px 9px;border-bottom:1px solid var(--line)}.git-head strong{display:block;font-size:12px;font-weight:600}.git-head p{margin:4px 0 0;color:var(--sub);font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.git-origin{padding:9px 12px;font-size:10px;color:var(--sub)}.git-input{margin:3px 9px 5px;padding:9px;background:#25252b;border:1px solid var(--line);border-radius:5px;color:var(--dim);font-size:10px}.commit-btn{margin:0 9px 10px;height:23px;background:#283855;border-radius:5px;text-align:center;color:#9fb7e6;font-size:10px}.git-empty{height:98px;display:grid;align-content:center;justify-items:center;gap:9px;color:var(--dim);font-size:10px;border-bottom:1px solid var(--line)}.git-empty i{border:1px solid #5d616a;border-radius:50%;font:13px var(--font);width:19px;height:19px;display:grid;place-items:center}.git-caption{padding:9px 9px 6px;color:var(--sub);font-size:10px}.git-graph{overflow:auto;padding:0 11px;flex:1;min-height:0}.git-commit{display:flex;min-height:45px;gap:10px;position:relative}.git-commit:before{content:"";position:absolute;left:4px;top:0;bottom:0;border-left:2px solid #8b77ba}.git-commit:first-child:before{border-left-color:#5d9dec}.git-node{margin-top:8px;width:10px;height:10px;border:2px solid #ac91d1;background:var(--side);border-radius:50%;flex:none;z-index:1}.git-commit:first-child .git-node{border-color:#5d9dec}.git-text{min-width:0;font-size:10.5px;overflow:hidden;padding-top:2px}.git-text span{display:block;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}.git-text small{display:block;font-size:9px;color:var(--dim);margin-top:2px}
+.files{padding:8px 7px;flex:1;min-height:0;overflow:auto}.files .project-name{font-size:12px;font-weight:590;padding:5px 6px 0}.files .project-path{font-size:9px;color:var(--dim);padding:0 6px 9px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.file{display:flex;align-items:center;gap:7px;min-height:23px;padding:3px 9px;border-radius:5px;white-space:nowrap;overflow:hidden;color:#b2b6c1;font-size:11px}.file:hover{background:#292a30}.file.on{background:#34353d;color:#e5e6eb}.file .icon{font-size:10px;width:14px;flex:none;text-align:center}.file.f{padding-left:19px;color:#8d93a0}.file.sub{padding-left:30px}.file .label{min-width:0;overflow:hidden;text-overflow:ellipsis}.projects{height:186px;border-top:1px solid var(--line);display:flex;flex-direction:column}.project-row{margin:2px 8px;padding:7px;border-radius:5px;display:flex;gap:8px;font-size:11px;color:#a9abb8}.project-row.on{background:#35353c}.project-row span{min-width:0;overflow:hidden;text-overflow:ellipsis}.project-row small{display:block;font-size:9px;color:var(--dim);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;max-width:188px}.label-head{padding:5px 8px;background:var(--head);color:var(--sub);font-size:10px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;height:35px;min-height:35px}.label-head b{font-weight:500;background:#303036;border-radius:4px;padding:2px 7px}
+.context{position:fixed;z-index:60;display:none;min-width:204px;max-width:260px;padding:5px;background:#303036e9;border:1px solid #484951;border-radius:9px;box-shadow:0 14px 44px #0009;backdrop-filter:blur(22px);font-size:12px;color:#f1f1f5}.context.show{display:block}.context button{display:flex;width:100%;gap:7px;align-items:center;text-align:left;border-radius:4px;padding:6px 8px;font-size:12px;color:inherit}.context button:hover{background:#476ca2}.context button .check{width:14px;flex:none}.context button .label{flex:1}.context button .arrow{color:#c0c3cd;font-size:10px}.context .sep{height:1px;margin:4px 5px;background:#55565e}.context button:disabled{opacity:.45;cursor:default}.context button:disabled:hover{background:transparent}
+.toast{position:absolute;bottom:22px;left:50%;transform:translate(-50%,8px);background:#303039e8;box-shadow:0 10px 32px #0005;color:#d8dce5;border:1px solid #54545c;border-radius:7px;padding:7px 12px;font-size:11px;pointer-events:none;opacity:0;transition:opacity .16s,transform .16s;z-index:22;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}.toast.show{opacity:1;transform:translate(-50%,0)}
+.editor{height:100%;display:flex;min-width:0}.gutter{width:42px;flex:none;padding:14px 8px 30px 0;text-align:right;color:#606370;white-space:pre;font:12px/22px var(--mono);overflow:hidden;user-select:none}.source{border:0;outline:0;resize:none;flex:1;width:100%;height:100%;padding:14px 12px 32px 4px;font:12px/22px var(--mono);background:transparent;color:#d1d4e2;white-space:pre;tab-size:2;overflow:auto}.source:focus-visible{outline:0}.split{display:grid;grid-template-columns:1fr 1fr;height:100%;width:100%;min-width:0}.split>*{min-width:0;min-height:0}.split>*:first-child{border-right:1px solid var(--line)}.render-scroll{height:100%;overflow:auto}.paper{padding:36px 55px 90px;margin:0 auto;max-width:810px;color:#d5d7dd;font-size:13px;line-height:1.78;overflow-wrap:anywhere}.paper h1{font-size:25px;font-weight:620;letter-spacing:-.02em;border-bottom:1px solid #383941;padding-bottom:12px;margin:0 0 23px}.paper h2{font-size:19px;font-weight:620;margin:27px 0 12px}.paper p{margin:11px 0}.paper blockquote{margin:16px 0;padding:4px 15px;border-left:3px solid #555966;color:var(--sub)}.paper ul{padding-left:21px}.paper li{margin:5px 0}.paper table{border-collapse:collapse;width:100%;font-size:12px;margin:18px 0}.paper td,.paper th{padding:7px 9px;border:1px solid #3b3c46;text-align:left}.paper th{background:#222329}.paper pre{overflow:auto;border-radius:6px;background:#252630;padding:15px;font:11px/1.7 var(--mono)}.paper code{font:11px var(--mono);background:#282a32;padding:2px 4px;border-radius:3px}.paper pre code{padding:0;background:none}.paper a{color:#8eb3ef}.paper img{max-width:100%;height:auto}.paper input{accent-color:#6599e6}
+@media(max-width:1040px){.shell{grid-template-columns:200px minmax(320px,1fr) 205px}.paper{padding:26px 30px 60px}}@media(max-width:780px){.shell{grid-template-columns:minmax(280px,1fr) 205px}.left{display:none}}@media(max-width:600px){.shell{grid-template-columns:1fr}.right{display:none}.split{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.split>*:first-child{border-right:0;border-bottom:1px solid var(--line)}.paper{padding:23px}}
+
+.doc-host{height:100%;display:grid;grid-template-columns:1fr;min-width:0}
+.doc-host.mode-split{grid-template-columns:1fr 1fr}
+.doc-host.mode-source .preview-panel,.doc-host.mode-preview .source-panel{display:none}
+.source-panel,.preview-panel{height:100%;min-width:0;min-height:0;overflow:hidden}
+.doc-host.mode-split .source-panel{border-right:1px solid var(--line)}
+@media(max-width:600px){.doc-host.mode-split{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.doc-host.mode-split .source-panel{border-right:0;border-bottom:1px solid var(--line)}}
+
+.html-viewport{height:100%;background:#f8f9fb;overflow:hidden}
+.html-viewport iframe{border:0;width:100%;height:100%;display:block;background:#f8f9fb}
+</style></head>
+<body data-kind="html">
+<div class="shell">
+ <aside class="left">
+   <div class="tabs"><span class="window-dots"><i></i><i></i><i></i></span><span class="head-name">⑂ Git Manager</span><button class="plus">＋</button></div>
+   <div class="git-head"><strong><span style="color:#5f9de8">⑂</span> main</strong><p>/Users/chii_magnus/Github/Bailey</p></div>
+   <div class="git-origin">⟳ origin/main</div><div class="git-input">Message (stage changes to commit…)</div>
+   <button class="commit-btn" onclick="Demo.toast('原型不执行 Git 操作')">✓ Commit Staged</button>
+   <div class="git-empty"><i>✓</i>Working tree clean</div><div class="git-caption">⌄ GIT GRAPH</div>
+   <div class="git-graph"><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>创建 plans</span><small>0516fb76 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>Merge PR #90</span><small>ff6ca262 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>归档 UI XCTest 计划</span><small>fbc7d1c0 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>合并 Dock 与多窗口回归</span><small>a45fd6e9 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>去除重复文件测试</span><small>e6af9766 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>清理 Git 菜单</span><small>acb4570c · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>修复 SSH 焦点</span><small>ca3c2630 · Chii Magnus</small></div></div></div>
+ </aside>
+ <main class="center">
+   <div class="tabs">
+     <div id="active-tab" class="tab active" title="右键：文件视图和操作" role="tab" tabindex="0"><span class="fmark" style="color:#e3a47e">HT</span><span class="name">index.html</span><span class="dirty"></span><span class="close">×</span></div>
+     <button class="plus" onclick="Demo.toast('原型：文件由右侧 File Manager 切换')">＋</button>
+   </div>
+   <div class="stage" id="stage"></div>
+ </main>
+ <aside class="right">
+  <div class="label-head"><b>▣ File Manager</b><span style="color:var(--sub)">＋</span></div>
+  <div class="files"><div class="project-name">Bailey</div><div class="project-path">/Users/chii_magnus/Github/Bailey</div>
+  <div class="file f"><span class="icon">⌄</span><span class="label">▣ .github</span></div>
+  <div class="file f sub"><span class="icon">⌄</span><span class="label">▣ features</span></div>
+  <a class="file" href="../markdown-live-preview/prototype.html"><span class="icon" style="color:#93b4ec">MD</span><span class="label">README.md</span></a>
+<a class="file" href="../csv-table-view/prototype.html"><span class="icon" style="color:#78c49a">CS</span><span class="label">experiment.csv</span></a>
+<a class="file" href="../svg-source-preview/prototype.html"><span class="icon" style="color:#d0a56d">SV</span><span class="label">stress-path.svg</span></a>
+<a class="file" href="../image-annotations/prototype.html"><span class="icon" style="color:#c4a3eb">PN</span><span class="label">experiment.png</span></a>
+<a class="file" href="../audio-file-playback/prototype.html"><span class="icon" style="color:#d2a4c1">M4</span><span class="label">field-recording.m4a</span></a>
+<a class="file" href="../video-file-playback/prototype.html"><span class="icon" style="color:#aaa9e0">MP</span><span class="label">simulation.mp4</span></a>
+<a class="file on" href="../html-live-preview/prototype.html"><span class="icon" style="color:#e3a47e">HT</span><span class="label">index.html</span></a>
+  <div class="file f"><span class="icon">›</span><span class="label">▣ Bailey</span></div>
+  <div class="file f"><span class="icon">›</span><span class="label">▣ BaileyTests</span></div>
+  <div class="file f"><span class="icon">›</span><span class="label">▣ docs</span></div>
+  <div class="file"><span class="icon">▤</span><span class="label">AGENTS.md</span></div></div>
+  <div class="projects"><div class="label-head"><b>▦ Projects</b><span>＋</span></div>
+   <div class="project-row on"><span>▣</span><span>Bailey<small>/Users/chii_magnus/Github/Bailey</small></span></div>
+   <div class="project-row"><span>▣</span><span>SoundField<small>.../Github/SoundField</small></span></div>
+   <div class="project-row"><span>▣</span><span>shale_shpb<small>.../Github/shale_shpb</small></span></div>
+  </div>
+ </aside>
+</div>
+<div class="context" id="context" role="menu"></div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const Demo=(()=>{
+ const stage=document.getElementById("stage"),menu=document.getElementById("context"),tab=document.getElementById("active-tab");
+ let modes=[],current="",change=()=>{},timer=0,canvasMenu=()=>[];
+ function toast(msg){let t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(timer);timer=setTimeout(()=>t.classList.remove("show"),2100)}
+ function dirty(value=true){tab.classList.toggle("changed",!!value)}
+ function setMode(m){if(!modes.includes(m))return;current=m;change(m);menu.classList.remove("show")}
+ function setModes(available,initial,render){modes=available;change=render;setMode(initial)}
+ function item(label,action,checked=false,disabled=false){return {label,action,checked,disabled}}
+ function showMenu(e,items){e.preventDefault();menu.replaceChildren();for(let it of items){
+  if(!it){const sep=document.createElement("div");sep.className="sep";menu.append(sep);continue}
+  const b=document.createElement("button"),c=document.createElement("span"),l=document.createElement("span");
+  c.className="check";c.textContent=it.checked?"✓":"";l.className="label";l.textContent=it.label;b.append(c,l);
+  b.disabled=!!it.disabled;b.onclick=()=>{menu.classList.remove("show");it.action?.()};menu.append(b)}
+  menu.classList.add("show");let x=e.clientX,y=e.clientY;
+  const w=menu.offsetWidth,h=menu.offsetHeight;
+  menu.style.left=Math.max(6,Math.min(x,innerWidth-w-8))+"px";
+  menu.style.top=Math.max(6,Math.min(y,innerHeight-h-8))+"px";
+ }
+ const labels={source:"显示源码",preview:"显示预览",split:"源码与预览并排",table:"显示表格"};
+ tab.addEventListener("contextmenu",e=>{const items=modes.map(m=>item(labels[m],()=>setMode(m),current===m));if(items.length)items.push(null);
+  items.push(...tabExtra());showMenu(e,items)});
+ let tabExtra=()=>[item("关闭标签",()=>toast("原型不会关闭正式 Bailey 标签"))];
+ function setTabExtra(fn){tabExtra=fn}
+ function setCanvasMenu(fn){canvasMenu=fn;stage.addEventListener("contextmenu",e=>{if(e.target.closest(".source,.context,.floating-tools,.csv-input"))return;const items=canvasMenu(e);if(items?.length)showMenu(e,items)})}
+ document.addEventListener("pointerdown",e=>{if(!menu.contains(e.target))menu.classList.remove("show")});
+ document.addEventListener("scroll",()=>menu.classList.remove("show"),true);
+ function editor(text,id){const shell=document.createElement("div");shell.className="editor";
+ const gutter=document.createElement("div");gutter.className="gutter";
+ const ta=document.createElement("textarea");ta.className="source";ta.id=id;ta.spellcheck=false;ta.value=text;
+ const lines=()=>gutter.textContent=Array.from({length:ta.value.split("\n").length},(_,i)=>i+1).join("\n");
+ ta.addEventListener("input",()=>{lines();dirty();ta.dispatchEvent(new Event("sourcechange"))});
+ ta.addEventListener("scroll",()=>gutter.scrollTop=ta.scrollTop);lines();shell.append(gutter,ta);return {shell,ta}}
+ return {stage,menu,item,showMenu,setModes,setMode,get mode(){return current},toast,dirty,setTabExtra,setCanvasMenu,editor}
+})();
+
+
+const HTML_INITIAL="<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <title>Bailey Preview</title>\n  <style>\n    :root {font-family: -apple-system, sans-serif;}\n    body {margin:0;background:#f8f9fb;color:#293242}\n    main {max-width:560px;margin:72px auto;padding:0 24px}\n    .eyebrow {color:#718096;letter-spacing:.13em;font-size:11px}\n    h1 {font-size:34px;letter-spacing:-.035em;font-weight:650}\n    p {font-size:15px;line-height:1.8;color:#657185}\n    article {border:1px solid #e0e4ec;border-radius:12px;\n      padding:22px;background:#fff;margin-top:30px}\n    .stats {display:flex;gap:40px;margin-top:22px}\n    .stats strong {display:block;font-size:23px}\n    .stats span {font-size:11px;color:#8e97a5}\n  </style>\n</head>\n<body>\n  <main>\n    <div class=\"eyebrow\">BAILEY / DESIGN PREVIEW</div>\n    <h1>Less chrome.<br>More content.</h1>\n    <p>HTML 可以在源码和静态预览之间切换。文件标签右键进入并排编辑。</p>\n    <article>\n      <strong>Experiment overview</strong>\n      <div class=\"stats\">\n        <div><strong>83</strong><span>样本曲线</span></div>\n        <div><strong>70</strong><span>已校验</span></div>\n        <div><strong>13</strong><span>待复核</span></div>\n      </div>\n    </article>\n  </main>\n</body>\n</html>\n";
+const holder=document.createElement("div");holder.className="doc-host mode-source";
+const source=document.createElement("div");source.className="source-panel";
+const preview=document.createElement("div");preview.className="preview-panel";
+const ed=Demo.editor(HTML_INITIAL,"html-code");source.append(ed.shell);
+const viewport=document.createElement("div");viewport.className="html-viewport";
+const iframe=document.createElement("iframe");
+iframe.setAttribute("sandbox","");
+iframe.setAttribute("referrerpolicy","no-referrer");
+iframe.setAttribute("title","安全静态 HTML 预览");
+viewport.append(iframe);preview.append(viewport);holder.append(source,preview);Demo.stage.append(holder);
+const csp="<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-src 'none'; form-action 'none'; base-uri 'none'\">";
+let timer=0,revision=0;
+function render(){const n=++revision;clearTimeout(timer);timer=setTimeout(()=>{if(n===revision)iframe.srcdoc=csp+ed.ta.value},145)}
+ed.ta.addEventListener("sourcechange",render);
+Demo.setModes(["source","preview","split"],"source",m=>{holder.className="doc-host mode-"+m;if(m!=="source")render()});
+Demo.setTabExtra(()=>[
+ Demo.item("在浏览器中打开…",()=>Demo.toast("正式 Bailey 会显式使用已有 Browser 面板")),
+ null,Demo.item("关闭标签",()=>Demo.toast("原型不关闭真实文件"))
+]);
+</script></body></html>

@@ -1,496 +1,153 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>Bailey · README.md / 交互原型</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bailey — README.md</title>
 <style>
-:root {
-  color-scheme: dark;
-  --bg:#1c1c20; --chrome:#1a1a1e; --panel:#1d1d21; --panel2:#202024;
-  --layer:#26262b; --border:#303036; --border-hi:#3b3b44; --text:#d8d8df;
-  --muted:#8c8d99; --soft:#696a75; --accent:#569aff; --accent-bg:#283a57;
-  --select:#343438; --hover:#292a30; --green:#76bc8f; --red:#e58a8a;
-  --orange:#dfac69; --purple:#b8a1e8; --code:#c9cfdf; --shade:#17171a;
-  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
-  --mono:"SFMono-Regular",SFMono-Regular,Menlo,Monaco,Consolas,monospace;
-}
-body.light {
-  color-scheme: light; --bg:#fff;--chrome:#f6f7f9;--panel:#f6f7fa;
-  --panel2:#f7f8fa;--layer:#ebedf2;--border:#e0e2e8;--border-hi:#c9cdd6;
-  --text:#1c2028;--muted:#656c78;--soft:#9299a6;--accent:#0969da;
-  --accent-bg:#dcecfb;--select:#e6e8ec;--hover:#edf0f3;
-  --green:#268650;--red:#be4040;--orange:#9d6800;--purple:#8f57b0;
-  --code:#29313e;--shade:#f2f4f7;
-}
-* { box-sizing:border-box; }
-html,body { margin:0;width:100%;height:100%;overflow:hidden; }
-body { background:var(--bg);color:var(--text);font:12px/1.45 var(--font);-webkit-font-smoothing:antialiased; }
-button,input,textarea,select { font:inherit;color:inherit; }
-button { cursor:pointer;border:1px solid transparent;border-radius:5px;background:transparent;padding:4px 7px;line-height:1.3; }
-button:hover:not(:disabled) { background:var(--hover); }
-button:disabled { color:var(--soft);cursor:default;opacity:.48; }
-button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible { outline:1px solid var(--accent);outline-offset:1px; }
-select { background:var(--panel2);border:1px solid var(--border-hi);border-radius:5px;padding:5px;min-width:60px; }
-input[type="checkbox"],input[type="range"] { accent-color:var(--accent); }
-a { color:inherit;text-decoration:none; }
-a:hover { color:var(--text); }
-::-webkit-scrollbar { width:9px;height:9px; }
-::-webkit-scrollbar-thumb { border-radius:8px;background:#73758260;border:2px solid transparent;background-clip:padding-box; }
-::-webkit-scrollbar-track { background:transparent; }
-.sr-only { position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap; }
-.app { width:100vw;height:100dvh;display:grid;grid-template-columns:258px minmax(340px,1fr) 258px;background:var(--chrome); }
-.left,.center,.right { min-width:0;height:100%;display:flex;flex-direction:column; }
-.left { background:var(--panel);border-right:1px solid var(--border); }
-.center { background:var(--bg); }
-.right { background:var(--panel);border-left:1px solid var(--border); }
-.tabstrip { height:35px;min-height:35px;display:flex;align-items:stretch;background:var(--chrome);border-bottom:1px solid var(--border);gap:0;overflow:hidden; }
-.window-tabstrip { gap:8px;align-items:center;padding-left:13px; }
-.lights { display:flex;gap:7px;align-items:center;flex-shrink:0; }
-.lights i { width:11px;height:11px;border-radius:50%;background:#494950;display:block;border:1px solid #55555b; }
-.lights i:first-child{ background:#666670; }
-.dock-tab { display:flex;align-items:center;gap:7px;padding:0 10px;color:var(--muted);min-width:0;border-right:1px solid var(--border);height:34px;flex-shrink:1; }
-.dock-tab.active { color:var(--text);background:var(--panel2);box-shadow:inset 0 -1px 0 var(--accent); }
-.dock-tab .file-tag { padding:1px 3px;line-height:1.15;border-radius:2px;font-size:8px;font-weight:650;letter-spacing:.025em;flex-shrink:0; }
-.file-tag.md{color:#8badff;background:#34446c}.file-tag.csv{color:#72c58d;background:#2f4d3f}
-.file-tag.svg{color:#e1a65a;background:#5a4530}.file-tag.img{color:#bda1f1;background:#4d4163}
-.file-tag.audio{color:#e7a5bc;background:#60445a}.file-tag.video{color:#b5a4f4;background:#51456c}
-.dock-tab .tab-title { white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:145px; }
-.dock-tab .close { color:var(--soft);opacity:0;margin-left:3px; }
-.dock-tab:hover .close { opacity:1; }
-.dock-tab.active .close { opacity:.8; }
-.tab-plus { margin-left:auto;align-self:center;color:var(--muted);padding:3px 8px;font-size:16px; }
-.pill-head { padding:3px 7px;border-radius:5px;background:var(--select);color:var(--muted);font-size:10px;font-weight:650;white-space:nowrap; }
-.section-tab-head { height:35px;min-height:35px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 8px;gap:8px; }
-.section-title { display:flex;align-items:center;gap:6px;min-width:0; }
-.icon-muted {color:var(--soft)}
-.square-ico { width:12px;height:10px;display:inline-block;border:1px solid var(--soft);border-radius:2px;position:relative;flex-shrink:0; }
-.square-ico:before { content:"";position:absolute;top:-4px;left:1px;width:5px;height:3px;border:1px solid var(--soft);border-bottom:0;border-radius:2px 2px 0 0; }
-.tiny-btn { color:var(--muted);padding:2px 5px;font-size:12px; }
-.git-top { padding:12px 10px;border-bottom:1px solid var(--border); }
-.git-branch { display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px; }
-.git-sub { font-size:10px;color:var(--muted);margin-left:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-.git-origin {color:var(--muted);font-size:10px;margin-top:8px;}
-.git-input {background:var(--layer);border:1px solid var(--border);color:var(--soft);margin-top:9px;padding:9px;border-radius:5px;font-size:10px;line-height:1.5; }
-.git-submit {background:var(--accent-bg);color:var(--text);width:100%;text-align:center;margin-top:6px;border:1px solid var(--border);}
-.clean-state {height:113px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--soft);font-size:11px;gap:7px;}
-.clean-mark {display:flex;align-items:center;justify-content:center;border:1px solid var(--border-hi);border-radius:50%;width:20px;height:20px;}
-.section-label {font-size:10px;color:var(--muted);padding:5px 10px;border-bottom:1px solid var(--border);letter-spacing:.04em;text-transform:uppercase;}
-.graph-scroll {flex:1;overflow:auto;min-height:0;padding:5px 9px 15px 13px;}
-.commit {height:47px;display:flex;gap:9px;position:relative;}
-.commit:before {content:"";position:absolute;left:4px;top:-18px;bottom:-27px;border-left:2px solid var(--purple);opacity:.75;}
-.commit-dot {width:10px;height:10px;border-radius:50%;border:2px solid var(--purple);background:var(--panel);position:relative;z-index:1;flex:none;margin-top:9px;}
-.commit:first-child .commit-dot {border-color:var(--accent);}
-.commit:first-child:before {border-color:var(--accent);}
-.commit-body {min-width:0;flex:1;}
-.commit-line {font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:4px;}
-.commit-detail {font-size:9px;color:var(--muted);display:flex;gap:6px;white-space:nowrap;overflow:hidden;}
-.commit-hash {font-family:var(--mono);font-size:9px;color:var(--muted);}
-.filetoolbar {height:35px;min-height:35px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding:0 11px;gap:8px;}
-.breadcrumb { color:var(--muted);font-size:11px;display:flex;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;align-items:center; }
-.breadcrumb b {color:var(--text);font-weight:500}
-.controls {display:flex;align-items:center;gap:7px;min-width:0;justify-content:flex-end;}
-.segmented {display:flex;align-items:center;gap:1px;background:var(--layer);border:1px solid var(--border);border-radius:6px;padding:2px;flex-shrink:0;}
-.segmented button {font-size:11px;padding:3px 10px;color:var(--muted);white-space:nowrap;}
-.segmented button.selected {color:var(--text);background:var(--select);box-shadow:0 1px 3px #00000020;}
-.actionbar {min-height:35px;height:35px;display:flex;align-items:center;gap:5px;padding:0 11px;border-bottom:1px solid var(--border);background:var(--bg);overflow:auto;flex-shrink:0;}
-.actionbar .spacer {flex:1;min-width:5px;}
-.hairline {width:1px;height:16px;background:var(--border-hi);margin:0 3px;flex-shrink:0;}
-.hint {font-size:10px;color:var(--muted);white-space:nowrap;}
-.action {border:1px solid var(--border);background:var(--panel2);color:var(--text);padding:4px 8px;white-space:nowrap;}
-.action.strong {color:#dbe8fd;background:var(--accent-bg);border-color:#496996;}
-.action.active {color:var(--text);background:var(--select);border-color:var(--border-hi);}
-.viewer {flex:1;min-height:0;position:relative;overflow:hidden;background:var(--bg);}
-.statusbar {height:26px;min-height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 11px;border-top:1px solid var(--border);color:var(--muted);font-size:10px;gap:8px;background:var(--chrome);}
-.status-left {display:flex;align-items:center;gap:9px;min-width:0;overflow:hidden;white-space:nowrap;}
-.status-right {display:flex;gap:11px;white-space:nowrap;}
-.dirtydot {display:none;width:6px;height:6px;background:var(--orange);border-radius:50%; }
-.is-dirty .dirtydot {display:inline-block;}
-.sidebar-files {display:flex;flex-direction:column;min-height:0;flex:1;}
-.files-scroll {flex:1;overflow:auto;padding:8px 5px 12px;}
-.file-tree-row {display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:5px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);}
-.file-tree-row .tiny-ico {display:inline-block;width:13px;min-width:13px;text-align:center;color:var(--soft);font-size:11px;}
-.file-tree-row:hover {background:var(--hover);}
-.file-tree-row.active {background:var(--select);}
-.file-tree-row.folder {color:var(--muted);}
-.file-tree-row .file-tag {font-size:8px;}
-.file-tree-row .fn {white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.tree-indent {padding-left:15px;}
-.tree-indent2 {padding-left:28px;}
-.projectpanel {height:210px;display:flex;flex-direction:column;border-top:1px solid var(--border);}
-.project-row {padding:8px 9px;margin:2px 7px;border-radius:5px;display:flex;align-items:flex-start;gap:8px;font-size:12px; }
-.project-row.active {background:var(--select);}
-.project-row .title {font-weight:540;font-size:11px;}
-.project-row .path {font-size:9px;color:var(--muted);text-overflow:ellipsis;white-space:nowrap;overflow:hidden;max-width:180px;}
-.project-foot {margin-top:auto;display:flex;justify-content:space-between;border-top:1px solid var(--border);padding:5px 8px;}
-.toast {position:absolute;bottom:45px;left:50%;transform:translate(-50%,10px);opacity:0;pointer-events:none;background:var(--layer);border:1px solid var(--border-hi);padding:9px 13px;border-radius:7px;color:var(--text);font-size:11px;box-shadow:0 8px 24px #0006;max-width:460px;z-index:100;transition:transform .15s ease,opacity .15s ease;}
-.toast.show {opacity:1;transform:translate(-50%,0);}
-.empty {color:var(--muted);font-size:12px;}
-.source-wrap {height:100%;display:flex;overflow:hidden;background:var(--bg);}
-.line-gutter {font:12px/22px var(--mono);color:var(--soft);background:var(--bg);min-width:41px;width:41px;text-align:right;padding:13px 9px 60px 0;overflow:hidden;white-space:pre;user-select:none;flex-shrink:0;}
-.source-text {background:var(--bg);border:0;resize:none;outline:none;color:var(--code);font:12px/22px var(--mono);width:100%;height:100%;padding:13px 16px 50px 8px;tab-size:2;white-space:pre;overflow:auto; }
-.source-text:focus-visible {outline:none;}
-.view-split {display:grid;height:100%;grid-template-columns:1fr 1fr;min-width:0;}
-.view-split > * {min-width:0;}
-.split-resize {border-right:1px solid var(--border-hi);}
-.viewer-heading {height:26px;min-height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 11px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);background:var(--panel2);}
-.viewer-heading span {text-transform:uppercase;letter-spacing:.06em;font-size:9px;}
-.alert {display:flex;align-items:center;gap:6px;color:var(--orange);font-size:11px;padding:7px 12px;background:#7b592625;border-bottom:1px solid #916f4745;}
-.alert.hidden {display:none;}
-.centered {display:flex;align-items:center;justify-content:center;height:100%;}
-.checker {background-color:#242429;background-image:linear-gradient(45deg,#2e2e33 25%,transparent 25%),linear-gradient(-45deg,#2e2e33 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#2e2e33 75%),linear-gradient(-45deg,transparent 75%,#2e2e33 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0px;}
-body.light .checker {background-color:#fafafa;background-image:linear-gradient(45deg,#eee 25%,transparent 25%),linear-gradient(-45deg,#eee 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#eee 75%),linear-gradient(-45deg,transparent 75%,#eee 75%);}
-.modal-shade {display:none;position:absolute;inset:0;z-index:80;background:#0008;align-items:center;justify-content:center;padding:12px;}
-.modal-shade.show {display:flex;}
-.modal {background:var(--panel2);border:1px solid var(--border-hi);width:min(420px,100%);border-radius:9px;padding:16px;box-shadow:0 15px 50px #0009;}
-.modal h3 {font-size:13px;margin:0 0 11px;font-weight:600;}
-.modal p {margin:6px 0 12px;color:var(--muted);font-size:11px;}
-.modal input {padding:7px;border:1px solid var(--border-hi);background:var(--bg);border-radius:5px;width:100%;}
-.modal-actions {margin-top:14px;display:flex;justify-content:flex-end;gap:7px;}
-.visually-hidden {position:absolute;clip:rect(0,0,0,0);width:1px;height:1px;overflow:hidden;}
-@media(max-width:1050px) { .app{grid-template-columns:200px minmax(320px,1fr) 215px;} .git-sub{margin-left:3px;} .breadcrumb .ancestor{display:none;} .filetoolbar{padding:0 7px;} }
-@media(max-width:830px) { .app{grid-template-columns:minmax(310px,1fr) 215px;} .left{display:none;} }
-@media(max-width:630px) { .app{grid-template-columns:1fr;} .right{display:none;} .dock-tab .tab-title{max-width:110px;} .segmented button{padding:4px 6px;} .actionbar{padding:0 6px;} .view-split {grid-template-columns:1fr;grid-template-rows:1fr 1fr;} .split-resize{border-right:0;border-bottom:1px solid var(--border-hi);} }
+:root{color-scheme:dark;--bg:#1b1b1f;--side:#1d1d21;--head:#1a1a1e;--raised:#29292f;--line:#323239;--ink:#d6d7df;--sub:#8d909d;--dim:#60636f;--focus:#73a6f4;--focusfill:#253550;--select:#303036;--soft:#232329;--mono:SFMono-Regular,Menlo,Consolas,monospace;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{color:var(--ink);font:12px/1.45 var(--font);background:var(--bg);-webkit-font-smoothing:antialiased}button,input,textarea{font:inherit;color:inherit}button{cursor:pointer;border:0;background:none}a{text-decoration:none;color:inherit}a:hover{color:var(--ink)}button:focus-visible,a:focus-visible,textarea:focus-visible,input:focus-visible{outline:1px solid var(--focus);outline-offset:2px}::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#77778067;border:2px solid transparent;border-radius:7px;background-clip:padding-box}::-webkit-scrollbar-track{background:none}
+.shell{display:grid;grid-template-columns:250px minmax(340px,1fr) 244px;width:100vw;height:100dvh}.left,.center,.right{min-width:0;height:100%;display:flex;flex-direction:column;overflow:hidden}.left,.right{background:var(--side)}.left{border-right:1px solid var(--line)}.right{border-left:1px solid var(--line)}
+.tabs{height:35px;min-height:35px;display:flex;align-items:center;background:var(--head);border-bottom:1px solid var(--line);padding:0 7px;gap:5px}.window-dots{display:flex;gap:7px;margin:0 7px 0 7px}.window-dots i{width:11px;height:11px;border-radius:50%;background:#494a50;border:1px solid #575960;display:inline-block}.head-name{font-size:11px;padding:3px 7px;background:#303036;border-radius:5px;color:#b1b3bd;max-width:142px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.plus{color:var(--sub);font-size:16px;padding:3px 7px;margin-left:auto;line-height:1}
+.tab{height:27px;display:flex;align-items:center;gap:7px;padding:4px 9px;border-radius:6px;min-width:0;max-width:205px;white-space:nowrap;color:var(--sub);cursor:pointer;font-size:11.5px;user-select:none}.tab.active{background:#283955;color:#dce8ff}.tab .fmark{width:13px;flex:none;text-align:center;font-size:9px;font-weight:700}.tab .name{min-width:0;text-overflow:ellipsis;overflow:hidden}.tab .close{display:none;color:#aab6c8;padding:0 2px}.tab.active:hover .close{display:block}.tab .dirty{width:5px;height:5px;border-radius:50%;background:var(--sub);display:none;flex:none}.tab.changed .dirty{display:block}.tab:focus-visible{outline:1px solid var(--focus)}
+.stage{position:relative;flex:1;min-height:0;min-width:0;overflow:hidden;background:var(--bg)}
+.git-head{padding:10px 10px 9px;border-bottom:1px solid var(--line)}.git-head strong{display:block;font-size:12px;font-weight:600}.git-head p{margin:4px 0 0;color:var(--sub);font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.git-origin{padding:9px 12px;font-size:10px;color:var(--sub)}.git-input{margin:3px 9px 5px;padding:9px;background:#25252b;border:1px solid var(--line);border-radius:5px;color:var(--dim);font-size:10px}.commit-btn{margin:0 9px 10px;height:23px;background:#283855;border-radius:5px;text-align:center;color:#9fb7e6;font-size:10px}.git-empty{height:98px;display:grid;align-content:center;justify-items:center;gap:9px;color:var(--dim);font-size:10px;border-bottom:1px solid var(--line)}.git-empty i{border:1px solid #5d616a;border-radius:50%;font:13px var(--font);width:19px;height:19px;display:grid;place-items:center}.git-caption{padding:9px 9px 6px;color:var(--sub);font-size:10px}.git-graph{overflow:auto;padding:0 11px;flex:1;min-height:0}.git-commit{display:flex;min-height:45px;gap:10px;position:relative}.git-commit:before{content:"";position:absolute;left:4px;top:0;bottom:0;border-left:2px solid #8b77ba}.git-commit:first-child:before{border-left-color:#5d9dec}.git-node{margin-top:8px;width:10px;height:10px;border:2px solid #ac91d1;background:var(--side);border-radius:50%;flex:none;z-index:1}.git-commit:first-child .git-node{border-color:#5d9dec}.git-text{min-width:0;font-size:10.5px;overflow:hidden;padding-top:2px}.git-text span{display:block;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}.git-text small{display:block;font-size:9px;color:var(--dim);margin-top:2px}
+.files{padding:8px 7px;flex:1;min-height:0;overflow:auto}.files .project-name{font-size:12px;font-weight:590;padding:5px 6px 0}.files .project-path{font-size:9px;color:var(--dim);padding:0 6px 9px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.file{display:flex;align-items:center;gap:7px;min-height:23px;padding:3px 9px;border-radius:5px;white-space:nowrap;overflow:hidden;color:#b2b6c1;font-size:11px}.file:hover{background:#292a30}.file.on{background:#34353d;color:#e5e6eb}.file .icon{font-size:10px;width:14px;flex:none;text-align:center}.file.f{padding-left:19px;color:#8d93a0}.file.sub{padding-left:30px}.file .label{min-width:0;overflow:hidden;text-overflow:ellipsis}.projects{height:186px;border-top:1px solid var(--line);display:flex;flex-direction:column}.project-row{margin:2px 8px;padding:7px;border-radius:5px;display:flex;gap:8px;font-size:11px;color:#a9abb8}.project-row.on{background:#35353c}.project-row span{min-width:0;overflow:hidden;text-overflow:ellipsis}.project-row small{display:block;font-size:9px;color:var(--dim);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;max-width:188px}.label-head{padding:5px 8px;background:var(--head);color:var(--sub);font-size:10px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;height:35px;min-height:35px}.label-head b{font-weight:500;background:#303036;border-radius:4px;padding:2px 7px}
+.context{position:fixed;z-index:60;display:none;min-width:204px;max-width:260px;padding:5px;background:#303036e9;border:1px solid #484951;border-radius:9px;box-shadow:0 14px 44px #0009;backdrop-filter:blur(22px);font-size:12px;color:#f1f1f5}.context.show{display:block}.context button{display:flex;width:100%;gap:7px;align-items:center;text-align:left;border-radius:4px;padding:6px 8px;font-size:12px;color:inherit}.context button:hover{background:#476ca2}.context button .check{width:14px;flex:none}.context button .label{flex:1}.context button .arrow{color:#c0c3cd;font-size:10px}.context .sep{height:1px;margin:4px 5px;background:#55565e}.context button:disabled{opacity:.45;cursor:default}.context button:disabled:hover{background:transparent}
+.toast{position:absolute;bottom:22px;left:50%;transform:translate(-50%,8px);background:#303039e8;box-shadow:0 10px 32px #0005;color:#d8dce5;border:1px solid #54545c;border-radius:7px;padding:7px 12px;font-size:11px;pointer-events:none;opacity:0;transition:opacity .16s,transform .16s;z-index:22;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}.toast.show{opacity:1;transform:translate(-50%,0)}
+.editor{height:100%;display:flex;min-width:0}.gutter{width:42px;flex:none;padding:14px 8px 30px 0;text-align:right;color:#606370;white-space:pre;font:12px/22px var(--mono);overflow:hidden;user-select:none}.source{border:0;outline:0;resize:none;flex:1;width:100%;height:100%;padding:14px 12px 32px 4px;font:12px/22px var(--mono);background:transparent;color:#d1d4e2;white-space:pre;tab-size:2;overflow:auto}.source:focus-visible{outline:0}.split{display:grid;grid-template-columns:1fr 1fr;height:100%;width:100%;min-width:0}.split>*{min-width:0;min-height:0}.split>*:first-child{border-right:1px solid var(--line)}.render-scroll{height:100%;overflow:auto}.paper{padding:36px 55px 90px;margin:0 auto;max-width:810px;color:#d5d7dd;font-size:13px;line-height:1.78;overflow-wrap:anywhere}.paper h1{font-size:25px;font-weight:620;letter-spacing:-.02em;border-bottom:1px solid #383941;padding-bottom:12px;margin:0 0 23px}.paper h2{font-size:19px;font-weight:620;margin:27px 0 12px}.paper p{margin:11px 0}.paper blockquote{margin:16px 0;padding:4px 15px;border-left:3px solid #555966;color:var(--sub)}.paper ul{padding-left:21px}.paper li{margin:5px 0}.paper table{border-collapse:collapse;width:100%;font-size:12px;margin:18px 0}.paper td,.paper th{padding:7px 9px;border:1px solid #3b3c46;text-align:left}.paper th{background:#222329}.paper pre{overflow:auto;border-radius:6px;background:#252630;padding:15px;font:11px/1.7 var(--mono)}.paper code{font:11px var(--mono);background:#282a32;padding:2px 4px;border-radius:3px}.paper pre code{padding:0;background:none}.paper a{color:#8eb3ef}.paper img{max-width:100%;height:auto}.paper input{accent-color:#6599e6}
+@media(max-width:1040px){.shell{grid-template-columns:200px minmax(320px,1fr) 205px}.paper{padding:26px 30px 60px}}@media(max-width:780px){.shell{grid-template-columns:minmax(280px,1fr) 205px}.left{display:none}}@media(max-width:600px){.shell{grid-template-columns:1fr}.right{display:none}.split{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.split>*:first-child{border-right:0;border-bottom:1px solid var(--line)}.paper{padding:23px}}
 
-/* CSV: compact native-table feel with row numbers and sticky header */
-.csv-shell {display:flex;flex-direction:column;height:100%;overflow:hidden;}
-.csv-scroll {height:100%;overflow:auto;outline:none;}
-.csv-table {border-collapse:separate;border-spacing:0;min-width:100%;font-size:12px;white-space:nowrap;table-layout:fixed;}
-.csv-table th,.csv-table td {border-right:1px solid var(--border);border-bottom:1px solid var(--border);height:29px;padding:4px 10px;text-align:left;overflow:hidden;text-overflow:ellipsis;min-width:95px;max-width:280px;position:relative;}
-.csv-table th {position:sticky;top:0;z-index:3;background:var(--panel2);font-size:11px;font-weight:540;color:var(--muted);cursor:pointer;user-select:none;}
-.csv-table th:hover {background:var(--select);}
-.csv-table .row-num {position:sticky;left:0;width:48px;min-width:48px;max-width:48px;background:var(--panel2);z-index:2;text-align:right;color:var(--soft);font:10px var(--mono);padding-right:9px;}
-.csv-table thead .row-num {z-index:4;top:0;}
-.csv-table td {font-family:var(--mono);font-size:11px;cursor:cell;}
-.csv-table td:hover {background:var(--hover);}
-.csv-table td.selected {background:var(--accent-bg);outline:1px solid var(--accent);outline-offset:-1px;z-index:1;}
-.csv-table tr.malformed td {border-bottom-color:var(--orange);}
-.csv-table .cell-number {color:var(--green);}
-.csv-cell-input {display:block;width:100%;height:100%;padding:2px 5px;background:var(--layer);outline:1px solid var(--accent);border:0;position:absolute;top:0;left:0;z-index:3;font:inherit;}
-.csv-search {background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:5px 7px;width:140px;font-size:11px;}
-.csv-source-pane {height:100%;display:flex;overflow:hidden;}
-.csv-source-pane[hidden],.csv-shell[hidden]{display:none;}
-.csv-label {display:flex;align-items:center;gap:4px;white-space:nowrap;color:var(--muted);font-size:10px;cursor:pointer;}
-.csv-sort-arrow {margin-left:6px;color:var(--accent);}
-@media(max-width:1000px){.csv-search{width:105px}.csv-label{display:none}}
-
-.md-workspace {height:100%;display:grid;grid-template-columns:1fr;min-width:0;}
-.md-workspace[data-mode=source] .md-preview-pane {display:none;}
-.md-workspace[data-mode=preview] .md-source-pane {display:none;}
-.md-workspace[data-mode=split] {grid-template-columns:1fr 1fr;}
-.md-pane {display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;}
-.md-source-pane {border-right:1px solid var(--border);}
-.md-preview-pane {overflow:hidden;background:var(--bg);}
-.md-source-wrap {flex:1;min-height:0;display:flex;overflow:hidden;}
-.md-render-scroll {flex:1;overflow:auto;min-height:0;}
-.md-paper {max-width:780px;padding:40px 55px 130px;margin:0 auto;font-size:13px;line-height:1.8;color:var(--text);overflow-wrap:anywhere;}
-.md-paper h1 {font-size:26px;font-weight:650;letter-spacing:-.025em;line-height:1.35;border-bottom:1px solid var(--border);padding-bottom:13px;margin:0 0 19px;}
-.md-paper h2 {font-size:19px;font-weight:650;line-height:1.4;border-bottom:1px solid var(--border);padding-bottom:8px;margin:28px 0 12px;}
-.md-paper h3 {font-size:15px;font-weight:650;margin:24px 0 10px;}
-.md-paper p {margin:9px 0 14px;}
-.md-paper ul,.md-paper ol {padding-left:25px;margin:10px 0 16px;}
-.md-paper li {margin:3px 0;}
-.md-paper blockquote {border-left:3px solid var(--border-hi);padding:5px 15px;margin:17px 0;color:var(--muted);background:var(--panel2);}
-.md-paper code {background:var(--layer);font:11px/1.5 var(--mono);padding:3px 5px;border-radius:4px;color:var(--code);}
-.md-paper pre {background:var(--panel2);border:1px solid var(--border);padding:15px 18px;border-radius:7px;overflow:auto;line-height:1.65;}
-.md-paper pre code {background:transparent;padding:0;font-size:11px;}
-.md-paper table {border-collapse:collapse;width:100%;margin:16px 0 24px;font-size:12px;}
-.md-paper th,.md-paper td {border:1px solid var(--border-hi);padding:7px 11px;text-align:left;}
-.md-paper th {background:var(--panel2);font-weight:620;}
-.md-paper tr:nth-child(even) td {background:var(--panel2);}
-.md-paper a {color:var(--accent);text-decoration:none;}
-.md-paper a:hover{text-decoration:underline;}
-.md-paper img {max-width:100%;height:auto;display:block;margin:12px auto 18px;border:1px solid var(--border);border-radius:5px;}
-.md-paper hr {border:0;border-top:1px solid var(--border);margin:24px 0;}
-.md-paper input[disabled] {opacity:.7;pointer-events:none;}
-body.light .md-paper pre{background:#f6f7f9}
-@media(max-width:950px) {.md-paper{padding:25px 24px 80px}}
-@media(max-width:650px) {.md-workspace[data-mode=split]{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.md-source-pane{border-right:0;border-bottom:1px solid var(--border)}}
-
-.svg-workspace {height:100%;display:grid;grid-template-columns:1fr;overflow:hidden;}
-.svg-workspace[data-mode=source] .svg-preview-pane{display:none;}
-.svg-workspace[data-mode=preview] .svg-source-pane{display:none;}
-.svg-workspace[data-mode=split]{grid-template-columns:1fr 1fr;}
-.svg-pane {height:100%;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
-.svg-source-pane{border-right:1px solid var(--border);}
-.svg-pane .source-wrap{flex:1;min-height:0;}
-.svg-stage {flex:1;min-height:0;overflow:auto;display:flex;align-items:safe center;justify-content:safe center;padding:34px;position:relative;}
-.svg-art {display:block;flex:none;width:min(100%,800px);height:auto;box-shadow:0 8px 36px #0005;background:white;}
-.svg-error {padding:7px 12px;font-size:11px;color:var(--orange);border-bottom:1px solid var(--border);background:#7b592625;}
-.svg-error[hidden]{display:none;}
-.svg-workspace[data-mode=preview] .svg-art {width:min(85%,820px);}
-.svg-workspace[data-mode=split] .svg-stage{padding:20px;}
-@media(max-width:650px) {.svg-workspace[data-mode=split]{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.svg-source-pane{border-right:0;border-bottom:1px solid var(--border)}}
-
-.image-stage {position:relative;height:100%;width:100%;overflow:auto;display:flex;align-items:safe center;justify-content:safe center;padding:35px;user-select:none;}
-.image-sheet {position:relative;width:min(89%,960px);height:auto;flex:none;box-shadow:0 9px 38px #0006;background:white;}
-.image-sheet img{display:block;width:100%;height:auto;pointer-events:none;}
-.annotation-layer{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none;}
-.annotation-layer.editable {pointer-events:auto;cursor:crosshair;}
-.image-toolgroup {display:flex;align-items:center;gap:4px;flex-shrink:0;}
-.image-toolgroup[hidden]{display:none;}
-.image-toolgroup button {font-size:11px;}
-.image-toolgroup button.current {color:var(--accent);border:1px solid var(--accent);background:var(--accent-bg);}
-.image-file-select {display:none;}
-.image-format {color:var(--muted);font-size:10px;white-space:nowrap;}
-@media(max-width:1000px){.image-format{display:none;}.image-stage{padding:16px;}}
-
-.media-scene {height:100%;overflow:auto;display:flex;align-items:safe center;justify-content:safe center;padding:28px 22px;}
-.audio-player {width:min(820px,100%);border:1px solid var(--border);border-radius:11px;background:var(--panel2);overflow:hidden;box-shadow:0 10px 30px #0002;}
-.audio-info {padding:30px 34px 10px;display:flex;align-items:center;gap:16px;}
-.audio-art {height:74px;width:74px;flex:none;border:1px solid var(--border-hi);border-radius:10px;background:linear-gradient(145deg,#343b53,#242532);position:relative;display:flex;align-items:center;justify-content:center;font-size:34px;color:#c2b9ed;font-weight:300;}
-.audio-art:after {content:"";width:19px;height:19px;position:absolute;right:-4px;bottom:-3px;border-radius:50%;background:#90bdda33;border:2px solid #3b5066;}
-.audio-name {font-size:17px;font-weight:620;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;}
-.audio-secondary{font-size:11px;color:var(--muted);}
-.audio-waveform {display:block;margin:13px 31px 5px;width:calc(100% - 62px);height:146px;cursor:crosshair;touch-action:pan-y;border-radius:5px;outline:none;}
-.audio-time {display:flex;align-items:center;justify-content:space-between;padding:0 34px;color:var(--muted);font:10px var(--mono);}
-.media-controls {padding:18px 29px 27px;display:flex;align-items:center;justify-content:center;gap:14px;}
-.media-controls button {font-size:13px;padding:5px 10px;color:var(--text);}
-.media-controls .play-circle {font-size:19px;border:1px solid var(--border-hi);border-radius:50%;width:43px;height:43px;background:var(--select);}
-.media-controls .play-circle:hover{background:var(--accent-bg);}
-.media-info-foot {border-top:1px solid var(--border);padding:11px 34px;color:var(--muted);font-size:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
-.media-volume {display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px;}
-.media-volume input[type=range]{width:84px;height:3px;}
-.media-choice {font-size:11px;padding:3px 6px;background:var(--panel2);color:var(--muted);}
-.audio-bg-note {font-size:10px;color:var(--muted);margin-left:2px;}
-@media(max-width:670px){.audio-info{padding:18px;}.audio-waveform{margin:12px 10px;width:calc(100% - 20px);}.audio-time,.media-info-foot{padding-left:14px;padding-right:14px}.media-controls{padding:12px;}.audio-art{width:55px;height:55px;}.audio-name{font-size:14px;}}
-
-.video-stage {height:100%;display:flex;align-items:safe center;justify-content:safe center;padding:25px 25px;overflow:auto;}
-.video-card {width:min(1020px,100%);background:var(--panel2);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:0 10px 34px #0003;}
-.video-screen {background:#0d1016;width:100%;aspect-ratio:16/9;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;}
-.video-screen video {width:100%;height:100%;object-fit:contain;display:block;}
-.video-screen.fill video{object-fit:cover;}
-.video-center-play {position:absolute;border:1px solid #ffffff70;border-radius:50%;width:58px;height:58px;display:flex;align-items:center;justify-content:center;color:white;background:#171b21b8;backdrop-filter:blur(8px);font-size:22px;transition:opacity .13s;}
-.video-center-play.hidden{opacity:0;pointer-events:none;}
-.video-topline {position:absolute;top:0;left:0;right:0;padding:20px 20px 38px;color:#f8f9fe;font-size:12px;background:linear-gradient(#090b0e86,transparent);pointer-events:none;}
-.video-topline strong {font-weight:550;}
-.video-controls {padding:11px 17px 13px;background:var(--panel2);}
-.video-timeline {width:100%;accent-color:var(--accent);height:12px;cursor:pointer;}
-.video-toolbar {display:flex;align-items:center;gap:10px;color:var(--muted);margin-top:6px;}
-.video-toolbar button {font-size:12px;color:var(--text);}
-.video-toolbar .video-primary {color:var(--text);font-size:18px;padding:2px 8px;}
-.video-time {font:10px var(--mono);white-space:nowrap;}
-.video-toolbar .spacer {flex:1;}
-.video-bottom {border-top:1px solid var(--border);padding:10px 17px;color:var(--muted);display:flex;justify-content:space-between;gap:10px;font-size:10px;}
-.video-screen:fullscreen {width:100vw;height:100vh;aspect-ratio:auto;}
-@media(max-width:670px){.video-stage{padding:8px;}.video-controls{padding:8px;}.video-toolbar{gap:3px;}}
-</style>
-</head>
-<body data-kind="markdown">
-<div class="app">
-  <aside class="left">
-    <div class="tabstrip window-tabstrip">
-      <div class="lights" aria-label="macOS 窗口控件"><i></i><i></i><i></i></div>
-      <span class="pill-head">⚑ Git Manager</span><button class="tab-plus" title="添加面板">＋</button>
-    </div>
-    <div class="git-top">
-      <div class="git-branch"><span style="color:var(--accent)">⑂</span> main <span class="spacer"></span><span style="margin-left:auto;font-size:10px;color:var(--muted)">≡ ···</span></div>
-      <div class="git-sub">/Users/chii_magnus/Github/Bailey</div>
-      <div class="git-origin">⟳ origin/main</div>
-      <div class="git-input">Message (stage changes to use ⌘↵)</div>
-      <button class="git-submit" type="button" onclick="showToast('这是只读原型，Git 操作不触发')">✓ Commit Staged</button>
-    </div>
-    <div class="clean-state"><span class="clean-mark">✓</span>Working tree clean</div>
-    <div class="section-label">⌄ Git Graph <span style="float:right">60</span></div>
-    <div class="graph-scroll"><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">归档已停止的 UI XCTest 迁移计划</div><div class="commit-detail"><span class="commit-hash">fbc7d1c0</span><span>Chii Magnus · 最近</span></div></div></div><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">合并 Dock 与多窗口回归测试</div><div class="commit-detail"><span class="commit-hash">a45fd6e9</span><span>Chii Magnus · 最近</span></div></div></div><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">删除重复文件与 AX 查询</div><div class="commit-detail"><span class="commit-hash">e6af9766</span><span>Chii Magnus · 最近</span></div></div></div><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">合并 Git 菜单去重与 Diff 资源回收</div><div class="commit-detail"><span class="commit-hash">acb4570c</span><span>Chii Magnus · 最近</span></div></div></div><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">修复 SSH 选择器焦点</div><div class="commit-detail"><span class="commit-hash">ca3c2630</span><span>Chii Magnus · 最近</span></div></div></div><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">稳定隔离首窗与窗口归属</div><div class="commit-detail"><span class="commit-hash">61061108</span><span>Chii Magnus · 最近</span></div></div></div><div class="commit"><div class="commit-dot"></div><div class="commit-body"><div class="commit-line">修复原生菜单动态标题</div><div class="commit-detail"><span class="commit-hash">c9d13013</span><span>Chii Magnus · 最近</span></div></div></div></div>
-  </aside>
-  <main class="center">
-    <div class="tabstrip"><a class="dock-tab" href="../svg-source-preview/prototype.html"><span class="file-tag svg">SVG</span><span class="tab-title">stress-path.svg</span></a><a class="dock-tab active" aria-current="page"><span class="file-tag md">MD</span><span class="tab-title">README.md</span><span class="close">×</span></a><a class="dock-tab" href="../csv-table-view/prototype.html"><span class="file-tag csv">CSV</span><span class="tab-title">experiment.csv</span></a><button class="tab-plus" onclick="showToast('原型：文件由右侧列表切换')" title="新建标签">＋</button></div>
-    <div class="filetoolbar">
-      <div class="breadcrumb"><span class="ancestor">Bailey</span><span class="ancestor">›</span><span class="ancestor">samples</span><span class="ancestor">›</span><b>README.md</b><span class="dirtydot" id="dirtyDot"></span></div>
-      <div class="controls"><div id="modeButtons" class="segmented" aria-label="文件视图模式"></div></div>
-    </div>
-    <div class="actionbar" id="actionbar"><span class="hint">UTF-8</span><div class="hairline"></div>
-<span class="hint" id="mdLines">0 行</span><div class="spacer"></div>
-<label class="csv-label" style="display:flex"><input type="checkbox" id="mdSync">同步滚动</label>
-<span class="hint" id="mdLive">实时预览就绪</span></div>
-    <div class="viewer" id="viewer"><div class="md-workspace" data-mode="source" id="mdWorkspace">
-<div class="md-pane md-source-pane">
-  <div class="viewer-heading" id="mdSourceTitle"><span>Source · 编辑</span><small>⌘⇧V 预览</small></div>
-  <div class="md-source-wrap"><div class="line-gutter" id="mdNumbers"></div><textarea class="source-text" id="mdText" spellcheck="false" aria-label="Markdown 源码"></textarea></div>
+.doc-host{height:100%;display:grid;grid-template-columns:1fr;min-width:0}
+.doc-host.mode-split{grid-template-columns:1fr 1fr}
+.doc-host.mode-source .preview-panel,.doc-host.mode-preview .source-panel{display:none}
+.source-panel,.preview-panel{height:100%;min-width:0;min-height:0;overflow:hidden}
+.doc-host.mode-split .source-panel{border-right:1px solid var(--line)}
+@media(max-width:600px){.doc-host.mode-split{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.doc-host.mode-split .source-panel{border-right:0;border-bottom:1px solid var(--line)}}
+</style></head>
+<body data-kind="md">
+<div class="shell">
+ <aside class="left">
+   <div class="tabs"><span class="window-dots"><i></i><i></i><i></i></span><span class="head-name">⑂ Git Manager</span><button class="plus">＋</button></div>
+   <div class="git-head"><strong><span style="color:#5f9de8">⑂</span> main</strong><p>/Users/chii_magnus/Github/Bailey</p></div>
+   <div class="git-origin">⟳ origin/main</div><div class="git-input">Message (stage changes to commit…)</div>
+   <button class="commit-btn" onclick="Demo.toast('原型不执行 Git 操作')">✓ Commit Staged</button>
+   <div class="git-empty"><i>✓</i>Working tree clean</div><div class="git-caption">⌄ GIT GRAPH</div>
+   <div class="git-graph"><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>创建 plans</span><small>0516fb76 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>Merge PR #90</span><small>ff6ca262 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>归档 UI XCTest 计划</span><small>fbc7d1c0 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>合并 Dock 与多窗口回归</span><small>a45fd6e9 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>去除重复文件测试</span><small>e6af9766 · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>清理 Git 菜单</span><small>acb4570c · Chii Magnus</small></div></div><div class="git-commit"><i class="git-node"></i><div class="git-text"><span>修复 SSH 焦点</span><small>ca3c2630 · Chii Magnus</small></div></div></div>
+ </aside>
+ <main class="center">
+   <div class="tabs">
+     <div id="active-tab" class="tab active" title="右键：文件视图和操作" role="tab" tabindex="0"><span class="fmark" style="color:#93b4ec">MD</span><span class="name">README.md</span><span class="dirty"></span><span class="close">×</span></div>
+     <button class="plus" onclick="Demo.toast('原型：文件由右侧 File Manager 切换')">＋</button>
+   </div>
+   <div class="stage" id="stage"></div>
+ </main>
+ <aside class="right">
+  <div class="label-head"><b>▣ File Manager</b><span style="color:var(--sub)">＋</span></div>
+  <div class="files"><div class="project-name">Bailey</div><div class="project-path">/Users/chii_magnus/Github/Bailey</div>
+  <div class="file f"><span class="icon">⌄</span><span class="label">▣ .github</span></div>
+  <div class="file f sub"><span class="icon">⌄</span><span class="label">▣ features</span></div>
+  <a class="file on" href="../markdown-live-preview/prototype.html"><span class="icon" style="color:#93b4ec">MD</span><span class="label">README.md</span></a>
+<a class="file" href="../csv-table-view/prototype.html"><span class="icon" style="color:#78c49a">CS</span><span class="label">experiment.csv</span></a>
+<a class="file" href="../svg-source-preview/prototype.html"><span class="icon" style="color:#d0a56d">SV</span><span class="label">stress-path.svg</span></a>
+<a class="file" href="../image-annotations/prototype.html"><span class="icon" style="color:#c4a3eb">PN</span><span class="label">experiment.png</span></a>
+<a class="file" href="../audio-file-playback/prototype.html"><span class="icon" style="color:#d2a4c1">M4</span><span class="label">field-recording.m4a</span></a>
+<a class="file" href="../video-file-playback/prototype.html"><span class="icon" style="color:#aaa9e0">MP</span><span class="label">simulation.mp4</span></a>
+<a class="file" href="../html-live-preview/prototype.html"><span class="icon" style="color:#e3a47e">HT</span><span class="label">index.html</span></a>
+  <div class="file f"><span class="icon">›</span><span class="label">▣ Bailey</span></div>
+  <div class="file f"><span class="icon">›</span><span class="label">▣ BaileyTests</span></div>
+  <div class="file f"><span class="icon">›</span><span class="label">▣ docs</span></div>
+  <div class="file"><span class="icon">▤</span><span class="label">AGENTS.md</span></div></div>
+  <div class="projects"><div class="label-head"><b>▦ Projects</b><span>＋</span></div>
+   <div class="project-row on"><span>▣</span><span>Bailey<small>/Users/chii_magnus/Github/Bailey</small></span></div>
+   <div class="project-row"><span>▣</span><span>SoundField<small>.../Github/SoundField</small></span></div>
+   <div class="project-row"><span>▣</span><span>shale_shpb<small>.../Github/shale_shpb</small></span></div>
+  </div>
+ </aside>
 </div>
-<div class="md-pane md-preview-pane">
-  <div class="viewer-heading"><span>Rendered · 只读</span><small id="mdPreviewStamp">Live</small></div>
-  <div class="md-render-scroll" id="mdScroll"><article class="md-paper" id="mdRendered"></article></div>
-</div>
-</div></div>
-    <div class="statusbar">
-      <div class="status-left"><span id="statusText">就绪</span><span id="fileMeta">MD · 本地样例</span></div>
-      <div class="status-right"><span id="shortHelp">⌘⇧V · 视图切换</span><span>交互原型 · 不写原文件</span></div>
-    </div>
-  </main>
-  <aside class="right">
-    <div class="sidebar-files">
-      <div class="section-tab-head"><span class="section-title"><span class="pill-head">▣ File Manager</span></span><button class="tiny-btn" onclick="showToast('原型：点击文件名以打开不同格式演示')">＋</button></div>
-      <div class="files-scroll">
-        <div style="padding:1px 8px 9px"><div style="font-size:12px;font-weight:600">Bailey</div><div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/Users/chii_magnus/Github/Bailey</div></div>
-        <div class="file-tree-row folder"><span class="tiny-ico">⌄</span><span class="square-ico"></span>.github</div>
-        <div class="file-tree-row folder tree-indent"><span class="tiny-ico">⌄</span><span class="square-ico"></span>features</div>
-        <div class="file-tree-row folder tree-indent2"><span class="tiny-ico">⌄</span><span class="square-ico"></span>samples</div>
-        <a class="file-tree-row tree-indent2 active" href="../markdown-live-preview/prototype.html"><span class="file-tag md">MD</span><span class="fn">README.md</span></a>
-<a class="file-tree-row tree-indent2" href="../csv-table-view/prototype.html"><span class="file-tag csv">CSV</span><span class="fn">experiment.csv</span></a>
-<a class="file-tree-row tree-indent2" href="../svg-source-preview/prototype.html"><span class="file-tag svg">SVG</span><span class="fn">stress-path.svg</span></a>
-<a class="file-tree-row tree-indent2" href="../image-annotations/prototype.html"><span class="file-tag img">PNG</span><span class="fn">experiment.png</span></a>
-<a class="file-tree-row tree-indent2" href="../audio-file-playback/prototype.html"><span class="file-tag audio">M4A</span><span class="fn">field-recording.m4a</span></a>
-<a class="file-tree-row tree-indent2" href="../video-file-playback/prototype.html"><span class="file-tag video">MP4</span><span class="fn">simulation.mp4</span></a>
-        <div class="file-tree-row folder"><span class="tiny-ico">›</span><span class="square-ico"></span>Bailey</div>
-        <div class="file-tree-row folder"><span class="tiny-ico">›</span><span class="square-ico"></span>BaileyTests</div>
-        <div class="file-tree-row folder"><span class="tiny-ico">›</span><span class="square-ico"></span>docs</div>
-        <div class="file-tree-row"><span class="file-tag md">MD</span>AGENTS.md</div>
-        <div class="file-tree-row"><span class="file-tag md">MD</span>README.md</div>
-      </div>
-    </div>
-    <div class="projectpanel">
-      <div class="section-tab-head"><span class="pill-head">▦ Projects</span><button class="tiny-btn" onclick="showToast('原型：项目选择暂不操作')">＋</button></div>
-      <div class="project-row active"><span class="square-ico" style="margin-top:4px"></span><div><div class="title">Bailey</div><div class="path">/Users/chii_magnus/Github/Bailey</div></div></div>
-      <div class="project-row"><span class="square-ico" style="margin-top:4px"></span><div><div class="title">SoundField</div><div class="path">.../Github/SoundField</div></div></div>
-      <div class="project-row"><span class="square-ico" style="margin-top:4px"></span><div><div class="title">shale_shpb</div><div class="path">.../Github/shale_shpb</div></div></div>
-      <div class="project-foot"><button class="tiny-btn" id="themeButton" title="预览浅色/深色主题">◐ 主题</button><span class="hint">模拟 Bailey Default</span></div>
-    </div>
-  </aside>
-</div>
-<div class="toast" id="toast" aria-live="polite"></div>
+<div class="context" id="context" role="menu"></div>
+<div class="toast" id="toast" role="status"></div>
 <script>
-(function () {
-  let toastTimer=0;
-  window.showToast=function(message) {
-    const t=document.getElementById("toast");t.textContent=message;t.classList.add("show");
-    clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove("show"),2400);
-  };
-  window.setDirty=function(value) {
-    document.body.classList.toggle("is-dirty",!!value);
-    document.getElementById("statusText").textContent=value?"未保存的模拟修改":"就绪";
-  };
-  window.setFileMeta=function(text) {document.getElementById("fileMeta").textContent=text;};
-  const modeRoot=document.getElementById("modeButtons");
-  window.installModes=function(modes,defaultMode,onChange) {
-    window.currentMode=defaultMode;
-    const labels={table:"表格",source:"源码",preview:"预览",split:"并排"};
-    const buttons=modes.map(mode=>{const b=document.createElement("button");
-      b.type="button";b.textContent=labels[mode];b.dataset.mode=mode;
-      b.setAttribute("aria-label",labels[mode]+"模式");
-      b.onclick=()=>window.switchMode(mode);modeRoot.append(b);return b;});
-    window.switchMode=function(mode) {
-      if(!modes.includes(mode))return;
-      const prev=window.currentMode;
-      const changed=onChange(mode,prev);
-      if(changed===false) return;
-      window.currentMode=mode;
-      buttons.forEach(b=>{b.classList.toggle("selected",b.dataset.mode===mode);b.setAttribute("aria-pressed",String(b.dataset.mode===mode));});
-    };
-    window.switchMode(defaultMode);
-  };
-  window.demoSave=function() {showToast("原型不会写入工作区；请通过明确的导出按钮保存演示数据");};
-  document.getElementById("themeButton").onclick=()=>{document.body.classList.toggle("light");showToast("仅切换原型外观，不改变 Bailey 设置");};
-  window.addEventListener("keydown",e=>{
-    if(e.metaKey && e.shiftKey && e.code==="KeyV" && window.toggleSourcePreview){
-      e.preventDefault();window.toggleSourcePreview();return;
-    }
-    if(e.metaKey && !e.shiftKey && e.code==="KeyS"){e.preventDefault();window.demoSave();}
-  });
+const Demo=(()=>{
+ const stage=document.getElementById("stage"),menu=document.getElementById("context"),tab=document.getElementById("active-tab");
+ let modes=[],current="",change=()=>{},timer=0,canvasMenu=()=>[];
+ function toast(msg){let t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(timer);timer=setTimeout(()=>t.classList.remove("show"),2100)}
+ function dirty(value=true){tab.classList.toggle("changed",!!value)}
+ function setMode(m){if(!modes.includes(m))return;current=m;change(m);menu.classList.remove("show")}
+ function setModes(available,initial,render){modes=available;change=render;setMode(initial)}
+ function item(label,action,checked=false,disabled=false){return {label,action,checked,disabled}}
+ function showMenu(e,items){e.preventDefault();menu.replaceChildren();for(let it of items){
+  if(!it){const sep=document.createElement("div");sep.className="sep";menu.append(sep);continue}
+  const b=document.createElement("button"),c=document.createElement("span"),l=document.createElement("span");
+  c.className="check";c.textContent=it.checked?"✓":"";l.className="label";l.textContent=it.label;b.append(c,l);
+  b.disabled=!!it.disabled;b.onclick=()=>{menu.classList.remove("show");it.action?.()};menu.append(b)}
+  menu.classList.add("show");let x=e.clientX,y=e.clientY;
+  const w=menu.offsetWidth,h=menu.offsetHeight;
+  menu.style.left=Math.max(6,Math.min(x,innerWidth-w-8))+"px";
+  menu.style.top=Math.max(6,Math.min(y,innerHeight-h-8))+"px";
+ }
+ const labels={source:"显示源码",preview:"显示预览",split:"源码与预览并排",table:"显示表格"};
+ tab.addEventListener("contextmenu",e=>{const items=modes.map(m=>item(labels[m],()=>setMode(m),current===m));if(items.length)items.push(null);
+  items.push(...tabExtra());showMenu(e,items)});
+ let tabExtra=()=>[item("关闭标签",()=>toast("原型不会关闭正式 Bailey 标签"))];
+ function setTabExtra(fn){tabExtra=fn}
+ function setCanvasMenu(fn){canvasMenu=fn;stage.addEventListener("contextmenu",e=>{if(e.target.closest(".source,.context,.floating-tools,.csv-input"))return;const items=canvasMenu(e);if(items?.length)showMenu(e,items)})}
+ document.addEventListener("pointerdown",e=>{if(!menu.contains(e.target))menu.classList.remove("show")});
+ document.addEventListener("scroll",()=>menu.classList.remove("show"),true);
+ function editor(text,id){const shell=document.createElement("div");shell.className="editor";
+ const gutter=document.createElement("div");gutter.className="gutter";
+ const ta=document.createElement("textarea");ta.className="source";ta.id=id;ta.spellcheck=false;ta.value=text;
+ const lines=()=>gutter.textContent=Array.from({length:ta.value.split("\n").length},(_,i)=>i+1).join("\n");
+ ta.addEventListener("input",()=>{lines();dirty();ta.dispatchEvent(new Event("sourcechange"))});
+ ta.addEventListener("scroll",()=>gutter.scrollTop=ta.scrollTop);lines();shell.append(gutter,ta);return {shell,ta}}
+ return {stage,menu,item,showMenu,setModes,setMode,get mode(){return current},toast,dirty,setTabExtra,setCanvasMenu,editor}
 })();
 
-(function(){
-  const INITIAL_MD="# SHPB 实验数据整理\n\n> 从原始波形到可复核的实验记录。**源文件**是唯一的数据真源。\n\n这份 Markdown 在 Bailey 中默认以源码打开。按 **⌘⇧V** 查看预览，也可以切换到并排模式，体验修改时的实时渲染。\n\n## 当前进度\n\n- [x] 已录入试样与实验工况\n- [x] 校验应力–应变曲线的峰值位置\n- [ ] 继续检查部分尾段缺口\n- [ ] 核对最终的 CSV 数据格式\n\n## 数据清单\n\n| 数据集 | 样本数 | 状态 |\n| :--- | ---: | :--- |\n| Fan2022 | 83 | 已标记 |\n| Zhang2024 | 42 | 待复核 |\n| Jia2026 | 86 | 分批核验 |\n\n## 一段实际代码\n\n~~~python\nimport csv\n\nwith open(\"experiment.csv\", newline=\"\", encoding=\"utf-8\") as f:\n    records = list(csv.DictReader(f))\n    print(\"Loaded\", len(records), \"records\")\n~~~\n\n## 图表与资料\n\n![实验应力路径](./stress-path.svg)\n\n在同一 Bailey 工作区中查看 [SVG 图形及源码](./stress-path.svg)，\n预览按钮不会改变原始 Markdown 字节。\n\n---\n\n*此预览是本地交互演示，真实产品会采用安全 Markdown 渲染。*\n";
-  const area=document.getElementById("mdText"),line=document.getElementById("mdNumbers");
-  const paper=document.getElementById("mdRendered"),scroll=document.getElementById("mdScroll");
-  const workspace=document.getElementById("mdWorkspace");
-  const live=document.getElementById("mdLive");
-  let timer=0,revision=0,syncing=false;
-  const demoSvg='<svg xmlns="http://www.w3.org/2000/svg" width="620" height="170" viewBox="0 0 620 170"><rect width="620" height="170" fill="#252a33"/><g stroke="#42516a" stroke-width="1"><path d="M42 20V143H588" fill="none"/><path d="M42 52H588M42 83H588M42 113H588" stroke-dasharray="4 5"/></g><path d="M45 141 Q100 136 155 108 T300 61 T440 54 T580 42" fill="none" stroke="#76bc8f" stroke-width="3"/><path d="M45 142 Q160 131 240 108 T380 83 T580 80" fill="none" stroke="#b6a3e4" stroke-width="3"/><text x="45" y="15" font-size="11" fill="#aab7c8">shale · stress–strain response</text></svg>';
-  function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
-  function inline(s){
-    let v=esc(s);
-    v=v.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,(match,alt,src)=>{
-      const real=src.replace(/&amp;/g,"&");
-      if(real.endsWith("stress-path.svg"))return '<img alt="'+alt+'" src="data:image/svg+xml;charset=utf-8,'+encodeURIComponent(demoSvg)+'">';
-      return '<span style="color:var(--muted)">[图片资源: '+esc(real)+']</span>';
-    });
-    v=v.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(match,label,url)=>{
-      if(/^(https?:\/\/)/i.test(url))return '<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+label+'</a>';
-      if(url.endsWith("stress-path.svg"))return '<a href="../svg-source-preview/prototype.html">'+label+'</a>';
-      return '<span style="color:var(--accent)">'+label+'</span>';
-    });
-    v=v.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");
-    v=v.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g,"<em>$1</em>");
-    const tick=String.fromCharCode(96);
-    v=v.replace(new RegExp(tick+"([^"+tick+"]+)"+tick,"g"),"<code>$1</code>");
-    return v;
-  }
-  function renderMarkdown(source){
-    const rows=source.replace(/\r\n?/g,"\n").split("\n");
-    let html="",code=false,codeBuf=[],list=false;
-    function flushList(){if(list){html+="</ul>";list=false;}}
-    const triple=String.fromCharCode(96).repeat(3);
-    for(let i=0;i<rows.length;i++){
-      const raw=rows[i],t=raw.trim();
-      if(t.startsWith(triple)||t.startsWith("~~~")){
-        flushList();
-        if(!code){code=true;codeBuf=[];}else{html+='<pre><code>'+esc(codeBuf.join("\n"))+'</code></pre>';code=false;}
-        continue;
-      }
-      if(code){codeBuf.push(raw);continue;}
-      if(!t){flushList();continue;}
-      if(/^\|.*\|\s*$/.test(t)&&i+1<rows.length && /^\|?[\s:|\-]+\|\s*$/.test(rows[i+1])){
-        flushList();const headings=t.replace(/^\||\|$/g,"").split("|");
-        html+="<table><thead><tr>"+headings.map(x=>"<th>"+inline(x.trim())+"</th>").join("")+"</tr></thead><tbody>";i+=2;
-        for(;i<rows.length&&/^\|/.test(rows[i].trim());i++){
-          html+="<tr>"+rows[i].trim().replace(/^\||\|$/g,"").split("|").map(x=>"<td>"+inline(x.trim())+"</td>").join("")+"</tr>";
-        }
-        i--;html+="</tbody></table>";continue;
-      }
-      if(/^#{1,6} /.test(t)){flushList();const n=t.match(/^#+/)[0].length;html+="<h"+n+">"+inline(t.slice(n+1))+"</h"+n+">";continue;}
-      if(/^>\s?/.test(t)){flushList();html+="<blockquote>"+inline(t.replace(/^>\s?/,""))+"</blockquote>";continue;}
-      if(/^[-*] \[[xX ]\] /.test(t)){if(!list){html+="<ul>";list=true;}
-        const checked=/^[-*] \[[xX]\]/.test(t)?" checked":"";
-        html+='<li style="list-style:none;margin-left:-18px"><input type="checkbox" disabled'+checked+'> '+inline(t.replace(/^[-*] \[[xX ]\] /,""))+"</li>";continue;
-      }
-      if(/^[-*] /.test(t)){if(!list){html+="<ul>";list=true;}html+="<li>"+inline(t.slice(2))+"</li>";continue;}
-      if(/^---+\s*$/.test(t)){flushList();html+="<hr>";continue;}
-      flushList();html+="<p>"+inline(t)+"</p>";
-    }
-    flushList();
-    if(code)html+='<pre><code>'+esc(codeBuf.join("\n"))+"</code></pre>";
-    return html;
-  }
-  function updateNumbers(){
-    line.textContent=Array.from({length:area.value.split("\n").length},(_,i)=>String(i+1)).join("\n");
-    document.getElementById("mdLines").textContent=area.value.split("\n").length+" 行";
-  }
-  function updatePreview(){
-    const current=++revision;live.textContent="更新中…";
-    clearTimeout(timer);timer=setTimeout(()=>{
-      if(current!==revision)return;
-      paper.innerHTML=renderMarkdown(area.value);
-      live.textContent="实时更新 · "+area.value.length+" 字符";
-    },145);
-  }
-  window.installModes(["source","preview","split"],"source",(mode)=>{
-    workspace.dataset.mode=mode;
-    document.getElementById("mdSourceTitle").style.display=mode==="source"?"none":"flex";
-    if(mode!=="source")updatePreview();
-    setFileMeta("Markdown · UTF-8");
-  });
-  window.toggleSourcePreview=()=>window.switchMode(window.currentMode==="source"?"preview":"source");
-  area.value=INITIAL_MD;updateNumbers();paper.innerHTML=renderMarkdown(area.value);
-  area.oninput=()=>{setDirty(true);updateNumbers();updatePreview();};
-  area.onscroll=()=>{line.scrollTop=area.scrollTop;
-    if(document.getElementById("mdSync").checked&&!syncing){
-      syncing=true;const max=Math.max(1,area.scrollHeight-area.clientHeight);
-      scroll.scrollTop=(area.scrollTop/max)*Math.max(0,scroll.scrollHeight-scroll.clientHeight);
-      syncing=false;
-    }
-  };
-  scroll.onscroll=()=>{
-    if(document.getElementById("mdSync").checked&&!syncing&&window.currentMode==="split"){
-      syncing=true;const max=Math.max(1,scroll.scrollHeight-scroll.clientHeight);
-      area.scrollTop=(scroll.scrollTop/max)*Math.max(0,area.scrollHeight-area.clientHeight);
-      syncing=false;
-    }
-  };
-  window.demoSave=()=>showToast("原型仅修改当前演示草稿；未来 Bailey 将使用现有 FileTab 保存");
-})();
 
-</script>
-</body></html>
+const MD_INITIAL="# SHPB 实验数据整理\n\n> 原始数据是唯一真源。**预览不会改写 Markdown。**\n\n文件标签右键即可切换源码、预览与并排；并排时编辑立即更新。\n\n## 当前进度\n\n- [x] 录入实验工况\n- [x] 复核应力峰值\n- [ ] 核对部分尾段\n- [ ] 整理 CSV\n\n## 测量结果\n\n| 试样 | 围压 | 峰值应力 |\n| :--- | ---: | ---: |\n| F-001 | 0 MPa | 116.3 MPa |\n| F-002 | 5 MPa | 132.5 MPa |\n| F-003 | 10 MPa | 147.1 MPa |\n\n## 数据读取\n\n~~~python\nimport csv\nwith open(\"experiment.csv\", encoding=\"utf-8\") as f:\n    rows = list(csv.DictReader(f))\n~~~\n\n继续查看 [CSV 表格](../csv-table-view/prototype.html)、[SVG 预览](../svg-source-preview/prototype.html) 或 HTML。\n";
+const holder=document.createElement("div");holder.className="doc-host mode-source";
+const source=document.createElement("div");source.className="source-panel";
+const preview=document.createElement("div");preview.className="preview-panel";
+const ed=Demo.editor(MD_INITIAL,"md-code");source.append(ed.shell);
+const reader=document.createElement("div");reader.className="render-scroll";
+const page=document.createElement("article");page.className="paper";reader.append(page);preview.append(reader);
+holder.append(source,preview);Demo.stage.append(holder);
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+function inline(s){
+ let t=esc(s);t=t.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");
+ t=t.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g,"<em>$1</em>");
+ const tick=String.fromCharCode(96);
+ t=t.replace(new RegExp(tick+"([^"+tick+"]+)"+tick,"g"),"<code>$1</code>");
+ return t.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(_m,label,path)=>{
+   const allowed=new Set(["../csv-table-view/prototype.html","../svg-source-preview/prototype.html"]);
+   const href=allowed.has(path)?path:"#";
+   return '<a href="'+href+'">'+label+'</a>';
+ });
+}
+function markdown(text){
+ const lines=text.replace(/\r\n?/g,"\n").split("\n");let out="",list=false,code=false,codeLines=[];
+ const flush=()=>{if(list){out+="</ul>";list=false}};
+ for(let i=0;i<lines.length;i++){
+  const s=lines[i].trim();
+  if(s.startsWith("~~~")||s.startsWith(String.fromCharCode(96).repeat(3))){
+   flush();if(code){out+="<pre><code>"+esc(codeLines.join("\n"))+"</code></pre>";code=false}else{code=true;codeLines=[]}continue}
+  if(code){codeLines.push(lines[i]);continue}
+  if(!s){flush();continue}
+  if(s.startsWith("|")&&i+1<lines.length&&/^\|?[\s|:\-]+\|/.test(lines[i+1])){
+   flush();out+="<table><thead><tr>"+s.slice(1,-1).split("|").map(v=>"<th>"+inline(v.trim())+"</th>").join("")+"</tr></thead><tbody>";i+=2;
+   for(;i<lines.length&&lines[i].trim().startsWith("|");i++){out+="<tr>"+lines[i].trim().slice(1,-1).split("|").map(v=>"<td>"+inline(v.trim())+"</td>").join("")+"</tr>"}
+   i--;out+="</tbody></table>";continue
+  }
+  const h=s.match(/^(#{1,6}) /);if(h){flush();out+="<h"+h[1].length+">"+inline(s.slice(h[0].length))+"</h"+h[1].length+">";continue}
+  if(s.startsWith(">")){flush();out+="<blockquote>"+inline(s.slice(1).trim())+"</blockquote>";continue}
+  if(/^[-*] /.test(s)){if(!list){out+="<ul>";list=true}
+   const v=s.slice(2),task=v.match(/^\[([ xX])\] (.*)/);
+   out+=task?'<li style="list-style:none;margin-left:-20px"><input type="checkbox" disabled '+(task[1]!==" "?"checked":"")+'> '+inline(task[2])+"</li>":"<li>"+inline(v)+"</li>";continue}
+  flush();out+="<p>"+inline(s)+"</p>";
+ }
+ flush();if(code)out+="<pre><code>"+esc(codeLines.join("\n"))+"</code></pre>";
+ return out;
+}
+let timer=0,revision=0;
+function render(){const n=++revision;clearTimeout(timer);timer=setTimeout(()=>{if(n===revision)page.innerHTML=markdown(ed.ta.value)},110)}
+ed.ta.addEventListener("sourcechange",render);
+Demo.setModes(["source","preview","split"],"source",m=>{holder.className="doc-host mode-"+m;if(m!=="source")render()});
+Demo.setTabExtra(()=>[Demo.item("以编码重新打开…",()=>Demo.toast("编码选择位于原生文件菜单")),null,Demo.item("关闭标签",()=>Demo.toast("原型不关闭真实文件"))]);
+</script></body></html>
