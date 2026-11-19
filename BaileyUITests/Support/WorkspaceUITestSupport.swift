@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import Carbon
 import Foundation
 import XCTest
@@ -49,6 +48,12 @@ enum WorkspaceUITestSupport {
                     "An unowned Bailey Dev is already running; tests cannot attach to it"
             ])
         }
+        // Preserve process-global input state before allocating a test session.
+        // If a clipboard type cannot be copied, leave no owned session or HOME behind.
+        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
+        let clipboardVersion = NSPasteboard.general.changeCount
+        let originalClipboard = clipboardIsReadOnly ? nil : try clipboardItems()
         let home: URL
         if let configurationHome {
             home = configurationHome
@@ -76,10 +81,6 @@ enum WorkspaceUITestSupport {
                           usesFixtureHome: configurationHome != nil,
                           owner: owner, project: project,
                           clipboardIsReadOnly: clipboardIsReadOnly)
-        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
-        let clipboardVersion = NSPasteboard.general.changeCount
-        let originalClipboard = clipboardIsReadOnly ? nil : try clipboardItems()
         test.addTeardownBlock { @MainActor in
             if let active = session, active.app === app { finishSession() }
             let pasteboard = NSPasteboard.general
@@ -117,8 +118,6 @@ enum WorkspaceUITestSupport {
                     NSLocalizedDescriptionKey: "The isolated fixture project did not appear"
                 ])
             }
-        } else {
-            XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         }
         let configuration = home.appendingPathComponent(".config/bailey-dev/config.toml")
         let initialized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -359,77 +358,77 @@ enum WorkspaceUITestSupport {
         return (window, source)
     }
 
-    static func positionFinderDragWindow(_ window: XCUIElement, awayFrom target: XCUICoordinate) {
+    static func positionFinderDragWindow(
+        _ window: XCUIElement, awayFrom target: XCUICoordinate
+    ) -> Bool {
         let point = target.screenPoint
-        guard let finder = NSRunningApplication.runningApplications(
-            withBundleIdentifier: "com.apple.finder"
-        ).first, let display = NSScreen.main else {
-            XCTFail("The real Finder process and display must be available for a file drag")
-            return
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) })
+            ?? NSScreen.main else {
+            XCTFail("A real display is required for Finder drag acceptance testing")
+            return false
         }
-        let app = AXUIElementCreateApplication(finder.processIdentifier)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString,
-                                            &value) == .success,
-              let windows = value as? [AXUIElement] else {
-            XCTFail("Finder must expose its real windows for the native drag")
-            return
+        let margin: CGFloat = 24
+        let bounds = screen.frame
+        var frame = window.frame
+        guard frame.width > 0, frame.height > 0 else {
+            XCTFail("The Finder source must have a visible window")
+            return false
         }
-        let frame = window.frame
-        let native = windows.first { candidate in
-            var originValue: CFTypeRef?
-            var sizeValue: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(candidate, kAXPositionAttribute as CFString,
-                                                &originValue) == .success,
-                  AXUIElementCopyAttributeValue(candidate, kAXSizeAttribute as CFString,
-                                                &sizeValue) == .success,
-                  let originValue, let sizeValue else { return false }
-            var origin = CGPoint.zero
-            var size = CGSize.zero
-            guard AXValueGetValue(originValue as! AXValue, .cgPoint, &origin),
-                  AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return false }
-            return abs(origin.x - frame.minX) < 3 && abs(origin.y - frame.minY) < 3
-                && abs(size.width - frame.width) < 3 && abs(size.height - frame.height) < 3
+        if !frame.insetBy(dx: -margin, dy: -margin).contains(point) { return true }
+
+        // Use XCTest's real mouse events. The sandboxed UI Runner cannot read
+        // another app's raw AX window list or change its AX position.
+        func unobscuredPosition(for size: CGSize) -> CGPoint? {
+            let horizontal = max(bounds.minX + margin,
+                                 min(point.x - size.width / 2,
+                                     bounds.maxX - size.width - margin))
+            let vertical = max(bounds.minY + margin,
+                               min(point.y - size.height / 2,
+                                   bounds.maxY - size.height - margin))
+            let left = point.x - size.width - margin
+            if left >= bounds.minX + margin {
+                return CGPoint(x: left, y: vertical)
+            }
+            let right = point.x + margin
+            if right + size.width <= bounds.maxX - margin {
+                return CGPoint(x: right, y: vertical)
+            }
+            let above = point.y - size.height - margin
+            if above >= bounds.minY + margin {
+                return CGPoint(x: horizontal, y: above)
+            }
+            let below = point.y + margin
+            if below + size.height <= bounds.maxY - margin {
+                return CGPoint(x: horizontal, y: below)
+            }
+            return nil
         }
-        guard let native else {
-            XCTFail("The real Finder drag window must match the selected XCTest window")
-            return
+        if unobscuredPosition(for: frame.size) == nil {
+            let width = min(frame.width, 500)
+            let height = min(frame.height, 360)
+            let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 0.995, dy: 0.995))
+            corner.click(forDuration: 0.3, thenDragTo: corner.withOffset(
+                CGVector(dx: width - frame.width, dy: height - frame.height)
+            ))
+            frame = window.frame
+            guard frame.width <= width + 20, frame.height <= height + 20 else {
+                XCTFail("The real Finder window did not resize to expose the drop target")
+                return false
+            }
         }
-        var desiredSize = CGSize(width: min(window.frame.width, 500),
-                                 height: min(window.frame.height, 360))
-        guard let sizeValue = AXValueCreate(.cgSize, &desiredSize),
-              AXUIElementSetAttributeValue(native, kAXSizeAttribute as CFString,
-                                            sizeValue) == .success else {
-            XCTFail("The actual Finder window must allow native resizing for an unobscured drag")
-            return
+        guard let destination = unobscuredPosition(for: frame.size) else {
+            XCTFail("The Finder source and target cannot fit on this display")
+            return false
         }
-        let size = window.frame.size
-        let margin: CGFloat = 20
-        let screen = display.frame
-        let x: CGFloat
-        let y: CGFloat
-        if point.x - screen.minX >= size.width + 2 * margin {
-            x = screen.minX + margin
-            y = max(screen.minY + margin, min(point.y - size.height / 2,
-                                              screen.maxY - size.height - margin))
-        } else if screen.maxX - point.x >= size.width + 2 * margin {
-            x = point.x + margin
-            y = max(screen.minY + margin, min(point.y - size.height / 2,
-                                              screen.maxY - size.height - margin))
-        } else {
-            x = screen.minX + margin
-            y = point.y >= screen.minY + size.height + 2 * margin
-                ? screen.minY + margin : point.y + margin
+        let titleBar = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+        titleBar.click(forDuration: 0.3, thenDragTo: titleBar.withOffset(
+            CGVector(dx: destination.x - frame.minX, dy: destination.y - frame.minY)
+        ))
+        guard !window.frame.insetBy(dx: -margin / 2, dy: -margin / 2).contains(point) else {
+            XCTFail("Finder still obscures the real destination; do not start a file drag")
+            return false
         }
-        var desiredPosition = CGPoint(x: x, y: y)
-        guard let positionValue = AXValueCreate(.cgPoint, &desiredPosition),
-              AXUIElementSetAttributeValue(native, kAXPositionAttribute as CFString,
-                                            positionValue) == .success else {
-            XCTFail("The actual Finder window must move without covering the drop destination")
-            return
-        }
-        XCTAssertFalse(window.frame.insetBy(dx: -margin / 2, dy: -margin / 2).contains(point),
-                       "Finder must not cover the real destination at \(point)")
+        return true
     }
 
     static func closeFinderDragWindow(_ window: XCUIElement) {

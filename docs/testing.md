@@ -82,7 +82,8 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 `make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与
 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
 `WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；
-隔离测试抑制 SwiftUI 隐式首窗，由窗口命令唯一地请求首次挂载；测试夹具不得在超时后发送第二个新建窗口快捷键。
+隔离测试抑制 SwiftUI 自动首窗；`Commands` 先登记开窗动作，AppKit 确认应用激活后
+才请求唯一首窗，避免过早调用 `openWindow` 导致无窗口；测试夹具不得超时补发快捷键。
 不使用 `-ApplePersistenceIgnoreState YES`，该参数会干扰原生窗口生命周期与恢复。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
@@ -256,7 +257,7 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --ar
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
 仅隔离测试模式禁用 SwiftUI 系统场景恢复，防止继承上一轮测试的窗口；
-正常应用的窗口恢复不变。隔离模式抑制系统隐式首窗，由应用级窗口开启动作唯一请求首窗；
+正常应用的窗口恢复不变。隔离模式不自动呈现窗口，应用激活后通过已有 SwiftUI 开窗动作请求一次；
 测试直接断言只有一个窗口，不允许在启动等待超时后补发 `⌘⇧N` 掩盖缺窗故障；
 不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。
 **开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；
@@ -302,8 +303,9 @@ Dev 四入口仍须持有同一锁，换目录不能隔离同 Bundle ID 的应�
 Finder 拖进运行中 Bailey 时，
 **先核对 Finder 与 Bailey 两个窗口的屏幕边界，目标点不能落在 Finder 自身窗口或侧栏内**，
 否则会被 Finder 执行移动／废纸篓等本机操作，不能归因于 Bailey。
-隔离 GUI 测试必须根据当前屏幕和真实目标点，通过 Finder 原生窗口属性调整来源窗口的尺寸与位置，
-不能假定拖动标题栏到固定 x 坐标就能在小屏幕 runner 留出可点击目标；
+隔离 GUI 测试必须根据当前屏幕和真实目标点，通过 XCTest 的原生鼠标操作调整 Finder 来源窗口，
+优先利用目标旁的空白区域，确有必要才缩放；UI Runner 沙盒不能直接读写 Finder 的跨进程 AX 窗口属性。
+无法露出目标时，必须在拖动文件**之前**失败，不能继续执行可能误移动本机文件的拖放。
 调整后仍须核对 Finder 不遮挡目标，并验证实际文件、终端或网页结果。
 核对系统当前选中项与拖动的真实 provider 数量；
 双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
@@ -333,7 +335,10 @@ Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or 
 当前窗口内的 `SSHFolderPickerView` 覆盖层；两条 UI 测试分别核验原生 sheet 与
 `bailey.sshFolderPicker.dismiss`／真实取消结果，不得将 SSH 覆盖层误判成 sheet。
 
-真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。
+真实 SSH 宿主测试只使用专用且获准的测试 master，不借用用户连接或结束其后台任务。
+完整 App UI Runner 的沙盒不允许监听 OpenSSH 的 `/tmp` 控制套接字，
+因此 `WorkspaceGitUITests` 的夹具明确禁用多路复用，独立握手；
+Cloudflare 连接失败不得算作测试通过，失败后须核对测试专属远端目录是否残留。
 真实 Windows SSH 回归必须**明确指定获授权的测试主机**。
 `BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；
 未提供时专用用例按条件跳过，不能视为真实 SSH 验收。

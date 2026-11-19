@@ -59,14 +59,6 @@ final class SharedTreeUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = try fixture.file("a-active.txt", text: "active\n")
         let clicked = try fixture.file("b-context.txt", text: "context\n")
-        let previousClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            NSPasteboard.general.clearContents()
-            if !previousClipboard.isEmpty {
-                XCTAssertTrue(NSPasteboard.general.writeObjects(previousClipboard))
-            }
-        }
-
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root
         )
@@ -78,10 +70,8 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertTrue(target.waitForExistence(timeout: 15))
         first.click()
         target.rightClick()
-        let menu = app.menus.allElementsBoundByIndex.first {
-            $0.frame.width > 50 && $0.menuItems["Copy Relative Path"].exists
-        }
-        XCTAssertNotNil(menu, "Context target must expose its own menu")
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8),
+                      "Context target must expose its own menu")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(first.isSelected && !target.isSelected,
                       "Esc must not turn a temporary right-click target into a selection")
@@ -110,9 +100,8 @@ final class SharedTreeUITests: XCTestCase {
         b.rightClick()
         XCTAssertTrue(a.isSelected && !b.isSelected,
                       "Right click must preserve Selection while targeting B temporarily")
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            $0.menuItems["Copy Relative Path"].exists
-        }, "Right-click menu must remain open when Cmd-C is sent")
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8),
+                      "Right-click menu must remain open when Cmd-C is sent")
         app.typeKey("c", modifierFlags: .command)
 
         expectFilesClipboard(target.path)
@@ -139,9 +128,7 @@ final class SharedTreeUITests: XCTestCase {
         b.rightClick()
         XCTAssertTrue(a.isSelected && !b.isSelected,
                       "Right click must preserve Selection while targeting B temporarily")
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            $0.menuItems["Copy Relative Path"].exists
-        })
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: .command)
 
         expectFilesClipboard(target.path)
@@ -254,16 +241,12 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertTrue(c.waitForExistence(timeout: 15))
         a.click()
         b.rightClick()
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            $0.menuItems["Copy Relative Path"].exists
-        })
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         c.rightClick()
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            $0.menuItems["Copy Relative Path"].exists
-        })
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
@@ -325,12 +308,6 @@ final class SharedTreeUITests: XCTestCase {
     }
 
     func testCompactFoldersStayCompactedWithAccessibleComponentActions() throws {
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("a1/b1/c1/leaf.swift", text: "leaf\n")
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
@@ -364,13 +341,10 @@ final class SharedTreeUITests: XCTestCase {
             .matching(identifier: "bailey.tree.folder.component.0").firstMatch
         XCTAssertTrue(component.waitForExistence(timeout: 10))
         component.rightClick()
-        let popup = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            $0.frame.width > 50 && $0.frame.height > 50
-        })
-        XCTAssertFalse(popup.menuItems["Unfold Directory"].exists)
-        XCTAssertFalse(popup.menuItems["Fold Directory"].exists)
-        let relative = popup.menuItems["Copy Relative Path"]
+        let relative = app.menuItems["Copy Relative Path"]
         XCTAssertTrue(relative.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Unfold Directory"].exists)
+        XCTAssertFalse(app.menuItems["Fold Directory"].exists)
         relative.click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a1")
         XCTAssertTrue(folder("a1 / b1 / c1").waitForExistence(timeout: 12))
@@ -378,11 +352,6 @@ final class SharedTreeUITests: XCTestCase {
     }
 
     func testGitCompactSegmentsUseTheirRealChangesHistoryAndWorktreePaths() throws {
-        let clipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            NSPasteboard.general.clearContents()
-            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
-        }
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("a1/b1/c1/base.txt", text: "committed\n")
         try fixture.initializeGit()

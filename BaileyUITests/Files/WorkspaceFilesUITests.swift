@@ -240,8 +240,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
         ).trimmingCharacters(in: .newlines)
-        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
-              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-") else {
+        guard let match = remoteRoot.range(
+            of: #"^/tmp/bailey-p2-ui-[A-Za-z0-9]{6}$"#, options: .regularExpression
+        ), match.lowerBound == remoteRoot.startIndex, match.upperBound == remoteRoot.endIndex else {
             throw NSError(domain: "BaileyP2UI", code: 1)
         }
         addTeardownBlock { @MainActor in
@@ -300,8 +301,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
         ).trimmingCharacters(in: .newlines)
-        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
-              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-")
+        guard let match = remoteRoot.range(
+            of: #"^/tmp/bailey-p2-ui-[A-Za-z0-9]{6}$"#, options: .regularExpression
+        ), match.lowerBound == remoteRoot.startIndex, match.upperBound == remoteRoot.endIndex
         else { throw NSError(domain: "BaileyP2UI", code: 3) }
         addTeardownBlock { @MainActor in
             XCTAssertEqual(try self.runSSH(host: host,
@@ -357,7 +359,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         let remotePoint = remoteFolder.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
-        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: remotePoint)
+        guard WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: remotePoint)
+        else { return }
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: remotePoint)
 
@@ -387,7 +390,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         let localPoint = localFolder.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
-        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: localPoint)
+        guard WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: localPoint)
+        else { return }
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: localPoint)
 
@@ -413,8 +417,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p3-ui-XXXXXX"
         ).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
-              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p3-ui-") else {
+        guard let match = remoteRoot.range(
+            of: #"^/tmp/bailey-p3-ui-[A-Za-z0-9]{6}$"#, options: .regularExpression
+        ), match.lowerBound == remoteRoot.startIndex, match.upperBound == remoteRoot.endIndex else {
             throw NSError(domain: "BaileyP3E2E", code: 1)
         }
         addTeardownBlock { @MainActor in
@@ -455,12 +460,11 @@ final class WorkspaceFilesUITests: XCTestCase {
             let search = app.textFields["bailey.commandPalette.search"]
             XCTAssertTrue(search.waitForExistence(timeout: 10))
             search.typeText(name)
-            let result = app.buttons.matching(NSPredicate(
-                format: "label CONTAINS[c] %@", name
-            )).firstMatch
+            let result = app.buttons.matching(identifier: "bailey.commandPalette.result")
+                .matching(NSPredicate(format: "value == %@", "file-" + path)).firstMatch
             XCTAssertTrue(result.waitForExistence(timeout: 30),
-                          "The real Windows SSH index must produce a selectable result")
-            app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+                          "The real Windows SSH index must produce the exact target file")
+            search.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
             let tab = WorkspaceUITestSupport.fileTab(
                 URL(fileURLWithPath: path), in: app.windows.firstMatch
             )
@@ -670,12 +674,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         let target = placeholder.deletingLastPathComponent()
         let copiedAlpha = target.appendingPathComponent(alpha.lastPathComponent)
         let movedBeta = target.appendingPathComponent(beta.lastPathComponent)
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let clipboard = NSPasteboard.general
-            clipboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
@@ -742,12 +740,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = try fixture.file("alpha.txt", text: "editor copy must stay text\n")
         let duplicate = fixture.root.appendingPathComponent("alpha copy.txt")
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
@@ -792,12 +784,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = try fixture.file("alpha.txt", text: "menu copy bytes\n")
         let duplicate = fixture.root.appendingPathComponent("alpha copy.txt")
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let clipboard = NSPasteboard.general
-            clipboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
@@ -876,9 +862,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         b.rightClick()
         XCTAssertTrue(a.isSelected && !b.isSelected,
                       "Context-click B must not mutate the existing A selection")
-        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
-            $0.menuItems["Copy Relative Path"].exists
-        }, "Files should display its context menu while Terminal owns input")
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8),
+                      "Files should display its context menu while Terminal owns input")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         app.typeText("printf terminal > '\(marker.path)'")
@@ -908,9 +893,10 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         a.click()
         XCUIElement.perform(withKeyModifiers: .control) { b.click() }
-        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            $0.menuItems["Copy Relative Path"].exists
-        }, "Control-click must open the clicked Files row's native context menu")
+        let menu = app.menus.matching(identifier: "bailey.tree.file").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8),
+                      "Control-click must open the clicked Files row's native context menu")
+        XCTAssertTrue(menu.menuItems["Copy Relative Path"].exists)
         XCTAssertTrue(a.isSelected)
         XCTAssertFalse(b.isSelected)
         menu.menuItems["Copy Path"].click()
@@ -1059,12 +1045,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         let alpha = try fixture.file("a.txt", text: "a bytes\n")
         let beta = try fixture.file("b.txt", text: "b bytes\n")
         let gamma = try fixture.file("c.txt", text: "c bytes\n")
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
@@ -1119,12 +1099,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         let moved = try fixture.file("moved/.keep", text: "")
         let copyFolder = target.deletingLastPathComponent()
         let moveFolder = moved.deletingLastPathComponent()
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
@@ -1190,7 +1164,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let firstPath = remoteRoot + "/alpha.txt"
         let secondPath = remoteRoot + "/beta.txt"
         addTeardownBlock { @MainActor in
-            _ = try? self.runSSH(host: host, command: "rm -rf -- '\(remoteRoot)'")
+            XCTAssertEqual(try self.runSSH(host: host,
+                command: "rm -r -- '\(remoteRoot)' && test ! -e '\(remoteRoot)' && printf cleaned"),
+                "cleaned", "Remote bulk-delete fixture must be removed")
         }
         _ = try runSSH(host: host, command:
             "mkdir -p -- '\(remoteRoot)' && "
@@ -1251,8 +1227,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
         ).trimmingCharacters(in: .newlines)
-        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
-              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-")
+        guard let match = remoteRoot.range(
+            of: #"^/tmp/bailey-p2-ui-[A-Za-z0-9]{6}$"#, options: .regularExpression
+        ), match.lowerBound == remoteRoot.startIndex, match.upperBound == remoteRoot.endIndex
         else { throw NSError(domain: "BaileyP2UI", code: 2) }
         addTeardownBlock { @MainActor in
             XCTAssertEqual(try self.runSSH(host: host,
@@ -1287,7 +1264,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         a.click()
         XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected)
-        try fileContextMenu(for: a, in: app).menuItems["Copy Relative Path"].click()
+        try fileContextMenu(for: a, in: app).menuItems["Copy Relative Paths"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a-remote.txt\nb-remote.txt")
 
         app.typeKey("n", modifierFlags: [.command, .shift])
@@ -1335,7 +1312,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         ).waitForExistence(timeout: 30), "Remote Files must recover the fresh Windows listing")
         XCTAssertTrue(a.isSelected && b.isSelected,
                       "Reconnect must not silently retarget the old remote selection")
-        try fileContextMenu(for: a, in: app).menuItems["Copy Relative Path"].click()
+        try fileContextMenu(for: a, in: app).menuItems["Copy Relative Paths"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a-remote.txt\nb-remote.txt")
         XCTAssertEqual(try runSSH(host: host, command: "cat '\(remoteA)'"), "REMOTE_A\n")
         XCTAssertEqual(try runSSH(host: host, command: "cat '\(remoteB)'"), "REMOTE_B\n")
@@ -1388,8 +1365,11 @@ final class WorkspaceFilesUITests: XCTestCase {
                       "Files must expose the clicked row's actual context menu")
         XCTAssertGreaterThan(popup.frame.width, 50,
                              "The context menu must have a visible frame")
-        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Copy Relative Path", in: popup).exists,
-                      "The live Files popup must expose its file operations")
+        let relativePath = popup.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Copy Relative Path", "Copy Relative Paths"]
+        )).firstMatch
+        XCTAssertTrue(relativePath.exists,
+                      "The live Files popup must expose its single-file or batch operations")
         return popup
     }
 
@@ -1448,12 +1428,6 @@ final class WorkspaceFilesUITests: XCTestCase {
     func testExplorerMenuUsesVSCodeFileAndDirectoryActions() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/leaf.txt", text: "menu bytes\n")
-        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
-        defer {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
-        }
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
@@ -1462,13 +1436,14 @@ final class WorkspaceFilesUITests: XCTestCase {
             .matching(NSPredicate(format: "label == %@", "folder")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 15))
         let folderMenu = try fileContextMenu(for: folder, in: app)
+        let folderActions = Set(folderMenu.menuItems.allElementsBoundByIndex.map(\.title))
         for title in ["New File…", "New Folder…", "Cut", "Copy", "Paste",
                       "Copy Path", "Copy Relative Path", "Rename", "Move to Trash"] {
-            XCTAssertTrue(folderMenu.menuItems[title].exists, "Missing VS Code folder action: \(title)")
+            XCTAssertTrue(folderActions.contains(title), "Missing VS Code folder action: \(title)")
         }
         for title in ["Move To…", "Duplicate", "cd Here", "Open in Integrated Terminal",
                       "Open to the Side", "Unfold Directory", "Fold Directory"] {
-            XCTAssertFalse(folderMenu.menuItems[title].exists, "Removed action: \(title)")
+            XCTAssertFalse(folderActions.contains(title), "Removed action: \(title)")
         }
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         folder.click()
@@ -1486,13 +1461,14 @@ final class WorkspaceFilesUITests: XCTestCase {
         let row = WorkspaceUITestSupport.fileRow(nested, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         let fileMenu = try fileContextMenu(for: row, in: app)
+        let fileActions = Set(fileMenu.menuItems.allElementsBoundByIndex.map(\.title))
         for title in ["Open", "Cut", "Copy", "Copy Path",
                       "Copy Relative Path", "Rename", "Move to Trash"] {
-            XCTAssertTrue(fileMenu.menuItems[title].exists, "Missing VS Code file action: \(title)")
+            XCTAssertTrue(fileActions.contains(title), "Missing VS Code file action: \(title)")
         }
         for title in ["Move To…", "Duplicate", "New File…", "New Folder…", "Paste",
                       "Open to the Side", "cd Here", "Unfold Directory", "Fold Directory"] {
-            XCTAssertFalse(fileMenu.menuItems[title].exists, "Unrelated file action: \(title)")
+            XCTAssertFalse(fileActions.contains(title), "Unrelated file action: \(title)")
         }
         fileMenu.menuItems["Copy Relative Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "folder/leaf.txt")
