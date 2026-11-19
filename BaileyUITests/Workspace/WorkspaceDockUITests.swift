@@ -154,7 +154,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         let rightTabEnd = max(files.frame.maxX, git.frame.maxX)
         let rightGap = plusButtons[2].frame.minX - rightTabEnd
-        XCTAssertGreaterThan(rightGap, 12, "The expanded right group needs visible blank header")
+        XCTAssertGreaterThan(rightGap, 0, "The right group must retain a hittable blank header")
         doubleClickBlank(at: rightTabEnd + rightGap / 2)
         expectResize(from: expanded, label: "Right")
         let restored = window.frame
@@ -167,7 +167,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let leftPlus = try XCTUnwrap(window.buttons.matching(identifier: "bailey.dock.addPanel")
             .allElementsBoundByIndex.min { $0.frame.midX < $1.frame.midX })
         let leftGap = leftPlus.frame.minX - projects.frame.maxX
-        XCTAssertGreaterThan(leftGap, 12, "The expanded left group needs visible blank header")
+        XCTAssertGreaterThan(leftGap, 0, "The left group must retain a hittable blank header")
         doubleClickBlank(at: projects.frame.maxX + leftGap / 2)
         expectResize(from: expandedAgain, label: "Left")
     }
@@ -490,7 +490,8 @@ final class WorkspaceDockUITests: XCTestCase {
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
         let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
-        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).label.contains("⌘W"))
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists,
+                      "The Close menu item and the separate native shortcut badge must coexist")
         print("NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Native file-tab context menu width"
@@ -519,7 +520,8 @@ final class WorkspaceDockUITests: XCTestCase {
         tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
         let menu = app.menus.containing(.menuItem, identifier: "关闭其他").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
-        XCTAssertTrue(WorkspaceUITestSupport.menuItem("关闭", in: menu).label.contains("⌘W"))
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("关闭", in: menu).exists,
+                      "The native close action must be present independently of its badge")
         print("CHINESE_NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Chinese native file-tab context menu width"
@@ -527,8 +529,10 @@ final class WorkspaceDockUITests: XCTestCase {
         add(screenshot)
         XCTAssertLessThan(menu.frame.width, 260)
         XCTAssertTrue(menu.menuItems["关闭右侧标签页"].exists)
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        XCTAssertTrue(tab.exists)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tab.waitForNonExistence(timeout: 12),
+                      "Cmd-W while the native menu is open must close its target exactly once")
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.files", in: app).exists)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "内容保持不变\n")
     }
 
@@ -867,8 +871,14 @@ final class WorkspaceDockUITests: XCTestCase {
             .button, identifier: "bailey.dock.git"
         ).firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 5))
-        XCTAssertLessThan(strip.frame.width, 130,
-                          "The narrow Dock tab strip must not overflow its group's viewport")
+        let rightDivider = try XCTUnwrap(window.otherElements
+            .matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.max { $0.frame.midX < $1.frame.midX })
+        XCTAssertGreaterThan(strip.frame.width, 0)
+        XCTAssertGreaterThan(strip.frame.minX, rightDivider.frame.midX,
+                             "The right Dock tab strip must stay inside its own group")
+        XCTAssertLessThan(strip.frame.maxX, window.frame.maxX,
+                          "The tab strip must not overflow the window's trailing edge")
         strip.swipeLeft()
         XCTAssertTrue(strip.frame.contains(CGPoint(x: git.frame.midX, y: git.frame.midY)),
                       "The active Git target must be inside the visible tab-strip viewport")

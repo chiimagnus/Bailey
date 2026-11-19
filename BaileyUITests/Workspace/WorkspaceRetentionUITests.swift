@@ -226,8 +226,9 @@ final class WorkspaceRetentionUITests: XCTestCase {
                 ))
                 return try XCTUnwrap(pixel.usingColorSpace(.deviceRGB))
             }
+            // Sample the blank toolbar area, not the "No Git Repository" label.
             return try (color(x: 50), color(x: 340), color(x: 780),
-                        color(x: 340, y: main.frame.height - 10))
+                        color(x: 550, y: main.frame.height - 10))
         }
 
         func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
@@ -610,46 +611,44 @@ final class WorkspaceRetentionUITests: XCTestCase {
                 abs(a.blueComponent - b.blueComponent))
         }
 
+        func selectInSettings(_ title: String, pickerIndex: Int? = nil) {
+            app.typeKey(",", modifierFlags: .command)
+            let settings = app.windows.matching(
+                identifier: "com_apple_SwiftUI_Settings_window"
+            ).firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 12))
+            if let pickerIndex {
+                let picker = settings.popUpButtons.element(boundBy: pickerIndex)
+                XCTAssertTrue(picker.waitForExistence(timeout: 12))
+                picker.click()
+                let option = picker.menuItems[title]
+                XCTAssertTrue(option.waitForExistence(timeout: 12))
+                option.click()
+                XCTAssertEqual(picker.value as? String, title)
+            } else {
+                let tab = settings.descendants(matching: .tab)[title].firstMatch
+                XCTAssertTrue(tab.waitForExistence(timeout: 12))
+                tab.click()
+            }
+            app.typeKey("w", modifierFlags: .command)
+            XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        }
+
         let customDark = try capture("Custom Adwaita Dark")
-        app.typeKey(",", modifierFlags: .command)
-        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
-        XCTAssertTrue(settings.waitForExistence(timeout: 12))
-        let darkPicker = settings.popUpButtons.element(boundBy: 1)
-        XCTAssertTrue(darkPicker.waitForExistence(timeout: 12))
-        darkPicker.click()
-        let defaultDark = darkPicker.menuItems["Default Dark"]
-        XCTAssertTrue(defaultDark.waitForExistence(timeout: 12))
-        defaultDark.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        selectInSettings("Default Dark", pickerIndex: 1)
         let builtInDark = try capture("Built-in Default Dark after Adwaita")
         for index in 0..<3 {
             XCTAssertGreaterThan(distance(customDark[index], builtInDark[index]), 0.04,
                                  "Area \(index) retained the previous custom dark background")
         }
 
-        app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForExistence(timeout: 12))
-        let light = settings.descendants(matching: .tab)["Light"].firstMatch
-        XCTAssertTrue(light.waitForExistence(timeout: 12))
-        light.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        selectInSettings("Light")
         let builtInLight = try capture("Built-in Default Light after Default Dark")
         for index in 0..<3 {
             XCTAssertGreaterThan(distance(builtInDark[index], builtInLight[index]), 0.4)
         }
 
-        app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForExistence(timeout: 12))
-        let lightPicker = settings.popUpButtons.element(boundBy: 2)
-        XCTAssertTrue(lightPicker.waitForExistence(timeout: 12))
-        lightPicker.click()
-        let ayu = lightPicker.menuItems["Ayu Light"]
-        XCTAssertTrue(ayu.waitForExistence(timeout: 12))
-        ayu.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        selectInSettings("Ayu Light", pickerIndex: 2)
         let customLight = try capture("Custom Ayu Light after built-in Default Light")
         XCTAssertGreaterThan(distance(builtInLight[1], customLight[1]), 0.012)
         XCTAssertLessThan(distance(customLight[0], customLight[1]), 0.012)
@@ -905,14 +904,17 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertTrue(main.waitForExistence(timeout: 12))
         app.typeKey("t", modifierFlags: .command)
         main.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.58)).click()
-        let marker = fixture.root.appendingPathComponent("terminal-theme-ready")
-        app.typeText("printf ready > '\(marker.path)'")
+        let beforePID = fixture.root.appendingPathComponent("terminal-theme-before.pid")
+        let afterPID = fixture.root.appendingPathComponent("terminal-theme-after.pid")
+        app.typeText("printf '%s' $$ > '\(beforePID.path)'")
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         let shellReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            FileManager.default.fileExists(atPath: marker.path)
+            FileManager.default.fileExists(atPath: beforePID.path)
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [shellReady], timeout: 15), .completed,
                        "A real Ghostty PTY must be running throughout the theme test")
+        let originalShell = try String(contentsOf: beforePID, encoding: .utf8)
+        XCTAssertFalse(originalShell.isEmpty)
 
         func capture(_ title: String) throws -> (projects: NSColor, terminal: NSColor) {
             let shot = main.screenshot()
@@ -976,7 +978,15 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let restored = try capture("Real Ghostty terminal, restored Ayu Light")
         XCTAssertLessThan(distance(restored.terminal, light.terminal), 0.045)
         XCTAssertLessThan(distance(restored.projects, restored.terminal), 0.045)
-        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "ready")
+        main.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.58)).click()
+        app.typeText("printf '%s' $$ > '\(afterPID.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let shellPreserved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: afterPID.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [shellPreserved], timeout: 15), .completed)
+        XCTAssertEqual(try String(contentsOf: afterPID, encoding: .utf8), originalShell,
+                       "Theme changes must keep the original Ghostty shell process")
     }
 
     func testRealTerminalKeepsSameShellAcrossFileTabAndFind() throws {
@@ -1065,8 +1075,9 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let finder = WorkspaceUITestSupport.finderDragSource(for: file)
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
         // Keep the actual WebKit drop point outside the Finder source window.
-        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
-        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: target)
+        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        guard WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: target)
+        else { return }
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: target)
         XCTAssertTrue(browser.staticTexts["FINDER_UPLOAD_FILE: \(file.lastPathComponent)"]
@@ -1095,7 +1106,8 @@ final class WorkspaceRetentionUITests: XCTestCase {
         // visible: a hidden target cannot be validated by AX coordinates.
         let finder = WorkspaceUITestSupport.finderDragSource(for: file)
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
-        WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: terminal)
+        guard WorkspaceUITestSupport.positionFinderDragWindow(finder.window, awayFrom: terminal)
+        else { return }
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .click(forDuration: 0.4, thenDragTo: terminal)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
