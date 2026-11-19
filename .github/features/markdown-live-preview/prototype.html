@@ -33,7 +33,6 @@
 .paper summary{cursor:pointer;font-weight:550}
 .paper .front-matter-view{font-size:10px;color:#a0a6b1;background:#22252c}
 .paper .embed-blocked{color:#a7a5b0;font-size:11px}
-.paper .mdx-unsupported{padding:7px 12px;background:#272733;border-left:2px solid #8b86b8}
 .paper .md-footnote-rule{border:0;border-top:1px solid #353840;margin:24px 0 9px}
 .paper .md-footnote{font-size:11px;color:#969bad}
 .paper .md-footnote-anchor{color:#a0b4df}
@@ -62,7 +61,7 @@
   <div class="file f"><span class="icon">⌄</span><span class="label">▣ .github</span></div>
   <div class="file f sub"><span class="icon">⌄</span><span class="label">▣ features</span></div>
   <a class="file on" href="../markdown-live-preview/prototype.html"><span class="icon" style="color:#93b4ec">MD</span><span class="label">SKILL.md</span></a>
-<a class="file" href="../mdx-safe-preview/prototype.html"><span class="icon" style="color:#a8a6ea">MD</span><span class="label">guide.mdx</span></a>
+<a class="file mdx-sample" href="../markdown-live-preview/prototype.html?sample=mdx"><span class="icon" style="color:#93b4ec">MD</span><span class="label">guide.mdx</span></a>
 <a class="file" href="../csv-table-view/prototype.html"><span class="icon" style="color:#78c49a">CS</span><span class="label">experiment.csv</span></a>
 <a class="file" href="../svg-source-preview/prototype.html"><span class="icon" style="color:#d0a56d">SV</span><span class="label">stress-path.svg</span></a>
 <a class="file" href="../image-annotations/prototype.html"><span class="icon" style="color:#c4a3eb">PN</span><span class="label">experiment.png</span></a>
@@ -150,7 +149,15 @@ const Demo=(()=>{
 
 
 
-const MD_INITIAL="---\nname: shpb-analysis\ndescription: >-\n  从实验数据提取可信曲线，保留原始文件及核验依据。\nversion: 1.0\ntags: [markdown, visualization]\n---\n\n# SHPB 实验数据整理\n\n这份示例采用 **SKILL.md** 格式。Front Matter 在源码中完整保留，预览只显示正文。文件标签右键可查看元数据。\n\n## GFM 任务与表格\n\n- [x] 录入实验工况\n- [ ] 核对曲线尾段\n\n| 试样 | 围压 | 峰值应力 |\n| :--- | ---: | ---: |\n| F-001 | 0 MPa | 116.3 MPa |\n| F-002 | 5 MPa | 132.5 MPa |\n\n## PNG\n\n![试样成像及应力分布](../image-annotations/demo-image.png)\n\n## SVG\n\n![动态压缩的应力应变曲线](../svg-source-preview/demo-plot.svg)\n\n## Mermaid\n\n~~~mermaid\nflowchart LR\n  A[读取原始文件] --> B[解析元数据]\n  B --> C[安全预览]\n~~~\n\n## 内联 HTML 与 SVG\n\n<details>\n<summary>查看实验说明</summary>\n本区仅展示安全的静态 HTML，不执行脚本。\n</details>\n\n<svg viewBox=\"0 0 150 40\" width=\"150\" height=\"40\"><rect x=\"1\" y=\"1\" width=\"148\" height=\"38\" rx=\"9\" fill=\"#293d59\" stroke=\"#7199c5\"/><circle cx=\"20\" cy=\"20\" r=\"7\" fill=\"#91c4a5\"/><text x=\"36\" y=\"25\" fill=\"#e5ebf5\" font-size=\"14\">safe SVG</text></svg>\n\n## 音频\n\n<audio controls src=\"../audio-file-playback/demo-audio.m4a\"></audio>\n\n## 视频\n\n<video controls src=\"../video-file-playback/demo-video.mp4\"></video>\n\n## 公式与脚注\n\n这里演示公式 $E = mc²$ 和脚注。[^note]\n\n[^note]: 公式、脚注的完整语义由正式渲染器负责；原型只展示设计方向。\n";
+const SHOW_MDX_SAMPLE=new URL(location.href).searchParams.get("sample")==="mdx";
+const MD_INITIAL=SHOW_MDX_SAMPLE?"---\ntitle: MDX as Markdown\ndescription: 只渲染 Markdown，不执行 JSX。\n---\n\n# 实验记录\n\n这里是普通 **Markdown**：标题、列表和图片等都沿用 Markdown 预览。\n\n- [x] 原生文本阅读\n- [ ] 不需要 JavaScript 运行时\n\n## 项目组件\n\nimport Chart from './components/Chart'\n\n<Chart series={results} />\n\n结果：{value + 1}\n\n这些 JSX／表达式只作为可读源码展示，不会执行或自动替换。\n":"---\nname: shpb-analysis\ndescription: >-\n  从实验数据提取可信曲线，保留原始文件及核验依据。\nversion: 1.0\ntags: [markdown, visualization]\n---\n\n# SHPB 实验数据整理\n\n这份示例采用 **SKILL.md** 格式。Front Matter 在源码中完整保留，预览只显示正文。文件标签右键可查看元数据。\n\n## GFM 任务与表格\n\n- [x] 录入实验工况\n- [ ] 核对曲线尾段\n\n| 试样 | 围压 | 峰值应力 |\n| :--- | ---: | ---: |\n| F-001 | 0 MPa | 116.3 MPa |\n| F-002 | 5 MPa | 132.5 MPa |\n\n## PNG\n\n![试样成像及应力分布](../image-annotations/demo-image.png)\n\n## SVG\n\n![动态压缩的应力应变曲线](../svg-source-preview/demo-plot.svg)\n\n## Mermaid\n\n~~~mermaid\nflowchart LR\n  A[读取原始文件] --> B[解析元数据]\n  B --> C[安全预览]\n~~~\n\n## 内联 HTML 与 SVG\n\n<details>\n<summary>查看实验说明</summary>\n本区仅展示安全的静态 HTML，不执行脚本。\n</details>\n\n<svg viewBox=\"0 0 150 40\" width=\"150\" height=\"40\"><rect x=\"1\" y=\"1\" width=\"148\" height=\"38\" rx=\"9\" fill=\"#293d59\" stroke=\"#7199c5\"/><circle cx=\"20\" cy=\"20\" r=\"7\" fill=\"#91c4a5\"/><text x=\"36\" y=\"25\" fill=\"#e5ebf5\" font-size=\"14\">safe SVG</text></svg>\n\n## 音频\n\n<audio controls src=\"../audio-file-playback/demo-audio.m4a\"></audio>\n\n## 视频\n\n<video controls src=\"../video-file-playback/demo-video.mp4\"></video>\n\n## 公式与脚注\n\n这里演示公式 $E = mc²$ 和脚注。[^note]\n\n[^note]: 公式、脚注的完整语义由正式渲染器负责；原型只展示设计方向。\n";
+if(SHOW_MDX_SAMPLE){
+  const tab=document.querySelector("#active-tab .name");
+  tab.textContent="guide.mdx";
+  document.title="Bailey — guide.mdx";
+  document.querySelectorAll(".file.on").forEach(x=>x.classList.remove("on"));
+  document.querySelector(".mdx-sample")?.classList.add("on");
+}
 const holder=document.createElement("div");holder.className="doc-host mode-source";
 const source=document.createElement("div");source.className="source-panel";
 const preview=document.createElement("div");preview.className="preview-panel";
@@ -236,7 +243,6 @@ function renderDocument(input){
   const flush=()=>{if(listing){html+="</ul>";listing=false}};
   if(fm.error)html+='<p class="embed-blocked">'+esc(fm.error)+"</p>";
   if(showFrontMatter&&frontMatter)html+='<pre class="front-matter-view"><code>'+esc(frontMatter)+"</code></pre>";
-  if(document.body.dataset.kind==="mdx")html+='<p class="embed-blocked">静态 MDX 阅读 · 动态 JSX/ESM 不执行</p>';
   for(let i=0;i<lines.length;i++){
     const raw=lines[i],s=raw.trim();
     const tick=String.fromCharCode(96);
@@ -251,10 +257,7 @@ function renderDocument(input){
     }
     if(fenced){code.push(raw);continue}
     if(!s){flush();continue}
-    if(/^import\s|^export\s|^<[A-Z][A-Za-z0-9]*/.test(s)){
-      flush();html+='<pre class="mdx-unsupported"><code>'+esc(s)+"</code></pre>";continue;
-    }
-    if(/^!\[[^\]]*\]\([^)]+\)$/.test(s)){flush();html+='<figure class="md-figure">'+inl(s)+"</figure>";continue}
+      if(/^!\[[^\]]*\]\([^)]+\)$/.test(s)){flush();html+='<figure class="md-figure">'+inl(s)+"</figure>";continue}
     if(/^<svg\b/i.test(s)){flush();html+=simpleSVG(s);continue}
     if(/^<(audio|video)\b/i.test(s)){
       flush();const isVideo=/^<video\b/i.test(s);

@@ -2,11 +2,17 @@
 
 用户可在图片原标签标注、保存继续编辑，也可导出扁平结果，原图始终不被静默覆盖。
 
+## 技术决定
+
+**不新增画布／截图编辑 SPM。** 标注坐标和对象由当前 `FileTab` 维护，SwiftUI 只承载按需显示的最小工具；AppKit 处理命中、文本输入与焦点，**Core Graphics** 绘制矢量箭头、矩形与文本，**Core Image** 负责 `CIGaussianBlur`／`CIPixellate` 等模糊与马赛克，**ImageIO** 导出 PNG/JPEG 并尽可能保持 ICC、方向及 DPI。
+从源图读取到标注合成只使用已有本机文件 IO/写入保护；可编辑标注记录为用户明确保存的 JSON sidecar，而非将原图静默重编码。
+原生 UndoManager 为标注事务提供 Undo／Redo，缩放／平移共享 P1 的单一视口模型，不为工具和展示分别维护两套坐标。
+
 ## 方案
 
 在 FileTab 的图像内容下维护唯一有界标注命令序列，画布根据原图坐标合成。
 侧写文件例如 `photo.png.bailey-annotations.json` 存储工具参数、原图片字节摘要和版本；只在首次明确保存标注后创建。
-画布的 Undo 仅对标注命令有效；⌘S 写 sidecar，底图只读；导出到新文件时调用 Core Graphics/Core Image 得到像素输出。
+画布的原生 Undo 仅对标注命令有效；⌘S 在已明确进入标注态并需保存时写 sidecar，底图只读；导出新图通过 Core Graphics／Core Image／ImageIO 完成。
 图片被移动时使用现有 Files 路径更新链处理关联 sidecar，删除和外部冲突须明确询问，不能静默写回同名但已替换的原图。
 
 ## 任务
@@ -22,7 +28,7 @@
 ### P2-T2 可编辑 sidecar 与扁平导出
 
 - **位置**：既有 `WorkspaceBackend.write(ifUnchanged:)`、Files 重命名／外部变更路径和 Editor 文档。
-- **实施**：显式保存 sidecar、重开还原、源文件版本绑定；导出 PNG/JPEG（透明/色彩配置/尺寸），文件冲突和错误有明确确认。
+- **实施**：显式保存 sidecar、重开还原、源文件 SHA-256 版本绑定；通过 Core Image 处理模糊／马赛克，通过 Core Graphics 保持矢量注释边缘，ImageIO 输出 PNG/JPEG（透明、ICC、Exif、尺寸、DPI）。文件冲突和错误明确提示，不覆盖底图。
 - **验证**：真实原图 checksum 前后相同；标注保存→恢复继续编辑→导出→打开结果，撤销状态一致；外部改图、无权限、截断写入、重名、文件移动和两窗口同时编辑不发生静默覆盖。
 
 ## 阶段验收
