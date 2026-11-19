@@ -78,24 +78,69 @@
 .text-prompt button{background:#3a527a;border-radius:4px;padding:5px 8px}
 
 
-.audio-space{height:100%;width:100%;display:grid;place-items:center;position:relative}
-.audio-composition{width:min(81%,820px);display:flex;flex-direction:column;align-items:center;gap:13px;transform:translateY(-7px)}
+.media-button{display:grid;place-items:center;flex:none;width:28px;height:28px;border-radius:6px;color:#c9d0dd;font-size:15px}
+.media-button:hover{background:#ffffff16;color:#f0f3f8}
+.media-button:disabled{opacity:.35;cursor:default}
+.media-button svg{width:17px;height:17px;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.media-speed-wrap{position:relative;width:max-content}
+.media-speed-wrap:after{content:"⌄";position:absolute;right:8px;top:50%;transform:translateY(-55%);font-size:11px;color:#a4aaba;pointer-events:none}
+.media-speed{appearance:none;min-width:64px;height:29px;background:#ffffff0b;border:1px solid #ffffff19;border-radius:6px;padding:0 22px 0 10px;font:11px var(--font);color:#cbd2df;cursor:pointer}
+.media-speed:hover{background:#ffffff17}
+.media-speed option{background:#292a31;color:#e2e5ec}
+.media-volume-control{display:flex;align-items:center;gap:3px}
+.media-volume-control input[type="range"]{width:76px;height:18px;accent-color:#91add5;cursor:pointer}
+.media-volume-control input[type="range"]:focus-visible{outline:1px solid #91add5;outline-offset:3px}
+.audio-space{height:100%;width:100%;display:grid;place-items:center;position:relative;container-type:inline-size}
+.audio-composition{width:min(82%,800px);display:flex;flex-direction:column;align-items:center;gap:12px;transform:translateY(-7px)}
 .wave{width:100%;height:114px;cursor:pointer;touch-action:pan-y;outline:none}
-.progress{height:1px;width:100%;background:#3d3e48;position:relative;cursor:pointer}
+.progress{height:2px;width:100%;background:#3d3e48;position:relative;cursor:pointer}
 .progress>div{position:absolute;left:0;top:0;height:2px;background:#8eaee3;width:0}
-.progress>i{position:absolute;width:6px;height:6px;border-radius:50%;background:#adcafa;top:-2.5px;left:0;transform:translateX(-50%)}
-.times{width:100%;display:flex;justify-content:space-between;font:10px var(--mono);color:#6d7180;margin-top:-3px}
-.audio-play{border:1px solid #545660;border-radius:50%;width:46px;height:46px;font-size:17px;background:#26272f;color:#dce3f2;display:grid;place-items:center;margin-top:15px;padding:0}
+.progress>i{position:absolute;width:6px;height:6px;border-radius:50%;background:#adcafa;top:-2px;left:0;transform:translateX(-50%)}
+.progress input{position:absolute;left:0;top:-10px;width:100%;height:22px;margin:0;opacity:0;cursor:pointer}
+.progress:focus-within{outline:1px solid #83a9e1;outline-offset:5px;border-radius:3px}
+.times{width:100%;display:flex;justify-content:space-between;font:10px var(--mono);color:#747987;margin-top:-3px}
+.audio-transport{display:grid;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);align-items:center;width:100%;margin-top:12px}
+.audio-play{border:1px solid #545660;border-radius:50%;width:44px;height:44px;font-size:17px;background:#26272f;color:#dce3f2;display:grid;place-items:center;padding:0}
 .audio-play:hover{background:#343d4f;border-color:#7792b6}
 .audio-play:active{transform:scale(.96)}
-.audio-reveal{font-size:10px;color:#656876;opacity:0;transition:opacity .2s;position:absolute;bottom:22px;left:50%;transform:translateX(-50%)}
-.audio-space:hover .audio-reveal{opacity:1}
-
-
-.video-space{height:100%;width:100%;background:#090a0e;display:grid;place-items:center;overflow:hidden}
-.video-space video{width:100%;height:100%;object-fit:contain;display:block;background:#090a0e}
+.audio-transport .media-volume-control{justify-self:end}
+@container (max-width:360px){
+ .audio-transport .media-volume-control input{width:34px}
+}
+@container (max-width:240px){
+ .audio-transport .media-speed{min-width:52px;padding-left:6px;padding-right:17px}
+ .audio-transport .media-volume-control{position:relative}
+ .audio-transport .media-volume-control input{display:none;position:absolute;bottom:32px;right:-7px;width:100px;height:30px;padding:0 8px;background:#2a2c35f2;border:1px solid #ffffff20;border-radius:8px;box-shadow:0 6px 22px #0007}
+ .audio-transport .media-volume-control:hover input,.audio-transport .media-volume-control:focus-within input{display:block}
+}
+.video-space{height:100%;width:100%;background:#090a0e;display:grid;place-items:center;overflow:hidden;position:relative}
+.video-frame{position:relative;overflow:hidden;background:#090a0e;max-width:100%;max-height:100%}
+.video-frame video{width:100%;height:100%;object-fit:contain;display:block;background:#090a0e}
 .video-space.crop video{object-fit:cover}
 .video-space:fullscreen{width:100vw;height:100vh}
+.video-controls{position:absolute;z-index:3;bottom:16px;left:50%;width:min(calc(100% - 34px),850px);padding:12px 15px 9px;transform:translateX(-50%) translateY(5px);background:#1e2027cd;border:1px solid #e2e8f018;box-shadow:0 12px 36px #0008;border-radius:12px;backdrop-filter:blur(24px);opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
+.video-space.show-controls .video-controls,.video-controls:focus-within{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+.video-seek{width:100%;height:12px;margin:0 0 7px;accent-color:#a9c5ee;cursor:pointer}
+.video-bottom{display:flex;align-items:center;gap:9px;min-height:30px}
+.video-time{font:10px var(--mono);color:#c1c7d3;white-space:nowrap;min-width:92px}
+.video-spacer{flex:1}
+.video-bottom .media-speed{background:transparent;border-color:transparent}
+.video-bottom .media-speed:hover{background:#ffffff19}
+.video-bottom .media-volume-control input{width:62px}
+.video-frame.narrow .media-volume-control{position:relative}
+.video-frame.narrow .media-volume-control input{display:none;position:absolute;bottom:31px;right:-23px;width:108px;height:32px;padding:0 9px;background:#2a2c35f2;border:1px solid #ffffff20;border-radius:8px;box-shadow:0 6px 22px #0007}
+.video-frame.narrow .media-volume-control:hover input,.video-frame.narrow .media-volume-control:focus-within input{display:block}
+.video-frame.narrow .video-time{min-width:64px;font-size:9px}
+.video-subtitles{font-size:11px;font-weight:650;letter-spacing:.01em}
+.video-subtitles.active{color:#a8caff;background:#3c5377}
+@media(max-width:650px){
+ .audio-composition{width:92%}
+ .media-volume-control input[type="range"]{width:48px}
+ .video-controls{padding:10px 9px 8px;bottom:10px;width:calc(100% - 20px)}
+ .video-bottom{gap:3px}
+ .video-time{min-width:70px;font-size:9px}
+ .video-bottom .media-volume-control input{width:40px}
+}
 
 
 .html-viewport{height:100%;background:#f8f9fb;overflow:hidden}
@@ -222,7 +267,7 @@ const Demo=(()=>{
   items.push(...tabExtra());showMenu(e,items)});
  let tabExtra=()=>[item("关闭标签",()=>toast("原型不会关闭正式 Bailey 标签"))];
  function setTabExtra(fn){tabExtra=fn}
- function setCanvasMenu(fn){canvasMenu=fn;stage.addEventListener("contextmenu",e=>{if(e.target.closest(".source,.context,.floating-tools,.csv-input"))return;const items=canvasMenu(e);if(items?.length)showMenu(e,items)})}
+ function setCanvasMenu(fn){canvasMenu=fn;stage.addEventListener("contextmenu",e=>{if(e.target.closest(".source,.context,.floating-tools,.csv-input,.audio-transport,.video-controls"))return;const items=canvasMenu(e);if(items?.length)showMenu(e,items)})}
  document.addEventListener("pointerdown",e=>{if(!menu.contains(e.target))menu.classList.remove("show")});
  document.addEventListener("scroll",()=>menu.classList.remove("show"),true);
  function editor(text,id){const shell=document.createElement("div");shell.className="editor";
@@ -234,6 +279,34 @@ const Demo=(()=>{
  return {stage,menu,item,showMenu,setModes,setMode,toggleSourcePreview,openFileMenu,canToggle,sourcePreviewTitle,get mode(){return current},toast,dirty,setTabExtra,setCanvasMenu,editor}
 })();
 
+
+function mediaInlineControls(media){
+ const speedWrap=document.createElement("label");speedWrap.className="media-speed-wrap";
+ const speed=document.createElement("select");speed.className="media-speed";speed.setAttribute("aria-label","播放速度");speed.title="播放速度";
+ for(const value of [0.5,0.75,1,1.25,1.5,2]){
+  const option=document.createElement("option");option.value=String(value);option.textContent=value+"×";speed.append(option);
+ }
+ speed.value=String(media.playbackRate);speed.onchange=()=>{media.playbackRate=Number(speed.value)};
+ speedWrap.append(speed);
+ const volumeGroup=document.createElement("div");volumeGroup.className="media-volume-control";
+ const mute=document.createElement("button");mute.type="button";mute.className="media-button";mute.setAttribute("aria-label","静音");
+ const volume=document.createElement("input");volume.type="range";volume.min="0";volume.max="1";volume.step=".01";volume.value=String(media.volume);
+ volume.setAttribute("aria-label","音量");volume.title="音量";
+ const sync=()=>{
+  const silent=media.muted||media.volume===0;
+  mute.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/>'+(silent?'<path d="M17 9l5 6m0-6l-5 6"/>':'<path d="M16 9q3 3 0 6m2-9q6 6 0 12"/>')+'</svg>';
+  mute.title=silent?"取消静音":"静音";
+  mute.setAttribute("aria-label",mute.title);
+  mute.setAttribute("aria-pressed",String(silent));
+  volume.value=String(media.volume);
+ };
+ mute.onclick=()=>{const silent=media.muted||media.volume===0;media.muted=!silent;if(silent&&media.volume===0)media.volume=.5;sync()};
+ volume.oninput=()=>{media.muted=false;media.volume=Number(volume.value);sync()};
+ media.addEventListener("volumechange",sync);
+ media.addEventListener("ratechange",()=>{speed.value=String(media.playbackRate)});
+ volumeGroup.append(mute,volume);sync();
+ return {speedWrap,volumeGroup,speed,volume,mute};
+}
 
 function installViewportGestures(viewport,surface,zoomBy,isEditing=()=>false){
   let pan=null,gestureScale=1;
@@ -751,18 +824,23 @@ Demo.setCanvasMenu(actions);Demo.setTabExtra(actions);draw();
 }
 if(activeKind==="audio"){
 
-
 const area=document.createElement("div");area.className="audio-space";
+const audio=document.createElement("audio");audio.preload="metadata";audio.src="./audio-file-playback/demo-audio.m4a";audio.volume=.65;
 const composition=document.createElement("div");composition.className="audio-composition";
-const wave=document.createElement("canvas");wave.className="wave";wave.setAttribute("aria-label","音频波形：点击定位");composition.append(wave);
-const progress=document.createElement("div");progress.className="progress";const line=document.createElement("div"),dot=document.createElement("i");progress.append(line,dot);composition.append(progress);
+const wave=document.createElement("canvas");wave.className="wave";wave.setAttribute("aria-label","音频波形：拖动定位");composition.append(wave);
+const progress=document.createElement("div");progress.className="progress";
+const line=document.createElement("div"),dot=document.createElement("i");
+const seekRange=document.createElement("input");seekRange.type="range";seekRange.min="0";seekRange.max="1000";seekRange.value="0";seekRange.step="1";
+seekRange.setAttribute("aria-label","播放进度");progress.append(line,dot,seekRange);composition.append(progress);
 const times=document.createElement("div");times.className="times";
 const now=document.createElement("span"),duration=document.createElement("span");
 now.textContent="00:00";duration.textContent="--:--";times.append(now,duration);composition.append(times);
-const play=document.createElement("button");play.className="audio-play";play.textContent="▶";play.title="播放／暂停";composition.append(play);
-const reveal=document.createElement("div");reveal.className="audio-reveal";reveal.textContent="右键波形：音量、速度";area.append(composition,reveal);Demo.stage.append(area);
-const audio=document.createElement("audio");audio.preload="metadata";audio.src="./audio-file-playback/demo-audio.m4a";area.append(audio);
-audio.volume=.65;let rate=1,volume=.65,peaks=[];
+const transport=document.createElement("div");transport.className="audio-transport";
+const media=mediaInlineControls(audio);
+const play=document.createElement("button");play.className="audio-play";play.type="button";play.textContent="▶";play.title="播放";play.setAttribute("aria-label","播放");
+transport.append(media.speedWrap,play,media.volumeGroup);composition.append(transport);
+area.append(composition,audio);Demo.stage.append(area);
+const peaks=[];
 for(let i=0;i<180;i++){const x=i/180;peaks.push(Math.max(.09,Math.min(.92,.20+.44*Math.abs(Math.sin(i*.25)*Math.cos(i*.061))+.18*Math.sin(i*.37)**2+.08*Math.cos(x*12)**2)))}
 function clock(n){if(!Number.isFinite(n))return "--:--";n=Math.floor(n);return String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0")}
 function drawWave(){
@@ -777,57 +855,111 @@ function drawWave(){
  }
  line.style.width=pct*100+"%";dot.style.left=pct*100+"%";
 }
-function refresh(){now.textContent=clock(audio.currentTime);duration.textContent=clock(audio.duration);play.textContent=audio.paused?"▶":"Ⅱ";drawWave()}
+function refresh(){
+ now.textContent=clock(audio.currentTime);duration.textContent=clock(audio.duration);
+ play.textContent=audio.paused?"▶":"Ⅱ";play.title=audio.paused?"播放":"暂停";play.setAttribute("aria-label",play.title);
+ if(Number.isFinite(audio.duration)&&audio.duration>0)seekRange.value=String(Math.round(audio.currentTime/audio.duration*1000));
+ drawWave()
+}
 async function toggle(){try{if(audio.paused)await audio.play();else audio.pause();refresh()}
  catch(e){Demo.toast("无法播放音频："+e.message)}}
 play.onclick=toggle;
-function seek(e){if(!Number.isFinite(audio.duration))return;const r=wave.getBoundingClientRect();audio.currentTime=Math.max(0,Math.min(audio.duration,(e.clientX-r.left)/r.width*audio.duration));refresh()}
-wave.addEventListener("click",seek);
-progress.addEventListener("click",e=>{if(!Number.isFinite(audio.duration))return;const r=progress.getBoundingClientRect();audio.currentTime=Math.max(0,Math.min(audio.duration,(e.clientX-r.left)/r.width*audio.duration));refresh()});
+function seekFromWave(e){
+ if(!Number.isFinite(audio.duration))return;
+ const r=wave.getBoundingClientRect();
+ audio.currentTime=Math.max(0,Math.min(audio.duration,(e.clientX-r.left)/r.width*audio.duration));refresh()
+}
+wave.addEventListener("pointerdown",e=>{if(e.button===0)seekFromWave(e)});
+wave.addEventListener("pointermove",e=>{if(e.buttons&1)seekFromWave(e)});
+seekRange.oninput=()=>{if(Number.isFinite(audio.duration))audio.currentTime=Number(seekRange.value)/1000*audio.duration;refresh()};
 for(const ev of ["timeupdate","play","pause","loadedmetadata","ended"])audio.addEventListener(ev,refresh);
 audio.onerror=()=>Demo.toast("音频无法解码；正式 App 将显示系统错误");
 new ResizeObserver(drawWave).observe(wave);
-function actions(){return [
- Demo.item(audio.paused?"播放":"暂停",toggle),
- Demo.item("返回开头",()=>{audio.currentTime=0;refresh()}),
- null,
- Demo.item("播放速度 1×",()=>{rate=1;audio.playbackRate=rate},rate===1),
- Demo.item("播放速度 1.25×",()=>{rate=1.25;audio.playbackRate=rate},rate===1.25),
- Demo.item("播放速度 1.5×",()=>{rate=1.5;audio.playbackRate=rate},rate===1.5),
- Demo.item("播放速度 2×",()=>{rate=2;audio.playbackRate=rate},rate===2),
- null,
- Demo.item("音量 －",()=>{volume=Math.max(0,volume-.15);audio.volume=volume;Demo.toast("音量 "+Math.round(volume*100)+"%")}),
- Demo.item("音量 ＋",()=>{volume=Math.min(1,volume+.15);audio.volume=volume;Demo.toast("音量 "+Math.round(volume*100)+"%")})
-]}
-Demo.setCanvasMenu(actions);Demo.setTabExtra(actions);refresh();
+const actions=()=>[
+ Demo.item("回到开头",()=>{audio.currentTime=0;refresh()}),
+ Demo.item("媒体信息",()=>Demo.toast("M4A · "+clock(audio.duration)))
+];
+Demo.setCanvasMenu(actions);refresh();
 
 }
 if(activeKind==="video"){
 
-
-const area=document.createElement("div");area.className="video-space";
+const area=document.createElement("div");area.className="video-space show-controls";
+const frame=document.createElement("div");frame.className="video-frame";
 const video=document.createElement("video");video.src="./video-file-playback/demo-video.mp4";video.preload="metadata";
-video.playsInline=true;video.controls=true;video.volume=.65;video.setAttribute("aria-label","视频原生播放器");
+video.playsInline=true;video.volume=.65;video.tabIndex=0;video.setAttribute("aria-label","视频播放画面");
 const track=document.createElement("track");track.kind="subtitles";track.src="./video-file-playback/demo-video.vtt";track.srclang="zh";track.label="中文字幕";
-video.append(track);area.append(video);Demo.stage.append(area);
-let rate=1,crop=false;
+video.append(track);
+const controls=document.createElement("div");controls.className="video-controls";
+const seek=document.createElement("input");seek.className="video-seek";seek.type="range";seek.min="0";seek.max="1000";seek.step="1";seek.value="0";
+seek.setAttribute("aria-label","视频播放进度");controls.append(seek);
+const row=document.createElement("div");row.className="video-bottom";
+const play=document.createElement("button");play.className="media-button";play.type="button";play.textContent="▶";play.title="播放";play.setAttribute("aria-label","播放");
+const clock=document.createElement("span");clock.className="video-time";clock.textContent="00:00 / --:--";
+const spacer=document.createElement("span");spacer.className="video-spacer";
+const media=mediaInlineControls(video);
+const captions=document.createElement("button");captions.className="media-button video-subtitles";captions.type="button";captions.textContent="CC";captions.title="切换字幕";captions.setAttribute("aria-label","字幕");
+const fullscreen=document.createElement("button");fullscreen.className="media-button";fullscreen.type="button";fullscreen.textContent="⛶";fullscreen.title="全屏";fullscreen.setAttribute("aria-label","进入全屏");
+row.append(play,clock,spacer,media.volumeGroup,media.speedWrap,captions,fullscreen);
+controls.append(row);frame.append(video,controls);area.append(frame);Demo.stage.append(area);
+let crop=false,scrubbing=false,hideTimer;
+function sizeFrame(){
+ const bounds=area.getBoundingClientRect();if(!bounds.width||!bounds.height)return;
+ const ratio=video.videoWidth&&video.videoHeight?video.videoWidth/video.videoHeight:16/9;
+ const width=Math.min(bounds.width,bounds.height*ratio);
+ frame.style.width=Math.floor(width)+"px";frame.style.height=Math.floor(width/ratio)+"px";
+ frame.classList.toggle("narrow",width<570);
+}
+new ResizeObserver(sizeFrame).observe(area);
+function fmt(n){if(!Number.isFinite(n))return "--:--";n=Math.floor(n);return String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0")}
+function update(){
+ play.textContent=video.paused?"▶":"Ⅱ";play.title=video.paused?"播放":"暂停";play.setAttribute("aria-label",play.title);
+ clock.textContent=fmt(video.currentTime)+" / "+fmt(video.duration);
+ if(!scrubbing&&Number.isFinite(video.duration)&&video.duration>0)seek.value=String(Math.round(video.currentTime/video.duration*1000));
+ const enabled=!!video.textTracks.length;
+ captions.disabled=!enabled;
+ captions.classList.toggle("active",enabled&&video.textTracks[0].mode==="showing");
+ captions.setAttribute("aria-pressed",String(enabled&&video.textTracks[0].mode==="showing"));
+ fullscreen.title=document.fullscreenElement?"退出全屏":"全屏";fullscreen.setAttribute("aria-label",fullscreen.title);
+}
+function reveal(){
+ area.classList.add("show-controls");clearTimeout(hideTimer);
+ if(!video.paused&&!scrubbing)hideTimer=setTimeout(()=>{
+  if(!controls.matches(":hover")&&!controls.matches(":focus-within"))area.classList.remove("show-controls");
+ },2100);
+}
+async function toggle(){try{if(video.paused)await video.play();else video.pause();update();reveal()}
+ catch(e){Demo.toast("无法播放视频："+e.message)}}
+async function toggleFullscreen(){
+ try{if(document.fullscreenElement)await document.exitFullscreen();else await area.requestFullscreen();update();reveal()}
+ catch{Demo.toast("浏览器未允许全屏；正式 Bailey 使用 AVKit 控件")}
+}
+play.onclick=toggle;
+video.onclick=toggle;
+seek.onpointerdown=()=>{scrubbing=true;reveal()};
+seek.oninput=()=>{if(Number.isFinite(video.duration))video.currentTime=Number(seek.value)/1000*video.duration;clock.textContent=fmt(video.currentTime)+" / "+fmt(video.duration)};
+seek.onchange=()=>{scrubbing=false;update();reveal()};
+seek.onpointerup=()=>{scrubbing=false;reveal()};
+captions.onclick=()=>{
+ const textTrack=video.textTracks[0];if(!textTrack)return;
+ textTrack.mode=textTrack.mode==="showing"?"disabled":"showing";update();reveal()
+};
+fullscreen.onclick=toggleFullscreen;
+area.addEventListener("pointermove",reveal);
+controls.addEventListener("pointerenter",()=>clearTimeout(hideTimer));
+controls.addEventListener("pointerleave",reveal);
+controls.addEventListener("focusin",reveal);
+controls.addEventListener("focusout",()=>setTimeout(reveal,0));
+for(const ev of ["timeupdate","play","pause","loadedmetadata","ended"])video.addEventListener(ev,()=>{if(ev==="loadedmetadata")sizeFrame();update();if(video.paused)reveal();else if(ev==="play")reveal()});
 video.onerror=()=>Demo.toast("视频解码失败；请检查容器和系统支持的编码");
-function actions(){return [
- Demo.item(video.paused?"播放":"暂停",async()=>{if(video.paused)await video.play();else video.pause()}),
+document.addEventListener("fullscreenchange",update);
+const actions=()=>[
  Demo.item("适合窗口",()=>{crop=false;area.classList.remove("crop")},!crop),
  Demo.item("填充画面",()=>{crop=true;area.classList.add("crop")},crop),
  null,
- Demo.item("正常速度",()=>{rate=1;video.playbackRate=rate},rate===1),
- Demo.item("1.25× 速度",()=>{rate=1.25;video.playbackRate=rate},rate===1.25),
- Demo.item("1.5× 速度",()=>{rate=1.5;video.playbackRate=rate},rate===1.5),
- Demo.item("2× 速度",()=>{rate=2;video.playbackRate=rate},rate===2),
- null,
- Demo.item(document.fullscreenElement?"退出全屏":"进入全屏",async()=>{
-  try{if(document.fullscreenElement)await document.exitFullscreen();else await area.requestFullscreen()}
-  catch{Demo.toast("浏览器未允许全屏；正式 Bailey 使用 AVKit 原生全屏")}
- })
-]}
-Demo.setCanvasMenu(actions);Demo.setTabExtra(actions);
+ Demo.item("媒体信息",()=>Demo.toast("MP4 · "+fmt(video.duration)))
+];
+Demo.setCanvasMenu(actions);update();
 
 }
 if(activeKind==="html"){
