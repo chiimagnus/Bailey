@@ -236,6 +236,7 @@ struct RecentCommitsView: View {
     let squashAction: ([String]) -> Void
     let commitBatchAction: ([String], GitStatusModel.CommitBatchAction) -> Void
     let headOID: String?
+    let worktreeLocations: [GitStatusModel.WorktreeLocation]
     let canActOnStash: Bool
     let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
     let openWorktreeDiff: (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void
@@ -282,6 +283,7 @@ struct RecentCommitsView: View {
         squashAction: @escaping ([String]) -> Void = { _ in },
         commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void = { _, _ in },
         headOID: String? = nil,
+        worktreeLocations: [GitStatusModel.WorktreeLocation] = [],
         canActOnStash: Bool = true,
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
         openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
@@ -332,6 +334,7 @@ struct RecentCommitsView: View {
         self.squashAction = squashAction
         self.commitBatchAction = commitBatchAction
         self.headOID = headOID
+        self.worktreeLocations = worktreeLocations
         self.canActOnStash = canActOnStash
         self.stashAction = stashAction
         self.openWorktreeDiff = openWorktreeDiff
@@ -1126,12 +1129,14 @@ struct RecentCommitsView: View {
         if selected.count == selection.ids.count {
             let hashes = selected.map(\.hash)
             let allOrdinary = selected.allSatisfy { $0.parentHashes.count <= 1 }
-            let canDrop = GitStatusModel.batchDropPlan(
-                selected: hashes, head: headOID, parents: commitParents
-            ) != nil
-            let canSquash = GitStatusModel.squashPlan(
-                selected: hashes, head: headOID, parents: commitParents
-            ) != nil
+            let canDrop = !GitStatusModel.historyRewriteTargets(
+                selected: hashes, kind: .drop, head: headOID, root: repoRoot,
+                worktrees: worktreeLocations, parents: commitParents
+            ).isEmpty
+            let canSquash = !GitStatusModel.historyRewriteTargets(
+                selected: hashes, kind: .squash, head: headOID, root: repoRoot,
+                worktrees: worktreeLocations, parents: commitParents
+            ).isEmpty
             Button(String(localized: "Copy Selected Commit Hashes", table: "Git")) {
                 copy(hashes.joined(separator: "\n"))
             }
@@ -1523,11 +1528,11 @@ struct RecentCommitsView: View {
                     branchAction(reference, commit, .delete)
                 }
                 .disabled(!canActOnCommit)
-                Button(String(localized: "Merge into Current Branch…", table: "Git")) {
+                Button(String(localized: "Merge into Worktree…", table: "Git")) {
                     branchAction(reference, commit, .merge)
                 }
                 .disabled(!canActOnCommit)
-                Button(String(localized: "Rebase Current Branch onto This Branch…", table: "Git")) {
+                Button(String(localized: "Rebase Worktree onto This Branch…", table: "Git")) {
                     branchAction(reference, commit, .rebase)
                 }
                 .disabled(!canActOnCommit)
@@ -1584,7 +1589,7 @@ struct RecentCommitsView: View {
                 }
                 .disabled(!canActOnCommit)
             }
-            Button(String(localized: "Merge into Current Branch…", table: "Git")) {
+            Button(String(localized: "Merge into Worktree…", table: "Git")) {
                 remoteAction(reference, commit, .merge)
             }
             .disabled(!canActOnCommit)

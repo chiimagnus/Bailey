@@ -22,7 +22,9 @@ final class GitNativeDialogTests: XCTestCase {
             )
         }
         for action in GitStatusModel.CommitBatchAction.allCases {
-            let dialog = GitBatchCommitDialog(action: action, commits: commits, target: target)
+            let dialog = GitBatchCommitDialog(
+                action: action, commits: commits, target: target, worktrees: [.current]
+            )
             XCTAssertTrue(dialog.alert.informativeText.contains(
                 String(localized: "Selected \(commits.count) commits", table: "Git")
             ))
@@ -31,12 +33,11 @@ final class GitNativeDialogTests: XCTestCase {
             XCTAssertEqual(dialog.alert.buttons.count, 2)
             XCTAssertEqual(dialog.alert.buttons[0].keyEquivalent, "\r")
             XCTAssertEqual(dialog.alert.buttons[1].keyEquivalent, "\u{1b}")
+            XCTAssertEqual(dialog.worktree.selected, .current)
+            XCTAssertEqual(dialog.alert.accessoryView != nil, action == .cherryPick)
             if action == .cherryPick {
-                XCTAssertNotNil(dialog.alert.accessoryView)
                 XCTAssertEqual(dialog.recordOrigin.state, .off)
                 XCTAssertEqual(dialog.noCommit.state, .off)
-            } else {
-                XCTAssertNil(dialog.alert.accessoryView)
             }
             if action == .drop {
                 XCTAssertTrue(dialog.alert.informativeText.contains(String(localized:
@@ -47,10 +48,45 @@ final class GitNativeDialogTests: XCTestCase {
         }
     }
 
+    func testNativeCommitDialogsRequireAnExplicitTargetWhenSeveralWorktreesMatch() {
+        let linked = GitStatusModel.WorktreeLocation(
+            path: "/repo/feature", headOID: String(repeating: "a", count: 40), branch: "feature"
+        )
+        let detached = GitStatusModel.WorktreeLocation(
+            path: "/repo/detached", headOID: String(repeating: "a", count: 40), branch: nil
+        )
+        let choices: [GitStatusModel.WorktreeTarget] = [
+            .current, .worktree(linked), .worktree(detached)
+        ]
+        let picker = GitWorktreeTargetPicker(choices, currentPath: "/repo/main")
+        XCTAssertEqual(picker.control.numberOfItems, 3)
+        XCTAssertEqual(picker.selected, .current)
+        XCTAssertTrue(picker.control.itemTitle(at: 0).contains("/repo/main"))
+        XCTAssertTrue(picker.control.itemTitle(at: 1).contains("/repo/feature"))
+        XCTAssertTrue(picker.control.itemTitle(at: 2).contains("/repo/detached"))
+        picker.control.selectItem(at: 2)
+        XCTAssertEqual(picker.selected, .worktree(detached))
+        XCTAssertNil(picker.solePath)
+        let single = GitWorktreeTargetPicker([.worktree(detached)], currentPath: "/repo/main")
+        XCTAssertEqual(single.solePath, "/repo/detached")
+        let stack = NSStackView()
+        single.add(to: stack)
+        XCTAssertTrue(stack.arrangedSubviews.isEmpty)
+        let squash = GitSquashDialog(
+            count: 2, suggestedMessage: "combined", target: target,
+            worktrees: [.worktree(detached)]
+        )
+        XCTAssertTrue(squash.alert.informativeText.contains("/repo/detached"))
+        XCTAssertNil(squash.worktree.control.superview)
+    }
+
     func testSquashNativeSheetRequiresMessageAndPreservesMultilineText() {
-        let sheet = GitSquashDialog(count: 2, suggestedMessage: "oldest", branch: "main")
+        let sheet = GitSquashDialog(
+            count: 2, suggestedMessage: "oldest", target: target, worktrees: [.current]
+        )
         XCTAssertEqual(sheet.message.string, "oldest")
-        XCTAssertTrue(sheet.alert.informativeText.contains("main"))
+        XCTAssertEqual(sheet.worktree.selected, .current)
+        XCTAssertEqual(sheet.worktree.solePath, target.repository)
         XCTAssertTrue(sheet.alert.buttons[0].isEnabled)
         XCTAssertTrue(sheet.alert.window.initialFirstResponder === sheet.message)
         XCTAssertEqual(sheet.alert.buttons[0].keyEquivalent, "\r")
@@ -246,7 +282,9 @@ final class GitNativeDialogTests: XCTestCase {
                            String(repeating: "c", count: 40)], references: [], files: []
         )
         for action in GitStatusModel.CommitAction.allCases {
-            let dialog = GitCommitDialog(action: action, commit: commit, target: target)
+            let dialog = GitCommitDialog(
+                action: action, commit: commit, target: target, worktrees: [.current]
+            )
             XCTAssertEqual(dialog.alert.buttons.count, 2, "\(action)")
             XCTAssertEqual(dialog.alert.buttons[0].keyEquivalent, "\r")
             XCTAssertEqual(dialog.alert.buttons[1].keyEquivalent, "\u{1b}")
@@ -274,7 +312,10 @@ final class GitNativeDialogTests: XCTestCase {
                 XCTAssertEqual(dialog.resetMode.numberOfItems,
                                GitStatusModel.ResetMode.allCases.count)
             case .drop:
-                XCTAssertTrue(dialog.alert.informativeText.contains("HEAD"))
+                XCTAssertTrue(dialog.alert.informativeText.contains(
+                    String(localized: "This rewrites local history. Remote branches and tags are not force-pushed.",
+                           table: "Git")
+                ))
             }
         }
     }

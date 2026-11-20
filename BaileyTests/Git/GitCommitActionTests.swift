@@ -53,6 +53,352 @@ final class GitCommitActionTests: XCTestCase {
         return try XCTUnwrap(model.recentCommits.first { $0.hash == hash })
     }
 
+    private func linkedGit(_ arguments: [String], in linked: URL) throws -> String {
+        let result = GitCommandExecution.run(arguments, in: linked.path, timeout: 15)
+        guard result.status == 0 else {
+            XCTFail(result.stderr)
+            throw WorkspaceError.notFound
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func linkedCommit(_ subject: String, in linked: URL) throws -> String {
+        let file = subject + ".txt"
+        try (subject + "\n").write(
+            to: linked.appendingPathComponent(file), atomically: true, encoding: .utf8
+        )
+        _ = try linkedGit(["add", "--", file], in: linked)
+        _ = try linkedGit(["commit", "-qm", subject], in: linked)
+        return try linkedGit(["rev-parse", "HEAD"], in: linked)
+    }
+
+    func testHistoryRewriteExposesEveryEligibleWorktreeWithoutGuessingAnOwner() {
+        let parents = [
+            "root": [String](), "first": ["root"], "second": ["first"],
+            "third": ["second"], "side": ["root"]
+        ]
+        let detached = GitStatusModel.WorktreeLocation(path: "/linked", headOID: "third", branch: nil)
+        let alternate = GitStatusModel.WorktreeLocation(path: "/other", headOID: "third", branch: "other")
+        func candidates(_ selected: [String], kind: GitStatusModel.HistoryRewriteKind,
+                        head: String = "root", others: [GitStatusModel.WorktreeLocation] = [detached])
+            -> [GitStatusModel.WorktreeTarget] {
+            GitStatusModel.historyRewriteTargets(
+                selected: selected, kind: kind, head: head,
+                root: "/main", worktrees: others, parents: parents
+            )
+        }
+        XCTAssertEqual(candidates(["second", "first"], kind: .drop), [.worktree(detached)])
+        XCTAssertEqual(candidates(["second", "first"], kind: .squash), [.worktree(detached)])
+        XCTAssertEqual(candidates(["first"], kind: .drop), [.worktree(detached)])
+        XCTAssertEqual(
+            candidates(["second", "first"], kind: .drop, head: "third"),
+            [.current, .worktree(detached)]
+        )
+        XCTAssertEqual(
+            candidates(["second", "first"], kind: .drop, others: [detached, alternate]),
+            [.worktree(detached), .worktree(alternate)]
+        )
+        XCTAssertTrue(candidates(["second", "side"], kind: .squash).isEmpty)
+        var locked = detached
+        locked.isLocked = true
+        XCTAssertTrue(candidates(["second", "first"], kind: .drop, others: [locked]).isEmpty)
+    }
+
+    func testSharedHistorySquashChangesOnlyTheExplicitlyChosenWorktree() async throws {
+        let first = try commit("shared first", text: "first\n")
+        let second = try commit("shared second", text: "second\n")
+        _ = try commit("shared third", text: "third\n")
+        let currentHead = try git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Shared-Squash-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let originalTree = try linkedGit(["rev-parse", "HEAD^{tree}"], in: linked)
+        _ = try await target(currentHead)
+        let choices = model.historyRewriteTargets(selected: [second, first], kind: .squash)
+        XCTAssertEqual(choices.count, 2)
+        XCTAssertEqual(choices.first, .current)
+        let other = try XCTUnwrap(choices.first { $0.worktree != nil })
+        model.squashCommits(
+            [second, first], message: "combined on linked", target: model.actionTarget(),
+            worktreeTarget: other
+        )
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), currentHead)
+        XCTAssertEqual(try git(["log", "-2", "--format=%s"]), "shared third\nshared second")
+        XCTAssertEqual(try linkedGit(["log", "-2", "--format=%s"], in: linked),
+                       "shared third\ncombined on linked")
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD^{tree}"], in: linked), originalTree)
+    }
+
+    func testCrossWorktreeSingleCherryPickRevertResetAndCheckout() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Linked-Actions-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "-b", "linked-actions", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let source = try commit("source change", text: "source\n")
+        let commitToUse = try await target(source)
+        func chosen() throws -> GitStatusModel.WorktreeTarget {
+            try XCTUnwrap(model.availableWorktreeTargets().first {
+                ($0.worktree?.path as NSString?)?.lastPathComponent == linked.lastPathComponent
+            })
+        }
+
+        model.actOnCommit(commitToUse, action: .cherryPick, target: model.actionTarget(),
+                          worktreeTarget: try chosen())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["show", "HEAD:tracked.txt"], in: linked), "source")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), source)
+
+        _ = try await target(source)
+        model.actOnCommit(commitToUse, action: .revert, target: model.actionTarget(),
+                          worktreeTarget: try chosen())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["show", "HEAD:tracked.txt"], in: linked), "root")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), source)
+
+        _ = try await target(source)
+        model.actOnCommit(commitToUse, action: .reset, target: model.actionTarget(),
+                          resetMode: .hard, worktreeTarget: try chosen())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD"], in: linked), source)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), source)
+
+        _ = try await target(source)
+        let rootCommit = try XCTUnwrap(model.recentCommits.first { $0.hash == root })
+        model.actOnCommit(rootCommit, action: .checkout, target: model.actionTarget(),
+                          worktreeTarget: try chosen())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD"], in: linked), root)
+        XCTAssertEqual(try linkedGit(["rev-parse", "--abbrev-ref", "HEAD"], in: linked), "HEAD")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), source)
+    }
+
+    func testCrossWorktreeBatchCherryPickAndRevert() async throws {
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Linked-Batch-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "-b", "linked-batch", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let first = try commit("batch first", text: "first\n")
+        let second = try commit("batch second", text: "second\n")
+        _ = try await target(second)
+        func selected() throws -> GitStatusModel.WorktreeTarget {
+            try XCTUnwrap(model.availableWorktreeTargets().first { $0.worktree != nil })
+        }
+        model.actOnCommits([second, first], action: .cherryPick, target: model.actionTarget(),
+                           worktreeTarget: try selected())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["show", "HEAD:tracked.txt"], in: linked), "second")
+        _ = try await target(second)
+        model.actOnCommits([second, first], action: .revert, target: model.actionTarget(),
+                           worktreeTarget: try selected())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["show", "HEAD:tracked.txt"], in: linked), "root")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), second)
+    }
+
+    func testCrossWorktreeMergeAndRebaseChangeOnlySelectedBranch() async throws {
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Linked-Merge-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "-b", "linked-merge", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let oldTarget = try linkedCommit("target separate", in: linked)
+        let source = try commit("source merge", text: "merge\n")
+        let selectedCommit = try await target(source)
+        func chosen() throws -> GitStatusModel.WorktreeTarget {
+            try XCTUnwrap(model.availableWorktreeTargets().first { $0.worktree != nil })
+        }
+        model.actOnCommit(selectedCommit, action: .merge, target: model.actionTarget(),
+                          worktreeTarget: try chosen())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["rev-list", "--parents", "-n", "1", "HEAD"], in: linked)
+            .split(separator: " ").count, 3)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), source)
+
+        _ = try linkedGit(["reset", "--hard", oldTarget], in: linked)
+        _ = try await target(source)
+        model.actOnCommit(selectedCommit, action: .rebase, target: model.actionTarget(),
+                          ignoreDate: false, worktreeTarget: try chosen())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["log", "-1", "--format=%s"], in: linked), "target separate")
+        XCTAssertEqual(try linkedGit(["show", "HEAD:tracked.txt"], in: linked), "merge")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), source)
+    }
+
+    func testBatchDropRewritesOnlyTheDetachedLinkedWorktree() async throws {
+        let mainHead = try git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Drop-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let first = try linkedCommit("linked-first", in: linked)
+        let second = try linkedCommit("linked-second", in: linked)
+        let third = try linkedCommit("linked-third", in: linked)
+        _ = try await target(third)
+        let rewrite = try XCTUnwrap(
+            model.historyRewriteTargets(selected: [second, first], kind: .drop).first
+        )
+        XCTAssertEqual((rewrite.worktree?.path as NSString?)?.lastPathComponent, linked.lastPathComponent)
+        model.actOnCommits(
+            [second, first], action: .drop, target: model.actionTarget(),
+            worktreeTarget: rewrite
+        )
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), mainHead)
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD^"], in: linked), mainHead)
+        XCTAssertEqual(try linkedGit(["log", "-1", "--format=%s"], in: linked), "linked-third")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: linked.appendingPathComponent("linked-first.txt").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: linked.appendingPathComponent("linked-second.txt").path
+        ))
+        XCTAssertEqual(try linkedGit(["status", "--porcelain"], in: linked), "")
+    }
+
+    func testSingleDropTargetsTheLinkedNamedBranchWithoutMovingCurrentBranch() async throws {
+        let mainHead = try git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Branch-Drop-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "-b", "linked-branch", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let first = try linkedCommit("linked-first", in: linked)
+        _ = try linkedCommit("linked-second", in: linked)
+        let third = try linkedCommit("linked-third", in: linked)
+        let selected = try await target(first)
+        let rewrite = try XCTUnwrap(model.historyRewriteTargets(selected: [first], kind: .drop).first)
+        XCTAssertEqual(rewrite.worktree?.branch, "linked-branch")
+        model.actOnCommit(
+            selected, action: .drop, target: model.actionTarget(),
+            worktreeTarget: rewrite
+        )
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), mainHead)
+        XCTAssertEqual(
+            try linkedGit(["rev-parse", "HEAD"], in: linked),
+            try git(["rev-parse", "refs/heads/linked-branch"])
+        )
+        XCTAssertNotEqual(try linkedGit(["rev-parse", "HEAD"], in: linked), third)
+        XCTAssertEqual(try linkedGit(["log", "-1", "--format=%s"], in: linked), "linked-third")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: linked.appendingPathComponent("linked-first.txt").path
+        ))
+        XCTAssertEqual(try linkedGit(["status", "--porcelain"], in: linked), "")
+    }
+
+    func testSquashRewritesOnlyTheDetachedLinkedWorktreeAndPreservesFiles() async throws {
+        let mainHead = try git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Squash-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let first = try linkedCommit("linked-first", in: linked)
+        let second = try linkedCommit("linked-second", in: linked)
+        let third = try linkedCommit("linked-third", in: linked)
+        let originalTree = try linkedGit(["rev-parse", "HEAD^{tree}"], in: linked)
+        _ = try await target(third)
+        let rewrite = try XCTUnwrap(
+            model.historyRewriteTargets(selected: [second, first], kind: .squash).first
+        )
+        XCTAssertEqual((rewrite.worktree?.path as NSString?)?.lastPathComponent, linked.lastPathComponent)
+        model.squashCommits(
+            [second, first], message: "linked-squashed",
+            target: model.actionTarget(), worktreeTarget: rewrite
+        )
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), mainHead)
+        XCTAssertEqual(try linkedGit(["rev-list", "--count", "HEAD"], in: linked), "3")
+        XCTAssertEqual(
+            try linkedGit(["log", "-2", "--format=%s"], in: linked),
+            "linked-third\nlinked-squashed"
+        )
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD^{tree}"], in: linked), originalTree)
+        XCTAssertEqual(try linkedGit(["status", "--porcelain"], in: linked), "")
+    }
+
+    func testLinkedWorktreeRewriteRejectsDirtyAndMovedHead() async throws {
+        let mainHead = try git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Guard-" + UUID().uuidString)
+        _ = try git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        defer {
+            _ = try? git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        let first = try linkedCommit("linked-first", in: linked)
+        let second = try linkedCommit("linked-second", in: linked)
+        _ = try await target(second)
+        let rewrite = try XCTUnwrap(
+            model.historyRewriteTargets(selected: [second, first], kind: .drop).first
+        )
+        try "dirty".write(to: linked.appendingPathComponent("linked-first.txt"),
+                          atomically: true, encoding: .utf8)
+        model.actOnCommits(
+            [second, first], action: .drop, target: model.actionTarget(),
+            worktreeTarget: rewrite
+        )
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD"], in: linked), second)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), mainHead)
+
+        _ = try linkedGit(["restore", "--", "linked-first.txt"], in: linked)
+        let note = linked.appendingPathComponent("untracked-note.txt")
+        try "preserve this".write(to: note, atomically: true, encoding: .utf8)
+        model.actOnCommits(
+            [second, first], action: .drop, target: model.actionTarget(),
+            worktreeTarget: rewrite
+        )
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD"], in: linked), second)
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "preserve this")
+        try FileManager.default.removeItem(at: note)
+        let third = try linkedCommit("linked-third", in: linked)
+        model.actOnCommits(
+            [second, first], action: .drop, target: model.actionTarget(),
+            worktreeTarget: rewrite
+        )
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try linkedGit(["rev-parse", "HEAD"], in: linked), third)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), mainHead)
+    }
+
     func testBatchCommitOrderPreservesAncestryAndReversesRevertOrder() {
         func commit(_ hash: String, parents: [String]) -> GitStatusModel.RecentCommit {
             .init(hash: hash, shortHash: hash, subject: hash,

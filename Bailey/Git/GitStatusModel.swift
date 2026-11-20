@@ -204,9 +204,9 @@ final class GitStatusModel {
             case .checkout: String(localized: "Checkout Commit…", table: "Git")
             case .cherryPick: String(localized: "Cherry Pick Commit…", table: "Git")
             case .revert: String(localized: "Revert Commit…", table: "Git")
-            case .merge: String(localized: "Merge Commit into Current Branch…", table: "Git")
-            case .rebase: String(localized: "Rebase Current Branch onto Commit…", table: "Git")
-            case .reset: String(localized: "Reset Current Branch to Commit…", table: "Git")
+            case .merge: String(localized: "Merge Commit into Worktree…", table: "Git")
+            case .rebase: String(localized: "Rebase Worktree onto Commit…", table: "Git")
+            case .reset: String(localized: "Reset Worktree to Commit…", table: "Git")
             case .drop: String(localized: "Drop Commit…", table: "Git")
             }
         }
@@ -305,8 +305,7 @@ final class GitStatusModel {
     }
 
     func canDrop(_ commit: RecentCommit) -> Bool {
-        Self.dropCommitPossible(commit.hash, head: headOID,
-                                parents: Dictionary(uniqueKeysWithValues: recentCommits.map { ($0.hash, $0.parentHashes) }))
+        !historyRewriteTargets(selected: [commit.hash], kind: .drop).isEmpty
     }
 
     nonisolated struct SquashPlan: Equatable, Sendable {
@@ -316,7 +315,57 @@ final class GitStatusModel {
         let newerCount: Int
     }
 
-    /// Only a single-parent segment on the current HEAD ancestry can be rewritten.
+    nonisolated enum HistoryRewriteKind: Equatable, Sendable { case drop, squash }
+
+    nonisolated enum WorktreeTarget: Equatable, Sendable {
+        case current
+        case worktree(WorktreeLocation)
+
+        var worktree: WorktreeLocation? {
+            if case .worktree(let location) = self { return location }
+            return nil
+        }
+    }
+
+    /// A commit may be in several worktree histories; never infer one owner.
+    nonisolated static func historyRewriteTargets(
+        selected: [String], kind: HistoryRewriteKind, head: String?,
+        root: String, worktrees: [WorktreeLocation], parents: [String: [String]]
+    ) -> [WorktreeTarget] {
+        func eligible(_ candidate: String?) -> Bool {
+            if kind == .drop, selected.count == 1, let hash = selected.first {
+                return dropCommitPossible(hash, head: candidate, parents: parents)
+            }
+            return kind == .drop
+                ? batchDropPlan(selected: selected, head: candidate, parents: parents) != nil
+                : squashPlan(selected: selected, head: candidate, parents: parents) != nil
+        }
+        var targets: [WorktreeTarget] = eligible(head) ? [.current] : []
+        targets += worktrees.filter {
+            $0.path != root && !$0.isLocked && !$0.isPrunable && eligible($0.headOID)
+        }.map { .worktree($0) }
+        return targets
+    }
+
+    func availableWorktreeTargets() -> [WorktreeTarget] {
+        [.current] + worktreeLocations.filter {
+            $0.path != repoRoot && !$0.isLocked && !$0.isPrunable && $0.headOID != nil
+        }.map { .worktree($0) }
+    }
+
+    func historyRewriteTargets(
+        selected: [String], kind: HistoryRewriteKind
+    ) -> [WorktreeTarget] {
+        let parents = Dictionary(uniqueKeysWithValues: recentCommits.filter {
+            $0.stash == nil && $0.worktree == nil
+        }.map { ($0.hash, $0.parentHashes) })
+        return Self.historyRewriteTargets(
+            selected: selected, kind: kind, head: headOID, root: repoRoot,
+            worktrees: worktreeLocations, parents: parents
+        )
+    }
+
+    /// Only a single-parent segment on the selected HEAD ancestry can be rewritten.
     nonisolated static func squashPlan(
         selected: [String], head: String?, parents: [String: [String]]
     ) -> SquashPlan? {
@@ -398,11 +447,14 @@ final class GitStatusModel {
         resetMode: ResetMode = .mixed, ignoreDate: Bool = true,
         interactiveLaunch: (@MainActor () throws -> Void)? = nil,
         selectedRef: (name: String, oid: String)? = nil,
+        worktreeTarget: WorktreeTarget = .current,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
-        guard isCurrent(target), repositoryOperation == nil,
+        guard isCurrent(target, requiresStableHead: worktreeTarget.worktree == nil),
+              availableWorktreeTargets().contains(worktreeTarget),
+              repositoryOperation == nil,
               commit.hash.count == 40 || commit.hash.count == 64,
               commit.hash.allSatisfy({ $0.isHexDigit }),
               commit.parentHashes.count < 2 || (1...commit.parentHashes.count).contains(parent)
@@ -437,7 +489,8 @@ final class GitStatusModel {
         case .reset:
             arguments = ["reset", "--" + resetMode.rawValue, commit.hash]
         case .drop:
-            guard canDrop(commit) else {
+            guard historyRewriteTargets(selected: [commit.hash], kind: .drop)
+                .contains(worktreeTarget) else {
                 failImmediately(String(localized: "This commit cannot be dropped from the current HEAD without crossing a merge or fork.", table: "Git"), completion: completion)
                 return
             }
@@ -447,15 +500,19 @@ final class GitStatusModel {
             label: action == .rebase && interactiveLaunch != nil
                 ? String(localized: "Launch Interactive Rebase", table: "Git") : action.title,
             commands: action == .rebase && interactiveLaunch != nil ? [] : [arguments],
+            directory: worktreeTarget.worktree?.path,
             requiredStatus: .history,
             squashMessage: action == .merge && squash && !noCommit
                 ? "Merge commit '\(commit.hash)'" : nil,
             dropCommit: action == .drop ? commit.hash : nil,
             terminalAction: action == .rebase ? interactiveLaunch : nil,
             expectedRef: selectedRef,
+            operationWorktree: worktreeTarget.worktree,
+            requiresCleanWorktree: action == .drop,
             prepare: prepare,
             isCurrentTarget: {
-                self.isCurrent(target) && (isCurrentTarget?() ?? true)
+                self.isCurrent(target, requiresStableHead: worktreeTarget.worktree == nil)
+                    && (isCurrentTarget?() ?? true)
             }, completion: completion
         )
     }
@@ -463,6 +520,7 @@ final class GitStatusModel {
     func actOnCommits(
         _ hashes: [String], action: CommitBatchAction, target: ActionTarget,
         recordOrigin: Bool = false, noCommit: Bool = false,
+        worktreeTarget: WorktreeTarget = .current,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -471,7 +529,9 @@ final class GitStatusModel {
         let byHash = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0) })
         let selected = hashes.compactMap { byHash[$0] }
         let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
-        guard isCurrent(target), repositoryOperation == nil, !isBusy,
+        guard isCurrent(target, requiresStableHead: worktreeTarget.worktree == nil),
+              availableWorktreeTargets().contains(worktreeTarget),
+              repositoryOperation == nil, !isBusy,
               hashes.count >= 2, Set(hashes).count == hashes.count,
               selected.count == hashes.count,
               selected.allSatisfy({ $0.parentHashes.count <= 1 })
@@ -490,9 +550,12 @@ final class GitStatusModel {
         case .revert:
             arguments = ["revert", "--no-edit"] + ordered
         case .drop:
-            guard let plan = Self.batchDropPlan(
-                selected: hashes, head: headOID, parents: parents
-            ), let parent = plan.parent else {
+            guard historyRewriteTargets(selected: hashes, kind: .drop).contains(worktreeTarget),
+                  let plan = Self.batchDropPlan(
+                      selected: hashes,
+                      head: worktreeTarget.worktree?.headOID ?? headOID,
+                      parents: parents
+                  ), let parent = plan.parent else {
                 failImmediately(String(localized: "The selected commits cannot all be dropped from this HEAD.", table: "Git"),
                                 completion: completion)
                 return
@@ -501,10 +564,15 @@ final class GitStatusModel {
             arguments = ["rebase", "--onto", parent, plan.newest]
         }
         perform(
-            label: action.title, commands: [arguments], requiredStatus: .history,
-            dropCommit: dropCommit, prepare: prepare,
+            label: action.title, commands: [arguments],
+            directory: worktreeTarget.worktree?.path,
+            requiredStatus: .history, dropCommit: dropCommit,
+            operationWorktree: worktreeTarget.worktree,
+            requiresCleanWorktree: action == .drop,
+            prepare: prepare,
             isCurrentTarget: {
-                self.isCurrent(target) && (isCurrentTarget?() ?? true)
+                self.isCurrent(target, requiresStableHead: worktreeTarget.worktree == nil)
+                    && (isCurrentTarget?() ?? true)
             }, completion: completion
         )
     }
@@ -517,6 +585,7 @@ final class GitStatusModel {
 
     func squashCommits(
         _ hashes: [String], message: String, target: ActionTarget,
+        worktreeTarget: WorktreeTarget = .current,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -529,19 +598,27 @@ final class GitStatusModel {
         }
         let commits = recentCommits.filter { $0.stash == nil && $0.worktree == nil }
         let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
-        guard isCurrent(target), repositoryOperation == nil, !isBusy,
+        guard isCurrent(target, requiresStableHead: worktreeTarget.worktree == nil),
+              repositoryOperation == nil, !isBusy,
               hashes.allSatisfy({ ($0.count == 40 || $0.count == 64) && $0.allSatisfy(\.isHexDigit) }),
-              Self.squashPlan(selected: hashes, head: headOID, parents: parents) != nil else {
+              availableWorktreeTargets().contains(worktreeTarget),
+              historyRewriteTargets(selected: hashes, kind: .squash).contains(worktreeTarget),
+              Self.squashPlan(
+                  selected: hashes, head: worktreeTarget.worktree?.headOID ?? headOID,
+                  parents: parents
+              ) != nil else {
             failImmediately(String(localized: "The selected commits are no longer a continuous linear range on HEAD.", table: "Git"),
                             completion: completion)
             return
         }
         perform(
             label: String(localized: "Squash Commits", table: "Git"),
-            commands: [], requiredStatus: .history,
+            commands: [], directory: worktreeTarget.worktree?.path, requiredStatus: .history,
             squashHistory: SquashRequest(
                 selected: hashes, message: message, historyLimit: commits.count
             ),
+            operationWorktree: worktreeTarget.worktree,
+            requiresCleanWorktree: true,
             prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion
         )
     }
@@ -2912,6 +2989,8 @@ final class GitStatusModel {
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
         expectedWorktree: WorktreeLocation? = nil, expectedVacantWorktreeBranch: String? = nil,
+        operationWorktree: WorktreeLocation? = nil,
+        requiresCleanWorktree: Bool = false,
         expectedFileState: (path: String, state: FileState)? = nil,
         expectedStashes: [Stash]? = nil,
         continueAfterFirstSuccess: Bool = false,
@@ -2931,9 +3010,10 @@ final class GitStatusModel {
         let generation = contextGeneration
         let expectedPanelTarget = panelTargetIdentity
         let validationRoot = rootPath
+        let worktreeListRoot = repoRoot
         let expectedRepositoryRoot = directory == nil && isRepo ? repoRoot : nil
-        let expectedHeadOID = headOID
-        let expectedBranch = branch
+        let expectedHeadOID = operationWorktree?.headOID ?? headOID
+        let expectedBranch = operationWorktree.map { $0.branch ?? "detached HEAD" } ?? branch
         let expectedUpstream = upstream
         guard !dir.isEmpty, !isBusy,
               (!commands.isEmpty || terminalAction != nil || squashHistory != nil) else {
@@ -3045,9 +3125,11 @@ final class GitStatusModel {
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
                     }
                 }
-                if expectedWorktree != nil || expectedVacantWorktreeBranch != nil {
+                if expectedWorktree != nil || expectedVacantWorktreeBranch != nil
+                    || operationWorktree != nil {
                     let list = await GitCommandExecution.run(
-                        ["worktree", "list", "--porcelain", "-z"], in: dir, backend: backend
+                        ["worktree", "list", "--porcelain", "-z"],
+                        in: operationWorktree == nil ? dir : worktreeListRoot, backend: backend
                     )
                     guard list.status == 0, let locations = Self.parseWorktreeList(list.stdout) else {
                         let message = String(localized: "Could not verify the current Worktree list. Nothing was changed.", table: "Git")
@@ -3057,6 +3139,25 @@ final class GitStatusModel {
                        locations.contains(where: { $0.branch == branch }) {
                         let message = String(localized: "The branch is already checked out in another Worktree.", table: "Git")
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                    if let operationWorktree {
+                        guard !operationWorktree.isPrunable, !operationWorktree.isLocked,
+                              locations.contains(operationWorktree) else {
+                            let message = String(localized: "The selected Worktree changed. Reopen Git Graph and try again.", table: "Git")
+                            return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                        }
+                        let status = await GitCommandExecution.run(
+                            ["status", "--porcelain=v2", "--branch", "-z",
+                             requiresCleanWorktree ? "--untracked-files=all" : "--untracked-files=no"],
+                            in: dir, backend: backend
+                        )
+                        let live = status.status == 0 ? Self.parseStatus(status.stdout) : nil
+                        guard let live, live.headOID == operationWorktree.headOID,
+                              live.branch == (operationWorktree.branch ?? "detached HEAD"),
+                              !requiresCleanWorktree || live.entries.isEmpty else {
+                            let message = String(localized: "The selected Worktree changed or is not clean enough for this operation.", table: "Git")
+                            return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                        }
                     }
                     if let expectedWorktree {
                         guard !expectedWorktree.isMain, !expectedWorktree.isLocked,

@@ -255,10 +255,19 @@ Shift 可横跨分支和 Merge；展开的文件及临时 Stash／Worktree 节�
 Cherry-pick 按真实父子依赖从旧到新执行，可选择记录来源或仅暂存；
 Revert 按反向依赖撤销，Merge 提交需要选择主线的操作在多选菜单中禁用。
 Git 序列操作成功后不擅自创建额外提交；冲突则保留原生 sequencer 和恢复入口，
-不跳过失败项。Drop 仅对当前 HEAD 第一父链上连续、单父、无额外子分叉且不含根提交的
+不跳过失败项。Drop 仅对目标 HEAD 第一父链上连续、单父、无额外子分叉且不含根提交的
 区间开放；通过单次原生 Rebase 移除该区间，不能用多次 Drop 绕开拓扑约束。
-Squash 同样仅允许 HEAD 第一父链上的连续线性区间，但可包含根提交，
-并在原生弹窗填写新提交信息。多选不受这些历史拓扑条件限制；
+Squash 同样仅允许目标 HEAD 第一父链上的连续线性区间，但可包含根提交，
+并在原生弹窗填写新提交信息。提交的 Checkout、Cherry-pick、Revert、Merge、Rebase、Reset、Drop 与 Squash
+均在原生确认框选择目标 Worktree，不必切换当前 Project。
+只有一个合法目标时，确认框直接显示其路径；多个目标时才显示选择器，
+当前 Worktree 排在首位。同一提交属于多个 Worktree 时由用户选择，
+不从提交哈希推测归属。
+Drop／Squash 仅列出满足选区拓扑条件的 Worktree（包括 detached HEAD），
+其它提交操作列出有效 Worktree。执行前复核目标路径、HEAD 和分支；
+历史重写还要求目标工作区干净。未选 Worktree 的 HEAD 不变，
+但共享分支和 Git 原生 `rebase.updateRefs` 行为仍需遵循。
+多选不受历史拓扑条件限制；
 菜单仅把不符合条件的历史操作置为不可用。所有写操作沿用原有窗口身份、
 保存保护、HEAD 和 Git 实际拓扑复核；不会自动强推远端。
 执行前再次从 Git 读取真实第一父链，核对 HEAD、分支、项目及所有待合并提交；
@@ -269,7 +278,7 @@ Squash 同样仅允许 HEAD 第一父链上的连续线性区间，但可包含�
 `rebase.updateRefs`；不会自动强推远端。Rebase 冲突或 Hook 失败保留 Git 原生恢复现场。
 Reset 默认 Mixed，也可选择 Soft 或 Hard；Soft/Mixed 不写工作文件，不要求保存无关的工作区编辑。
 Hard 先完成保存保护，再按 Git 原生规则覆写。
-Drop 只允许有父节点、通往当前 HEAD 且没有 Merge/多子分叉的路径；
+Drop 只允许有父节点、通往目标 Worktree HEAD 且没有 Merge/多子分叉的路径；
 Tag 或同节点 Ref 不额外禁止，detached HEAD 也按相同规则处理。
 执行前核对真实拓扑，尊重用户 `rebase.updateRefs`，不自动强推。
 
@@ -280,8 +289,9 @@ Tag 或同节点 Ref 不额外禁止，detached HEAD 也按相同规则处理。
 允许快进时，“不创建提交”并不阻止 HEAD 前移。冲突及 Hook 失败保留真实 index、工作区和错误，
 仍在现有终端继续、跳过或中止相应 Git 操作。
 
-弹窗绑定发起窗口、项目、机器和仓库，确认及异步预检后重新核对。
-会改工作区的历史操作先等待项目内同一仓库、机器的文件和 Diff 保存；
+弹窗绑定发起窗口、项目、机器、仓库和明确选择的 Worktree，
+确认及异步预检后重新核对。
+会改工作区的历史操作先等待目标 Worktree 同一机器的文件和 Diff 保存；
 失败或保存期间再次编辑会停止，标签不关闭。执行前发现新编辑、在途写入，
 或正文虽干净但编码转换仍有保存错误时也会拒绝；
 已开始的 Git 进程不声称能锁住外部 CLI。操作结束重读干净标签，包括可编辑但没有未保存改动的工作区 Diff，
@@ -396,7 +406,7 @@ Checkout Remote Branch 默认以远端分支名创建本地跟踪分支并切换
 期间本地分支被移动，即使勾选 Force Fetch 也拒绝旧确认。
 重新确认后可强制更新，仍不能修改其他 worktree 正在检出的分支。
 
-Merge into Current Branch 使用历史提交相同的原生 Merge 表单；
+Merge into Worktree 使用历史提交相同的原生目标工作树表单；
 Pull into Current Branch 独立提供 No-FF 和 Squash（默认均关闭），
 不会混用顶部只允许快进的 Pull 快捷键。Squash 仅在确有暂存差异时创建单父提交。
 
