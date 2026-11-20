@@ -332,24 +332,6 @@ final class FileTreeModel {
         }
     }
 
-    var contextOperationPaths: [String]? {
-        guard let target = contextMenuTargetPath,
-              let item = items.first(where: {
-                  !$0.isDraft && ($0.path == target
-                      || $0.compactComponents.contains { $0.path == target })
-              }) else { return nil }
-        return item.path == target ? contextSelection(for: item) : [target]
-    }
-
-    var contextDirectoryPath: String? {
-        guard let target = contextMenuTargetPath,
-              let row = items.first(where: {
-                  !$0.isDraft && ($0.path == target
-                      || ($0.isDirectory && $0.compactComponents.contains { $0.path == target }))
-              }) else { return nil }
-        return row.isDirectory ? target : (target as NSString).deletingLastPathComponent
-    }
-
     @discardableResult
     func moveSelection(by delta: Int, extending: Bool = false) -> Item? {
         let visible = items.filter { !$0.isDraft }

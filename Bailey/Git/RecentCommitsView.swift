@@ -697,23 +697,10 @@ struct RecentCommitsView: View {
 
     private var focusedGraphPathActions: FocusedPathActions {
         FocusedPathActions(paths: { absolute in
-            guard isKeyboardActive, contextRowID != nil || keyboardFocused else { return [] }
-            let ids: Set<String>
-            if let contextRowID {
-                ids = isMultipleSelection(for: contextRowID) ? selection.ids : [contextRowID]
-            } else {
-                ids = selection.ids.isEmpty ? Set([focusedRowID].compactMap { $0 }) : selection.ids
-            }
+            guard isKeyboardActive, keyboardFocused else { return [] }
+            let ids = selection.ids.isEmpty ? Set([focusedRowID].compactMap { $0 }) : selection.ids
             let rows = keyboardRows.filter { ids.contains($0.id) }
             var values: [String] = []
-            if rows.isEmpty, ids.count == 1, let contextRowID,
-               contextRowID.contains("\u{0}folder\u{0}"),
-               let commit = commits.first(where: {
-                   contextRowID.hasPrefix(commitRowID($0) + "\u{0}folder\u{0}")
-               }), let path = contextRowID.components(separatedBy: "\u{0}").last {
-                let root = commit.worktree?.path ?? repoRoot
-                return [absolute ? (root as NSString).appendingPathComponent(path) : path]
-            }
             guard !rows.isEmpty, rows.count == ids.count else { return [] }
             for row in rows {
                 let root: String
@@ -1776,11 +1763,11 @@ struct RecentCommitsView: View {
                 Button(String(localized: "Copy Absolute Path", table: "Git")) {
                     copy((worktree.path as NSString).appendingPathComponent(entry.path))
                 }
-                .badge(PathMenuShortcut.copyAbsolute)
+                .keyboardShortcut(PathMenuShortcut.copyAbsolute)
                 Button(String(localized: "Copy Relative Path", table: "Git")) {
                     copy(entry.path)
                 }
-                .badge(PathMenuShortcut.copyRelative)
+                .keyboardShortcut(PathMenuShortcut.copyRelative)
             }
         }
     }
@@ -1896,9 +1883,9 @@ struct RecentCommitsView: View {
             Button(String(localized: "Copy Absolute Path", table: "Git")) {
                 copy((root as NSString).appendingPathComponent(path))
             }
-            .badge(PathMenuShortcut.copyAbsolute)
+            .keyboardShortcut(PathMenuShortcut.copyAbsolute)
             Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
-                .badge(PathMenuShortcut.copyRelative)
+                .keyboardShortcut(PathMenuShortcut.copyRelative)
         }
     }
 
@@ -1956,11 +1943,11 @@ struct RecentCommitsView: View {
                 Button(String(localized: "Copy Absolute Path", table: "Git")) {
                     copy((repoRoot as NSString).appendingPathComponent(file.path))
                 }
-                .badge(PathMenuShortcut.copyAbsolute)
+                .keyboardShortcut(PathMenuShortcut.copyAbsolute)
                 Button(String(localized: "Copy Relative Path", table: "Git")) {
                     copy(file.path)
                 }
-                .badge(PathMenuShortcut.copyRelative)
+                .keyboardShortcut(PathMenuShortcut.copyRelative)
             }
         }
     }

@@ -193,7 +193,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | 改动 | 相关测试 |
 | --- | --- |
 | 应用身份、Finder 类型注册、系统文件事件和目标窗口路由 | `AppIdentityTests`、`FinderDeliveryIntegrationTests`、`WorkspaceWindowsUITests`；实际 Finder 拖放另需受控图形会话 |
-| 原生右键菜单的快捷键提示、宽度与目标 | `AppIdentityTests`（显示契约）；`WorkspaceDockUITests`（中英文宽度、⌘W）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`（复制／删除）。实际对齐须由 GUI 验证 |
+| 原生右键菜单的实际快捷键、宽度与目标 | `AppIdentityTests`（显示契约）；`WorkspaceDockUITests`（中英文宽度、⌘W）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`（复制／删除）。实际对齐须由 GUI 验证 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `WorkspaceDockUITests`、`WorkspaceFilesUITests` 的真实输入与双窗 E2E |
 | Dock 标题栏、标签与分隔线拖动 | `NativeContentIdentityIntegrationTests` 核对三区空白尺寸；`WorkspaceDockUITests` 核对三区双击、窗口移动、标签／分隔线拖动及 Window 菜单；`WorkspaceWindowsUITests` 核对关闭重启后悬停标签再双击，验证实际窗口尺寸变化 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |

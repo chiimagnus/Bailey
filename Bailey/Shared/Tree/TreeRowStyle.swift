@@ -7,15 +7,17 @@ enum TreeEditAction {
 }
 
 enum PathMenuShortcut {
-    static let copyAbsolute = "⌥⌘C"
-    static let copyRelative = "⌥⇧⌘C"
-    static let reveal = "⌥⌘R"
+    static let copyAbsolute = KeyboardShortcut("c", modifiers: [.command, .option])
+    static let copyRelative = KeyboardShortcut("c", modifiers: [.command, .option, .shift])
+    static let reveal = KeyboardShortcut("r", modifiers: [.command, .option])
 
     static func hasPathActions(_ menu: NSMenu) -> Bool {
-        menu.items.contains {
-            $0.badge?.stringValue == copyAbsolute
-                || $0.badge?.stringValue == copyRelative
-                || $0.badge?.stringValue == reveal
+        guard menu !== NSApp.mainMenu, menu.supermenu == nil else { return false }
+        return menu.items.contains { item in
+            let flags = item.keyEquivalentModifierMask
+            return (item.keyEquivalent == "c" &&
+                    (flags == [.command, .option] || flags == [.command, .option, .shift]))
+                || (item.keyEquivalent == "r" && flags == [.command, .option])
         }
     }
 }
@@ -127,7 +129,6 @@ struct ContextMenuClickTarget: NSViewRepresentable {
     var onMenuClosed: (() -> Void)?
     var isExpectedMenu: ((NSMenu) -> Bool)?
     var onMiddleClick: (() -> Void)?
-    @Environment(MainMenuPresentation.self) private var menuPresentation: MainMenuPresentation?
 
     init(onContextClick: @escaping () -> Void, onMenuClosed: (() -> Void)? = nil,
          isExpectedMenu: ((NSMenu) -> Bool)? = nil,
@@ -147,7 +148,6 @@ struct ContextMenuClickTarget: NSViewRepresentable {
         view.onMenuClosed = onMenuClosed
         view.isExpectedMenu = isExpectedMenu
         view.onMiddleClick = onMiddleClick
-        view.menuPresentation = menuPresentation
     }
 
     static func dismantleNSView(_ view: ContextMenuClickView, coordinator: ()) {
@@ -156,7 +156,6 @@ struct ContextMenuClickTarget: NSViewRepresentable {
         view.onMenuClosed = nil
         view.isExpectedMenu = nil
         view.onMiddleClick = nil
-        view.menuPresentation = nil
     }
 }
 
@@ -165,7 +164,6 @@ final class ContextMenuClickView: NSView {
     var onMenuClosed: (() -> Void)?
     var isExpectedMenu: ((NSMenu) -> Bool)?
     var onMiddleClick: (() -> Void)?
-    weak var menuPresentation: MainMenuPresentation?
     private weak var contextMouseEvent: NSEvent?
     private var trackingMenu: NSMenu?
 
@@ -224,11 +222,9 @@ final class ContextMenuClickView: NSView {
     }
 
     @objc private func menuDidEndTracking(_ notification: Notification) {
-        guard let menu = trackingMenu, menu === notification.object as? NSMenu else { return }
+        guard trackingMenu === notification.object as? NSMenu else { return }
         stopObservingMenu()
-        guard let onMenuClosed else { return }
-        if let menuPresentation { menuPresentation.finishContextMenu(menu, cleanup: onMenuClosed) }
-        else { onMenuClosed() }
+        onMenuClosed?()
     }
 
     func stopObservingMenu() {

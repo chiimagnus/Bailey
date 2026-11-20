@@ -57,7 +57,7 @@ Front Matter 用无执行能力的 YAML 数据解析器，作为文档头部元�
   `.keyboardShortcut("v", modifiers: [.command, .shift])`、
   `.disabled(!canToggleSourcePreview)`。
   源码→预览；预览→源码；并排→源码；CSV 则对应表格／源码。
-  文件标签右键「源码／预览／并排」不显示快捷键，也不额外注册按键。
+  文件标签右键「源码／预览／并排」按需使用原生局部 `.keyboardShortcut`，不重复注册全局按键。
   格式支持、内容可用性及是否为当前真实活动 Dock 文件共同决定启用状态；
   工具栏／终端／Browser／普通代码及失去窗口焦点时系统菜单项置灰。
   只读允许切换；预览出错仍允许返回源码。

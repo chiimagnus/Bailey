@@ -651,7 +651,7 @@ struct DockTabGroupView: View {
                         guard isValidMenuTarget(item) else { return }
                         close(item)
                     }
-                    .badge("⌘W")
+                    .keyboardShortcut("w", modifiers: .command)
                     .disabled(project.isClosingPanels)
                 }
             }
@@ -826,14 +826,14 @@ struct DockTabGroupView: View {
                           current.workspaceIdentity == nil else { return }
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                 }
-                .badge(PathMenuShortcut.reveal)
+                .keyboardShortcut(PathMenuShortcut.reveal)
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
                 guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(current.path, forType: .string)
             }
-            .badge(PathMenuShortcut.copyAbsolute)
+            .keyboardShortcut(PathMenuShortcut.copyAbsolute)
             let relativeRoot = project.customDirectory.map { $0 == "/" ? "/" : $0 + "/" }
             let relativePath = relativeRoot.flatMap {
                 file.workspaceIdentity == project.workspaceIdentity && file.path.hasPrefix($0)
@@ -847,7 +847,7 @@ struct DockTabGroupView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(String(current.path.dropFirst(root.count)), forType: .string)
             }
-            .badge(PathMenuShortcut.copyRelative)
+            .keyboardShortcut(PathMenuShortcut.copyRelative)
             .disabled(relativePath == nil)
             Divider()
         }
@@ -871,7 +871,7 @@ struct DockTabGroupView: View {
             guard currentMenuTab(tabID) != nil else { return }
             close(.tab(tabID))
         }
-        .badge("⌘W")
+        .keyboardShortcut("w", modifiers: .command)
         .disabled(project.isClosingPanels || tab.content.isClosing)
         Button(String(localized: "Close Others", table: "Interface")) {
             if let current = currentMenuTab(tabID) { project.closeOthers(current) }

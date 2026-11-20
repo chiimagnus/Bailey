@@ -258,6 +258,18 @@ enum WorkspaceUITestSupport {
         confirmation.click()
     }
 
+    static func assertClipboard(
+        _ expected: String, _ message: String = "",
+        timeout: TimeInterval = 4, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            NSPasteboard.general.string(forType: .string) == expected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: timeout), .completed,
+                       message.isEmpty ? "Expected native clipboard result: \(expected)" : message,
+                       file: file, line: line)
+    }
+
     static func clipboardItems() throws -> [NSPasteboardItem] {
         try (NSPasteboard.general.pasteboardItems ?? []).map { item in
             let copy = NSPasteboardItem()

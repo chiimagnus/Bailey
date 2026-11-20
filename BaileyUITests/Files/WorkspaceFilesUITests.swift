@@ -857,17 +857,18 @@ final class WorkspaceFilesUITests: XCTestCase {
         a.click()
 
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path)
+        WorkspaceUITestSupport.assertClipboard(first.path)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        WorkspaceUITestSupport.assertClipboard("first.txt")
 
         b.rightClick()
         XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), second.path)
+        WorkspaceUITestSupport.assertClipboard(second.path,
+            "The context key equivalent must copy its right-clicked file")
         XCTAssertTrue(a.isSelected && !b.isSelected)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt",
+        WorkspaceUITestSupport.assertClipboard("first.txt",
                        "After the context menu closes, focus returns to the original Files row")
 
         let fileMenu = app.menuBars.menuBarItems["File"]
@@ -890,10 +891,10 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         editor.click()
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path,
+        WorkspaceUITestSupport.assertClipboard(first.path,
                        "An actively edited file must also provide its path")
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        WorkspaceUITestSupport.assertClipboard("first.txt")
         XCTAssertEqual(editor.value as? String, "first\n",
                        "Path shortcuts must not mutate the active editor")
     }

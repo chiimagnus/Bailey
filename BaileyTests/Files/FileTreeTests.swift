@@ -2131,7 +2131,7 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "VS Code Explorer getContext(true) uses multi-Selection even if Focus is outside")
         tree.selectForContextMenu(rows[0])
-        XCTAssertEqual(tree.contextOperationPaths, [rows[0].path, rows[2].path],
+        XCTAssertEqual(tree.contextSelection(for: rows[0]), [rows[0].path, rows[2].path],
                        "A right-click inside multi-selection uses the selection")
         XCTAssertEqual(tree.selectedPath, rows[1].path,
                        "Right click cannot replace the current keyboard cursor")
@@ -2139,18 +2139,16 @@ final class FileTreeTests: XCTestCase {
                        "Context-clicking one of the selected rows keeps the selected set")
 
         tree.selectForContextMenu(rows[1])
-        XCTAssertEqual(tree.contextOperationPaths, [rows[1].path],
+        XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
                        "Right-click outside the selection uses the clicked row")
-        XCTAssertEqual(tree.contextDirectoryPath, root.path,
-                       "Main File commands must use the parent of a right-clicked file")
+        XCTAssertEqual(tree.contextMenuTargetPath, rows[1].path)
         XCTAssertEqual(tree.selectedPath, rows[1].path)
         XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path],
                        "A context click only changes the temporary menu target")
         XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
                        "An unselected context target is still acted on alone")
         tree.dismissContextMenu(target: rows[1].path)
-        XCTAssertNil(tree.contextOperationPaths)
-        XCTAssertNil(tree.contextDirectoryPath,
+        XCTAssertNil(tree.contextMenuTargetPath,
                      "Canceling the menu must restore ordinary File commands")
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "Esc must leave the original explicit selection and Edit target intact")

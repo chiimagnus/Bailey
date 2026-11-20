@@ -536,7 +536,7 @@ private struct FileTreeRow: View {
                     await model.beginNewFile(in: target.path)
                 }
             }
-            .badge("⌘N")
+            .keyboardShortcut("n", modifiers: .command)
 
             let newFolderTitle = String(localized: "New Folder…", table: "Sidebar")
             Button(newFolderTitle) {
@@ -545,7 +545,7 @@ private struct FileTreeRow: View {
                     await model.beginNewFolder(in: target.path)
                 }
             }
-            .badge("⌥⌘N")
+            .keyboardShortcut("n", modifiers: [.command, .option])
         } else if !multiple {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(target.path, true) }
@@ -562,7 +562,7 @@ private struct FileTreeRow: View {
                     selection.map { URL(fileURLWithPath: $0) }
                 )
             }
-            .badge(PathMenuShortcut.reveal)
+            .keyboardShortcut(PathMenuShortcut.reveal)
         }
         Divider()
         let cutTitle = String(localized: "Cut", table: "Sidebar")
@@ -591,7 +591,7 @@ private struct FileTreeRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(selection.joined(separator: "\n"), forType: .string)
         }
-        .badge(PathMenuShortcut.copyAbsolute)
+        .keyboardShortcut(PathMenuShortcut.copyAbsolute)
         Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
                : String(localized: "Copy Relative Path", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
@@ -601,7 +601,7 @@ private struct FileTreeRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         }
-        .badge(PathMenuShortcut.copyRelative)
+        .keyboardShortcut(PathMenuShortcut.copyRelative)
         Divider()
         if !multiple {
             Button(String(localized: "Rename", table: "Sidebar")) {

@@ -401,7 +401,6 @@ final class DockWorkspaceModel {
     }
 
     var activeGroup: DockGroup? { activeGroupID.flatMap { root.group(id: $0) } }
-    var closeTarget: DockItem? { contextTarget ?? activeGroup?.selected }
 
     func selection(in groupID: UUID) -> [DockItem] {
         guard let group = root.group(id: groupID) else { return [] }

@@ -154,14 +154,16 @@ final class PanelContextTests: XCTestCase {
                        "An editor file outside the project cannot create outside its root")
     }
 
-    func testNewItemKeepsAcceptedMenuDirectoryButRejectsProjectSwitch() async throws {
+    func testNewItemCapturesSelectedDirectoryAndRejectsProjectSwitch() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-menu-create-" + UUID().uuidString)
         let projectRoot = root.appendingPathComponent("project", isDirectory: true)
         let target = projectRoot.appendingPathComponent("target", isDirectory: true)
         let other = root.appendingPathComponent("other", isDirectory: true)
+        let contextFile = projectRoot.appendingPathComponent("right-clicked.txt")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try "context".write(to: contextFile, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: root) }
 
         let manager = workspaceApplication.makeWindow()
@@ -169,10 +171,15 @@ final class PanelContextTests: XCTestCase {
         manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
         _ = await project.syncFiles(isCurrent: { true })
+        manager.showPanel(.files)
         let directory = try XCTUnwrap(project.fileTree.items.first { $0.path == target.path })
-        project.fileTree.selectForContextMenu(directory)
+        let clicked = try XCTUnwrap(project.fileTree.items.first { $0.path == contextFile.path })
+        project.fileTree.select(directory)
+        project.fileTree.selectForContextMenu(clicked)
         let accepted = try XCTUnwrap(manager.newItemAction(isDirectory: false))
-        XCTAssertNil(project.fileTree.contextMenuTargetPath)
+        XCTAssertEqual(project.fileTree.contextMenuTargetPath, contextFile.path,
+                       "A global New File command must not consume the right-click target")
+        project.fileTree.dismissContextMenu(target: contextFile.path)
         await accepted()
         XCTAssertEqual(project.fileTree.draft?.parentDir, target.path)
         let written = await project.fileTree.commitDraft(name: "created.txt")
@@ -180,7 +187,6 @@ final class PanelContextTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("created.txt")), Data())
         XCTAssertFalse(FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("created.txt").path))
 
-        project.fileTree.selectForContextMenu(directory)
         let stale = try XCTUnwrap(manager.newItemAction(isDirectory: true))
         manager.addLocalFolders([other])
         XCTAssertFalse(manager.selectedProject === project)

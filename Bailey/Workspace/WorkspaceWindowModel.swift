@@ -664,7 +664,7 @@ final class WorkspaceWindowModel {
 
     func closeActivePanelOrWindow() {
         guard let project = selectedProject,
-              let item = project.dock.closeTarget else {
+              let item = project.dock.activeGroup?.selected else {
             attachedWindow?.performClose(nil)
             return
         }
@@ -735,9 +735,7 @@ final class WorkspaceWindowModel {
         let revision = context.connectionRevision
         let hasCurrentTree = tree.matchesIndexTarget(root: root, context: context)
         let directory: String
-        if hasCurrentTree, let contextDirectory = tree.contextDirectoryPath {
-            directory = contextDirectory
-        } else if hasCurrentTree, project.dock.activeGroup?.selected == .files {
+        if hasCurrentTree, project.dock.activeGroup?.selected == .files {
             directory = tree.selectedDirectoryPath ?? root
         } else if case .file(let file)? = project.focusedContent,
                   file.workspaceIdentity == context.identity.workspace {
@@ -745,9 +743,6 @@ final class WorkspaceWindowModel {
             directory = LocalPathScope.contains(parent, in: root) ? parent : root
         } else {
             directory = root
-        }
-        if let menuTarget = tree.contextMenuTargetPath {
-            tree.dismissContextMenu(target: menuTarget)
         }
         return { [weak self] in
             guard let self, !isClosed,

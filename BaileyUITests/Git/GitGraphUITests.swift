@@ -81,11 +81,11 @@ final class GitGraphUITests: XCTestCase {
         b.rightClick()
         XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "second.txt",
-                       "The main File command must operate on the right-clicked history file")
+        WorkspaceUITestSupport.assertClipboard("second.txt",
+                       "The native context command must operate on the right-clicked history file")
         XCTAssertTrue(a.isSelected && !b.isSelected)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt",
+        WorkspaceUITestSupport.assertClipboard("first.txt",
                        "After the menu ends, the original Git Graph selection owns the shortcut")
         let fileMenu = app.menuBars.menuBarItems["File"]
         fileMenu.click()
@@ -99,7 +99,7 @@ final class GitGraphUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(a.isSelected && !b.isSelected)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        WorkspaceUITestSupport.assertClipboard("first.txt")
         let folder = app.windows.firstMatch.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch
@@ -107,16 +107,16 @@ final class GitGraphUITests: XCTestCase {
         folder.rightClick()
         XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "nested",
+        WorkspaceUITestSupport.assertClipboard("nested",
                        "A graph folder context must supply its actual relative path")
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        WorkspaceUITestSupport.assertClipboard("first.txt")
 
         XCUIElement.perform(withKeyModifiers: .command) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected)
         a.rightClick()
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt\nsecond.txt",
+        WorkspaceUITestSupport.assertClipboard("first.txt\nsecond.txt",
                        "A context click inside Graph multi-selection must retain the whole set")
         XCTAssertTrue(a.isSelected && b.isSelected)
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))

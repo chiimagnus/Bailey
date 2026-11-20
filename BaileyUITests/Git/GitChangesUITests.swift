@@ -1512,17 +1512,17 @@ final class GitChangesUITests: XCTestCase {
         a.click()
 
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path)
+        WorkspaceUITestSupport.assertClipboard(first.path)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        WorkspaceUITestSupport.assertClipboard("first.txt")
 
         b.rightClick()
         XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "second.txt")
+        WorkspaceUITestSupport.assertClipboard("second.txt")
         XCTAssertTrue(a.isSelected && !b.isSelected)
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path,
+        WorkspaceUITestSupport.assertClipboard(first.path,
                        "Dismissing the context menu must restore the prior keyboard target")
     }
 
