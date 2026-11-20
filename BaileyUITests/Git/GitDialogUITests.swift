@@ -777,7 +777,7 @@ final class GitDialogUITests: XCTestCase {
         XCUIElement.perform(withKeyModifiers: .command) { second.click() }
         XCTAssertTrue(first.isSelected && second.isSelected)
         second.rightClick()
-        let cherry = app.menuItems["Cherry Pick Selected Commits…"]
+        let cherry = app.menuItems["Cherry Pick…"]
         XCTAssertTrue(cherry.waitForExistence(timeout: 8))
         cherry.click()
         let sheet = app.windows.firstMatch.sheets.firstMatch
@@ -791,7 +791,7 @@ final class GitDialogUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), original)
 
         second.rightClick()
-        app.menuItems["Cherry Pick Selected Commits…"].click()
+        app.menuItems["Cherry Pick…"].click()
         let confirmed = app.windows.firstMatch.sheets.firstMatch
         XCTAssertTrue(confirmed.waitForExistence(timeout: 12))
         confirmed.buttons["Yes, Cherry Pick Selected"].click()
@@ -830,7 +830,7 @@ final class GitDialogUITests: XCTestCase {
 
         func openSheet() -> XCUIElement {
             oldest.rightClick()
-            let squash = app.menuItems["Squash Selected Commits…"]
+            let squash = app.menuItems["Squash…"]
             XCTAssertTrue(squash.waitForExistence(timeout: 8))
             XCTAssertTrue(squash.isEnabled)
             squash.click()

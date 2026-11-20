@@ -950,6 +950,8 @@ final class GitStatusModelTests: XCTestCase {
         model.sync(root: root)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertTrue(model.isRepo)
+        XCTAssertFalse(model.canStageAllChanges)
+        XCTAssertFalse(model.canCommit(includeAll: false))
 
         let draftChanged = expectation(description: "Commit draft is observed")
         withObservationTracking({ _ = model.commitMessage }) { draftChanged.fulfill() }
@@ -976,14 +978,19 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isRefreshing }
         await fulfillment(of: [statusChanged], timeout: 1)
         let changed = try XCTUnwrap(model.changedEntries.first)
+        XCTAssertTrue(model.canStageAllChanges)
+        XCTAssertFalse(model.canCommit(includeAll: false))
         model.stageEntries([changed])
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "tracked.txt")
+        XCTAssertTrue(model.canCommit(includeAll: false),
+                      "A staged change and valid draft enable the current project's commit")
 
         let staged = try XCTUnwrap(model.stagedEntries.first)
         model.unstageEntries([staged])
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertTrue(try git(["diff", "--cached", "--name-only"]).isEmpty)
+        XCTAssertFalse(model.canCommit(includeAll: false))
 
         model.discard(try XCTUnwrap(model.changedEntries.first))
         try await wait { !model.isBusy && !model.isRefreshing }

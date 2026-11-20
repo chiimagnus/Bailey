@@ -89,13 +89,14 @@ struct FileTreePanel: View {
                     .help(String(localized: "Reveal in Finder", table: "Sidebar"))
                 }
                 Menu {
-                    Toggle(String(localized: "Show Excluded Files", table: "Sidebar"),
-                           isOn: Binding(
-                            get: { model.showExcluded },
-                            set: { visible in
-                                if isCurrentTarget() { Task { await model.setShowExcluded(visible) } }
-                            }
-                           ))
+                    Button(model.showExcluded
+                        ? String(localized: "Hide Excluded Files", table: "Sidebar")
+                        : String(localized: "Show Excluded Files", table: "Sidebar")) {
+                        Task {
+                            guard isCurrentTarget() else { return }
+                            await model.setShowExcluded(!model.showExcluded)
+                        }
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .panelFont(size: 11)
@@ -546,10 +547,6 @@ private struct FileTreeRow: View {
                 }
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
-        } else if !multiple {
-            Button(String(localized: "Open", table: "Sidebar")) {
-                if isCurrentTarget() { openFile(target.path, true) }
-            }
         }
         if !isRemote {
             if !multiple {
@@ -564,7 +561,9 @@ private struct FileTreeRow: View {
             }
             .keyboardShortcut(PathMenuShortcut.reveal)
         }
-        Divider()
+        if !isRemote || (!multiple && target.isDirectory) {
+            Divider()
+        }
         let cutTitle = String(localized: "Cut", table: "Sidebar")
         Button(cutTitle) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }

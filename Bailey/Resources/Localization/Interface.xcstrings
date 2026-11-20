@@ -108,26 +108,6 @@
         }
       }
     },
-    "Close Diffs" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭差异"
-          }
-        }
-      }
-    },
-    "Close Files" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭文件"
-          }
-        }
-      }
-    },
     "Close Others" : {
       "localizations" : {
         "zh-Hans" : {
@@ -214,16 +194,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "命令面板…"
-          }
-        }
-      }
-    },
-    "Copy Absolute Path" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制绝对路径"
           }
         }
       }
@@ -552,16 +522,6 @@
         }
       }
     },
-    "Rename…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名…"
-          }
-        }
-      }
-    },
     "Reveal in Finder" : {
       "localizations" : {
         "zh-Hans" : {
@@ -748,16 +708,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示/隐藏右侧边栏（⇧⌘B）"
-          }
-        }
-      }
-    },
-    "Use Automatic Title" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用自动标题"
           }
         }
       }

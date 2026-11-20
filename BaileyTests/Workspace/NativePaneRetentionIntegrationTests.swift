@@ -125,17 +125,13 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let project = Project(fallbackName: "observation", workspaceConfiguration: .standard)
         let tab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
         project.append(tab)
-        let renamed = expectation(description: "Tab rename invalidates the project-backed title")
-        withObservationTracking({ _ = project.tabs.first?.displayTitle }) { renamed.fulfill() }
+        XCTAssertEqual(project.tabs.first?.displayTitle, tab.content.title)
         var snapshots = 0
         project.onSnapshotChange = { snapshots += 1 }
-        tab.customName = "Renamed"
-        await fulfillment(of: [renamed], timeout: 1)
-        XCTAssertEqual(project.tabs.first?.displayTitle, "Renamed")
-        XCTAssertGreaterThan(snapshots, 0)
 
         let other = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
         project.append(other)
+        XCTAssertGreaterThan(snapshots, 0)
         let selected = expectation(description: "Project selection is directly observed")
         withObservationTracking({ _ = project.selectedTabID }) { selected.fulfill() }
         project.selectTab(tab.id)
@@ -681,7 +677,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 XCTAssertTrue(window.makeFirstResponder(focusedEditor))
                 XCTAssertTrue(window.firstResponder === focusedEditor)
             }
-            project.closeFiles()
+            project.closeAll()
             XCTAssertTrue(project.tabs.isEmpty)
             XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil },
                           "Actual tab closure must retire document views even when AppKit caches old scroll views")
@@ -850,7 +846,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             await file.save()
             XCTAssertFalse(file.isDirty)
             XCTAssertEqual(try Data(contentsOf: path), original + Data(appended.utf8))
-            project.closeFiles()
+            project.closeAll()
             XCTAssertTrue(project.tabs.isEmpty)
             XCTAssertNil(scroll.documentView, "Closing the file must detach its TextKit document")
             XCTAssertNil(editor.syntaxCoordinator, "Closing the file must retire its parser")
@@ -977,8 +973,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 XCTFail("The first native editor must be mounted")
             }
 
-            project.closeFiles()
-            XCTAssertTrue(project.tabs.isEmpty, "Real Project.closeFiles must retire all five tabs")
+            project.closeAll()
+            XCTAssertTrue(project.tabs.isEmpty, "Real Project.closeAll must retire all five tabs")
             XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil })
             XCTAssertTrue(oldStorages.allSatisfy { $0.length == 0 },
                           "AppKit must not retain the retired text in cached views")
@@ -1493,15 +1489,13 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             XCTAssertEqual(tab.displayTitle, title)
             XCTAssertEqual(presentation.panelEntries(for: project).map(\.title), initial.map(\.title))
         }
-        tab.customName = "User rename"
-        XCTAssertEqual(presentation.panelEntries(for: project).map(\.title), initial.map(\.title))
         let another = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
         project.append(another)
         XCTAssertEqual(presentation.panelEntries(for: project).map(\.id), initial.map(\.id))
         await fulfillment(of: [invalidated], timeout: 0.1)
 
         presentation.endTracking()
-        XCTAssertEqual(presentation.panelEntries(for: project).first?.title, "User rename")
+        XCTAssertEqual(presentation.panelEntries(for: project).first?.title, "Final title")
         XCTAssertEqual(presentation.panelEntries(for: project).count, 2)
         XCTAssertEqual(terminal.title, "Final title")
     }

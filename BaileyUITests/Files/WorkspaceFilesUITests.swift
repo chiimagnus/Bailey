@@ -3,6 +3,91 @@ import XCTest
 
 @MainActor
 final class WorkspaceFilesUITests: XCTestCase {
+    func testSystemFileMenuSwitchesShowAndHideExcludedFilesWithoutChangingSettings() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let visible = try fixture.file("visible.swift", text: "visible bytes\n")
+        try fixture.initializeGit()
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, project: fixture.root
+        )
+        let config = fixture.root.appendingPathComponent(".config/bailey-dev/config.toml")
+        let originalConfig = try? Data(contentsOf: config)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(visible, in: window)
+            .waitForExistence(timeout: 15))
+        let excluded = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", ".git")).firstMatch
+        XCTAssertFalse(excluded.exists)
+
+        app.menuBarItems["File"].click()
+        let show = app.menuItems["Show Excluded Files"]
+        XCTAssertTrue(show.waitForExistence(timeout: 8))
+        XCTAssertTrue(show.isEnabled)
+        show.click()
+        XCTAssertTrue(excluded.waitForExistence(timeout: 12),
+                      "The native File menu must reveal excluded folders in Files")
+
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        let header = WorkspaceUITestSupport.element("bailey.files.showExcludedMenu", in: app)
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        header.click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
+        let hidden = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: excluded
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 12), .completed,
+                       "The Files header and the system menu must share one visibility state")
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(visible, in: window).exists)
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Show Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Show Excluded Files"].click()
+        XCTAssertTrue(excluded.waitForExistence(timeout: 12))
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
+        let hiddenAgain = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: excluded
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenAgain], timeout: 12), .completed)
+
+        XCTAssertEqual(try String(contentsOf: visible, encoding: .utf8), "visible bytes\n")
+        XCTAssertEqual(try? Data(contentsOf: config), originalConfig,
+                       "Temporary excluded-file visibility must not alter saved settings")
+        app.menuBarItems["Panel"].click()
+        app.menuItems["Git Manager"].click()
+        app.menuBarItems["File"].click()
+        let showWhileGitActive = app.menuItems["Show Excluded Files"]
+        XCTAssertTrue(showWhileGitActive.isEnabled,
+                      "The current project's Files visibility must not depend on panel focus")
+        showWhileGitActive.click()
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let backInFiles = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: excluded
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [backInFiles], timeout: 12), .completed)
+
+        WorkspaceUITestSupport.fileRow(visible, in: window).doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(visible, in: window)
+            .waitForExistence(timeout: 12))
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Show Excluded Files"].isEnabled,
+                      "An active Editor must not disable the project's Files visibility")
+        app.menuItems["Show Excluded Files"].click()
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
+    }
+
     func testRealSettingsExcludeAndFileTabRevealHiddenRow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let hidden = try fixture.file("workspace/node_modules/hidden.swift", text: "real hidden editor bytes\n")
@@ -80,9 +165,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let menu = WorkspaceUITestSupport.element("bailey.files.showExcludedMenu", in: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
         menu.click()
-        let showExcluded = app.menuItems["Show Excluded Files"]
-        XCTAssertTrue(showExcluded.waitForExistence(timeout: 8))
-        showExcluded.click()
+        let hideExcluded = app.menuItems["Hide Excluded Files"]
+        XCTAssertTrue(hideExcluded.waitForExistence(timeout: 8))
+        hideExcluded.click()
         let hiddenAgain = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: folder
         )
@@ -897,6 +982,13 @@ final class WorkspaceFilesUITests: XCTestCase {
         WorkspaceUITestSupport.assertClipboard("first.txt")
         XCTAssertEqual(editor.value as? String, "first\n",
                        "Path shortcuts must not mutate the active editor")
+        let tab = window.buttons.matching(identifier: "bailey.tab.file").firstMatch
+        XCTAssertTrue(tab.waitForExistence(timeout: 8))
+        tab.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Copy Absolute Path"].exists)
+        app.menuItems["Copy Path"].click()
+        WorkspaceUITestSupport.assertClipboard(first.path)
     }
 
     func testTerminalFocusedRightClickPreservesFilesSelectionAndInput() throws {
@@ -1131,10 +1223,19 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertFalse(selectedMenu.menuItems["Open"].exists,
                        "Multi-selection must not silently open only one file")
         XCTAssertFalse(selectedMenu.menuItems["Open in Default App"].exists)
-        XCTAssertTrue(selectedMenu.menuItems["Copy"].exists)
+        XCTAssertFalse(selectedMenu.menuItems["Paste"].exists)
+        XCTAssertTrue(selectedMenu.menuItems["Copy"].exists,
+                      "Copy transfers the selected files, not just their paths")
+        XCTAssertTrue(selectedMenu.menuItems["Copy Paths"].exists)
+        XCTAssertTrue(selectedMenu.menuItems["Copy Relative Paths"].exists)
         selectedMenu.menuItems["Copy Relative Paths"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a.txt\nb.txt",
                        "Context-clicking a selected row must copy the selected relative paths")
+        let pathMenu = try fileContextMenu(for: a, in: app)
+        pathMenu.menuItems["Copy Paths"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       alpha.path + "\n" + beta.path)
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)
         let deleteMenu = try fileContextMenu(for: a, in: app)
         WorkspaceUITestSupport.menuItem("Move to Trash", in: deleteMenu).click()
         let deleted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -1480,7 +1581,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: existing), Data("existing".utf8))
     }
 
-    func testExplorerMenuUsesVSCodeFileAndDirectoryActions() throws {
+    func testExplorerMenuKeepsDistinctFileAndDirectoryActions() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/leaf.txt", text: "menu bytes\n")
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
@@ -1517,13 +1618,13 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         let fileMenu = try fileContextMenu(for: row, in: app)
         let fileActions = Set(fileMenu.menuItems.allElementsBoundByIndex.map(\.title))
-        for title in ["Open", "Cut", "Copy", "Copy Path",
-                      "Copy Relative Path", "Rename", "Move to Trash"] {
-            XCTAssertTrue(fileActions.contains(title), "Missing VS Code file action: \(title)")
+        for title in ["Open in Default App", "Reveal in Finder", "Cut", "Copy",
+                      "Copy Path", "Copy Relative Path", "Rename", "Move to Trash"] {
+            XCTAssertTrue(fileActions.contains(title), "Missing file action: \(title)")
         }
-        for title in ["Move To…", "Duplicate", "New File…", "New Folder…", "Paste",
-                      "Open to the Side", "cd Here", "Unfold Directory", "Fold Directory"] {
-            XCTAssertFalse(fileActions.contains(title), "Unrelated file action: \(title)")
+        for title in ["Open", "Move To…", "Duplicate", "New File…", "New Folder…",
+                      "Paste", "Open to the Side", "cd Here", "Unfold Directory", "Fold Directory"] {
+            XCTAssertFalse(fileActions.contains(title), "Redundant file action: \(title)")
         }
         fileMenu.menuItems["Copy Relative Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "folder/leaf.txt")

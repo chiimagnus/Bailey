@@ -45,7 +45,9 @@ final class SharedTreeUITests: XCTestCase {
         nestedRow.rightClick()
         let open = app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Open", "打开"])).firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 8))
+        XCTAssertFalse(open.exists, "File opening is already available by double-click or Return")
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Open in Default App", "用默认应用打开"])).firstMatch.exists)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0,
                        "Context-click must not execute the file's primary browse action")
@@ -454,7 +456,7 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertTrue(leaf.exists)
     }
 
-    func testGitCompactSegmentsUseTheirRealChangesHistoryAndWorktreePaths() throws {
+    func testGitChangesCompactSegmentsRemainTargetedAndGraphFoldersStayNavigable() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("a1/b1/c1/base.txt", text: "committed\n")
         try fixture.initializeGit()
@@ -494,35 +496,27 @@ final class SharedTreeUITests: XCTestCase {
         let commit = window.buttons["E2E fixture history"].firstMatch
         XCTAssertTrue(commit.waitForExistence(timeout: 20))
         commit.click()
-        func verifySegments() {
+        func verifyGraphFolder() {
             XCTAssertTrue(compact().waitForExistence(timeout: 15))
-            for (index, path) in ["a1", "a1/b1", "a1/b1/c1"].enumerated() {
-                let segment = compact().descendants(matching: .any)
-                    .matching(identifier: "bailey.tree.folder.component.\(index)").firstMatch
-                XCTAssertTrue(segment.waitForExistence(timeout: 8))
-                XCTAssertEqual(segment.value as? String, path)
-                segment.rightClick()
-                let copy = window.menuItems["Copy Relative Path"]
-                XCTAssertTrue(copy.waitForExistence(timeout: 8))
-                XCTAssertTrue(copy.isEnabled)
-                app.typeKey("c", modifierFlags: [.command, .option, .shift])
-                XCTAssertEqual(NSPasteboard.general.string(forType: .string), path)
-                segment.rightClick()
-                let absolute = window.menuItems["Copy Absolute Path"]
-                XCTAssertTrue(absolute.waitForExistence(timeout: 8))
-                XCTAssertFalse(absolute.frame.isEmpty)
-                absolute.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-                XCTAssertEqual(NSPasteboard.general.string(forType: .string),
-                               fixture.root.appendingPathComponent(path).path)
-            }
+            XCTAssertFalse(compact().descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder.component.1").firstMatch.exists,
+                "Git Graph must not retain path-copy context targets on compact segments")
+            compact().rightClick()
+            XCTAssertFalse(window.menuItems["Copy Path"].exists)
+            XCTAssertFalse(window.menuItems["Copy Relative Path"].exists)
+            let before = compact().value as? String
+            compact().click()
+            XCTAssertNotEqual(compact().value as? String, before)
+            compact().click()
+            XCTAssertEqual(compact().value as? String, before)
         }
-        verifySegments()
+        verifyGraphFolder()
         commit.click()
         try "modified\n".write(to: tracked, atomically: true, encoding: .utf8)
         let working = window.buttons["Uncommitted Changes"].firstMatch
         XCTAssertTrue(working.waitForExistence(timeout: 15))
         working.click()
-        verifySegments()
+        verifyGraphFolder()
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["show", ":a1/b1/c1/base.txt"]), Data("committed\n".utf8))
         XCTAssertEqual(try Data(contentsOf: tracked), Data("modified\n".utf8))

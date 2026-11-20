@@ -23,7 +23,7 @@ final class SessionStoreTests: XCTestCase {
                         sshHost: nil, pinnedFile: nil,
                         tabs: index == 0 ? [] : [.init(
                             content: .session(workingDirectory: "/fixture/\(index)"),
-                            historyKey: "history-\(index)", customName: nil, contextSessionIndex: nil
+                            historyKey: "history-\(index)", contextSessionIndex: nil
                         )], selectedTabIndex: nil,
                         dock: .group(.init(id: UUID(), items: [.files], selected: .files))
                     )], selectedProjectIndex: 0)
@@ -148,7 +148,6 @@ final class SessionStoreTests: XCTestCase {
             Project.TabSnapshot(
                 content: content,
                 historyKey: index == 0 ? "history-fixture" : nil,
-                customName: index == 0 ? "fixture" : nil,
                 contextSessionIndex: index == 1 ? 0 : nil
             )
         }
@@ -169,6 +168,8 @@ final class SessionStoreTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let data = try encoder.encode(snapshot)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("customName"),
+                       "A tab's title is derived from content and never persisted separately")
         let decoded = try JSONDecoder().decode(AppSnapshot.self, from: data)
         XCTAssertEqual(try encoder.encode(decoded), data)
 
@@ -186,7 +187,7 @@ final class SessionStoreTests: XCTestCase {
 
         let mac = Snapshot.TabSnapshot(
             content: .file(path: path.path, editorState: EditorState(selectionLocation: 3)),
-            historyKey: nil, customName: "Mac", contextSessionIndex: nil,
+            historyKey: nil, contextSessionIndex: nil,
             localFile: true
         )
         let json = try JSONEncoder().encode(mac)
@@ -269,7 +270,7 @@ final class SessionStoreTests: XCTestCase {
             sshHost: nil, pinnedFile: nil,
             tabs: [.init(
                 content: .session(workingDirectory: "/fixture"),
-                historyKey: key, customName: nil, contextSessionIndex: nil
+                historyKey: key, contextSessionIndex: nil
             )],
             selectedTabIndex: 0,
             dock: .group(.init(id: UUID(), items: [.projects, .tab(0)], selected: .tab(0)))
@@ -356,14 +357,13 @@ final class SessionStoreTests: XCTestCase {
         project.openFile(oldFile.path)
         await fulfillment(of: [tabAdded], timeout: 1)
         let fileTab = try XCTUnwrap(project.selectedTab)
-        fileTab.customName = "Renamed File Tab"
         try FileManager.default.moveItem(at: oldFile, to: newFile)
         workspaceApplication.fileRenamed(from: oldFile.path, to: newFile.path, workspace: nil)
         try await waitForSnapshot { snapshots in
             guard let tabs = savedProject(snapshots)?.tabs else { return false }
             return tabs.contains {
                 if case .file(let path, _) = $0.content {
-                    return path == newFile.path && $0.customName == "Renamed File Tab"
+                    return path == newFile.path
                 }
                 return false
             }
@@ -495,8 +495,8 @@ final class SessionStoreTests: XCTestCase {
             if let previous { defaults.set(previous, forKey: "workspaceSnapshot") }
             else { defaults.removeObject(forKey: "workspaceSnapshot") }
         }
-        let firstTab = Project.TabSnapshot(content: .file(path: "/fixture/first", editorState: nil), customName: "First")
-        let secondTab = Project.TabSnapshot(content: .browser(url: "https://example.invalid"), customName: "Second")
+        let firstTab = Project.TabSnapshot(content: .file(path: "/fixture/first", editorState: nil))
+        let secondTab = Project.TabSnapshot(content: .browser(url: "https://example.invalid"))
         let secondGroupID = UUID()
         let oldProject = Project(
             customDirectory: "/fixture/legacy", sshHost: nil, pinnedFile: nil,
@@ -519,8 +519,6 @@ final class SessionStoreTests: XCTestCase {
         let loadedCurrent = try XCTUnwrap(windows.last?.projects.first)
         XCTAssertEqual(loadedOld.customDirectory, "/fixture/legacy")
         XCTAssertEqual(loadedCurrent.customDirectory, "/fixture/current")
-        XCTAssertEqual(loadedOld.tabs.first?.customName, "First")
-        XCTAssertEqual(loadedCurrent.tabs.first?.customName, "Second")
         guard case .file(let restoredPath, _) = loadedOld.tabs.first?.content,
               case .browser(let restoredURL) = loadedCurrent.tabs.first?.content else {
             return XCTFail("Both windows must retain their original content types")

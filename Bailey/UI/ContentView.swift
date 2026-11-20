@@ -78,6 +78,7 @@ struct ContentView: View {
             hasUnsavedEdits: { manager.hasUnsavedEditorsInWindow },
             saveBeforeClose: { await manager.saveBeforeWindowClose() }
         ))
+        .focusedSceneValue(\.baileyGitModel, git)
         .onAppear {
             installFileErrorPresentation()
             git.setLocalFileEventsForeground(NSApp.isActive)

@@ -133,6 +133,26 @@ final class WorkspaceWindowModel {
         }
     }
 
+    /// The File menu targets the selected project's tree, even when Files is not visible.
+    func toggleExcludedFiles() {
+        guard let project = selectedProject, let context = project.panelContext else { return }
+        let revision = context.connectionRevision
+        Task { [weak self, weak project] in
+            guard let self, let project else { return }
+            let isCurrent = {
+                !self.isClosed && self.selectedProject === project
+                    && project.matchesPanelTarget(context.identity)
+                    && project.panelContext?.connectionRevision == revision
+            }
+            guard isCurrent() else { return }
+            if project.fileTree.syncedTarget(for: context) == nil {
+                guard await project.syncFiles(isCurrent: isCurrent) != nil else { return }
+            }
+            guard isCurrent() else { return }
+            await project.fileTree.setShowExcluded(!project.fileTree.showExcluded)
+        }
+    }
+
     /// Git menus and the bottom toolbar must use the same save-and-reload transaction.
     func switchGitBranch(
         to name: String, expectedOID: String, in project: Project, model: GitStatusModel
@@ -616,17 +636,21 @@ final class WorkspaceWindowModel {
         return false
     }
 
-    /// The File menu follows the active Dock content, not an individual TextKit
-    /// responder that may be hidden when switching Unified / Split.
+    /// Prefer the displayed Diff, then the current project's most recently used Diff.
+    /// A File menu command must remain available while another pane has focus.
     var diffLayoutTarget: DiffTab? {
         guard let project = selectedProject else { return nil }
-        let content = project.dock.activeGroup?.selected == .git
+        let preferred = project.dock.activeGroup?.selected == .git
             ? project.selectedTab?.content : project.focusedContent
-        guard case .diff(let diff)? = content,
-              diff.workspaceIdentity == project.workspaceIdentity,
-              diff.hasLoadedContent, !diff.source.isPlainRevision,
-              diff.hasChanges || diff.isEditing else { return nil }
-        return diff
+        let contents = [preferred].compactMap { $0 } + project.tabsByRecency.map(\.content)
+        for content in contents {
+            guard case .diff(let diff) = content,
+                  diff.workspaceIdentity == project.workspaceIdentity,
+                  diff.hasLoadedContent, !diff.source.isPlainRevision,
+                  diff.hasChanges || diff.isEditing else { continue }
+            return diff
+        }
+        return nil
     }
 
     func toggleDiffLayout() {
@@ -1102,7 +1126,6 @@ final class WorkspaceWindowModel {
         switch panel {
         case .files: filesTreeResponder = view
         case .git: gitTreeResponder = view
-        default: break
         }
     }
 
@@ -1283,7 +1306,6 @@ final class WorkspaceWindowModel {
                     } else { nil }
                     return (tab, ProjectSnapshot.TabSnapshot(
                         content: content, historyKey: historyKey,
-                        customName: tab.customName,
                         contextSessionIndex: tab.contextSession.flatMap { context in
                             projectSessions.firstIndex { $0.id == context.id }
                         },

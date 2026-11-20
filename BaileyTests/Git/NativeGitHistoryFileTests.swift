@@ -1589,7 +1589,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         let restored = Project(fallbackName: "restored", workspaceConfiguration: .standard)
         for content in decoded {
             _ = restored.restoreTab(from: .init(
-                content: content, historyKey: nil, customName: nil,
+                content: content, historyKey: nil,
                 contextSessionIndex: nil))
         }
         XCTAssertEqual(restored.tabs.count, 3)

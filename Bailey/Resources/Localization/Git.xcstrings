@@ -11,72 +11,62 @@
         }
       }
     },
-    "Cherry Pick Selected Commits…" : {
+    "Cherry Pick…" : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "拣选所选提交…"
+            "value": "拣选…"
           }
         }
       }
     },
-    "Revert Selected Commits…" : {
+    "Revert…" : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "撤销所选提交…"
+            "value": "撤销…"
           }
         }
       }
     },
-    "Drop Selected Commits…" : {
+    "Drop…" : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "删除所选提交…"
+            "value": "删除提交…"
           }
         }
       }
     },
-    "Copy Selected Commit Hashes" : {
+    "Copy Hashes" : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "复制所选提交哈希"
+            "value": "复制哈希"
           }
         }
       }
     },
-    "Copy Selected Commit Subjects" : {
+    "Copy Subjects" : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "复制所选提交标题"
+            "value": "复制标题"
           }
         }
       }
     },
-    "Copy Selected Commit Summaries" : {
+    "Copy Summaries" : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "复制所选提交摘要"
-          }
-        }
-      }
-    },
-    "Copy Selected Items" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "复制所选项目"
+            "value": "复制摘要"
           }
         }
       }
@@ -1061,6 +1051,16 @@
         }
       }
     },
+    "Squash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩…"
+          }
+        }
+      }
+    },
     "Squash Selected Commits…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1564,16 +1564,6 @@
         }
       }
     },
-    "Open Historical Diff" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开历史差异"
-          }
-        }
-      }
-    },
     "Switch to This Branch" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2011,16 +2001,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未提交更改"
-          }
-        }
-      }
-    },
-    "Copy Worktree Path" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制工作树路径"
           }
         }
       }
@@ -3373,16 +3353,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "确认恢复文件"
-          }
-        }
-      }
-    },
-    "Copy Absolute Path" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制绝对路径"
           }
         }
       }

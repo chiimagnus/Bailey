@@ -53,7 +53,6 @@ struct GitPanel: View {
         Binding(get: { model.commitMessage }, set: { model.commitMessage = $0 })
     }
     @FocusState private var isCommitFieldFocused: Bool
-    @State private var focusedCommitID = UUID()
     @State private var pendingDiscard: GitStatusModel.PendingDiscard?
     @State private var pendingDiscardAll: [GitStatusModel.PendingDiscard] = []
     @State private var pendingDiscardAllTrigger: OperationTrigger = .discardAll
@@ -249,7 +248,6 @@ struct GitPanel: View {
             remoteURLs = await model.remoteURLs()
         }
         .tint(themeAccent)
-        .focusedValue(\.baileyGitStageAll, focusedStageAllAction)
     }
 
     // MARK: Header
@@ -1597,14 +1595,13 @@ struct GitPanel: View {
                 )
                 .focused($isCommitFieldFocused)
                 .accessibilityIdentifier("bailey.git.commit.message")
-                .focusedValue(\.baileyGitCommit, focusedCommitAction)
 
-            if !showSyncButton || canCommit(includeAll: false) {
+            if !showSyncButton || model.canCommit(includeAll: false) {
                 HStack(spacing: 4) {
                     actionButton(
                         icon: "checkmark",
                         title: commitButtonTitle,
-                        enabled: canCommit(includeAll: false),
+                        enabled: model.canCommit(includeAll: false),
                         isLoading: operationIsLoading(.primaryAction),
                         help: String(localized: "Commit staged changes (⌘Return)", table: "Sidebar"),
                         action: performPrimaryAction
@@ -1638,11 +1635,11 @@ struct GitPanel: View {
             }
                 .keyboardShortcut(isCommitFieldFocused
                     ? KeyboardShortcut(.return, modifiers: .command) : nil)
-                .disabled(!canCommit(includeAll: false))
+                .disabled(!model.canCommit(includeAll: false))
             Button(String(localized: "Stage All & Commit", table: "Sidebar")) {
                 performCommit(includeAll: true, trigger: .commitMenu)
             }
-                .disabled(!canCommit(includeAll: true))
+                .disabled(!model.canCommit(includeAll: true))
             Divider()
             Button(String(localized: "Amend Last Commit", table: "Sidebar")) {
                 performCommit(includeAll: false, amend: true, trigger: .commitMenu)
@@ -1742,17 +1739,6 @@ struct GitPanel: View {
         )
     }
 
-    private func canCommit(includeAll: Bool) -> Bool {
-        let hasEligibleChanges = includeAll
-            ? (!model.changedEntries.isEmpty || !model.stagedEntries.isEmpty)
-            : !model.stagedEntries.isEmpty
-        return !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && hasEligibleChanges
-            && model.mergeEntries.isEmpty
-            && model.canUseCurrentStatus
-            && !model.isBusy
-    }
-
     private func canAmend(includeAll: Bool) -> Bool {
         let hasCommit = model.hasHead
         let hasEligibleChanges = !includeAll
@@ -1766,29 +1752,6 @@ struct GitPanel: View {
             && !model.isBusy
     }
 
-    private var focusedCommitAction: FocusedGitCommitAction? {
-        guard isGitActive, hasCurrentPanelTarget, canCommit(includeAll: false) else { return nil }
-        return FocusedGitCommitAction(id: focusedCommitID) {
-            guard isGitActive, hasCurrentPanelTarget else { return }
-            performPrimaryAction()
-        }
-    }
-
-    private var focusedStageAllAction: FocusedGitStageAllAction? {
-        guard isGitActive, hasCurrentPanelTarget, let context = project?.panelContext,
-              model.isRepo, model.canUseCurrentStatus, !model.isBusy,
-              !model.changedEntries.isEmpty else { return nil }
-        let repository = model.repoRoot
-        return FocusedGitStageAllAction(target: context.identity, repository: repository) {
-            guard isGitActive, hasCurrentPanelTarget,
-                  project?.panelContext?.identity == context.identity,
-                  model.repoRoot == repository, model.isRepo,
-                  model.canUseCurrentStatus, !model.isBusy, !model.changedEntries.isEmpty
-            else { return }
-            performOperation(.stageAll, model.stageAll)
-        }
-    }
-
     private func performPrimaryAction() {
         performCommit(includeAll: false, trigger: .primaryAction)
     }
@@ -1798,7 +1761,8 @@ struct GitPanel: View {
         amend: Bool = false,
         trigger: OperationTrigger
     ) {
-        guard amend ? canAmend(includeAll: includeAll) : canCommit(includeAll: includeAll) else { return }
+        guard amend ? canAmend(includeAll: includeAll) : model.canCommit(includeAll: includeAll)
+        else { return }
         let submittedMessage = commitMessage
         performOperation(trigger) {
             model.commit(message: submittedMessage, includeAll: includeAll, amend: amend)
@@ -2627,6 +2591,7 @@ struct GitPanel: View {
                 browseGitChange(VisibleChange(kind: kind, row: presentation, entry: entry))
             },
             openFile: { openIfPossible(entry) },
+            canOpenFile: { model.canOpen(entry, isRemote: remoteName != nil) },
             openHead: kind != .merge && model.hasHead && entry.staged != "A" && !entry.isUntracked ? {
                 openHeadFile(entry)
             } : nil,
@@ -3237,6 +3202,7 @@ private struct GitEntryRow: View {
     let isDiscardLoading: Bool
     let openDiff: () -> Void
     let openFile: () -> Void
+    let canOpenFile: () -> Bool
     let openHead: (() -> Void)?
     let ignore: (() -> Void)?
     let stage: () -> Void
@@ -3279,18 +3245,17 @@ private struct GitEntryRow: View {
 
     @ViewBuilder
     private var menu: some View {
-        if !multipleSelection {
-            if kind == .merge {
-                Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
-                Button(String(localized: "Open Conflicted File", table: "Sidebar")) { openFile() }
-            } else {
-                Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
-                Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
-            }
+        let showOpenFile = !multipleSelection && canOpenFile()
+        if showOpenFile {
+            Button(kind == .merge
+                   ? String(localized: "Open Conflicted File", table: "Sidebar")
+                   : String(localized: "Open File", table: "Sidebar")) { openFile() }
+        }
+        if !multipleSelection, let openHead {
+            Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
+        }
+        if showOpenFile || (!multipleSelection && openHead != nil) {
             Divider()
-            if let openHead {
-                Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
-            }
         }
         if !multipleSelection || canBatchOperate {
             switch kind {

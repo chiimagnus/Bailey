@@ -309,6 +309,41 @@ final class PanelContextTests: XCTestCase {
         XCTAssertTrue(fixed("/new", workspace: "ssh:remote", project: project).isRemote)
     }
 
+    func testFileMenuTogglesExcludedFilesWithoutFilesPanelFocus() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-excluded-menu-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        XCTAssertNotEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertTrue(project.fileTree.rootPath.isEmpty,
+                      "The menu must also work before Files has mounted its tree")
+
+        let hiddenPath = root.appendingPathComponent(".git").path
+        manager.toggleExcludedFiles()
+        try await wait {
+            project.fileTree.showExcluded
+                && project.fileTree.items.contains { $0.path == hiddenPath }
+        }
+        XCTAssertEqual(project.fileTree.rootPath, root.path)
+
+        manager.toggleExcludedFiles()
+        try await wait {
+            !project.fileTree.showExcluded
+                && !project.fileTree.items.contains { $0.path == hiddenPath }
+        }
+    }
+
     func testSelectedProjectOwnsGitAndFilesRefreshAcrossRapidSwitches() async throws {
         let snapshots = SessionStore.load()
         let histories = TerminalHistoryStore.load()

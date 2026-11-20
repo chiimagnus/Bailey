@@ -314,7 +314,7 @@ final class NativeDiffTabTests: XCTestCase {
             cachedScroll = pane.scrollView
             XCTAssertTrue(cachedScroll.documentView === pane.textView)
         }
-        project.closeDiffs()
+        project.closeAll()
         try await wait({ oldDiff == nil }, timeout: 10)
         XCTAssertTrue(project.tabs.isEmpty)
         let retained = cachedScroll.documentView as? DiffTextView
@@ -419,7 +419,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === edit.textView)
         XCTAssertEqual(Data(edit.textView.string.utf8), Data(changed.utf8))
 
-        project.closeDiffs()
+        project.closeAll()
         XCTAssertTrue(project.tabs.isEmpty)
         XCTAssertNil(diff.nativeSurface)
         XCTAssertTrue(window.contentView === surface,
@@ -498,7 +498,7 @@ final class NativeDiffTabTests: XCTestCase {
         }
         XCTAssertEqual(project.tabs.count, 20)
         XCTAssertEqual(weakResources.count, 20)
-        project.closeDiffs()
+        project.closeAll()
         XCTAssertTrue(project.tabs.isEmpty)
         for scrollView in scrollViews {
             XCTAssertNil(scrollView.documentView,
@@ -5568,7 +5568,7 @@ final class NativeDiffTabTests: XCTestCase {
                 XCTAssertTrue(diff.isSaving)
                 XCTAssertTrue(tab.content.hasUnresolvedSave)
 
-                if batch { project.closeDiffs() } else { project.close(tab) }
+                if batch { project.closeAll() } else { project.close(tab) }
                 XCTAssertTrue(project.tabs.contains { $0 === tab },
                               "An encoding-only Git write must not be closed before completion")
 
@@ -8530,10 +8530,24 @@ final class NativeDiffTabTests: XCTestCase {
         manager.toggleDiffLayout()
         XCTAssertEqual(preferences.diffStyle, .split)
         project.dock.select(.files)
-        XCTAssertNil(manager.diffLayoutTarget,
-                     "A background Diff must not capture shortcuts from Files")
+        XCTAssertTrue(manager.diffLayoutTarget === diff,
+                      "The same project's most recent Diff remains available from Files")
         manager.toggleDiffLayout()
-        XCTAssertEqual(preferences.diffStyle, .split)
+        XCTAssertEqual(preferences.diffStyle, .unified)
+
+        let recentPreferences = DiffViewPreferences(defaults: defaults)
+        let recentDiff = DiffTab(
+            repoRoot: "/fixture", path: "recent.txt", source: .worktree,
+            untracked: true, origPath: nil, backend: DiffWorkspaceFixture(),
+            workspaceIdentity: project.workspaceIdentity, preferences: recentPreferences
+        )
+        try await wait { recentDiff.hasLoadedContent && recentDiff.hasChanges }
+        let recentTab = PaneTab(content: .diff(recentDiff))
+        project.append(recentTab)
+        project.selectTab(recentTab.id)
+        project.dock.select(.files)
+        XCTAssertTrue(manager.diffLayoutTarget === recentDiff,
+                      "When multiple Diffs exist, the most recently selected one owns the menu")
 
         let other = Project(fallbackName: "other", workspaceConfiguration: .standard)
         manager.projects.append(other)
