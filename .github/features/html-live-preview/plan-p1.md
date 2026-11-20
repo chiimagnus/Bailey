@@ -17,7 +17,8 @@ HTML 全页**不必**先用 SwiftSoup 重新序列化（那会破坏原页面 CS
 源码仍由现有 `SourceTextEditor` 保存与 Undo。参见 [文件渲染接入边界](../file-viewer-routing/plan-p1.md)。
 预览使用独立受控 `WKWebView`／非持久化配置，通过受限自定义 scheme 加载可授权的 HTML／CSS／项目内静态资源，不以任意本地 file URL 或网络导航代替访问授权；不把源 HTML 交给现有可执行 Browser。
 右键命令在 `WorkspaceDockView` 的文件标签上下文扩展；
-**复用 Markdown P1-T2 在 `BaileyApp.swift` 注册的唯一 `⌘⇧V` 系统 File 菜单动作**，由当前窗口活动文件决定是否可用，不在此另注册一次。
+全局 `⌘⇧V` 复用 Markdown P1-T2 在 `BaileyApp.swift` 的 File 菜单命令，
+由当前活动文件决定是否启用；右键菜单操作被右键标签，不注册第二个全局命令。
 
 ## 任务
 
@@ -34,8 +35,8 @@ HTML 全页**不必**先用 SwiftSoup 重新序列化（那会破坏原页面 CS
 ### P1-T2 主菜单命令与文件标签视图切换
 
 - **位置**：`BaileyApp.swift` 系统菜单、`WorkspaceDockView` 标签右键、`FileViewerView`、`docs/features/editor.md`。
-- **实施**：当前标签可选「源码／预览／并排」；`⌘⇧V` 复用 Markdown 的唯一 File 菜单命令双向切换，不新增菜单项或键盘注册；
-  右键不复制键盘绑定，不显示快捷键提示。仅复用已有 Dock 标签，没有内容工具栏或路径栏。
+- **实施**：当前标签可选「源码／预览／并排」；`⌘⇧V` 复用 Markdown 的全局 File 菜单命令双向切换；
+  右键如需相同快捷键则在本次原生菜单绑定，不重投事件。仅复用已有 Dock 标签，没有内容工具栏或路径栏。
 - **验证**：两窗口及多 Dock、右键后台标签不误操作当前文件、原生菜单权限、无键盘重复派发、系统文本选择／输入法焦点保持。
 
 ## 阶段验收

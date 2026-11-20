@@ -710,7 +710,7 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertTrue(manager.selectedProject === project)
     }
 
-    func testRightClickInactiveFileTabChangesCloseTargetWithoutOpeningIt() throws {
+    func testRightClickInactiveFileTabKeepsActiveSelectionUntilExplicitClose() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-close-target-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -731,18 +731,18 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[2].id))
 
         project.dock.selectForContextMenu(.tab(tabs[1].id))
-        XCTAssertEqual(project.dock.closeTarget, .tab(tabs[1].id))
+        XCTAssertEqual(project.dock.contextTarget, .tab(tabs[1].id))
         XCTAssertEqual(project.dock.activeGroupID, active)
         XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[2].id))
 
-        manager.closeActivePanelOrWindow()
+        manager.closePanel(.tab(tabs[1].id), in: project)
         XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id, tabs[2].id])
         XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[2].id))
         XCTAssertNil(project.dock.contextTarget)
 
         project.dock.selectForContextMenu(.tab(tabs[2].id))
         project.selectTab(tabs[0].id)
-        XCTAssertEqual(project.dock.closeTarget, .tab(tabs[0].id))
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[0].id))
         manager.closeActivePanelOrWindow()
         XCTAssertEqual(project.tabs.map(\.id), [tabs[2].id])
         for file in files {
@@ -795,13 +795,30 @@ final class DockWorkspaceTests: XCTestCase {
         let project = Project(fallbackName: "first", workspaceConfiguration: .standard)
         manager.projects = [project]
         manager.selectedProjectID = project.id
+        let active = project.dock.activeGroup?.selected
         project.dock.selectForContextMenu(.git)
-        XCTAssertEqual(project.dock.closeTarget, .git)
+        XCTAssertEqual(project.dock.contextTarget, .git)
 
         manager.windowResignedKey()
 
         XCTAssertNil(project.dock.contextTarget)
-        XCTAssertEqual(project.dock.closeTarget, project.dock.activeGroup?.selected)
+        XCTAssertEqual(project.dock.activeGroup?.selected, active)
+    }
+
+    func testMainMenuCloseIgnoresContextOnlyTarget() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "main-menu", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        manager.showPanel(.files)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+
+        project.dock.selectForContextMenu(.git)
+        manager.closeActivePanelOrWindow()
+        XCTAssertNil(project.dock.group(containing: .files),
+                     "The system Panel command must close the selected panel, not a context-only target")
+        XCTAssertNotNil(project.dock.group(containing: .git))
     }
 
     func testRightClickToolTargetIsIndependentOfActiveGroupAndProject() throws {
@@ -815,10 +832,10 @@ final class DockWorkspaceTests: XCTestCase {
         let active = first.dock.activeGroupID
 
         first.dock.selectForContextMenu(.git)
-        XCTAssertEqual(first.dock.closeTarget, .git)
+        XCTAssertEqual(first.dock.contextTarget, .git)
         XCTAssertEqual(first.dock.activeGroupID, active)
         XCTAssertEqual(first.dock.activeGroup?.selected, .files)
-        manager.closeActivePanelOrWindow()
+        manager.closePanel(.git, in: first)
         XCTAssertNil(first.dock.group(containing: .git))
         XCTAssertNotNil(first.dock.group(containing: .files))
 
@@ -827,7 +844,7 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNil(first.dock.contextTarget)
         XCTAssertNil(second.dock.contextTarget)
         manager.selectedProjectID = first.id
-        XCTAssertEqual(first.dock.closeTarget, .files)
+        XCTAssertEqual(first.dock.activeGroup?.selected, .files)
     }
 
     func testToolsAreNotTheMostRecentWorkContentAndCloseTheirOwnPanel() throws {

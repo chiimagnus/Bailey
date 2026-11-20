@@ -484,6 +484,8 @@ Stage All Changes 也可用「文件」菜单的 ⇧⌘Y 调用，暂存整个�
 提供复制所选绝对／相对路径及 Finder 定位（本机）；
 绝对路径 ⌥⌘C、相对路径 ⌥⇧⌘C、本机 Finder 定位 ⌥⌘R 作用于有效的键盘目标，
 右键菜单展开时使用本次命中对象；Git Graph 的历史文件路径同样支持复制快捷键。
+右键菜单直接执行自己的原生快捷键；菜单取消或执行完后临时目标失效，
+下一次普通命令按当前游标和选区处理。
 ⌘C 复制当前 Git 选区的相对路径。单项菜单仍保留原能力。
 STAGED／CHANGES 同一路径是两个独立选择对象；跨 STAGED、CHANGES、MERGE 的混合选区
 只能进行复制／定位，不显示只对其中一组生效的 Stage／Unstage／Discard，
@@ -543,6 +545,8 @@ Push 通过临时接收仓库核对真实提交，涉及 LFS 时还检查接收�
 `GitGraphWorktreePresentationTests` 分别验证颜色及对比度、引用分组、Worktree 路径与状态。
 `GitGraphUITests` 和 `GitGraphGeometryUITests` 只保留真实 App 的行命中、Dock 拖动、横滚、深浅像素、
 键盘、历史文件、分页和多级菜单，不为每个纯布局组合重复启动 App。
+路径快捷键须核对历史文件与文件夹（包括紧凑目录段）的实际剪贴板结果，
+以及右键菜单关闭后原选区的命令归属；按键注册成功不等于操作成功。
 `GitStashActionTests` 验证 Stash 身份及 Pop/Drop/Branch。
 
 `GitChangesUITests` 通过真实 Dev App 验证外部工作区、index、HEAD 变化、跨项目隔离、文件夹按钮、

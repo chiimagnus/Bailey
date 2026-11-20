@@ -148,7 +148,7 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testFilePathShortcutsAreUniquelyRegisteredInSystemMenu() throws {
+    func testFilePathShortcutsRemainUniqueWithinMainMenu() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let file = try XCTUnwrap(main.items.first {
             $0.title == String(localized: "File", table: "Interface")
@@ -171,7 +171,7 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testPanelCloseShortcutOnlyBelongsToSystemMenu() throws {
+    func testPanelCloseShortcutIsNativeInBothMenus() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let panel = try XCTUnwrap(main.items.first {
             $0.title == String(localized: "Panel", table: "Interface")
@@ -181,27 +181,19 @@ final class AppIdentityTests: XCTestCase {
         })
         XCTAssertEqual(close.keyEquivalent, "w")
         XCTAssertEqual(close.keyEquivalentModifierMask, .command)
-        XCTAssertEqual(main.items.compactMap(\.submenu).flatMap(\.items).filter {
-            $0.keyEquivalent == "w" && $0.keyEquivalentModifierMask == .command
-        }.count, 1)
 
-        let context = NSHostingMenu(rootView: Button("Close Panel", action: {}).badge("⌘W"))
+        let context = NSHostingMenu(rootView:
+            Button("Close Panel", action: {}).keyboardShortcut("w", modifiers: .command)
+        )
         context.update()
-        XCTAssertEqual(context.items.first?.badge?.stringValue, "⌘W")
-        XCTAssertTrue(context.items.allSatisfy(\.keyEquivalent.isEmpty),
-                      "A contextual close badge must never register a second shortcut")
-        let event = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command,
-            timestamp: 0, windowNumber: 0, context: nil,
-            characters: "w", charactersIgnoringModifiers: "w",
-            isARepeat: false, keyCode: 13
-        ))
-        XCTAssertFalse(context.performKeyEquivalent(with: event),
-                       "The contextual menu must leave Cmd-W for the system main menu")
+        let item = try XCTUnwrap(context.items.first)
+        XCTAssertEqual(item.keyEquivalent, "w")
+        XCTAssertEqual(item.keyEquivalentModifierMask, .command)
+        XCTAssertNil(item.badge, "A native shortcut must not use a display-only badge")
     }
 
     @MainActor
-    func testStageAllChangesShortcutOnlyBelongsToFileMenu() throws {
+    func testStageAllChangesShortcutRemainsInFileMenu() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let file = try XCTUnwrap(main.items.first {
             $0.title == String(localized: "File", table: "Interface")
@@ -350,72 +342,85 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testSwiftUIMenuShortcutBadgesAreDisplayOnly() throws {
+    func testSwiftUIContextMenuShortcutsRegisterNativeKeyEquivalents() throws {
         let menu = NSHostingMenu(rootView: VStack {
-            Button("Cut", action: {}).badge("⌘X")
-            Button("Copy", action: {}).badge("⌘C")
-            Button("Paste", action: {}).badge("⌘V").disabled(true)
-            Button("Move to Trash", role: .destructive, action: {}).badge("⌫")
-            Button("Close", action: {}).badge("⌘W")
-            Button("Stage All Changes", action: {}).badge("⇧⌘Y")
+            Button("Cut", action: {}).keyboardShortcut("x", modifiers: .command)
+            Button("Copy", action: {}).keyboardShortcut("c", modifiers: .command)
+            Button("Paste", action: {}).keyboardShortcut("v", modifiers: .command).disabled(true)
+            Button("Move to Trash", role: .destructive, action: {})
+                .keyboardShortcut(.delete, modifiers: [])
+            Button("Close", action: {}).keyboardShortcut("w", modifiers: .command)
+            Button("Stage All Changes", action: {})
+                .keyboardShortcut("y", modifiers: [.command, .shift])
             Button("Close Tabs to the Right", action: {})
         })
         menu.update()
-        let expectations = [
-            ("Cut", "⌘X"), ("Copy", "⌘C"), ("Paste", "⌘V"),
-            ("Move to Trash", "⌫"), ("Close", "⌘W"),
-            ("Stage All Changes", "⇧⌘Y")
+        let expected: [(String, String, NSEvent.ModifierFlags)] = [
+            ("Cut", "x", .command), ("Copy", "c", .command),
+            ("Paste", "v", .command), ("Close", "w", .command),
+            ("Stage All Changes", "y", [.command, .shift]),
         ]
-        for (index, expected) in expectations.enumerated() {
-            let item = menu.items[index]
-            XCTAssertEqual(item.title, expected.0)
-            XCTAssertEqual(item.badge?.stringValue, expected.1)
-            XCTAssertTrue(item.keyEquivalent.isEmpty,
-                          "The system main menu must remain the only keyboard shortcut owner")
-            XCTAssertNil(item.attributedTitle)
-            XCTAssertTrue(item.accessibilityLabel()?.contains(expected.0) == true)
+        for (title, key, flags) in expected {
+            let item = try XCTUnwrap(menu.items.first { $0.title == title })
+            XCTAssertEqual(item.keyEquivalent, key)
+            XCTAssertEqual(item.keyEquivalentModifierMask, flags)
+            XCTAssertNil(item.badge)
+            XCTAssertTrue(item.accessibilityLabel()?.contains(title) == true)
         }
-        XCTAssertFalse(menu.items[2].isEnabled)
+        let delete = try XCTUnwrap(menu.items.first { $0.title == "Move to Trash" })
+        XCTAssertFalse(delete.keyEquivalent.isEmpty)
+        XCTAssertTrue(delete.keyEquivalentModifierMask.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(menu.items.first { $0.title == "Paste" }).isEnabled)
         XCTAssertEqual(menu.items.last?.title, "Close Tabs to the Right")
-        XCTAssertNil(menu.items.last?.badge)
-        XCTAssertLessThan(menu.size.width, 290, "Native badges should not reserve a fixed column")
+        XCTAssertTrue(try XCTUnwrap(menu.items.last).keyEquivalent.isEmpty)
     }
 
     @MainActor
-    func testNativeMenuBadgeOmittedWhenShortcutIsUnavailable() throws {
+    func testNativeContextShortcutCanBeConditionalAndLocalized() throws {
         let menu = NSHostingMenu(rootView: VStack {
-            Button("Commit Staged", action: {}).badge(nil as String?)
-            Button("Commit Staged", action: {}).badge("⌘↩")
-            Button("新建文件夹…", action: {}).badge("⌥⌘N")
+            Button("Commit Staged", action: {}).keyboardShortcut(nil as KeyboardShortcut?)
+            Button("Commit Staged", action: {}).keyboardShortcut(.return, modifiers: .command)
+            Button("新建文件夹…", action: {})
+                .keyboardShortcut("n", modifiers: [.command, .option])
         })
         menu.update()
-        XCTAssertNil(menu.items[0].badge)
-        XCTAssertEqual(menu.items[1].badge?.stringValue, "⌘↩")
-        XCTAssertEqual(menu.items[2].badge?.stringValue, "⌥⌘N")
+        XCTAssertTrue(menu.items[0].keyEquivalent.isEmpty)
+        XCTAssertFalse(menu.items[1].keyEquivalent.isEmpty)
+        XCTAssertEqual(menu.items[1].keyEquivalentModifierMask, .command)
+        XCTAssertEqual(menu.items[2].keyEquivalent, "n")
+        XCTAssertEqual(menu.items[2].keyEquivalentModifierMask, [.command, .option])
         XCTAssertEqual(menu.items[2].title, "新建文件夹…")
-        XCTAssertTrue(menu.items.allSatisfy(\.keyEquivalent.isEmpty))
+        XCTAssertTrue(menu.items.allSatisfy { $0.badge == nil })
     }
 
     @MainActor
-    func testPathShortcutBadgesIdentifyContextMenusWithoutRegisteringShortcuts() throws {
+    func testPathShortcutKeyEquivalentsIdentifyTheirContextMenu() throws {
         let menu = NSHostingMenu(rootView: VStack {
-            Button("Other locale", action: {}).badge(PathMenuShortcut.copyAbsolute)
-            Button("Close", action: {}).badge("⌘W")
+            Button("Other locale", action: {}).keyboardShortcut(PathMenuShortcut.copyAbsolute)
+            Button("Close", action: {}).keyboardShortcut("w", modifiers: .command)
         })
         menu.update()
         XCTAssertTrue(PathMenuShortcut.hasPathActions(menu))
-        XCTAssertTrue(menu.items.allSatisfy(\.keyEquivalent.isEmpty))
+        XCTAssertEqual(menu.items[0].keyEquivalent, "c")
+        XCTAssertEqual(menu.items[0].keyEquivalentModifierMask, [.command, .option])
 
-        let plain = NSHostingMenu(rootView: Button("Copy Path", action: {}))
+        for shortcut in [PathMenuShortcut.copyRelative, PathMenuShortcut.reveal] {
+            let other = NSHostingMenu(rootView:
+                Button("Other locale", action: {}).keyboardShortcut(shortcut)
+            )
+            other.update()
+            XCTAssertTrue(PathMenuShortcut.hasPathActions(other))
+        }
+        let plain = NSHostingMenu(rootView:
+            Button("Close", action: {}).keyboardShortcut("w", modifiers: .command)
+        )
         plain.update()
         XCTAssertFalse(PathMenuShortcut.hasPathActions(plain))
-        let key = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.command, .option],
-            timestamp: 0, windowNumber: 0, context: nil,
-            characters: "c", charactersIgnoringModifiers: "c",
-            isARepeat: false, keyCode: 8
-        ))
-        XCTAssertEqual(PathMenuShortcut.badge(for: key), PathMenuShortcut.copyAbsolute)
+        let mainFile = try XCTUnwrap(NSApp.mainMenu?.items.first {
+            $0.title == String(localized: "File", table: "Interface")
+        }?.submenu)
+        XCTAssertFalse(PathMenuShortcut.hasPathActions(mainFile),
+                       "A system File submenu must not be mistaken for a context popup")
     }
 
     @MainActor

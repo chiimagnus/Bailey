@@ -109,11 +109,10 @@ struct FocusedGitStageAllAction: Equatable {
 struct FocusedPathActions {
     let paths: (Bool) -> [String]
     let revealablePaths: () -> [String]
-    var didPerform: () -> Void = {}
 
     static func file(
         _ file: FileTab, in project: Project,
-        isValid: @escaping () -> Bool, didPerform: @escaping () -> Void = {}
+        isValid: @escaping () -> Bool
     ) -> Self {
         let paths: (Bool) -> [String] = { absolute in
             guard isValid() else { return [] }
@@ -125,7 +124,7 @@ struct FocusedPathActions {
         }
         return Self(paths: paths, revealablePaths: {
             file.workspaceIdentity == nil ? paths(true) : []
-        }, didPerform: didPerform)
+        })
     }
 
     func copy(absolute: Bool) {
@@ -133,14 +132,12 @@ struct FocusedPathActions {
         guard !value.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value.joined(separator: "\n"), forType: .string)
-        didPerform()
     }
 
     func revealInFinder() {
         let value = revealablePaths()
         guard !value.isEmpty else { return }
         NSWorkspace.shared.activateFileViewerSelecting(value.map { URL(fileURLWithPath: $0) })
-        didPerform()
     }
 }
 
@@ -157,7 +154,6 @@ extension FocusedValues {
 final class MainMenuPresentation {
     // Only menu rows refresh during tracking; rebuilding Commands would drop native Window items.
     @ObservationIgnored private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
-    @ObservationIgnored var pendingContextClose: (window: NSWindow, project: Project, target: DockItem, timestamp: TimeInterval)?
     private var completedTrackings = 0
     private(set) var trackingEpoch = 0
 
@@ -193,40 +189,7 @@ private struct BaileyCommands: Commands {
     @FocusedValue(\.baileyPathActions) private var focusedPathActions: FocusedPathActions?
     @Environment(\.openWindow) private var openWindow
     private var pathActions: FocusedPathActions? {
-        guard let manager else { return nil }
-        if let project = manager.selectedProject,
-           case .tab(let id)? = project.dock.contextTarget,
-           project.dock.group(containing: .tab(id)) != nil,
-           let tab = project.tabs.first(where: { $0.id == id }),
-           case .file(let file) = tab.content {
-            return .file(file, in: project, isValid: {
-                manager.selectedProject === project && project.dock.contextTarget == .tab(id)
-            }, didPerform: { project.dock.clearContextTarget() })
-        }
-        if let project = manager.selectedProject,
-           let context = project.panelContext,
-           project.fileTree.syncedTarget(for: context) != nil,
-           project.fileTree.contextOperationPaths != nil {
-            let tree = project.fileTree
-            let paths: (Bool) -> [String] = { absolute in
-                guard manager.selectedProject === project,
-                      tree.syncedTarget(for: context) != nil,
-                      let values = tree.contextOperationPaths else { return [] }
-                if absolute { return values }
-                let root = tree.rootPath == "/" ? "/" : tree.rootPath + "/"
-                return values.filter { $0.hasPrefix(root) }
-                    .map { String($0.dropFirst(root.count)) }
-            }
-            return FocusedPathActions(paths: paths, revealablePaths: {
-                guard !context.isRemote else { return [] }
-                return paths(true)
-            }, didPerform: {
-                if let target = tree.contextMenuTargetPath {
-                    tree.dismissContextMenu(target: target)
-                }
-            })
-        }
-        return focusedPathActions
+        manager != nil ? focusedPathActions : nil
     }
     private var diffLayoutMenuTitle: String {
         guard let style = manager?.diffLayoutTarget?.preferences.diffStyle else {
@@ -242,6 +205,7 @@ private struct BaileyCommands: Commands {
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
         return focusedManager
     }
+
     var body: some Commands {
         let _ = application.registerWindowOpener {
             openWindow(id: "main")
@@ -314,18 +278,14 @@ private struct BaileyCommands: Commands {
             }
             .disabled(manager?.selectedProject == nil)
 
-            Button {
-                manager?.showPanel(.files)
-            } label: {
+            Button(action: { manager?.showPanel(.files) }) {
                 Label(String(localized: "File Manager", table: "Sidebar"), systemImage: DockItem.files.symbol)
                     .labelStyle(.titleAndIcon)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button {
-                manager?.showPanel(.git)
-            } label: {
+            Button(action: { manager?.showPanel(.git) }) {
                 Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
                     .labelStyle(.titleAndIcon)
             }
@@ -359,41 +319,7 @@ private struct BaileyCommands: Commands {
             .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
             Button(String(localized: "Close Panel", table: "Interface")) {
-                if let pending = menuPresentation.pendingContextClose {
-                    menuPresentation.pendingContextClose = nil
-                    guard NSApp.isActive, NSApp.keyWindow === pending.window,
-                          NSApp.currentEvent?.timestamp == pending.timestamp,
-                          let owner = application.owner(of: pending.window),
-                          owner.selectedProject === pending.project,
-                          pending.project.dock.contextTarget == pending.target else { return }
-                    owner.closeActivePanelOrWindow()
-                    return
-                }
-
                 let owner = manager ?? NSApp.keyWindow.flatMap { application.owner(of: $0) }
-                if let owner, let project = owner.selectedProject,
-                   let target = project.dock.contextTarget,
-                   let window = owner.attachedWindow, window === NSApp.keyWindow,
-                   let event = NSApp.currentEvent, event.type == .keyDown,
-                   event.modifierFlags.intersection([.command, .option, .shift, .control]) == [.command],
-                   event.charactersIgnoringModifiers?.lowercased() == "w" {
-                    menuPresentation.pendingContextClose = (window, project, target, event.timestamp)
-                    nonisolated(unsafe) let deferredEvent = event
-                    RunLoop.main.perform(inModes: [.default]) {
-                        MainActor.assumeIsolated {
-                            guard let pending = menuPresentation.pendingContextClose,
-                                  deferredEvent.timestamp == pending.timestamp,
-                                  NSApp.isActive, NSApp.keyWindow === pending.window,
-                                  application.owner(of: pending.window)?.selectedProject === pending.project,
-                                  pending.project.dock.contextTarget == pending.target else {
-                                menuPresentation.pendingContextClose = nil
-                                return
-                            }
-                            NSApp.postEvent(deferredEvent, atStart: true)
-                        }
-                    }
-                    return
-                }
                 if let owner { owner.closeActivePanelOrWindow() }
                 else { NSApp.keyWindow?.performClose(nil) }
             }
@@ -404,9 +330,7 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(entries) { item in
-                    Button {
-                        manager?.selectPanel(item.id)
-                    } label: {
+                    Button(action: { manager?.selectPanel(item.id) }) {
                         PanelMenuLabel(item: item, presentation: menuPresentation)
                     }
                     .keyboardShortcut(item.index < 9
@@ -452,11 +376,11 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(entries) { item in
-                    Button {
+                    Button(action: {
                         if let index = manager?.projects.firstIndex(where: { $0.id == item.id }) {
                             manager?.selectProject(index: index)
                         }
-                    } label: {
+                    }) {
                         ProjectMenuLabel(item: item, presentation: menuPresentation)
                     }
                     .keyboardShortcut(item.index < 9
@@ -468,13 +392,15 @@ private struct BaileyCommands: Commands {
 
         CommandMenu(String(localized: "File", table: "Interface")) {
             Button(String(localized: "New File…", table: "Sidebar")) {
-                Task { await manager?.newFile() }
+                let action = manager?.newItemAction(isDirectory: false)
+                Task { await action?() }
             }
             .keyboardShortcut("n", modifiers: .command)
             .disabled(manager?.selectedProject?.panelContext == nil)
 
             Button(String(localized: "New Folder…", table: "Sidebar")) {
-                Task { await manager?.newFolder() }
+                let action = manager?.newItemAction(isDirectory: true)
+                Task { await action?() }
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
             .disabled(manager?.selectedProject?.panelContext == nil)
@@ -492,19 +418,19 @@ private struct BaileyCommands: Commands {
             Button(String(localized: "Copy Path", table: "Sidebar")) {
                 pathActions?.copy(absolute: true)
             }
-            .keyboardShortcut("c", modifiers: [.command, .option])
+            .keyboardShortcut(PathMenuShortcut.copyAbsolute)
             .disabled(pathActions?.paths(true).isEmpty != false)
 
             Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
                 pathActions?.copy(absolute: false)
             }
-            .keyboardShortcut("c", modifiers: [.command, .option, .shift])
+            .keyboardShortcut(PathMenuShortcut.copyRelative)
             .disabled(pathActions?.paths(false).isEmpty != false)
 
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 pathActions?.revealInFinder()
             }
-            .keyboardShortcut("r", modifiers: [.command, .option])
+            .keyboardShortcut(PathMenuShortcut.reveal)
             .disabled(pathActions?.revealablePaths().isEmpty != false)
 
             Divider()

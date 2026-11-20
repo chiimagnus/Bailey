@@ -416,6 +416,7 @@ final class GitChangesUITests: XCTestCase {
         let file = try fixture.file("layout.txt", text: "before\n")
         try fixture.initializeGit()
         try "after\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "layout.txt"])
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         let fileMenu = app.menuBars.menuBarItems["File"]
@@ -433,16 +434,16 @@ final class GitChangesUITests: XCTestCase {
         let layout = window.radioGroups["bailey.diff.layout"]
         XCTAssertTrue(layout.waitForExistence(timeout: 25),
                       "A selected Git change must open a real native Diff")
-        let unifiedSegment = layout.radioButtons.element(boundBy: 0)
-        let splitSegment = layout.radioButtons.element(boundBy: 1)
-        unifiedSegment.click()
-        let unifiedSelected = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "selected == true"), object: unifiedSegment
-        )
-        let splitSelected = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "selected == true"), object: splitSegment
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [unifiedSelected], timeout: 10), .completed)
+        layout.radioButtons.element(boundBy: 0).click()
+        func expectLayout(split: Bool) {
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let values = window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String }
+                if split { return values.contains("before\n") && values.contains("after\n") }
+                return values.contains { $0.contains("before") && $0.contains("after") }
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 10), .completed)
+        }
+        expectLayout(split: false)
 
         fileMenu.click()
         let toSplit = app.menuItems["Switch to Split"]
@@ -451,8 +452,10 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(app.menuItems["Switch to Unified"].exists)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
+        change.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("u", modifierFlags: [.command, .option])
-        XCTAssertEqual(XCTWaiter.wait(for: [splitSelected], timeout: 10), .completed)
+        expectLayout(split: true)
         fileMenu.click()
         let toUnified = app.menuItems["Switch to Unified"]
         XCTAssertTrue(toUnified.waitForExistence(timeout: 8))
@@ -461,14 +464,12 @@ final class GitChangesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         app.typeKey("u", modifierFlags: [.command, .option])
-        XCTAssertEqual(XCTWaiter.wait(for: [unifiedSelected], timeout: 10), .completed)
+        expectLayout(split: false)
         fileMenu.click()
         XCTAssertTrue(toSplit.waitForExistence(timeout: 8))
         XCTAssertTrue(toSplit.isEnabled, "Returning to Unified must not disable the command")
         toSplit.click()
-        XCTAssertEqual(XCTWaiter.wait(for: [splitSelected], timeout: 10), .completed)
-        app.typeKey("u", modifierFlags: [.command, .option])
-        XCTAssertEqual(XCTWaiter.wait(for: [unifiedSelected], timeout: 10), .completed)
+        expectLayout(split: true)
 
         app.typeKey("e", modifierFlags: [.command, .shift])
         fileMenu.click()
@@ -515,7 +516,6 @@ final class GitChangesUITests: XCTestCase {
         changesHeader.rightClick()
         XCTAssertTrue(app.menuItems["Stage All Changes"].waitForExistence(timeout: 8),
                       "The CHANGES header context menu must also expose Stage All")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         app.typeKey("y", modifierFlags: [.command, .shift])
         let allStaged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -566,7 +566,7 @@ final class GitChangesUITests: XCTestCase {
 
         let projectMenu = app.menuBars.menuBarItems["Project"]
         projectMenu.click()
-        XCTAssertFalse(app.menuItems["Commit Staged"].exists, "Project must not retain Commit Staged")
+        XCTAssertFalse(projectMenu.menuItems["Commit Staged"].exists, "Project must not retain Commit Staged")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         app.typeKey("g", modifierFlags: [.command, .shift])
@@ -581,7 +581,12 @@ final class GitChangesUITests: XCTestCase {
         fileMenu.click()
         XCTAssertTrue(commit.waitForExistence(timeout: 10))
         XCTAssertTrue(commit.isEnabled, "A valid focused Git draft must enable the File command")
-        commit.click()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let stagedRow = WorkspaceUITestSupport.fileRow(staged, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(stagedRow.waitForExistence(timeout: 10))
+        stagedRow.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
         let complete = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? fixture.git(["log", "-1", "--format=%s"])) ==
                 Data("latest focused commit message\n".utf8)
@@ -1507,17 +1512,17 @@ final class GitChangesUITests: XCTestCase {
         a.click()
 
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path)
+        WorkspaceUITestSupport.assertClipboard(first.path)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        WorkspaceUITestSupport.assertClipboard("first.txt")
 
         b.rightClick()
         XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "second.txt")
+        WorkspaceUITestSupport.assertClipboard("second.txt")
         XCTAssertTrue(a.isSelected && !b.isSelected)
         app.typeKey("c", modifierFlags: [.command, .option])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path,
+        WorkspaceUITestSupport.assertClipboard(first.path,
                        "Dismissing the context menu must restore the prior keyboard target")
     }
 

@@ -491,7 +491,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let menu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("Close", in: menu).exists,
-                      "The Close menu item and the separate native shortcut badge must coexist")
+                      "The Close menu item and its native keyboard shortcut must coexist")
         print("NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Native file-tab context menu width"
@@ -521,7 +521,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let menu = app.menus.containing(.menuItem, identifier: "关闭其他").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 8))
         XCTAssertTrue(WorkspaceUITestSupport.menuItem("关闭", in: menu).exists,
-                      "The native close action must be present independently of its badge")
+                      "The native close action must remain available with its shortcut")
         print("CHINESE_NATIVE_TAB_MENU_WIDTH=\(menu.frame.width)")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Chinese native file-tab context menu width"

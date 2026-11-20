@@ -1636,7 +1636,8 @@ struct GitPanel: View {
             Button(stagedTitle) {
                 performCommit(includeAll: false, trigger: .commitMenu)
             }
-                .badge(isCommitFieldFocused ? "⌘↩" : nil)
+                .keyboardShortcut(isCommitFieldFocused
+                    ? KeyboardShortcut(.return, modifiers: .command) : nil)
                 .disabled(!canCommit(includeAll: false))
             Button(String(localized: "Stage All & Commit", table: "Sidebar")) {
                 performCommit(includeAll: true, trigger: .commitMenu)
@@ -1920,7 +1921,7 @@ struct GitPanel: View {
                             .init(
                                 systemImage: "plus",
                                 help: String(localized: "Stage All Changes", table: "Sidebar"),
-                                badge: "⇧⌘Y",
+                                shortcut: KeyboardShortcut("y", modifiers: [.command, .shift]),
                                 isLoading: operationIsLoading(.stageAll)
                             ) {
                                 performOperation(.stageAll, model.stageAll)
@@ -2357,9 +2358,7 @@ struct GitPanel: View {
 
     private var focusedChangePathActions: FocusedPathActions {
         let paths: (Bool) -> [String] = { absolute in
-            guard isGitActive, hasCurrentPanelTarget else { return [] }
-            if let contextChange { return contextPaths(for: contextChange, absolute: absolute) }
-            guard keyboardFocused else { return [] }
+            guard isGitActive, hasCurrentPanelTarget, keyboardFocused else { return [] }
             let visible = changesDisplay.selections
             guard let key = model.selectedChanges.isEmpty ? selectedChange
                 : visible.first(where: { model.selectedChanges.contains($0) }) else { return [] }
@@ -2367,8 +2366,6 @@ struct GitPanel: View {
         }
         return FocusedPathActions(paths: paths, revealablePaths: {
             remoteName == nil ? paths(true) : []
-        }, didPerform: {
-            contextChange = nil
         })
     }
 
@@ -2392,8 +2389,6 @@ struct GitPanel: View {
 
     private func dismissContextChange(_ key: ChangeSelection) {
         guard contextChange == key else { return }
-        if let event = NSApp.currentEvent, event.type == .keyDown,
-           PathMenuShortcut.badge(for: event) != nil { return }
         contextChange = nil
     }
 
@@ -2794,19 +2789,19 @@ struct GitPanel: View {
                : String(localized: "Copy Path", table: "Sidebar")) {
             copyContextPaths(for: target, absolute: true)
         }
-        .badge(PathMenuShortcut.copyAbsolute)
+        .keyboardShortcut(PathMenuShortcut.copyAbsolute)
         Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
                : String(localized: "Copy Relative Path", table: "Sidebar")) {
             copyContextPaths(for: target, absolute: false)
         }
-        .badge(PathMenuShortcut.copyRelative)
+        .keyboardShortcut(PathMenuShortcut.copyRelative)
         if remoteName == nil {
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 NSWorkspace.shared.activateFileViewerSelecting(
                     contextPaths(for: target, absolute: true).map { URL(fileURLWithPath: $0) }
                 )
             }
-            .badge(PathMenuShortcut.reveal)
+            .keyboardShortcut(PathMenuShortcut.reveal)
         }
     }
 
@@ -3326,21 +3321,21 @@ private struct GitEntryRow: View {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
                 }
             }
-            .badge(PathMenuShortcut.reveal)
+            .keyboardShortcut(PathMenuShortcut.reveal)
         }
         if multipleSelection {
             Button(String(localized: "Copy Paths", table: "Sidebar"), action: copyBatchPaths)
-                .badge(PathMenuShortcut.copyAbsolute)
+                .keyboardShortcut(PathMenuShortcut.copyAbsolute)
             Button(String(localized: "Copy Relative Paths", table: "Sidebar"), action: copyBatchRelativePaths)
-                .badge(PathMenuShortcut.copyRelative)
+                .keyboardShortcut(PathMenuShortcut.copyRelative)
         } else {
             Button(String(localized: "Copy Path", table: "Sidebar")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(absolutePath, forType: .string)
             }
-            .badge(PathMenuShortcut.copyAbsolute)
+            .keyboardShortcut(PathMenuShortcut.copyAbsolute)
             Button(String(localized: "Copy Relative Path", table: "Sidebar")) { copyRelativePath() }
-                .badge(PathMenuShortcut.copyRelative)
+                .keyboardShortcut(PathMenuShortcut.copyRelative)
         }
     }
 

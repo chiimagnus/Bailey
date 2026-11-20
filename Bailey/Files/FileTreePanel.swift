@@ -447,8 +447,7 @@ private struct FileTreeRow: View {
             }
             .overlay {
                 ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                       onMenuClosed: { dismissContextMenu(for: item.path) },
-                                       onMenuKeyDown: handleMenuKeyDown,
+                                       onMenuClosed: { model.dismissContextMenu(target: item.path) },
                                        isExpectedMenu: isMenuForCurrentRow)
                     .contextMenu { rowMenu(for: item) }
             }
@@ -456,8 +455,7 @@ private struct FileTreeRow: View {
             semanticRow
                 .background {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { dismissContextMenu(for: item.path) },
-                                           onMenuKeyDown: handleMenuKeyDown,
+                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
                                            isExpectedMenu: isMenuForCurrentRow)
                 }
                 .contextMenu { rowMenu(for: item) }
@@ -467,8 +465,7 @@ private struct FileTreeRow: View {
             semanticRow
                 .overlay {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { dismissContextMenu(for: item.path) },
-                                           onMenuKeyDown: handleMenuKeyDown,
+                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
                                            isExpectedMenu: isMenuForCurrentRow)
                         .contextMenu { rowMenu(for: item) }
                 }
@@ -517,18 +514,6 @@ private struct FileTreeRow: View {
         model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
     }
 
-    private func dismissContextMenu(for target: String) {
-        // AppKit may end context tracking before dispatching a File menu shortcut.
-        if let event = NSApp.currentEvent, event.type == .keyDown {
-            if PathMenuShortcut.badge(for: event) != nil { return }
-            if event.charactersIgnoringModifiers?.lowercased() == "n" {
-                let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-                if modifiers == .command || modifiers == [.command, .option] { return }
-            }
-        }
-        model.dismissContextMenu(target: target)
-    }
-
     private func isMenuForCurrentRow(_ menu: NSMenu) -> Bool {
         guard isCurrentTarget(), !item.isDraft,
               model.items.contains(where: { $0.path == item.path }),
@@ -536,32 +521,6 @@ private struct FileTreeRow: View {
               target == item.path || item.compactComponents.contains(where: { $0.path == target })
         else { return false }
         return PathMenuShortcut.hasPathActions(menu)
-    }
-
-    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
-        guard isMenuForCurrentRow(menu) else { return false }
-        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        let key = event.charactersIgnoringModifiers?.lowercased()
-        let title: String
-        switch (key, modifiers) {
-        case (_, []) where event.keyCode == 51 || event.keyCode == 117:
-            title = sshHost == nil
-                ? String(localized: "Move to Trash", table: "Sidebar")
-                : String(localized: "Delete…", table: "Sidebar")
-        case ("c", [.command]): title = String(localized: "Copy", table: "Sidebar")
-        case ("x", [.command]): title = String(localized: "Cut", table: "Sidebar")
-        case ("v", [.command]): title = String(localized: "Paste", table: "Sidebar")
-        default: return false
-        }
-        guard let index = menu.items.firstIndex(where: {
-            $0.isEnabled && $0.title == title
-        }) else { return false }
-        menu.performActionForItem(at: index)
-        if let target = model.contextMenuTargetPath {
-            model.dismissContextMenu(target: target)
-        }
-        menu.cancelTracking()
-        return true
     }
 
     @ViewBuilder
@@ -577,7 +536,7 @@ private struct FileTreeRow: View {
                     await model.beginNewFile(in: target.path)
                 }
             }
-            .badge("⌘N")
+            .keyboardShortcut("n", modifiers: .command)
 
             let newFolderTitle = String(localized: "New Folder…", table: "Sidebar")
             Button(newFolderTitle) {
@@ -586,7 +545,7 @@ private struct FileTreeRow: View {
                     await model.beginNewFolder(in: target.path)
                 }
             }
-            .badge("⌥⌘N")
+            .keyboardShortcut("n", modifiers: [.command, .option])
         } else if !multiple {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(target.path, true) }
@@ -603,27 +562,27 @@ private struct FileTreeRow: View {
                     selection.map { URL(fileURLWithPath: $0) }
                 )
             }
-            .badge(PathMenuShortcut.reveal)
+            .keyboardShortcut(PathMenuShortcut.reveal)
         }
         Divider()
         let cutTitle = String(localized: "Cut", table: "Sidebar")
         Button(cutTitle) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
         }
-        .badge("⌘X")
+        .keyboardShortcut("x", modifiers: .command)
 
         let copyTitle = String(localized: "Copy", table: "Sidebar")
         Button(copyTitle) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
         }
-        .badge("⌘C")
+        .keyboardShortcut("c", modifiers: .command)
 
         if !multiple && target.isDirectory {
             let pasteTitle = String(localized: "Paste", table: "Sidebar")
             Button(pasteTitle) {
                 if isCurrentTarget() { onCommand(.paste(into: target.path)) }
             }
-            .badge("⌘V")
+            .keyboardShortcut("v", modifiers: .command)
         }
         Divider()
         Button(multiple ? String(localized: "Copy Paths", table: "Sidebar")
@@ -632,7 +591,7 @@ private struct FileTreeRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(selection.joined(separator: "\n"), forType: .string)
         }
-        .badge(PathMenuShortcut.copyAbsolute)
+        .keyboardShortcut(PathMenuShortcut.copyAbsolute)
         Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
                : String(localized: "Copy Relative Path", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
@@ -642,7 +601,7 @@ private struct FileTreeRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         }
-        .badge(PathMenuShortcut.copyRelative)
+        .keyboardShortcut(PathMenuShortcut.copyRelative)
         Divider()
         if !multiple {
             Button(String(localized: "Rename", table: "Sidebar")) {
@@ -655,7 +614,7 @@ private struct FileTreeRow: View {
         Button(deleteTitle, role: .destructive) {
             if isCurrentTarget() { onCommand(.delete(selection)) }
         }
-        .badge("⌫")
+        .keyboardShortcut(.delete, modifiers: [])
     }
 
     /// Commits an inline rename and, when the file actually moved, tells the
@@ -701,8 +660,7 @@ private struct FileTreeRow: View {
                     }
                 },
                 onContextClick: { selectForContextMenu(target) },
-                onMenuClosed: { dismissContextMenu(for: target.path) },
-                onMenuKeyDown: handleMenuKeyDown,
+                onMenuClosed: { model.dismissContextMenu(target: target.path) },
                 isExpectedMenu: isMenuForCurrentRow,
                 menuContent: { rowMenu(for: target) })
                 .overlay {
