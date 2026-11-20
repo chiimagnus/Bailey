@@ -584,16 +584,6 @@ final class Project: nonisolated Identifiable {
         closePanels(dock.commandTargets(for: .tab(tab.id), scope: .tabsToRight))
     }
 
-    /// Closes file tabs while leaving other content open.
-    func closeFiles() {
-        closeBatch(tabs.map(\.content).filter { $0.isFile })
-    }
-
-    /// Closes diff tabs while leaving other content open.
-    func closeDiffs() {
-        closeBatch(tabs.map(\.content).filter { $0.isDiff })
-    }
-
     /// Closes every tab, leaving the project open but empty.
     func closeAll() {
         closeBatch(tabs.map(\.content))

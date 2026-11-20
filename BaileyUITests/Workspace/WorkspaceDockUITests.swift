@@ -500,8 +500,10 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertLessThan(menu.frame.width, 260,
                           "A short tab context menu should not reserve a 250pt shortcut column")
         XCTAssertTrue(menu.menuItems["Close Tabs to the Right"].exists)
-        XCTAssertFalse(menu.menuItems["Rename…"].exists)
-        XCTAssertFalse(menu.menuItems["Use Automatic Title"].exists)
+        XCTAssertTrue(menu.menuItems["Close All"].exists)
+        for old in ["Rename…", "Use Automatic Title", "Close Files", "Close Diffs"] {
+            XCTAssertFalse(menu.menuItems[old].exists)
+        }
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(tab.exists)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "Content remains untouched\n")

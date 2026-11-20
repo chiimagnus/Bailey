@@ -677,7 +677,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 XCTAssertTrue(window.makeFirstResponder(focusedEditor))
                 XCTAssertTrue(window.firstResponder === focusedEditor)
             }
-            project.closeFiles()
+            project.closeAll()
             XCTAssertTrue(project.tabs.isEmpty)
             XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil },
                           "Actual tab closure must retire document views even when AppKit caches old scroll views")
@@ -846,7 +846,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             await file.save()
             XCTAssertFalse(file.isDirty)
             XCTAssertEqual(try Data(contentsOf: path), original + Data(appended.utf8))
-            project.closeFiles()
+            project.closeAll()
             XCTAssertTrue(project.tabs.isEmpty)
             XCTAssertNil(scroll.documentView, "Closing the file must detach its TextKit document")
             XCTAssertNil(editor.syntaxCoordinator, "Closing the file must retire its parser")
@@ -973,8 +973,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 XCTFail("The first native editor must be mounted")
             }
 
-            project.closeFiles()
-            XCTAssertTrue(project.tabs.isEmpty, "Real Project.closeFiles must retire all five tabs")
+            project.closeAll()
+            XCTAssertTrue(project.tabs.isEmpty, "Real Project.closeAll must retire all five tabs")
             XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil })
             XCTAssertTrue(oldStorages.allSatisfy { $0.length == 0 },
                           "AppKit must not retain the retired text in cached views")

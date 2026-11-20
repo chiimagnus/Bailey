@@ -1175,11 +1175,11 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertTrue(remote.isDirty)
     }
 
-    func testCloseFilesSavesOriginallyCleanTabEditedDuringAnotherTabWrite() async throws {
+    func testCloseAllSavesOriginallyCleanTabEditedDuringAnotherTabWrite() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let project = Project(fallbackName: "Close Files", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Close All", workspaceConfiguration: .standard)
         let remotePath = root.appendingPathComponent("blocked-remote.txt").path
         let backend = EditorWorkspaceFixture(path: remotePath, contents: Data("remote original".utf8))
         let remote = FileTab(path: remotePath, backend: backend, workspaceIdentity: "ssh:fixture")
@@ -1193,7 +1193,7 @@ final class FileTabPersistenceTests: XCTestCase {
         project.append(PaneTab(content: .file(local)))
         remote.text = "remote saved"
         remote.refreshDirtyState()
-        project.closeFiles()
+        project.closeAll()
         try await waitForFileTabState { await backend.writingPath == remotePath }
 
         local.text = "new draft before close finishes"
@@ -1295,7 +1295,7 @@ final class FileTabPersistenceTests: XCTestCase {
                               "Single-tab close must not retire an active writer")
                 closing = nil
             case .batch:
-                project.closeFiles()
+                project.closeAll()
                 XCTAssertTrue(project.tabs.contains { $0 === tab },
                               "Batch close must not retire an active writer")
                 closing = nil
@@ -1356,7 +1356,7 @@ final class FileTabPersistenceTests: XCTestCase {
                 project.close(tab)
                 closing = nil
             case .batch:
-                project.closeFiles()
+                project.closeAll()
                 closing = nil
             case .project:
                 manager.close(project)

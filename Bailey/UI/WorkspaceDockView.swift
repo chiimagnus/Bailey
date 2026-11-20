@@ -869,15 +869,6 @@ struct DockTabGroupView: View {
             if let current = currentMenuTab(tabID) { project.closeToRight(of: current) }
         }
         .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .tabsToRight).isEmpty)
-        Divider()
-        Button(String(localized: "Close Files", table: "Interface")) {
-            if currentMenuTab(tabID) != nil { project.closeFiles() }
-        }
-        .disabled(project.isClosingPanels || !project.tabs.contains { $0.content.isFile })
-        Button(String(localized: "Close Diffs", table: "Interface")) {
-            if currentMenuTab(tabID) != nil { project.closeDiffs() }
-        }
-        .disabled(project.isClosingPanels || !project.tabs.contains { $0.content.isDiff })
         Button(String(localized: "Close All", table: "Interface")) {
             if currentMenuTab(tabID) != nil { project.closeAll() }
         }
