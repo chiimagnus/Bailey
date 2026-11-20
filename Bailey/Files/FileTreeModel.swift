@@ -797,12 +797,13 @@ final class FileTreeModel {
         await rebuild()
     }
 
-    /// Copies Finder content only into this tree's current local workspace.
-    /// The actual recursive disk operation runs in LocalWorkspaceBackend.
+    /// Transfer local file URLs only into this tree's authorized workspace.
+    /// The disk operation and source-identity checks live in LocalWorkspaceBackend.
     func importFromFinder(
         _ sources: [URL], into directory: String, move: Bool = false,
+        expectedIdentities: [String: LocalFileIdentity]? = nil,
         isCurrentTarget: () -> Bool
-    ) async -> LocalFileImportResult? {
+    ) async -> LocalFileTransferResult? {
         let root = rootPath
         let scope = workspaceScope
         let epoch = treeEpoch
@@ -826,7 +827,8 @@ final class FileTreeModel {
         }
         // Copy through the validated physical directory, not a symlink that can be retargeted.
         let result = await LocalWorkspaceBackend.shared.transferLocalFiles(
-            sources, into: resolvedTarget, move: move
+            sources, into: resolvedTarget, move: move, authorizedRoot: resolvedRoot,
+            expectedIdentities: expectedIdentities
         )
         if epoch == treeEpoch, scope == workspaceScope, root == rootPath, isCurrentTarget() {
             for moved in result.moved {
@@ -989,8 +991,12 @@ final class FileTreeModel {
                 if scope == "local", backend is LocalWorkspaceBackend,
                    action == .copy || action == .move {
                     guard let physicalTarget, let targetPath else { continue }
+                    guard let expectedIdentity = LocalFileIdentity.read(physicalSource) else {
+                        throw WorkspaceError.notFound
+                    }
                     let outcome = try await LocalWorkspaceBackend.shared.transferLocalFile(
-                        from: physicalSource, into: physicalTarget, move: action == .move
+                        from: physicalSource, into: physicalTarget, move: action == .move,
+                        expectedIdentity: expectedIdentity, authorizedRoot: physicalRoot
                     )
                     switch outcome {
                     case .copied(let path), .moved(let path):

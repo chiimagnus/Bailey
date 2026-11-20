@@ -3,7 +3,7 @@ import SwiftUI
 
 enum FileTreeCommand {
     case copy([String], cut: Bool)
-    case paste(into: String)
+    case paste(into: String, move: Bool = false)
     case delete([String])
     case drop([String], into: String, copy: Bool)
 }
@@ -28,21 +28,30 @@ enum FileTreeClipboard {
     ) -> Bool {
         guard !record.paths.isEmpty, let data = try? JSONEncoder().encode(record) else { return false }
         if local {
-            let items = record.paths.enumerated().map { index, path in
-                let item = NSPasteboardItem()
-                item.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
-                if index == 0 {
-                    item.setData(data, forType: type)
-                    item.setString(record.paths.joined(separator: "\n"), forType: .string)
-                }
-                return item
-            }
-            pasteboard.clearContents()
-            return pasteboard.writeObjects(items)
+            return writeLocalFiles(record.paths, privateData: data, to: pasteboard)
         }
         pasteboard.declareTypes([type, .string], owner: nil)
         guard pasteboard.setData(data, forType: type) else { return false }
         return pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
+    }
+
+    @discardableResult
+    static func writeLocalFiles(
+        _ paths: [String], privateData: Data? = nil,
+        to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard !paths.isEmpty else { return false }
+        let items = paths.enumerated().map { index, path in
+            let item = NSPasteboardItem()
+            item.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
+            if index == 0 {
+                if let privateData { item.setData(privateData, forType: type) }
+                item.setString(paths.joined(separator: "\n"), forType: .string)
+            }
+            return item
+        }
+        pasteboard.clearContents()
+        return pasteboard.writeObjects(items)
     }
 
     static func localURLs(from pasteboard: NSPasteboard = .general) -> [URL] {
@@ -52,9 +61,7 @@ enum FileTreeClipboard {
     }
 
     static func canReadFiles(from pasteboard: NSPasteboard = .general) -> Bool {
-        pasteboard.canReadObject(
-            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
-        )
+        pasteboard.availableType(from: [.fileURL]) != nil
     }
 
     static func read(from pasteboard: NSPasteboard = .general) -> Record? {
@@ -324,6 +331,8 @@ private struct FileTreeScrollView: View {
         switch action {
         case .cut, .copy, .delete: return !model.selectedOperationPaths.isEmpty
         case .paste: return canPasteFiles()
+        case .moveTo: return sshHost == nil && canPasteFiles()
+            && FileTreeClipboard.canReadFiles()
         case .selectAll: return model.items.contains { !$0.isDraft }
         }
     }
@@ -334,6 +343,7 @@ private struct FileTreeScrollView: View {
         case .cut: onCommand(.copy(model.selectedOperationPaths, cut: true))
         case .copy: onCommand(.copy(model.selectedOperationPaths, cut: false))
         case .paste: onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath))
+        case .moveTo: onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath, move: true))
         case .delete: onCommand(.delete(model.selectedOperationPaths))
         case .selectAll: model.selectAllVisible()
         }
@@ -608,6 +618,16 @@ private struct FileTreeRow: View {
                 if isCurrentTarget() { onCommand(.paste(into: target.path)) }
             }
             .keyboardShortcut("v", modifiers: .command)
+            .disabled(isRemote
+                ? NSPasteboard.general.availableType(from: [FileTreeClipboard.type]) == nil
+                : !FileTreeClipboard.canReadFiles())
+            if !isRemote {
+                Button(String(localized: "Move Here", table: "Sidebar")) {
+                    if isCurrentTarget() { onCommand(.paste(into: target.path, move: true)) }
+                }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+                .disabled(!FileTreeClipboard.canReadFiles())
+            }
         }
         Divider()
         Button(multiple ? String(localized: "Copy Paths", table: "Sidebar")

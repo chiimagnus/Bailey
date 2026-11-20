@@ -389,6 +389,23 @@ final class WorkspaceApplication {
         }
     }
 
+    /// Refresh already-owned local file trees affected by moves in another project or window.
+    func refreshLocalFileTrees(affectedPaths: [String], excluding destination: FileTreeModel?) async {
+        var refreshed = Set<ObjectIdentifier>()
+        for project in windows.flatMap(\.projects) {
+            let tree = project.fileTree
+            guard tree !== destination, refreshed.insert(ObjectIdentifier(tree)).inserted,
+                  let context = project.panelContext, context.scope == "local",
+                  tree.rootPath == context.cwd,
+                  affectedPaths.contains(where: { matchesFile($0, inside: tree.rootPath, workspace: nil) })
+            else { continue }
+            _ = await tree.sync(
+                root: context.cwd, backend: context.backend, scope: context.scope,
+                panelIdentity: context.identity, connectionRevision: context.connectionRevision
+            )
+        }
+    }
+
     /// Clean tabs close; an edit made during deletion remains visible but read-only.
     func filesDeleted(paths: [String], workspace: String?) {
         for window in windows {

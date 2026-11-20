@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import Observation
 import SwiftUI
@@ -866,32 +867,35 @@ final class WorkspaceWindowModel {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target) else {
             return FileTreeModel.FileBatchResult()
         }
+        func perform() async -> FileTreeModel.FileBatchResult {
+            guard selectedProjectID == project.id, project.matchesPanelTarget(target) else {
+                return FileTreeModel.FileBatchResult()
+            }
+            let outcome = await project.fileTree.performFileOperation(
+                operation, paths: paths, into: directory,
+                isCurrentTarget: {
+                    self.selectedProjectID == project.id && project.matchesPanelTarget(target)
+                }
+            )
+            for entry in outcome.succeeded {
+                switch operation {
+                case .move:
+                    if let destination = entry.destination {
+                        application.fileRenamed(
+                            from: entry.source, to: destination, workspace: target.workspace
+                        )
+                    }
+                case .delete:
+                    application.filesDeleted(paths: [entry.source], workspace: target.workspace)
+                case .copy: break
+                }
+            }
+            return outcome
+        }
+        if operation == .copy, target.workspace == nil { return await perform() }
         do {
             return try await application.withProtectedFiles(paths: paths, workspace: target.workspace) {
-                guard self.selectedProjectID == project.id,
-                      project.matchesPanelTarget(target) else { throw CancellationError() }
-                let outcome = await project.fileTree.performFileOperation(
-                    operation, paths: paths, into: directory,
-                    isCurrentTarget: {
-                        self.selectedProjectID == project.id && project.matchesPanelTarget(target)
-                    }
-                )
-                for entry in outcome.succeeded {
-                    switch operation {
-                    case .move:
-                        if let destination = entry.destination {
-                            self.application.fileRenamed(
-                                from: entry.source, to: destination, workspace: target.workspace
-                            )
-                        }
-                    case .delete:
-                        self.application.filesDeleted(
-                            paths: [entry.source], workspace: target.workspace
-                        )
-                    case .copy: break
-                    }
-                }
-                return outcome
+                await perform()
             }
         } catch {
             if !(error is CancellationError) { WorkspaceNativeDialogs.showError(error, in: window) }
@@ -947,13 +951,13 @@ final class WorkspaceWindowModel {
         in project: Project, target: PanelContext.Identity,
         pasteboard: NSPasteboard = .general
     ) -> Bool {
-        guard selectedProjectID == project.id, project.matchesPanelTarget(target),
-              let record = FileTreeClipboard.read(from: pasteboard) else { return false }
-        return application.trustedFileClipboard(record, pasteboard: pasteboard)
-            && record.project == project.id
-            && record.identity == String(reflecting: target)
-            && record.root == project.fileTree.rootPath
-            && record.connectionRevision == clipboardRevision(for: target)
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else {
+            return false
+        }
+        if target.workspace == nil {
+            return FileTreeClipboard.canReadFiles(from: pasteboard)
+        }
+        return pasteboard.availableType(from: [FileTreeClipboard.type]) != nil
     }
 
     func performFileTreeCommand(
@@ -978,52 +982,79 @@ final class WorkspaceWindowModel {
         switch command {
         case .copy(let paths, let cut):
             guard !paths.isEmpty else { return }
+            let local = target.workspace == nil
+            if local {
+                let physicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+                let valid = paths.allSatisfy { path in
+                    let url = URL(fileURLWithPath: path).standardizedFileURL
+                    guard path == url.path, path != root,
+                          LocalPathScope.contains(path, in: root),
+                          LocalPathScope.contains(
+                            url.deletingLastPathComponent().resolvingSymlinksInPath().path,
+                            in: physicalRoot
+                          ),
+                          let identity = LocalFileIdentity.read(path) else { return false }
+                    let kind = identity.mode & UInt16(S_IFMT)
+                    return kind == UInt16(S_IFREG) || kind == UInt16(S_IFDIR)
+                        || kind == UInt16(S_IFLNK)
+                }
+                guard valid else {
+                    fileCommandError(String(
+                        localized: "Could not copy files to the clipboard.", table: "Sidebar"
+                    ))
+                    return
+                }
+            }
             let record = FileTreeClipboard.Record(
                 token: UUID(), project: project.id,
                 identity: String(reflecting: target), root: root,
                 connectionRevision: clipboardRevision(for: target), paths: paths, cut: cut
             )
-            let local = target.workspace == nil
             guard FileTreeClipboard.write(record, local: local, to: pasteboard) else {
                 fileCommandError(String(localized: "Could not copy files to the clipboard.", table: "Sidebar"))
                 return
             }
             application.rememberFileClipboard(record, local: local, pasteboard: pasteboard)
 
-        case .paste(let directory):
-            guard let record = FileTreeClipboard.read(from: pasteboard) else {
-                fileCommandError(String(localized: "Clipboard does not contain files copied from Bailey.", table: "Sidebar"))
+        case .paste(let directory, let explicitMove):
+            if target.workspace == nil {
+                pasteLocalFiles(
+                    into: directory, explicitMove: explicitMove, in: project, target: target,
+                    pasteboard: pasteboard, onChange: onChange
+                )
                 return
             }
-            guard canPasteFileTree(in: project, target: target, pasteboard: pasteboard) else {
-                fileCommandError(String(localized: "The copied files belong to a different project or connection.", table: "Sidebar"))
+            guard !explicitMove, let record = FileTreeClipboard.read(from: pasteboard),
+                  application.trustedFileClipboard(record, pasteboard: pasteboard),
+                  record.project == project.id, record.root == root,
+                  record.identity == String(reflecting: target),
+                  record.connectionRevision == clipboardRevision(for: target) else {
+                fileCommandError(String(
+                    localized: "Remote files require the original project and active connection.",
+                    table: "Sidebar"
+                ))
                 return
             }
-            let pasteboardVersion = pasteboard.changeCount
+            let version = pasteboard.changeCount
             run(record.cut ? .move : .copy, paths: record.paths, directory: directory) { result in
                 guard record.cut, !result.succeeded.isEmpty,
-                      pasteboard.changeCount == pasteboardVersion,
+                      pasteboard.changeCount == version,
                       FileTreeClipboard.read(from: pasteboard) == record else { return }
                 let remaining = record.paths.filter { path in
-                    !result.succeeded.contains {
-                        LocalPathScope.contains(path, in: $0.source)
-                    }
+                    !result.succeeded.contains { LocalPathScope.contains(path, in: $0.source) }
                 }
                 if remaining.isEmpty {
                     pasteboard.declareTypes([.string], owner: nil)
                     pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
                 } else {
                     let pending = FileTreeClipboard.Record(
-                        token: record.token, project: record.project,
-                        identity: record.identity, root: record.root,
-                        connectionRevision: record.connectionRevision,
+                        token: record.token, project: record.project, identity: record.identity,
+                        root: record.root, connectionRevision: record.connectionRevision,
                         paths: remaining, cut: true
                     )
-                    if FileTreeClipboard.write(
-                        pending, local: target.workspace == nil, to: pasteboard
-                    ) {
+                    if FileTreeClipboard.write(pending, to: pasteboard) {
                         self.application.rememberFileClipboard(
-                            pending, local: target.workspace == nil, pasteboard: pasteboard
+                            pending, local: false, pasteboard: pasteboard
                         )
                     }
                 }
@@ -1052,6 +1083,119 @@ final class WorkspaceWindowModel {
             alert.beginSheetModal(for: window) { response in
                 guard response == .alertFirstButtonReturn else { return }
                 run(.delete, paths: paths, directory: nil)
+            }
+        }
+    }
+
+    /// Public file URLs identify copyable Mac files; only a live cut intent or
+    /// an explicit Move Here command authorizes deleting an external source.
+    private func pasteLocalFiles(
+        into directory: String, explicitMove: Bool, in project: Project,
+        target: PanelContext.Identity, pasteboard: NSPasteboard,
+        onChange: @escaping () -> Void
+    ) {
+        let urls = FileTreeClipboard.localURLs(from: pasteboard)
+        guard !urls.isEmpty else {
+            fileCommandError(String(
+                localized: "Clipboard does not contain local files.", table: "Sidebar"
+            ))
+            return
+        }
+        let paths = urls.map { $0.standardizedFileURL.path }
+        let record = FileTreeClipboard.read(from: pasteboard)
+        let trustedCut = record?.cut == true && record?.paths == paths
+            && record.map { application.trustedFileClipboard($0, pasteboard: pasteboard) } == true
+        let moving = explicitMove || trustedCut
+        let clipboardVersion = pasteboard.changeCount
+        Task { @MainActor in
+            @MainActor func transfer() async -> LocalFileTransferResult? {
+                guard selectedProjectID == project.id, project.matchesPanelTarget(target),
+                      (!trustedCut || pasteboard.changeCount == clipboardVersion) else {
+                    return nil
+                }
+                var expectedIdentities: [String: LocalFileIdentity]? = nil
+                if moving {
+                    var sources: [String: LocalFileIdentity] = [:]
+                    for path in paths {
+                        if let identity = LocalFileIdentity.read(path) { sources[path] = identity }
+                    }
+                    expectedIdentities = sources
+                }
+                let result = await project.fileTree.importFromFinder(
+                    urls, into: directory, move: moving,
+                    expectedIdentities: expectedIdentities,
+                    isCurrentTarget: {
+                        self.selectedProjectID == project.id && project.matchesPanelTarget(target)
+                    }
+                )
+                if let result {
+                    for entry in result.moved {
+                        application.fileRenamed(
+                            from: entry.source, to: entry.destination, workspace: nil
+                        )
+                    }
+                    for entry in result.copiedWithoutRemoval where entry.retainedAt != entry.source {
+                        application.fileRenamed(
+                            from: entry.source, to: entry.retainedAt, workspace: nil
+                        )
+                    }
+                }
+                return result
+            }
+
+            let result: LocalFileTransferResult?
+            if moving {
+                do {
+                    result = try await application.withProtectedFiles(
+                        paths: paths, workspace: nil
+                    ) {
+                        await transfer()
+                    }
+                } catch {
+                    if !(error is CancellationError) {
+                        WorkspaceNativeDialogs.showError(error, in: window)
+                    }
+                    return
+                }
+            } else {
+                result = await transfer() // Copy the saved disk version, not the editor's draft.
+            }
+            guard let result else { return }
+            let affected = result.moved.flatMap { [$0.source, $0.destination] }
+                + result.copiedWithoutRemoval.flatMap {
+                    [$0.source, $0.destination, $0.retainedAt]
+                }
+            if !affected.isEmpty {
+                await application.refreshLocalFileTrees(
+                    affectedPaths: affected, excluding: project.fileTree
+                )
+            }
+            if !result.copied.isEmpty || !result.moved.isEmpty { onChange() }
+
+            guard moving, !affected.isEmpty,
+                  pasteboard.changeCount == clipboardVersion else { return }
+            let remaining = paths.filter { path in
+                !result.moved.contains { LocalPathScope.contains(path, in: $0.source) }
+            }.map { path in
+                result.copiedWithoutRemoval.first(where: { $0.source == path })?.retainedAt ?? path
+            }.filter { LocalFileIdentity.read($0) != nil }
+
+            if remaining.isEmpty {
+                // The old file URLs must not point to deleted files.
+                pasteboard.declareTypes([.string], owner: nil)
+                pasteboard.setString(paths.joined(separator: "\n"), forType: .string)
+            } else if trustedCut, let record {
+                let pending = FileTreeClipboard.Record(
+                    token: record.token, project: record.project, identity: record.identity,
+                    root: record.root, connectionRevision: record.connectionRevision,
+                    paths: remaining, cut: true
+                )
+                if FileTreeClipboard.write(pending, local: true, to: pasteboard) {
+                    application.rememberFileClipboard(pending, local: true, pasteboard: pasteboard)
+                }
+            } else {
+                // Explicit Finder moves keep only extant, still-copyable file URLs.
+                FileTreeClipboard.writeLocalFiles(remaining, to: pasteboard)
             }
         }
     }

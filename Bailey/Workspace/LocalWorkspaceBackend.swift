@@ -3,9 +3,8 @@ import Darwin
 import Foundation
 
 /// Completed paths and independent failures from one Finder copy batch.
-nonisolated struct LocalFileImportResult: Sendable {
+nonisolated struct LocalFileTransferResult: Sendable {
     var copied: [String] = []
-    var copiedEntries: [(source: String, destination: String)] = []
     var moved: [(source: String, destination: String)] = []
     var copiedWithoutRemoval: [(source: String, destination: String, retainedAt: String)] = []
     var failures: [String] = []
@@ -280,9 +279,11 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
 
     /// Finder drop and local Files paste share the exact same transfer rules.
     @concurrent func transferLocalFiles(
-        _ sources: [URL], into directory: String, move: Bool = false
-    ) async -> LocalFileImportResult {
-        var result = LocalFileImportResult()
+        _ sources: [URL], into directory: String, move: Bool = false,
+        authorizedRoot: String? = nil,
+        expectedIdentities: [String: LocalFileIdentity]? = nil
+    ) async -> LocalFileTransferResult {
+        var result = LocalFileTransferResult()
         var seen = Set<URL>()
         let unique = sources.filter { seen.insert($0.standardizedFileURL).inserted }
         let selectedDirectories = Set(unique.compactMap { source -> String? in
@@ -309,15 +310,18 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 ancestor = next
             }
             if includedByParent { continue }
+            if let expectedIdentities, expectedIdentities[path] == nil {
+                result.failures.append("Source was missing when the transfer began: \(path)")
+                continue
+            }
             do {
                 let outcome = try Self.transferLocalSync(
                     from: source, into: URL(fileURLWithPath: directory), move: move,
-                    expectedIdentity: nil
+                    expectedIdentity: expectedIdentities?[path], authorizedRoot: authorizedRoot
                 )
                 switch outcome {
                 case .copied(let destination):
                     result.copied.append(destination)
-                    result.copiedEntries.append((path, destination))
                 case .moved(let destination):
                     result.moved.append((path, destination))
                 case .copiedWithoutRemoval(let destination, let retainedAt):
@@ -337,17 +341,17 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
 
     @concurrent func transferLocalFile(
         from source: String, into directory: String, move: Bool,
-        expectedIdentity: LocalFileIdentity? = nil
+        expectedIdentity: LocalFileIdentity? = nil, authorizedRoot: String? = nil
     ) async throws -> LocalFileTransferOutcome {
         try Self.transferLocalSync(
             from: URL(fileURLWithPath: source), into: URL(fileURLWithPath: directory),
-            move: move, expectedIdentity: expectedIdentity
+            move: move, expectedIdentity: expectedIdentity, authorizedRoot: authorizedRoot
         )
     }
 
     private static func transferLocalSync(
         from source: URL, into directory: URL, move: Bool,
-        expectedIdentity: LocalFileIdentity?
+        expectedIdentity: LocalFileIdentity?, authorizedRoot: String?
     ) throws -> LocalFileTransferOutcome {
         guard source.isFileURL, source.host == nil || source.host == "localhost" else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
@@ -366,6 +370,14 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
         }
         let target = directory.standardizedFileURL.resolvingSymlinksInPath()
+        if let authorizedRoot {
+            // The caller already pinned a physical root. Never resolve it again:
+            // otherwise a replaced root symlink could redefine the authorization.
+            let pinnedRoot = URL(fileURLWithPath: authorizedRoot).standardizedFileURL.path
+            guard LocalPathScope.contains(target.path, in: pinnedRoot) else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM))
+            }
+        }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDirectory),
               isDirectory.boolValue else { throw WorkspaceError.notFound }
@@ -377,10 +389,17 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             let name = original.lastPathComponent
             let ext = (name as NSString).pathExtension
             let stem = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
-            for number in 1...100 {
+            let extensionSuffix = ext.isEmpty ? "" : "." + ext
+            let allowed = pathconf(target.path, _PC_NAME_MAX)
+            let maxNameBytes = allowed > 0 ? Int(allowed) : 255
+            for number in 1...Int.max {
                 let suffix = number == 1 ? " copy" : " copy \(number)"
+                let budget = maxNameBytes - suffix.utf8.count - extensionSuffix.utf8.count
+                guard budget > 0 else { throw CocoaError(.fileWriteInvalidFileName) }
+                var truncatedStem = stem
+                while truncatedStem.utf8.count > budget { truncatedStem.removeLast() }
                 let candidate = target.appendingPathComponent(
-                    stem + suffix + (ext.isEmpty ? "" : "." + ext)
+                    truncatedStem + suffix + extensionSuffix
                 )
                 var existing = Darwin.stat()
                 if lstat(candidate.path, &existing) == 0 { continue }
