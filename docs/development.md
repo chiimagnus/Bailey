@@ -85,6 +85,8 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 Markdown 排版复用 Textual 的原生视图和 Foundation Markdown 结构；
 Yams 只解析文件头部的数据，SwiftSoup 只提取受支持的静态 HTML 结构。
 SwiftDraw 只接收剥离脚本和外部引用的 SVG，不从原文 URL 直接加载。
+MermaidKit 直接输出原生位图，不引入 Mermaid.js 或 WebView；
+公式使用 Textual 的 SwiftUIMath，随 App 提供字体。
 升级 Textual 时核对图片与 emoji 都使用 Bailey 的附件加载器，而非上游的网络默认值。
 
 ### Ghostty

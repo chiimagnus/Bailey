@@ -1,5 +1,6 @@
 import SwiftUI
 import Textual
+@_spi(Textual) import SwiftUIMath
 
 struct MarkdownFilePreview: View {
     let file: FileTab
@@ -118,6 +119,8 @@ struct MarkdownPreview: View {
                                     .id(revision)
                             case .html(let nodes):
                                 MarkdownHTMLContent(nodes: nodes, resource: resource)
+                            case .mermaid(let source, let line):
+                                MarkdownMermaidView(source: source, line: line).id(source)
                             }
                         }
                         .id(index)
@@ -152,10 +155,51 @@ struct MarkdownPreview: View {
     }
 }
 
-private struct PreparedMarkdown: MarkupParser {
+struct PreparedMarkdown: MarkupParser {
     let markup: AttributedString
 
-    func attributedString(for input: String) throws -> AttributedString { markup }
+    func attributedString(for input: String) throws -> AttributedString {
+        guard markup.characters.contains("$") else { return markup }
+        let math = AttributedStringMarkdownParser.inlineMarkdown(syntaxExtensions: [.math])
+        var result = AttributedString()
+        for run in markup.runs {
+            let original = markup[run.range]
+            let text = String(original.characters)
+            guard text.utf8.count <= 4096, text.contains("$"),
+                  run.inlinePresentationIntent?.contains(.code) != true, run.link == nil, run.imageURL == nil,
+                  run.presentationIntent?.components.contains(where: {
+                      if case .codeBlock = $0.kind { return true }
+                      return false
+                  }) != true,
+                  let expanded = try? math.attributedString(for: text),
+                  expanded.runs.contains(where: { $0.textual.attachment != nil }) else {
+                result.append(original)
+                continue
+            }
+            for part in expanded.runs {
+                var attributes = run.attributes
+                if let attachment = part.textual.attachment {
+                    let notation = attachment.description
+                    let display = notation.hasPrefix("$$")
+                    let markers = display ? 2 : 1
+                    let latex = String(notation.dropFirst(markers).dropLast(markers))
+                    let bounds = Math.typographicBounds(
+                        for: latex, fitting: .unspecified,
+                        font: .init(name: .latinModern, size: 14), style: display ? .display : .text
+                    )
+                    if bounds.size.width > 0 {
+                        attributes.textual.attachment = attachment
+                        result.append(AttributedString("\u{FFFC}", attributes: attributes))
+                    } else {
+                        result.append(AttributedString(notation, attributes: attributes))
+                    }
+                } else {
+                    result.append(AttributedString(String(expanded[part.range].characters), attributes: attributes))
+                }
+            }
+        }
+        return result
+    }
 }
 
 private struct MarkdownHTMLContent: View {

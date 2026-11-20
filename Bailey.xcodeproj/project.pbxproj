@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BC1000000000000000000043 /* MermaidRender in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000042 /* MermaidRender */; };
 		BC1000000000000000000033 /* SwiftDraw in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000032 /* SwiftDraw */; };
 		BC1000000000000000000003 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000002 /* Textual */; };
 		BC1000000000000000000013 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000012 /* Yams */; };
@@ -72,6 +73,7 @@
 				BC1000000000000000000013 /* Yams in Frameworks */,
 				BC1000000000000000000023 /* SwiftSoup in Frameworks */,
 				BC1000000000000000000033 /* SwiftDraw in Frameworks */,
+				BC1000000000000000000043 /* MermaidRender in Frameworks */,
 			);
 		};
 		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
@@ -151,6 +153,7 @@
 				BC1000000000000000000012 /* Yams */,
 				BC1000000000000000000022 /* SwiftSoup */,
 				BC1000000000000000000032 /* SwiftDraw */,
+				BC1000000000000000000042 /* MermaidRender */,
 			);
 			productName = Bailey;
 			productReference = FF3FDD73300B6A7400112486 /* Bailey.app */;
@@ -219,6 +222,7 @@
 				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
 				BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
+				BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF3FDD74300B6A7400112486 /* Products */;
@@ -524,6 +528,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/2389-research/MermaidKit";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.2;
+			};
+		};
 		BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/swhitty/SwiftDraw";
@@ -575,6 +587,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		BC1000000000000000000042 /* MermaidRender */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */;
+			productName = MermaidRender;
+		};
 		BC1000000000000000000032 /* SwiftDraw */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */;

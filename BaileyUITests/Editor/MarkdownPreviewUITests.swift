@@ -15,6 +15,11 @@ final class MarkdownPreviewUITests: XCTestCase {
 
             <audio controls src="sound.wav" autoplay loop></audio>
 
+            ```mermaid
+            flowchart LR
+              Source --> Preview
+            ```
+
             """)
         _ = try fixture.file("chart.svg", text: """
             <svg xmlns="http://www.w3.org/2000/svg" width="100" height="30">
@@ -46,6 +51,8 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertFalse(player.exists)
         start.click()
         XCTAssertTrue(player.waitForExistence(timeout: 10), preview.debugDescription)
+        let diagram = WorkspaceUITestSupport.element("bailey.markdown.mermaid", in: app)
+        XCTAssertTrue(diagram.waitForExistence(timeout: 10), preview.debugDescription)
         app.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(player.waitForNonExistence(timeout: 10))
     }

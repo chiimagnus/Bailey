@@ -8,6 +8,9 @@ Work with source files, Git, a browser,
 and AI command-line tools around your terminal in one customizable window. Requires an Apple
 Silicon Mac running macOS 15.6 or later.
 
+Press ⌘⇧V in a Markdown file to toggle its [native preview](docs/features/editor.md#markdown-预览).
+Use the file tab's context menu to edit and preview side by side.
+
 ## Screenshots
 
 <p>

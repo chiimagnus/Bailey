@@ -2,10 +2,64 @@ import AppKit
 import AVFoundation
 import Foundation
 import XCTest
+import Textual
 @testable import Bailey
 
 @MainActor
 final class MarkdownPreviewTests: XCTestCase {
+    func testMarkdownMermaidUsesFenceBodyAndRendersNativeDiagramTypes() async throws {
+        let documents = [
+            "flowchart TD\n    Start --> Stop",
+            "sequenceDiagram\n    Alice->>Bob: Hello",
+            "classDiagram\n    class Ledger",
+            "stateDiagram-v2\n    [*] --> Idle"
+        ]
+        for source in documents {
+            let fenced = "---\nname: sample\n---\n```mermaid\n" + source + "\n```"
+            let document = try await MarkdownDocument.parse(fenced)
+            guard case .mermaid(let body, line: 4) = document.blocks.first?.content else {
+                return XCTFail("Missing fence and original start line")
+            }
+            XCTAssertEqual(body, source + "\n")
+            for dark in [false, true] {
+                let rendered = await MarkdownMermaid.image(body, dark: dark)
+                let image = try XCTUnwrap(rendered)
+                XCTAssertGreaterThan(image.size.width, 20)
+                XCTAssertGreaterThan(image.size.height, 20)
+                XCTAssertNotNil(image.tiffRepresentation)
+            }
+        }
+        for source in ["not a diagram", "flowchart TD\n click Start href \"https://example.invalid\"", String(repeating: "a", count: 20_000)] {
+            let rendered = await MarkdownMermaid.image(source, dark: false)
+            XCTAssertNil(rendered)
+        }
+    }
+
+    func testRenderMathAndFootnotesWhileKeepingLiteralCode() async throws {
+        let document = try await MarkdownDocument.parse("""
+            Inline $x^2$ and a note[^ref]. Literal `$x$`.
+
+            $$\\frac{1}{2}$$
+
+            [^ref]: Note
+
+            ```text
+            [^fake]: Do not turn this into a footnote.
+            ```
+            """)
+        let note = try XCTUnwrap(document.blocks.first { $0.anchor == "bailey-note:ref" })
+        guard case .markdown(let noteText) = note.content else { return XCTFail("No footnote content") }
+        XCTAssertEqual(String(noteText.characters), "[1] Note")
+        XCTAssertFalse(document.blocks.contains { $0.anchor == "bailey-note:fake" })
+        let allMarkup = try document.blocks.compactMap { block -> AttributedString? in
+            guard case .markdown(let raw) = block.content else { return nil }
+            return try PreparedMarkdown(markup: raw).attributedString(for: "")
+        }
+        let attachments = allMarkup.flatMap { $0.runs.compactMap { $0.textual.attachment?.description } }
+        XCTAssertEqual(attachments, ["$x^2$", "$$\\frac{1}{2}$$"])
+        XCTAssertTrue(allMarkup.contains { $0.runs.contains { $0.link?.fragment == "bailey-note:ref" } })
+        XCTAssertTrue(allMarkup.contains { String($0.characters).contains("Literal $x$") })
+    }
     func testSVGInlineAndRelativeShareStaticRenderingWithoutExternalContent() async throws {
         let source = """
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
@@ -243,9 +297,10 @@ final class MarkdownPreviewTests: XCTestCase {
             | --- | --- |
             | ~~removed~~ | https://example.invalid |
 
-            ```mermaid title
-            graph TD
-                A --> B
+            ```swift
+            func call() {
+                helper()
+            }
             ```
 
             import Widget from './widget'
@@ -269,8 +324,8 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(runs.contains { run in
             run.presentationIntent?.components.contains { if case .table = $0.kind { true } else { false } } == true
         })
-        let fence = try XCTUnwrap(markup.first { $0.characters.starts(with: "graph TD") })
-        XCTAssertEqual(String(fence.characters), "graph TD\n    A --> B\n")
+        let fence = try XCTUnwrap(markup.first { $0.characters.starts(with: "func call()") })
+        XCTAssertEqual(String(fence.characters), "func call() {\n    helper()\n}\n")
         XCTAssertEqual(fence.runs.first?.markdownSourcePosition?.startColumn, 1)
     }
 

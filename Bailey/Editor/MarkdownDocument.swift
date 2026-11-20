@@ -17,6 +17,7 @@ nonisolated struct MarkdownDocument: Sendable {
     enum Content: Sendable {
         case markdown(AttributedString)
         case html([MarkdownHTML])
+        case mermaid(source: String, line: Int)
     }
 
     let properties: [Property]
@@ -39,12 +40,15 @@ nonisolated struct MarkdownDocument: Sendable {
         try Task.checkCancellation()
         let header = splitHeader(source)
         let original = String(header.body)
+        let headerLines = source[..<header.body.startIndex].filter(\.isNewline).count
         var originalLines: [Substring]?
         let rendered = try AttributedString(
             markdown: original, including: \.textual,
             options: .init(appliesSourcePositionAttributes: true)
         )
         try Task.checkCancellation()
+        let footnotes = original.contains("[^") ? MarkdownFootnotes(lines: sourceLines(), markup: rendered) : nil
+        let footnoteLines = Set(footnotes?.notes.map(\.line) ?? [])
         var blocks: [Block] = []
         var duplicates: [String: Int] = [:]
         var start = rendered.startIndex
@@ -60,12 +64,25 @@ nonisolated struct MarkdownDocument: Sendable {
             latest = outermost
         }
         if start != rendered.endIndex { append(rendered[start...], intent: latest) }
+        for note in footnotes?.notes ?? [] {
+            let text = "[\(note.number)] " + note.text
+            let markup = (try? AttributedString(markdown: text)) ?? AttributedString(text)
+            blocks.append(Block(anchor: note.anchor, content: .markdown(markup)))
+        }
         return Self(properties: header.properties, warning: header.warning, blocks: blocks)
 
         func append(_ content: AttributedSubstring, intent: PresentationIntent.IntentType?) {
             let plain = String(content.characters)
+            if case .codeBlock(let hint)? = intent?.kind,
+               hint?.split(whereSeparator: \.isWhitespace).first?.lowercased() == "mermaid" {
+                let line = (content.runs.first?.markdownSourcePosition?.startLine ?? 1) + headerLines
+                blocks.append(Block(anchor: nil, content: .mermaid(source: plain, line: line)))
+                return
+            }
             let paragraph: Bool
             if case .paragraph = intent?.kind { paragraph = true } else { paragraph = false }
+            if paragraph, let line = content.runs.first?.markdownSourcePosition?.startLine,
+               footnoteLines.contains(line) { return }
             if (intent == nil || paragraph), plain.hasPrefix("<"),
                sourcePrefix(content.runs.first?.markdownSourcePosition, count: 1) == "<",
                let html = MarkdownHTML.parse(plain) {
@@ -116,19 +133,25 @@ nonisolated struct MarkdownDocument: Sendable {
                 }
                 markup = inline
             }
+            if let footnotes { markup = footnotes.link(in: markup) }
             blocks.append(Block(anchor: anchor, content: .markdown(markup)))
+        }
+
+        func sourceLines() -> [Substring] {
+            if let originalLines { return originalLines }
+            let lines = original.split(omittingEmptySubsequences: false) {
+                $0 == "\n" || $0 == "\r\n" || $0 == "\r"
+            }
+            originalLines = lines
+            return lines
         }
 
         func sourcePrefix(_ position: AttributedString.MarkdownSourcePosition?, count: Int) -> String? {
             guard let position else { return nil }
-            if originalLines == nil {
-                originalLines = original.split(omittingEmptySubsequences: false) {
-                    $0 == "\n" || $0 == "\r\n" || $0 == "\r"
-                }
-            }
-            guard let originalLines, originalLines.indices.contains(position.startLine - 1),
+            let lines = sourceLines()
+            guard lines.indices.contains(position.startLine - 1),
                   position.startColumn > 0 else { return nil }
-            let bytes = originalLines[position.startLine - 1].utf8
+            let bytes = lines[position.startLine - 1].utf8
             return String(decoding: bytes.dropFirst(position.startColumn - 1).prefix(count), as: UTF8.self)
         }
     }
