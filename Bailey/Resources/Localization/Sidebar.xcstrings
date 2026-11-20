@@ -923,6 +923,16 @@
         }
       }
     },
+    "Hide Excluded Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏被排除的文件"
+          }
+        }
+      }
+    },
     "Hide Git Output" : {
       "localizations" : {
         "zh-Hans" : {

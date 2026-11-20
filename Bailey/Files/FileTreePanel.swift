@@ -89,13 +89,14 @@ struct FileTreePanel: View {
                     .help(String(localized: "Reveal in Finder", table: "Sidebar"))
                 }
                 Menu {
-                    Toggle(String(localized: "Show Excluded Files", table: "Sidebar"),
-                           isOn: Binding(
-                            get: { model.showExcluded },
-                            set: { visible in
-                                if isCurrentTarget() { Task { await model.setShowExcluded(visible) } }
-                            }
-                           ))
+                    Button(model.showExcluded
+                        ? String(localized: "Hide Excluded Files", table: "Sidebar")
+                        : String(localized: "Show Excluded Files", table: "Sidebar")) {
+                        Task {
+                            guard isCurrentTarget() else { return }
+                            await model.setShowExcluded(!model.showExcluded)
+                        }
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .panelFont(size: 11)

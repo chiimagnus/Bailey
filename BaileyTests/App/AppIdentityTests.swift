@@ -171,6 +171,19 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testExcludedFilesSystemMenuHasNoShortcut() throws {
+        let main = try XCTUnwrap(NSApp.mainMenu)
+        let panel = try XCTUnwrap(main.items.first {
+            $0.title == String(localized: "Panel", table: "Interface")
+        }?.submenu)
+        let show = try XCTUnwrap(panel.items.first {
+            $0.title == String(localized: "Show Excluded Files", table: "Sidebar")
+        })
+        XCTAssertTrue(show.keyEquivalent.isEmpty,
+                      "Excluded-file visibility is a menu command without a keyboard shortcut")
+    }
+
+    @MainActor
     func testPanelCloseShortcutIsNativeInBothMenus() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let panel = try XCTUnwrap(main.items.first {

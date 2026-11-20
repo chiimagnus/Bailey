@@ -3,6 +3,70 @@ import XCTest
 
 @MainActor
 final class WorkspaceFilesUITests: XCTestCase {
+    func testSystemPanelMenuSwitchesShowAndHideExcludedFilesWithoutChangingSettings() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let visible = try fixture.file("visible.swift", text: "visible bytes\n")
+        try fixture.initializeGit()
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, project: fixture.root
+        )
+        let config = fixture.root.appendingPathComponent(".config/bailey-dev/config.toml")
+        let originalConfig = try? Data(contentsOf: config)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(visible, in: window)
+            .waitForExistence(timeout: 15))
+        let excluded = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", ".git")).firstMatch
+        XCTAssertFalse(excluded.exists)
+
+        app.menuBarItems["Panel"].click()
+        let show = app.menuItems["Show Excluded Files"]
+        XCTAssertTrue(show.waitForExistence(timeout: 8))
+        XCTAssertTrue(show.isEnabled)
+        show.click()
+        XCTAssertTrue(excluded.waitForExistence(timeout: 12),
+                      "The native Panel menu must reveal excluded folders in Files")
+
+        app.menuBarItems["Panel"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        let header = WorkspaceUITestSupport.element("bailey.files.showExcludedMenu", in: app)
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        header.click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
+        let hidden = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: excluded
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 12), .completed,
+                       "The Files header and the system menu must share one visibility state")
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(visible, in: window).exists)
+        app.menuBarItems["Panel"].click()
+        XCTAssertTrue(app.menuItems["Show Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Show Excluded Files"].click()
+        XCTAssertTrue(excluded.waitForExistence(timeout: 12))
+        app.menuBarItems["Panel"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
+        let hiddenAgain = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: excluded
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenAgain], timeout: 12), .completed)
+
+        XCTAssertEqual(try String(contentsOf: visible, encoding: .utf8), "visible bytes\n")
+        XCTAssertEqual(try? Data(contentsOf: config), originalConfig,
+                       "Temporary excluded-file visibility must not alter saved settings")
+        app.menuBarItems["Panel"].click()
+        app.menuItems["Git Manager"].click()
+        app.menuBarItems["Panel"].click()
+        XCTAssertFalse(app.menuItems["Show Excluded Files"].isEnabled,
+                       "An inactive File Manager must not offer the visibility command")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    }
+
     func testRealSettingsExcludeAndFileTabRevealHiddenRow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let hidden = try fixture.file("workspace/node_modules/hidden.swift", text: "real hidden editor bytes\n")
@@ -80,9 +144,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let menu = WorkspaceUITestSupport.element("bailey.files.showExcludedMenu", in: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
         menu.click()
-        let showExcluded = app.menuItems["Show Excluded Files"]
-        XCTAssertTrue(showExcluded.waitForExistence(timeout: 8))
-        showExcluded.click()
+        let hideExcluded = app.menuItems["Hide Excluded Files"]
+        XCTAssertTrue(hideExcluded.waitForExistence(timeout: 8))
+        hideExcluded.click()
         let hiddenAgain = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: folder
         )

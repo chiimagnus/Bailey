@@ -191,6 +191,13 @@ private struct BaileyCommands: Commands {
     private var pathActions: FocusedPathActions? {
         manager != nil ? focusedPathActions : nil
     }
+    private var fileTreeForMenu: FileTreeModel? {
+        guard let project = manager?.selectedProject,
+              project.dock.activeGroup?.selected == .files,
+              let context = project.panelContext,
+              project.fileTree.syncedTarget(for: context) != nil else { return nil }
+        return project.fileTree
+    }
     private var diffLayoutMenuTitle: String {
         guard let style = manager?.diffLayoutTarget?.preferences.diffStyle else {
             return String(localized: "Diff Layout", table: "Git")
@@ -284,6 +291,21 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
+
+            Button(fileTreeForMenu?.showExcluded == true
+                ? String(localized: "Hide Excluded Files", table: "Sidebar")
+                : String(localized: "Show Excluded Files", table: "Sidebar")) {
+                guard let owner = manager, let project = owner.selectedProject,
+                      let target = project.panelContext?.identity,
+                      let tree = fileTreeForMenu else { return }
+                Task { @MainActor in
+                    guard owner.selectedProject === project,
+                          project.matchesPanelTarget(target),
+                          project.dock.activeGroup?.selected == .files else { return }
+                    await tree.setShowExcluded(!tree.showExcluded)
+                }
+            }
+            .disabled(fileTreeForMenu == nil)
 
             Button(action: { manager?.showPanel(.git) }) {
                 Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
