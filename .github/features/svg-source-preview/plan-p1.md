@@ -21,7 +21,8 @@ SVG 源码仍保留在唯一原生 `NSTextStorage` 中；渲染时从该版本�
 <a id="p1-t1"></a>
 ### P1-T1 SVG 类型识别与安全内容边界
 
-- **位置**：`FileTab.loadedContent`、`FileViewerView`、新增 SVG 预览视图和测试。
+- **位置**：`FileViewerView` 的 `.text` 分支、`FileTab.nativeTextStorage`、新增 SVG 预览视图和测试；
+  复用已验证的文本读取，按 [文件渲染接入边界](../file-viewer-routing/plan-p1.md) **不新增 SVG `Content` case 或改写 `loadedContent`**。
 - **实施**：按扩展名路由有效 SVG，调用 SwiftDraw `SVG(data:)`；XML 输入和外部资源访问必须先有范围／权限限制，拒绝脚本、外链、扩展实体和主动内容。
   用官方 SVG fixture 和 Bailey 科研绘图检查 `clipPath`、`mask`、`filter`、pattern、gradient、变换和 text 渲染差异；未覆盖的 SVG 特性须有可见回退，不能假装 SwiftDraw 和 WebKit 完全等价。
 - **验证**：与系统参考渲染的像素／结构对比正常 viewBox、clipPath、mask、filter、pattern、文字、渐变、透明度、复杂 path；识别支持矩阵和差异阈值。

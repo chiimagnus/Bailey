@@ -12,16 +12,19 @@ HTML 全页**不必**先用 SwiftSoup 重新序列化（那会破坏原页面 CS
 
 ## 方案
 
-沿 `Project.openFile` → `FileTab` → `FileViewerView` 添加 HTML 显示模式。源码仍由现有 `SourceTextEditor` 保存与 Undo。
+沿现有 `FileTab` → `FileViewerView` 的 `.text` 分支添加 HTML 展示模式，
+不为文本预览改写 `FileTab.loadedContent` 或增加新的 `Content` case；会话恢复直接通过 `Project.restoreTab` 创建文件标签。
+源码仍由现有 `SourceTextEditor` 保存与 Undo。参见 [文件渲染接入边界](../file-viewer-routing/plan-p1.md)。
 预览使用独立受控 `WKWebView`／非持久化配置，通过受限自定义 scheme 加载可授权的 HTML／CSS／项目内静态资源，不以任意本地 file URL 或网络导航代替访问授权；不把源 HTML 交给现有可执行 Browser。
-右键命令在 `WorkspaceDockView` 的文件标签上下文扩展，真实键盘命令在 `BaileyApp.swift` 的系统主菜单注册，仅对当前窗口活动的可渲染文件生效。
+右键命令在 `WorkspaceDockView` 的文件标签上下文扩展；
+**复用 Markdown P1-T2 在 `BaileyApp.swift` 注册的唯一 `⌘⇧V` 系统 File 菜单动作**，由当前窗口活动文件决定是否可用，不在此另注册一次。
 
 ## 任务
 
 <a id="p1-t1"></a>
 ### P1-T1 类型入口与静态内容安全边界
 
-- **位置**：`FileTab` 文件类型判定、`FileViewerView`、新增 HTML 静态预览、安全测试。
+- **位置**：`FileViewerView` 已加载 `.text` 的格式展示分支、新增 HTML 静态预览和安全测试；不添加独立文件类型管理器。
 - **实施**：源码默认，`WKWebViewConfiguration` 禁止网页 JavaScript，`WKURLSchemeHandler` 仅服务经当前工作区身份验证的相对静态资源；CSP 默认 deny，并由 `WKNavigationDelegate` 拒绝自动导航、外链／file URL、弹窗与表单提交。
   网络/权限被拒绝时显示具体资源占位或错误；渲染只从 FileTab 当前原生文本快照取得，不创建第二份可写 HTML。
 - **验证**：不同 CSS 层叠与媒体查询、HTML/CSS、图片/SVG 静态资源、相对路径含 URL 编码/`../`/symlink、无权限本地与 SSH 同名文件。
@@ -31,7 +34,8 @@ HTML 全页**不必**先用 SwiftSoup 重新序列化（那会破坏原页面 CS
 ### P1-T2 主菜单命令与文件标签视图切换
 
 - **位置**：`BaileyApp.swift` 系统菜单、`WorkspaceDockView` 标签右键、`FileViewerView`、`docs/features/editor.md`。
-- **实施**：当前标签可选「源码／预览／并排」；`⌘⇧V` 在源码／预览切换；右键不复制键盘绑定，不显示快捷键提示。仅复用已有 Dock 标签，没有内容工具栏或路径栏。
+- **实施**：当前标签可选「源码／预览／并排」；`⌘⇧V` 复用 Markdown 的唯一 File 菜单命令双向切换，不新增菜单项或键盘注册；
+  右键不复制键盘绑定，不显示快捷键提示。仅复用已有 Dock 标签，没有内容工具栏或路径栏。
 - **验证**：两窗口及多 Dock、右键后台标签不误操作当前文件、原生菜单权限、无键盘重复派发、系统文本选择／输入法焦点保持。
 
 ## 阶段验收
