@@ -151,6 +151,18 @@ final class FileTab: nonisolated Identifiable {
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
+
+    nonisolated static func imageThumbnail(_ source: CGImageSource, maximumDimension: Int) -> CGImage? {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
+        let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
+        let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
+        guard width > 0, height > 0, width <= maxImagePixels / height else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
     @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
@@ -764,16 +776,7 @@ final class FileTab: nonisolated Identifiable {
            let source = CGImageSourceCreateWithData(data as CFData,
                                                     [kCGImageSourceShouldCache: false] as CFDictionary),
            CGImageSourceGetType(source) != nil {
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
-            let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
-            let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
-            let thumbnailOptions: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: 4096,
-            ]
-            guard width > 0, height > 0, width <= maxImagePixels / height,
-                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0,
-                                                                      thumbnailOptions as CFDictionary) else {
+            guard let thumbnail = imageThumbnail(source, maximumDimension: 4096) else {
                 return LoadedContent(
                     content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
                     text: "", encoding: nil, imageFingerprint: nil, decodingFailed: false,

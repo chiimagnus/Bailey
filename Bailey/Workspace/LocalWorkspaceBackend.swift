@@ -123,7 +123,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try Self.readSync(path: path, maxBytes: maxBytes)
     }
 
-    private static func readSync(path: String, maxBytes: Int) throws -> Data {
+    @concurrent func read(path: String, maxBytes: Int, confinedTo directory: String) async throws -> Data {
+        guard let root = realpath(directory, nil) else { throw CocoaError(.fileReadNoPermission) }
+        defer { free(root) }
+        return try Self.readSync(path: path, maxBytes: maxBytes, confinedTo: String(cString: root))
+    }
+
+    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {
         try Task.checkCancellation()
         guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
@@ -138,6 +144,16 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
+        if let root {
+            var resolved = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(fd, F_GETPATH, &resolved) != -1,
+                  LocalPathScope.contains(
+                      String(decoding: resolved.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self),
+                      in: root
+                  ) else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+        }
         var info = Darwin.stat()
         guard fstat(fd, &info) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))

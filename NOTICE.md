@@ -30,6 +30,7 @@ Bailey 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参�
 | JetBrains Mono 字体 | [OFL.txt](Bailey/Resources/Fonts/OFL.txt) |
 | Nerd Fonts 资源 | [LICENSE-nerd-fonts.txt](Bailey/Resources/Fonts/LICENSE-nerd-fonts.txt) |
 | Ghostty 及 Swift 包依赖 | [Package.resolved](Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) 记录来源和解析提交；许可证随各依赖源码维护 |
+| Markdown 排版与解析 | [Textual](Bailey/Resources/Licenses/LICENSE-textual.txt)、[SwiftUIMath](Bailey/Resources/Licenses/LICENSE-swiftui-math.txt)、[ConcurrencyExtras](Bailey/Resources/Licenses/LICENSE-swift-concurrency-extras.txt)、[Yams](Bailey/Resources/Licenses/LICENSE-yams.txt)、[SwiftSoup](Bailey/Resources/Licenses/LICENSE-swiftsoup.txt) |
 | TSX 本地解析器 | 来源、固定修订和更新边界见 [development.md](docs/development.md#语法解析与-diff) |
 
 升级依赖或重新生成资源时，保留原有许可证与版权文本；自有文档整理不翻译、覆盖或删减这些原文。

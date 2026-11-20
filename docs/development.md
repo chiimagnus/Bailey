@@ -82,6 +82,10 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 在 [Package.resolved](../Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)。
 不要在别处维护第二份完整版本清单；升级时同步检查下面的必要契约和 [NOTICE](../NOTICE.md)。
 
+Markdown 排版复用 Textual 的原生视图和 Foundation Markdown 结构；
+Yams 只解析文件头部的数据，SwiftSoup 只提取受支持的静态 HTML 结构。
+升级 Textual 时核对图片与 emoji 都使用 Bailey 的附件加载器，而非上游的网络默认值。
+
 ### Ghostty
 
 Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；
