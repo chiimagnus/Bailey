@@ -18,6 +18,7 @@ struct BaileyApp: App {
     var body: some Scene {
         WindowGroup(AppIdentity.displayName, id: "main") {
             WindowRootView(application: applicationDelegate.workspace)
+                .environment(applicationDelegate.menuPresentation)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultLaunchBehavior(BaileyInstanceMode.isIsolated ? .suppressed : .automatic)
@@ -109,11 +110,10 @@ struct FocusedGitStageAllAction: Equatable {
 struct FocusedPathActions {
     let paths: (Bool) -> [String]
     let revealablePaths: () -> [String]
-    var didPerform: () -> Void = {}
 
     static func file(
         _ file: FileTab, in project: Project,
-        isValid: @escaping () -> Bool, didPerform: @escaping () -> Void = {}
+        isValid: @escaping () -> Bool
     ) -> Self {
         let paths: (Bool) -> [String] = { absolute in
             guard isValid() else { return [] }
@@ -125,7 +125,7 @@ struct FocusedPathActions {
         }
         return Self(paths: paths, revealablePaths: {
             file.workspaceIdentity == nil ? paths(true) : []
-        }, didPerform: didPerform)
+        })
     }
 
     func copy(absolute: Bool) {
@@ -133,14 +133,12 @@ struct FocusedPathActions {
         guard !value.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value.joined(separator: "\n"), forType: .string)
-        didPerform()
     }
 
     func revealInFinder() {
         let value = revealablePaths()
         guard !value.isEmpty else { return }
         NSWorkspace.shared.activateFileViewerSelecting(value.map { URL(fileURLWithPath: $0) })
-        didPerform()
     }
 }
 
@@ -155,9 +153,21 @@ extension FocusedValues {
 @MainActor
 @Observable
 final class MainMenuPresentation {
+    private struct ContextTracking {
+        weak var menu: NSMenu?
+        let isValid: () -> Bool
+        var timestamp: TimeInterval?
+        var canReplay: (() -> Bool)?
+        var posted = false
+        var cleanup: (() -> Void)?
+
+        var shouldReplay: Bool { isValid() && canReplay?() == true }
+    }
+
     // Only menu rows refresh during tracking; rebuilding Commands would drop native Window items.
     @ObservationIgnored private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
-    @ObservationIgnored var pendingContextClose: (window: NSWindow, project: Project, target: DockItem, timestamp: TimeInterval)?
+    @ObservationIgnored private var contextTracking: ContextTracking?
+    @ObservationIgnored private var replayMonitor: Any?
     private var completedTrackings = 0
     private(set) var trackingEpoch = 0
 
@@ -181,6 +191,86 @@ final class MainMenuPresentation {
         tracked = nil
         completedTrackings &+= 1
     }
+
+    func contextMenuStarted(_ menu: NSMenu, isValid: @escaping () -> Bool) {
+        clearContextTracking()
+        contextTracking = ContextTracking(menu: menu, isValid: isValid)
+    }
+
+    func finishContextMenu(_ menu: NSMenu, cleanup: @escaping () -> Void) {
+        guard contextTracking?.menu === menu, NSApp.currentEvent?.type == .keyDown else {
+            cleanup()
+            return
+        }
+        contextTracking?.cleanup = cleanup
+    }
+
+    func contextMenuEnded(_ menu: NSMenu) {
+        guard contextTracking?.menu === menu else { return }
+        guard let event = NSApp.currentEvent, event.type == .keyDown else {
+            clearContextTracking()
+            return
+        }
+        let timestamp = event.timestamp
+        contextTracking?.timestamp = timestamp
+        nonisolated(unsafe) let deferredEvent = event
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let tracking = self.contextTracking,
+                      tracking.timestamp == timestamp else { return }
+                guard tracking.shouldReplay else {
+                    self.clearContextTracking()
+                    return
+                }
+                self.contextTracking?.posted = true
+                if tracking.cleanup != nil {
+                    self.replayMonitor = NSEvent.addLocalMonitorForEvents(
+                        matching: [.keyDown, .leftMouseDown, .rightMouseDown]
+                    ) { [weak self] incoming in
+                        let discard = MainActor.assumeIsolated {
+                            guard let self, let tracking = self.contextTracking,
+                                  tracking.timestamp != nil else { return false }
+                            let replay = incoming.timestamp == timestamp
+                            if replay, tracking.shouldReplay { return false }
+                            self.clearContextTracking()
+                            return replay
+                        }
+                        return discard ? nil : incoming
+                    }
+                }
+                NSApp.postEvent(deferredEvent, atStart: true)
+            }
+        }
+    }
+
+    func command(_ action: @escaping () -> Void) -> () -> Void {
+        { self.perform(action) }
+    }
+
+    func perform(_ action: () -> Void, canReplay: @escaping () -> Bool = { true }) {
+        guard let tracking = contextTracking, let event = NSApp.currentEvent,
+              event.type == .keyDown, event.timestamp == tracking.timestamp else {
+            if contextTracking?.timestamp != nil { clearContextTracking() }
+            action()
+            return
+        }
+        if tracking.posted {
+            contextTracking?.timestamp = nil
+            defer { clearContextTracking() }
+            guard tracking.shouldReplay else { return }
+            action()
+        } else if tracking.canReplay == nil {
+            contextTracking?.canReplay = canReplay
+        }
+    }
+
+    private func clearContextTracking() {
+        let cleanup = contextTracking?.cleanup
+        contextTracking = nil
+        if let replayMonitor { NSEvent.removeMonitor(replayMonitor) }
+        replayMonitor = nil
+        cleanup?()
+    }
 }
 
 /// Menu commands routed to the focused window's manager.
@@ -201,7 +291,7 @@ private struct BaileyCommands: Commands {
            case .file(let file) = tab.content {
             return .file(file, in: project, isValid: {
                 manager.selectedProject === project && project.dock.contextTarget == .tab(id)
-            }, didPerform: { project.dock.clearContextTarget() })
+            })
         }
         if let project = manager.selectedProject,
            let context = project.panelContext,
@@ -220,10 +310,6 @@ private struct BaileyCommands: Commands {
             return FocusedPathActions(paths: paths, revealablePaths: {
                 guard !context.isRemote else { return [] }
                 return paths(true)
-            }, didPerform: {
-                if let target = tree.contextMenuTargetPath {
-                    tree.dismissContextMenu(target: target)
-                }
             })
         }
         return focusedPathActions
@@ -242,6 +328,11 @@ private struct BaileyCommands: Commands {
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
         return focusedManager
     }
+
+    private func commandButton(_ title: String, action: @escaping () -> Void) -> Button<Text> {
+        Button(title, action: menuPresentation.command(action))
+    }
+
     var body: some Commands {
         let _ = application.registerWindowOpener {
             openWindow(id: "main")
@@ -250,7 +341,7 @@ private struct BaileyCommands: Commands {
         CommandGroup(replacing: .saveItem) {}
 
         CommandGroup(after: .pasteboard) {
-            Button(String(localized: "Save", table: "Interface")) {
+            commandButton(String(localized: "Save", table: "Interface")) {
                 manager?.saveSelectedFile()
             }
             .keyboardShortcut("s", modifiers: .command)
@@ -261,18 +352,18 @@ private struct BaileyCommands: Commands {
             // Find follows the active dock content, not the find bar's first responder.
             if manager?.canFind == true {
                 Menu(String(localized: "Find", table: "Interface")) {
-                    Button(String(localized: "Find…", table: "Interface")) {
+                    commandButton(String(localized: "Find…", table: "Interface")) {
                         manager?.performFindAction(.show)
                     }
                     .keyboardShortcut("f", modifiers: .command)
 
-                    Button(String(localized: "Find and Replace…", table: "Interface")) {
+                    commandButton(String(localized: "Find and Replace…", table: "Interface")) {
                         manager?.performFindAction(.replace)
                     }
                     .keyboardShortcut("f", modifiers: [.command, .option])
                     .disabled(manager?.canReplace != true)
 
-                    Button(String(localized: "Find Next", table: "Interface")) {
+                    commandButton(String(localized: "Find Next", table: "Interface")) {
                         manager?.performFindAction(.next)
                     }
                     .keyboardShortcut("g", modifiers: .command)
@@ -281,7 +372,7 @@ private struct BaileyCommands: Commands {
                         manager?.performFindAction(.previous)
                     }
 
-                    Button(String(localized: "Use Selection for Find", table: "Interface")) {
+                    commandButton(String(localized: "Use Selection for Find", table: "Interface")) {
                         manager?.performFindAction(.useSelection)
                     }
                     .keyboardShortcut("e", modifiers: .command)
@@ -298,7 +389,7 @@ private struct BaileyCommands: Commands {
         CommandGroup(replacing: .sidebar) {}
 
         CommandMenu(String(localized: "Panel", table: "Interface")) {
-            Button(String(localized: "Command Palette…", table: "Interface")) {
+            commandButton(String(localized: "Command Palette…", table: "Interface")) {
                 manager?.toggleCommandPalette()
             }
             .keyboardShortcut("p", modifiers: .command)
@@ -314,18 +405,14 @@ private struct BaileyCommands: Commands {
             }
             .disabled(manager?.selectedProject == nil)
 
-            Button {
-                manager?.showPanel(.files)
-            } label: {
+            Button(action: menuPresentation.command { manager?.showPanel(.files) }) {
                 Label(String(localized: "File Manager", table: "Sidebar"), systemImage: DockItem.files.symbol)
                     .labelStyle(.titleAndIcon)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button {
-                manager?.showPanel(.git)
-            } label: {
+            Button(action: menuPresentation.command { manager?.showPanel(.git) }) {
                 Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
                     .labelStyle(.titleAndIcon)
             }
@@ -334,68 +421,40 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Next Panel", table: "Interface")) {
+            commandButton(String(localized: "Next Panel", table: "Interface")) {
                 manager?.selectNextPanel()
             }
             .keyboardShortcut("]", modifiers: [.command, .shift])
             .disabled((manager?.selectedProject?.dock.tabOrder.count ?? 0) < 2)
 
-            Button(String(localized: "Previous Panel", table: "Interface")) {
+            commandButton(String(localized: "Previous Panel", table: "Interface")) {
                 manager?.selectPreviousPanel()
             }
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled((manager?.selectedProject?.dock.tabOrder.count ?? 0) < 2)
 
-            Button(String(localized: "Switch Recent Panel", table: "Interface")) {
+            commandButton(String(localized: "Switch Recent Panel", table: "Interface")) {
                 if let manager { manager.tabSwitcher.cycle(in: manager, reverse: false) }
             }
             .keyboardShortcut(.tab, modifiers: .control)
             .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
-            Button(String(localized: "Switch Recent Panel Backward", table: "Interface")) {
+            commandButton(String(localized: "Switch Recent Panel Backward", table: "Interface")) {
                 if let manager { manager.tabSwitcher.cycle(in: manager, reverse: true) }
             }
             .keyboardShortcut(.tab, modifiers: [.control, .shift])
             .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
             Button(String(localized: "Close Panel", table: "Interface")) {
-                if let pending = menuPresentation.pendingContextClose {
-                    menuPresentation.pendingContextClose = nil
-                    guard NSApp.isActive, NSApp.keyWindow === pending.window,
-                          NSApp.currentEvent?.timestamp == pending.timestamp,
-                          let owner = application.owner(of: pending.window),
-                          owner.selectedProject === pending.project,
-                          pending.project.dock.contextTarget == pending.target else { return }
-                    owner.closeActivePanelOrWindow()
-                    return
-                }
-
                 let owner = manager ?? NSApp.keyWindow.flatMap { application.owner(of: $0) }
-                if let owner, let project = owner.selectedProject,
-                   let target = project.dock.contextTarget,
-                   let window = owner.attachedWindow, window === NSApp.keyWindow,
-                   let event = NSApp.currentEvent, event.type == .keyDown,
-                   event.modifierFlags.intersection([.command, .option, .shift, .control]) == [.command],
-                   event.charactersIgnoringModifiers?.lowercased() == "w" {
-                    menuPresentation.pendingContextClose = (window, project, target, event.timestamp)
-                    nonisolated(unsafe) let deferredEvent = event
-                    RunLoop.main.perform(inModes: [.default]) {
-                        MainActor.assumeIsolated {
-                            guard let pending = menuPresentation.pendingContextClose,
-                                  deferredEvent.timestamp == pending.timestamp,
-                                  NSApp.isActive, NSApp.keyWindow === pending.window,
-                                  application.owner(of: pending.window)?.selectedProject === pending.project,
-                                  pending.project.dock.contextTarget == pending.target else {
-                                menuPresentation.pendingContextClose = nil
-                                return
-                            }
-                            NSApp.postEvent(deferredEvent, atStart: true)
-                        }
-                    }
-                    return
-                }
-                if let owner { owner.closeActivePanelOrWindow() }
-                else { NSApp.keyWindow?.performClose(nil) }
+                let project = owner?.selectedProject
+                let target = project?.dock.contextTarget
+                menuPresentation.perform({
+                    if let owner { owner.closeActivePanelOrWindow() }
+                    else { NSApp.keyWindow?.performClose(nil) }
+                }, canReplay: {
+                    project?.dock.contextTarget == target
+                })
             }
             .keyboardShortcut("w", modifiers: .command)
 
@@ -404,9 +463,7 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(entries) { item in
-                    Button {
-                        manager?.selectPanel(item.id)
-                    } label: {
+                    Button(action: menuPresentation.command { manager?.selectPanel(item.id) }) {
                         PanelMenuLabel(item: item, presentation: menuPresentation)
                     }
                     .keyboardShortcut(item.index < 9
@@ -417,7 +474,7 @@ private struct BaileyCommands: Commands {
         }
 
         CommandMenu(String(localized: "Project", table: "Interface")) {
-            Button(String(localized: "Add Projects…", table: "Interface")) {
+            commandButton(String(localized: "Add Projects…", table: "Interface")) {
                 manager?.chooseFolders()
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
@@ -430,13 +487,13 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Next Project", table: "Interface")) {
+            commandButton(String(localized: "Next Project", table: "Interface")) {
                 manager?.selectNextProject()
             }
             .keyboardShortcut("]", modifiers: [.command, .option])
             .disabled((manager?.projects.count ?? 0) < 2)
 
-            Button(String(localized: "Previous Project", table: "Interface")) {
+            commandButton(String(localized: "Previous Project", table: "Interface")) {
                 manager?.selectPreviousProject()
             }
             .keyboardShortcut("[", modifiers: [.command, .option])
@@ -452,11 +509,11 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(entries) { item in
-                    Button {
+                    Button(action: menuPresentation.command {
                         if let index = manager?.projects.firstIndex(where: { $0.id == item.id }) {
                             manager?.selectProject(index: index)
                         }
-                    } label: {
+                    }) {
                         ProjectMenuLabel(item: item, presentation: menuPresentation)
                     }
                     .keyboardShortcut(item.index < 9
@@ -467,21 +524,23 @@ private struct BaileyCommands: Commands {
         }
 
         CommandMenu(String(localized: "File", table: "Interface")) {
-            Button(String(localized: "New File…", table: "Sidebar")) {
-                Task { await manager?.newFile() }
+            commandButton(String(localized: "New File…", table: "Sidebar")) {
+                let action = manager?.newItemAction(isDirectory: false)
+                Task { await action?() }
             }
             .keyboardShortcut("n", modifiers: .command)
             .disabled(manager?.selectedProject?.panelContext == nil)
 
-            Button(String(localized: "New Folder…", table: "Sidebar")) {
-                Task { await manager?.newFolder() }
+            commandButton(String(localized: "New Folder…", table: "Sidebar")) {
+                let action = manager?.newItemAction(isDirectory: true)
+                Task { await action?() }
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
             .disabled(manager?.selectedProject?.panelContext == nil)
 
             Divider()
 
-            Button(String(localized: "Open File…", table: "Interface")) {
+            commandButton(String(localized: "Open File…", table: "Interface")) {
                 manager?.chooseFiles()
             }
             .keyboardShortcut("o", modifiers: .command)
@@ -489,19 +548,19 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Copy Path", table: "Sidebar")) {
+            commandButton(String(localized: "Copy Path", table: "Sidebar")) {
                 pathActions?.copy(absolute: true)
             }
             .keyboardShortcut("c", modifiers: [.command, .option])
             .disabled(pathActions?.paths(true).isEmpty != false)
 
-            Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+            commandButton(String(localized: "Copy Relative Path", table: "Sidebar")) {
                 pathActions?.copy(absolute: false)
             }
             .keyboardShortcut("c", modifiers: [.command, .option, .shift])
             .disabled(pathActions?.paths(false).isEmpty != false)
 
-            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
+            commandButton(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 pathActions?.revealInFinder()
             }
             .keyboardShortcut("r", modifiers: [.command, .option])
@@ -509,13 +568,13 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Stage All Changes", table: "Sidebar")) {
+            commandButton(String(localized: "Stage All Changes", table: "Sidebar")) {
                 if manager != nil { focusedGitStageAll?.perform() }
             }
             .keyboardShortcut("y", modifiers: [.command, .shift])
             .disabled(manager == nil || focusedGitStageAll == nil)
 
-            Button(String(localized: "Commit Staged", table: "Sidebar")) {
+            commandButton(String(localized: "Commit Staged", table: "Sidebar")) {
                 focusedGitCommit?.perform()
             }
             .keyboardShortcut(.return, modifiers: .command)
@@ -523,7 +582,7 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(diffLayoutMenuTitle) {
+            commandButton(diffLayoutMenuTitle) {
                 manager?.toggleDiffLayout()
             }
             .keyboardShortcut("u", modifiers: [.command, .option])
@@ -531,7 +590,7 @@ private struct BaileyCommands: Commands {
         }
 
         CommandMenu(String(localized: "Terminal", table: "Terminal")) {
-            Button(String(localized: "New Terminal", table: "Interface")) {
+            commandButton(String(localized: "New Terminal", table: "Interface")) {
                 manager?.newSession()
             }
             .keyboardShortcut("t", modifiers: .command)
@@ -539,7 +598,7 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Clear Terminal", table: "Interface")) {
+            commandButton(String(localized: "Clear Terminal", table: "Interface")) {
                 manager?.clearActiveTerminal()
             }
             .keyboardShortcut("k", modifiers: .command)
@@ -554,13 +613,13 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Focus Address Bar", table: "Interface")) {
+            commandButton(String(localized: "Focus Address Bar", table: "Interface")) {
                 manager?.focusBrowserAddressBar()
             }
             .keyboardShortcut("l", modifiers: .command)
             .disabled(manager?.hasSelectedBrowser != true)
 
-            Button(String(localized: "Reload Page", table: "Interface")) {
+            commandButton(String(localized: "Reload Page", table: "Interface")) {
                 manager?.reloadSelectedBrowser()
             }
             .keyboardShortcut("r", modifiers: .command)
@@ -580,12 +639,12 @@ private struct BaileyCommands: Commands {
         }
 
         CommandGroup(before: .windowArrangement) {
-            Button(String(localized: "New Window", table: "Interface")) {
+            commandButton(String(localized: "New Window", table: "Interface")) {
                 openWindow(id: "main")
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
-            Button(
+            commandButton(
                 String(localized: NSApp.keyWindow?.styleMask.contains(.fullScreen) == true
                     ? "Exit Full Screen" : "Enter Full Screen", table: "Interface")
             ) {

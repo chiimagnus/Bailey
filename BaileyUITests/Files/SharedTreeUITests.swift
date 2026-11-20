@@ -143,6 +143,61 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 12), .completed)
     }
 
+    func testFilesContextNativeCutPasteAndDeleteKeepOriginalSelection() throws {
+        guard (try? WorkspaceUITestSupport.clipboardItems()) != nil else {
+            throw XCTSkip("The current clipboard cannot be backed up without losing data")
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let selected = try fixture.file("a-selected.txt", text: "keep\n")
+        let cut = try fixture.file("b-cut.txt", text: "move\n")
+        let deleted = try fixture.file("c-delete.txt", text: "remove\n")
+        _ = try fixture.file("destination/keep.txt", text: "keep inside\n")
+        let destination = fixture.root.appendingPathComponent("destination/b-cut.txt")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let selectedRow = WorkspaceUITestSupport.fileRow(selected, in: window)
+        let cutRow = WorkspaceUITestSupport.fileRow(cut, in: window)
+        let deletedRow = WorkspaceUITestSupport.fileRow(deleted, in: window)
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "destination")).firstMatch
+        XCTAssertTrue(selectedRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(cutRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(deletedRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        selectedRow.click()
+
+        cutRow.rightClick()
+        XCTAssertTrue(app.menuItems["Cut"].waitForExistence(timeout: 8))
+        XCTAssertTrue(selectedRow.isSelected && !cutRow.isSelected)
+        app.typeKey("x", modifierFlags: .command)
+        expectFilesClipboard(cut.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cut.path),
+                      "Cut must not move the source until Paste")
+
+        folder.rightClick()
+        XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 8))
+        app.typeKey("v", modifierFlags: .command)
+        let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: destination.path)
+                && !FileManager.default.fileExists(atPath: cut.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("move\n".utf8))
+
+        deletedRow.rightClick()
+        XCTAssertTrue(app.menuItems["Move to Trash"].waitForExistence(timeout: 8))
+        app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !FileManager.default.fileExists(atPath: deleted.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: selected), Data("keep\n".utf8))
+        XCTAssertTrue(selectedRow.isSelected,
+                      "Context menu editing must not change the original Files selection")
+    }
+
     func testContextMenuNewItemShortcutsCreateOnlyInsideRightClickedFolder() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let home = try WorkspaceUITestFixture(in: self)
@@ -219,6 +274,54 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "other\n")
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: fixture.root.appendingPathComponent("context-created.txt").path))
+    }
+
+    func testSystemShortcutsKeepTheirTargetsDuringFilesContextTracking() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let target = try fixture.file("target.txt", text: "untouched\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(target, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+
+        func openFileMenu() {
+            row.rightClick()
+            XCTAssertTrue(app.menuItems["Rename"].waitForExistence(timeout: 8))
+        }
+
+        openFileMenu()
+        app.typeKey("p", modifierFlags: .command)
+        let palette = window.textFields["bailey.commandPalette.search"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 8), "A second palette toggle would close it")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(palette.waitForNonExistence(timeout: 8))
+
+        openFileMenu()
+        app.typeKey("t", modifierFlags: .command)
+        let marker = fixture.root.appendingPathComponent("terminal-context-marker")
+        app.typeText("printf terminal > '\(marker.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let received = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: marker, encoding: .utf8)) == "terminal"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 12), .completed)
+
+        row.doubleClick()
+        let fileTab = WorkspaceUITestSupport.fileTab(target, in: window)
+        XCTAssertTrue(fileTab.waitForExistence(timeout: 12))
+        XCTAssertTrue(fileTab.isSelected)
+        openFileMenu()
+        app.typeKey(XCUIKeyboardKey.tab, modifierFlags: .control)
+        let switched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !fileTab.isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [switched], timeout: 8), .completed,
+                       "Control release must commit the preview after a right-click")
+
+        openFileMenu()
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertEqual(app.windows.count, 2)
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "untouched\n")
     }
 
     func testContextClickKeepsSelectionWhenMenuIsCancelled() throws {
@@ -399,14 +502,16 @@ final class SharedTreeUITests: XCTestCase {
                 XCTAssertTrue(segment.waitForExistence(timeout: 8))
                 XCTAssertEqual(segment.value as? String, path)
                 segment.rightClick()
-                let copy = app.menuItems["Copy Relative Path"]
+                let copy = window.menuItems["Copy Relative Path"]
                 XCTAssertTrue(copy.waitForExistence(timeout: 8))
-                copy.click()
+                XCTAssertTrue(copy.isEnabled)
+                app.typeKey("c", modifierFlags: [.command, .option, .shift])
                 XCTAssertEqual(NSPasteboard.general.string(forType: .string), path)
                 segment.rightClick()
-                let absolute = app.menuItems["Copy Absolute Path"]
+                let absolute = window.menuItems["Copy Absolute Path"]
                 XCTAssertTrue(absolute.waitForExistence(timeout: 8))
-                absolute.click()
+                XCTAssertFalse(absolute.frame.isEmpty)
+                absolute.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
                 XCTAssertEqual(NSPasteboard.general.string(forType: .string),
                                fixture.root.appendingPathComponent(path).path)
             }

@@ -2367,8 +2367,6 @@ struct GitPanel: View {
         }
         return FocusedPathActions(paths: paths, revealablePaths: {
             remoteName == nil ? paths(true) : []
-        }, didPerform: {
-            contextChange = nil
         })
     }
 
@@ -2392,8 +2390,6 @@ struct GitPanel: View {
 
     private func dismissContextChange(_ key: ChangeSelection) {
         guard contextChange == key else { return }
-        if let event = NSApp.currentEvent, event.type == .keyDown,
-           PathMenuShortcut.badge(for: event) != nil { return }
         contextChange = nil
     }
 

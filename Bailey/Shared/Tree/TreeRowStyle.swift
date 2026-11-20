@@ -18,17 +18,6 @@ enum PathMenuShortcut {
                 || $0.badge?.stringValue == reveal
         }
     }
-
-    static func badge(for event: NSEvent) -> String? {
-        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        return switch (event.charactersIgnoringModifiers?.lowercased(), modifiers) {
-        case ("c", [.command, .option]): copyAbsolute
-        case ("c", [.command, .option, .shift]): copyRelative
-        case ("r", [.command, .option]): reveal
-        default: nil
-        }
-    }
-
 }
 
 /// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
@@ -136,17 +125,15 @@ struct TreeKeyboardHost: NSViewRepresentable {
 struct ContextMenuClickTarget: NSViewRepresentable {
     let onContextClick: () -> Void
     var onMenuClosed: (() -> Void)?
-    var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
     var isExpectedMenu: ((NSMenu) -> Bool)?
     var onMiddleClick: (() -> Void)?
+    @Environment(MainMenuPresentation.self) private var menuPresentation: MainMenuPresentation?
 
     init(onContextClick: @escaping () -> Void, onMenuClosed: (() -> Void)? = nil,
-         onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil,
          isExpectedMenu: ((NSMenu) -> Bool)? = nil,
          onMiddleClick: (() -> Void)? = nil) {
         self.onContextClick = onContextClick
         self.onMenuClosed = onMenuClosed
-        self.onMenuKeyDown = onMenuKeyDown
         self.isExpectedMenu = isExpectedMenu
         self.onMiddleClick = onMiddleClick
     }
@@ -158,29 +145,28 @@ struct ContextMenuClickTarget: NSViewRepresentable {
     func updateNSView(_ view: ContextMenuClickView, context: Context) {
         view.onContextClick = onContextClick
         view.onMenuClosed = onMenuClosed
-        view.onMenuKeyDown = onMenuKeyDown
         view.isExpectedMenu = isExpectedMenu
         view.onMiddleClick = onMiddleClick
+        view.menuPresentation = menuPresentation
     }
 
     static func dismantleNSView(_ view: ContextMenuClickView, coordinator: ()) {
         view.stopObservingMenu()
         view.onContextClick = nil
         view.onMenuClosed = nil
-        view.onMenuKeyDown = nil
         view.isExpectedMenu = nil
         view.onMiddleClick = nil
+        view.menuPresentation = nil
     }
 }
 
 final class ContextMenuClickView: NSView {
     var onContextClick: (() -> Void)?
     var onMenuClosed: (() -> Void)?
-    var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
     var isExpectedMenu: ((NSMenu) -> Bool)?
     var onMiddleClick: (() -> Void)?
+    weak var menuPresentation: MainMenuPresentation?
     private weak var contextMouseEvent: NSEvent?
-    private var menuKeyMonitor: Any?
     private var trackingMenu: NSMenu?
 
     override init(frame frameRect: NSRect) {
@@ -212,7 +198,7 @@ final class ContextMenuClickView: NSView {
         guard contextMouseEvent !== event else { return }
         contextMouseEvent = event
         stopObservingMenu()
-        if onMenuClosed != nil || onMenuKeyDown != nil {
+        if onMenuClosed != nil {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(menuDidBeginTracking(_:)),
                 name: NSMenu.didBeginTrackingNotification, object: nil
@@ -235,29 +221,14 @@ final class ContextMenuClickView: NSView {
               isExpectedMenu?(menu) ?? true else { return }
         if let window, let key = NSApp.keyWindow, window !== key { return }
         trackingMenu = menu
-        guard onMenuKeyDown != nil else { return }
-        menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
-            [weak self] event in
-            let handled = assumeMainActor { self?.handleMenuKeyDown(event) == true }
-            return handled ? nil : event
-        }
     }
 
     @objc private func menuDidEndTracking(_ notification: Notification) {
-        guard trackingMenu === notification.object as? NSMenu else { return }
-        onMenuClosed?()
+        guard let menu = trackingMenu, menu === notification.object as? NSMenu else { return }
         stopObservingMenu()
-    }
-
-    private func handleMenuKeyDown(_ event: NSEvent) -> Bool {
-        guard let menu = trackingMenu,
-              window?.isKeyWindow == true, NSApp.keyWindow === window,
-              onMenuKeyDown?(menu, event) == true else { return false }
-        if trackingMenu === menu {
-            onMenuClosed?()
-            stopObservingMenu()
-        }
-        return true
+        guard let onMenuClosed else { return }
+        if let menuPresentation { menuPresentation.finishContextMenu(menu, cleanup: onMenuClosed) }
+        else { onMenuClosed() }
     }
 
     func stopObservingMenu() {
@@ -267,8 +238,6 @@ final class ContextMenuClickView: NSView {
         NotificationCenter.default.removeObserver(
             self, name: NSMenu.didEndTrackingNotification, object: nil
         )
-        if let menuKeyMonitor { NSEvent.removeMonitor(menuKeyMonitor) }
-        menuKeyMonitor = nil
         trackingMenu = nil
     }
 }
@@ -497,7 +466,6 @@ struct TreeCompactSegment<MenuContent: View>: View {
     let onClick: () -> Void
     let onContextClick: () -> Void
     let onMenuClosed: () -> Void
-    var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil
     var isExpectedMenu: ((NSMenu) -> Bool)? = nil
     @ViewBuilder var menuContent: () -> MenuContent
     @State private var hovering = false
@@ -522,7 +490,7 @@ struct TreeCompactSegment<MenuContent: View>: View {
                                  including: nativeClickOwner ? .none : .all)
             .overlay {
                 ContextMenuClickTarget(onContextClick: onContextClick,
-                                      onMenuClosed: onMenuClosed, onMenuKeyDown: onMenuKeyDown,
+                                      onMenuClosed: onMenuClosed,
                                       isExpectedMenu: isExpectedMenu)
                     .contextMenu(menuItems: menuContent)
             }

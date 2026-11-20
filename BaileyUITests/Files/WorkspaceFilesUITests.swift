@@ -1811,7 +1811,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("alpha/shared.swift", text: "let value = 1\n")
         let beta = try fixture.file("beta/shared.swift", text: "let value = 2\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
@@ -1836,6 +1836,10 @@ final class WorkspaceFilesUITests: XCTestCase {
             editor.click()
             app.typeKey("a", modifierFlags: .command)
             editor.typeText(replacement)
+            if path == beta {
+                files.rightClick()
+                XCTAssertTrue(app.menuItems["Close Panel"].waitForExistence(timeout: 8))
+            }
             app.typeKey("s", modifierFlags: .command)
             let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 (try? String(contentsOf: path, encoding: .utf8)) == replacement

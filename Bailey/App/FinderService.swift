@@ -67,10 +67,20 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func menuDidBeginTracking(_ notification: Notification) {
-        // AppKit tracks the main menu itself, not the Panel / Project submenus.
-        guard let menu = notification.object as? NSMenu,
-              let mainMenu = NSApp.mainMenu,
-              menu === mainMenu, trackedPresentationMenu == nil else { return }
+        guard let menu = notification.object as? NSMenu, let mainMenu = NSApp.mainMenu else { return }
+        if menu !== mainMenu {
+            guard menu.supermenu == nil, let event = NSApp.currentEvent,
+                  event.type == .rightMouseDown
+                    || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)),
+                  let window = NSApp.keyWindow else { return }
+            let projectID = workspace.owner(of: window)?.selectedProject?.id
+            menuPresentation.contextMenuStarted(menu) { [weak self, weak window] in
+                guard let self, let window, NSApp.isActive, NSApp.keyWindow === window else { return false }
+                return self.workspace.owner(of: window)?.selectedProject?.id == projectID
+            }
+            return
+        }
+        guard trackedPresentationMenu == nil else { return }
         trackedPresentationMenu = menu
         let owner = NSApp.keyWindow.flatMap { workspace.owner(of: $0) }
         menuPresentation.beginTracking(
@@ -102,8 +112,11 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func menuDidEndTracking(_ notification: Notification) {
-        guard let menu = notification.object as? NSMenu,
-              menu === trackedPresentationMenu else { return }
+        guard let menu = notification.object as? NSMenu else { return }
+        guard menu === trackedPresentationMenu else {
+            menuPresentation.contextMenuEnded(menu)
+            return
+        }
         trackedPresentationMenu = nil
         menuPresentation.endTracking()
     }

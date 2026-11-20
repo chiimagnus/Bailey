@@ -733,7 +733,7 @@ struct RecentCommitsView: View {
                 values.append(absolute ? (root as NSString).appendingPathComponent(path) : path)
             }
             return values
-        }, revealablePaths: { [] }, didPerform: { contextRowID = nil })
+        }, revealablePaths: { [] })
     }
 
     private func selectContextRow(_ id: String) {
@@ -742,8 +742,6 @@ struct RecentCommitsView: View {
 
     private func dismissContextRow(_ id: String) {
         guard contextRowID == id else { return }
-        if let event = NSApp.currentEvent, event.type == .keyDown,
-           PathMenuShortcut.badge(for: event) != nil { return }
         contextRowID = nil
     }
 

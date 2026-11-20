@@ -660,18 +660,6 @@ struct DockTabGroupView: View {
 
     private func finishTabContextMenu(for item: DockItem) {
         guard project.dock.contextTarget == item else { return }
-        // AppKit 可能先结束右键菜单跟踪，再让系统主菜单处理 ⌘W。
-        // 保留本次右键目标，直到 Close 消费它。
-        if let event = NSApp.currentEvent, event.type == .keyDown {
-            if case .tab(let id) = item,
-               let tab = project.tabs.first(where: { $0.id == id }),
-               case .file = tab.content,
-               PathMenuShortcut.badge(for: event) != nil { return }
-            if event.modifierFlags.intersection([.command, .control, .option, .shift])
-                == [.command], event.charactersIgnoringModifiers?.lowercased() == "w" {
-                return
-            }
-        }
         project.dock.clearContextTarget()
     }
 

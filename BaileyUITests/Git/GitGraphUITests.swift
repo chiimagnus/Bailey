@@ -87,6 +87,19 @@ final class GitGraphUITests: XCTestCase {
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt",
                        "After the menu ends, the original Git Graph selection owns the shortcut")
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        fileMenu.click()
+        let reveal = fileMenu.menuItems["Reveal in Finder"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 8))
+        XCTAssertFalse(reveal.isEnabled)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        b.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
+        app.typeKey("r", modifierFlags: [.command, .option])
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(a.isSelected && !b.isSelected)
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
         let folder = app.windows.firstMatch.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch

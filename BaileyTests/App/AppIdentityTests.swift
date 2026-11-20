@@ -409,13 +409,6 @@ final class AppIdentityTests: XCTestCase {
         let plain = NSHostingMenu(rootView: Button("Copy Path", action: {}))
         plain.update()
         XCTAssertFalse(PathMenuShortcut.hasPathActions(plain))
-        let key = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.command, .option],
-            timestamp: 0, windowNumber: 0, context: nil,
-            characters: "c", charactersIgnoringModifiers: "c",
-            isARepeat: false, keyCode: 8
-        ))
-        XCTAssertEqual(PathMenuShortcut.badge(for: key), PathMenuShortcut.copyAbsolute)
     }
 
     @MainActor

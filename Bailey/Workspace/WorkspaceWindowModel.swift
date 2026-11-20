@@ -721,25 +721,24 @@ final class WorkspaceWindowModel {
     // MARK: - Files
 
     func newFile() async {
-        await newItem(isDirectory: false)
+        await newItemAction(isDirectory: false)?()
     }
 
     func newFolder() async {
-        await newItem(isDirectory: true)
+        await newItemAction(isDirectory: true)?()
     }
 
-    private func newItem(isDirectory: Bool) async {
-        guard let project = selectedProject, let context = project.panelContext else { return }
+    func newItemAction(isDirectory: Bool) -> (@MainActor () async -> Void)? {
+        guard let project = selectedProject, let context = project.panelContext else { return nil }
+        let tree = project.fileTree
         let root = context.cwd
         let revision = context.connectionRevision
-        guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
+        let hasCurrentTree = tree.matchesIndexTarget(root: root, context: context)
         let directory: String
-        if project.fileTree.matchesIndexTarget(root: root, context: context),
-           let contextDirectory = project.fileTree.contextDirectoryPath {
+        if hasCurrentTree, let contextDirectory = tree.contextDirectoryPath {
             directory = contextDirectory
-        } else if project.dock.activeGroup?.selected == .files,
-                  project.fileTree.matchesIndexTarget(root: root, context: context) {
-            directory = project.fileTree.selectedDirectoryPath ?? root
+        } else if hasCurrentTree, project.dock.activeGroup?.selected == .files {
+            directory = tree.selectedDirectoryPath ?? root
         } else if case .file(let file)? = project.focusedContent,
                   file.workspaceIdentity == context.identity.workspace {
             let parent = (file.path as NSString).deletingLastPathComponent
@@ -747,20 +746,25 @@ final class WorkspaceWindowModel {
         } else {
             directory = root
         }
-        if let menuTarget = project.fileTree.contextMenuTargetPath {
-            project.fileTree.dismissContextMenu(target: menuTarget)
+        if let menuTarget = tree.contextMenuTargetPath {
+            tree.dismissContextMenu(target: menuTarget)
         }
-        showPanel(.files)
-        guard await project.fileTree.sync(
-            root: root, backend: context.backend, scope: context.scope,
-            panelIdentity: context.identity, connectionRevision: revision
-        ), context.connectionRevision == revision,
-            selectedProjectID == project.id, project.matchesPanelTarget(context.identity)
-        else { return }
-        if isDirectory {
-            await project.fileTree.beginNewFolder(in: directory)
-        } else {
-            await project.fileTree.beginNewFile(in: directory)
+        return { [weak self] in
+            guard let self, !isClosed,
+                  selectedProjectID == project.id, project.matchesPanelTarget(context.identity),
+                  context.connectionRevision == revision else { return }
+            showPanel(.files)
+            guard await tree.sync(
+                root: root, backend: context.backend, scope: context.scope,
+                panelIdentity: context.identity, connectionRevision: revision
+            ), context.connectionRevision == revision,
+                selectedProjectID == project.id, project.matchesPanelTarget(context.identity)
+            else { return }
+            if isDirectory {
+                await tree.beginNewFolder(in: directory)
+            } else {
+                await tree.beginNewFile(in: directory)
+            }
         }
     }
 
