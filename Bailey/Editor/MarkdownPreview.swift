@@ -4,6 +4,7 @@ import Textual
 struct MarkdownFilePreview: View {
     let file: FileTab
     let directory: String?
+    let assetRefresh: UInt
     let onOpenLink: (URL) async -> Bool
 
     @State private var parsed: (document: MarkdownDocument, request: String, target: String)?
@@ -21,7 +22,7 @@ struct MarkdownFilePreview: View {
                                       set: { file.markdownScrollPosition = $0 }),
                     openLink: onOpenLink
                 )
-                .id(target + (directory ?? ""))
+                .id("\(target)-\(assetRefresh)-\(directory ?? "")")
             } else if failed {
                 ContentUnavailableView("Could not render Markdown.", systemImage: "doc.text")
             } else {
@@ -114,6 +115,7 @@ struct MarkdownPreview: View {
                                     .textual.structuredTextStyle(.gitHub)
                                     .textual.textSelection(.enabled)
                                     .frame(minHeight: 12, alignment: .topLeading)
+                                    .id(revision)
                             case .html(let nodes):
                                 MarkdownHTMLContent(nodes: nodes, resource: resource)
                             }
@@ -168,7 +170,24 @@ private struct MarkdownHTMLContent: View {
                     Text(verbatim: text).textSelection(.enabled)
                 }
             case .image(let url, let alt):
-                MarkdownHTMLImage(url: url, alt: alt, resource: resource)
+                MarkdownHTMLImage(source: .file(url), alt: alt, resource: resource)
+            case .svg(let source, let alt):
+                MarkdownHTMLImage(source: .svg(source), alt: alt, resource: resource)
+            case .table(let rows):
+                ScrollView(.horizontal) {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                        ForEach(rows.indices, id: \.self) { index in
+                            GridRow {
+                                ForEach(rows[index].indices, id: \.self) { column in
+                                    Text(verbatim: rows[index][column])
+                                        .fontWeight(index == 0 ? .semibold : nil)
+                                }
+                            }
+                        }
+                    }
+                }
+            case .media(let url, let video):
+                MarkdownMediaView(url: url, video: video, resource: resource).id(url)
             case .details(let label, let children):
                 DisclosureGroup {
                     VStack(alignment: .leading) { MarkdownHTMLContent(nodes: children, resource: resource) }
@@ -187,7 +206,12 @@ private struct MarkdownHTMLContent: View {
 }
 
 private struct MarkdownHTMLImage: View {
-    let url: URL
+    enum Source: Hashable {
+        case file(URL)
+        case svg(String)
+    }
+
+    let source: Source
     let alt: String
     let resource: MarkdownResource
     @State private var image: MarkdownImage?
@@ -196,15 +220,29 @@ private struct MarkdownHTMLImage: View {
         Group {
             if let image {
                 image.body
-                    .frame(maxWidth: image.image.map { CGFloat($0.width) }, alignment: .leading)
+                    .frame(maxWidth: image.image.map { CGFloat($0.poster.width) }, alignment: .leading)
             } else {
                 ProgressView().controlSize(.small)
             }
         }
-        .task(id: url) {
-            let decoded = try? await resource.image(url)
+        .task(id: source) {
+            image = nil
+            let decoded: MarkdownPicture?
+            let url: URL?
+            switch source {
+            case .file(let link):
+                url = link
+                decoded = try? await resource.picture(link)
+            case .svg(let xml):
+                url = nil
+                decoded = try? await Self.svgPicture(xml)
+            }
             guard !Task.isCancelled else { return }
             image = MarkdownImage(image: decoded, alt: alt, url: url)
         }
+    }
+
+    @concurrent private static func svgPicture(_ source: String) async throws -> MarkdownPicture {
+        MarkdownPicture(poster: try MarkdownSVG.render(Data(source.utf8)))
     }
 }

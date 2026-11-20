@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BC1000000000000000000033 /* SwiftDraw in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000032 /* SwiftDraw */; };
 		BC1000000000000000000003 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000002 /* Textual */; };
 		BC1000000000000000000013 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000012 /* Yams */; };
 		BC1000000000000000000023 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000022 /* SwiftSoup */; };
@@ -70,6 +71,7 @@
 				BC1000000000000000000003 /* Textual in Frameworks */,
 				BC1000000000000000000013 /* Yams in Frameworks */,
 				BC1000000000000000000023 /* SwiftSoup in Frameworks */,
+				BC1000000000000000000033 /* SwiftDraw in Frameworks */,
 			);
 		};
 		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
@@ -148,6 +150,7 @@
 				BC1000000000000000000002 /* Textual */,
 				BC1000000000000000000012 /* Yams */,
 				BC1000000000000000000022 /* SwiftSoup */,
+				BC1000000000000000000032 /* SwiftDraw */,
 			);
 			productName = Bailey;
 			productReference = FF3FDD73300B6A7400112486 /* Bailey.app */;
@@ -215,6 +218,7 @@
 				BC1000000000000000000001 /* XCRemoteSwiftPackageReference "textual" */,
 				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
 				BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
+				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF3FDD74300B6A7400112486 /* Products */;
@@ -520,6 +524,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swhitty/SwiftDraw";
+			requirement = {
+				kind = exactVersion;
+				version = 0.30.0;
+			};
+		};
 		BC1000000000000000000001 /* XCRemoteSwiftPackageReference "textual" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/textual";
@@ -563,6 +575,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		BC1000000000000000000032 /* SwiftDraw */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */;
+			productName = SwiftDraw;
+		};
 		BC1000000000000000000002 /* Textual */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = BC1000000000000000000001 /* XCRemoteSwiftPackageReference "textual" */;

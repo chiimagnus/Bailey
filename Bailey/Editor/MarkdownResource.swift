@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import SwiftUI
 import Textual
+import UniformTypeIdentifiers
 
 nonisolated struct MarkdownResource: Sendable {
     let path: String
@@ -74,15 +75,60 @@ nonisolated struct MarkdownResource: Sendable {
         return result.stdout
     }
 
-    @concurrent func image(_ url: URL) async throws -> CGImage {
-        let data = try await read(url, maxBytes: 16 << 20)
+    @concurrent func picture(_ url: URL) async throws -> MarkdownPicture {
+        let svg = url.pathExtension.lowercased() == "svg"
+        let data = try await read(url, maxBytes: svg ? 1 << 20 : 16 << 20)
         try Task.checkCancellation()
+        if svg { return MarkdownPicture(poster: try MarkdownSVG.render(data)) }
+        return try MarkdownPicture.decode(data)
+    }
+}
+
+nonisolated struct MarkdownPicture: Hashable, Sendable {
+    struct Frame: Hashable, Sendable {
+        let image: CGImage
+        let seconds: TimeInterval
+    }
+
+    let poster: CGImage
+    var animation: [Frame] = []
+
+    static func decode(_ data: Data) throws -> Self {
         guard let source = CGImageSourceCreateWithData(
             data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
-        ), let thumbnail = FileTab.imageThumbnail(source, maximumDimension: 2048) else {
+        ), let poster = FileTab.imageThumbnail(source, maximumDimension: 2048) else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        return thumbnail
+        let count = CGImageSourceGetCount(source)
+        guard CGImageSourceGetType(source) as String? == UTType.gif.identifier,
+              (2...32).contains(count) else { return Self(poster: poster) }
+        var pixels = 0
+        var frames: [Frame] = []
+        for index in 0..<count {
+            try Task.checkCancellation()
+            guard let frame = FileTab.imageThumbnail(source, index: index, maximumDimension: 1024) else {
+                return Self(poster: poster)
+            }
+            pixels += frame.width * frame.height
+            guard pixels <= 8_000_000 else { return Self(poster: poster) }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+            let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double
+                ?? gif?[kCGImagePropertyGIFDelayTime] as? Double ?? 0.1
+            frames.append(Frame(image: frame, seconds: delay.isFinite ? min(max(delay, 0.04), 10) : 0.1))
+        }
+        return Self(poster: poster, animation: frames)
+    }
+
+    func image(at time: TimeInterval) -> CGImage {
+        guard !animation.isEmpty else { return poster }
+        let total = animation.reduce(0) { $0 + $1.seconds }
+        var elapsed = time.truncatingRemainder(dividingBy: total)
+        for frame in animation {
+            if elapsed < frame.seconds { return frame.image }
+            elapsed -= frame.seconds
+        }
+        return poster
     }
 }
 
@@ -91,7 +137,7 @@ nonisolated struct MarkdownImageLoader: AttachmentLoader {
 
     func attachment(for url: URL, text: String, environment: ColorEnvironmentValues) async throws -> MarkdownImage {
         do {
-            let image = try await resource.image(url)
+            let image = try await resource.picture(url)
             try Task.checkCancellation()
             return MarkdownImage(image: image, alt: text, url: url)
         } catch is CancellationError {
@@ -103,9 +149,9 @@ nonisolated struct MarkdownImageLoader: AttachmentLoader {
 }
 
 nonisolated struct MarkdownImage: Attachment {
-    let image: CGImage?
+    let image: MarkdownPicture?
     let alt: String
-    let url: URL
+    let url: URL?
 
     var description: String { alt.isEmpty ? String(localized: "Image") : alt }
 
@@ -125,25 +171,42 @@ nonisolated struct MarkdownImage: Attachment {
         guard let image else {
             return CGSize(width: min(proposal.width ?? 240, 240), height: 24)
         }
-        let naturalWidth = CGFloat(image.width)
+        let naturalWidth = CGFloat(image.poster.width)
         let width = min(proposal.width ?? naturalWidth, naturalWidth)
-        return CGSize(width: width, height: width * CGFloat(image.height) / naturalWidth)
+        return CGSize(width: width, height: width * CGFloat(image.poster.height) / naturalWidth)
     }
 }
 
 private struct MarkdownImageLink: View {
-    let image: CGImage
+    let image: MarkdownPicture
     let alt: String
-    let url: URL
+    let url: URL?
     @Environment(\.openURL) private var openURL
+    @Environment(\.appearsActive) private var active
 
     var body: some View {
-        Button { openURL(url) } label: {
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .scaledToFit()
+        Group {
+            if let url {
+                Button { openURL(url) } label: { frames }
+                    .buttonStyle(.plain)
+            } else {
+                frames
+            }
         }
-        .buttonStyle(.plain)
         .accessibilityLabel(alt)
+    }
+
+    @ViewBuilder private var frames: some View {
+        if image.animation.isEmpty {
+            raster(image.poster)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.04, paused: !active)) { context in
+                raster(image.image(at: context.date.timeIntervalSinceReferenceDate))
+            }
+        }
+    }
+
+    private func raster(_ image: CGImage) -> some View {
+        Image(decorative: image, scale: 1).resizable().scaledToFit()
     }
 }

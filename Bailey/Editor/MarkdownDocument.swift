@@ -72,6 +72,12 @@ nonisolated struct MarkdownDocument: Sendable {
                 blocks.append(Block(anchor: nil, content: .html(html)))
                 return
             }
+            if paragraph, content.runs.count == 1, let url = content.runs.first?.imageURL {
+                let node = MarkdownMedia.video(for: url).map { MarkdownHTML.media(url, video: $0) }
+                    ?? .image(url, alt: plain)
+                blocks.append(Block(anchor: nil, content: .html([node])))
+                return
+            }
             var anchor: String?
             if case .header = intent?.kind {
                 let slug = plain.lowercased().replacingOccurrences(of: " ", with: "-")
@@ -91,6 +97,24 @@ nonisolated struct MarkdownDocument: Sendable {
             case .orderedList, .unorderedList:
                 markup = formatTaskItems(content, sourcePrefix: sourcePrefix)
             default: break
+            }
+            if paragraph, plain.contains("<") {
+                var inline = AttributedString()
+                for run in markup.runs {
+                    let value = markup[run.range]
+                    let html = String(value.characters)
+                    if run.inlinePresentationIntent == nil, html.lowercased().hasPrefix("<img"),
+                       sourcePrefix(run.markdownSourcePosition, count: 1) == "<",
+                       let nodes = MarkdownHTML.parse(html), nodes.count == 1,
+                       case .image(let url, let alt) = nodes.first {
+                        var attributes = run.attributes
+                        attributes.imageURL = url
+                        inline.append(AttributedString(alt.isEmpty ? "Image" : alt, attributes: attributes))
+                    } else {
+                        inline.append(value)
+                    }
+                }
+                markup = inline
             }
             blocks.append(Block(anchor: anchor, content: .markdown(markup)))
         }
@@ -199,18 +223,24 @@ nonisolated struct MarkdownDocument: Sendable {
 nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
     case text(String)
     case image(URL, alt: String)
+    case svg(String, alt: String)
+    case table([[String]])
+    case media(URL, video: Bool)
     case details(String, [Self])
     case emphasis([Self], tag: String)
 
     private static let supported: Set<String> = [
         "img", "details", "b", "strong", "em", "i", "s", "del", "code", "kbd",
-        "div", "p", "span", "summary", "blockquote", "br",
+        "div", "p", "span", "summary", "blockquote", "br", "svg", "table", "video", "audio",
     ]
 
     static func parse(_ source: String) -> [Self]? {
         guard source.utf8.count <= 256 << 10 else { return nil }
         do {
-            guard let body = try SwiftSoup.parseBodyFragment(source).body(),
+            let parser = Parser.htmlParser().settings(.preserveCase)
+            let document = try parser.parseInput(source, "")
+            _ = document.outputSettings().prettyPrint(pretty: false)
+            guard let body = document.body(),
                   body.children().contains(where: { supported.contains($0.tagNameNormal()) }) else { return nil }
             return try body.getChildNodes().flatMap { try render($0, depth: 0) }
         } catch {
@@ -225,14 +255,27 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         switch tag {
         case "img":
             let alt = try element.attr("alt")
-            let location = try element.attr("src")
-            let encoded = location.addingPercentEncoding(
-                withAllowedCharacters: .urlFragmentAllowed.union(CharacterSet(charactersIn: "%#[]"))
-            )
-            guard let encoded, !encoded.isEmpty, let url = URL(string: encoded) else {
+            guard let url = try reference(element.attr("src")) else {
                 return [.text(alt)]
             }
             return [.image(url, alt: alt)]
+        case "svg":
+            let title = element.children().first { $0.tagNameNormal() == "title" }
+            let alt = try title?.text() ?? String(localized: "SVG image")
+            return [.svg(try element.outerHtml(), alt: alt)]
+        case "table":
+            let rows = try element.select("tr").map { row in
+                try row.children().filter { ["th", "td"].contains($0.tagNameNormal()) }.map { try $0.text() }
+            }
+            return [.table(rows)]
+        case "video", "audio":
+            let fallback = element.children().filter { $0.tagNameNormal() == "source" }
+            let candidates = try [element.attr("src")] + fallback.map { try $0.attr("src") }
+            if element.hasAttr("controls"),
+               let url = candidates.compactMap(reference).first(where: { MarkdownMedia.video(for: $0) == (tag == "video") }) {
+                return [.media(url, video: tag == "video")]
+            }
+            return [.text(try element.outerHtml())]
         case "details":
             let summary = element.children().first { $0.tagNameNormal() == "summary" }
             let label = try summary?.text() ?? String(localized: "Details")
@@ -249,5 +292,13 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         default:
             return [.text(try element.outerHtml())]
         }
+    }
+
+    private static func reference(_ source: String) -> URL? {
+        let encoded = source.trimmingCharacters(in: .whitespacesAndNewlines).addingPercentEncoding(
+            withAllowedCharacters: .urlFragmentAllowed.union(CharacterSet(charactersIn: "%#[]"))
+        )
+        guard let encoded, !encoded.isEmpty else { return nil }
+        return URL(string: encoded)
     }
 }

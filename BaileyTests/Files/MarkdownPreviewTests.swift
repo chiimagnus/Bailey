@@ -1,10 +1,85 @@
 import AppKit
+import AVFoundation
 import Foundation
 import XCTest
 @testable import Bailey
 
 @MainActor
 final class MarkdownPreviewTests: XCTestCase {
+    func testSVGInlineAndRelativeShareStaticRenderingWithoutExternalContent() async throws {
+        let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+              <title>Gradient</title>
+              <defs><linearGradient id="paint">
+                <stop offset="0%" stop-color="red"/><stop offset="100%" stop-color="blue"/>
+              </linearGradient></defs>
+              <script>alert(1)</script><image href="https://example.invalid/image.png"/>
+              <rect width="20" height="10" fill="url(#paint)" onclick="alert(1)"/>
+            </svg>
+            """
+        let nodes = try XCTUnwrap(MarkdownHTML.parse(source))
+        guard case .svg(let xml, alt: "Gradient") = nodes.first else { return XCTFail("Missing inline SVG") }
+        let inline = try MarkdownSVG.render(Data(xml.utf8))
+        XCTAssertEqual(inline.width, 40)
+        XCTAssertEqual(inline.height, 20)
+        let inlinePixels = NSBitmapImageRep(cgImage: inline)
+        let left = try XCTUnwrap(inlinePixels.colorAt(x: 1, y: 8)?.usingColorSpace(.deviceRGB))
+        let right = try XCTUnwrap(inlinePixels.colorAt(x: 38, y: 8)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(left.redComponent, left.blueComponent)
+        XCTAssertGreaterThan(right.blueComponent, right.redComponent)
+        XCTAssertThrowsError(try MarkdownSVG.render(Data("<!DOCTYPE svg><svg/>".utf8)))
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(source.utf8).write(to: root.appending(path: "chart.svg"))
+        let resource = MarkdownResource(path: root.appending(path: "paper.md").path,
+                                        directory: root.path, backend: LocalWorkspaceBackend.shared)
+        let loaded = try await resource.picture(try XCTUnwrap(URL(string: "chart.svg")))
+        XCTAssertEqual(loaded.poster.width, inline.width)
+        XCTAssertEqual(loaded.poster.height, inline.height)
+    }
+
+    func testControlledHTMLMediaStagesPlayableLocalBytesAndSeeks() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let input = root.appending(path: "sound.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
+        let samples = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
+        samples.frameLength = 8_000
+        do {
+            let file = try AVAudioFile(forWriting: input, settings: format.settings)
+            try file.write(from: samples)
+        }
+        let url = try XCTUnwrap(URL(string: "sound.wav"))
+        let parsed = try XCTUnwrap(MarkdownHTML.parse("""
+            <audio controls loop autoplay onplay="start()"><source src="sound.wav"></audio>
+            """))
+        XCTAssertEqual(parsed, [.media(url, video: false)])
+        let excluded = try XCTUnwrap(MarkdownHTML.parse("<audio autoplay src='sound.wav'></audio>"))
+        XCTAssertFalse(excluded.contains(.media(url, video: false)))
+        let resource = MarkdownResource(path: root.appending(path: "paper.md").path,
+                                        directory: root.path, backend: LocalWorkspaceBackend.shared)
+        let staged = try await MarkdownMedia.stage(url, from: resource)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        XCTAssertEqual(try Data(contentsOf: staged), try Data(contentsOf: input))
+        let asset = MarkdownMedia.asset(at: staged)
+        let playable = try await asset.load(.isPlayable)
+        XCTAssertTrue(playable)
+        let duration = try await asset.load(.duration)
+        XCTAssertEqual(duration.seconds, 1, accuracy: 0.02)
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        let seeked = await player.seek(to: CMTime(seconds: 0.5, preferredTimescale: 8_000),
+                                       toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(seeked)
+        XCTAssertEqual(player.currentTime().seconds, 0.5, accuracy: 0.02)
+        XCTAssertEqual(player.rate, 0)
+        do {
+            _ = try await MarkdownMedia.stage(try XCTUnwrap(URL(string: "https://example.invalid/sound.wav")),
+                                              from: resource)
+            XCTFail("Network media must never be staged")
+        } catch is CocoaError {}
+    }
     func testMarkdownLinkOpensTheAuthorizedProjectFileAndReusesIt() async throws {
         let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let root = temporary.appending(path: "Project")
@@ -239,7 +314,7 @@ final class MarkdownPreviewTests: XCTestCase {
             let url = try XCTUnwrap(markup.runs.first?.imageURL)
             let read = try await resource.read(url, maxBytes: bytes.count)
             XCTAssertEqual(read, bytes)
-            let decoded = try await resource.image(url)
+            let decoded = try await resource.picture(url).poster
             XCTAssertEqual(decoded.width, 5)
             XCTAssertEqual(decoded.height, 3)
         }
@@ -247,14 +322,14 @@ final class MarkdownPreviewTests: XCTestCase {
         guard case .image(let htmlURL, alt: "图片") = html.first else {
             return XCTFail("Expected HTML image")
         }
-        let htmlImage = try await resource.image(htmlURL)
+        let htmlImage = try await resource.picture(htmlURL).poster
         XCTAssertEqual(htmlImage.width, 5)
         for link in ["../../outside.png", "%2e%2e/%2e%2e/outside.png", "escape.png", "other/outside.png",
                      "file:///outside.png", "https://example.invalid/image.png", "//example.invalid/image.png",
                      "%00.png", "missing.png", "alias.png?untrusted"] {
             let url = try XCTUnwrap(URL(string: link))
             do {
-                _ = try await resource.image(url)
+                _ = try await resource.picture(url)
                 XCTFail("Unexpectedly decoded \(link)")
             } catch {}
         }

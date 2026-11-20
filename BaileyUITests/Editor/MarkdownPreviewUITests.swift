@@ -1,8 +1,54 @@
 import Foundation
+import AVFoundation
 import XCTest
 
 @MainActor
 final class MarkdownPreviewUITests: XCTestCase {
+    func testRichMarkdownShowsStaticSVGAndLoadsNativeAudioOnDemand() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("Paper.md", text: """
+            # Offline paper
+
+            ![Constrained SVG](chart.svg)
+
+            <table><tr><th>Measurement</th><td>42</td></tr></table>
+
+            <audio controls src="sound.wav" autoplay loop></audio>
+
+            """)
+        _ = try fixture.file("chart.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="30">
+              <rect width="100" height="30" fill="blue"/>
+            </svg>
+            """)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
+        buffer.frameLength = 8_000
+        buffer.floatChannelData?[0].initialize(repeating: 0, count: 8_000)
+        do {
+            let audio = try AVAudioFile(forWriting: fixture.root.appending(path: "sound.wav"), settings: format.settings)
+            try audio.write(from: buffer)
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.staticTexts["Offline paper"].waitForExistence(timeout: 10))
+        XCTAssertTrue(preview.staticTexts["Measurement"].exists)
+        XCTAssertTrue(preview.buttons["Constrained SVG"].waitForExistence(timeout: 10), preview.debugDescription)
+        let start = preview.buttons["Load Audio"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        let player = WorkspaceUITestSupport.element("bailey.markdown.media", in: app)
+        XCTAssertFalse(player.exists)
+        start.click()
+        XCTAssertTrue(player.waitForExistence(timeout: 10), preview.debugDescription)
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(player.waitForNonExistence(timeout: 10))
+    }
     func testSideBySideUpdatesWhileEditingAndUsesTheOriginalSavePath() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "# Initial heading\n"

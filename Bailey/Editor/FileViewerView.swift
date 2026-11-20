@@ -165,8 +165,8 @@ final class FileTab: nonisolated Identifiable {
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
 
-    nonisolated static func imageThumbnail(_ source: CGImageSource, maximumDimension: Int) -> CGImage? {
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
+    nonisolated static func imageThumbnail(_ source: CGImageSource, index: Int = 0, maximumDimension: Int) -> CGImage? {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any]
         let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
         let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
         guard width > 0, height > 0, width <= maxImagePixels / height else { return nil }
@@ -174,7 +174,7 @@ final class FileTab: nonisolated Identifiable {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
     }
     @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
@@ -888,6 +888,7 @@ struct FileViewerView: View {
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
     @State private var windowReference = FileWindowReference()
+    @State private var assetRefresh: UInt = 0
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -907,7 +908,8 @@ struct FileViewerView: View {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
                     if (file.showsMarkdownPreview || rendersOnlyMarkdown) && file.canPreviewMarkdown {
-                        MarkdownFilePreview(file: file, directory: markdownDirectory, onOpenLink: onMarkdownLink)
+                        MarkdownFilePreview(file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
+                                            onOpenLink: onMarkdownLink)
                     } else if !rendersOnlyMarkdown {
                         HStack {
                             Spacer()
@@ -957,9 +959,9 @@ struct FileViewerView: View {
             else { file.refreshWhenSelected() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
-            guard !rendersOnlyMarkdown, notification.object as? NSWindow === windowReference.window,
-                  file.readOnlyReason == nil else { return }
-            file.refreshWhenSelected()
+            guard notification.object as? NSWindow === windowReference.window else { return }
+            if rendersOnlyMarkdown || file.showsMarkdownPreview { assetRefresh &+= 1 }
+            if !rendersOnlyMarkdown, file.readOnlyReason == nil { file.refreshWhenSelected() }
         }
     }
 
