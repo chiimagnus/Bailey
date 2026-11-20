@@ -110,7 +110,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === keyboard)
     }
 
-    func testPaneTabChromeTracksContentDirtyAndRenamedTitlesDirectly() async throws {
+    func testPaneTabChromeTracksContentDirtyAndAutomaticTitleDirectly() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -121,7 +121,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         let tab = PaneTab(content: .file(file))
         let chrome = PaneTabItem(
             tab: tab, isDisplayed: true, isPaneFocused: true, isContextTarget: false,
-            select: {}, close: {}, renamingTabID: .constant(nil)
+            select: {}, close: {}
         )
         let dirty = expectation(description: "The real tab chrome observes the file's dirty state")
         withObservationTracking({ _ = chrome.body }) { dirty.fulfill() }
@@ -130,11 +130,8 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         await fulfillment(of: [dirty], timeout: 1)
         XCTAssertTrue(file.isDirty)
 
-        let renamed = expectation(description: "The same chrome observes the tab's custom title")
-        withObservationTracking({ _ = chrome.body }) { renamed.fulfill() }
-        tab.customName = "新的标签标题"
-        await fulfillment(of: [renamed], timeout: 1)
-        XCTAssertEqual(tab.displayTitle, "新的标签标题")
+        XCTAssertEqual(tab.displayTitle, "label.swift",
+                       "The tab title follows its file instead of an editable alias")
     }
 
     func testCommandPaletteBackdropCanDismissThroughAccessibility() async throws {
@@ -261,9 +258,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let target = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
-        target.customName = "AX target tab"
         let other = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
-        other.customName = "Other tab"
         project.append(target)
         project.append(other)
         XCTAssertEqual(project.selectedTabID, other.id)
@@ -298,8 +293,12 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
             return [node] + children.flatMap(all)
         }
         let buttons = (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(all)
+        let targetLabel = String(
+            localized: "Tab \(1), \(target.displayTitle)", table: "Workspace",
+            comment: "Accessibility label for a tab. The placeholders are its position and title."
+        )
         let candidate = try XCTUnwrap(buttons.first { node in
-            (attribute(node, "accessibilityLabel") as? String ?? "").contains("AX target tab")
+            attribute(node, "accessibilityLabel") as? String == targetLabel
         })
         XCTAssertEqual(attribute(candidate, "accessibilityRole") as? String, "AXButton")
         let press = NSSelectorFromString("accessibilityPerformPress")

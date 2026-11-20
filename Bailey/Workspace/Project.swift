@@ -761,7 +761,6 @@ final class Project: nonisolated Identifiable {
             localFile: snap.localFile == true,
             restoredHistory: snap.historyKey.flatMap { histories[$0] }
         ))
-        tab.customName = snap.customName
         append(tab)
         return tab
     }

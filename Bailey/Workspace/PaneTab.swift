@@ -116,9 +116,6 @@ enum PaneContent: nonisolated Identifiable {
 final class PaneTab: nonisolated Identifiable {
     nonisolated let id = UUID()
     let content: PaneContent
-    var customName: String? {
-        didSet { if customName != oldValue { onSnapshotChange?() } }
-    }
     weak var contextSession: TerminalSession? {
         didSet { if contextSession?.id != oldValue?.id { onSnapshotChange?() } }
     }
@@ -128,8 +125,5 @@ final class PaneTab: nonisolated Identifiable {
         self.content = content
     }
 
-    var displayTitle: String {
-        if let customName, !customName.isEmpty { return customName }
-        return content.title
-    }
+    var displayTitle: String { content.title }
 }

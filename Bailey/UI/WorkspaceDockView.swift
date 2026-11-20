@@ -322,7 +322,6 @@ struct DockTabGroupView: View {
     let dragging: DockTabDragCoordinator
     var isTopLeft = false
     private let settings = AppSettings.shared
-    @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false
     @State private var tabKeyboard = TreeKeyboardOwner()
     @State private var tabCursor: DockItem?
@@ -560,8 +559,7 @@ struct DockTabGroupView: View {
                                         }
                                         dragGestureItem = nil
                                     },
-                                including: item.tabID != nil && renamingTabID == item.tabID
-                                    ? .subviews : .all
+                                including: .all
                             )
                     }
                 }
@@ -611,8 +609,7 @@ struct DockTabGroupView: View {
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
-                close: { close(item) },
-                renamingTabID: $renamingTabID
+                close: { close(item) }
             )
             .overlay {
                 ContextMenuClickTarget(
@@ -664,7 +661,7 @@ struct DockTabGroupView: View {
     }
 
     private var focusedTabPathActions: FocusedPathActions? {
-        guard tabKeyboardFocused, isFocused, renamingTabID == nil,
+        guard tabKeyboardFocused, isFocused,
               case .tab(let id)? = tabCursor ?? active,
               let tab = project.tabs.first(where: { $0.id == id }),
               case .file(let file) = tab.content else { return nil }
@@ -806,15 +803,6 @@ struct DockTabGroupView: View {
     @ViewBuilder
     private func projectTabMenu(_ tab: PaneTab) -> some View {
         let tabID = tab.id
-        Button(String(localized: "Rename…", table: "Interface")) {
-            if currentMenuTab(tabID) != nil { renamingTabID = tabID }
-        }
-        if tab.customName != nil {
-            Button(String(localized: "Use Automatic Title", table: "Interface")) {
-                currentMenuTab(tabID)?.customName = nil
-            }
-        }
-        Divider()
         if case .file(let file) = tab.content {
             Button(String(localized: "Reveal in File Manager", table: "Interface")) {
                 guard currentMenuTab(tabID) != nil else { return }

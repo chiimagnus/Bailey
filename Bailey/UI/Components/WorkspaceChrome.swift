@@ -11,151 +11,47 @@ struct PaneTabItem: View {
     let isContextTarget: Bool
     let select: () -> Void
     let close: () -> Void
-    @Binding var renamingTabID: UUID?
-
     var body: some View {
-        if renamingTabID == tab.id {
-            TabRenameChrome(
-                systemImage: tab.content.systemImage,
-                browserIcon: focusedBrowser,
-                fileIconPath: focusedFileIconPath,
-                initialValue: tab.displayTitle,
-                commit: { name in
-                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    tab.customName = trimmed.isEmpty ? nil : trimmed
-                },
-                end: { renamingTabID = nil }
+        switch tab.content {
+        case .session(let session):
+            TabItemChrome(
+                systemImage: "terminal", title: session.title,
+                isDisplayed: isDisplayed, isSelected: isSelected,
+                isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
+                isContextTarget: isContextTarget, select: select, close: close
             )
-        } else {
-            switch tab.content {
-            case .session(let session):
-                TabItemChrome(
-                    systemImage: "terminal", title: tab.customName ?? session.title,
-                    isDisplayed: isDisplayed, isSelected: isSelected,
-                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget, select: select, close: close
-                )
-            case .file(let file):
-                TabItemChrome(
-                    systemImage: "doc.text", fileIconPath: file.path,
-                    title: tab.customName ?? file.name,
-                    isDisplayed: isDisplayed, isSelected: isSelected,
-                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget, isDirty: file.isDirty,
-                    select: select, close: close
-                )
-                .help(file.path)
-                .accessibilityIdentifier("bailey.tab.file")
-                .accessibilityValue(file.path)
-            case .browser(let browser):
-                TabItemChrome(
-                    systemImage: "globe", browserIcon: browser,
-                    title: tab.customName ?? browser.title,
-                    isDisplayed: isDisplayed, isSelected: isSelected,
-                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget, select: select, close: close
-                )
-                .help(browser.urlString)
-            case .diff(let diff):
-                TabItemChrome(
-                    systemImage: "plus.forwardslash.minus", fileIconPath: diff.path,
-                    title: tab.customName ?? diff.title,
-                    isDisplayed: isDisplayed, isSelected: isSelected,
-                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget, isDirty: diff.isDirty,
-                    select: select, close: close
-                )
-                .help(diff.path)
-            }
+        case .file(let file):
+            TabItemChrome(
+                systemImage: "doc.text", fileIconPath: file.path,
+                title: file.name,
+                isDisplayed: isDisplayed, isSelected: isSelected,
+                isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
+                isContextTarget: isContextTarget, isDirty: file.isDirty,
+                select: select, close: close
+            )
+            .help(file.path)
+            .accessibilityIdentifier("bailey.tab.file")
+            .accessibilityValue(file.path)
+        case .browser(let browser):
+            TabItemChrome(
+                systemImage: "globe", browserIcon: browser,
+                title: browser.title,
+                isDisplayed: isDisplayed, isSelected: isSelected,
+                isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
+                isContextTarget: isContextTarget, select: select, close: close
+            )
+            .help(browser.urlString)
+        case .diff(let diff):
+            TabItemChrome(
+                systemImage: "plus.forwardslash.minus", fileIconPath: diff.path,
+                title: diff.title,
+                isDisplayed: isDisplayed, isSelected: isSelected,
+                isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
+                isContextTarget: isContextTarget, isDirty: diff.isDirty,
+                select: select, close: close
+            )
+            .help(diff.path)
         }
-    }
-
-    private var focusedBrowser: BrowserTab? {
-        if case .browser(let browser) = tab.content {
-            browser
-        } else {
-            nil
-        }
-    }
-
-    private var focusedFileIconPath: String? {
-        tab.content.fileIconPath
-    }
-}
-
-/// Inline editor shown in place of a tab while it's renamed — the same
-/// affordance as the project row's rename. Commits on Return or focus loss,
-/// cancels on Escape; an empty name returns the tab to its automatic title.
-private struct TabRenameChrome: View {
-    private let themeChanges = Theme.changes
-    let systemImage: String
-    let browserIcon: BrowserTab?
-    let fileIconPath: String?
-    let commit: (String) -> Void
-    let end: () -> Void
-
-    @State private var draft: String
-    /// Set by the first commit/cancel so the focus-loss handler that fires
-    /// while the field is being torn down doesn't commit a second time.
-    @State private var finished = false
-    @FocusState private var focused: Bool
-
-    init(
-        systemImage: String,
-        browserIcon: BrowserTab?,
-        fileIconPath: String?,
-        initialValue: String,
-        commit: @escaping (String) -> Void,
-        end: @escaping () -> Void
-    ) {
-        self.systemImage = systemImage
-        self.browserIcon = browserIcon
-        self.fileIconPath = fileIconPath
-        self.commit = commit
-        self.end = end
-        _draft = State(initialValue: initialValue)
-    }
-
-    var body: some View {
-        let _ = themeChanges.revision
-        HStack(spacing: 5) {
-            if let browserIcon {
-                BrowserFaviconView(browser: browserIcon, size: 11)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color(nsColor: Theme.accent))
-            } else if let fileIconPath {
-                MaterialFileIconView(path: fileIconPath, size: 12)
-            } else {
-                Image(systemName: systemImage)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color(nsColor: Theme.accent))
-            }
-            TextField("", text: $draft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11.5))
-                .frame(width: 110)
-                .focused($focused)
-                .onSubmit { finish(apply: true) }
-                .onExitCommand { finish(apply: false) }
-                .onChange(of: focused) {
-                    if !focused { finish(apply: true) }
-                }
-        }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.primary.opacity(0.09))
-        )
-        .onAppear {
-            DispatchQueue.main.async { focused = true }
-        }
-    }
-
-    private func finish(apply: Bool) {
-        guard !finished else { return }
-        finished = true
-        if apply { commit(draft) }
-        end()
     }
 }
 

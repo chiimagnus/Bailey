@@ -542,16 +542,6 @@
         }
       }
     },
-    "Rename…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名…"
-          }
-        }
-      }
-    },
     "Reveal in Finder" : {
       "localizations" : {
         "zh-Hans" : {
@@ -738,16 +728,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示/隐藏右侧边栏（⇧⌘B）"
-          }
-        }
-      }
-    },
-    "Use Automatic Title" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用自动标题"
           }
         }
       }

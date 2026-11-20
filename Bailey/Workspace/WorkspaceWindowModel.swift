@@ -1282,7 +1282,6 @@ final class WorkspaceWindowModel {
                     } else { nil }
                     return (tab, ProjectSnapshot.TabSnapshot(
                         content: content, historyKey: historyKey,
-                        customName: tab.customName,
                         contextSessionIndex: tab.contextSession.flatMap { context in
                             projectSessions.firstIndex { $0.id == context.id }
                         },
