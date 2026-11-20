@@ -193,7 +193,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | 改动 | 相关测试 |
 | --- | --- |
 | 应用身份、Finder 类型注册、系统文件事件和目标窗口路由 | `AppIdentityTests`、`FinderDeliveryIntegrationTests`、`WorkspaceWindowsUITests`；实际 Finder 拖放另需受控图形会话 |
-| 原生右键菜单的实际快捷键、宽度与目标 | `AppIdentityTests`（显示契约）；`WorkspaceDockUITests`（中英文宽度、⌘W）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`（复制／删除）。实际对齐须由 GUI 验证 |
+| 原生右键快捷键、菜单宽度与操作目标 | `AppIdentityTests`（原生按键注册）；`WorkspaceDockUITests`（⌘W 与宽度）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`、`GitChangesUITests`、`GitGraphUITests`（路径复制与目标恢复）。最终行为须由 GUI 验证 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `WorkspaceDockUITests`、`WorkspaceFilesUITests` 的真实输入与双窗 E2E |
 | Dock 标题栏、标签与分隔线拖动 | `NativeContentIdentityIntegrationTests` 核对三区空白尺寸；`WorkspaceDockUITests` 核对三区双击、窗口移动、标签／分隔线拖动及 Window 菜单；`WorkspaceWindowsUITests` 核对关闭重启后悬停标签再双击，验证实际窗口尺寸变化 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
@@ -317,10 +317,13 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式
 随后核对接收 PID 的 Bundle ID 为 `chiimagnus.bailey.dev`，并检查窗口数、目标文件内容和原始 SHA-256。
 Dev 的 `LSHandlerRank=None` 不竞逐 Finder 默认文件处理程序；
 Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为已验收。
+正式 Bailey 窗口若遮挡 Dev，须在独占图形会话中重验，不得操作正式 App 来迁就测试。
 
-原生右键菜单跟踪期间，XCUITest 的 `app.menus` 快照可能无法枚举弹出菜单。
-验证右键 `⌘W` 时，需在隔离 Bailey Dev 的真实 GUI／录屏中核对系统 Panel 菜单
-**第一次按键的原生短暂高亮**、右键目标及最终关闭对象；不能只凭 AX 快照判断。
+右键菜单由自身的原生快捷键执行动作，不把按键重投给系统菜单栏。
+真实 GUI 验收须核对快捷键在菜单打开时操作右键目标、菜单关闭后恢复普通命令目标；
+不能把系统 Panel 菜单高亮或菜单项可见当作执行成功。
+XCUITest 的 `app.menus` 快照可能漏掉跟踪中的弹出菜单，必要时用录屏和最终结果复核。
+剪贴板断言须等待实际内容更新，不能在发送按键后立即读取旧值。
 
 需要点击真实菜单项的测试仍必须证明该项存在、可执行，并核对最终副作用。
 菜单树包含不可见的系统主菜单，弹出菜单还会改变元素排序；

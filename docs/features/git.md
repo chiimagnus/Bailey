@@ -545,6 +545,8 @@ Push 通过临时接收仓库核对真实提交，涉及 LFS 时还检查接收�
 `GitGraphWorktreePresentationTests` 分别验证颜色及对比度、引用分组、Worktree 路径与状态。
 `GitGraphUITests` 和 `GitGraphGeometryUITests` 只保留真实 App 的行命中、Dock 拖动、横滚、深浅像素、
 键盘、历史文件、分页和多级菜单，不为每个纯布局组合重复启动 App。
+路径快捷键须核对历史文件与文件夹（包括紧凑目录段）的实际剪贴板结果，
+以及右键菜单关闭后原选区的命令归属；按键注册成功不等于操作成功。
 `GitStashActionTests` 验证 Stash 身份及 Pop/Drop/Branch。
 
 `GitChangesUITests` 通过真实 Dev App 验证外部工作区、index、HEAD 变化、跨项目隔离、文件夹按钮、

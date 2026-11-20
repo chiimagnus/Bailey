@@ -27,10 +27,12 @@ Textual 排版只读显示结果；Front Matter 必须先在文首提取，不�
 Front Matter 用无执行能力的 YAML 数据解析器，作为文档头部元数据，而不是普通段落或可执行配置。
 权限检查必须延伸到图片和媒体资源的实际解码请求，不能只验证文本 URL。
 
-应用快捷键唯一注册点为 `Bailey/App/BaileyApp.swift` 的 **`CommandMenu("File")`**，不是额外的 View/Editor 菜单。
+全局 `⌘⇧V` 只由 `Bailey/App/BaileyApp.swift` 的 `CommandMenu("File")` 注册；
+右键菜单如需同一组合键，使用原生局部绑定，不在 View／Editor 另建全局监听。
 沿用现有 Save 的 `WorkspaceWindowModel.selectedProject?.focusedContent` 和前台主窗口校验；
 `WorkspaceDockView.projectTabMenu` 的显式右键视图选择只作用被右键的文件标签，不推断它是当前输入焦点。
-单一动作的可用性、标题和目标由当前有效文件显示模式决定；`⌘⇧V` 不绑定在右键菜单或编辑器事件中。
+主菜单动作的可用性、标题和目标由当前有效文件显示模式决定；
+右键菜单只操作本次命中的文件标签，不改变主菜单命令目标。
 
 ## 任务
 
