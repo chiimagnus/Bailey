@@ -71,7 +71,21 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.menuItems["Hide Excluded Files"].click()
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        XCTAssertFalse(excluded.exists)
+        let backInFiles = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: excluded
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [backInFiles], timeout: 12), .completed)
+
+        WorkspaceUITestSupport.fileRow(visible, in: window).doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(visible, in: window)
+            .waitForExistence(timeout: 12))
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Show Excluded Files"].isEnabled,
+                      "An active Editor must not disable the project's Files visibility")
+        app.menuItems["Show Excluded Files"].click()
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
     }
 
     func testRealSettingsExcludeAndFileTabRevealHiddenRow() throws {

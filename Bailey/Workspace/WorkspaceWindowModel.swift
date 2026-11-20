@@ -636,17 +636,21 @@ final class WorkspaceWindowModel {
         return false
     }
 
-    /// The File menu follows the active Dock content, not an individual TextKit
-    /// responder that may be hidden when switching Unified / Split.
+    /// Prefer the displayed Diff, then the current project's most recently used Diff.
+    /// A File menu command must remain available while another pane has focus.
     var diffLayoutTarget: DiffTab? {
         guard let project = selectedProject else { return nil }
-        let content = project.dock.activeGroup?.selected == .git
+        let preferred = project.dock.activeGroup?.selected == .git
             ? project.selectedTab?.content : project.focusedContent
-        guard case .diff(let diff)? = content,
-              diff.workspaceIdentity == project.workspaceIdentity,
-              diff.hasLoadedContent, !diff.source.isPlainRevision,
-              diff.hasChanges || diff.isEditing else { return nil }
-        return diff
+        let contents = [preferred].compactMap { $0 } + project.tabsByRecency.map(\.content)
+        for content in contents {
+            guard case .diff(let diff) = content,
+                  diff.workspaceIdentity == project.workspaceIdentity,
+                  diff.hasLoadedContent, !diff.source.isPlainRevision,
+                  diff.hasChanges || diff.isEditing else { continue }
+            return diff
+        }
+        return nil
     }
 
     func toggleDiffLayout() {

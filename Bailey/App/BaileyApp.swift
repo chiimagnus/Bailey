@@ -87,25 +87,6 @@ struct WindowRootView: View {
     }
 }
 
-/// A focused command has one identity per Git panel mount; its closure always
-/// revalidates the current repository when invoked.
-struct FocusedGitCommitAction: Equatable {
-    let id: UUID
-    let perform: () -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
-}
-
-struct FocusedGitStageAllAction: Equatable {
-    let target: PanelContext.Identity
-    let repository: String
-    let perform: () -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.target == rhs.target && lhs.repository == rhs.repository
-    }
-}
-
 struct FocusedPathActions {
     let paths: (Bool) -> [String]
     let revealablePaths: () -> [String]
@@ -143,8 +124,7 @@ struct FocusedPathActions {
 
 extension FocusedValues {
     @Entry var baileyManager: WorkspaceWindowModel?
-    @Entry var baileyGitCommit: FocusedGitCommitAction?
-    @Entry var baileyGitStageAll: FocusedGitStageAllAction?
+    @Entry var baileyGitModel: GitStatusModel?
     @Entry var baileyPathActions: FocusedPathActions?
 }
 
@@ -184,8 +164,7 @@ private struct BaileyCommands: Commands {
     let application: WorkspaceApplication
     let menuPresentation: MainMenuPresentation
     @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
-    @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: FocusedGitCommitAction?
-    @FocusedValue(\.baileyGitStageAll) private var focusedGitStageAll: FocusedGitStageAllAction?
+    @FocusedValue(\.baileyGitModel) private var focusedGitModel: GitStatusModel?
     @FocusedValue(\.baileyPathActions) private var focusedPathActions: FocusedPathActions?
     @Environment(\.openWindow) private var openWindow
     private var pathActions: FocusedPathActions? {
@@ -195,6 +174,13 @@ private struct BaileyCommands: Commands {
         guard let project = manager?.selectedProject,
               project.panelContext != nil else { return nil }
         return project
+    }
+    private var gitForMenu: GitStatusModel? {
+        guard let project = manager?.selectedProject,
+              let context = project.panelContext,
+              let git = focusedGitModel,
+              git.matchesPanelTarget(context.identity) else { return nil }
+        return git
     }
     private var diffLayoutMenuTitle: String {
         guard let style = manager?.diffLayoutTarget?.preferences.diffStyle else {
@@ -448,16 +434,18 @@ private struct BaileyCommands: Commands {
             Divider()
 
             Button(String(localized: "Stage All Changes", table: "Sidebar")) {
-                if manager != nil { focusedGitStageAll?.perform() }
+                guard let git = gitForMenu, git.canStageAllChanges else { return }
+                git.stageAll()
             }
             .keyboardShortcut("y", modifiers: [.command, .shift])
-            .disabled(manager == nil || focusedGitStageAll == nil)
+            .disabled(gitForMenu?.canStageAllChanges != true)
 
             Button(String(localized: "Commit Staged", table: "Sidebar")) {
-                focusedGitCommit?.perform()
+                guard let git = gitForMenu, git.canCommit(includeAll: false) else { return }
+                git.commit(message: git.commitMessage, includeAll: false)
             }
             .keyboardShortcut(.return, modifiers: .command)
-            .disabled(focusedGitCommit == nil)
+            .disabled(gitForMenu?.canCommit(includeAll: false) != true)
 
             Divider()
 

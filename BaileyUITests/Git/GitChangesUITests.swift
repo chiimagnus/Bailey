@@ -411,7 +411,7 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
     }
 
-    func testFileMenuSingleDiffLayoutShortcutTogglesAndRespectsCurrentPanel() throws {
+    func testFileMenuSingleDiffLayoutShortcutTracksRecentDiffAcrossPanelFocus() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("layout.txt", text: "before\n")
         try fixture.initializeGit()
@@ -473,9 +473,13 @@ final class GitChangesUITests: XCTestCase {
 
         app.typeKey("e", modifierFlags: [.command, .shift])
         fileMenu.click()
-        XCTAssertTrue(unavailable.waitForExistence(timeout: 8))
-        XCTAssertFalse(unavailable.isEnabled, "Files cannot toggle a background Diff")
+        XCTAssertTrue(toUnified.waitForExistence(timeout: 8))
+        XCTAssertTrue(toUnified.isEnabled,
+                      "The File menu can change the current project's last Diff from Files")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey("u", modifierFlags: [.command, .option])
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        expectLayout(split: false)
         XCTAssertEqual(try Data(contentsOf: file), Data("after\n".utf8))
     }
 
@@ -492,30 +496,27 @@ final class GitChangesUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let fileMenu = app.menuBars.menuBarItems["File"]
         XCTAssertTrue(fileMenu.waitForExistence(timeout: 10))
-        app.typeKey("e", modifierFlags: [.command, .shift])
-        fileMenu.click()
-        let stageAll = app.menuItems["Stage All Changes"]
-        XCTAssertTrue(stageAll.waitForExistence(timeout: 10))
-        XCTAssertFalse(stageAll.isEnabled, "Stage All must be disabled outside Git")
-        XCTAssertFalse(app.menuItems["Stage Changes"].exists,
-                       "A row-scoped Stage must not be registered in the File menu")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-
         app.typeKey("g", modifierFlags: [.command, .shift])
         let row = WorkspaceUITestSupport.fileRow(edited, in: app.windows.firstMatch,
                                                    relativeTo: fixture.root)
         XCTAssertTrue(row.waitForExistence(timeout: 25))
         row.click()
-        fileMenu.click()
-        XCTAssertTrue(stageAll.waitForExistence(timeout: 10))
-        XCTAssertTrue(stageAll.isEnabled, "An active Git checkout with changes can Stage All")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-
         let changesHeader = app.windows.firstMatch.buttons["CHANGES"]
         XCTAssertTrue(changesHeader.waitForExistence(timeout: 10))
         changesHeader.rightClick()
         XCTAssertTrue(app.menuItems["Stage All Changes"].waitForExistence(timeout: 8),
                       "The CHANGES header context menu must also expose Stage All")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        fileMenu.click()
+        let stageAll = app.menuItems["Stage All Changes"]
+        XCTAssertTrue(stageAll.waitForExistence(timeout: 10))
+        XCTAssertTrue(stageAll.isEnabled,
+                      "The current project's changes can be staged while Files has focus")
+        XCTAssertFalse(app.menuItems["Stage Changes"].exists,
+                       "A row-scoped Stage must not be registered in the File menu")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         app.typeKey("y", modifierFlags: [.command, .shift])
         let allStaged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -530,6 +531,7 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: deleted.path))
         XCTAssertEqual(try Data(contentsOf: added), Data("new\n".utf8))
 
+        app.typeKey("g", modifierFlags: [.command, .shift])
         let changesSection = app.windows.firstMatch.buttons["CHANGES"]
         let cleared = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: changesSection
@@ -561,7 +563,7 @@ final class GitChangesUITests: XCTestCase {
         fileMenu.click()
         let commit = app.menuItems["Commit Staged"]
         XCTAssertTrue(commit.waitForExistence(timeout: 10), "Commit Staged must always appear in File")
-        XCTAssertFalse(commit.isEnabled, "A non-Git panel cannot commit")
+        XCTAssertFalse(commit.isEnabled, "Commit requires staged files and a nonempty draft")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         let projectMenu = app.menuBars.menuBarItems["Project"]
@@ -578,14 +580,12 @@ final class GitChangesUITests: XCTestCase {
         input.typeText("latest focused commit message")
         XCTAssertEqual(input.value as? String, "latest focused commit message")
 
+        app.typeKey("e", modifierFlags: [.command, .shift])
         fileMenu.click()
         XCTAssertTrue(commit.waitForExistence(timeout: 10))
-        XCTAssertTrue(commit.isEnabled, "A valid focused Git draft must enable the File command")
+        XCTAssertTrue(commit.isEnabled,
+                      "A valid Git draft must remain committable while Files has focus")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        let stagedRow = WorkspaceUITestSupport.fileRow(staged, in: window, relativeTo: fixture.root)
-        XCTAssertTrue(stagedRow.waitForExistence(timeout: 10))
-        stagedRow.rightClick()
-        XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
         let complete = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? fixture.git(["log", "-1", "--format=%s"])) ==

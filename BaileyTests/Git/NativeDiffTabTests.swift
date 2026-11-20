@@ -8530,10 +8530,24 @@ final class NativeDiffTabTests: XCTestCase {
         manager.toggleDiffLayout()
         XCTAssertEqual(preferences.diffStyle, .split)
         project.dock.select(.files)
-        XCTAssertNil(manager.diffLayoutTarget,
-                     "A background Diff must not capture shortcuts from Files")
+        XCTAssertTrue(manager.diffLayoutTarget === diff,
+                      "The same project's most recent Diff remains available from Files")
         manager.toggleDiffLayout()
-        XCTAssertEqual(preferences.diffStyle, .split)
+        XCTAssertEqual(preferences.diffStyle, .unified)
+
+        let recentPreferences = DiffViewPreferences(defaults: defaults)
+        let recentDiff = DiffTab(
+            repoRoot: "/fixture", path: "recent.txt", source: .worktree,
+            untracked: true, origPath: nil, backend: DiffWorkspaceFixture(),
+            workspaceIdentity: project.workspaceIdentity, preferences: recentPreferences
+        )
+        try await wait { recentDiff.hasLoadedContent && recentDiff.hasChanges }
+        let recentTab = PaneTab(content: .diff(recentDiff))
+        project.append(recentTab)
+        project.selectTab(recentTab.id)
+        project.dock.select(.files)
+        XCTAssertTrue(manager.diffLayoutTarget === recentDiff,
+                      "When multiple Diffs exist, the most recently selected one owns the menu")
 
         let other = Project(fallbackName: "other", workspaceConfiguration: .standard)
         manager.projects.append(other)

@@ -1889,6 +1889,10 @@ final class GitStatusModel {
                 requiredStatus: .core, refreshKind: .indexOnly, isCurrentTarget: valid)
     }
 
+    var canStageAllChanges: Bool {
+        isRepo && canUseCurrentStatus && !isBusy && !changedEntries.isEmpty
+    }
+
     func stageAll() {
         perform(label: String(localized: "Stage all changes", table: "Git"), commands: [["add", "-A"]],
                 requiredStatus: .core, refreshKind: .indexOnly)
@@ -2040,6 +2044,15 @@ final class GitStatusModel {
             return false
         }
         return true
+    }
+
+    func canCommit(includeAll: Bool) -> Bool {
+        let hasEligibleChanges = includeAll
+            ? (!changedEntries.isEmpty || !stagedEntries.isEmpty)
+            : !stagedEntries.isEmpty
+        return isRepo && canUseCurrentStatus && !isBusy && mergeEntries.isEmpty
+            && hasEligibleChanges
+            && !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Commits only the index unless `includeAll` explicitly requests `git add -A`.

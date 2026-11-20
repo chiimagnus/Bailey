@@ -487,8 +487,12 @@ Git Changes 自动定位该行并替换旧选择；暂存与未暂存的同名�
 显式「Open File」和选择 Diff 标签继续切入目标内容；仅浏览 Diff 不修改 Git index／HEAD，
 Stage／Unstage／Discard 行按钮和右键菜单在目标处于已选集合时作用于该集合，
 目标不在集合内时只操作该行；分组标题的 Stage All／Unstage All／Discard All 仍作用于整组。
-Stage All Changes 也可用「文件」菜单的 ⇧⌘Y 调用，暂存整个仓库的未暂存更改（包括未跟踪文件），
-不受选区、搜索过滤或目录展开状态限制；普通 Stage Changes 没有快捷键。
+系统 File 菜单的「Stage All Changes」（⇧⌘Y）与「Commit Staged」（⌘Return）
+面向当前窗口选中的项目，无需让 Git 面板获得焦点；
+仅当 Git 仓库状态有效、相应改动存在，且提交信息非空时启用对应命令。
+Stage All 暂存整个仓库的未暂存更改（包括未跟踪文件），不受选区、搜索过滤或目录展开状态限制；
+普通 Stage Changes 没有快捷键。已打开的 Diff 可通过同一菜单的 ⌥⌘U 切换布局，
+即使焦点已切到当前项目的其他面板。
 多个文件右键隐藏只打开一项 Diff／文件、HEAD 原文和单文件忽略规则，
 提供复制所选绝对／相对路径及 Finder 定位（本机）；
 绝对路径 ⌥⌘C、相对路径 ⌥⇧⌘C、本机 Finder 定位 ⌥⌘R 作用于有效的键盘目标，
@@ -554,8 +558,8 @@ Push 通过临时接收仓库核对真实提交，涉及 LFS 时还检查接收�
 `GitGraphWorktreePresentationTests` 分别验证颜色及对比度、引用分组、Worktree 路径与状态。
 `GitGraphUITests` 和 `GitGraphGeometryUITests` 只保留真实 App 的行命中、Dock 拖动、横滚、深浅像素、
 键盘、历史文件、分页和多级菜单，不为每个纯布局组合重复启动 App。
-路径快捷键须核对历史文件与文件夹（包括紧凑目录段）的实际剪贴板结果，
-以及右键菜单关闭后原选区的命令归属；按键注册成功不等于操作成功。
+Files 与 Git Changes 的路径快捷键须核对实际剪贴板结果，以及右键菜单关闭后
+原选区的命令归属；Git Graph 不注册路径复制菜单。按键注册成功不等于操作成功。
 `GitStashActionTests` 验证 Stash 身份及 Pop/Drop/Branch。
 
 `GitChangesUITests` 通过真实 Dev App 验证外部工作区、index、HEAD 变化、跨项目隔离、文件夹按钮、
