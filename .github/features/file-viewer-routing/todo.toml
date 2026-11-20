@@ -1,0 +1,18 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "核销读取链路并按首个真实格式最小接入"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "接入真实预览并维护主视图及标签缩略图"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""

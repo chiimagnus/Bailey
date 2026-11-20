@@ -22,7 +22,8 @@
 <a id="p1-t1"></a>
 ### P1-T1 解析和文件类型路由
 
-- **位置**：`FileTab.Content`／`FileTab.loadedContent`、`FileViewerView`；新增独立 CSV 解析器及纯解析测试。
+- **位置**：`FileViewerView` 现有 `.text` 分支、`FileTab.nativeTextStorage`；新增 CSV 解析器及纯解析测试。
+  遵循 [文件渲染接入边界](../file-viewer-routing/plan-p1.md)，**不新增 CSV 专用 `Content` case，也不为文本表格重写 `loadedContent`**。
 - **实施**：识别 CSV／TSV；有限样本分隔符探测和手动覆盖；有限状态分析 quoted/escaped 字段、CRLF/LF/CR、空行及尾空列，记录**UTF-16 字段与行范围**、对应物理行号和原文引用状态。
   Unicode 代理对和多字节字符不能拿 UTF-8 offset 当作 `NSRange`；格式错误给出准确行列且保留源码，不在网格中默默修复。文件有效时展示只读结构，失败走源码。
 - **验证**：与 RFC 4180 参考输入及隔离参考解析器交叉核验（参考库只用于测试，不加入正式 SPM）；
