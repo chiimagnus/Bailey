@@ -23,12 +23,38 @@ enum FileTreeClipboard {
     static let type = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
 
     @discardableResult
-    static func write(_ record: Record, to pasteboard: NSPasteboard = .general) -> Bool {
-        guard let data = try? JSONEncoder().encode(record) else { return false }
+    static func write(
+        _ record: Record, local: Bool = false, to pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard !record.paths.isEmpty, let data = try? JSONEncoder().encode(record) else { return false }
+        if local {
+            let items = record.paths.enumerated().map { index, path in
+                let item = NSPasteboardItem()
+                item.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
+                if index == 0 {
+                    item.setData(data, forType: type)
+                    item.setString(record.paths.joined(separator: "\n"), forType: .string)
+                }
+                return item
+            }
+            pasteboard.clearContents()
+            return pasteboard.writeObjects(items)
+        }
         pasteboard.declareTypes([type, .string], owner: nil)
         guard pasteboard.setData(data, forType: type) else { return false }
-        pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
-        return true
+        return pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
+    }
+
+    static func localURLs(from pasteboard: NSPasteboard = .general) -> [URL] {
+        (pasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []).filter { $0.isFileURL && ($0.host == nil || $0.host == "localhost") }
+    }
+
+    static func canReadFiles(from pasteboard: NSPasteboard = .general) -> Bool {
+        pasteboard.canReadObject(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        )
     }
 
     static func read(from pasteboard: NSPasteboard = .general) -> Record? {

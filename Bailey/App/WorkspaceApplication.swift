@@ -8,6 +8,54 @@ final class WorkspaceApplication {
     private var windows: [WorkspaceWindowModel] = []
     /// A process-local capability for Files clipboard and internal drag payloads.
     let fileTransferToken = UUID()
+    private struct FileClipboardIntent {
+        let record: FileTreeClipboard.Record
+        let version: Int
+        let local: Bool
+        let sourceIdentities: [String: LocalFileIdentity]
+    }
+    private var fileClipboardIntents: [NSPasteboard.Name: FileClipboardIntent] = [:]
+
+    func rememberFileClipboard(
+        _ record: FileTreeClipboard.Record, local: Bool, pasteboard: NSPasteboard
+    ) {
+        var identities: [String: LocalFileIdentity] = [:]
+        if local && record.cut {
+            for path in record.paths {
+                guard let identity = LocalFileIdentity.read(path) else {
+                    fileClipboardIntents.removeValue(forKey: pasteboard.name)
+                    return
+                }
+                identities[path] = identity
+            }
+        }
+        fileClipboardIntents[pasteboard.name] = FileClipboardIntent(
+            record: record, version: pasteboard.changeCount,
+            local: local, sourceIdentities: identities
+        )
+    }
+
+    func trustedFileClipboard(
+        _ record: FileTreeClipboard.Record, pasteboard: NSPasteboard
+    ) -> Bool {
+        guard let intent = fileClipboardIntents[pasteboard.name],
+              intent.version == pasteboard.changeCount, intent.record == record,
+              let project = windows.flatMap(\.projects).first(where: { $0.id == record.project }),
+              project.fileTree.rootPath == record.root,
+              let identity = project.panelContext?.identity,
+              String(reflecting: identity) == record.identity,
+              intent.local == (identity.workspace == nil)
+        else { return false }
+        let revision = identity.workspace.flatMap { workspace in
+            workspace.hasPrefix("ssh:")
+                ? SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4))) : nil
+        }
+        guard record.connectionRevision == revision else { return false }
+        return intent.sourceIdentities.allSatisfy { path, original in
+            LocalFileIdentity.read(path) == original
+        }
+    }
+
     private var pendingDirectories: [String] = []
     private struct PendingExternalOpen {
         let urls: [URL]

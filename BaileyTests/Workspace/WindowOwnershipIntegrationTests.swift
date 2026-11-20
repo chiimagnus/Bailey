@@ -172,6 +172,78 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertNil(FileTreeClipboard.read(from: pasteboard))
     }
 
+    func testLocalFileClipboardWritesNativeFileItemsAndRemoteKeepsPrivateOnly() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("中文 with spaces\n.txt")
+        let directory = root.appendingPathComponent("empty folder")
+        let link = root.appendingPathComponent("dangling")
+        try Data([0, 1, 255]).write(to: file)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "missing")
+        let paths = [file.path, directory.path, link.path]
+        let record = FileTreeClipboard.Record(
+            token: UUID(), project: UUID(), identity: "local", root: root.path,
+            connectionRevision: nil, paths: paths, cut: false
+        )
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertTrue(FileTreeClipboard.write(record, local: true, to: pasteboard))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, paths.count)
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard), record)
+        XCTAssertEqual(pasteboard.string(forType: .string), paths.joined(separator: "\n"))
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard).map(\.path), paths)
+        XCTAssertTrue(pasteboard.pasteboardItems?.allSatisfy {
+            $0.types.contains(.fileURL)
+        } == true)
+
+        let remote = FileTreeClipboard.Record(
+            token: UUID(), project: UUID(), identity: "ssh:remote", root: "/home",
+            connectionRevision: 7, paths: ["/home/secrets.txt"], cut: true
+        )
+        XCTAssertTrue(FileTreeClipboard.write(remote, local: false, to: pasteboard))
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard), [])
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard), remote)
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1)
+    }
+
+    func testClipboardCutTrustRequiresLiveProcessVersionSourceIdentityAndProject() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.txt")
+        try Data("before".utf8).write(to: source)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target, pasteboard: pasteboard
+        )
+        let record = try XCTUnwrap(FileTreeClipboard.read(from: pasteboard))
+        XCTAssertTrue(workspaceApplication.trustedFileClipboard(record, pasteboard: pasteboard))
+        XCTAssertTrue(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+
+        XCTAssertTrue(FileTreeClipboard.write(record, local: true, to: pasteboard))
+        XCTAssertFalse(workspaceApplication.trustedFileClipboard(record, pasteboard: pasteboard),
+                       "A copied private record and UUID do not authorize a move")
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard))
+
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target, pasteboard: pasteboard
+        )
+        let current = try XCTUnwrap(FileTreeClipboard.read(from: pasteboard))
+        try Data("modified after cut".utf8).write(to: source)
+        XCTAssertFalse(workspaceApplication.trustedFileClipboard(current, pasteboard: pasteboard))
+    }
+
     func testRenamingViaProjectRootSymlinkUpdatesCanonicalPathInAnotherWindow() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let actual = base.appendingPathComponent("actual")

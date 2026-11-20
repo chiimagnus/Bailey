@@ -32,6 +32,31 @@ nonisolated enum LocalPathScope {
 }
 
 
+/// The directory entry's identity at a specific point in time, without following links.
+nonisolated struct LocalFileIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let mode: UInt16
+    let size: Int64
+    let modifiedSeconds: Int64
+    let modifiedNanoseconds: Int64
+    let changedSeconds: Int64
+    let changedNanoseconds: Int64
+
+    static func read(_ path: String) -> Self? {
+        var info = Darwin.stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        return Self(
+            device: UInt64(info.st_dev), inode: UInt64(info.st_ino),
+            mode: UInt16(info.st_mode), size: Int64(info.st_size),
+            modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
+            modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec),
+            changedSeconds: Int64(info.st_ctimespec.tv_sec),
+            changedNanoseconds: Int64(info.st_ctimespec.tv_nsec)
+        )
+    }
+}
+
 /// The Mac's own disk and process table. Wraps exactly the calls the panels
 /// made inline before the seam existed.
 ///

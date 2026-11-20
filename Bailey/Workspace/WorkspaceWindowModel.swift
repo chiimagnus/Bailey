@@ -949,7 +949,7 @@ final class WorkspaceWindowModel {
     ) -> Bool {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target),
               let record = FileTreeClipboard.read(from: pasteboard) else { return false }
-        return record.token == application.fileTransferToken
+        return application.trustedFileClipboard(record, pasteboard: pasteboard)
             && record.project == project.id
             && record.identity == String(reflecting: target)
             && record.root == project.fileTree.rootPath
@@ -979,14 +979,16 @@ final class WorkspaceWindowModel {
         case .copy(let paths, let cut):
             guard !paths.isEmpty else { return }
             let record = FileTreeClipboard.Record(
-                token: application.fileTransferToken, project: project.id,
+                token: UUID(), project: project.id,
                 identity: String(reflecting: target), root: root,
                 connectionRevision: clipboardRevision(for: target), paths: paths, cut: cut
             )
-            guard FileTreeClipboard.write(record, to: pasteboard) else {
+            let local = target.workspace == nil
+            guard FileTreeClipboard.write(record, local: local, to: pasteboard) else {
                 fileCommandError(String(localized: "Could not copy files to the clipboard.", table: "Sidebar"))
                 return
             }
+            application.rememberFileClipboard(record, local: local, pasteboard: pasteboard)
 
         case .paste(let directory):
             guard let record = FileTreeClipboard.read(from: pasteboard) else {
@@ -1017,7 +1019,13 @@ final class WorkspaceWindowModel {
                         connectionRevision: record.connectionRevision,
                         paths: remaining, cut: true
                     )
-                    FileTreeClipboard.write(pending, to: pasteboard)
+                    if FileTreeClipboard.write(
+                        pending, local: target.workspace == nil, to: pasteboard
+                    ) {
+                        self.application.rememberFileClipboard(
+                            pending, local: target.workspace == nil, pasteboard: pasteboard
+                        )
+                    }
                 }
             }
 
