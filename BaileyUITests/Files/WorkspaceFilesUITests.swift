@@ -844,6 +844,60 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: survivor), Data("keep me".utf8))
     }
 
+    func testFilePathShortcutsFollowFocusedSelectionAndRightClickTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("first.txt", text: "first\n")
+        let second = try fixture.file("second.txt", text: "second\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(first, in: window)
+        let b = WorkspaceUITestSupport.fileRow(second, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        a.click()
+
+        app.typeKey("c", modifierFlags: [.command, .option])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path)
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+
+        b.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
+        app.typeKey("c", modifierFlags: [.command, .option])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), second.path)
+        XCTAssertTrue(a.isSelected && !b.isSelected)
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt",
+                       "After the context menu closes, focus returns to the original Files row")
+
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        fileMenu.click()
+        XCTAssertTrue(app.menuItems["Copy Path"].isEnabled)
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].isEnabled)
+        XCTAssertTrue(app.menuItems["Reveal in Finder"].isEnabled)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        app.typeKey("t", modifierFlags: .command)
+        fileMenu.click()
+        XCTAssertFalse(app.menuItems["Copy Path"].isEnabled)
+        XCTAssertFalse(app.menuItems["Copy Relative Path"].isEnabled)
+        XCTAssertFalse(app.menuItems["Reveal in Finder"].isEnabled)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        a.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        editor.click()
+        app.typeKey("c", modifierFlags: [.command, .option])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), first.path,
+                       "An actively edited file must also provide its path")
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+        XCTAssertEqual(editor.value as? String, "first\n",
+                       "Path shortcuts must not mutate the active editor")
+    }
+
     func testTerminalFocusedRightClickPreservesFilesSelectionAndInput() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let selectedFile = try fixture.file("a-selected.txt", text: "selected\n")

@@ -148,6 +148,86 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testFilePathShortcutsAreUniquelyRegisteredInSystemMenu() throws {
+        let main = try XCTUnwrap(NSApp.mainMenu)
+        let file = try XCTUnwrap(main.items.first {
+            $0.title == String(localized: "File", table: "Interface")
+        }?.submenu)
+        let commands: [(String, String, NSEvent.ModifierFlags)] = [
+            (String(localized: "Copy Path", table: "Sidebar"), "c", [.command, .option]),
+            (String(localized: "Copy Relative Path", table: "Sidebar"),
+             "c", [.command, .option, .shift]),
+            (String(localized: "Reveal in Finder", table: "Sidebar"), "r", [.command, .option]),
+        ]
+        let all = main.items.compactMap(\.submenu).flatMap(\.items)
+        for (title, key, flags) in commands {
+            let item = try XCTUnwrap(file.items.first { $0.title == title })
+            XCTAssertEqual(item.keyEquivalent, key)
+            XCTAssertEqual(item.keyEquivalentModifierMask, flags)
+            XCTAssertEqual(all.filter {
+                $0.keyEquivalent == key && $0.keyEquivalentModifierMask == flags
+            }.count, 1, "Only the File menu may register \(title)")
+        }
+    }
+
+    @MainActor
+    func testStageAllChangesShortcutOnlyBelongsToFileMenu() throws {
+        let main = try XCTUnwrap(NSApp.mainMenu)
+        let file = try XCTUnwrap(main.items.first {
+            $0.title == String(localized: "File", table: "Interface")
+        }?.submenu)
+        let stageAll = try XCTUnwrap(file.items.first {
+            $0.title == String(localized: "Stage All Changes", table: "Sidebar")
+        })
+        XCTAssertEqual(stageAll.keyEquivalent, "y")
+        XCTAssertEqual(stageAll.keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertEqual(main.items.compactMap(\.submenu).flatMap(\.items).filter {
+            $0.keyEquivalent == "y"
+                && $0.keyEquivalentModifierMask == [.command, .shift]
+        }.count, 1)
+        XCTAssertFalse(file.items.contains {
+            $0.title == String(localized: "Stage Changes", table: "Sidebar")
+        }, "Only Stage All Changes belongs to the main menu")
+    }
+
+    @MainActor
+    func testSaveRemainsInEditWhileSingleDiffLayoutToggleBelongsToFile() throws {
+        let main = try XCTUnwrap(NSApp.mainMenu)
+        let edit = try XCTUnwrap(main.items.compactMap(\.submenu).first { submenu in
+            submenu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
+                && submenu.items.contains { $0.action == #selector(TreeKeyboardView.paste(_:)) }
+        })
+        let file = try XCTUnwrap(main.items.first {
+            $0.title == String(localized: "File", table: "Interface")
+        }?.submenu)
+        let save = try XCTUnwrap(edit.items.first {
+            $0.title == String(localized: "Save", table: "Interface")
+        })
+        XCTAssertEqual(save.keyEquivalent, "s")
+        XCTAssertEqual(save.keyEquivalentModifierMask, .command)
+        XCTAssertFalse(file.items.contains { $0.title == save.title })
+
+        let toggle = try XCTUnwrap(file.items.first {
+            $0.title == String(localized: "Diff Layout", table: "Git")
+        })
+        XCTAssertEqual(toggle.keyEquivalent, "u")
+        XCTAssertEqual(toggle.keyEquivalentModifierMask, [.command, .option])
+        XCTAssertFalse(toggle.isEnabled, "Without a focused Diff the command must be disabled")
+        let all = main.items.compactMap(\.submenu).flatMap(\.items)
+        XCTAssertEqual(all.filter {
+            $0.keyEquivalent == "u" && $0.keyEquivalentModifierMask == [.command, .option]
+        }.count, 1, "Only File registers the layout toggle")
+        XCTAssertFalse(all.contains {
+            ["1", "2"].contains($0.keyEquivalent)
+                && $0.keyEquivalentModifierMask == [.command, .option]
+        }, "Remove both obsolete layout shortcuts")
+        XCTAssertFalse(edit.items.contains {
+            [String(localized: "Unified", table: "Git"),
+             String(localized: "Split", table: "Git")].contains($0.title)
+        }, "Edit must no longer contain Diff layout commands")
+    }
+
+    @MainActor
     func testEditDeleteUsesNativeMenuShortcut() throws {
         let menu = try XCTUnwrap(NSApp.mainMenu)
         let editMenu = try XCTUnwrap(menu.items.compactMap(\.submenu).first(where: { submenu in
@@ -247,12 +327,14 @@ final class AppIdentityTests: XCTestCase {
             Button("Paste", action: {}).badge("⌘V").disabled(true)
             Button("Move to Trash", role: .destructive, action: {}).badge("⌫")
             Button("Close", action: {}).badge("⌘W")
+            Button("Stage All Changes", action: {}).badge("⇧⌘Y")
             Button("Close Tabs to the Right", action: {})
         })
         menu.update()
         let expectations = [
             ("Cut", "⌘X"), ("Copy", "⌘C"), ("Paste", "⌘V"),
-            ("Move to Trash", "⌫"), ("Close", "⌘W")
+            ("Move to Trash", "⌫"), ("Close", "⌘W"),
+            ("Stage All Changes", "⇧⌘Y")
         ]
         for (index, expected) in expectations.enumerated() {
             let item = menu.items[index]
@@ -282,6 +364,57 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(menu.items[2].badge?.stringValue, "⌥⌘N")
         XCTAssertEqual(menu.items[2].title, "新建文件夹…")
         XCTAssertTrue(menu.items.allSatisfy(\.keyEquivalent.isEmpty))
+    }
+
+    @MainActor
+    func testPathShortcutMatchesOnlyEnabledContextMenuActions() throws {
+        var performed: [String] = []
+        let menu = NSHostingMenu(rootView: VStack {
+            Button("Path command label from another locale") { performed.append("absolute") }
+                .badge(PathMenuShortcut.copyAbsolute)
+            Button("Custom relative command") { performed.append("relative") }
+                .badge(PathMenuShortcut.copyRelative)
+            Button("Custom Finder command") { performed.append("reveal") }
+                .badge(PathMenuShortcut.reveal)
+                .disabled(true)
+        })
+        menu.update()
+        XCTAssertTrue(menu.items.allSatisfy(\.keyEquivalent.isEmpty))
+        XCTAssertEqual(menu.items.map { $0.badge?.stringValue },
+                       [PathMenuShortcut.copyAbsolute, PathMenuShortcut.copyRelative, PathMenuShortcut.reveal])
+        XCTAssertTrue(PathMenuShortcut.hasPathActions(menu), "Badges, not localized titles, identify path commands")
+
+        func key(_ character: String, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: 0, context: nil,
+                characters: character, charactersIgnoringModifiers: character,
+                isARepeat: false, keyCode: character == "r" ? 15 : 8
+            ))
+        }
+
+        XCTAssertTrue(PathMenuShortcut.perform(
+            in: menu, event: try key("c", [.command, .option])
+        ))
+        XCTAssertTrue(PathMenuShortcut.perform(
+            in: menu, event: try key("c", [.command, .option, .shift])
+        ))
+        XCTAssertEqual(performed, ["absolute", "relative"])
+        XCTAssertFalse(PathMenuShortcut.perform(
+            in: menu, event: try key("r", [.command, .option])
+        ), "A disabled Finder command must not dispatch")
+        XCTAssertFalse(PathMenuShortcut.perform(
+            in: menu, event: try key("c", [.command])
+        ), "Ordinary Copy must remain owned by Edit")
+        let unbadged = NSHostingMenu(rootView: Button(
+            String(localized: "Copy Path", table: "Sidebar"), action: {}
+        ))
+        unbadged.update()
+        XCTAssertFalse(PathMenuShortcut.hasPathActions(unbadged))
+        XCTAssertFalse(PathMenuShortcut.perform(
+            in: unbadged, event: try key("c", [.command, .option])
+        ), "Menu labels alone must not create a shortcut target")
+        XCTAssertEqual(performed, ["absolute", "relative"])
     }
 
     @MainActor

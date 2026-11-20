@@ -585,7 +585,7 @@ struct DockTabGroupView: View {
                     tabKeyboardFocused = focused
                     if focused, tabCursor.map({ !group.items.contains($0) }) ?? true { tabCursor = active }
                 }, onAttachedToWindow: { tabKeyboard.view?.setAccessibilityIdentifier("bailey.dock.tabstrip") }
-            ))
+            ).focusedValue(\.baileyPathActions, focusedTabPathActions))
             .onChange(of: group.selected) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
             }
@@ -677,6 +677,33 @@ struct DockTabGroupView: View {
         project.dock.clearContextTarget()
     }
 
+    private var focusedTabPathActions: FocusedPathActions? {
+        guard tabKeyboardFocused, isFocused, renamingTabID == nil,
+              case .tab(let id)? = tabCursor ?? active,
+              let tab = project.tabs.first(where: { $0.id == id }),
+              case .file(let file) = tab.content else { return nil }
+        return pathActions(for: file)
+    }
+
+    private func pathActions(for file: FileTab) -> FocusedPathActions {
+        FocusedPathActions(paths: { absolute in
+            guard canFocusGroup() else { return [] }
+            if absolute { return [file.path] }
+            guard file.workspaceIdentity == project.workspaceIdentity,
+                  let root = project.customDirectory.map({ $0 == "/" ? "/" : $0 + "/" }),
+                  file.path.hasPrefix(root) else { return [] }
+            return [String(file.path.dropFirst(root.count))]
+        }, revealablePaths: {
+            guard canFocusGroup(), file.workspaceIdentity == nil else { return [] }
+            return [file.path]
+        })
+    }
+
+    private func contentPathActions(for tab: PaneTab) -> FocusedPathActions? {
+        guard case .file(let file) = tab.content else { return nil }
+        return pathActions(for: file)
+    }
+
     private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
         guard isValidMenuTarget(item), project.dock.contextTarget == item else { return false }
         let title = closeTitle(for: item)
@@ -684,9 +711,11 @@ struct DockTabGroupView: View {
     }
 
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent, for item: DockItem) -> Bool {
+        guard isMenuForTab(menu, item: item) else { return false }
+        if PathMenuShortcut.perform(in: menu, event: event) { return true }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
-              isMenuForTab(menu, item: item) else { return false }
+        guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w"
+        else { return false }
         let title = closeTitle(for: item)
         guard let index = menu.items.firstIndex(where: {
             $0.isEnabled && $0.title == title
@@ -783,6 +812,7 @@ struct DockTabGroupView: View {
                         destination: (projectID: project.id, groupID: group.id)
                     ) }
                 )
+                .focusedValue(\.baileyPathActions, contentPathActions(for: tab))
                 .id(tab.id)
             }
         case nil:
@@ -839,12 +869,29 @@ struct DockTabGroupView: View {
                           current.workspaceIdentity == nil else { return }
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                 }
+                .badge(PathMenuShortcut.reveal)
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
                 guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(current.path, forType: .string)
             }
+            .badge(PathMenuShortcut.copyAbsolute)
+            let relativeRoot = project.customDirectory.map { $0 == "/" ? "/" : $0 + "/" }
+            let relativePath = relativeRoot.flatMap {
+                file.workspaceIdentity == project.workspaceIdentity && file.path.hasPrefix($0)
+                    ? String(file.path.dropFirst($0.count)) : nil
+            }
+            Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+                guard case .file(let current)? = currentMenuTab(tabID)?.content,
+                      current.workspaceIdentity == project.workspaceIdentity,
+                      let root = project.customDirectory.map({ $0 == "/" ? "/" : $0 + "/" }),
+                      current.path.hasPrefix(root) else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(String(current.path.dropFirst(root.count)), forType: .string)
+            }
+            .badge(PathMenuShortcut.copyRelative)
+            .disabled(relativePath == nil)
             Divider()
         }
         if case .browser(let browser) = tab.content, !browser.urlString.isEmpty {

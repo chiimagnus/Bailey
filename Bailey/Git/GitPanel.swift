@@ -249,6 +249,7 @@ struct GitPanel: View {
             remoteURLs = await model.remoteURLs()
         }
         .tint(themeAccent)
+        .focusedValue(\.baileyGitStageAll, focusedStageAllAction)
     }
 
     // MARK: Header
@@ -1740,6 +1741,21 @@ struct GitPanel: View {
         }
     }
 
+    private var focusedStageAllAction: FocusedGitStageAllAction? {
+        guard isGitActive, hasCurrentPanelTarget, let context = project?.panelContext,
+              model.isRepo, model.canUseCurrentStatus, !model.isBusy,
+              !model.changedEntries.isEmpty else { return nil }
+        let repository = model.repoRoot
+        return FocusedGitStageAllAction(target: context.identity, repository: repository) {
+            guard isGitActive, hasCurrentPanelTarget,
+                  project?.panelContext?.identity == context.identity,
+                  model.repoRoot == repository, model.isRepo,
+                  model.canUseCurrentStatus, !model.isBusy, !model.changedEntries.isEmpty
+            else { return }
+            performOperation(.stageAll, model.stageAll)
+        }
+    }
+
     private func performPrimaryAction() {
         performCommit(includeAll: false, trigger: .primaryAction)
     }
@@ -1872,6 +1888,7 @@ struct GitPanel: View {
                             .init(
                                 systemImage: "plus",
                                 help: String(localized: "Stage All Changes", table: "Sidebar"),
+                                badge: "⇧⌘Y",
                                 isLoading: operationIsLoading(.stageAll)
                             ) {
                                 performOperation(.stageAll, model.stageAll)
@@ -2091,6 +2108,7 @@ struct GitPanel: View {
                                      default: return false
                                      }
                                  })
+                    .focusedValue(\.baileyPathActions, focusedChangePathActions)
             }
             .onAppear {
                 GitGraphScrollLog.record(
@@ -2304,6 +2322,19 @@ struct GitPanel: View {
         copyToPasteboard(paths.joined(separator: "\n"))
     }
 
+    private var focusedChangePathActions: FocusedPathActions {
+        let paths: (Bool) -> [String] = { absolute in
+            guard keyboardFocused, isGitActive, hasCurrentPanelTarget else { return [] }
+            let visible = changesDisplay.selections
+            guard let key = model.selectedChanges.isEmpty ? selectedChange
+                : visible.first(where: { model.selectedChanges.contains($0) }) else { return [] }
+            return contextPaths(for: key, absolute: absolute)
+        }
+        return FocusedPathActions(paths: paths, revealablePaths: {
+            remoteName == nil ? paths(true) : []
+        })
+    }
+
     /// A mixed STAGED / CHANGES / MERGE selection must never be partially mutated.
     private func selectedEntries(for target: ChangeSelection, kind: GitEntryRow.Kind) -> [GitStatusModel.Entry] {
         guard canOperateSelectedChanges(target, kind: kind) else { return [] }
@@ -2464,7 +2495,12 @@ struct GitPanel: View {
         .background {
             ContextMenuClickTarget(
                 onContextClick: { focusContextChange(key) },
-                onMenuClosed: { dismissContextChange(key) }
+                onMenuClosed: { dismissContextChange(key) },
+                onMenuKeyDown: { menu, event in
+                    guard contextChange == key, hasCurrentPanelTarget else { return false }
+                    return PathMenuShortcut.perform(in: menu, event: event)
+                },
+                isExpectedMenu: { contextChange == key && PathMenuShortcut.hasPathActions($0) }
             )
         }
         .contextMenu {
@@ -2493,7 +2529,12 @@ struct GitPanel: View {
                 guard hasCurrentPanelTarget else { return }
                 contextChange = context
             },
-            onMenuClosed: { dismissContextChange(context) }) {
+            onMenuClosed: { dismissContextChange(context) },
+            onMenuKeyDown: { menu, event in
+                guard contextChange == context, hasCurrentPanelTarget else { return false }
+                return PathMenuShortcut.perform(in: menu, event: event)
+            },
+            isExpectedMenu: { contextChange == context && PathMenuShortcut.hasPathActions($0) }) {
                 directoryMenu(path: component.path, target: context, kind: kind,
                     stageTrigger: .entry(path: component.path, operation: .stage),
                     unstageTrigger: .entry(path: component.path, operation: .unstage))
@@ -2540,6 +2581,11 @@ struct GitPanel: View {
             contextRing: contextChange == key,
             onContextClick: { focusContextChange(key) },
             onMenuClosed: { dismissContextChange(key) },
+            onMenuKeyDown: { menu, event in
+                guard contextChange == key, hasCurrentPanelTarget else { return false }
+                return PathMenuShortcut.perform(in: menu, event: event)
+            },
+            isExpectedMenu: { contextChange == key && PathMenuShortcut.hasPathActions($0) },
             isRemote: remoteName != nil,
             multipleSelection: isGroupContext(key),
             canBatchOperate: allowsBatchMutation,
@@ -2720,16 +2766,19 @@ struct GitPanel: View {
                : String(localized: "Copy Path", table: "Sidebar")) {
             copyContextPaths(for: target, absolute: true)
         }
+        .badge(PathMenuShortcut.copyAbsolute)
         Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
                : String(localized: "Copy Relative Path", table: "Sidebar")) {
             copyContextPaths(for: target, absolute: false)
         }
+        .badge(PathMenuShortcut.copyRelative)
         if remoteName == nil {
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 NSWorkspace.shared.activateFileViewerSelecting(
                     contextPaths(for: target, absolute: true).map { URL(fileURLWithPath: $0) }
                 )
             }
+            .badge(PathMenuShortcut.reveal)
         }
     }
 
@@ -3150,6 +3199,8 @@ private struct GitEntryRow: View {
     let contextRing: Bool
     let onContextClick: () -> Void
     let onMenuClosed: () -> Void
+    let onMenuKeyDown: (NSMenu, NSEvent) -> Bool
+    let isExpectedMenu: (NSMenu) -> Bool
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -3197,7 +3248,8 @@ private struct GitEntryRow: View {
         }
         .overlay {
             ContextMenuClickTarget(
-                onContextClick: onContextClick, onMenuClosed: onMenuClosed
+                onContextClick: onContextClick, onMenuClosed: onMenuClosed,
+                onMenuKeyDown: onMenuKeyDown, isExpectedMenu: isExpectedMenu
             )
                 .contextMenu { menu }
         }
@@ -3247,16 +3299,21 @@ private struct GitEntryRow: View {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
                 }
             }
+            .badge(PathMenuShortcut.reveal)
         }
         if multipleSelection {
             Button(String(localized: "Copy Paths", table: "Sidebar"), action: copyBatchPaths)
+                .badge(PathMenuShortcut.copyAbsolute)
             Button(String(localized: "Copy Relative Paths", table: "Sidebar"), action: copyBatchRelativePaths)
+                .badge(PathMenuShortcut.copyRelative)
         } else {
             Button(String(localized: "Copy Path", table: "Sidebar")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(absolutePath, forType: .string)
             }
+            .badge(PathMenuShortcut.copyAbsolute)
             Button(String(localized: "Copy Relative Path", table: "Sidebar")) { copyRelativePath() }
+                .badge(PathMenuShortcut.copyRelative)
         }
     }
 

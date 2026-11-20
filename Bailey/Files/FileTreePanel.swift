@@ -214,6 +214,7 @@ private struct FileTreeScrollView: View {
                                  onAttachedToWindow: focusSelectedRow,
                                  onEditCommand: performEdit,
                                  canEditCommand: canPerformEdit)
+                    .focusedValue(\.baileyPathActions, focusedPathActions)
             }
             .onAppear { if isActive { focusSelectedRow() } }
             .onChange(of: isActive) { _, active in
@@ -272,6 +273,22 @@ private struct FileTreeScrollView: View {
         // A visible command palette or another native text field owns its input.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return }
         keyboardOwner.focus()
+    }
+
+    private var focusedPathActions: FocusedPathActions {
+        FocusedPathActions(paths: { absolute in
+            guard keyboardFocused, isActive, canFocusKeyboard(), isCurrentTarget(),
+                  model.renamingPath == nil, model.draft == nil else { return [] }
+            let paths = model.selectedOperationPaths
+            guard !absolute else { return paths }
+            let root = model.rootPath == "/" ? "/" : model.rootPath + "/"
+            return paths.filter { $0.hasPrefix(root) }.map { String($0.dropFirst(root.count)) }
+        }, revealablePaths: {
+            guard sshHost == nil, keyboardFocused, isActive, canFocusKeyboard(),
+                  isCurrentTarget(), model.renamingPath == nil, model.draft == nil
+            else { return [] }
+            return model.selectedOperationPaths
+        })
     }
 
     private func canPerformEdit(_ action: TreeEditAction) -> Bool {
@@ -517,15 +534,12 @@ private struct FileTreeRow: View {
               let target = model.contextMenuTargetPath,
               target == item.path || item.compactComponents.contains(where: { $0.path == target })
         else { return false }
-        return menu.items.contains {
-            [String(localized: "Copy Relative Path", table: "Sidebar"),
-             String(localized: "Copy Relative Paths", table: "Sidebar")]
-                .contains($0.accessibilityLabel())
-        }
+        return PathMenuShortcut.hasPathActions(menu)
     }
 
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
         guard isMenuForCurrentRow(menu) else { return false }
+        if PathMenuShortcut.perform(in: menu, event: event) { return true }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
         let title: String
@@ -592,6 +606,7 @@ private struct FileTreeRow: View {
                     selection.map { URL(fileURLWithPath: $0) }
                 )
             }
+            .badge(PathMenuShortcut.reveal)
         }
         Divider()
         let cutTitle = String(localized: "Cut", table: "Sidebar")
@@ -620,6 +635,7 @@ private struct FileTreeRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(selection.joined(separator: "\n"), forType: .string)
         }
+        .badge(PathMenuShortcut.copyAbsolute)
         Button(multiple ? String(localized: "Copy Relative Paths", table: "Sidebar")
                : String(localized: "Copy Relative Path", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
@@ -629,6 +645,7 @@ private struct FileTreeRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         }
+        .badge(PathMenuShortcut.copyRelative)
         Divider()
         if !multiple {
             Button(String(localized: "Rename", table: "Sidebar")) {

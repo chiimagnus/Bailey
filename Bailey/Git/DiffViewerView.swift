@@ -2008,6 +2008,7 @@ private final class DiffControlsNSView: NSView {
         layoutControl.action = #selector(layoutChanged)
         layoutControl.setAccessibilityLabel(String(localized: "Diff Layout", table: "Git"))
         layoutControl.setAccessibilityIdentifier("bailey.diff.layout")
+        layoutControl.toolTip = String(localized: "Diff Layout", table: "Git") + " (⌥⌘U)"
 
         divider.wantsLayer = true
         divider.translatesAutoresizingMaskIntoConstraints = false

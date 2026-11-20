@@ -96,9 +96,39 @@ struct FocusedGitCommitAction: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }
 
+struct FocusedGitStageAllAction: Equatable {
+    let target: PanelContext.Identity
+    let repository: String
+    let perform: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.target == rhs.target && lhs.repository == rhs.repository
+    }
+}
+
+struct FocusedPathActions {
+    let paths: (Bool) -> [String]
+    let revealablePaths: () -> [String]
+
+    func copy(absolute: Bool) {
+        let value = paths(absolute)
+        guard !value.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value.joined(separator: "\n"), forType: .string)
+    }
+
+    func revealInFinder() {
+        let value = revealablePaths()
+        guard !value.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(value.map { URL(fileURLWithPath: $0) })
+    }
+}
+
 extension FocusedValues {
     @Entry var baileyManager: WorkspaceWindowModel?
     @Entry var baileyGitCommit: FocusedGitCommitAction?
+    @Entry var baileyGitStageAll: FocusedGitStageAllAction?
+    @Entry var baileyPathActions: FocusedPathActions?
 }
 
 /// Presentation snapshots live only while AppKit tracks an open system menu.
@@ -138,7 +168,21 @@ private struct BaileyCommands: Commands {
     let menuPresentation: MainMenuPresentation
     @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
     @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: FocusedGitCommitAction?
+    @FocusedValue(\.baileyGitStageAll) private var focusedGitStageAll: FocusedGitStageAllAction?
+    @FocusedValue(\.baileyPathActions) private var focusedPathActions: FocusedPathActions?
     @Environment(\.openWindow) private var openWindow
+    private var pathActions: FocusedPathActions? {
+        manager == nil ? nil : focusedPathActions
+    }
+    private var diffLayoutMenuTitle: String {
+        guard let style = manager?.diffLayoutTarget?.preferences.diffStyle else {
+            return String(localized: "Diff Layout", table: "Git")
+        }
+        let next = style == .unified
+            ? String(localized: "Split", table: "Git")
+            : String(localized: "Unified", table: "Git")
+        return String(format: String(localized: "Switch to %@", table: "Git"), next)
+    }
     private var manager: WorkspaceWindowModel? {
         guard let focusedManager, NSApp.isActive,
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
@@ -152,6 +196,14 @@ private struct BaileyCommands: Commands {
         CommandGroup(replacing: .saveItem) {}
 
         CommandGroup(after: .pasteboard) {
+            Button(String(localized: "Save", table: "Interface")) {
+                manager?.saveSelectedFile()
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(manager?.canSaveSelectedFile != true)
+
+            Divider()
+
             // Find follows the active dock content, not the find bar's first responder.
             if manager?.canFind == true {
                 Menu(String(localized: "Find", table: "Interface")) {
@@ -309,15 +361,6 @@ private struct BaileyCommands: Commands {
             }
             .disabled(manager?.selectedProject == nil)
 
-            if manager?.selectedProject?.dock.activeGroup?.selected == .git {
-                Divider()
-                Button(String(localized: "Commit Staged", table: "Sidebar")) {
-                    focusedGitCommit?.perform()
-                }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(focusedGitCommit == nil)
-            }
-
             let entries = menuPresentation.projectEntries(for: manager?.projects ?? [])
             if !entries.isEmpty {
                 Divider()
@@ -360,11 +403,45 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Save", table: "Interface")) {
-                manager?.saveSelectedFile()
+            Button(String(localized: "Copy Path", table: "Sidebar")) {
+                pathActions?.copy(absolute: true)
             }
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(manager?.canSaveSelectedFile != true)
+            .keyboardShortcut("c", modifiers: [.command, .option])
+            .disabled(pathActions?.paths(true).isEmpty != false)
+
+            Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+                pathActions?.copy(absolute: false)
+            }
+            .keyboardShortcut("c", modifiers: [.command, .option, .shift])
+            .disabled(pathActions?.paths(false).isEmpty != false)
+
+            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
+                pathActions?.revealInFinder()
+            }
+            .keyboardShortcut("r", modifiers: [.command, .option])
+            .disabled(pathActions?.revealablePaths().isEmpty != false)
+
+            Divider()
+
+            Button(String(localized: "Stage All Changes", table: "Sidebar")) {
+                if manager != nil { focusedGitStageAll?.perform() }
+            }
+            .keyboardShortcut("y", modifiers: [.command, .shift])
+            .disabled(manager == nil || focusedGitStageAll == nil)
+
+            Button(String(localized: "Commit Staged", table: "Sidebar")) {
+                focusedGitCommit?.perform()
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(focusedGitCommit == nil)
+
+            Divider()
+
+            Button(diffLayoutMenuTitle) {
+                manager?.toggleDiffLayout()
+            }
+            .keyboardShortcut("u", modifiers: [.command, .option])
+            .disabled(manager?.diffLayoutTarget == nil)
         }
 
         CommandMenu(String(localized: "Terminal", table: "Terminal")) {
