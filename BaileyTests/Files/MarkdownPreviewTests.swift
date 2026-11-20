@@ -5,6 +5,29 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewTests: XCTestCase {
+    func testMarkdownModeRequiresActualTextAndDoesNotTouchDirtyNativeSource() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".mdx")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let bytes = Data("# Original\r\n".utf8)
+        try bytes.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        XCTAssertFalse(file.canPreviewMarkdown)
+        try await file.waitForText()
+        XCTAssertTrue(file.canPreviewMarkdown)
+        let storage = file.nativeTextStorage
+        file.text = "# Draft\r\n"
+        file.setMarkdownPreview(true)
+        XCTAssertTrue(file.showsMarkdownPreview)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        file.updatePath(path.path + ".txt")
+        XCTAssertFalse(file.canPreviewMarkdown)
+        XCTAssertFalse(file.showsMarkdownPreview)
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertEqual(file.text, "# Draft\r\n")
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+    }
     func testSKILLMetadataKeepsMultilineAndNullValuesOutOfBody() async throws {
         let source = "\u{FEFF}" + [
             "---", "name: sample", "description: |", "  多行", "  second line",

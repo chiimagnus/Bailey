@@ -172,7 +172,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var hasReadDemand = false
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
-    @ObservationIgnored private var targetGeneration: UInt = 0
+    private var targetGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
     @ObservationIgnored private var saveLatestRequested = false
     /// Encoding changes are explicit user actions, never merged or silently dropped.
@@ -190,6 +190,23 @@ final class FileTab: nonisolated Identifiable {
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a file opened locally is never read-only.
     let workspaceIdentity: String?
+    private(set) var showsMarkdownPreview = false
+
+    var canPreviewMarkdown: Bool {
+        guard case .text = content else { return false }
+        return MarkdownDocument.supports(path)
+    }
+
+    var markdownRequestID: String { "\(targetGeneration)-\(reloadRevision)" }
+
+    func setMarkdownPreview(_ enabled: Bool) {
+        guard canPreviewMarkdown else { return }
+        showsMarkdownPreview = enabled
+    }
+
+    func markdownResource(in directory: String?) -> MarkdownResource {
+        MarkdownResource(path: path, directory: readOnlyReason == nil ? directory : nil, backend: backend)
+    }
 
     private struct LoadedContent {
         let content: Content
@@ -372,6 +389,7 @@ final class FileTab: nonisolated Identifiable {
         invalidateReload()
         targetGeneration &+= 1
         path = newPath
+        if !MarkdownDocument.supports(newPath) { showsMarkdownPreview = false }
         editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if wasReading { loadIfNeeded() }
     }
@@ -847,6 +865,8 @@ struct FileViewerView: View {
     /// Called when the editor takes focus itself (e.g. a click), so the
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
+    var markdownDirectory: String?
+    var onMarkdownLink: (URL) -> Void = { _ in }
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
@@ -869,23 +889,27 @@ struct FileViewerView: View {
                     if let error = file.saveError {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
-                    HStack {
-                        Spacer()
-                        encodingMenu
+                    if file.showsMarkdownPreview && file.canPreviewMarkdown {
+                        MarkdownFilePreview(file: file, directory: markdownDirectory, onOpenLink: onMarkdownLink)
+                    } else {
+                        HStack {
+                            Spacer()
+                            encodingMenu
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 23)
+                        SourceTextEditor(
+                            file: file,
+                            font: TerminalFont.current(),
+                            palette: .theme(dark: colorScheme == .dark),
+                            wrapLines: settings.wrapLines,
+                            longLineDisplayWidth: settings.longLineDisplayWidth,
+                            isFocused: isFocused,
+                            canFocus: canFocus,
+                            onFocused: onFocused
+                        )
+                        .id(file.reloadRevision)
                     }
-                    .padding(.horizontal, 12)
-                    .frame(height: 23)
-                    SourceTextEditor(
-                        file: file,
-                        font: TerminalFont.current(),
-                        palette: .theme(dark: colorScheme == .dark),
-                        wrapLines: settings.wrapLines,
-                        longLineDisplayWidth: settings.longLineDisplayWidth,
-                        isFocused: isFocused,
-                        canFocus: canFocus,
-                        onFocused: onFocused
-                    )
-                    .id(file.reloadRevision)
                 }
             case .image(let image):
                 VStack(spacing: 0) {

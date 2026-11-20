@@ -214,14 +214,6 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Save", table: "Interface")) {
-                manager?.saveSelectedFile()
-            }
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(manager?.canSaveSelectedFile != true)
-
-            Divider()
-
             // Find follows the active dock content, not the find bar's first responder.
             if manager?.canFind == true {
                 Menu(String(localized: "Find", table: "Interface")) {
@@ -412,6 +404,21 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("o", modifiers: .command)
             .disabled(manager?.selectedProject == nil)
+
+            Button(manager?.markdownPreviewTarget?.showsMarkdownPreview == true
+                ? String(localized: "Show Source", table: "Editor")
+                : String(localized: "Show Preview", table: "Editor")) {
+                guard let file = manager?.markdownPreviewTarget else { return }
+                file.setMarkdownPreview(!file.showsMarkdownPreview)
+            }
+            .keyboardShortcut("v", modifiers: [.command, .shift])
+            .disabled(manager?.markdownPreviewTarget == nil)
+
+            Button(String(localized: "Save", table: "Interface")) {
+                manager?.saveSelectedFile()
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(manager?.canSaveSelectedFile != true)
 
             Divider()
 

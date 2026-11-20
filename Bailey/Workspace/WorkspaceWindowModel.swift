@@ -674,14 +674,15 @@ final class WorkspaceWindowModel {
     /// Find uses the active pane's existing native text or terminal surface.
     var canFind: Bool {
         switch selectedProject?.focusedContent {
-        case .session, .file, .diff: return true
+        case .session, .diff: return true
+        case .file(let file): return !file.showsMarkdownPreview
         case .browser, .none: return false
         }
     }
 
     var canReplace: Bool {
         switch selectedProject?.focusedContent {
-        case .file: return true
+        case .file(let file): return !file.showsMarkdownPreview
         case .diff(let diff): return diff.isEditing && diff.isEditableNow
         case .session, .browser, .none: return false
         }
@@ -826,6 +827,13 @@ final class WorkspaceWindowModel {
     }
 
     var canSaveSelectedFile: Bool { selectedProject?.focusedContent?.isDirty == true }
+
+    var markdownPreviewTarget: FileTab? {
+        guard !isClosed, !isCommandPaletteVisible, !isSSHFolderPickerVisible,
+              attachedWindow?.isKeyWindow == true, attachedWindow?.attachedSheet == nil,
+              case .file(let file)? = selectedProject?.focusedContent, file.canPreviewMarkdown else { return nil }
+        return file
+    }
 
     /// Saves the focused pane if it holds a file or an editable diff.
     func saveSelectedFile() {

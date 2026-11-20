@@ -1,6 +1,80 @@
 import SwiftUI
 import Textual
 
+struct MarkdownFilePreview: View {
+    let file: FileTab
+    let directory: String?
+    let onOpenLink: (URL) -> Void
+
+    @State private var parsed: MarkdownDocument?
+    @State private var failed = false
+
+    var body: some View {
+        let request = file.markdownRequestID
+        Group {
+            if let parsed {
+                MarkdownPreview(document: parsed, revision: request,
+                                resource: file.markdownResource(in: directory), openLink: onOpenLink)
+            } else if failed {
+                ContentUnavailableView("Could not render Markdown.", systemImage: "doc.text")
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: request) {
+            parsed = nil
+            failed = false
+            do {
+                let document = try await MarkdownDocument.parse(file.text)
+                guard !Task.isCancelled, request == file.markdownRequestID else { return }
+                parsed = document
+            } catch {
+                guard !Task.isCancelled, request == file.markdownRequestID else { return }
+                failed = true
+            }
+        }
+    }
+}
+
+struct MarkdownMetadataView: View {
+    let file: FileTab
+    @State private var metadata: (properties: [MarkdownDocument.Property], warning: String?)?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Front Matter", tableName: "Editor").font(.headline)
+                if let metadata {
+                    if let warning = metadata.warning {
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                    } else if metadata.properties.isEmpty {
+                        Text("No YAML metadata.", tableName: "Editor").foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(metadata.properties.enumerated()), id: \.offset) { _, property in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: property.name).fontWeight(.medium)
+                            Text(verbatim: property.value.isEmpty ? "—" : property.value)
+                        }
+                    }
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            .padding()
+        }
+        .frame(width: 300, height: 220)
+        .task(id: file.markdownRequestID) {
+            let request = file.markdownRequestID
+            let result = await MarkdownDocument.metadata(file.text)
+            guard !Task.isCancelled, request == file.markdownRequestID else { return }
+            metadata = result
+        }
+    }
+}
+
 struct MarkdownPreview: View {
     let document: MarkdownDocument
     let revision: String
@@ -46,7 +120,7 @@ struct MarkdownPreview: View {
         }
         .textual.imageAttachmentLoader(MarkdownImageLoader(resource: resource))
         .textual.emojiAttachmentLoader(MarkdownImageLoader(resource: resource))
-        .accessibilityIdentifier("markdown-preview")
+        .accessibilityIdentifier("bailey.markdown.preview")
     }
 }
 

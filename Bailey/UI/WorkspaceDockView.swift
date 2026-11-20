@@ -328,6 +328,7 @@ struct DockTabGroupView: View {
     @State private var tabKeyboardFocused = false
     @State private var tabStripContentWidth: CGFloat = 0
     @State private var dragGestureItem: DockItem?
+    @State private var markdownMetadataTabID: UUID?
     @GestureState private var isTabDragging = false
     @Environment(\.appearsActive) private var windowAppearsActive
 
@@ -411,6 +412,14 @@ struct DockTabGroupView: View {
                     key: DockGroupFrames.self,
                     value: [group.id: geometry.frame(in: .global)]
                 )
+            }
+        }
+        .popover(isPresented: Binding(
+            get: { markdownMetadataTabID != nil },
+            set: { if !$0 { markdownMetadataTabID = nil } }
+        )) {
+            if let id = markdownMetadataTabID, case .file(let file)? = currentMenuTab(id)?.content {
+                MarkdownMetadataView(file: file)
             }
         }
     }
@@ -759,8 +768,12 @@ struct DockTabGroupView: View {
                     isFocused: isFocused,
                     canFocus: canFocusGroup,
                     onFocused: focusGroup,
-                    onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
+                    onNewBrowserTab: {
+                        guard manager.selectedProject === project else { return }
+                        manager.newBrowserTab(initialURL: $0)
+                    },
                     onNewFileTab: { manager.openFile($0) },
+                    markdownDirectory: markdownDirectory(for: tab),
                     onExternalFilesDropped: { FinderWindowDrop.receive(
                         $0, preferred: manager,
                         destination: (projectID: project.id, groupID: group.id)
@@ -793,6 +806,12 @@ struct DockTabGroupView: View {
 
     private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }
 
+    private func markdownDirectory(for tab: PaneTab) -> String? {
+        guard case .file(let file) = tab.content,
+              file.workspaceIdentity == project.workspaceIdentity else { return nil }
+        return project.customDirectory
+    }
+
     private func addSession() {
         project.newSession()
         if let id = project.selectedTabID {
@@ -804,6 +823,24 @@ struct DockTabGroupView: View {
     private func projectTabMenu(_ tab: PaneTab) -> some View {
         let tabID = tab.id
         if case .file(let file) = tab.content {
+            if file.canPreviewMarkdown {
+                Button(String(localized: "Show Source", table: "Editor")) {
+                    if case .file(let current)? = currentMenuTab(tabID)?.content {
+                        current.setMarkdownPreview(false)
+                    }
+                }
+                .disabled(!file.showsMarkdownPreview)
+                Button(String(localized: "Show Preview", table: "Editor")) {
+                    if case .file(let current)? = currentMenuTab(tabID)?.content {
+                        current.setMarkdownPreview(true)
+                    }
+                }
+                .disabled(file.showsMarkdownPreview)
+                Button(String(localized: "Front Matter…", table: "Editor")) {
+                    if currentMenuTab(tabID) != nil { markdownMetadataTabID = tabID }
+                }
+                Divider()
+            }
             Button(String(localized: "Reveal in File Manager", table: "Interface")) {
                 guard currentMenuTab(tabID) != nil else { return }
                 manager.revealFileInFileManager(tabID: tabID, in: project)

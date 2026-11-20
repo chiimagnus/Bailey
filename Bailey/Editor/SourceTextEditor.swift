@@ -49,6 +49,13 @@ struct SourceTextEditor: NSViewRepresentable {
     var canFocus: () -> Bool = { true }
     var onFocused: () -> Void = {}
 
+    private var onResignFirstResponder: () -> Void {
+        { [weak file] in
+            guard let file, !file.showsMarkdownPreview else { return }
+            file.autoSaveOnFocusLoss()
+        }
+    }
+
     func makeCoordinator() -> Coordinator {
         if let coordinator = file.editorCoordinator,
            coordinator.revision == file.reloadRevision {
@@ -63,7 +70,7 @@ struct SourceTextEditor: NSViewRepresentable {
         let scrollView = context.coordinator.scrollView ?? makeScrollView(coordinator: context.coordinator)
         if let textView = scrollView.documentView as? FocusReportingTextView {
             textView.onBecomeFirstResponder = onFocused
-            textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
+            textView.onResignFirstResponder = onResignFirstResponder
             apply(to: textView, scrollView: scrollView)
         }
         context.coordinator.wasFocused = isFocused
@@ -83,8 +90,6 @@ struct SourceTextEditor: NSViewRepresentable {
             }
             file.preparedLineWidths = nil
         }
-        textView.onBecomeFirstResponder = onFocused
-        textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
         scrollView.wantsLayer = true
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -178,9 +183,7 @@ struct SourceTextEditor: NSViewRepresentable {
         container.focusOnAttach = isFocused
         guard let textView = scrollView.documentView as? NativeCodeTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
-        (textView as? FocusReportingTextView)?.onResignFirstResponder = {
-            [weak file] in file?.autoSaveOnFocusLoss()
-        }
+        (textView as? FocusReportingTextView)?.onResignFirstResponder = onResignFirstResponder
         apply(to: textView, scrollView: scrollView)
         // Take focus on the unfocused→focused edge (keyboard navigation moving
         // focus here), never on every render.

@@ -1,6 +1,56 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Show Preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示预览"
+          }
+        }
+      }
+    },
+    "Show Source" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示源码"
+          }
+        }
+      }
+    },
+    "Front Matter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "头部元数据"
+          }
+        }
+      }
+    },
+    "Front Matter…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "头部元数据…"
+          }
+        }
+      }
+    },
+    "No YAML metadata." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有 YAML 元数据。"
+          }
+        }
+      }
+    },
     "Automatic" : {
       "localizations" : {
         "zh-Hans" : {

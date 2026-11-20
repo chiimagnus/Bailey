@@ -30,6 +30,11 @@ nonisolated struct MarkdownDocument: Sendable {
         }
     }
 
+    @concurrent static func metadata(_ source: String) async -> (properties: [Property], warning: String?) {
+        let header = splitHeader(source)
+        return (header.properties, header.warning)
+    }
+
     @concurrent static func parse(_ source: String) async throws -> Self {
         try Task.checkCancellation()
         let header = splitHeader(source)
