@@ -8493,6 +8493,55 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(pane.textView.string, modified)
     }
 
+    func testDiffLayoutCommandKeepsItsTargetAcrossRepeatedTogglesAndToolFocus() async throws {
+        let suite = "bailey-layout-command-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.diffStyle = .unified
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "Diff menu", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+
+        let diff = DiffTab(
+            repoRoot: "/fixture", path: "layout.txt", source: .worktree,
+            untracked: true, origPath: nil, backend: DiffWorkspaceFixture(),
+            workspaceIdentity: project.workspaceIdentity, preferences: preferences
+        )
+        try await wait { diff.hasLoadedContent && diff.hasChanges }
+        let tab = PaneTab(content: .diff(diff))
+        project.append(tab)
+        project.selectTab(tab.id)
+
+        XCTAssertTrue(manager.diffLayoutTarget === diff)
+        manager.toggleDiffLayout()
+        XCTAssertEqual(preferences.diffStyle, .split)
+        XCTAssertTrue(manager.diffLayoutTarget === diff,
+                      "Changing the native layout must not revoke the menu command")
+        manager.toggleDiffLayout()
+        XCTAssertEqual(preferences.diffStyle, .unified)
+
+        project.dock.select(.git)
+        XCTAssertTrue(manager.diffLayoutTarget === diff,
+                      "The Git panel can still toggle its displayed Diff preview")
+        manager.toggleDiffLayout()
+        XCTAssertEqual(preferences.diffStyle, .split)
+        project.dock.select(.files)
+        XCTAssertNil(manager.diffLayoutTarget,
+                     "A background Diff must not capture shortcuts from Files")
+        manager.toggleDiffLayout()
+        XCTAssertEqual(preferences.diffStyle, .split)
+
+        let other = Project(fallbackName: "other", workspaceConfiguration: .standard)
+        manager.projects.append(other)
+        manager.selectedProjectID = other.id
+        XCTAssertNil(manager.diffLayoutTarget,
+                     "Project changes must invalidate the former Diff menu target")
+    }
+
     func testNativeDiffSplitLayoutPreservesPaneIdentity() async throws {
         let domain = "bailey-native-layout-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

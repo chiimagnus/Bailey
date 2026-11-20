@@ -484,6 +484,11 @@ final class WorkspaceWindowModel {
         }
     }
 
+    func windowResignedKey() {
+        selectedProject?.dock.clearContextTarget()
+        autoSaveEditedTabs()
+    }
+
     func close(_ project: Project) {
         guard projects.contains(where: { $0 === project }),
               !project.isClosingPanels,
@@ -609,6 +614,24 @@ final class WorkspaceWindowModel {
     var canClearActiveTerminal: Bool {
         if case .session? = selectedProject?.focusedContent { return true }
         return false
+    }
+
+    /// The File menu follows the active Dock content, not an individual TextKit
+    /// responder that may be hidden when switching Unified / Split.
+    var diffLayoutTarget: DiffTab? {
+        guard let project = selectedProject else { return nil }
+        let content = project.dock.activeGroup?.selected == .git
+            ? project.selectedTab?.content : project.focusedContent
+        guard case .diff(let diff)? = content,
+              diff.workspaceIdentity == project.workspaceIdentity,
+              diff.hasLoadedContent, !diff.source.isPlainRevision,
+              diff.hasChanges || diff.isEditing else { return nil }
+        return diff
+    }
+
+    func toggleDiffLayout() {
+        guard let diff = diffLayoutTarget else { return }
+        diff.setDiffStyle(diff.preferences.diffStyle == .unified ? .split : .unified)
     }
 
     /// Routes a Find menu command to the focused pane. Driven off the focused

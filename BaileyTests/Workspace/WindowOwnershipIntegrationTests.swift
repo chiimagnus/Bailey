@@ -604,7 +604,9 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             file.refreshDirtyState()
         }
         XCTAssertTrue(files.allSatisfy(\.isDirty))
-        manager.autoSaveEditedTabs()
+        project.dock.selectForContextMenu(.git)
+        manager.windowResignedKey()
+        XCTAssertNil(project.dock.contextTarget)
         try await wait { files.allSatisfy { !$0.isDirty } }
         for file in files {
             XCTAssertEqual(try String(contentsOfFile: file.path, encoding: .utf8), file.text)

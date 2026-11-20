@@ -585,7 +585,7 @@ struct DockTabGroupView: View {
                     tabKeyboardFocused = focused
                     if focused, tabCursor.map({ !group.items.contains($0) }) ?? true { tabCursor = active }
                 }, onAttachedToWindow: { tabKeyboard.view?.setAccessibilityIdentifier("bailey.dock.tabstrip") }
-            ))
+            ).focusedValue(\.baileyPathActions, focusedTabPathActions))
             .onChange(of: group.selected) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
             }
@@ -618,9 +618,6 @@ struct DockTabGroupView: View {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
                     onMenuClosed: { finishTabContextMenu(for: item) },
-                    onMenuKeyDown: { menu, event in
-                        handleMenuKeyDown(menu, event, for: item)
-                    },
                     isExpectedMenu: { isMenuForTab($0, item: item) },
                     onMiddleClick: { manager.closePanel(item, in: project) }
                 )
@@ -645,9 +642,6 @@ struct DockTabGroupView: View {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
                     onMenuClosed: { finishTabContextMenu(for: item) },
-                    onMenuKeyDown: { menu, event in
-                        handleMenuKeyDown(menu, event, for: item)
-                    },
                     isExpectedMenu: { isMenuForTab($0, item: item) },
                     onMiddleClick: { manager.closePanel(item, in: project) }
                 )
@@ -668,32 +662,36 @@ struct DockTabGroupView: View {
         guard project.dock.contextTarget == item else { return }
         // AppKit 可能先结束右键菜单跟踪，再让系统主菜单处理 ⌘W。
         // 保留本次右键目标，直到 Close 消费它。
-        if let event = NSApp.currentEvent,
-           event.type == .keyDown,
-           event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command],
-           event.charactersIgnoringModifiers?.lowercased() == "w" {
-            return
+        if let event = NSApp.currentEvent, event.type == .keyDown {
+            if case .tab(let id) = item,
+               let tab = project.tabs.first(where: { $0.id == id }),
+               case .file = tab.content,
+               PathMenuShortcut.badge(for: event) != nil { return }
+            if event.modifierFlags.intersection([.command, .control, .option, .shift])
+                == [.command], event.charactersIgnoringModifiers?.lowercased() == "w" {
+                return
+            }
         }
         project.dock.clearContextTarget()
+    }
+
+    private var focusedTabPathActions: FocusedPathActions? {
+        guard tabKeyboardFocused, isFocused, renamingTabID == nil,
+              case .tab(let id)? = tabCursor ?? active,
+              let tab = project.tabs.first(where: { $0.id == id }),
+              case .file(let file) = tab.content else { return nil }
+        return FocusedPathActions.file(file, in: project, isValid: canFocusGroup)
+    }
+
+    private func contentPathActions(for tab: PaneTab) -> FocusedPathActions? {
+        guard case .file(let file) = tab.content else { return nil }
+        return FocusedPathActions.file(file, in: project, isValid: canFocusGroup)
     }
 
     private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
         guard isValidMenuTarget(item), project.dock.contextTarget == item else { return false }
         let title = closeTitle(for: item)
         return menu.items.contains { $0.title == title }
-    }
-
-    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent, for item: DockItem) -> Bool {
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
-              isMenuForTab(menu, item: item) else { return false }
-        let title = closeTitle(for: item)
-        guard let index = menu.items.firstIndex(where: {
-            $0.isEnabled && $0.title == title
-        }) else { return false }
-        menu.performActionForItem(at: index)
-        menu.cancelTracking()
-        return true
     }
 
     private func selectionChange(_ modifiers: NSEvent.ModifierFlags) -> DockWorkspaceModel.SelectionChange {
@@ -783,6 +781,7 @@ struct DockTabGroupView: View {
                         destination: (projectID: project.id, groupID: group.id)
                     ) }
                 )
+                .focusedValue(\.baileyPathActions, contentPathActions(for: tab))
                 .id(tab.id)
             }
         case nil:
@@ -839,12 +838,29 @@ struct DockTabGroupView: View {
                           current.workspaceIdentity == nil else { return }
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                 }
+                .badge(PathMenuShortcut.reveal)
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
                 guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(current.path, forType: .string)
             }
+            .badge(PathMenuShortcut.copyAbsolute)
+            let relativeRoot = project.customDirectory.map { $0 == "/" ? "/" : $0 + "/" }
+            let relativePath = relativeRoot.flatMap {
+                file.workspaceIdentity == project.workspaceIdentity && file.path.hasPrefix($0)
+                    ? String(file.path.dropFirst($0.count)) : nil
+            }
+            Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+                guard case .file(let current)? = currentMenuTab(tabID)?.content,
+                      current.workspaceIdentity == project.workspaceIdentity,
+                      let root = project.customDirectory.map({ $0 == "/" ? "/" : $0 + "/" }),
+                      current.path.hasPrefix(root) else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(String(current.path.dropFirst(root.count)), forType: .string)
+            }
+            .badge(PathMenuShortcut.copyRelative)
+            .disabled(relativePath == nil)
             Divider()
         }
         if case .browser(let browser) = tab.content, !browser.urlString.isEmpty {

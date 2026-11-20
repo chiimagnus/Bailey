@@ -11,17 +11,20 @@ struct PanelSectionHeader: View {
         let id = UUID()
         let systemImage: String
         let help: String
+        let badge: String?
         let isLoading: Bool
         let perform: () -> Void
 
         init(
             systemImage: String,
             help: String,
+            badge: String? = nil,
             isLoading: Bool = false,
             perform: @escaping () -> Void
         ) {
             self.systemImage = systemImage
             self.help = help
+            self.badge = badge
             self.isLoading = isLoading
             self.perform = perform
         }
@@ -126,6 +129,7 @@ struct PanelSectionHeader: View {
         .contextMenu {
             ForEach(actions) { action in
                 Button(action.help, action: action.perform)
+                    .badge(action.badge)
                     .disabled(actionsDisabled)
             }
             if !actions.isEmpty, !menuActions.isEmpty { Divider() }

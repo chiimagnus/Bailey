@@ -6,6 +6,31 @@ enum TreeEditAction {
     case cut, copy, paste, delete, selectAll
 }
 
+enum PathMenuShortcut {
+    static let copyAbsolute = "⌥⌘C"
+    static let copyRelative = "⌥⇧⌘C"
+    static let reveal = "⌥⌘R"
+
+    static func hasPathActions(_ menu: NSMenu) -> Bool {
+        menu.items.contains {
+            $0.badge?.stringValue == copyAbsolute
+                || $0.badge?.stringValue == copyRelative
+                || $0.badge?.stringValue == reveal
+        }
+    }
+
+    static func badge(for event: NSEvent) -> String? {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        return switch (event.charactersIgnoringModifiers?.lowercased(), modifiers) {
+        case ("c", [.command, .option]): copyAbsolute
+        case ("c", [.command, .option, .shift]): copyRelative
+        case ("r", [.command, .option]): reveal
+        default: nil
+        }
+    }
+
+}
+
 /// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
 @MainActor
 final class TreeKeyboardOwner {

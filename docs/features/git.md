@@ -468,8 +468,12 @@ Git Changes 自动定位该行并替换旧选择；暂存与未暂存的同名�
 显式「Open File」和选择 Diff 标签继续切入目标内容；仅浏览 Diff 不修改 Git index／HEAD，
 Stage／Unstage／Discard 行按钮和右键菜单在目标处于已选集合时作用于该集合，
 目标不在集合内时只操作该行；分组标题的 Stage All／Unstage All／Discard All 仍作用于整组。
+Stage All Changes 也可用「文件」菜单的 ⇧⌘Y 调用，暂存整个仓库的未暂存更改（包括未跟踪文件），
+不受选区、搜索过滤或目录展开状态限制；普通 Stage Changes 没有快捷键。
 多个文件右键隐藏只打开一项 Diff／文件、HEAD 原文和单文件忽略规则，
 提供复制所选绝对／相对路径及 Finder 定位（本机）；
+绝对路径 ⌥⌘C、相对路径 ⌥⇧⌘C、本机 Finder 定位 ⌥⌘R 作用于有效的键盘目标，
+右键菜单展开时使用本次命中对象；Git Graph 的历史文件路径同样支持复制快捷键。
 ⌘C 复制当前 Git 选区的相对路径。单项菜单仍保留原能力。
 STAGED／CHANGES 同一路径是两个独立选择对象；跨 STAGED、CHANGES、MERGE 的混合选区
 只能进行复制／定位，不显示只对其中一组生效的 Stage／Unstage／Discard，
