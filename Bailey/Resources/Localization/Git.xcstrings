@@ -281,6 +281,26 @@
         }
       }
     },
+    "Current Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前工作树"
+          }
+        }
+      }
+    },
+    "Target Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标工作树"
+          }
+        }
+      }
+    },
     "Create Worktree…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -417,6 +437,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "该分支已经在其他工作树中检出。"
+          }
+        }
+      }
+    },
+    "The selected Worktree changed. Reopen Git Graph and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选工作树已发生变化。请重新打开 Git 图谱后重试。"
+          }
+        }
+      }
+    },
+    "The selected Worktree changed or is not clean enough for this operation." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选工作树已变化，或不满足此操作要求的干净状态。"
           }
         }
       }
@@ -781,22 +821,22 @@
         }
       }
     },
-    "Rebase Current Branch onto Commit…" : {
+    "Rebase Worktree onto Commit…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将当前分支变基到提交…"
+            "value" : "将工作树变基到提交…"
           }
         }
       }
     },
-    "Reset Current Branch to Commit…" : {
+    "Reset Worktree to Commit…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将当前分支重置到提交…"
+            "value" : "将工作树重置到提交…"
           }
         }
       }
@@ -981,12 +1021,12 @@
         }
       }
     },
-    "Merge Commit into Current Branch…" : {
+    "Merge Commit into Worktree…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将提交合并到当前分支…"
+            "value" : "将提交合并到工作树…"
           }
         }
       }
@@ -1644,12 +1684,12 @@
         }
       }
     },
-    "Repository %@: %@\nCommit %@: %@" : {
+    "Commit %@: %@" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仓库 %@：%@\n提交 %@：%@"
+            "value" : "提交 %@：%@"
           }
         }
       }
@@ -2517,22 +2557,22 @@
         }
       }
     },
-    "Merge into Current Branch…" : {
+    "Merge into Worktree…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "合并到当前分支…"
+            "value" : "合并到工作树…"
           }
         }
       }
     },
-    "Rebase Current Branch onto This Branch…" : {
+    "Rebase Worktree onto This Branch…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将当前分支变基到此分支…"
+            "value" : "将工作树变基到此分支…"
           }
         }
       }

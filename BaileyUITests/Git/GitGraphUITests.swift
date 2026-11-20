@@ -454,6 +454,127 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/multi-badge^{}"]), taggedHash)
     }
 
+    func testLinkedWorktreeSelectionAllowsDropAndSquashWithoutRewritingCurrentWorktree() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("base.txt", text: "base\n")
+        try fixture.initializeGit()
+        let mainHead = try fixture.git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-Git-Rewrite-" + UUID().uuidString)
+        addTeardownBlock {
+            _ = try? fixture.git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        try fixture.git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        for title in ["linked first", "linked second", "linked third"] {
+            try (title + "\n").write(
+                to: linked.appendingPathComponent(title + ".txt"),
+                atomically: true, encoding: .utf8
+            )
+            try fixture.git(["-C", linked.path, "add", "--", title + ".txt"])
+            try fixture.git(["-C", linked.path, "commit", "-qm", title])
+        }
+        let oldTree = try fixture.git(["-C", linked.path, "rev-parse", "HEAD^{tree}"])
+        let app = try launchGraph(fixture, language: "en")
+        let first = app.buttons["linked first"]
+        let second = app.buttons["linked second"]
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        second.click()
+        XCUIElement.perform(withKeyModifiers: .command) { first.click() }
+        XCTAssertTrue(second.isSelected && first.isSelected)
+
+        first.rightClick()
+        let drop = app.menuItems["Drop Selected Commits…"]
+        let squash = app.menuItems["Squash Selected Commits…"]
+        XCTAssertTrue(drop.waitForExistence(timeout: 8))
+        XCTAssertTrue(squash.waitForExistence(timeout: 8))
+        XCTAssertTrue(drop.isEnabled, "Other worktree history must have a valid Drop target")
+        XCTAssertTrue(squash.isEnabled, "Other worktree history must have a valid Squash target")
+        squash.click()
+        let sheet = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15))
+        let targetDescription = sheet.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", linked.lastPathComponent)
+        ).firstMatch
+        XCTAssertTrue(targetDescription.waitForExistence(timeout: 8),
+                      "A single valid worktree target must be shown without an extra picker")
+        let editor = sheet.textViews["bailey.git.squash.message"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 8))
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("linked combined")
+        sheet.buttons["Yes, Squash"].click()
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["-C", linked.path, "rev-list", "--count", "HEAD"]))
+                == Data("3\n".utf8)
+                && (try? fixture.git(["-C", linked.path, "log", "-2", "--format=%s"]))
+                    == Data("linked third\nlinked combined\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 40), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), mainHead)
+        XCTAssertEqual(try fixture.git(["-C", linked.path, "rev-parse", "HEAD^{tree}"]), oldTree)
+        XCTAssertTrue(try fixture.git(["-C", linked.path, "status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testSharedCommitHistoryRequiresChoosingWhichWorktreeToSquash() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("base.txt", text: "base\n")
+        try fixture.initializeGit()
+        for subject in ["shared one", "shared two", "shared three"] {
+            _ = try fixture.file(subject + ".txt", text: subject + "\n")
+            try fixture.git(["add", "--", subject + ".txt"])
+            try fixture.git(["commit", "-qm", subject])
+        }
+        let originalHEAD = try fixture.git(["rev-parse", "HEAD"])
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-Shared-Worktree-" + UUID().uuidString)
+        addTeardownBlock {
+            _ = try? fixture.git(["worktree", "remove", "--force", linked.path])
+            try? FileManager.default.removeItem(at: linked)
+        }
+        try fixture.git(["worktree", "add", "-q", "--detach", linked.path, "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let first = app.buttons["shared one"]
+        let second = app.buttons["shared two"]
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        second.click()
+        XCUIElement.perform(withKeyModifiers: .command) { first.click() }
+        first.rightClick()
+        let squash = app.menuItems["Squash Selected Commits…"]
+        XCTAssertTrue(squash.waitForExistence(timeout: 8))
+        XCTAssertTrue(squash.isEnabled)
+        squash.click()
+        let sheet = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        let choice = sheet.popUpButtons["bailey.git.target-worktree"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 8))
+        XCTAssertTrue((choice.value as? String ?? "").contains(fixture.root.lastPathComponent),
+                      "Shared commits must not silently choose the other worktree")
+        choice.click()
+        let linkedOption = app.menuItems.matching(
+            NSPredicate(format: "title CONTAINS %@", linked.lastPathComponent)
+        ).firstMatch
+        XCTAssertTrue(linkedOption.waitForExistence(timeout: 8))
+        linkedOption.click()
+        XCTAssertTrue((choice.value as? String ?? "").contains(linked.lastPathComponent))
+        let editor = sheet.textViews["bailey.git.squash.message"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 8))
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("shared linked only")
+        sheet.buttons["Yes, Squash"].click()
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["-C", linked.path, "log", "-2", "--format=%s"]))
+                == Data("shared three\nshared linked only\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 40), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), originalHEAD)
+        XCTAssertEqual(try fixture.git(["log", "-2", "--format=%s"]),
+                       Data("shared three\nshared two\n".utf8))
+    }
+
     func testGraphMultiSelectionUsesDedicatedCopyAndHistoryActionMenu() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("root.txt", text: "root\n")

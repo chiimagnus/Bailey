@@ -1388,23 +1388,35 @@ struct GitPanel: View {
               let window = manager.attachedWindow, let project,
               manager.selectedProject === project, let context = project.panelContext,
               model.matchesPanelTarget(context.identity) else { return }
+        let targets = action == .drop
+            ? model.historyRewriteTargets(selected: [commit.hash], kind: .drop)
+            : model.availableWorktreeTargets()
+        guard !targets.isEmpty else { return }
         let target = model.actionTarget()
-        let isCurrent: @MainActor () -> Bool = {
+        let isCurrent: @MainActor (GitStatusModel.WorktreeTarget) -> Bool = { chosen in
             manager.attachedWindow === window && manager.selectedProject === project
                 && context.scope == target.scope
                 && project.matchesPanelTarget(context.identity)
-                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: chosen.worktree == nil)
                 && (selectedRefName.map { model.refsByName[$0]?.oid == commit.hash } ?? true)
+                && (action == .drop
+                    ? model.historyRewriteTargets(selected: [commit.hash], kind: .drop)
+                        .contains(chosen)
+                    : model.availableWorktreeTargets().contains(chosen))
         }
         let execute: @MainActor (GitCommitDialog?) -> Void = { dialog in
-            guard isCurrent() else { return }
+            let chosen = dialog?.worktree.selected ?? .current
+            guard targets.contains(chosen), isCurrent(chosen) else { return }
+            let repository = chosen.worktree?.path ?? target.repository
+            let isStillCurrent: @MainActor () -> Bool = { isCurrent(chosen) }
             let resetMode = GitStatusModel.ResetMode.allCases[max(0, dialog?.resetMode.indexOfSelectedItem ?? 1)]
             let changesWorktree = action != .reset || resetMode == .hard
             var interactiveLaunch: (@MainActor () throws -> Void)?
             if action == .rebase, dialog?.interactive.state == .on {
                 interactiveLaunch = {
                     _ = try project.newInteractiveGitSession(
-                        repository: target.repository, arguments: ["rebase", "--interactive", commit.hash], context: context
+                        repository: repository, arguments: ["rebase", "--interactive", commit.hash], context: context
                     )
                 }
             }
@@ -1423,25 +1435,27 @@ struct GitPanel: View {
                     ignoreDate: dialog?.ignoreDate.state != .off,
                     interactiveLaunch: interactiveLaunch,
                     selectedRef: selectedRefName.map { ($0, commit.hash) },
+                    worktreeTarget: chosen,
                     prepare: {
                         if !changesWorktree { return true }
                         return await manager.application.saveBeforeGitAction(
-                            repository: target.repository, scope: target.scope, isCurrent: isCurrent
+                            repository: repository, scope: target.scope, isCurrent: isStillCurrent
                         )
                     }, isCurrentTarget: {
-                        isCurrent() && (!changesWorktree || manager.application.canRunGitAction(repository: target.repository, scope: target.scope))
+                        isStillCurrent() && (!changesWorktree
+                            || manager.application.canRunGitAction(repository: repository, scope: target.scope))
                     },
                     completion: { _ in
-                        manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                        manager.application.reloadAfterGitAction(repository: repository, scope: target.scope)
                     }
                 )
             }
         }
-        if action == .checkout, settings.gitAlwaysAcceptCheckout {
+        if action == .checkout, settings.gitAlwaysAcceptCheckout, targets == [.current] {
             execute(nil)
             return
         }
-        let dialog = GitCommitDialog(action: action, commit: commit, target: target)
+        let dialog = GitCommitDialog(action: action, commit: commit, target: target, worktrees: targets)
         dialog.alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
             execute(dialog)
@@ -1461,38 +1475,45 @@ struct GitPanel: View {
         }
         guard commits.count == hashes.count,
               commits.allSatisfy({ $0.parentHashes.count <= 1 }) else { return }
-        if action == .drop {
-            let parents = Dictionary(uniqueKeysWithValues: model.recentCommits.filter {
-                $0.stash == nil && $0.worktree == nil
-            }.map { ($0.hash, $0.parentHashes) })
-            guard GitStatusModel.batchDropPlan(
-                selected: hashes, head: model.headOID, parents: parents
-            ) != nil else { return }
-        }
-        let isCurrent: @MainActor () -> Bool = {
+        let targets = action == .drop
+            ? model.historyRewriteTargets(selected: hashes, kind: .drop)
+            : model.availableWorktreeTargets()
+        guard !targets.isEmpty else { return }
+        let isCurrent: @MainActor (GitStatusModel.WorktreeTarget) -> Bool = { chosen in
             manager.attachedWindow === window && manager.selectedProject === project
                 && project.matchesPanelTarget(context.identity)
-                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: chosen.worktree == nil)
+                && (action == .drop
+                    ? model.historyRewriteTargets(selected: hashes, kind: .drop).contains(chosen)
+                    : model.availableWorktreeTargets().contains(chosen))
         }
-        let dialog = GitBatchCommitDialog(action: action, commits: commits, target: target)
+        let dialog = GitBatchCommitDialog(
+            action: action, commits: commits, target: target, worktrees: targets
+        )
         dialog.alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            let chosen = dialog.worktree.selected
+            guard response == .alertFirstButtonReturn,
+                  targets.contains(chosen), isCurrent(chosen) else { return }
+            let repository = chosen.worktree?.path ?? target.repository
+            let isStillCurrent: @MainActor () -> Bool = { isCurrent(chosen) }
             performOperation(.commitMenu) {
                 model.actOnCommits(
                     hashes, action: action, target: target,
                     recordOrigin: dialog.recordOrigin.state == .on,
                     noCommit: dialog.noCommit.state == .on,
+                    worktreeTarget: chosen,
                     prepare: {
                         await manager.application.saveBeforeGitAction(
-                            repository: target.repository, scope: target.scope, isCurrent: isCurrent
+                            repository: repository, scope: target.scope, isCurrent: isStillCurrent
                         )
                     }, isCurrentTarget: {
-                        isCurrent() && manager.application.canRunGitAction(
-                            repository: target.repository, scope: target.scope
+                        isStillCurrent() && manager.application.canRunGitAction(
+                            repository: repository, scope: target.scope
                         )
                     }, completion: { _ in
                         manager.application.reloadAfterGitAction(
-                            repository: target.repository, scope: target.scope
+                            repository: repository, scope: target.scope
                         )
                     }
                 )
@@ -1506,37 +1527,48 @@ struct GitPanel: View {
               manager.selectedProject === project, let context = project.panelContext,
               model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
+        let targets = model.historyRewriteTargets(selected: hashes, kind: .squash)
+        guard let firstTarget = targets.first else { return }
         let current = model.recentCommits.filter { $0.stash == nil && $0.worktree == nil }
         let parents = Dictionary(uniqueKeysWithValues: current.map { ($0.hash, $0.parentHashes) })
         guard let plan = GitStatusModel.squashPlan(
-            selected: hashes, head: model.headOID, parents: parents
+            selected: hashes, head: firstTarget.worktree?.headOID ?? model.headOID,
+            parents: parents
         ), let oldest = current.first(where: { $0.hash == plan.oldest }) else { return }
 
-        let isCurrent: @MainActor () -> Bool = {
+        let isCurrent: @MainActor (GitStatusModel.WorktreeTarget) -> Bool = { chosen in
             manager.attachedWindow === window && manager.selectedProject === project
                 && project.matchesPanelTarget(context.identity)
-                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: chosen.worktree == nil)
+                && model.historyRewriteTargets(selected: hashes, kind: .squash)
+                    .contains(chosen)
         }
         let dialog = GitSquashDialog(
-            count: hashes.count, suggestedMessage: oldest.subject, branch: model.branch
+            count: hashes.count, suggestedMessage: oldest.subject,
+            target: target, worktrees: targets
         )
         dialog.alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn, isCurrent(),
-                  !dialog.commitMessage.isEmpty else { return }
+            let chosen = dialog.worktree.selected
+            guard response == .alertFirstButtonReturn, targets.contains(chosen),
+                  isCurrent(chosen), !dialog.commitMessage.isEmpty else { return }
+            let repository = chosen.worktree?.path ?? target.repository
+            let isStillCurrent: @MainActor () -> Bool = { isCurrent(chosen) }
             performOperation(.commitMenu) {
                 model.squashCommits(
                     hashes, message: dialog.commitMessage, target: target,
+                    worktreeTarget: chosen,
                     prepare: {
                         await manager.application.saveBeforeGitAction(
-                            repository: target.repository, scope: target.scope, isCurrent: isCurrent
+                            repository: repository, scope: target.scope, isCurrent: isStillCurrent
                         )
                     }, isCurrentTarget: {
-                        isCurrent() && manager.application.canRunGitAction(
-                            repository: target.repository, scope: target.scope
+                        isStillCurrent() && manager.application.canRunGitAction(
+                            repository: repository, scope: target.scope
                         )
                     }, completion: { _ in
                         manager.application.reloadAfterGitAction(
-                            repository: target.repository, scope: target.scope
+                            repository: repository, scope: target.scope
                         )
                     }
                 )
@@ -1999,6 +2031,7 @@ struct GitPanel: View {
                             squashAction: presentSquashDialog,
                             commitBatchAction: presentCommitBatchDialog,
                             headOID: model.headOID,
+                            worktreeLocations: model.worktreeLocations,
                             canActOnStash: !model.isBusy && model.canUseCurrentStashes,
                             stashAction: { stash, action in
                                 presentStashDialog(stash, action: action)

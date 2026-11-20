@@ -1,6 +1,49 @@
 import AppKit
 
 @MainActor
+final class GitWorktreeTargetPicker {
+    let targets: [GitStatusModel.WorktreeTarget]
+    let currentPath: String
+    let control = NSPopUpButton()
+
+    init(_ targets: [GitStatusModel.WorktreeTarget], currentPath: String) {
+        precondition(!targets.isEmpty)
+        self.targets = targets
+        self.currentPath = currentPath
+        for target in targets {
+            let title: String
+            switch target {
+            case .current:
+                title = String(localized: "Current Worktree", table: "Git") + " — " + currentPath
+            case .worktree(let location):
+                title = (location.branch ?? String(localized: "Detached HEAD", table: "Git"))
+                    + " — " + location.path
+            }
+            control.addItem(withTitle: title)
+        }
+        control.setAccessibilityIdentifier("bailey.git.target-worktree")
+        control.widthAnchor.constraint(equalToConstant: 350).isActive = true
+    }
+
+    var selected: GitStatusModel.WorktreeTarget {
+        targets[control.indexOfSelectedItem]
+    }
+
+    var solePath: String? {
+        guard targets.count == 1 else { return nil }
+        return targets[0].worktree?.path ?? currentPath
+    }
+
+    func add(to controls: NSStackView) {
+        guard targets.count > 1 else { return }
+        controls.addArrangedSubview(NSTextField(
+            labelWithString: String(localized: "Target Worktree", table: "Git")
+        ))
+        controls.addArrangedSubview(control)
+    }
+}
+
+@MainActor
 final class GitCommitDialog {
     let alert = NSAlert()
     let parent = NSPopUpButton()
@@ -12,15 +55,23 @@ final class GitCommitDialog {
     let interactive = NSButton(checkboxWithTitle: String(localized: "Launch Interactive Rebase in New Terminal", table: "Git"), target: nil, action: nil)
     let ignoreDate = NSButton(checkboxWithTitle: String(localized: "Ignore Date", table: "Git"), target: nil, action: nil)
     let resetMode = NSPopUpButton()
+    let worktree: GitWorktreeTargetPicker
 
     init(action: GitStatusModel.CommitAction, commit: GitStatusModel.RecentCommit,
-         target: GitStatusModel.ActionTarget) {
+         target: GitStatusModel.ActionTarget,
+         worktrees: [GitStatusModel.WorktreeTarget]) {
+        worktree = GitWorktreeTargetPicker(worktrees, currentPath: target.repository)
         alert.messageText = action.title
-        alert.informativeText = String(localized: "Repository \(target.scope): \(target.repository)\nCommit \(commit.shortHash): \(commit.subject)", table: "Git")
+        alert.informativeText = (worktree.solePath.map {
+            String(localized: "Repository \(target.scope): \($0)", table: "Git") + "\n"
+        } ?? "") + String(
+            localized: "Commit \(commit.shortHash): \(commit.subject)", table: "Git"
+        )
         let controls = NSStackView()
         controls.orientation = .vertical
         controls.alignment = .leading
         controls.spacing = 8
+        worktree.add(to: controls)
         switch action {
         case .checkout:
             alert.informativeText += "\n" + String(localized: "Checkout leaves you in detached HEAD. Create a branch to keep new commits.", table: "Git")
@@ -61,7 +112,10 @@ final class GitCommitDialog {
             alert.informativeText += "\n" + String(localized: "Hard permanently overwrites tracked files and may delete untracked paths obstructing their restoration. Ordinary untracked files are kept.", table: "Git")
             alert.addButton(withTitle: String(localized: "Yes, Reset", table: "Git"))
         case .drop:
-            alert.informativeText += "\n" + String(localized: "This rewrites the current HEAD history to remove the selected commit. Your Git rebase configuration still applies.", table: "Git")
+            alert.informativeText += "\n" + String(
+                localized: "This rewrites local history. Remote branches and tags are not force-pushed.",
+                table: "Git"
+            )
             alert.addButton(withTitle: String(localized: "Yes, Drop", table: "Git"))
         }
         alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
@@ -85,27 +139,31 @@ final class GitBatchCommitDialog {
         checkboxWithTitle: String(localized: "No Commit", table: "Git"),
         target: nil, action: nil
     )
+    let worktree: GitWorktreeTargetPicker
 
     init(action: GitStatusModel.CommitBatchAction, commits: [GitStatusModel.RecentCommit],
-         target: GitStatusModel.ActionTarget) {
+         target: GitStatusModel.ActionTarget,
+         worktrees: [GitStatusModel.WorktreeTarget]) {
+        worktree = GitWorktreeTargetPicker(worktrees, currentPath: target.repository)
         precondition(commits.count >= 2)
         alert.messageText = action.title
         let summary = commits.prefix(5).map { "\($0.shortHash)  \($0.subject)" }
             .joined(separator: "\n")
         let remaining = commits.count > 5 ? "\n…" : ""
-        alert.informativeText = String(
-            localized: "Repository \(target.scope): \(target.repository)", table: "Git"
-        ) + "\n" + String(
+        alert.informativeText = (worktree.solePath.map {
+            String(localized: "Repository \(target.scope): \($0)", table: "Git") + "\n"
+        } ?? "") + String(
             localized: "Selected \(commits.count) commits", table: "Git"
         ) + "\n" + summary + remaining
+        let controls = NSStackView()
+        controls.orientation = .vertical
+        controls.alignment = .leading
+        controls.spacing = 8
+        worktree.add(to: controls)
         switch action {
         case .cherryPick:
-            let controls = NSStackView(views: [recordOrigin, noCommit])
-            controls.orientation = .vertical
-            controls.alignment = .leading
-            controls.spacing = 8
-            controls.frame = NSRect(x: 0, y: 0, width: 350, height: controls.fittingSize.height)
-            alert.accessoryView = controls
+            controls.addArrangedSubview(recordOrigin)
+            controls.addArrangedSubview(noCommit)
             alert.addButton(withTitle: String(localized: "Yes, Cherry Pick Selected", table: "Git"))
         case .revert:
             alert.addButton(withTitle: String(localized: "Yes, Revert Selected", table: "Git"))
@@ -117,6 +175,10 @@ final class GitBatchCommitDialog {
         alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
         alert.buttons[0].keyEquivalent = "\r"
         alert.buttons[1].keyEquivalent = "\u{1b}"
+        if !controls.arrangedSubviews.isEmpty {
+            controls.frame = NSRect(x: 0, y: 0, width: 380, height: controls.fittingSize.height)
+            alert.accessoryView = controls
+        }
     }
 }
 
@@ -124,21 +186,24 @@ final class GitBatchCommitDialog {
 final class GitSquashDialog: NSObject, NSTextViewDelegate {
     let alert = NSAlert()
     let message = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 112))
+    let worktree: GitWorktreeTargetPicker
 
     var commitMessage: String {
         message.string.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    init(count: Int, suggestedMessage: String, branch: String?) {
+    init(count: Int, suggestedMessage: String,
+         target: GitStatusModel.ActionTarget, worktrees: [GitStatusModel.WorktreeTarget]) {
         precondition(count >= 2)
+        worktree = GitWorktreeTargetPicker(worktrees, currentPath: target.repository)
         super.init()
         alert.messageText = String(localized: "Squash Selected Commits…", table: "Git")
         let countLabel = String(localized: "Combine \(count) selected commits into one.", table: "Git",
                                 comment: "Number of commits to rewrite.")
         let risk = String(localized:
             "This rewrites local history. Remote branches and tags are not force-pushed.", table: "Git")
-        let branchName = branch ?? String(localized: "Detached HEAD", table: "Git")
-        alert.informativeText = branchName + "\n" + countLabel + "\n" + risk
+        alert.informativeText = (worktree.solePath.map { $0 + "\n" } ?? "")
+            + countLabel + "\n" + risk
         alert.addButton(withTitle: String(localized: "Yes, Squash", table: "Git"))
         alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
 
@@ -161,11 +226,14 @@ final class GitSquashDialog: NSObject, NSTextViewDelegate {
         message.setAccessibilityIdentifier("bailey.git.squash.message")
         scroll.documentView = message
 
-        let content = NSStackView(views: [label, scroll])
+        let content = NSStackView()
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 8
-        content.frame = NSRect(x: 0, y: 0, width: 380, height: 140)
+        worktree.add(to: content)
+        content.addArrangedSubview(label)
+        content.addArrangedSubview(scroll)
+        content.frame = NSRect(x: 0, y: 0, width: 380, height: content.fittingSize.height)
         alert.accessoryView = content
         alert.buttons[0].isEnabled = !commitMessage.isEmpty
         alert.buttons[0].keyEquivalent = "\r"

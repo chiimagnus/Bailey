@@ -887,7 +887,7 @@ final class GitDialogUITests: XCTestCase {
         let app = try launchGit(fixture)
         openCommitMenu("side for interactive rebase", in: app)
         let option = app.menuItems.matching(NSPredicate(format: "title IN %@",
-            ["Rebase Current Branch onto Commit…", "将当前分支变基到提交…"])).firstMatch
+            ["Rebase Worktree onto Commit…", "将工作树变基到提交…"])).firstMatch
         XCTAssertTrue(option.waitForExistence(timeout: 8))
         option.click()
         let sheet = app.windows.firstMatch.sheets.firstMatch
@@ -1050,15 +1050,15 @@ final class GitDialogUITests: XCTestCase {
                              confirm: ["Yes, Revert", "是，撤销"])
         cancel(revert)
 
-        let merging = present(["Merge Commit into Current Branch…", "将提交合并到当前分支…"],
+        let merging = present(["Merge Commit into Worktree…", "将提交合并到工作树…"],
                               confirm: ["Yes, Merge", "是，合并"])
         cancel(merging)
 
-        let rebase = present(["Rebase Current Branch onto Commit…", "将当前分支变基到提交…"],
+        let rebase = present(["Rebase Worktree onto Commit…", "将工作树变基到提交…"],
                              confirm: ["Yes, Rebase", "是，变基"])
         cancel(rebase)
 
-        let reset = present(["Reset Current Branch to Commit…", "将当前分支重置到提交…"],
+        let reset = present(["Reset Worktree to Commit…", "将工作树重置到提交…"],
                             confirm: ["Yes, Reset", "是，重置"])
         let mode = reset.popUpButtons.firstMatch
         XCTAssertTrue(mode.waitForExistence(timeout: 8))
