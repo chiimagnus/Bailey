@@ -68,19 +68,23 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let unicode = try fixture.file("中文 🧪.swift", text: "let 测试 = 1\n")
         let nested = try fixture.file("nested/deep.md", text: "# hello\n")
         let app = try WorkspaceUITestSupport.launch(
-            in: self, project: fixture.root, clipboardIsReadOnly: true
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
         )
         WorkspaceUITestSupport.element("bailey.dock.git", in: app).click()
         let originalWindowCount = app.windows.count
+        let products = Bundle.main.bundleURL.deletingLastPathComponent().standardizedFileURL
         let bundle = try XCTUnwrap(
             NSRunningApplication.runningApplications(withBundleIdentifier: "chiimagnus.bailey.dev")
-                .compactMap(\.bundleURL).first,
+                .compactMap(\.bundleURL).first {
+                    $0.deletingLastPathComponent().standardizedFileURL == products
+                },
             "Only the isolated Bailey Dev instance may receive system file-open events"
         )
         XCTAssertTrue(bundle.path.contains("DerivedData-Dev/Build/Products/Debug/"),
                       "A Launch Services test may never target the installed Bailey")
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+        config.allowsRunningApplicationSubstitution = false
         NSWorkspace.shared.open([file], withApplicationAt: bundle, configuration: config) {
             _, error in XCTAssertNil(error, "Launch Services should deliver an actual file URL")
         }
@@ -114,6 +118,17 @@ final class WorkspaceWindowsUITests: XCTestCase {
                        "One system batch must open each new file exactly once")
         XCTAssertEqual(app.windows.count, originalWindowCount,
                        "External document opening must not create an additional workspace window")
+        let markdownTab = WorkspaceUITestSupport.fileTab(nested, in: window)
+        markdownTab.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String, "# hello\n")
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.staticTexts["hello"].waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 3,
+                       "Opening the preview does not add another editable file tab")
         XCTAssertEqual(try Data(contentsOf: file), Data("let external = true\n".utf8))
         XCTAssertEqual(try Data(contentsOf: unicode), Data("let 测试 = 1\n".utf8))
         XCTAssertEqual(try Data(contentsOf: nested), Data("# hello\n".utf8))
