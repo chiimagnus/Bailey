@@ -1,0 +1,26 @@
+version = 1
+current_task_id = "P1-T3"
+
+[[tasks]]
+id = "P1-T1"
+title = "发布原生文件项并绑定进程内剪切意图"
+status = "completed"
+plan = "plan-p1.md#p1-t1"
+commit = "aa3ae57e3d2a3e5182ca718373829eefca5bb3e4"
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "统一安全复制与显式移动的磁盘结果"
+status = "completed"
+plan = "plan-p1.md#p1-t2"
+commit = "159aa6126f07d9c98f3a4d58d418b814e088d64e"
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "接通跨项目粘贴、菜单与跨窗口保存保护"
+status = "in_progress"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
