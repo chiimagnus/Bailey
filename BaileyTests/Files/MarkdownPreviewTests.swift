@@ -405,6 +405,25 @@ final class MarkdownPreviewTests: XCTestCase {
         }
     }
 
+    func testMarkdownAtTheNativeTextByteBoundaryPreservesTheWholeBlock() async throws {
+        let prefix = "# Capacity\n\n"
+        let suffix = "\n\n# End"
+        let size = 32 << 20
+        let count = size - prefix.utf8.count - suffix.utf8.count
+        let source = prefix + String(repeating: "a", count: count) + suffix
+        XCTAssertEqual(source.utf8.count, size)
+        let start = ContinuousClock.now
+        let document = try await MarkdownDocument.parse(source)
+        XCTAssertEqual(document.blocks.first?.anchor, "capacity")
+        XCTAssertEqual(document.blocks.last?.anchor, "end")
+        XCTAssertEqual(document.blocks.count, 3)
+        guard case .markdown(let block) = document.blocks[1].content else {
+            return XCTFail("The preview must preserve the content of the long paragraph")
+        }
+        XCTAssertEqual(String(block.characters).utf8.count, count)
+        print("Markdown 32 MiB: \(start.duration(to: .now))")
+    }
+
     private func previewText(_ document: MarkdownDocument) -> String {
         document.blocks.compactMap { block in
             guard case .markdown(let content) = block.content else { return nil }
