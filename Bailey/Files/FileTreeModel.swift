@@ -800,7 +800,8 @@ final class FileTreeModel {
     /// Copies Finder content only into this tree's current local workspace.
     /// The actual recursive disk operation runs in LocalWorkspaceBackend.
     func importFromFinder(
-        _ sources: [URL], into directory: String, isCurrentTarget: () -> Bool
+        _ sources: [URL], into directory: String, move: Bool = false,
+        isCurrentTarget: () -> Bool
     ) async -> LocalFileImportResult? {
         let root = rootPath
         let scope = workspaceScope
@@ -824,8 +825,16 @@ final class FileTreeModel {
             return nil
         }
         // Copy through the validated physical directory, not a symlink that can be retargeted.
-        let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: resolvedTarget)
+        let result = await LocalWorkspaceBackend.shared.transferLocalFiles(
+            sources, into: resolvedTarget, move: move
+        )
         if epoch == treeEpoch, scope == workspaceScope, root == rootPath, isCurrentTarget() {
+            for moved in result.moved {
+                if LocalPathScope.contains(moved.source, in: root) {
+                    remapPaths(from: moved.source, to: moved.destination)
+                }
+                invalidateDirectory(containing: moved.source)
+            }
             await rebuild(refresh: true)
             if !result.failures.isEmpty {
                 presentError(
@@ -843,6 +852,7 @@ final class FileTreeModel {
 
     struct FileBatchResult {
         var succeeded: [(source: String, destination: String?)] = []
+        var copiedWithoutRemoval: [(source: String, destination: String, retainedAt: String)] = []
         var failures: [String] = []
     }
 
@@ -976,22 +986,48 @@ final class FileTreeModel {
             }
             do {
                 var completedDestination = destination
-                switch action {
-                case .copy:
-                    guard let physicalDestination else { continue }
-                    if physicalSource == physicalDestination || source == targetPath {
-                        let name = try await Self.copyWithUniqueName(
-                            source: physicalSource, into: resolvedParent, backend: backend
+                if scope == "local", backend is LocalWorkspaceBackend,
+                   action == .copy || action == .move {
+                    guard let physicalTarget, let targetPath else { continue }
+                    let outcome = try await LocalWorkspaceBackend.shared.transferLocalFile(
+                        from: physicalSource, into: physicalTarget, move: action == .move
+                    )
+                    switch outcome {
+                    case .copied(let path), .moved(let path):
+                        completedDestination = (targetPath as NSString)
+                            .appendingPathComponent((path as NSString).lastPathComponent)
+                    case .copiedWithoutRemoval(let path, let retainedAt):
+                        let copy = (targetPath as NSString)
+                            .appendingPathComponent((path as NSString).lastPathComponent)
+                        result.copiedWithoutRemoval.append((source, copy, retainedAt))
+                        result.failures.append(
+                            "\(source): Copied to \(copy), but retained at \(retainedAt)."
                         )
-                        completedDestination = (sourceParent as NSString).appendingPathComponent(name)
-                    } else {
-                        try await backend.copy(from: physicalSource, to: physicalDestination)
+                        continue
+                    case .unchanged: continue
                     }
-                case .move:
-                    guard let physicalDestination, physicalDestination != source else { continue }
-                    try await backend.rename(from: physicalSource, to: physicalDestination)
-                case .delete:
-                    try await backend.delete(paths: [physicalSource])
+                } else {
+                    switch action {
+                    case .copy:
+                        guard let physicalDestination else { continue }
+                        if physicalSource == physicalDestination || source == targetPath {
+                            let sourceType = try await backend.stat(path: physicalSource)
+                            guard sourceType?.isDirectory != true else {
+                                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+                            }
+                            let name = try await Self.copyWithUniqueName(
+                                source: physicalSource, into: resolvedParent, backend: backend
+                            )
+                            completedDestination = (sourceParent as NSString).appendingPathComponent(name)
+                        } else {
+                            try await backend.copy(from: physicalSource, to: physicalDestination)
+                        }
+                    case .move:
+                        guard let physicalDestination, physicalDestination != source else { continue }
+                        try await backend.rename(from: physicalSource, to: physicalDestination)
+                    case .delete:
+                        try await backend.delete(paths: [physicalSource])
+                    }
                 }
                 result.succeeded.append((
                     source: source, destination: action == .delete ? nil : completedDestination
@@ -1014,7 +1050,12 @@ final class FileTreeModel {
                 invalidateDirectory(containing: entry.source)
                 if let destination = entry.destination { invalidateDirectory(containing: destination) }
             }
-            if !result.succeeded.isEmpty { await rebuild(refresh: true) }
+            for entry in result.copiedWithoutRemoval {
+                invalidateDirectory(containing: entry.destination)
+            }
+            if !result.succeeded.isEmpty || !result.copiedWithoutRemoval.isEmpty {
+                await rebuild(refresh: true)
+            }
             if !result.failures.isEmpty {
                 presentError(String(localized: "Couldn’t complete file operation.", table: "Workspace"),
                              result.failures.joined(separator: "\n"))

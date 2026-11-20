@@ -4,8 +4,18 @@ import Foundation
 
 /// Completed paths and independent failures from one Finder copy batch.
 nonisolated struct LocalFileImportResult: Sendable {
-    let copied: [String]
-    let failures: [String]
+    var copied: [String] = []
+    var copiedEntries: [(source: String, destination: String)] = []
+    var moved: [(source: String, destination: String)] = []
+    var copiedWithoutRemoval: [(source: String, destination: String, retainedAt: String)] = []
+    var failures: [String] = []
+}
+
+nonisolated enum LocalFileTransferOutcome: Sendable {
+    case copied(String)
+    case moved(String)
+    case copiedWithoutRemoval(destination: String, retainedAt: String)
+    case unchanged
 }
 
 /// Absolute, normalized POSIX paths; the filesystem root is its own separator.
@@ -43,11 +53,16 @@ nonisolated struct LocalFileIdentity: Equatable, Sendable {
     let changedSeconds: Int64
     let changedNanoseconds: Int64
 
+    func refersToSameEntry(as other: Self) -> Bool {
+        device == other.device && inode == other.inode && (mode & UInt16(S_IFMT)) == (other.mode & UInt16(S_IFMT))
+    }
+
     static func read(_ path: String) -> Self? {
         var info = Darwin.stat()
         guard lstat(path, &info) == 0 else { return nil }
         return Self(
-            device: UInt64(info.st_dev), inode: UInt64(info.st_ino),
+            device: UInt64(truncatingIfNeeded: info.st_dev),
+            inode: UInt64(truncatingIfNeeded: info.st_ino),
             mode: UInt16(info.st_mode), size: Int64(info.st_size),
             modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
             modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec),
@@ -263,80 +278,286 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
     }
 
-    /// The Finder-to-Files action copies on a background executor and never
-    /// replaces a destination, removes a source, or uploads to a remote host.
-    @concurrent func copyFromFinder(_ sources: [URL], into directory: String) async -> LocalFileImportResult {
-        let fm = FileManager.default
-        let target = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL
-        let targetReal = target.resolvingSymlinksInPath().path
-        var copied: [String] = []
-        var failures: [String] = []
-        var isDirectory: ObjCBool = false
-        guard fm.fileExists(atPath: target.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return LocalFileImportResult(copied: [], failures: [
-                String(localized: "Target folder no longer exists: \(directory)", table: "Workspace")
-            ])
-        }
-        var seen = Set<String>()
-        for source in sources {
-            guard source.isFileURL, source.host == nil || source.host == "localhost" else {
-                failures.append(String(
-                    localized: "Not a local Finder file: \(source.lastPathComponent)", table: "Workspace"
-                ))
+    /// Finder drop and local Files paste share the exact same transfer rules.
+    @concurrent func transferLocalFiles(
+        _ sources: [URL], into directory: String, move: Bool = false
+    ) async -> LocalFileImportResult {
+        var result = LocalFileImportResult()
+        var seen = Set<URL>()
+        let unique = sources.filter { seen.insert($0.standardizedFileURL).inserted }
+        let selectedDirectories = Set(unique.compactMap { source -> String? in
+            guard source.isFileURL,
+                  let identity = LocalFileIdentity.read(source.standardizedFileURL.path),
+                  identity.mode & UInt16(S_IFMT) == UInt16(S_IFDIR) else { return nil }
+            return source.standardizedFileURL.path
+        })
+        for source in unique {
+            guard source.isFileURL else {
+                result.failures.append("Not a local file URL: \(source.absoluteString)")
                 continue
             }
-            let original = source.standardizedFileURL
-            guard seen.insert(original.path).inserted else { continue }
-            // Copy the directory entry, not the symlink's resolved destination.
-            // fileExists follows links and incorrectly rejects dangling links;
-            // treating a directory link as a real folder also falsely blocks
-            // copying the link when it points to an ancestor of the target.
-            var sourceInfo = Darwin.stat()
-            guard lstat(original.path, &sourceInfo) == 0 else {
-                failures.append(String(
-                    localized: "Source no longer exists: \(original.lastPathComponent)", table: "Workspace"
-                ))
-                continue
+            let path = source.standardizedFileURL.path
+            var ancestor = (path as NSString).deletingLastPathComponent
+            var includedByParent = false
+            while ancestor != path {
+                if selectedDirectories.contains(ancestor) {
+                    includedByParent = true
+                    break
+                }
+                let next = (ancestor as NSString).deletingLastPathComponent
+                if next == ancestor { break }
+                ancestor = next
             }
-            let sourceType = sourceInfo.st_mode & S_IFMT
-            guard sourceType == S_IFREG || sourceType == S_IFDIR || sourceType == S_IFLNK else {
-                let error = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
-                failures.append(String(
-                    localized: "Couldn’t copy \(original.lastPathComponent): \(error.localizedDescription)",
-                    table: "Workspace"
-                ))
-                continue
-            }
-            let isRealDirectory = sourceType == S_IFDIR
-            let destination = target.appendingPathComponent(
-                original.lastPathComponent, isDirectory: isRealDirectory
-            )
-            if isRealDirectory,
-               LocalPathScope.contains(targetReal, in: original.resolvingSymlinksInPath().path) {
-                failures.append(String(
-                    localized: "Cannot copy \(original.lastPathComponent) into itself or a subfolder.",
-                    table: "Workspace"
-                ))
-                continue
-            }
-            var existing = Darwin.stat()
-            if lstat(destination.path, &existing) == 0 {
-                failures.append(String(
-                    localized: "Already exists: \(destination.lastPathComponent)", table: "Workspace"
-                ))
-                continue
-            }
+            if includedByParent { continue }
             do {
-                try Self.copyExclusive(from: original, to: destination)
-                copied.append(destination.path)
+                let outcome = try Self.transferLocalSync(
+                    from: source, into: URL(fileURLWithPath: directory), move: move,
+                    expectedIdentity: nil
+                )
+                switch outcome {
+                case .copied(let destination):
+                    result.copied.append(destination)
+                    result.copiedEntries.append((path, destination))
+                case .moved(let destination):
+                    result.moved.append((path, destination))
+                case .copiedWithoutRemoval(let destination, let retainedAt):
+                    result.copied.append(destination)
+                    result.copiedWithoutRemoval.append((path, destination, retainedAt))
+                    result.failures.append(
+                        "Copied \(path) to \(destination), but the source remains at \(retainedAt)."
+                    )
+                case .unchanged: break
+                }
             } catch {
-                failures.append(String(
-                    localized: "Couldn’t copy \(original.lastPathComponent): \(error.localizedDescription)",
-                    table: "Workspace"
-                ))
+                result.failures.append("\(source.path): \(error.localizedDescription)")
             }
         }
-        return LocalFileImportResult(copied: copied, failures: failures)
+        return result
+    }
+
+    @concurrent func transferLocalFile(
+        from source: String, into directory: String, move: Bool,
+        expectedIdentity: LocalFileIdentity? = nil
+    ) async throws -> LocalFileTransferOutcome {
+        try Self.transferLocalSync(
+            from: URL(fileURLWithPath: source), into: URL(fileURLWithPath: directory),
+            move: move, expectedIdentity: expectedIdentity
+        )
+    }
+
+    private static func transferLocalSync(
+        from source: URL, into directory: URL, move: Bool,
+        expectedIdentity: LocalFileIdentity?
+    ) throws -> LocalFileTransferOutcome {
+        guard source.isFileURL, source.host == nil || source.host == "localhost" else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        let original = source.standardizedFileURL
+        let parent = original.deletingLastPathComponent().resolvingSymlinksInPath()
+        let physicalSource = parent.appendingPathComponent(original.lastPathComponent)
+        guard let identity = LocalFileIdentity.read(physicalSource.path) else {
+            throw WorkspaceError.notFound
+        }
+        guard expectedIdentity == nil || expectedIdentity == identity else {
+            throw WorkspaceError.changedExternally
+        }
+        let type = identity.mode & UInt16(S_IFMT)
+        guard type == UInt16(S_IFREG) || type == UInt16(S_IFDIR) || type == UInt16(S_IFLNK) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+        }
+        let target = directory.standardizedFileURL.resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { throw WorkspaceError.notFound }
+        if type == UInt16(S_IFDIR), LocalPathScope.contains(target.path, in: physicalSource.path) {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        if parent.path == target.path {
+            if move { return .unchanged }
+            let name = original.lastPathComponent
+            let ext = (name as NSString).pathExtension
+            let stem = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
+            for number in 1...100 {
+                let suffix = number == 1 ? " copy" : " copy \(number)"
+                let candidate = target.appendingPathComponent(
+                    stem + suffix + (ext.isEmpty ? "" : "." + ext)
+                )
+                var existing = Darwin.stat()
+                if lstat(candidate.path, &existing) == 0 { continue }
+                do {
+                    try copyExclusive(from: physicalSource, to: candidate)
+                    return .copied(candidate.path)
+                } catch {
+                    if lstat(candidate.path, &existing) == 0 { continue }
+                    throw error
+                }
+            }
+            throw CocoaError(.fileWriteFileExists)
+        }
+        let destination = target.appendingPathComponent(original.lastPathComponent)
+        if move {
+            return try moveExclusive(from: physicalSource, to: destination, identity: identity)
+        }
+        try copyExclusive(from: physicalSource, to: destination)
+        return .copied(destination.path)
+    }
+
+    private struct FileSnapshotEntry: Equatable {
+        let kind: UInt16
+        let permissions: UInt16
+        let size: Int64
+        let modifiedSeconds: Int64
+        let modifiedNanoseconds: Int64
+        let checksum: String?
+        let linkDestination: String?
+        let attributes: [String: Data]
+    }
+
+    /// Read only real directory entries. Symlinks never expand into other trees.
+    private static func fileSnapshot(_ root: URL) throws -> [String: FileSnapshotEntry] {
+        var entries: [String: FileSnapshotEntry] = [:]
+        func walk(_ relative: String) throws {
+            try Task.checkCancellation()
+            let path = relative.isEmpty ? root.path :
+                (root.path as NSString).appendingPathComponent(relative)
+            guard let entry = LocalFileIdentity.read(path) else { throw WorkspaceError.changedExternally }
+            let kind = entry.mode & UInt16(S_IFMT)
+            guard kind == UInt16(S_IFREG) || kind == UInt16(S_IFDIR) || kind == UInt16(S_IFLNK) else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+            }
+            var checksum: String?
+            var link: String?
+            if kind == UInt16(S_IFREG) {
+                let file = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+                defer { try? file.close() }
+                var digest = SHA256()
+                while let bytes = try file.read(upToCount: 1_048_576), !bytes.isEmpty {
+                    try Task.checkCancellation()
+                    digest.update(data: bytes)
+                }
+                checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
+            } else if kind == UInt16(S_IFLNK) {
+                link = try FileManager.default.destinationOfSymbolicLink(atPath: path)
+            }
+            entries[relative] = FileSnapshotEntry(
+                kind: kind, permissions: entry.mode & 0o7777,
+                size: kind == UInt16(S_IFREG) ? entry.size : 0,
+                modifiedSeconds: entry.modifiedSeconds,
+                modifiedNanoseconds: entry.modifiedNanoseconds,
+                checksum: checksum, linkDestination: link,
+                attributes: try extendedAttributes(of: path)
+            )
+            if kind == UInt16(S_IFDIR) {
+                for child in try FileManager.default.contentsOfDirectory(atPath: path).sorted() {
+                    try walk(relative.isEmpty ? child : relative + "/" + child)
+                }
+            }
+        }
+        try walk("")
+        return entries
+    }
+
+    private static func extendedAttributes(of path: String) throws -> [String: Data] {
+        let size = path.withCString { listxattr($0, nil, 0, XATTR_NOFOLLOW) }
+        guard size >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        guard size > 0 else { return [:] }
+        var buffer = [CChar](repeating: 0, count: Int(size))
+        let read = buffer.withUnsafeMutableBufferPointer { pointer in
+            path.withCString { listxattr($0, pointer.baseAddress, size_t(size), XATTR_NOFOLLOW) }
+        }
+        guard read == size else { throw WorkspaceError.changedExternally }
+        let names = buffer.split(separator: 0).map { String(cString: Array($0) + [0]) }
+        var result: [String: Data] = [:]
+        for name in names {
+            let count = path.withCString { pathPointer in
+                name.withCString { namePointer in
+                    getxattr(pathPointer, namePointer, nil, 0, 0, XATTR_NOFOLLOW)
+                }
+            }
+            guard count >= 0 else { throw WorkspaceError.changedExternally }
+            var data = [UInt8](repeating: 0, count: Int(count))
+            let actual = data.withUnsafeMutableBufferPointer { bytes in
+                path.withCString { pathPointer in
+                    name.withCString { namePointer in
+                        getxattr(pathPointer, namePointer, bytes.baseAddress, count, 0, XATTR_NOFOLLOW)
+                    }
+                }
+            }
+            guard actual == count else { throw WorkspaceError.changedExternally }
+            result[name] = Data(data)
+        }
+        return result
+    }
+
+    private static func exclusiveRename(from source: URL, to destination: URL) -> Int32 {
+        source.path.withCString { from in
+            destination.path.withCString { to in
+                renamex_np(from, to, UInt32(RENAME_EXCL))
+            }
+        }
+    }
+
+    private static func moveExclusive(
+        from source: URL, to destination: URL, identity: LocalFileIdentity
+    ) throws -> LocalFileTransferOutcome {
+        guard LocalFileIdentity.read(source.path) == identity else {
+            throw WorkspaceError.changedExternally
+        }
+        if exclusiveRename(from: source, to: destination) == 0 {
+            guard let moved = LocalFileIdentity.read(destination.path),
+                  moved.refersToSameEntry(as: identity) else {
+                _ = exclusiveRename(from: destination, to: source)
+                throw WorkspaceError.changedExternally
+            }
+            return .moved(destination.path)
+        }
+        let reason = errno
+        guard reason == EXDEV else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(reason))
+        }
+
+        let sourceSnapshot = try fileSnapshot(source)
+        try copyExclusive(from: source, to: destination)
+        // A different disk cannot preserve the source inode; verify bytes, links and metadata.
+        guard LocalFileIdentity.read(source.path) == identity,
+              try fileSnapshot(source) == sourceSnapshot,
+              try fileSnapshot(destination) == sourceSnapshot else {
+            return .copiedWithoutRemoval(destination: destination.path, retainedAt: source.path)
+        }
+
+        // Move the original entry to a private name on its own volume before
+        // removing it; a substituted path can never be mistaken for the copied source.
+        let holding = source.deletingLastPathComponent()
+            .appendingPathComponent(".bailey-move-" + UUID().uuidString)
+        guard exclusiveRename(from: source, to: holding) == 0 else {
+            return .copiedWithoutRemoval(destination: destination.path, retainedAt: source.path)
+        }
+        func retainedLocation() -> String {
+            exclusiveRename(from: holding, to: source) == 0 ? source.path : holding.path
+        }
+        guard let held = LocalFileIdentity.read(holding.path),
+              held.refersToSameEntry(as: identity),
+              (try? fileSnapshot(holding)) == sourceSnapshot else {
+            return .copiedWithoutRemoval(
+                destination: destination.path, retainedAt: retainedLocation()
+            )
+        }
+        let type = held.mode & UInt16(S_IFMT)
+        if type == UInt16(S_IFDIR) {
+            // Trash uses a directory move, not a potentially partial recursive delete.
+            do {
+                try FileManager.default.trashItem(at: holding, resultingItemURL: nil)
+            } catch {
+                return .copiedWithoutRemoval(
+                    destination: destination.path, retainedAt: retainedLocation()
+                )
+            }
+        } else if unlink(holding.path) != 0 {
+            return .copiedWithoutRemoval(
+                destination: destination.path, retainedAt: retainedLocation()
+            )
+        }
+        return .moved(destination.path)
     }
 
     @concurrent func copy(from: String, to: String) async throws {
@@ -364,7 +585,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         if lstat(destination.path, &occupied) == 0 {
             throw CocoaError(.fileWriteFileExists)
         }
-        // Copy privately on the destination volume, then atomically publish without clobbering.
+        // Verify bytes, links and supported metadata before publishing the staged entry.
+        let originalContents = try fileSnapshot(source)
         let stagingDirectory = try fm.url(
             for: .itemReplacementDirectory, in: .userDomainMask,
             appropriateFor: parent, create: true
@@ -372,11 +594,11 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         defer { try? fm.removeItem(at: stagingDirectory) }
         let staged = stagingDirectory.appendingPathComponent(source.lastPathComponent)
         try fm.copyItem(at: source, to: staged)
-        let status = staged.path.withCString { from in
-            destination.path.withCString { to in
-                renamex_np(from, to, UInt32(RENAME_EXCL))
-            }
+        guard try fileSnapshot(staged) == originalContents,
+              try fileSnapshot(source) == originalContents else {
+            throw WorkspaceError.changedExternally
         }
+        let status = exclusiveRename(from: staged, to: destination)
         guard status == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
