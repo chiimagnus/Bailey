@@ -191,12 +191,10 @@ private struct BaileyCommands: Commands {
     private var pathActions: FocusedPathActions? {
         manager != nil ? focusedPathActions : nil
     }
-    private var fileTreeForMenu: FileTreeModel? {
+    private var fileProjectForMenu: Project? {
         guard let project = manager?.selectedProject,
-              project.dock.activeGroup?.selected == .files,
-              let context = project.panelContext,
-              project.fileTree.syncedTarget(for: context) != nil else { return nil }
-        return project.fileTree
+              project.panelContext != nil else { return nil }
+        return project
     }
     private var diffLayoutMenuTitle: String {
         guard let style = manager?.diffLayoutTarget?.preferences.diffStyle else {
@@ -291,21 +289,6 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
-
-            Button(fileTreeForMenu?.showExcluded == true
-                ? String(localized: "Hide Excluded Files", table: "Sidebar")
-                : String(localized: "Show Excluded Files", table: "Sidebar")) {
-                guard let owner = manager, let project = owner.selectedProject,
-                      let target = project.panelContext?.identity,
-                      let tree = fileTreeForMenu else { return }
-                Task { @MainActor in
-                    guard owner.selectedProject === project,
-                          project.matchesPanelTarget(target),
-                          project.dock.activeGroup?.selected == .files else { return }
-                    await tree.setShowExcluded(!tree.showExcluded)
-                }
-            }
-            .disabled(fileTreeForMenu == nil)
 
             Button(action: { manager?.showPanel(.git) }) {
                 Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
@@ -454,6 +437,13 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut(PathMenuShortcut.reveal)
             .disabled(pathActions?.revealablePaths().isEmpty != false)
+
+            Button(fileProjectForMenu?.fileTree.showExcluded == true
+                ? String(localized: "Hide Excluded Files", table: "Sidebar")
+                : String(localized: "Show Excluded Files", table: "Sidebar")) {
+                manager?.toggleExcludedFiles()
+            }
+            .disabled(fileProjectForMenu == nil)
 
             Divider()
 

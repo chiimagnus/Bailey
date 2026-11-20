@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class WorkspaceFilesUITests: XCTestCase {
-    func testSystemPanelMenuSwitchesShowAndHideExcludedFilesWithoutChangingSettings() throws {
+    func testSystemFileMenuSwitchesShowAndHideExcludedFilesWithoutChangingSettings() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let visible = try fixture.file("visible.swift", text: "visible bytes\n")
         try fixture.initializeGit()
@@ -21,15 +21,15 @@ final class WorkspaceFilesUITests: XCTestCase {
             .matching(NSPredicate(format: "label == %@", ".git")).firstMatch
         XCTAssertFalse(excluded.exists)
 
-        app.menuBarItems["Panel"].click()
+        app.menuBarItems["File"].click()
         let show = app.menuItems["Show Excluded Files"]
         XCTAssertTrue(show.waitForExistence(timeout: 8))
         XCTAssertTrue(show.isEnabled)
         show.click()
         XCTAssertTrue(excluded.waitForExistence(timeout: 12),
-                      "The native Panel menu must reveal excluded folders in Files")
+                      "The native File menu must reveal excluded folders in Files")
 
-        app.menuBarItems["Panel"].click()
+        app.menuBarItems["File"].click()
         XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
@@ -44,11 +44,11 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 12), .completed,
                        "The Files header and the system menu must share one visibility state")
         XCTAssertTrue(WorkspaceUITestSupport.fileRow(visible, in: window).exists)
-        app.menuBarItems["Panel"].click()
+        app.menuBarItems["File"].click()
         XCTAssertTrue(app.menuItems["Show Excluded Files"].waitForExistence(timeout: 8))
         app.menuItems["Show Excluded Files"].click()
         XCTAssertTrue(excluded.waitForExistence(timeout: 12))
-        app.menuBarItems["Panel"].click()
+        app.menuBarItems["File"].click()
         XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
         app.menuItems["Hide Excluded Files"].click()
         let hiddenAgain = XCTNSPredicateExpectation(
@@ -61,10 +61,17 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "Temporary excluded-file visibility must not alter saved settings")
         app.menuBarItems["Panel"].click()
         app.menuItems["Git Manager"].click()
-        app.menuBarItems["Panel"].click()
-        XCTAssertFalse(app.menuItems["Show Excluded Files"].isEnabled,
-                       "An inactive File Manager must not offer the visibility command")
+        app.menuBarItems["File"].click()
+        let showWhileGitActive = app.menuItems["Show Excluded Files"]
+        XCTAssertTrue(showWhileGitActive.isEnabled,
+                      "The current project's Files visibility must not depend on panel focus")
+        showWhileGitActive.click()
+        app.menuBarItems["File"].click()
+        XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
+        app.menuItems["Hide Excluded Files"].click()
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        XCTAssertFalse(excluded.exists)
     }
 
     func testRealSettingsExcludeAndFileTabRevealHiddenRow() throws {

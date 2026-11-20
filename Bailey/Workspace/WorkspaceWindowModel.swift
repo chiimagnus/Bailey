@@ -133,6 +133,26 @@ final class WorkspaceWindowModel {
         }
     }
 
+    /// The File menu targets the selected project's tree, even when Files is not visible.
+    func toggleExcludedFiles() {
+        guard let project = selectedProject, let context = project.panelContext else { return }
+        let revision = context.connectionRevision
+        Task { [weak self, weak project] in
+            guard let self, let project else { return }
+            let isCurrent = {
+                !self.isClosed && self.selectedProject === project
+                    && project.matchesPanelTarget(context.identity)
+                    && project.panelContext?.connectionRevision == revision
+            }
+            guard isCurrent() else { return }
+            if project.fileTree.syncedTarget(for: context) == nil {
+                guard await project.syncFiles(isCurrent: isCurrent) != nil else { return }
+            }
+            guard isCurrent() else { return }
+            await project.fileTree.setShowExcluded(!project.fileTree.showExcluded)
+        }
+    }
+
     /// Git menus and the bottom toolbar must use the same save-and-reload transaction.
     func switchGitBranch(
         to name: String, expectedOID: String, in project: Project, model: GitStatusModel
