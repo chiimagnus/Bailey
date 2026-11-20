@@ -68,14 +68,17 @@ struct SourceTextEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let scrollView = context.coordinator.scrollView ?? makeScrollView(coordinator: context.coordinator)
-        if let textView = scrollView.documentView as? FocusReportingTextView {
+        let textView = scrollView.documentView as? FocusReportingTextView
+        textView?.onBecomeFirstResponder = nil
+        textView?.onResignFirstResponder = nil
+        let container = SourceEditorContainer(scrollView: scrollView)
+        if let textView {
             textView.onBecomeFirstResponder = onFocused
             textView.onResignFirstResponder = onResignFirstResponder
             apply(to: textView, scrollView: scrollView)
         }
         context.coordinator.wasFocused = isFocused
         file.editorView = scrollView
-        let container = SourceEditorContainer(scrollView: scrollView)
         container.focusOnAttach = isFocused
         container.canFocus = canFocus
         return container
@@ -201,9 +204,9 @@ struct SourceTextEditor: NSViewRepresentable {
     static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
         guard let container = container as? SourceEditorContainer,
               container.scrollView.superview === container else { return }
-        container.scrollView.removeFromSuperview()
         (container.scrollView.documentView as? FocusReportingTextView)?.onBecomeFirstResponder = nil
         (container.scrollView.documentView as? FocusReportingTextView)?.onResignFirstResponder = nil
+        container.scrollView.removeFromSuperview()
         if coordinator.file?.editorView === container.scrollView {
             coordinator.file?.editorView = nil
         }

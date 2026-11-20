@@ -9,6 +9,7 @@ enum DockItem: Hashable {
     case files
     case git
     case tab(UUID)
+    case markdownPreview(UUID)
 
     init?(configurationName: String) {
         switch configurationName {
@@ -24,13 +25,18 @@ enum DockItem: Hashable {
         case .projects: "projects"
         case .files: "files"
         case .git: "git"
-        case .tab: nil
+        case .tab, .markdownPreview: nil
         }
     }
 
     var tabID: UUID? {
         if case .tab(let id) = self { return id }
         return nil
+    }
+
+    var contentTabID: UUID? {
+        if case .markdownPreview(let id) = self { return id }
+        return tabID
     }
 }
 
@@ -311,6 +317,7 @@ enum DockSavedItem: Codable, Hashable {
         case .projects: self = .projects
         case .files: self = .files
         case .git: self = .git
+        case .markdownPreview: return nil
         case .tab(let id):
             guard let index = tabIDs.firstIndex(of: id) else { return nil }
             self = .tab(index)
@@ -458,7 +465,9 @@ final class DockWorkspaceModel {
         if root != updated { root = updated }
         let current = activeGroup?.selected
         if previous != current {
-            if let previous { onDeactivate?(previous) }
+            if let previous, previous.contentTabID == nil || previous.contentTabID != current?.contentTabID {
+                onDeactivate?(previous)
+            }
             onActiveItemChange?(previous, current)
         }
     }
@@ -469,9 +478,12 @@ final class DockWorkspaceModel {
         let previous = activeGroup?.selected
         if let old = activeGroupID { extendedSelections[old] = nil }
         activeGroupID = groupID
-        if let previous { onDeactivate?(previous) }
-        if previous != activeGroup?.selected {
-            onActiveItemChange?(previous, activeGroup?.selected)
+        let current = activeGroup?.selected
+        if let previous, previous.contentTabID == nil || previous.contentTabID != current?.contentTabID {
+            onDeactivate?(previous)
+        }
+        if previous != current {
+            onActiveItemChange?(previous, current)
         }
     }
 
@@ -540,7 +552,7 @@ final class DockWorkspaceModel {
         var seen = Set<DockItem>()
         var updated = root.mappingGroups { group in
             group.items = group.items.filter { item in
-                if case .tab(let id) = item, !allowed.contains(id) { return false }
+                if let id = item.contentTabID, !allowed.contains(id) { return false }
                 return seen.insert(item).inserted
             }
             if let selected = group.selected, !group.items.contains(selected) {
@@ -628,6 +640,10 @@ final class DockWorkspaceModel {
 
     func removeTool(_ item: DockItem) {
         if case .tab = item { return }
+        if case .markdownPreview(let id) = item {
+            setMarkdownPreview(of: id, visible: false)
+            return
+        }
         if let remaining = root.removing(item) {
             updateLayout(remaining)
         } else if let owner = root.group(containing: item) {
@@ -635,6 +651,20 @@ final class DockWorkspaceModel {
                 group.items.removeAll { $0 == item }
                 group.selected = nil
             })
+        }
+    }
+
+    func setMarkdownPreview(of tabID: UUID, visible: Bool) {
+        let item = DockItem.markdownPreview(tabID)
+        guard let sourceGroup = root.group(containing: .tab(tabID)) else { return }
+        if visible {
+            guard root.group(containing: item) == nil else { return }
+            let preview = DockNode.group(DockGroup(items: [item]))
+            updateLayout(root.inserting(preview, edge: .right, at: sourceGroup.id))
+        } else if root.group(containing: item) != nil, var updated = root.removing(item) {
+            let destination = activeGroup?.selected == item ? sourceGroup.id : nil
+            if let destination { updated = updated.editingGroup(destination) { $0.selected = .tab(tabID) } }
+            updateLayout(updated, activating: destination)
         }
     }
 

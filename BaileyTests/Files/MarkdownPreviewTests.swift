@@ -5,6 +5,37 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewTests: XCTestCase {
+    func testDockCompanionReusesFileTabAndCollapsesWithoutDeactivatingTheDocument() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".md")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let bytes = Data("# Original\n".utf8)
+        try bytes.write(to: path)
+        let project = Project(fallbackName: "Project", workspaceConfiguration: .standard)
+        project.openLocalFile(path.path)
+        let tab = try XCTUnwrap(project.focusedTab)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected one file tab") }
+        try await file.waitForText()
+        let original = project.dock.root
+        let storage = file.nativeTextStorage
+        let request = file.markdownRequestID
+        file.text = "# Edited\n"
+        XCTAssertNotEqual(file.markdownRequestID, request)
+        project.setMarkdownMode(.sideBySide, for: tab)
+        let side = try XCTUnwrap(project.dock.group(containing: .markdownPreview(tab.id)))
+        XCTAssertEqual(project.dock.root.groups.count, original.groups.count + 1)
+        XCTAssertEqual(project.dock.tabOrder, [tab.id])
+        XCTAssertEqual(project.tabs.count, 1)
+        XCTAssertFalse(file.showsMarkdownPreview)
+        project.dock.activate(side.id)
+        XCTAssertTrue(project.focusedTab === tab)
+        project.setMarkdownMode(.source, for: tab)
+        XCTAssertEqual(project.dock.root, original)
+        XCTAssertTrue(project.focusedTab === tab)
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertFalse(file.isSaving)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+    }
     func testMarkdownModeRequiresActualTextAndDoesNotTouchDirtyNativeSource() async throws {
         let path = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".mdx")
         defer { try? FileManager.default.removeItem(at: path) }

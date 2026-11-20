@@ -6,15 +6,22 @@ struct MarkdownFilePreview: View {
     let directory: String?
     let onOpenLink: (URL) -> Void
 
-    @State private var parsed: MarkdownDocument?
+    @State private var parsed: (document: MarkdownDocument, request: String, target: String)?
     @State private var failed = false
 
     var body: some View {
         let request = file.markdownRequestID
+        let target = file.markdownResourceID
         Group {
-            if let parsed {
-                MarkdownPreview(document: parsed, revision: request,
-                                resource: file.markdownResource(in: directory), openLink: onOpenLink)
+            if let parsed, parsed.target == target {
+                MarkdownPreview(
+                    document: parsed.document, revision: parsed.request,
+                    resource: file.markdownResource(in: directory),
+                    position: Binding(get: { file.markdownScrollPosition },
+                                      set: { file.markdownScrollPosition = $0 }),
+                    openLink: onOpenLink
+                )
+                .id(target + (directory ?? ""))
             } else if failed {
                 ContentUnavailableView("Could not render Markdown.", systemImage: "doc.text")
             } else {
@@ -22,15 +29,17 @@ struct MarkdownFilePreview: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: request) {
-            parsed = nil
+        .task(id: request) { [weak file] in
             failed = false
             do {
-                let document = try await MarkdownDocument.parse(file.text)
-                guard !Task.isCancelled, request == file.markdownRequestID else { return }
-                parsed = document
+                if parsed?.target == target { try await Task.sleep(for: .milliseconds(150)) }
+                guard let source = file?.text else { return }
+                let document = try await MarkdownDocument.parse(source)
+                guard !Task.isCancelled, request == file?.markdownRequestID else { return }
+                parsed = (document, request, target)
             } catch {
-                guard !Task.isCancelled, request == file.markdownRequestID else { return }
+                guard !Task.isCancelled, request == file?.markdownRequestID else { return }
+                parsed = nil
                 failed = true
             }
         }
@@ -79,6 +88,7 @@ struct MarkdownPreview: View {
     let document: MarkdownDocument
     let revision: String
     let resource: MarkdownResource
+    @Binding var position: Int?
     var openLink: (URL) -> Void = { _ in }
 
     var body: some View {
@@ -97,21 +107,24 @@ struct MarkdownPreview: View {
                                 StructuredText(revision, parser: PreparedMarkdown(markup: markup))
                                     .textual.structuredTextStyle(.gitHub)
                                     .textual.textSelection(.enabled)
+                                    .frame(minHeight: 12, alignment: .topLeading)
                             case .html(let nodes):
                                 MarkdownHTMLContent(nodes: nodes, resource: resource)
                             }
                         }
-                        .id(block.anchor ?? "markdown-block:\(index)")
+                        .id(index)
                     }
                 }
+                .scrollTargetLayout()
                 .frame(maxWidth: 820, alignment: .leading)
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            .scrollPosition(id: $position, anchor: .top)
             .environment(\.openURL, OpenURLAction { url in
                 if url.absoluteString.hasPrefix("#"), let fragment = url.fragment,
-                   document.blocks.contains(where: { $0.anchor == fragment }) {
-                    proxy.scrollTo(fragment, anchor: .top)
+                   let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                    proxy.scrollTo(index, anchor: .top)
                 } else {
                     openLink(url)
                 }

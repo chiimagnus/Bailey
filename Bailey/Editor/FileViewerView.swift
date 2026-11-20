@@ -4,6 +4,18 @@ import ImageIO
 import Observation
 import SwiftUI
 
+enum MarkdownViewMode: CaseIterable {
+    case source, preview, sideBySide
+
+    var title: String {
+        switch self {
+        case .source: String(localized: "Show Source", table: "Editor")
+        case .preview: String(localized: "Show Preview", table: "Editor")
+        case .sideBySide: String(localized: "Show Side by Side", table: "Editor")
+        }
+    }
+}
+
 /// A file opened as a tab in a project. Text content lives here (not in the
 /// view) so edits survive tab switches.
 @MainActor
@@ -123,6 +135,7 @@ final class FileTab: nonisolated Identifiable {
     /// notification; only direct edits require one deferred full reconciliation.
     private func nativeStorageDidChange() {
         guard case .text = content else { return }
+        markdownEditRevision &+= 1
         preparedLineWidths = nil
         pendingStorageChange = true
         if !isDirty {
@@ -191,13 +204,16 @@ final class FileTab: nonisolated Identifiable {
     /// machines is two tabs, and a file opened locally is never read-only.
     let workspaceIdentity: String?
     private(set) var showsMarkdownPreview = false
+    private var markdownEditRevision: UInt = 0
+    @ObservationIgnored var markdownScrollPosition: Int?
 
     var canPreviewMarkdown: Bool {
         guard case .text = content else { return false }
         return MarkdownDocument.supports(path)
     }
 
-    var markdownRequestID: String { "\(targetGeneration)-\(reloadRevision)" }
+    var markdownResourceID: String { "\(targetGeneration)-\(reloadRevision)" }
+    var markdownRequestID: String { "\(markdownResourceID)-\(markdownEditRevision)" }
 
     func setMarkdownPreview(_ enabled: Bool) {
         guard canPreviewMarkdown else { return }
@@ -866,6 +882,7 @@ struct FileViewerView: View {
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
     var markdownDirectory: String?
+    var rendersOnlyMarkdown = false
     var onMarkdownLink: (URL) -> Void = { _ in }
 
     private let settings = AppSettings.shared
@@ -889,9 +906,9 @@ struct FileViewerView: View {
                     if let error = file.saveError {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
-                    if file.showsMarkdownPreview && file.canPreviewMarkdown {
+                    if (file.showsMarkdownPreview || rendersOnlyMarkdown) && file.canPreviewMarkdown {
                         MarkdownFilePreview(file: file, directory: markdownDirectory, onOpenLink: onMarkdownLink)
-                    } else {
+                    } else if !rendersOnlyMarkdown {
                         HStack {
                             Spacer()
                             encodingMenu
@@ -936,10 +953,11 @@ struct FileViewerView: View {
         }
         .background(FileWindowReader(reference: windowReference).frame(width: 0, height: 0))
         .onAppear {
-            file.refreshWhenSelected()
+            if rendersOnlyMarkdown { file.loadIfNeeded() }
+            else { file.refreshWhenSelected() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
-            guard notification.object as? NSWindow === windowReference.window,
+            guard !rendersOnlyMarkdown, notification.object as? NSWindow === windowReference.window,
                   file.readOnlyReason == nil else { return }
             file.refreshWhenSelected()
         }

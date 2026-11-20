@@ -204,6 +204,7 @@ extension DockItem {
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .tab: "terminal"
+        case .markdownPreview: "doc.richtext"
         }
     }
 
@@ -213,6 +214,7 @@ extension DockItem {
         case .files: String(localized: "File Manager", table: "Sidebar")
         case .git: String(localized: "Git Manager", table: "Sidebar")
         case .tab(let id): project.tabs.first { $0.id == id }?.displayTitle ?? String(localized: "Tab", table: "Workspace")
+        case .markdownPreview: String(localized: "Preview", table: "Editor")
         }
     }
 }
@@ -643,7 +645,7 @@ struct DockTabGroupView: View {
                 select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
                 close: { close(item) }
             )
-            .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
+            .accessibilityIdentifier("bailey.dock.\(item.contentTabID == nil ? item.configurationName ?? "unknown" : "markdown-preview")")
             .overlay {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
@@ -761,7 +763,7 @@ struct DockTabGroupView: View {
                     manager: manager,
                     destination: (projectID: project.id, groupID: group.id)
                 ))
-        case .tab(let id):
+        case .tab(let id), .markdownPreview(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 PanelContentView(
                     tab: tab,
@@ -774,6 +776,7 @@ struct DockTabGroupView: View {
                     },
                     onNewFileTab: { manager.openFile($0) },
                     markdownDirectory: markdownDirectory(for: tab),
+                    rendersOnlyMarkdown: active == .markdownPreview(id),
                     onExternalFilesDropped: { FinderWindowDrop.receive(
                         $0, preferred: manager,
                         destination: (projectID: project.id, groupID: group.id)
@@ -824,18 +827,14 @@ struct DockTabGroupView: View {
         let tabID = tab.id
         if case .file(let file) = tab.content {
             if file.canPreviewMarkdown {
-                Button(String(localized: "Show Source", table: "Editor")) {
-                    if case .file(let current)? = currentMenuTab(tabID)?.content {
-                        current.setMarkdownPreview(false)
+                ForEach(MarkdownViewMode.allCases, id: \.self) { mode in
+                    Button(mode.title) {
+                        if let current = currentMenuTab(tabID) {
+                            project.setMarkdownMode(mode, for: current)
+                        }
                     }
+                    .disabled(project.markdownMode(for: tab) == mode)
                 }
-                .disabled(!file.showsMarkdownPreview)
-                Button(String(localized: "Show Preview", table: "Editor")) {
-                    if case .file(let current)? = currentMenuTab(tabID)?.content {
-                        current.setMarkdownPreview(true)
-                    }
-                }
-                .disabled(file.showsMarkdownPreview)
                 Button(String(localized: "Front Matter…", table: "Editor")) {
                     if currentMenuTab(tabID) != nil { markdownMetadataTabID = tabID }
                 }

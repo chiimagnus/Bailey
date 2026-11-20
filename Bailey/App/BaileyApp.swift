@@ -405,14 +405,11 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("o", modifiers: .command)
             .disabled(manager?.selectedProject == nil)
 
-            Button(manager?.markdownPreviewTarget?.showsMarkdownPreview == true
-                ? String(localized: "Show Source", table: "Editor")
-                : String(localized: "Show Preview", table: "Editor")) {
-                guard let file = manager?.markdownPreviewTarget else { return }
-                file.setMarkdownPreview(!file.showsMarkdownPreview)
+            Button(manager?.markdownMenuMode?.title ?? MarkdownViewMode.preview.title) {
+                manager?.toggleMarkdownPreview()
             }
             .keyboardShortcut("v", modifiers: [.command, .shift])
-            .disabled(manager?.markdownPreviewTarget == nil)
+            .disabled(manager?.markdownMenuMode == nil)
 
             Button(String(localized: "Save", table: "Interface")) {
                 manager?.saveSelectedFile()
