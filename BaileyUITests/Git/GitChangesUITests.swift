@@ -920,6 +920,12 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [removedVisible], timeout: 20), .completed,
                        "A deleted file must still show its old text instead of a blank Diff")
         XCTAssertTrue(review.isHittable)
+        removedRow.rightClick()
+        XCTAssertTrue(app.menuItems["Open HEAD File"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Open File"].exists,
+                       "A deleted file must not offer an action that cannot open it")
+        XCTAssertTrue(app.menuItems["Stage Changes"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         let untrackedRow = WorkspaceUITestSupport.fileRow(untracked, in: window,
                                                            relativeTo: fixture.root)
@@ -1518,6 +1524,8 @@ final class GitChangesUITests: XCTestCase {
 
         b.rightClick()
         XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.menuItems["Open File"].exists)
+        XCTAssertFalse(app.menuItems["Open Changes"].exists)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
         WorkspaceUITestSupport.assertClipboard("second.txt")
         XCTAssertTrue(a.isSelected && !b.isSelected)

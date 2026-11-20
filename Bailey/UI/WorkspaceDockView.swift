@@ -828,7 +828,7 @@ struct DockTabGroupView: View {
                 }
                 .keyboardShortcut(PathMenuShortcut.reveal)
             }
-            Button(String(localized: "Copy Absolute Path", table: "Interface")) {
+            Button(String(localized: "Copy Path", table: "Sidebar")) {
                 guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(current.path, forType: .string)

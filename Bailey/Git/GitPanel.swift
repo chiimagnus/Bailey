@@ -2627,6 +2627,7 @@ struct GitPanel: View {
                 browseGitChange(VisibleChange(kind: kind, row: presentation, entry: entry))
             },
             openFile: { openIfPossible(entry) },
+            canOpenFile: { model.canOpen(entry, isRemote: remoteName != nil) },
             openHead: kind != .merge && model.hasHead && entry.staged != "A" && !entry.isUntracked ? {
                 openHeadFile(entry)
             } : nil,
@@ -3237,6 +3238,7 @@ private struct GitEntryRow: View {
     let isDiscardLoading: Bool
     let openDiff: () -> Void
     let openFile: () -> Void
+    let canOpenFile: () -> Bool
     let openHead: (() -> Void)?
     let ignore: (() -> Void)?
     let stage: () -> Void
@@ -3279,18 +3281,17 @@ private struct GitEntryRow: View {
 
     @ViewBuilder
     private var menu: some View {
-        if !multipleSelection {
-            if kind == .merge {
-                Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
-                Button(String(localized: "Open Conflicted File", table: "Sidebar")) { openFile() }
-            } else {
-                Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
-                Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
-            }
+        let showOpenFile = !multipleSelection && canOpenFile()
+        if showOpenFile {
+            Button(kind == .merge
+                   ? String(localized: "Open Conflicted File", table: "Sidebar")
+                   : String(localized: "Open File", table: "Sidebar")) { openFile() }
+        }
+        if !multipleSelection, let openHead {
+            Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
+        }
+        if showOpenFile || (!multipleSelection && openHead != nil) {
             Divider()
-            if let openHead {
-                Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
-            }
         }
         if !multipleSelection || canBatchOperate {
             switch kind {

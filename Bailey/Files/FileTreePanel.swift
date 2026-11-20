@@ -546,10 +546,6 @@ private struct FileTreeRow: View {
                 }
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
-        } else if !multiple {
-            Button(String(localized: "Open", table: "Sidebar")) {
-                if isCurrentTarget() { openFile(target.path, true) }
-            }
         }
         if !isRemote {
             if !multiple {
@@ -564,7 +560,9 @@ private struct FileTreeRow: View {
             }
             .keyboardShortcut(PathMenuShortcut.reveal)
         }
-        Divider()
+        if !isRemote || (!multiple && target.isDirectory) {
+            Divider()
+        }
         let cutTitle = String(localized: "Cut", table: "Sidebar")
         Button(cutTitle) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }

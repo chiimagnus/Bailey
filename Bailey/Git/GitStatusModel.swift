@@ -217,9 +217,9 @@ final class GitStatusModel {
 
         var title: String {
             switch self {
-            case .cherryPick: String(localized: "Cherry Pick Selected Commits…", table: "Git")
-            case .revert: String(localized: "Revert Selected Commits…", table: "Git")
-            case .drop: String(localized: "Drop Selected Commits…", table: "Git")
+            case .cherryPick: String(localized: "Cherry Pick…", table: "Git")
+            case .revert: String(localized: "Revert…", table: "Git")
+            case .drop: String(localized: "Drop…", table: "Git")
             }
         }
     }

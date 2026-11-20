@@ -218,16 +218,6 @@
         }
       }
     },
-    "Copy Absolute Path" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制绝对路径"
-          }
-        }
-      }
-    },
     "Copy Address" : {
       "localizations" : {
         "zh-Hans" : {

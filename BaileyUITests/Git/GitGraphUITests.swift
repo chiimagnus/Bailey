@@ -32,6 +32,10 @@ final class GitGraphUITests: XCTestCase {
                       "Deleted file must coexist with the new folder at the same Git path")
         XCTAssertTrue(addedFirst.waitForExistence(timeout: 12))
         XCTAssertTrue(addedSecond.waitForExistence(timeout: 12))
+        deleted.rightClick()
+        XCTAssertFalse(app.menuItems["Copy Path"].exists)
+        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists,
+                       "Deleted history files do not have filesystem path menus")
 
         folder.click()
         XCTAssertTrue(addedFirst.waitForNonExistence(timeout: 12))
@@ -57,7 +61,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
-    func testGraphFilePathShortcutUsesRightClickTargetThenReturnsToSelection() throws {
+    func testGraphHistoryMenusKeepRevisionOperationsWithoutPathCopy() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first.txt", text: "first\n")
         let second = try fixture.file("second.txt", text: "second\n")
@@ -72,53 +76,29 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(a.waitForExistence(timeout: 12))
         XCTAssertTrue(b.waitForExistence(timeout: 12))
 
-        if commit.isSelected {
-            XCUIElement.perform(withKeyModifiers: .command) { commit.click() }
-        }
-        XCTAssertFalse(commit.isSelected)
-        XCUIElement.perform(withKeyModifiers: .command) { a.click() }
-        XCTAssertTrue(a.isSelected)
+        a.click()
         b.rightClick()
-        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
-        app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        WorkspaceUITestSupport.assertClipboard("second.txt",
-                       "The native context command must operate on the right-clicked history file")
+        XCTAssertTrue(app.menuItems["View File at Revision"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.menuItems["Compare with Working File"].exists)
+        XCTAssertTrue(app.menuItems["Open Working File"].exists)
+        XCTAssertFalse(app.menuItems["Copy Path"].exists)
+        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists)
         XCTAssertTrue(a.isSelected && !b.isSelected)
-        app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        WorkspaceUITestSupport.assertClipboard("first.txt",
-                       "After the menu ends, the original Git Graph selection owns the shortcut")
-        let fileMenu = app.menuBars.menuBarItems["File"]
-        fileMenu.click()
-        let reveal = fileMenu.menuItems["Reveal in Finder"]
-        XCTAssertTrue(reveal.waitForExistence(timeout: 8))
-        XCTAssertFalse(reveal.isEnabled)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        b.rightClick()
-        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
-        app.typeKey("r", modifierFlags: [.command, .option])
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        XCTAssertTrue(a.isSelected && !b.isSelected)
-        app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        WorkspaceUITestSupport.assertClipboard("first.txt")
+
+        XCUIElement.perform(withKeyModifiers: .command) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected)
+        a.rightClick()
+        XCTAssertFalse(app.menuItems["Copy Paths"].exists)
+        XCTAssertFalse(app.menuItems["Copy Relative Paths"].exists)
+        XCTAssertTrue(a.isSelected && b.isSelected)
         let folder = app.windows.firstMatch.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 12))
         folder.rightClick()
-        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
-        app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        WorkspaceUITestSupport.assertClipboard("nested",
-                       "A graph folder context must supply its actual relative path")
-        app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        WorkspaceUITestSupport.assertClipboard("first.txt")
-
-        XCUIElement.perform(withKeyModifiers: .command) { b.click() }
-        XCTAssertTrue(a.isSelected && b.isSelected)
-        a.rightClick()
-        app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        WorkspaceUITestSupport.assertClipboard("first.txt\nsecond.txt",
-                       "A context click inside Graph multi-selection must retain the whole set")
-        XCTAssertTrue(a.isSelected && b.isSelected)
+        XCTAssertFalse(app.menuItems["Copy Path"].exists)
+        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists)
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
         XCTAssertEqual(try Data(contentsOf: nested), Data("third\n".utf8))
@@ -376,7 +356,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
-    func testStashBadgeInMixedSelectionShowsOnlyBatchCopyMenu() throws {
+    func testStashBadgeInMixedSelectionHidesSingleAndBatchMenus() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("stash-multi.txt", text: "baseline\n")
         try fixture.initializeGit()
@@ -394,25 +374,18 @@ final class GitGraphUITests: XCTestCase {
         commit.click()
         XCUIElement.perform(withKeyModifiers: .command) { badge.click() }
         badge.rightClick()
-        let batchCopy = app.menuItems["Copy Selected Items"]
-        XCTAssertTrue(batchCopy.waitForExistence(timeout: 8))
         XCTAssertFalse(app.menuItems["Pop Stash…"].exists,
                        "A Stash badge within mixed selection cannot offer single-Stash mutation")
-        XCTAssertFalse(app.menuItems["Squash Selected Commits…"].exists)
-        batchCopy.click()
-        let text = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
-        let values = Set(text.split(separator: "\n").map(String.init))
-        XCTAssertEqual(values, Set([
-            String(decoding: head, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            "stash@{0}",
-        ]))
+        XCTAssertFalse(app.menuItems["Squash…"].exists)
+        XCTAssertFalse(app.menuItems["Copy as Text"].exists)
+        XCTAssertFalse(app.menuItems["Copy Paths"].exists)
+        XCTAssertTrue(commit.isSelected && badge.isSelected)
 
         badge.click()
         badge.rightClick()
         XCTAssertTrue(app.menuItems["Pop Stash…"].waitForExistence(timeout: 8),
                       "Single-Stash context menu must stay available")
-        XCTAssertFalse(app.menuItems["Copy Selected Items"].exists)
+        XCTAssertFalse(app.menuItems["Copy as Text"].exists)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["rev-parse", "stash@{0}"]), stash)
@@ -443,11 +416,11 @@ final class GitGraphUITests: XCTestCase {
         XCUIElement.perform(withKeyModifiers: .command) { tagged.click() }
         XCTAssertTrue(newest.isSelected && tagged.isSelected)
         badge.rightClick()
-        XCTAssertTrue(app.menuItems["Copy Selected Commit Hashes"].waitForExistence(timeout: 8),
+        XCTAssertTrue(app.menuItems["Copy Hashes"].waitForExistence(timeout: 8),
                       "The tag badge belongs to the selected commit's batch context.")
         XCTAssertFalse(app.menuItems["Delete Tag…"].exists,
                        "Multi-select cannot expose a single-tag destructive action.")
-        app.menuItems["Copy Selected Commit Hashes"].click()
+        app.menuItems["Copy Hashes"].click()
         let hashes = [head, taggedHash].map {
             String(decoding: $0, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -461,7 +434,7 @@ final class GitGraphUITests: XCTestCase {
         badge.rightClick()
         XCTAssertTrue(app.menuItems["Delete Tag…"].waitForExistence(timeout: 8),
                       "The ordinary tag action must remain available on a single selection.")
-        XCTAssertFalse(app.menuItems["Copy Selected Commit Hashes"].exists)
+        XCTAssertFalse(app.menuItems["Copy Hashes"].exists)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/multi-badge^{}"]), taggedHash)
@@ -498,8 +471,8 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(second.isSelected && first.isSelected)
 
         first.rightClick()
-        let drop = app.menuItems["Drop Selected Commits…"]
-        let squash = app.menuItems["Squash Selected Commits…"]
+        let drop = app.menuItems["Drop…"]
+        let squash = app.menuItems["Squash…"]
         XCTAssertTrue(drop.waitForExistence(timeout: 8))
         XCTAssertTrue(squash.waitForExistence(timeout: 8))
         XCTAssertTrue(drop.isEnabled, "Other worktree history must have a valid Drop target")
@@ -555,7 +528,7 @@ final class GitGraphUITests: XCTestCase {
         second.click()
         XCUIElement.perform(withKeyModifiers: .command) { first.click() }
         first.rightClick()
-        let squash = app.menuItems["Squash Selected Commits…"]
+        let squash = app.menuItems["Squash…"]
         XCTAssertTrue(squash.waitForExistence(timeout: 8))
         XCTAssertTrue(squash.isEnabled)
         squash.click()
@@ -614,31 +587,44 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertFalse(outside.isSelected)
 
         newest.rightClick()
-        let copy = app.menuItems["Copy Selected Commit Hashes"]
+        let copy = app.menuItems["Copy Hashes"]
         XCTAssertTrue(copy.waitForExistence(timeout: 8))
         XCTAssertFalse(app.menuItems["Checkout Commit…"].exists)
         XCTAssertFalse(app.menuItems["Create Branch at Commit…"].exists)
-        XCTAssertTrue(app.menuItems["Cherry Pick Selected Commits…"].exists)
-        XCTAssertTrue(app.menuItems["Revert Selected Commits…"].exists)
-        XCTAssertTrue(app.menuItems["Drop Selected Commits…"].exists)
-        XCTAssertTrue(app.menuItems["Squash Selected Commits…"].exists)
+        XCTAssertTrue(app.menuItems["Cherry Pick…"].exists)
+        XCTAssertTrue(app.menuItems["Revert…"].exists)
+        XCTAssertTrue(app.menuItems["Drop…"].exists)
+        XCTAssertTrue(app.menuItems["Squash…"].exists)
         copy.click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string),
                        expected.joined(separator: "\n"))
         XCTAssertTrue(newest.isSelected && middle.isSelected)
 
         middle.rightClick()
-        app.menuItems["Copy Selected Commit Subjects"].click()
+        app.menuItems["Copy Subjects"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string),
                        "batch third\nbatch second")
 
+        newest.rightClick()
+        app.menuItems["Copy Summaries"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       expected[0] + " batch third\n" + expected[1] + " batch second")
+
         outside.rightClick()
         XCTAssertTrue(app.menuItems["Checkout Commit…"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.menuItems["Copy Selected Commit Hashes"].exists)
-        app.menuItems["Copy Commit Hash"].click()
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
-                       String(decoding: try fixture.git(["rev-parse", "HEAD~2"]), as: UTF8.self)
-                           .trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertFalse(app.menuItems["Copy Hashes"].exists)
+        XCTAssertFalse(app.menuItems["Copy Commit Hash"].exists)
+        XCTAssertTrue(app.menuItems["Copy Commit Subject"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let shortSHA = app.buttons.matching(identifier: "bailey.git.history.copyHash").firstMatch
+        XCTAssertTrue(shortSHA.waitForExistence(timeout: 8))
+        shortSHA.click()
+        let fullHashes = expected + [
+            String(decoding: try fixture.git(["rev-parse", "HEAD~2"]), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        XCTAssertTrue(fullHashes.contains(NSPasteboard.general.string(forType: .string) ?? ""),
+                      "Clicking a short SHA still copies the full commit hash")
         XCTAssertTrue(newest.isSelected && middle.isSelected && !outside.isSelected)
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
@@ -672,7 +658,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertFalse(root.isSelected)
 
         topic.rightClick()
-        let squash = app.menuItems["Squash Selected Commits…"]
+        let squash = app.menuItems["Squash…"]
         XCTAssertTrue(squash.waitForExistence(timeout: 8))
         XCTAssertFalse(squash.isEnabled,
                        "Multi-selection is valid across branches; squash is not.")
@@ -681,7 +667,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(topic.isSelected)
 
         root.rightClick()
-        XCTAssertFalse(app.menuItems["Squash Selected Commits…"].exists,
+        XCTAssertFalse(app.menuItems["Squash…"].exists,
                        "A context target outside the selection cannot use the old selection.")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(main.isSelected)
@@ -1122,19 +1108,16 @@ final class GitGraphUITests: XCTestCase {
                 dx: window.frame.width - 150, dy: window.frame.height / 2)))
         XCTAssertTrue(node.isHittable, "A dirty worktree with a very long Branch must remain accessible in a 150pt panel")
         node.rightClick()
-        let copyPath = app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["Copy Worktree Path", "复制工作树路径"])).firstMatch
         let unsafe = app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Checkout Commit…", "检出提交…"])).firstMatch
-        XCTAssertTrue(copyPath.waitForExistence(timeout: 8),
-                      "The dirty node must have its own worktree path action")
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Copy Path", "复制路径"])).firstMatch.exists)
         XCTAssertFalse(unsafe.exists,
                        "A dirty worktree state must not become a synthetic commit action")
         XCTAssertFalse(app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Rename Branch…", "重命名分支…",
                                    "Copy Branch Name", "复制分支名称"])).firstMatch.exists,
                        "A dirty worktree node must not repeat the checkout's Branch badge actions")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         node.click()
         let file = app.windows.firstMatch.descendants(matching: .any)
             .matching(identifier: "bailey.tree.file")
@@ -1890,6 +1873,11 @@ final class GitGraphUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 15), .completed,
                            "The actual Diff must use the selected worktree stage and baseline")
         }
+        rows.element(boundBy: 0).rightClick()
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Copy Path", "复制路径"])).firstMatch.exists)
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Open Staged Diff", "打开暂存区差异"])).firstMatch.exists)
         rows.element(boundBy: 0).click()
         XCTAssertTrue(rows.element(boundBy: 0).isSelected,
                       "The staged Worktree file must use Git Graph Selection styling")
@@ -1898,6 +1886,13 @@ final class GitGraphUITests: XCTestCase {
         layout.radioButtons.element(boundBy: 1).click()
         requireDiff("committed\n", "index version\n")
 
+        rows.element(boundBy: 1).rightClick()
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Copy Path", "复制路径",
+                                     "Copy Relative Path", "复制相对路径"])).firstMatch.exists)
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Open Working Changes", "打开工作区更改",
+                                     "Open Staged Diff", "打开暂存区差异"])).firstMatch.exists)
         rows.element(boundBy: 1).click()
         XCTAssertTrue(rows.element(boundBy: 1).isSelected)
         XCTAssertFalse(rows.element(boundBy: 0).isSelected,

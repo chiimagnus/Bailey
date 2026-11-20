@@ -897,6 +897,13 @@ final class WorkspaceFilesUITests: XCTestCase {
         WorkspaceUITestSupport.assertClipboard("first.txt")
         XCTAssertEqual(editor.value as? String, "first\n",
                        "Path shortcuts must not mutate the active editor")
+        let tab = window.buttons.matching(identifier: "bailey.tab.file").firstMatch
+        XCTAssertTrue(tab.waitForExistence(timeout: 8))
+        tab.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems["Copy Absolute Path"].exists)
+        app.menuItems["Copy Path"].click()
+        WorkspaceUITestSupport.assertClipboard(first.path)
     }
 
     func testTerminalFocusedRightClickPreservesFilesSelectionAndInput() throws {
@@ -1131,10 +1138,19 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertFalse(selectedMenu.menuItems["Open"].exists,
                        "Multi-selection must not silently open only one file")
         XCTAssertFalse(selectedMenu.menuItems["Open in Default App"].exists)
-        XCTAssertTrue(selectedMenu.menuItems["Copy"].exists)
+        XCTAssertFalse(selectedMenu.menuItems["Paste"].exists)
+        XCTAssertTrue(selectedMenu.menuItems["Copy"].exists,
+                      "Copy transfers the selected files, not just their paths")
+        XCTAssertTrue(selectedMenu.menuItems["Copy Paths"].exists)
+        XCTAssertTrue(selectedMenu.menuItems["Copy Relative Paths"].exists)
         selectedMenu.menuItems["Copy Relative Paths"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a.txt\nb.txt",
                        "Context-clicking a selected row must copy the selected relative paths")
+        let pathMenu = try fileContextMenu(for: a, in: app)
+        pathMenu.menuItems["Copy Paths"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                       alpha.path + "\n" + beta.path)
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)
         let deleteMenu = try fileContextMenu(for: a, in: app)
         WorkspaceUITestSupport.menuItem("Move to Trash", in: deleteMenu).click()
         let deleted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -1480,7 +1496,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: existing), Data("existing".utf8))
     }
 
-    func testExplorerMenuUsesVSCodeFileAndDirectoryActions() throws {
+    func testExplorerMenuKeepsDistinctFileAndDirectoryActions() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/leaf.txt", text: "menu bytes\n")
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
@@ -1517,13 +1533,13 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         let fileMenu = try fileContextMenu(for: row, in: app)
         let fileActions = Set(fileMenu.menuItems.allElementsBoundByIndex.map(\.title))
-        for title in ["Open", "Cut", "Copy", "Copy Path",
-                      "Copy Relative Path", "Rename", "Move to Trash"] {
-            XCTAssertTrue(fileActions.contains(title), "Missing VS Code file action: \(title)")
+        for title in ["Open in Default App", "Reveal in Finder", "Cut", "Copy",
+                      "Copy Path", "Copy Relative Path", "Rename", "Move to Trash"] {
+            XCTAssertTrue(fileActions.contains(title), "Missing file action: \(title)")
         }
-        for title in ["Move To…", "Duplicate", "New File…", "New Folder…", "Paste",
-                      "Open to the Side", "cd Here", "Unfold Directory", "Fold Directory"] {
-            XCTAssertFalse(fileActions.contains(title), "Unrelated file action: \(title)")
+        for title in ["Open", "Move To…", "Duplicate", "New File…", "New Folder…",
+                      "Paste", "Open to the Side", "cd Here", "Unfold Directory", "Fold Directory"] {
+            XCTAssertFalse(fileActions.contains(title), "Redundant file action: \(title)")
         }
         fileMenu.menuItems["Copy Relative Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "folder/leaf.txt")
