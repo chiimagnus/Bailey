@@ -518,12 +518,13 @@ private struct FileTreeRow: View {
     }
 
     private func dismissContextMenu(for target: String) {
-        // AppKit closes this menu before the system File menu handles Cmd-N.
-        // Preserve its target for that same command, but not for Escape/cancel.
-        if let event = NSApp.currentEvent, event.type == .keyDown,
-           event.charactersIgnoringModifiers?.lowercased() == "n" {
-            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            if modifiers == .command || modifiers == [.command, .option] { return }
+        // AppKit may end context tracking before dispatching a File menu shortcut.
+        if let event = NSApp.currentEvent, event.type == .keyDown {
+            if PathMenuShortcut.badge(for: event) != nil { return }
+            if event.charactersIgnoringModifiers?.lowercased() == "n" {
+                let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+                if modifiers == .command || modifiers == [.command, .option] { return }
+            }
         }
         model.dismissContextMenu(target: target)
     }
@@ -539,8 +540,7 @@ private struct FileTreeRow: View {
 
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
         guard isMenuForCurrentRow(menu) else { return false }
-        if PathMenuShortcut.perform(in: menu, event: event) { return true }
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
         let key = event.charactersIgnoringModifiers?.lowercased()
         let title: String
         switch (key, modifiers) {
@@ -551,9 +551,6 @@ private struct FileTreeRow: View {
         case ("c", [.command]): title = String(localized: "Copy", table: "Sidebar")
         case ("x", [.command]): title = String(localized: "Cut", table: "Sidebar")
         case ("v", [.command]): title = String(localized: "Paste", table: "Sidebar")
-        case ("n", [.command]): title = String(localized: "New File…", table: "Sidebar")
-        case ("n", [.option, .command]):
-            title = String(localized: "New Folder…", table: "Sidebar")
         default: return false
         }
         guard let index = menu.items.firstIndex(where: {

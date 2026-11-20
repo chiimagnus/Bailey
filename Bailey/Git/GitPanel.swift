@@ -2324,7 +2324,9 @@ struct GitPanel: View {
 
     private var focusedChangePathActions: FocusedPathActions {
         let paths: (Bool) -> [String] = { absolute in
-            guard keyboardFocused, isGitActive, hasCurrentPanelTarget else { return [] }
+            guard isGitActive, hasCurrentPanelTarget else { return [] }
+            if let contextChange { return contextPaths(for: contextChange, absolute: absolute) }
+            guard keyboardFocused else { return [] }
             let visible = changesDisplay.selections
             guard let key = model.selectedChanges.isEmpty ? selectedChange
                 : visible.first(where: { model.selectedChanges.contains($0) }) else { return [] }
@@ -2332,6 +2334,8 @@ struct GitPanel: View {
         }
         return FocusedPathActions(paths: paths, revealablePaths: {
             remoteName == nil ? paths(true) : []
+        }, didPerform: {
+            contextChange = nil
         })
     }
 
@@ -2354,7 +2358,10 @@ struct GitPanel: View {
     }
 
     private func dismissContextChange(_ key: ChangeSelection) {
-        if contextChange == key { contextChange = nil }
+        guard contextChange == key else { return }
+        if let event = NSApp.currentEvent, event.type == .keyDown,
+           PathMenuShortcut.badge(for: event) != nil { return }
+        contextChange = nil
     }
 
     private func browseGitChange(_ change: VisibleChange) {
@@ -2496,10 +2503,6 @@ struct GitPanel: View {
             ContextMenuClickTarget(
                 onContextClick: { focusContextChange(key) },
                 onMenuClosed: { dismissContextChange(key) },
-                onMenuKeyDown: { menu, event in
-                    guard contextChange == key, hasCurrentPanelTarget else { return false }
-                    return PathMenuShortcut.perform(in: menu, event: event)
-                },
                 isExpectedMenu: { contextChange == key && PathMenuShortcut.hasPathActions($0) }
             )
         }
@@ -2530,10 +2533,6 @@ struct GitPanel: View {
                 contextChange = context
             },
             onMenuClosed: { dismissContextChange(context) },
-            onMenuKeyDown: { menu, event in
-                guard contextChange == context, hasCurrentPanelTarget else { return false }
-                return PathMenuShortcut.perform(in: menu, event: event)
-            },
             isExpectedMenu: { contextChange == context && PathMenuShortcut.hasPathActions($0) }) {
                 directoryMenu(path: component.path, target: context, kind: kind,
                     stageTrigger: .entry(path: component.path, operation: .stage),
@@ -2581,10 +2580,6 @@ struct GitPanel: View {
             contextRing: contextChange == key,
             onContextClick: { focusContextChange(key) },
             onMenuClosed: { dismissContextChange(key) },
-            onMenuKeyDown: { menu, event in
-                guard contextChange == key, hasCurrentPanelTarget else { return false }
-                return PathMenuShortcut.perform(in: menu, event: event)
-            },
             isExpectedMenu: { contextChange == key && PathMenuShortcut.hasPathActions($0) },
             isRemote: remoteName != nil,
             multipleSelection: isGroupContext(key),
@@ -3199,7 +3194,6 @@ private struct GitEntryRow: View {
     let contextRing: Bool
     let onContextClick: () -> Void
     let onMenuClosed: () -> Void
-    let onMenuKeyDown: (NSMenu, NSEvent) -> Bool
     let isExpectedMenu: (NSMenu) -> Bool
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
@@ -3249,7 +3243,7 @@ private struct GitEntryRow: View {
         .overlay {
             ContextMenuClickTarget(
                 onContextClick: onContextClick, onMenuClosed: onMenuClosed,
-                onMenuKeyDown: onMenuKeyDown, isExpectedMenu: isExpectedMenu
+                isExpectedMenu: isExpectedMenu
             )
                 .contextMenu { menu }
         }

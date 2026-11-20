@@ -734,6 +734,7 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(project.dock.closeTarget, .tab(tabs[1].id))
         XCTAssertEqual(project.dock.activeGroupID, active)
         XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[2].id))
+
         manager.closeActivePanelOrWindow()
         XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id, tabs[2].id])
         XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[2].id))
@@ -786,6 +787,21 @@ final class DockWorkspaceTests: XCTestCase {
                        "A later Cmd-W must close active B, never retry the blocked A")
         XCTAssertEqual(try Data(contentsOf: first), Data("first bytes\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second bytes\n".utf8))
+    }
+
+    func testLosingKeyWindowInvalidatesCurrentContextTarget() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "first", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.dock.selectForContextMenu(.git)
+        XCTAssertEqual(project.dock.closeTarget, .git)
+
+        manager.windowResignedKey()
+
+        XCTAssertNil(project.dock.contextTarget)
+        XCTAssertEqual(project.dock.closeTarget, project.dock.activeGroup?.selected)
     }
 
     func testRightClickToolTargetIsIndependentOfActiveGroupAndProject() throws {

@@ -484,6 +484,11 @@ final class WorkspaceWindowModel {
         }
     }
 
+    func windowResignedKey() {
+        selectedProject?.dock.clearContextTarget()
+        autoSaveEditedTabs()
+    }
+
     func close(_ project: Project) {
         guard projects.contains(where: { $0 === project }),
               !project.isClosingPanels,

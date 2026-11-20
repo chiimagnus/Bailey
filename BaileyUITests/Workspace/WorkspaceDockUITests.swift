@@ -942,6 +942,89 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second), Data("right original\n".utf8))
     }
 
+    func testRightClickEditedFileTabCommandWSavesItsContents() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("edited-before-close.txt", text: "original\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        files.click()
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        editor.click()
+        app.typeKey("a", modifierFlags: .command)
+        editor.typeText("SAVED_BY_CONTEXT_CLOSE\n")
+        XCTAssertTrue((editor.value as? String)?.contains("SAVED_BY_CONTEXT_CLOSE") == true)
+
+        tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        XCTAssertTrue(app.menuItems["Close"].waitForExistence(timeout: 8))
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tab.waitForNonExistence(timeout: 15))
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: file, encoding: .utf8)) == "SAVED_BY_CONTEXT_CLOSE\n"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "Context Command-W must persist the real edited file before closing")
+        XCTAssertTrue(window.exists)
+    }
+
+    func testControlClickAndMainPanelMenuRespectTheCurrentCloseTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("background.txt", text: "background bytes\n")
+        let second = try fixture.file("active.txt", text: "active bytes\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        func open(_ file: URL) throws {
+            let done = expectation(description: "Open an isolated file tab")
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open([file], withApplicationAt: bundle, configuration: config) {
+                _, error in
+                XCTAssertNil(error)
+                done.fulfill()
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [done], timeout: 20), .completed)
+        }
+        try open(first)
+        try open(second)
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileTab(first, in: window)
+        let b = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        b.click()
+
+        XCUIElement.perform(withKeyModifiers: .control) { a.click() }
+        XCTAssertTrue(app.menuItems["Close"].waitForExistence(timeout: 8),
+                      "Control-click must use the native Dock context menu")
+        XCTAssertTrue(b.isSelected && !a.isSelected)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(a.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(b.exists && window.exists)
+
+        try open(first)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        b.click()
+        a.rightClick()
+        XCTAssertTrue(app.menuItems["Close"].waitForExistence(timeout: 8))
+        app.menuBarItems["Panel"].click()
+        let close = app.menuItems["Close Panel"]
+        XCTAssertTrue(close.waitForExistence(timeout: 8))
+        close.click()
+        XCTAssertTrue(b.waitForNonExistence(timeout: 12),
+                      "Switching to the system menu must cancel the old right-click target")
+        XCTAssertTrue(a.exists && window.exists)
+        XCTAssertEqual(try Data(contentsOf: first), Data("background bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("active bytes\n".utf8))
+    }
+
     func testOpenFileTabContextMenuCommandWClosesOnlyRightClickedTab() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("left.txt", text: "first\n")
@@ -970,6 +1053,15 @@ final class WorkspaceDockUITests: XCTestCase {
         a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
         XCTAssertNotEqual(try contextOutlinePixels(of: a), before,
                           "The inactive tab must visibly become the native context target")
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "left.txt",
+                       "The File menu must use the right-clicked inactive tab, not the active one")
+        XCTAssertTrue(a.exists && b.isSelected)
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "right.txt",
+                       "After context copy, the File menu must return to the active tab")
+        a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
         app.typeKey("w", modifierFlags: .command)
         XCTAssertTrue(a.waitForNonExistence(timeout: 12))
         XCTAssertTrue(b.exists && window.exists,

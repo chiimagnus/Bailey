@@ -492,7 +492,7 @@ struct RecentCommitsView: View {
 
     private enum NavigationAction {
         case commit(Commit)
-        case folder(String)
+        case folder(key: String, root: String, path: String)
         case historicalFile(Commit, Commit.FileChange)
         case worktreeFile(GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool)
     }
@@ -565,7 +565,8 @@ struct RecentCommitsView: View {
                 if node.isDirectory {
                     let folder = section + ":" + node.path
                     let rowID = folderRowID(commit, section: section, path: node.path)
-                    rows.append(NavigationRow(id: rowID, parent: parent, action: .folder(folder),
+                    rows.append(NavigationRow(id: rowID, parent: parent,
+                        action: .folder(key: folder, root: repoRoot, path: node.path),
                         isExpandable: true, isExpanded: node.isExpanded))
                     parents.append((node.path, rowID))
                 } else if let file = byPath[node.path] {
@@ -616,7 +617,8 @@ struct RecentCommitsView: View {
                     if node.isDirectory {
                         let key = sectionKey + ":" + node.path
                         let rowID = folderRowID(commit, section: section.name, path: node.path)
-                        rows.append(NavigationRow(id: rowID, parent: parent, action: .folder(key),
+                        rows.append(NavigationRow(id: rowID, parent: parent,
+                            action: .folder(key: key, root: worktree.path, path: node.path),
                             isExpandable: true, isExpanded: node.isExpanded))
                         parents.append((node.path, rowID))
                     } else if let entry = byPath[node.path] {
@@ -692,15 +694,31 @@ struct RecentCommitsView: View {
 
     private var focusedGraphPathActions: FocusedPathActions {
         FocusedPathActions(paths: { absolute in
-            guard isKeyboardActive, keyboardFocused else { return [] }
-            let ids = selection.ids.isEmpty ? Set([focusedRowID].compactMap { $0 }) : selection.ids
+            guard isKeyboardActive, contextRowID != nil || keyboardFocused else { return [] }
+            let ids: Set<String>
+            if let contextRowID {
+                ids = isMultipleSelection(for: contextRowID) ? selection.ids : [contextRowID]
+            } else {
+                ids = selection.ids.isEmpty ? Set([focusedRowID].compactMap { $0 }) : selection.ids
+            }
             let rows = keyboardRows.filter { ids.contains($0.id) }
-            guard !rows.isEmpty, rows.count == ids.count else { return [] }
             var values: [String] = []
+            if rows.isEmpty, ids.count == 1, let contextRowID,
+               contextRowID.contains("\u{0}folder\u{0}"),
+               let commit = commits.first(where: {
+                   contextRowID.hasPrefix(commitRowID($0) + "\u{0}folder\u{0}")
+               }), let path = contextRowID.components(separatedBy: "\u{0}").last {
+                let root = commit.worktree?.path ?? repoRoot
+                return [absolute ? (root as NSString).appendingPathComponent(path) : path]
+            }
+            guard !rows.isEmpty, rows.count == ids.count else { return [] }
             for row in rows {
                 let root: String
                 let path: String
                 switch row.action {
+                case .folder(_, let folderRoot, let folderPath):
+                    root = folderRoot
+                    path = folderPath
                 case .historicalFile(_, let file):
                     root = repoRoot
                     path = file.path
@@ -712,7 +730,7 @@ struct RecentCommitsView: View {
                 values.append(absolute ? (root as NSString).appendingPathComponent(path) : path)
             }
             return values
-        }, revealablePaths: { [] })
+        }, revealablePaths: { [] }, didPerform: { contextRowID = nil })
     }
 
     private func selectContextRow(_ id: String) {
@@ -720,17 +738,16 @@ struct RecentCommitsView: View {
     }
 
     private func dismissContextRow(_ id: String) {
-        if contextRowID == id { contextRowID = nil }
+        guard contextRowID == id else { return }
+        if let event = NSApp.currentEvent, event.type == .keyDown,
+           PathMenuShortcut.badge(for: event) != nil { return }
+        contextRowID = nil
     }
 
     private func contextTarget(for id: String) -> ContextMenuClickTarget {
         ContextMenuClickTarget(
             onContextClick: { selectContextRow(id) },
             onMenuClosed: { dismissContextRow(id) },
-            onMenuKeyDown: { menu, event in
-                guard contextRowID == id, isKeyboardActive else { return false }
-                return PathMenuShortcut.perform(in: menu, event: event)
-            },
             isExpectedMenu: { _ in contextRowID == id }
         )
     }
@@ -745,7 +762,7 @@ struct RecentCommitsView: View {
         switch action {
         case .commit(let commit):
             toggle(commit)
-        case .folder(let key):
+        case .folder(let key, _, _):
             toggleFolder(key)
         case .historicalFile(let commit, let file):
             openDiff(commit, file)
@@ -875,8 +892,8 @@ struct RecentCommitsView: View {
             switch row.action {
             case .commit(let commit):
                 return commit.worktree?.path ?? commit.stash?.selector ?? commit.hash
-            case .folder:
-                return row.id.components(separatedBy: "\u{0}").last
+            case .folder(_, _, let path):
+                return path
             case .historicalFile(_, let file):
                 return file.path
             case .worktreeFile(let worktree, let entry, _):
@@ -1863,10 +1880,6 @@ struct RecentCommitsView: View {
                 contextRowID = context
             },
             onMenuClosed: { dismissContextRow(context) },
-            onMenuKeyDown: { menu, event in
-                guard contextRowID == context, isKeyboardActive else { return false }
-                return PathMenuShortcut.perform(in: menu, event: event)
-            },
             isExpectedMenu: { _ in contextRowID == context }) {
                 folderMenu(path: component.path, root: root, rowID: context)
             })

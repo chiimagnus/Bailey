@@ -19,22 +19,16 @@ enum PathMenuShortcut {
         }
     }
 
-    static func perform(in menu: NSMenu, event: NSEvent) -> Bool {
+    static func badge(for event: NSEvent) -> String? {
         let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        let key = event.charactersIgnoringModifiers?.lowercased()
-        let badge: String
-        switch (key, modifiers) {
-        case ("c", [.command, .option]): badge = copyAbsolute
-        case ("c", [.command, .option, .shift]): badge = copyRelative
-        case ("r", [.command, .option]): badge = reveal
-        default: return false
+        return switch (event.charactersIgnoringModifiers?.lowercased(), modifiers) {
+        case ("c", [.command, .option]): copyAbsolute
+        case ("c", [.command, .option, .shift]): copyRelative
+        case ("r", [.command, .option]): reveal
+        default: nil
         }
-        guard let index = menu.items.firstIndex(where: { $0.isEnabled && $0.badge?.stringValue == badge })
-        else { return false }
-        menu.performActionForItem(at: index)
-        menu.cancelTracking()
-        return true
     }
+
 }
 
 /// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.

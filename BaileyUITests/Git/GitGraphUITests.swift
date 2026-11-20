@@ -57,6 +57,60 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
+    func testGraphFilePathShortcutUsesRightClickTargetThenReturnsToSelection() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("first.txt", text: "first\n")
+        let second = try fixture.file("second.txt", text: "second\n")
+        let nested = try fixture.file("nested/third.txt", text: "third\n")
+        try fixture.initializeGit()
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+        commit.click()
+        let a = historicalFile("first.txt", in: app)
+        let b = historicalFile("second.txt", in: app)
+        XCTAssertTrue(a.waitForExistence(timeout: 12))
+        XCTAssertTrue(b.waitForExistence(timeout: 12))
+
+        if commit.isSelected {
+            XCUIElement.perform(withKeyModifiers: .command) { commit.click() }
+        }
+        XCTAssertFalse(commit.isSelected)
+        XCUIElement.perform(withKeyModifiers: .command) { a.click() }
+        XCTAssertTrue(a.isSelected)
+        b.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "second.txt",
+                       "The main File command must operate on the right-clicked history file")
+        XCTAssertTrue(a.isSelected && !b.isSelected)
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt",
+                       "After the menu ends, the original Git Graph selection owns the shortcut")
+        let folder = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 12))
+        folder.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "nested",
+                       "A graph folder context must supply its actual relative path")
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt")
+
+        XCUIElement.perform(withKeyModifiers: .command) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected)
+        a.rightClick()
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "first.txt\nsecond.txt",
+                       "A context click inside Graph multi-selection must retain the whole set")
+        XCTAssertTrue(a.isSelected && b.isSelected)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: nested), Data("third\n".utf8))
+    }
+
     func testHostedCommitMenuKeepsRemoteSetupOutOfMainPanel() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("hosted.txt", text: "remote context\n")
