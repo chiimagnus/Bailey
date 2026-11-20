@@ -5,6 +5,68 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewTests: XCTestCase {
+    func testMarkdownLinkOpensTheAuthorizedProjectFileAndReusesIt() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let root = temporary.appending(path: "Project")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let origin = root.appending(path: "Origin.md")
+        let destination = root.appending(path: "Linked 图.md")
+        try Data("# Origin".utf8).write(to: origin)
+        try Data("# Linked".utf8).write(to: destination)
+        let outside = temporary.appending(path: "outside.md")
+        try Data("must not be read".utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "out.md"), withDestinationURL: outside)
+        let project = Project(fallbackName: "Project", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        project.openFile(origin.path)
+        guard case .file(let source)? = project.focusedContent else { return XCTFail("Expected Markdown source") }
+        try await source.waitForText()
+        for link in ["out.md", "../outside.md", "file:///etc/hosts", "javascript:alert(1)", "missing.md"] {
+            let opened = await project.openMarkdownLink(try XCTUnwrap(URL(string: link)), from: source) { true }
+            XCTAssertFalse(opened, link)
+        }
+        XCTAssertEqual(project.tabs.count, 1)
+        let link = try XCTUnwrap(URL(string: "Linked%20%E5%9B%BE.md"))
+        let rejected = await project.openMarkdownLink(link, from: source) { false }
+        XCTAssertFalse(rejected)
+        for _ in 0..<2 {
+            let opened = await project.openMarkdownLink(link, from: source) { true }
+            XCTAssertTrue(opened)
+            guard case .file(let linked)? = project.focusedContent else { return XCTFail("Expected linked file") }
+            try await linked.waitForText()
+            XCTAssertEqual(linked.text, "# Linked")
+            XCTAssertEqual(linked.path, destination.path)
+            XCTAssertEqual(project.tabs.count, 2)
+        }
+    }
+
+    func testSavingAndRestoringMarkdownReopensExactBytesWithoutAnEmptyCompanion() async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".md")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        try (bom + Data("# Before\r\n".utf8)).write(to: path)
+        let project = Project(fallbackName: "Project", workspaceConfiguration: .standard)
+        project.openLocalFile(path.path)
+        let tab = try XCTUnwrap(project.focusedTab)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected Markdown source") }
+        try await file.waitForText()
+        let baseline = project.dock.root
+        project.setMarkdownMode(.sideBySide, for: tab)
+        file.text = "# After 👋\r\n"
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), bom + Data("# After 👋\r\n".utf8))
+        let snapshot = project.dock.snapshot(tabIDs: [tab.id])
+        XCTAssertEqual(snapshot.restore(tabIDs: [tab.id]), baseline)
+        let restored = Project(fallbackName: "Restored", workspaceConfiguration: .standard)
+        let restoredTab = restored.restoreTab(from: .init(
+            content: .file(path: path.path, editorState: nil), localFile: true
+        ))
+        guard case .file(let restoredFile) = restoredTab.content else { return XCTFail("Missing restored file") }
+        try await restoredFile.waitForText()
+        XCTAssertEqual(restoredFile.text, "# After 👋\r\n")
+        XCTAssertEqual(restored.markdownMode(for: restoredTab), .source)
+    }
     func testDockCompanionReusesFileTabAndCollapsesWithoutDeactivatingTheDocument() async throws {
         let path = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".md")
         defer { try? FileManager.default.removeItem(at: path) }

@@ -4,7 +4,7 @@ import Textual
 struct MarkdownFilePreview: View {
     let file: FileTab
     let directory: String?
-    let onOpenLink: (URL) -> Void
+    let onOpenLink: (URL) async -> Bool
 
     @State private var parsed: (document: MarkdownDocument, request: String, target: String)?
     @State private var failed = false
@@ -89,7 +89,9 @@ struct MarkdownPreview: View {
     let revision: String
     let resource: MarkdownResource
     @Binding var position: Int?
-    var openLink: (URL) -> Void = { _ in }
+    var openLink: (URL) async -> Bool = { _ in false }
+    @State private var linkToOpen: URL?
+    @State private var failedLink = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -97,6 +99,10 @@ struct MarkdownPreview: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if let warning = document.warning {
                         Label(warning, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                    }
+                    if failedLink {
+                        Label("Could not open this link.", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(document.blocks.indices, id: \.self) { index in
@@ -126,7 +132,7 @@ struct MarkdownPreview: View {
                    let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
                     proxy.scrollTo(index, anchor: .top)
                 } else {
-                    openLink(url)
+                    linkToOpen = url
                 }
                 return .handled
             })
@@ -134,6 +140,13 @@ struct MarkdownPreview: View {
         .textual.imageAttachmentLoader(MarkdownImageLoader(resource: resource))
         .textual.emojiAttachmentLoader(MarkdownImageLoader(resource: resource))
         .accessibilityIdentifier("bailey.markdown.preview")
+        .task(id: linkToOpen) {
+            guard let linkToOpen else { return }
+            let opened = await openLink(linkToOpen)
+            guard !Task.isCancelled else { return }
+            failedLink = !opened
+            self.linkToOpen = nil
+        }
     }
 }
 

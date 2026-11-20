@@ -124,9 +124,24 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     }
 
     @concurrent func read(path: String, maxBytes: Int, confinedTo directory: String) async throws -> Data {
-        guard let root = realpath(directory, nil) else { throw CocoaError(.fileReadNoPermission) }
-        defer { free(root) }
-        return try Self.readSync(path: path, maxBytes: maxBytes, confinedTo: String(cString: root))
+        try Self.readSync(path: path, maxBytes: maxBytes, confinedTo: Self.canonicalPath(directory))
+    }
+
+    @concurrent func checkConfinedFile(_ path: String, in directory: String) async throws {
+        let root = try Self.canonicalPath(directory)
+        let resolved = try Self.canonicalPath(path)
+        guard LocalPathScope.contains(resolved, in: root),
+              Self.statSync(resolved)?.isRegular == true else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+    }
+
+    private static func canonicalPath(_ path: String) throws -> String {
+        guard !path.utf8.contains(0), let resolved = realpath(path, nil) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {

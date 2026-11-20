@@ -11,6 +11,7 @@ struct PanelContentView: View {
     var onNewFileTab: (String) -> Void
     var markdownDirectory: String?
     var rendersOnlyMarkdown = false
+    var onMarkdownLink: (FileTab, URL) async -> Bool = { _, _ in false }
     var onExternalFilesDropped: ([NSItemProvider]) -> Bool = { _ in false }
 
     var body: some View {
@@ -36,11 +37,7 @@ struct PanelContentView: View {
                     file: file, isFocused: isFocused, canFocus: canFocus, onFocused: onFocused,
                     markdownDirectory: markdownDirectory,
                     rendersOnlyMarkdown: rendersOnlyMarkdown,
-                    onMarkdownLink: { url in
-                        guard let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
-                              url.host != nil else { return }
-                        onNewBrowserTab(url.absoluteString)
-                    }
+                    onMarkdownLink: { url in await onMarkdownLink(file, url) }
                 )
                 .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
             case .browser(let browser):

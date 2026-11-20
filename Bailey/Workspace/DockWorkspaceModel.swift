@@ -673,7 +673,9 @@ final class DockWorkspaceModel {
     }
 
     func snapshot(tabIDs: [UUID]) -> DockSavedNode {
-        DockSavedNode(root, tabIDs: tabIDs)
+        let previews = root.groups.flatMap(\.items).filter { if case .markdownPreview = $0 { true } else { false } }
+        let persisted = previews.reduce(root) { layout, item in layout.removing(item) ?? layout }
+        return DockSavedNode(persisted, tabIDs: tabIDs)
     }
 
     func restore(_ saved: DockSavedNode, tabIDs: [UUID]) {

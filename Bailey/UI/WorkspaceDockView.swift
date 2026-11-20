@@ -777,6 +777,11 @@ struct DockTabGroupView: View {
                     onNewFileTab: { manager.openFile($0) },
                     markdownDirectory: markdownDirectory(for: tab),
                     rendersOnlyMarkdown: active == .markdownPreview(id),
+                    onMarkdownLink: { file, url in
+                        await project.openMarkdownLink(url, from: file) {
+                            manager.selectedProject === project && manager.attachedWindow?.isKeyWindow == true
+                        }
+                    },
                     onExternalFilesDropped: { FinderWindowDrop.receive(
                         $0, preferred: manager,
                         destination: (projectID: project.id, groupID: group.id)

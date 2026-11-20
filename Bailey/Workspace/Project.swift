@@ -338,6 +338,31 @@ final class Project: nonisolated Identifiable {
         openFile(path, backend: LocalWorkspaceBackend.shared, workspace: nil, inGroup: groupID)
     }
 
+    func openMarkdownLink(_ url: URL, from file: FileTab, isCurrent: () -> Bool) async -> Bool {
+        guard isCurrent(), file.canPreviewMarkdown, tabs.contains(where: { $0.content.id == file.id }) else {
+            return false
+        }
+        if let scheme = url.scheme?.lowercased() {
+            guard scheme == "http" || scheme == "https", url.host != nil else { return false }
+            newBrowserTab(initialURL: url.absoluteString, initialFocus: .webContent)
+            return true
+        }
+        guard file.workspaceIdentity == workspaceIdentity, let directory = customDirectory else { return false }
+        let resource = file.markdownResource(in: directory)
+        let target = file.markdownResourceID
+        do {
+            let resolved = try await resource.resolvedFile(url)
+            guard !Task.isCancelled, isCurrent(), file.markdownResourceID == target,
+                  directory == customDirectory, file.workspaceIdentity == workspaceIdentity,
+                  tabs.contains(where: { $0.content.id == file.id }) else { return false }
+            openFile(resolved, backend: resource.backend, workspace: file.workspaceIdentity,
+                     inGroup: dock.activeGroupID)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func openFile(
         _ path: String, backend: WorkspaceBackend, workspace: String?,
         editorState: EditorState? = nil, inGroup groupID: UUID? = nil,

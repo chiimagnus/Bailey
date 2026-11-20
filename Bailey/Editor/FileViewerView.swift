@@ -883,7 +883,7 @@ struct FileViewerView: View {
     var onFocused: () -> Void = {}
     var markdownDirectory: String?
     var rendersOnlyMarkdown = false
-    var onMarkdownLink: (URL) -> Void = { _ in }
+    var onMarkdownLink: (URL) async -> Bool = { _ in false }
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes

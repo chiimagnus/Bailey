@@ -39,7 +39,23 @@ nonisolated struct MarkdownResource: Sendable {
         if let local = backend as? LocalWorkspaceBackend {
             return try await local.read(path: candidate, maxBytes: maxBytes, confinedTo: directory)
         }
-        guard maxBytes >= 0, maxBytes < .max else { throw WorkspaceError.tooLarge }
+        return try await remoteResource(candidate, directory: directory, maxBytes: maxBytes)
+    }
+
+    func resolvedFile(_ url: URL) async throws -> String {
+        let candidate = try relativePath(for: url)
+        guard let directory else { throw CocoaError(.fileReadNoPermission) }
+        if let local = backend as? LocalWorkspaceBackend {
+            try await local.checkConfinedFile(candidate, in: directory)
+        } else {
+            _ = try await remoteResource(candidate, directory: directory, maxBytes: nil)
+        }
+        return candidate
+    }
+
+    private func remoteResource(_ candidate: String, directory: String, maxBytes: Int?) async throws -> Data {
+        if let maxBytes, maxBytes < 0 || maxBytes == .max { throw WorkspaceError.tooLarge }
+        let count = maxBytes.map { String($0 + 1) } ?? ""
         let result = try await backend.runLimited(
             argv: ["sh", "-c", """
                 root=$(realpath -- "$1" && printf '.') || exit 1
@@ -47,12 +63,14 @@ nonisolated struct MarkdownResource: Sendable {
                 candidate=$(realpath -- "$2" && printf '.') || exit 1
                 candidate=${candidate%?}; candidate=${candidate%?}
                 [ -n "$root" ] && [ -d "$root" ] && [ -f "$candidate" ] || exit 1
-                case "$candidate" in "${root%/}/"*) head -c "$3" -- "$candidate";; *) exit 1;; esac
-                """, "bailey-markdown", directory, candidate, String(maxBytes + 1)],
-            cwd: nil, env: nil, stdin: nil, timeout: 25, stdoutLimit: maxBytes + 1, stderrLimit: 16_384
+                case "$candidate" in "${root%/}/"*) ;; *) exit 1;; esac
+                if [ -n "$3" ]; then head -c "$3" -- "$candidate"; fi
+                """, "bailey-markdown", directory, candidate, count],
+            cwd: nil, env: nil, stdin: nil, timeout: 25, stdoutLimit: maxBytes.map { $0 + 1 } ?? 0,
+            stderrLimit: 16_384
         )
         guard result.status == 0 else { throw CocoaError(.fileReadNoPermission) }
-        guard result.stdout.count <= maxBytes else { throw WorkspaceError.tooLarge }
+        if let maxBytes, result.stdout.count > maxBytes { throw WorkspaceError.tooLarge }
         return result.stdout
     }
 
