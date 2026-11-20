@@ -157,7 +157,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }) != nil else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
-        let stage = String(cString: template)
+        let stage = String(decoding: template.dropLast().map { UInt8(bitPattern: $0) },
+                           as: UTF8.self)
         defer { try? FileManager.default.removeItem(atPath: stage) }
         let item = stage + "/item"
         try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)

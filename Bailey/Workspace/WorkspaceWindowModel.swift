@@ -1102,7 +1102,6 @@ final class WorkspaceWindowModel {
         switch panel {
         case .files: filesTreeResponder = view
         case .git: gitTreeResponder = view
-        default: break
         }
     }
 

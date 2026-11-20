@@ -37,8 +37,8 @@ struct Scanner {
     for (; serialized_tag_count < tag_count; serialized_tag_count++) {
       Tag &tag = tags[serialized_tag_count];
       if (tag.type == CUSTOM) {
-        unsigned name_length = tag.custom_tag_name.size();
-        if (name_length > UINT8_MAX) name_length = UINT8_MAX;
+        unsigned name_length = tag.custom_tag_name.size() > UINT8_MAX
+            ? UINT8_MAX : static_cast<unsigned>(tag.custom_tag_name.size());
         if (i + 2 + name_length >= TREE_SITTER_SERIALIZATION_BUFFER_SIZE) break;
         buffer[i++] = static_cast<char>(tag.type);
         buffer[i++] = name_length;

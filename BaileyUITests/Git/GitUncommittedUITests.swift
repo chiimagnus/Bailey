@@ -117,7 +117,7 @@ final class GitUncommittedUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         try verifyIsolatedRepository(fixture)
         let committed = try fixture.file("tracked.txt", text: "keep me\n")
-        try fixture.file(".gitignore", text: "*.ignore\n")
+        _ = try fixture.file(".gitignore", text: "*.ignore\n")
         try fixture.initializeGit()
         let head = try fixture.git(["rev-parse", "HEAD"])
         let untracked = try fixture.file("untracked.txt", text: "remove only on approval\n")
