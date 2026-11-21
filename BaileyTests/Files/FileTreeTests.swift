@@ -2531,8 +2531,11 @@ final class FileTreeTests: XCTestCase {
         guard case .copiedWithoutRemoval(let copied, let retained) = outcome else {
             return XCTFail("A read-only source directory cannot authorize deletion, even after a complete copy")
         }
-        XCTAssertEqual(copied, destination.appendingPathComponent("kept.bin").path)
-        XCTAssertEqual(retained, source.path)
+        XCTAssertEqual(try XCTUnwrap(LocalFileIdentity.read(copied)),
+                       try XCTUnwrap(LocalFileIdentity.read(
+                           destination.appendingPathComponent("kept.bin").path)))
+        XCTAssertEqual(try XCTUnwrap(LocalFileIdentity.read(retained)),
+                       try XCTUnwrap(LocalFileIdentity.read(source.path)))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copied)), bytes)
         XCTAssertEqual(try Data(contentsOf: source), bytes)
     }
@@ -2598,7 +2601,9 @@ final class FileTreeTests: XCTestCase {
         guard case .moved(let path) = outcome else {
             return XCTFail("Verified cross-volume file transfer must remove the original")
         }
-        XCTAssertEqual(path, into.appendingPathComponent("cross-volume.bin").path)
+        XCTAssertEqual(try XCTUnwrap(LocalFileIdentity.read(path)),
+                       try XCTUnwrap(LocalFileIdentity.read(
+                           into.appendingPathComponent("cross-volume.bin").path)))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
         XCTAssertNil(LocalFileIdentity.read(source.path))
     }
