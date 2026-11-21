@@ -42,6 +42,7 @@
 资源错误地受当前项目根限制，项目外本机文件点击相对链接也可能被拒绝。
 `18150d59` 修正授权边界：项目内沿用项目根，项目外 Finder 文件仅允许自身父目录；
 链接沿原文件后端打开，不把 SSH 文件误映射到本机。保留 `../` 和符号链接逃逸拦截。
-`MarkdownResourceScopeTests,FileTabPersistenceTests` 共 63 项 Host 测试通过。
+`9beaf227` 补上远端根与 Mac 路径文本恰好相同时的授权隔离；不依赖同名路径推断机器身份。
+`MarkdownResourceScopeTests,FileTabPersistenceTests` 共 63 项 Host 测试通过；新增跨机器同名路径反例和其他集成测试一起进入 135 项合并回归。
 真实 Windows SSH、此组合在多窗口的完整 GUI 仍未独立验收。
 

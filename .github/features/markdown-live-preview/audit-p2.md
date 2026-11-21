@@ -37,9 +37,50 @@
 - 实际 Dev GUI：`details open` 双向切换、HTML h2/ul、相对链接进入原项目标签、相邻内联 HTML 合并通过（`/tmp/bailey-md-deep-gui-green.log`、`/tmp/bailey-md-deep-inline-green2.log`）。
 - HTML 图片几何实际红→绿：SVG 原图 320×120 声明 48×32 时旧行为绘成 48×18，新行为按 48×32；超宽 2000×800 在实际预览区域自适应。输入保持 ASCII 源代码、只改 HTML 属性到 96×16 的 GUI 复验已通过（`/tmp/bailey-deep-source-live-green-gui.log`），截图附于对应 `.xcresult`。
 - 关键根因不在 Markdown：`NativeCodeTextView` 的四项默认自动文本替换会改写源文件，Host 曾 4 项断言失败；现统一关闭，保留既有原生 Undo 和 IME 管线。
+- 先前还漏了两条解析路径：脚注引用顺序及未引用定义（`84411409`），和 Markdown 标题／列表／引用内的 HTML 强调、链接、锚点（`6e2689d2`）；补充原生引用／代码隔离及混排 Host 8+4 项，点击真实文件链接的 Dev GUI 已通过。
+- `9beaf227` 进一步隔离 SSH 项目里 Finder 打开的 Mac 文件，即使路径字符串与远端根同名也不得借用权限。合并后 Markdown／编辑器／Dock／授权 **135 项 Host 通过，0 失败**，对应 `Test-Bailey-2026.11.21_16-28-44-+0800.xcresult`。
 - **仍不宣称**对任意复杂 HTML 达到浏览器逐像素一致，或已完成 VoiceOver、真实中文 IME、Windows SSH、32 MiB 全文 GPU 帧率／内存与长期音视频播放的真实验收。
 
 ## 发现项
+
+## 发现 F-14
+
+- 任务：`P2-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/MarkdownPreview.swift:26`
+- 摘要：`每次窗口激活都会重建整个 Markdown 阅读视图，重置交互与媒体状态`
+- 风险：`源码、滚动和折叠状态不变时，窗口切换却重置 details/媒体并重新布局全部 Markdown；资源刷新不该借用整页身份`
+- 预期修复：`保留窗口激活时读取外部资源的能力，只让实际附件随资源版本刷新，不重建完整 MarkdownPreview`
+- 验证：`Textual WithAttachments.swift；定点 Host；隔离 Bailey Dev 真实窗口激活和并排实时编辑 GUI`
+- 解决证据：`066d2edb: 只重载 Markdown 图片附件和 HTML 图片的加载任务，改用 SwiftUI appearsActive、保持 details 状态；135/135 Host（/tmp/bailey-ponytail-final-host.log），7/7 真实 Bailey Dev GUI（/tmp/bailey-md-focus-clean-gui.log、/tmp/bailey-ponytail-final-gui5.log），正式 make build 与 codesign --verify --deep --strict 通过（/tmp/bailey-ponytail-final-build.log），均退出 0。`
+
+
+## 发现 F-13
+
+- 任务：`P2-T4`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/MarkdownFootnotes.swift:13`
+- 摘要：`脚注持久保存两份完整 Note 数组，其中定义数组仅用于行号过滤`
+- 风险：`重复保存未展示的脚注定义对象，并保留易误读的定义顺序编号`
+- 预期修复：`定义收集阶段仅保留已用的索引及源码定义行集合，继续只保存实际引用的最终脚注`
+- 验证：`make test:MarkdownFootnotesTests,MarkdownPreviewTests`
+- 解决证据：`git commit HEAD: 精简定义 Note 数组；make test:MarkdownFootnotesTests,MarkdownPreviewTests，25/25，/tmp/bailey-footnotes-debt-final.log`
+
+
+## 发现 F-12
+
+- 任务：`P2-T1`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/MarkdownPreview.swift:135`
+- 摘要：`每个 Markdown 块重复设置相同版本 id，强制重建 Textual 状态`
+- 风险：`Textual 已在 markup 变化时更新预解析内容，额外 id 导致视图身份和图片附件不必要重置，增加实时编辑重绘成本`
+- 预期修复：`保留 StructuredText 的版本输入和外层唯一块 ID，删除重复的内部版本 id，验证真实实时更新/滚动`
+- 验证：`Textual upstream StructuredText.swift; make test:MarkdownPreviewTests; make test:ui ONLY_TESTING=BaileyUITests/MarkdownPreviewUITests`
+- 解决证据：`独立提交删除内层 id(revision)；101 Host（/tmp/bailey-ponytail-host.log），HTML 链接／图片实时渲染 GUI 2 项（/tmp/bailey-ponytail-gui.log），并排单测复跑 1/1（/tmp/bailey-side-by-side-isolated.log）；联合 UI 运行的临时输入污染失败另记录。`
+
 
 ## 发现 F-11
 
