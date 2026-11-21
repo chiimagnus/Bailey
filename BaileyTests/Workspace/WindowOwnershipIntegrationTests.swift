@@ -41,9 +41,9 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         anotherWindow.addLocalFolders([root])
         let otherProject = try XCTUnwrap(anotherWindow.selectedProject)
         let otherTarget = try XCTUnwrap(otherProject.panelContext?.identity)
-        XCTAssertFalse(
+        XCTAssertTrue(
             anotherWindow.canPasteFileTree(in: otherProject, target: otherTarget, pasteboard: pasteboard),
-            "A system Paste menu must not offer files from another project"
+            "A local file URL is copyable into another local project"
         )
         manager.performFileTreeCommand(
             .paste(into: into.path), in: project, target: target,
@@ -56,6 +56,651 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertFalse(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
         XCTAssertEqual(pasteboard.string(forType: .string), source.path,
                        "Completed cut must preserve plain-text paths but remove stale transfer metadata")
+    }
+
+    func testLocalClipboardCopiesAndMovesAcrossProjectsAndWindows() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = base.appendingPathComponent("Project A")
+        let secondRoot = base.appendingPathComponent("Project B")
+        let receiving = secondRoot.appendingPathComponent("receiving")
+        for folder in [firstRoot, receiving] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = firstRoot.appendingPathComponent("跨项目 file.txt")
+        let contents = Data("cross-project document 中文\n".utf8)
+        try contents.write(to: source)
+
+        let origin = workspaceApplication.makeWindow()
+        let anotherEditor = workspaceApplication.makeWindow()
+        let destination = workspaceApplication.makeWindow()
+        defer {
+            origin.windowClosed()
+            anotherEditor.windowClosed()
+            destination.windowClosed()
+        }
+        origin.addLocalFolders([firstRoot])
+        anotherEditor.addLocalFolders([firstRoot])
+        destination.addLocalFolders([secondRoot])
+        let a = try XCTUnwrap(origin.selectedProject)
+        let b = try XCTUnwrap(destination.selectedProject)
+        let aTarget = try XCTUnwrap(a.panelContext?.identity)
+        let bTarget = try XCTUnwrap(b.panelContext?.identity)
+        await a.fileTree.sync(root: firstRoot.path, backend: LocalWorkspaceBackend.shared)
+        await b.fileTree.sync(root: secondRoot.path, backend: LocalWorkspaceBackend.shared)
+        anotherEditor.openFile(source.path)
+        guard case .file(let opened)? = anotherEditor.selectedProject?.selectedTab?.content else {
+            return XCTFail("Expected an open document in a second window")
+        }
+        try await opened.waitForText()
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        origin.performFileTreeCommand(
+            .copy([source.path], cut: false), in: a, target: aTarget, pasteboard: pasteboard
+        )
+        XCTAssertTrue(destination.canPasteFileTree(in: b, target: bTarget, pasteboard: pasteboard))
+        destination.performFileTreeCommand(
+            .paste(into: secondRoot.path), in: b, target: bTarget, pasteboard: pasteboard
+        )
+        let copied = secondRoot.appendingPathComponent(source.lastPathComponent)
+        try await wait { FileManager.default.fileExists(atPath: copied.path) }
+        XCTAssertEqual(try Data(contentsOf: copied), contents)
+        XCTAssertEqual(try Data(contentsOf: source), contents)
+        XCTAssertEqual(opened.path, source.path, "Copy never remaps an open source file")
+
+        origin.performFileTreeCommand(
+            .copy([source.path], cut: true), in: a, target: aTarget, pasteboard: pasteboard
+        )
+        destination.performFileTreeCommand(
+            .paste(into: receiving.path), in: b, target: bTarget, pasteboard: pasteboard
+        )
+        let moved = receiving.appendingPathComponent(source.lastPathComponent)
+        try await wait { FileManager.default.fileExists(atPath: moved.path) }
+        try await wait { !FileManager.default.fileExists(atPath: source.path) }
+        try await wait { opened.path == moved.path }
+        try await wait { FileTreeClipboard.read(from: pasteboard) == nil }
+        try await wait { !a.fileTree.items.contains(where: { $0.path == source.path }) }
+        XCTAssertEqual(try Data(contentsOf: moved), contents)
+        XCTAssertEqual(try Data(contentsOf: copied), contents)
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertEqual(origin.selectedProjectID, a.id)
+        XCTAssertEqual(destination.selectedProjectID, b.id)
+    }
+
+    func testFinderStyleFileURLsPasteAsCopyButExplicitMoveRemovesOnlyOriginal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let outside = root.appendingPathComponent("Finder source")
+        let projectRoot = root.appendingPathComponent("Project")
+        let copiedInto = projectRoot.appendingPathComponent("copied")
+        let movedInto = projectRoot.appendingPathComponent("moved")
+        for folder in [outside, copiedInto, movedInto] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = outside.appendingPathComponent("报告 🧪.bin")
+        let directory = outside.appendingPathComponent("empty dir")
+        let symlink = outside.appendingPathComponent("dangling-link")
+        let bytes = Data([127, 0, 10, 255])
+        try bytes.write(to: file)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(atPath: symlink.path, withDestinationPath: "missing")
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([projectRoot])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: projectRoot.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertTrue(FileTreeClipboard.writeLocalFiles([file.path, directory.path, symlink.path], to: pasteboard))
+        XCTAssertNil(FileTreeClipboard.read(from: pasteboard), "Finder does not supply private tokens")
+        XCTAssertTrue(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
+        manager.performFileTreeCommand(
+            .paste(into: copiedInto.path), in: project, target: target, pasteboard: pasteboard
+        )
+        try await wait {
+            [file, directory, symlink].allSatisfy {
+                LocalFileIdentity.read(copiedInto.appendingPathComponent($0.lastPathComponent).path) != nil
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: copiedInto.appendingPathComponent(file.lastPathComponent)), bytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertNotNil(LocalFileIdentity.read(symlink.path))
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard).count, 3)
+
+        manager.performFileTreeCommand(
+            .paste(into: movedInto.path, move: true), in: project, target: target,
+            pasteboard: pasteboard
+        )
+        try await wait {
+            [file, directory, symlink].allSatisfy {
+                LocalFileIdentity.read(movedInto.appendingPathComponent($0.lastPathComponent).path) != nil
+            }
+        }
+        try await wait { !FileTreeClipboard.canReadFiles(from: pasteboard) }
+        for source in [file, directory, symlink] {
+            XCTAssertNil(LocalFileIdentity.read(source.path))
+        }
+        XCTAssertEqual(try Data(contentsOf: movedInto.appendingPathComponent(file.lastPathComponent)), bytes)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(
+            atPath: movedInto.appendingPathComponent(symlink.lastPathComponent).path
+        ), "missing")
+    }
+
+    func testForeignOrTamperedCutRecordCannotAuthorizeDeletion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = root.appendingPathComponent("A")
+        let secondRoot = root.appendingPathComponent("B")
+        for folder in [firstRoot, secondRoot] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = firstRoot.appendingPathComponent("keep.txt")
+        try Data("original source".utf8).write(to: file)
+        let origin = workspaceApplication.makeWindow()
+        let destination = workspaceApplication.makeWindow()
+        defer { origin.windowClosed(); destination.windowClosed() }
+        origin.addLocalFolders([firstRoot])
+        destination.addLocalFolders([secondRoot])
+        let sourceProject = try XCTUnwrap(origin.selectedProject)
+        let targetProject = try XCTUnwrap(destination.selectedProject)
+        let a = try XCTUnwrap(sourceProject.panelContext?.identity)
+        let b = try XCTUnwrap(targetProject.panelContext?.identity)
+        await sourceProject.fileTree.sync(root: firstRoot.path, backend: LocalWorkspaceBackend.shared)
+        await targetProject.fileTree.sync(root: secondRoot.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+
+        origin.performFileTreeCommand(
+            .copy([file.path], cut: true), in: sourceProject, target: a, pasteboard: pasteboard
+        )
+        let originalRecord = try XCTUnwrap(FileTreeClipboard.read(from: pasteboard))
+        XCTAssertTrue(workspaceApplication.trustedFileClipboard(originalRecord, pasteboard: pasteboard))
+        // A second pasteboard writer changes the version even if it copies the token byte-for-byte.
+        XCTAssertTrue(FileTreeClipboard.write(originalRecord, local: true, to: pasteboard))
+        XCTAssertFalse(workspaceApplication.trustedFileClipboard(originalRecord, pasteboard: pasteboard))
+        destination.performFileTreeCommand(
+            .paste(into: secondRoot.path), in: targetProject, target: b, pasteboard: pasteboard
+        )
+        let result = secondRoot.appendingPathComponent("keep.txt")
+        try await wait { FileManager.default.fileExists(atPath: result.path) }
+        XCTAssertEqual(try Data(contentsOf: result), Data("original source".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), Data("original source".utf8))
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard), originalRecord)
+
+        // A newly constructed application registry cannot authorize the prior cut.
+        let restarted = WorkspaceApplication()
+        let newWindow = restarted.makeWindow()
+        defer { newWindow.windowClosed() }
+        let thirdRoot = root.appendingPathComponent("C")
+        try FileManager.default.createDirectory(at: thirdRoot, withIntermediateDirectories: true)
+        newWindow.addLocalFolders([thirdRoot])
+        let thirdProject = try XCTUnwrap(newWindow.selectedProject)
+        let c = try XCTUnwrap(thirdProject.panelContext?.identity)
+        await thirdProject.fileTree.sync(root: thirdRoot.path, backend: LocalWorkspaceBackend.shared)
+        newWindow.performFileTreeCommand(
+            .paste(into: thirdRoot.path), in: thirdProject, target: c, pasteboard: pasteboard
+        )
+        try await wait { FileManager.default.fileExists(atPath: thirdRoot.appendingPathComponent(file.lastPathComponent).path) }
+        XCTAssertEqual(try Data(contentsOf: file), Data("original source".utf8))
+    }
+
+    func testCopyFromDirtyEditorLeavesDraftIntactAndCopiesSavedDiskBytes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let copiedInto = root.appendingPathComponent("copied")
+        try FileManager.default.createDirectory(at: copiedInto, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("working.txt")
+        try Data("saved".utf8).write(to: source)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(source.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        guard case .file(let file)? = project.selectedTab?.content else {
+            return XCTFail("Open file required")
+        }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "unsaved editor draft"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: false), in: project, target: target, pasteboard: pasteboard
+        )
+        manager.performFileTreeCommand(
+            .paste(into: copiedInto.path), in: project, target: target, pasteboard: pasteboard
+        )
+        let copied = copiedInto.appendingPathComponent("working.txt")
+        try await wait { FileManager.default.fileExists(atPath: copied.path) }
+        XCTAssertEqual(try Data(contentsOf: copied), Data("saved".utf8))
+        XCTAssertEqual(try Data(contentsOf: source), Data("saved".utf8))
+        XCTAssertEqual(file.text, "unsaved editor draft")
+        XCTAssertTrue(file.isDirty, "Copy must never force-save or discard an editor draft")
+    }
+
+    func testCutMoveSavesDirtyEditorBeforeMovingTheRealFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destinationFolder = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(
+            at: destinationFolder, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("draft.txt")
+        try Data("original disk bytes".utf8).write(to: source)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(source.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        guard case .file(let file)? = project.selectedTab?.content else {
+            return XCTFail("An open editor is required")
+        }
+        try await file.waitForText()
+        file.text = "new saved content from Bailey"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target, pasteboard: pasteboard
+        )
+        manager.performFileTreeCommand(
+            .paste(into: destinationFolder.path), in: project, target: target,
+            pasteboard: pasteboard
+        )
+        let moved = destinationFolder.appendingPathComponent(source.lastPathComponent)
+        try await wait { LocalFileIdentity.read(moved.path) != nil }
+        try await wait { LocalFileIdentity.read(source.path) == nil }
+        try await wait { file.path == moved.path }
+        XCTAssertEqual(try Data(contentsOf: moved), Data("new saved content from Bailey".utf8))
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+    }
+
+    func testExternalPartialMoveKeepsOnlyLiveFinderFileURLsForRetry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let outside = root.appendingPathComponent("Finder")
+        let projectRoot = root.appendingPathComponent("Bailey")
+        for folder in [outside, projectRoot] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = outside.appendingPathComponent("one.txt")
+        let second = outside.appendingPathComponent("two.txt")
+        try Data("one".utf8).write(to: first)
+        try Data("two".utf8).write(to: second)
+        let conflict = projectRoot.appendingPathComponent("two.txt")
+        try Data("original target".utf8).write(to: conflict)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([projectRoot])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: projectRoot.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertTrue(FileTreeClipboard.writeLocalFiles([first.path, second.path], to: pasteboard))
+        manager.performFileTreeCommand(
+            .paste(into: projectRoot.path, move: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        try await wait { FileManager.default.fileExists(atPath: projectRoot.appendingPathComponent("one.txt").path) }
+        try await wait { FileTreeClipboard.localURLs(from: pasteboard).map(\.path) == [second.path] }
+        XCTAssertNil(LocalFileIdentity.read(first.path))
+        XCTAssertNotNil(LocalFileIdentity.read(second.path))
+        XCTAssertEqual(try Data(contentsOf: conflict), Data("original target".utf8))
+        XCTAssertNil(FileTreeClipboard.read(from: pasteboard), "Finder partials stay public URLs")
+        try FileManager.default.removeItem(at: conflict)
+        manager.performFileTreeCommand(
+            .paste(into: projectRoot.path, move: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        try await wait { LocalFileIdentity.read(second.path) == nil }
+        try await wait { !FileTreeClipboard.canReadFiles(from: pasteboard) }
+        XCTAssertEqual(try Data(contentsOf: projectRoot.appendingPathComponent("two.txt")),
+                       Data("two".utf8))
+    }
+
+    func testMovingSymlinkDoesNotSaveItsUnrelatedDirtyTarget() async throws {
+        for (viaClipboard, openedThroughLink) in [(true, false), (false, false), (true, true), (false, true)] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let destination = root.appendingPathComponent("destination")
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let actual = root.appendingPathComponent("target.txt")
+            let link = root.appendingPathComponent("link.txt")
+            try Data("saved bytes".utf8).write(to: actual)
+            try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "target.txt")
+
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            manager.openFile(openedThroughLink ? link.path : actual.path)
+            let project = try XCTUnwrap(manager.selectedProject)
+            let target = try XCTUnwrap(project.panelContext?.identity)
+            await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+            guard case .file(let file)? = project.selectedTab?.content else {
+                return XCTFail("An open editor of the symlink target is required")
+            }
+            try await file.waitForText()
+            file.text = "unsaved draft"
+            file.refreshDirtyState()
+            XCTAssertTrue(file.isDirty)
+
+            if viaClipboard {
+                let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+                manager.performFileTreeCommand(
+                    .copy([link.path], cut: true), in: project, target: target, pasteboard: pasteboard
+                )
+                manager.performFileTreeCommand(
+                    .paste(into: destination.path), in: project, target: target,
+                    pasteboard: pasteboard
+                )
+            } else {
+                let batch = await manager.performFileOperation(
+                    .move, paths: [link.path], into: destination.path,
+                    in: project, target: target
+                )
+                XCTAssertTrue(batch.failures.isEmpty)
+            }
+
+            let moved = destination.appendingPathComponent("link.txt")
+            try await wait { LocalFileIdentity.read(moved.path) != nil }
+            XCTAssertNil(LocalFileIdentity.read(link.path))
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: moved.path),
+                           "target.txt")
+            XCTAssertEqual(try Data(contentsOf: actual), Data("saved bytes".utf8),
+                           "Moving a link entry must not commit the target editor's draft")
+            XCTAssertEqual(file.path, openedThroughLink ? moved.path : actual.path)
+            XCTAssertTrue(file.isDirty, "The editor's unsaved draft must survive the link move")
+        }
+    }
+
+    func testPartialCutCannotReauthorizeAReplacedSourceForRetry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("a.txt")
+        let replaced = root.appendingPathComponent("b.txt")
+        try Data("first".utf8).write(to: first)
+        try Data("original second".utf8).write(to: replaced)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(
+            .copy([first.path, replaced.path], cut: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        manager.performFileTreeCommand(
+            .paste(into: destination.path),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        try FileManager.default.removeItem(at: replaced)
+        try Data("new second inode".utf8).write(to: replaced)
+
+        try await wait { LocalFileIdentity.read(first.path) == nil }
+        try await wait {
+            FileTreeClipboard.localURLs(from: pasteboard).map(\.path) == [replaced.path]
+        }
+        XCTAssertEqual(try Data(contentsOf: replaced), Data("new second inode".utf8))
+        XCTAssertNil(LocalFileIdentity.read(destination.appendingPathComponent("b.txt").path))
+        XCTAssertNil(FileTreeClipboard.read(from: pasteboard),
+                     "A partial cut must not create a fresh delete authorization for a replaced file")
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("a.txt")),
+                       Data("first".utf8))
+    }
+
+    func testCutMoveDirectoryAllowsProtectedDirtyDescendantSave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sourceDirectory = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        for folder in [sourceDirectory, destination] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let child = sourceDirectory.appendingPathComponent("child.txt")
+        try Data("original".utf8).write(to: child)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(child.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        guard case .file(let file)? = project.selectedTab?.content else {
+            return XCTFail("A real open descendant editor is required")
+        }
+        try await file.waitForText()
+        file.text = "saved by Bailey"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(
+            .copy([sourceDirectory.path], cut: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        manager.performFileTreeCommand(
+            .paste(into: destination.path),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        let moved = destination.appendingPathComponent("source/child.txt")
+        try await wait { LocalFileIdentity.read(moved.path) != nil }
+        try await wait { LocalFileIdentity.read(sourceDirectory.path) == nil }
+        XCTAssertEqual(try Data(contentsOf: moved), Data("saved by Bailey".utf8))
+        XCTAssertEqual(file.path, moved.path)
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testQueuedDirectoryCutRejectsReplacementBeforeProtectedEditorSave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sourceDirectory = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        for folder in [sourceDirectory, destination] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let child = sourceDirectory.appendingPathComponent("child.txt")
+        try Data("original".utf8).write(to: child)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(child.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        guard case .file(let file)? = project.selectedTab?.content else {
+            return XCTFail("A real open descendant editor is required")
+        }
+        try await file.waitForText()
+        file.text = "unsaved draft"
+        file.refreshDirtyState()
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(
+            .copy([sourceDirectory.path], cut: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        manager.performFileTreeCommand(
+            .paste(into: destination.path),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        try FileManager.default.removeItem(at: sourceDirectory)
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: child)
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(try Data(contentsOf: child), Data("original".utf8),
+                       "A stale move must not save the dirty draft over a substituted file")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("source").path
+        ), "A directory created after the cut must not be moved")
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testQueuedExplicitMoveRejectsAReplacedSourceEntity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.txt")
+        try Data("old bytes".utf8).write(to: source)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertTrue(FileTreeClipboard.writeLocalFiles([source.path], to: pasteboard))
+
+        manager.performFileTreeCommand(
+            .paste(into: destination.path, move: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        // The queued Task has not reached the backend: replace the original inode.
+        try FileManager.default.removeItem(at: source)
+        try Data("different entity".utf8).write(to: source)
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(try Data(contentsOf: source), Data("different entity".utf8),
+                       "The command must not delete a file created after the user requested the move")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("source.txt").path
+        ))
+    }
+
+    func testClipboardChangeCancelsQueuedImplicitCutBeforeAnyDeletion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("original.txt")
+        try Data("keep this file".utf8).write(to: source)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target, pasteboard: pasteboard
+        )
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard))
+        manager.performFileTreeCommand(
+            .paste(into: destination.path), in: project, target: target, pasteboard: pasteboard
+        )
+        // Change the pasteboard before the queued operation enters the backend.
+        pasteboard.declareTypes([.string], owner: nil)
+        XCTAssertTrue(pasteboard.setString("new clipboard content", forType: .string))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(try Data(contentsOf: source), Data("keep this file".utf8))
+        XCTAssertNil(LocalFileIdentity.read(destination.appendingPathComponent("original.txt").path))
+        XCTAssertEqual(pasteboard.string(forType: .string), "new clipboard content")
+    }
+
+    func testClipboardFromAnotherAppIsNotOverwrittenAfterPendingMove() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let from = root.appendingPathComponent("source")
+        let into = root.appendingPathComponent("destination")
+        for folder in [from, into] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = from.appendingPathComponent("item.txt")
+        try Data("safe bytes".utf8).write(to: file)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([into])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: into.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertTrue(FileTreeClipboard.writeLocalFiles([file.path], to: pasteboard))
+        manager.performFileTreeCommand(
+            .paste(into: into.path, move: true),
+            in: project, target: target, pasteboard: pasteboard
+        )
+        pasteboard.declareTypes([.string], owner: nil)
+        XCTAssertTrue(pasteboard.setString("new clipboard owner", forType: .string))
+        try await wait { LocalFileIdentity.read(file.path) == nil }
+        XCTAssertEqual(try Data(contentsOf: into.appendingPathComponent("item.txt")),
+                       Data("safe bytes".utf8))
+        XCTAssertEqual(pasteboard.string(forType: .string), "new clipboard owner")
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+    }
+
+    func testNativeFileDetectionUsesTypesOnlyAcrossMixedPasteboardItems() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("visible file 🧪.txt")
+        try Data("content".utf8).write(to: source)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let text = NSPasteboardItem()
+        text.setString("file:///tmp/not-a-real-file-item", forType: .string)
+        let file = NSPasteboardItem()
+        file.setString(source.absoluteString, forType: .fileURL)
+        XCTAssertTrue(pasteboard.writeObjects([text, file]))
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard),
+                      "File types may coexist with unrelated text items")
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard).map(\.path), [source.path])
+        XCTAssertNil(FileTreeClipboard.read(from: pasteboard))
+    }
+
+    func testPlainTextAndWebsiteURLsDoNotBecomeLocalFileClipboardSources() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.declareTypes([.string], owner: nil)
+        XCTAssertTrue(pasteboard.setString("file:///tmp/untrusted.txt", forType: .string))
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertTrue(FileTreeClipboard.localURLs(from: pasteboard).isEmpty)
+
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setString("https://example.org/file.txt", forType: .URL)
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertTrue(FileTreeClipboard.localURLs(from: pasteboard).isEmpty)
+
+        pasteboard.clearContents()
+        let remoteHostItem = NSPasteboardItem()
+        remoteHostItem.setString("file://external.example.invalid/tmp/untrusted.txt", forType: .fileURL)
+        XCTAssertTrue(pasteboard.writeObjects([remoteHostItem]))
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard),
+                      "The menu may inspect types without reading file contents")
+        XCTAssertTrue(FileTreeClipboard.localURLs(from: pasteboard).isEmpty,
+                      "Only localhost file URLs can become disk sources")
+
+        pasteboard.clearContents()
+        let malformedFile = NSPasteboardItem()
+        malformedFile.setString("not a valid file URL", forType: .fileURL)
+        XCTAssertTrue(pasteboard.writeObjects([malformedFile]))
+        XCTAssertTrue(FileTreeClipboard.localURLs(from: pasteboard).isEmpty)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertTrue(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard),
+                      "The menu only checks a file type; the actual paste rejects malformed URLs")
+        pasteboard.declareTypes([.string], owner: nil)
+        XCTAssertTrue(pasteboard.setString("purely textual path", forType: .string))
+        XCTAssertFalse(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
     }
 
     func testFilesMultiSelectionCommandTargetsReachClipboardAndDiskWhenFocusMovesOutside() async throws {
@@ -156,6 +801,18 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second), Data("b".utf8))
         XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("b.txt")),
                        Data("occupied".utf8))
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard).map(\.path), [second.path])
+        XCTAssertTrue(workspaceApplication.trustedFileClipboard(
+            try XCTUnwrap(FileTreeClipboard.read(from: pasteboard)), pasteboard: pasteboard
+        ))
+        try FileManager.default.removeItem(at: destination.appendingPathComponent("b.txt"))
+        owner.performFileTreeCommand(
+            .paste(into: destination.path), in: project, target: identity, pasteboard: pasteboard
+        )
+        try await wait { !FileManager.default.fileExists(atPath: second.path) }
+        try await wait { FileTreeClipboard.read(from: pasteboard) == nil }
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("b.txt")),
+                       Data("b".utf8))
     }
 
     func testFileTreeClipboardRecordRoundTripsUnicodeWithoutGlobalPasteboard() {
@@ -170,6 +827,78 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         pasteboard.declareTypes([.string], owner: nil)
         pasteboard.setString("not a file transfer", forType: .string)
         XCTAssertNil(FileTreeClipboard.read(from: pasteboard))
+    }
+
+    func testLocalFileClipboardWritesNativeFileItemsAndRemoteKeepsPrivateOnly() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("中文 with spaces\n.txt")
+        let directory = root.appendingPathComponent("empty folder")
+        let link = root.appendingPathComponent("dangling")
+        try Data([0, 1, 255]).write(to: file)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "missing")
+        let paths = [file.path, directory.path, link.path]
+        let record = FileTreeClipboard.Record(
+            token: UUID(), project: UUID(), identity: "local", root: root.path,
+            connectionRevision: nil, paths: paths, cut: false
+        )
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertTrue(FileTreeClipboard.write(record, local: true, to: pasteboard))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, paths.count)
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard), record)
+        XCTAssertEqual(pasteboard.string(forType: .string), paths.joined(separator: "\n"))
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard).map(\.path), paths)
+        XCTAssertTrue(pasteboard.pasteboardItems?.allSatisfy {
+            $0.types.contains(.fileURL)
+        } == true)
+
+        let remote = FileTreeClipboard.Record(
+            token: UUID(), project: UUID(), identity: "ssh:remote", root: "/home",
+            connectionRevision: 7, paths: ["/home/secrets.txt"], cut: true
+        )
+        XCTAssertTrue(FileTreeClipboard.write(remote, local: false, to: pasteboard))
+        XCTAssertFalse(FileTreeClipboard.canReadFiles(from: pasteboard))
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard), [])
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard), remote)
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1)
+    }
+
+    func testClipboardCutTrustRequiresLiveProcessVersionSourceIdentityAndProject() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.txt")
+        try Data("before".utf8).write(to: source)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target, pasteboard: pasteboard
+        )
+        let record = try XCTUnwrap(FileTreeClipboard.read(from: pasteboard))
+        XCTAssertTrue(workspaceApplication.trustedFileClipboard(record, pasteboard: pasteboard))
+        XCTAssertTrue(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+
+        XCTAssertTrue(FileTreeClipboard.write(record, local: true, to: pasteboard))
+        XCTAssertFalse(workspaceApplication.trustedFileClipboard(record, pasteboard: pasteboard),
+                       "A copied private record and UUID do not authorize a move")
+        XCTAssertTrue(FileTreeClipboard.canReadFiles(from: pasteboard))
+
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target, pasteboard: pasteboard
+        )
+        let current = try XCTUnwrap(FileTreeClipboard.read(from: pasteboard))
+        try Data("modified after cut".utf8).write(to: source)
+        XCTAssertFalse(workspaceApplication.trustedFileClipboard(current, pasteboard: pasteboard))
     }
 
     func testRenamingViaProjectRootSymlinkUpdatesCanonicalPathInAnotherWindow() async throws {

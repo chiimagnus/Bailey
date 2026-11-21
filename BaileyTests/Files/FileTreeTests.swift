@@ -2418,6 +2418,388 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue([bytes, Data("other".utf8)].contains(try Data(contentsOf: racing)))
     }
 
+    func testUnifiedLocalCopyAndFinderUseOneNumberingPolicy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("报告.txt")
+        let directory = root.appendingPathComponent("directory")
+        try Data([0, 255, 17]).write(to: file)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let backend = LocalWorkspaceBackend.shared
+
+        let first = await backend.transferLocalFiles([file], into: root.path)
+        let second = await backend.transferLocalFiles([file], into: root.path)
+        XCTAssertEqual(first.copied, [root.appendingPathComponent("报告 copy.txt").path])
+        XCTAssertEqual(second.copied, [root.appendingPathComponent("报告 copy 2.txt").path])
+        XCTAssertTrue(first.failures.isEmpty)
+        XCTAssertTrue(second.failures.isEmpty)
+
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let internalCopy = await tree.performFileOperation(.copy, paths: [file.path], into: root.path)
+        XCTAssertEqual(internalCopy.succeeded.first?.destination,
+                       root.appendingPathComponent("报告 copy 3.txt").path)
+        for name in ["报告.txt", "报告 copy.txt", "报告 copy 2.txt", "报告 copy 3.txt"] {
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name)), Data([0, 255, 17]))
+        }
+        let folderCopy = await backend.transferLocalFiles([directory], into: root.path)
+        XCTAssertEqual(folderCopy.copied, [root.appendingPathComponent("directory copy").path])
+        let forbidden = await backend.transferLocalFiles([directory], into: directory.path)
+        XCTAssertTrue(forbidden.copied.isEmpty)
+        XCTAssertEqual(forbidden.failures.count, 1)
+    }
+
+    func testLocalCopyPreservesPermissionsTimesAndExtendedAttributes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let into = root.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("binary.dat")
+        let content = Data((0..<1_048_576).map { UInt8(truncatingIfNeeded: $0) })
+        try content.write(to: original)
+        try FileManager.default.setAttributes([
+            .posixPermissions: 0o640,
+            .modificationDate: Date(timeIntervalSince1970: 1_700_000_000)
+        ], ofItemAtPath: original.path)
+        let attribute = Data("custom-marker".utf8)
+        let written = attribute.withUnsafeBytes { bytes in
+            original.path.withCString { path in
+                "com.chiimagnus.bailey.test".withCString { key in
+                    setxattr(path, key, bytes.baseAddress, attribute.count, 0, 0)
+                }
+            }
+        }
+        XCTAssertEqual(written, 0)
+        let result = await LocalWorkspaceBackend.shared.transferLocalFiles([original], into: into.path)
+        XCTAssertEqual(result.copied.count, 1, result.failures.joined(separator: "\n"))
+        let copied = into.appendingPathComponent("binary.dat")
+        XCTAssertEqual(try Data(contentsOf: copied), content)
+        let sourceInfo = try XCTUnwrap(LocalFileIdentity.read(original.path))
+        let copyInfo = try XCTUnwrap(LocalFileIdentity.read(copied.path))
+        XCTAssertEqual(sourceInfo.mode & 0o7777, copyInfo.mode & 0o7777)
+        XCTAssertEqual(sourceInfo.modifiedSeconds, copyInfo.modifiedSeconds)
+        XCTAssertEqual(sourceInfo.modifiedNanoseconds, copyInfo.modifiedNanoseconds)
+        var copiedAttribute = [UInt8](repeating: 0, count: attribute.count)
+        let read = copiedAttribute.withUnsafeMutableBufferPointer { bytes in
+            copied.path.withCString { path in
+                "com.chiimagnus.bailey.test".withCString { key in
+                    getxattr(path, key, bytes.baseAddress, bytes.count, 0, 0)
+                }
+            }
+        }
+        XCTAssertEqual(read, attribute.count)
+        XCTAssertEqual(Data(copiedAttribute), attribute)
+    }
+
+    /// Only a purpose-built test disk image can activate these destructive tests.
+    private func mountedClipboardTestVolume() throws -> URL {
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let marker = project.appendingPathComponent("build/.file-clipboard-test-volume")
+        guard let mount = try? String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              (mount.hasPrefix("/private/tmp/bailey-clipboard-vol.") ||
+                  mount.hasPrefix("/tmp/bailey-clipboard-vol.")),
+              mount.hasSuffix("/mounted") else {
+            throw XCTSkip("Requires an isolated mounted test volume; never a user volume")
+        }
+        return URL(fileURLWithPath: mount)
+    }
+
+    func testCrossVolumeFailedSourceRemovalReportsVerifiedCopyAndPreservesSource() async throws {
+        let mount = try mountedClipboardTestVolume()
+        let readonlyParent = mount.appendingPathComponent("readonly-" + UUID().uuidString)
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-CrossVolume-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: readonlyParent, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: readonlyParent.path)
+            try? FileManager.default.removeItem(at: readonlyParent)
+            try? FileManager.default.removeItem(at: destination)
+        }
+        let source = readonlyParent.appendingPathComponent("kept.bin")
+        let bytes = Data((0..<1_048_576).map { UInt8(truncatingIfNeeded: $0) })
+        try bytes.write(to: source)
+        XCTAssertNotEqual(try XCTUnwrap(LocalFileIdentity.read(source.path)).device,
+                          try XCTUnwrap(LocalFileIdentity.read(destination.path)).device)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: readonlyParent.path)
+        let outcome = try await LocalWorkspaceBackend.shared.transferLocalFile(
+            from: source.path, into: destination.path, move: true
+        )
+        guard case .copiedWithoutRemoval(let copied, let retained) = outcome else {
+            return XCTFail("A read-only source directory cannot authorize deletion, even after a complete copy")
+        }
+        XCTAssertEqual(try XCTUnwrap(LocalFileIdentity.read(copied)),
+                       try XCTUnwrap(LocalFileIdentity.read(
+                           destination.appendingPathComponent("kept.bin").path)))
+        XCTAssertEqual(try XCTUnwrap(LocalFileIdentity.read(retained)),
+                       try XCTUnwrap(LocalFileIdentity.read(source.path)))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copied)), bytes)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+    }
+
+    func testCrossVolumeDirectoryMovePreservesNestedBytesAndLinks() async throws {
+        let mount = try mountedClipboardTestVolume()
+        // Source on the disposable volume keeps its Trash inside the disposable
+        // image; the user's actual Trash must never receive test content.
+        let origin = mount.appendingPathComponent("dir-" + UUID().uuidString)
+        let nested = origin.appendingPathComponent("nested")
+        let into = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-CrossVolume-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: into)
+            try? FileManager.default.removeItem(at: origin)
+        }
+        let file = nested.appendingPathComponent("payload.bin")
+        let bytes = Data((0..<1_048_576).map { UInt8(truncatingIfNeeded: $0) })
+        try bytes.write(to: file)
+        let symbolic = origin.appendingPathComponent("dangling")
+        try FileManager.default.createSymbolicLink(atPath: symbolic.path, withDestinationPath: "missing")
+        let originIdentity = try XCTUnwrap(LocalFileIdentity.read(origin.path))
+        let destinationIdentity = try XCTUnwrap(LocalFileIdentity.read(into.path))
+        XCTAssertNotEqual(originIdentity.device, destinationIdentity.device)
+        let outcome = try await LocalWorkspaceBackend.shared.transferLocalFile(
+            from: origin.path, into: into.path, move: true
+        )
+        let destination = into.appendingPathComponent(origin.lastPathComponent)
+        guard case .moved(let actualPath) = outcome else {
+            return XCTFail("Cross-volume directory must be verified and removed from source")
+        }
+        XCTAssertEqual(actualPath, destination.path)
+        XCTAssertNil(LocalFileIdentity.read(origin.path))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("nested/payload.bin")),
+                       bytes)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(
+            atPath: destination.appendingPathComponent("dangling").path
+        ), "missing")
+    }
+
+    func testCrossVolumeMoveVerifiesRealDiskAndRemovesOnlySource() async throws {
+        let mount = try mountedClipboardTestVolume()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let into = mount.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: into)
+        }
+        let source = root.appendingPathComponent("cross-volume.bin")
+        let bytes = Data((0..<2_000_000).map { UInt8(truncatingIfNeeded: $0) })
+        try bytes.write(to: source)
+        let identity = try XCTUnwrap(LocalFileIdentity.read(source.path))
+        let destinationVolume = try XCTUnwrap(LocalFileIdentity.read(into.path))
+        XCTAssertNotEqual(identity.device, destinationVolume.device,
+                          "This must exercise the actual EXDEV branch, not same-volume rename")
+        let outcome = try await LocalWorkspaceBackend.shared.transferLocalFile(
+            from: source.path, into: into.path, move: true
+        )
+        guard case .moved(let path) = outcome else {
+            return XCTFail("Verified cross-volume file transfer must remove the original")
+        }
+        XCTAssertEqual(try XCTUnwrap(LocalFileIdentity.read(path)),
+                       try XCTUnwrap(LocalFileIdentity.read(
+                           into.appendingPathComponent("cross-volume.bin").path)))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+        XCTAssertNil(LocalFileIdentity.read(source.path))
+    }
+
+    func testLocalCopyHandlesLongUnicodeNamesAndMoreThanOneHundredNumberedConflicts() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("entry.txt")
+        try Data("exact".utf8).write(to: source)
+        for number in 1...105 {
+            let suffix = number == 1 ? " copy" : " copy \(number)"
+            try Data("existing \(number)".utf8).write(
+                to: root.appendingPathComponent("entry\(suffix).txt")
+            )
+        }
+        let backend = LocalWorkspaceBackend.shared
+        let result = await backend.transferLocalFiles([source], into: root.path)
+        XCTAssertEqual(result.copied, [root.appendingPathComponent("entry copy 106.txt").path],
+                       "Numbering must not silently stop after an arbitrary limit")
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("entry copy 106.txt")),
+                       Data("exact".utf8))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("entry copy 105.txt")),
+                       Data("existing 105".utf8))
+
+        let longName = String(repeating: "名", count: 83) + ".txt"
+        let long = root.appendingPathComponent(longName)
+        try Data("unicode bytes".utf8).write(to: long)
+        let duplicate = await backend.transferLocalFiles([long], into: root.path)
+        XCTAssertEqual(duplicate.copied.count, 1, duplicate.failures.joined(separator: "\n"))
+        let created = try XCTUnwrap(duplicate.copied.first)
+        XCTAssertTrue(created.hasSuffix(" copy.txt"))
+        XCTAssertLessThanOrEqual((created as NSString).lastPathComponent.utf8.count, 255)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: created)), Data("unicode bytes".utf8))
+        XCTAssertEqual(try Data(contentsOf: long), Data("unicode bytes".utf8))
+    }
+
+    func testLocalPasteBindsEachSourceIdentityAfterAsyncPreparation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sourceFolder = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        for folder in [sourceFolder, destination] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = sourceFolder.appendingPathComponent("payload.txt")
+        try Data("the selected file".utf8).write(to: original)
+        let originalIdentity = try XCTUnwrap(LocalFileIdentity.read(original.path))
+        let replacement = sourceFolder.appendingPathComponent("replacement.txt")
+        try Data("a different file".utf8).write(to: replacement)
+        try FileManager.default.removeItem(at: original)
+        try FileManager.default.moveItem(at: replacement, to: original)
+
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rejectedTransfer = await tree.importFromFinder(
+            [original], into: destination.path, move: true,
+            expectedIdentities: [original.path: originalIdentity], isCurrentTarget: { true }
+        )
+        let refused = try XCTUnwrap(rejectedTransfer)
+        XCTAssertTrue(refused.moved.isEmpty)
+        XCTAssertEqual(refused.failures.count, 1)
+        XCTAssertEqual(try Data(contentsOf: original), Data("a different file".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent(original.lastPathComponent).path
+        ))
+
+        let appearedLate = sourceFolder.appendingPathComponent("late.txt")
+        try Data("late arrival".utf8).write(to: appearedLate)
+        let lateTransfer = await tree.importFromFinder(
+            [appearedLate], into: destination.path, move: true,
+            expectedIdentities: [:], isCurrentTarget: { true }
+        )
+        let absentAtStart = try XCTUnwrap(lateTransfer)
+        XCTAssertTrue(absentAtStart.moved.isEmpty)
+        XCTAssertEqual(absentAtStart.failures.count, 1)
+        XCTAssertEqual(try Data(contentsOf: appearedLate), Data("late arrival".utf8))
+    }
+
+    func testLocalTransferBackendRechecksAuthorizedDestinationRoot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let authorized = root.appendingPathComponent("authorized")
+        let outside = root.appendingPathComponent("outside")
+        let redirected = authorized.appendingPathComponent("redirection")
+        for folder in [authorized, outside] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = outside.appendingPathComponent("file.txt")
+        try Data("must never escape".utf8).write(to: source)
+        try FileManager.default.createSymbolicLink(at: redirected, withDestinationURL: outside)
+        let backend = LocalWorkspaceBackend.shared
+        let result = await backend.transferLocalFiles(
+            [source], into: redirected.path, authorizedRoot: authorized.path
+        )
+        XCTAssertEqual(result.failures.count, 1)
+        XCTAssertTrue(result.copied.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outside.appendingPathComponent("file copy.txt").path
+        ))
+        XCTAssertEqual(try Data(contentsOf: source), Data("must never escape".utf8))
+        try FileManager.default.removeItem(at: redirected)
+        try FileManager.default.createDirectory(at: redirected, withIntermediateDirectories: false)
+        let valid = await backend.transferLocalFiles(
+            [source], into: redirected.path, authorizedRoot: authorized.path
+        )
+        XCTAssertEqual(valid.copied.count, 1, valid.failures.joined(separator: "\n"))
+        XCTAssertEqual(try Data(contentsOf: redirected.appendingPathComponent("file.txt")),
+                       Data("must never escape".utf8))
+    }
+
+    func testLocalMoveIsExclusiveAndKeepsEntityIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let from = root.appendingPathComponent("from")
+        let into = root.appendingPathComponent("into")
+        for folder in [from, into] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = from.appendingPathComponent("payload.bin")
+        try Data([3, 2, 0, 255]).write(to: source)
+        let originalIdentity = try XCTUnwrap(LocalFileIdentity.read(source.path))
+        let backend = LocalWorkspaceBackend.shared
+        let unchanged = try await backend.transferLocalFile(from: source.path, into: from.path, move: true)
+        if case .unchanged = unchanged {} else { XCTFail("Moving to the same parent must be a no-op") }
+        XCTAssertEqual(LocalFileIdentity.read(source.path), originalIdentity)
+
+        let outcome = try await backend.transferLocalFile(from: source.path, into: into.path, move: true)
+        if case .moved(let path) = outcome {
+            XCTAssertEqual(path, into.appendingPathComponent("payload.bin").path)
+        } else { XCTFail("Expected an atomic same-volume move") }
+        let destination = into.appendingPathComponent("payload.bin")
+        XCTAssertTrue(LocalFileIdentity.read(destination.path)?.refersToSameEntry(as: originalIdentity) == true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try Data(contentsOf: destination), Data([3, 2, 0, 255]))
+        try Data("collision".utf8).write(to: source)
+        do {
+            _ = try await backend.transferLocalFile(from: source.path, into: into.path, move: true)
+            XCTFail("Existing destination must never be overwritten")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: source), Data("collision".utf8))
+        XCTAssertEqual(try Data(contentsOf: destination), Data([3, 2, 0, 255]))
+    }
+
+    func testLocalMoveRejectsStaleSourceAndNeverDeletesSubstitutedFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let into = root.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("original.txt")
+        try Data("first".utf8).write(to: source)
+        let snapshot = try XCTUnwrap(LocalFileIdentity.read(source.path))
+        let replaced = root.appendingPathComponent("substitution")
+        try Data("new file".utf8).write(to: replaced)
+        try FileManager.default.removeItem(at: source)
+        try FileManager.default.moveItem(at: replaced, to: source)
+
+        do {
+            _ = try await LocalWorkspaceBackend.shared.transferLocalFile(
+                from: source.path, into: into.path, move: true, expectedIdentity: snapshot
+            )
+            XCTFail("A substituted source must be rejected before the move")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: source), Data("new file".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: into.appendingPathComponent("original.txt").path))
+    }
+
+    func testLocalTransfersCoalesceParentChildAndPreserveInputOrder() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("source")
+        let nested = source.appendingPathComponent("nested")
+        let into = root.appendingPathComponent("target")
+        for folder in [nested, into] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let child = nested.appendingPathComponent("child.txt")
+        let standalone = source.appendingPathComponent("z.txt")
+        try Data("child".utf8).write(to: child)
+        try Data("standalone".utf8).write(to: standalone)
+
+        let report = await LocalWorkspaceBackend.shared.transferLocalFiles(
+            [standalone, child, nested, standalone], into: into.path
+        )
+        XCTAssertEqual(report.copied.map { ($0 as NSString).lastPathComponent }, ["z.txt", "nested"])
+        XCTAssertTrue(report.failures.isEmpty, report.failures.joined(separator: "\n"))
+        XCTAssertEqual(try Data(contentsOf: into.appendingPathComponent("nested/child.txt")),
+                       Data("child".utf8))
+        XCTAssertEqual(try Data(contentsOf: into.appendingPathComponent("z.txt")), Data("standalone".utf8))
+        let invalid = await LocalWorkspaceBackend.shared.transferLocalFiles(
+            [URL(string: "https://example.com/no-file")!], into: into.path
+        )
+        XCTAssertTrue(invalid.copied.isEmpty)
+        XCTAssertEqual(invalid.failures.count, 1)
+    }
+
     func testCopyPastedIntoSameFolderCreatesNumberedCopiesWithoutOverwriting() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -2448,11 +2830,11 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("child.txt")),
                        Data("nested".utf8))
         let again = await tree.performFileOperation(.copy, paths: [folder.path], into: folder.path)
-        XCTAssertEqual(again.succeeded.first?.destination,
-                       root.appendingPathComponent("folder copy 2").path,
-                       "Copying a selected folder and immediately pasting must create a sibling")
-        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("folder copy 2/child.txt")),
-                       Data("nested".utf8))
+        XCTAssertTrue(again.succeeded.isEmpty)
+        XCTAssertEqual(again.failures.count, 1,
+                       "A real directory cannot be pasted into itself or a descendant")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("folder copy 2").path))
     }
 
     func testFileTreeBatchCopyMoveAndDeleteReportRealPartialResults() async throws {
@@ -2571,6 +2953,42 @@ final class FileTreeTests: XCTestCase {
         XCTAssertFalse(tree.validateMenuItem(paste))
         tree.copy(nil)
         XCTAssertEqual(received.count, 5, "A text field must not copy Files")
+    }
+
+    func testMoveHereNativeMenuActionNeedsFocusedFilesResponder() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 220),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let container = NSView(frame: window.contentView!.bounds)
+        let tree = TreeKeyboardView(frame: container.bounds)
+        let editor = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 25))
+        container.addSubview(tree)
+        container.addSubview(editor)
+        window.contentView = container
+
+        var commands: [TreeEditAction] = []
+        tree.onEditCommand = { commands.append($0) }
+        tree.canEditCommand = { $0 == .moveTo }
+        let action = NSMenuItem(
+            title: "Move Here", action: #selector(TreeKeyboardView.moveTo(_:)), keyEquivalent: "v"
+        )
+        action.keyEquivalentModifierMask = [.command, .option]
+        XCTAssertTrue(window.makeFirstResponder(tree))
+        XCTAssertTrue(tree.validateMenuItem(action))
+        tree.moveTo(nil)
+        XCTAssertEqual(commands, [.moveTo])
+        tree.canEditCommand = { _ in false }
+        XCTAssertFalse(tree.validateMenuItem(action))
+        tree.moveTo(nil)
+        XCTAssertEqual(commands, [.moveTo], "Unavailable commands must not move files")
+        tree.canEditCommand = { _ in true }
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertFalse(tree.validateMenuItem(action))
+        tree.moveTo(nil)
+        XCTAssertEqual(commands, [.moveTo], "Text/terminal focus must not route to Files")
     }
 
     func testRenameAndCreateCannotEscapeProjectThroughDirectorySymlink() async throws {
@@ -2827,7 +3245,7 @@ final class FileTreeTests: XCTestCase {
             throw XCTSkip("Test host bypasses POSIX source-read protection")
         }
 
-        let result = await backend.copyFromFinder([source], into: target.path)
+        let result = await backend.transferLocalFiles([source], into: target.path)
         XCTAssertTrue(result.copied.isEmpty)
         XCTAssertEqual(result.failures.count, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent(source.lastPathComponent).path),
@@ -2844,13 +3262,13 @@ final class FileTreeTests: XCTestCase {
         let content = Data("concurrent-copy-source".utf8)
         try content.write(to: source)
 
-        let reports = await withTaskGroup(of: LocalFileImportResult.self) { group in
+        let reports = await withTaskGroup(of: LocalFileTransferResult.self) { group in
             for _ in 0..<12 {
                 group.addTask {
-                    await LocalWorkspaceBackend.shared.copyFromFinder([source], into: target.path)
+                    await LocalWorkspaceBackend.shared.transferLocalFiles([source], into: target.path)
                 }
             }
-            var reports: [LocalFileImportResult] = []
+            var reports: [LocalFileTransferResult] = []
             for await report in group { reports.append(report) }
             return reports
         }
@@ -2970,7 +3388,7 @@ final class FileTreeTests: XCTestCase {
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         let pipe = origin.appendingPathComponent("blocking.fifo")
         XCTAssertEqual(Darwin.mkfifo(pipe.path, 0o600), 0)
-        let report = await backend.copyFromFinder([pipe, URL(fileURLWithPath: "/dev/null")], into: target.path)
+        let report = await backend.transferLocalFiles([pipe, URL(fileURLWithPath: "/dev/null")], into: target.path)
         XCTAssertTrue(report.copied.isEmpty)
         XCTAssertEqual(report.failures.count, 2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("blocking.fifo").path))
@@ -2992,7 +3410,7 @@ final class FileTreeTests: XCTestCase {
         }
         let collision = other.appendingPathComponent("item-022.txt")
         try Data("must stay separate".utf8).write(to: collision)
-        let report = await backend.copyFromFinder(inputs + [inputs[0], collision], into: target.path)
+        let report = await backend.transferLocalFiles(inputs + [inputs[0], collision], into: target.path)
         XCTAssertEqual(report.copied.count, 55, "Same URL is idempotent; unique files keep copying")
         XCTAssertEqual(report.failures.count, 1, "Different source with an already used name cannot overwrite")
         for index in 0..<55 {

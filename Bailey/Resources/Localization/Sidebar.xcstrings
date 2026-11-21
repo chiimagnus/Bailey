@@ -41,6 +41,16 @@
         }
       }
     },
+    "Move Here" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动到此处"
+          }
+        }
+      }
+    },
     "Could not copy files to the clipboard." : {
       "localizations" : {
         "zh-Hans" : {
@@ -51,22 +61,22 @@
         }
       }
     },
-    "Clipboard does not contain files copied from Bailey." : {
+    "Clipboard does not contain local files." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "剪贴板中没有来自 Bailey 的文件。"
+            "value" : "剪贴板中没有可用的本机文件。"
           }
         }
       }
     },
-    "The copied files belong to a different project or connection." : {
+    "Remote files require the original project and active connection." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制的文件属于另一项目或连接。"
+            "value" : "远端文件必须在原项目及有效的连接中操作。"
           }
         }
       }

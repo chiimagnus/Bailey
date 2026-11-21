@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 /// Application-owned window registry, Finder routing and session persistence.
@@ -8,6 +9,54 @@ final class WorkspaceApplication {
     private var windows: [WorkspaceWindowModel] = []
     /// A process-local capability for Files clipboard and internal drag payloads.
     let fileTransferToken = UUID()
+    private struct FileClipboardIntent {
+        let record: FileTreeClipboard.Record
+        let version: Int
+        let local: Bool
+        let sourceIdentities: [String: LocalFileIdentity]
+    }
+    private var fileClipboardIntents: [NSPasteboard.Name: FileClipboardIntent] = [:]
+
+    func rememberFileClipboard(
+        _ record: FileTreeClipboard.Record, local: Bool, pasteboard: NSPasteboard
+    ) {
+        var identities: [String: LocalFileIdentity] = [:]
+        if local && record.cut {
+            for path in record.paths {
+                guard let identity = LocalFileIdentity.read(path) else {
+                    fileClipboardIntents.removeValue(forKey: pasteboard.name)
+                    return
+                }
+                identities[path] = identity
+            }
+        }
+        fileClipboardIntents[pasteboard.name] = FileClipboardIntent(
+            record: record, version: pasteboard.changeCount,
+            local: local, sourceIdentities: identities
+        )
+    }
+
+    func trustedFileClipboard(
+        _ record: FileTreeClipboard.Record, pasteboard: NSPasteboard
+    ) -> Bool {
+        guard let intent = fileClipboardIntents[pasteboard.name],
+              intent.version == pasteboard.changeCount, intent.record == record,
+              let project = windows.flatMap(\.projects).first(where: { $0.id == record.project }),
+              project.fileTree.rootPath == record.root,
+              let identity = project.panelContext?.identity,
+              String(reflecting: identity) == record.identity,
+              intent.local == (identity.workspace == nil)
+        else { return false }
+        let revision = identity.workspace.flatMap { workspace in
+            workspace.hasPrefix("ssh:")
+                ? SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4))) : nil
+        }
+        guard record.connectionRevision == revision else { return false }
+        return intent.sourceIdentities.allSatisfy { path, original in
+            LocalFileIdentity.read(path) == original
+        }
+    }
+
     private var pendingDirectories: [String] = []
     private struct PendingExternalOpen {
         let urls: [URL]
@@ -281,13 +330,20 @@ final class WorkspaceApplication {
     /// Coordinate file and editable worktree diff tabs across registered windows.
     func withProtectedFiles<Result>(
         paths: [String], workspace: String?,
+        didSave: (@MainActor (String) -> Void)? = nil,
         operation: @MainActor () async throws -> Result
     ) async throws -> Result {
+        let protectedPaths = paths.filter { path in
+            guard workspace == nil, let source = LocalFileIdentity.read(path) else { return true }
+            return source.mode & UInt16(S_IFMT) != UInt16(S_IFLNK)
+        }
         var seen: Set<UUID> = []
         let affected = windows.flatMap(\.projects).flatMap(\.tabs).compactMap { tab -> PaneContent? in
             let content = tab.content
             guard let location = fileLocation(content), location.workspace == workspace,
-                  paths.contains(where: { matchesFile(location.path, inside: $0, workspace: workspace) }),
+                  protectedPaths.contains(where: {
+                      matchesFile(location.path, inside: $0, workspace: workspace)
+                  }),
                   seen.insert(content.id).inserted else { return nil }
             return content
         }.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -296,6 +352,8 @@ final class WorkspaceApplication {
 
         var held: [PaneContent] = []
         for content in affected {
+            let hadUnsavedChanges = content.isDirty
+            let originalPath = fileLocation(content)?.path
             let ready: Bool
             switch content {
             case .file(let file): ready = await file.beginFileMutation()
@@ -311,6 +369,7 @@ final class WorkspaceApplication {
                 )
             }
             held.append(content)
+            if hadUnsavedChanges, let originalPath { didSave?(originalPath) }
         }
         defer { held.forEach { releaseFileMutation($0) } }
         return try await operation()
@@ -338,6 +397,23 @@ final class WorkspaceApplication {
                 }
                 project.updateFilePaths(from: oldPath, to: newPath, workspace: workspace)
             }
+        }
+    }
+
+    /// Refresh already-owned local file trees affected by moves in another project or window.
+    func refreshLocalFileTrees(affectedPaths: [String], excluding destination: FileTreeModel?) async {
+        var refreshed = Set<ObjectIdentifier>()
+        for project in windows.flatMap(\.projects) {
+            let tree = project.fileTree
+            guard tree !== destination, refreshed.insert(ObjectIdentifier(tree)).inserted,
+                  let context = project.panelContext, context.scope == "local",
+                  tree.rootPath == context.cwd,
+                  affectedPaths.contains(where: { matchesFile($0, inside: tree.rootPath, workspace: nil) })
+            else { continue }
+            _ = await tree.sync(
+                root: context.cwd, backend: context.backend, scope: context.scope,
+                panelIdentity: context.identity, connectionRevision: context.connectionRevision
+            )
         }
     }
 

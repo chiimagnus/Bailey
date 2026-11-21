@@ -205,6 +205,15 @@ private struct BaileyCommands: Commands {
         CommandGroup(replacing: .saveItem) {}
 
         CommandGroup(after: .pasteboard) {
+            Button(String(localized: "Move Here", table: "Sidebar")) {
+                NSApp.sendAction(#selector(TreeKeyboardView.moveTo(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("v", modifiers: [.command, .option])
+            .disabled(manager?.attachedWindow?.firstResponder
+                .flatMap { $0 as? TreeKeyboardView }?.canEditCommand?(.moveTo) != true)
+
+            Divider()
+
             Button(String(localized: "Save", table: "Interface")) {
                 manager?.saveSelectedFile()
             }

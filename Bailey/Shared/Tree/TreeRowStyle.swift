@@ -3,7 +3,7 @@ import GhosttyTheme
 import SwiftUI
 
 enum TreeEditAction {
-    case cut, copy, paste, delete, selectAll
+    case cut, copy, paste, moveTo, delete, selectAll
 }
 
 enum PathMenuShortcut {
@@ -63,6 +63,7 @@ final class TreeKeyboardView: NSView, NSMenuItemValidation {
     @IBAction func cut(_ sender: Any?) { performEdit(.cut) }
     @IBAction func copy(_ sender: Any?) { performEdit(.copy) }
     @IBAction func paste(_ sender: Any?) { performEdit(.paste) }
+    @IBAction func moveTo(_ sender: Any?) { performEdit(.moveTo) }
     @IBAction func delete(_ sender: Any?) { performEdit(.delete) }
     @IBAction override func selectAll(_ sender: Any?) { performEdit(.selectAll) }
 
@@ -72,6 +73,7 @@ final class TreeKeyboardView: NSView, NSMenuItemValidation {
         case #selector(cut(_:)): action = .cut
         case #selector(copy(_:)): action = .copy
         case #selector(paste(_:)): action = .paste
+        case #selector(moveTo(_:)): action = .moveTo
         case #selector(delete(_:)): action = .delete
         case #selector(selectAll(_:)): action = .selectAll
         default: return true

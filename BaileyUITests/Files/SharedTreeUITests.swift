@@ -14,6 +14,111 @@ final class SharedTreeUITests: XCTestCase {
                        "The real Files copy must publish both its path and transfer record")
     }
 
+    func testFinderAndBaileyCopyFilesBothWaysThroughNativeClipboard() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = try fixture.file("original-来自访达.txt", text: "exact Finder bytes 中文\n")
+        _ = try fixture.file("into-Bailey/anchor.txt", text: "leave unchanged\n")
+        let finderAnchor = try fixture.file("into-Finder/anchor.txt", text: "leave unchanged\n")
+        let baileyCopy = fixture.root.appendingPathComponent(
+            "into-Bailey/" + source.lastPathComponent
+        )
+        let finderCopy = finderAnchor.deletingLastPathComponent()
+            .appendingPathComponent(source.lastPathComponent)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+
+        // This is Finder's own Command-C, not an NSPasteboard fixture.
+        let (_, finderSource) = WorkspaceUITestSupport.finderDragSource(for: source)
+        finderSource.click()
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        finder.typeKey("c", modifierFlags: .command)
+        let received = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        XCTAssertTrue(received.contains(where: { $0.standardizedFileURL == source.standardizedFileURL }),
+                      "Finder must publish an actual file URL")
+        app.activate()
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let destinationFolder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "into-Bailey")).firstMatch
+        XCTAssertTrue(destinationFolder.waitForExistence(timeout: 15))
+        destinationFolder.rightClick()
+        XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 8))
+        app.typeKey("v", modifierFlags: .command)
+        let firstCopied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: baileyCopy.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [firstCopied], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: baileyCopy), try Data(contentsOf: source))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+
+        // Bailey's own Command-C must in turn be accepted by real Finder.
+        app.activate()
+        let sourceRow = WorkspaceUITestSupport.fileRow(source, in: window)
+        XCTAssertTrue(sourceRow.waitForExistence(timeout: 15))
+        sourceRow.click()
+        app.typeKey("c", modifierFlags: .command)
+        let baileyItems = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        XCTAssertTrue(baileyItems.contains(where: {
+            $0.standardizedFileURL == source.standardizedFileURL
+        }), "Bailey must publish file items Finder can consume")
+        let (_, finderDestination) = WorkspaceUITestSupport.finderDragSource(for: finderAnchor)
+        finderDestination.click()
+        finder.typeKey("v", modifierFlags: .command)
+        let secondCopied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: finderCopy.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [secondCopied], timeout: 20), .completed,
+                       "Finder must create a real file from Bailey's file URL")
+        XCTAssertEqual(try Data(contentsOf: finderCopy), try Data(contentsOf: source))
+        XCTAssertEqual(try String(contentsOf: finderAnchor, encoding: .utf8),
+                       "leave unchanged\n")
+    }
+
+    func testFinderFileUsesNativeMoveHereShortcutWithoutAClipboardCutToken() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = try fixture.file("external-source.txt", text: "move these real bytes\n")
+        _ = try fixture.file("move-target/anchor.txt", text: "untouched\n")
+        let destination = fixture.root.appendingPathComponent("move-target/external-source.txt")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+
+        let (_, selected) = WorkspaceUITestSupport.finderDragSource(for: source)
+        XCTAssertTrue(selected.exists, "Finder should already select the revealed file")
+        XCUIApplication(bundleIdentifier: "com.apple.finder")
+            .typeKey("c", modifierFlags: .command)
+        let fileURLs = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        XCTAssertTrue(fileURLs.contains(where: {
+            $0.standardizedFileURL == source.standardizedFileURL
+        }), "Finder must publish the selected file, not only path text")
+        app.activate()
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let target = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "move-target")).firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 15))
+        target.rightClick()
+        let command = app.windows.firstMatch.menus
+            .matching(identifier: "bailey.tree.folder").firstMatch.menuItems["Move Here"]
+        XCTAssertTrue(command.waitForExistence(timeout: 8))
+        XCTAssertTrue(command.isEnabled, "Public Finder file URLs are eligible for explicit move")
+        app.typeKey("v", modifierFlags: [.command, .option])
+        let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: destination.path)
+                && !FileManager.default.fileExists(atPath: source.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("move these real bytes\n".utf8))
+        XCTAssertFalse((NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []).contains { $0.standardizedFileURL == source.standardizedFileURL },
+        "Completed move must remove obsolete file URLs from the clipboard")
+    }
+
     func testFileAndFolderContextMenusDoNotBrowseOrOpen() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/real-file.swift", text: "original file bytes\n")
