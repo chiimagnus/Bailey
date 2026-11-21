@@ -85,7 +85,7 @@ nonisolated struct MarkdownDocument: Sendable {
                footnoteLines.contains(line) { return }
             if (intent == nil || paragraph), plain.hasPrefix("<"),
                sourcePrefix(content.runs.first?.markdownSourcePosition, count: 1) == "<",
-               let html = MarkdownHTML.parse(plain) {
+               let html = MarkdownHTML.parse(plain), MarkdownInlineHTML.containsBlock(html) {
                 blocks.append(Block(anchor: nil, content: .html(html)))
                 return
             }
@@ -95,9 +95,20 @@ nonisolated struct MarkdownDocument: Sendable {
                 blocks.append(Block(anchor: nil, content: .html([node])))
                 return
             }
+            var markup = AttributedString(content)
+            switch intent?.kind {
+            case .orderedList, .unorderedList:
+                markup = formatTaskItems(content, sourcePrefix: sourcePrefix)
+            default: break
+            }
+            if plain.contains("<"), markup.runs.contains(where: {
+                $0.inlinePresentationIntent?.contains(.inlineHTML) == true
+            }) {
+                markup = MarkdownInlineHTML.render(markup)
+            }
             var anchor: String?
             if case .header = intent?.kind {
-                let slug = plain.lowercased().replacingOccurrences(of: " ", with: "-")
+                let slug = String(markup.characters).lowercased().replacingOccurrences(of: " ", with: "-")
                     .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
                 var next = duplicates[slug, default: 0]
                 var unique = next == 0 ? slug : "\(slug)-\(next)"
@@ -108,30 +119,6 @@ nonisolated struct MarkdownDocument: Sendable {
                 duplicates[slug] = next + 1
                 if unique != slug { duplicates[unique] = 1 }
                 anchor = unique
-            }
-            var markup = AttributedString(content)
-            switch intent?.kind {
-            case .orderedList, .unorderedList:
-                markup = formatTaskItems(content, sourcePrefix: sourcePrefix)
-            default: break
-            }
-            if paragraph, plain.contains("<") {
-                var inline = AttributedString()
-                for run in markup.runs {
-                    let value = markup[run.range]
-                    let html = String(value.characters)
-                    if run.inlinePresentationIntent == nil, html.lowercased().hasPrefix("<img"),
-                       sourcePrefix(run.markdownSourcePosition, count: 1) == "<",
-                       let nodes = MarkdownHTML.parse(html), nodes.count == 1,
-                       case .image(let url, let alt, _, _) = nodes.first {
-                        var attributes = run.attributes
-                        attributes.imageURL = url
-                        inline.append(AttributedString(alt.isEmpty ? "Image" : alt, attributes: attributes))
-                    } else {
-                        inline.append(value)
-                    }
-                }
-                markup = inline
             }
             if let footnotes { markup = footnotes.link(in: markup) }
             blocks.append(Block(anchor: anchor, content: .markdown(markup)))
