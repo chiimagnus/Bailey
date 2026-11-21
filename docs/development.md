@@ -36,12 +36,12 @@ Makefile 通过构建参数选择正式版或开发版，不复制 App Target、
 直接在 Xcode 中运行 scheme 不会自动带入 Makefile 的开发版参数；
 需要隔离的 Bailey Dev 时，应使用 `make build:dev` 生成的开发版 App。
 
-正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
-测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
+正式版产物位于 `.build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
+测试版位于 `.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
 App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.dev`）。
 两者使用独立 DerivedData 和 Bundle ID，
 测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；
-包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
+包依赖仍在 `.build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
 宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；
 `make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给本机阶段验收。

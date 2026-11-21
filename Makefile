@@ -6,15 +6,16 @@ PROJECT := Bailey.xcodeproj
 SCHEME := Bailey
 CONFIGURATION ?= Debug
 DESTINATION := platform=macOS,arch=arm64
-DERIVED_DATA := build/DerivedData
-DEV_DERIVED_DATA := build/DerivedData-Dev
+BUILD_DIR := .build
+DERIVED_DATA := $(BUILD_DIR)/DerivedData
+DEV_DERIVED_DATA := $(BUILD_DIR)/DerivedData-Dev
 DEV_FLAGS := BAILEY_BUNDLE_SUFFIX=.dev 'BAILEY_APP_NAME=Bailey Dev' \
 	BAILEY_DOCUMENT_HANDLER_RANK=None 'BAILEY_FINDER_SERVICE_NAME=Add Folder to Bailey Dev'
-SOURCE_PACKAGES := build/SourcePackages
+SOURCE_PACKAGES := $(BUILD_DIR)/SourcePackages
 APP_BUNDLE = Bailey.app
 APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/$(APP_BUNDLE)
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Bailey.app
-ARCHIVE := build/releases/bailey-$(VERSION)-macos-arm64.zip
+ARCHIVE := $(BUILD_DIR)/releases/bailey-$(VERSION)-macos-arm64.zip
 
 # 按 Package.resolved 固定版本；与 Xcode 的工程、scheme、测试目标共用。
 XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
@@ -30,10 +31,10 @@ SELECTED_TESTS_PREFLIGHT = if [ -n '$(strip $(ONLY_TESTING))' ]; then \
 	python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); full=[g["name"]+"/"+c["name"]+"/"+t["name"].removesuffix("()") for p in j["values"] for g in p.get("children",[]) for c in g.get("children",[]) for t in c.get("children",[]) if t["kind"]=="test" and not t.get("disabled",False)]; missing=[s for s in sys.argv[2].split() if not any(p==s or p.startswith(s+"/") for p in full)]; print("Selected XCTest methods:",len(full)); sys.exit("Unmatched XCTest selector: "+", ".join(missing) if missing else 0)' "$$enumeration" '$(strip $(ONLY_TESTING))'; \
 	rm -f "$$enumeration"; \
 fi
-DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \
-	lock='$(CURDIR)/build/.bailey-dev-test.lock'; \
+DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/$(BUILD_DIR)'; \
+	lock='$(CURDIR)/$(BUILD_DIR)/.bailey-dev-test.lock'; \
 	mkdir "$$lock" 2>/dev/null || { \
-		echo '无法取得 Bailey Dev 构建／测试锁；请等待已有操作结束。若上次操作被强制终止，先确认没有相关进程再移除 build/.bailey-dev-test.lock。' >&2; exit 2; \
+		echo '无法取得 Bailey Dev 构建／测试锁；请等待已有操作结束。若上次操作被强制终止，先确认没有相关进程再移除 .build/.bailey-dev-test.lock。' >&2; exit 2; \
 	}; trap 'rmdir "$$lock"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
@@ -122,8 +123,8 @@ package:
 	@security find-identity -v -p codesigning $(if $(strip $(SIGNING_KEYCHAIN)),'$(SIGNING_KEYCHAIN)') | grep -F '$(SIGNING_IDENTITY) "Apple Development:' >/dev/null || { echo '没有有效的 Apple Development 签名身份' >&2; exit 1; }
 	@test ! -e '$(ARCHIVE)' || { echo '发布包已存在，拒绝覆盖：$(ARCHIVE)' >&2; exit 1; }
 	@$(MAKE) --no-print-directory 'build:release' SIGNING=release VERSION='$(VERSION)' BUILD_NUMBER='$(BUILD_NUMBER)'
-	@mkdir -p build/releases
-	@set -eu; temp=$$(mktemp -d build/releases/.verify.XXXXXX); trap 'rm -rf "$$temp"' EXIT; \
+	@mkdir -p '$(BUILD_DIR)/releases'
+	@set -eu; temp=$$(mktemp -d '$(BUILD_DIR)/releases/.verify.XXXXXX'); trap 'rm -rf "$$temp"' EXIT; \
 		app='$(RELEASE_APP)'; \
 		ditto -c -k --sequesterRsrc --keepParent "$$app" "$$temp/package.zip"; \
 		ditto -x -k "$$temp/package.zip" "$$temp/unpacked"; \

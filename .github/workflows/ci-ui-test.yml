@@ -83,7 +83,7 @@ jobs:
           import sys
 
           executed = 0
-          for bundle in glob.glob("build/DerivedData-Dev/Logs/Test/*.xcresult"):
+          for bundle in glob.glob(".build/DerivedData-Dev/Logs/Test/*.xcresult"):
               summary = json.loads(subprocess.check_output(
                   ["xcrun", "xcresulttool", "get", "test-results", "summary",
                    "--path", bundle, "--compact"], text=True
@@ -103,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p test-results
-          for bundle in build/DerivedData-Dev/Logs/Test/*.xcresult; do
+          for bundle in .build/DerivedData-Dev/Logs/Test/*.xcresult; do
             test -d "$bundle" || continue
             ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
           done
@@ -168,7 +168,7 @@ jobs:
           import sys
 
           executed = 0
-          for bundle in glob.glob("build/DerivedData-Dev/Logs/Test/*.xcresult"):
+          for bundle in glob.glob(".build/DerivedData-Dev/Logs/Test/*.xcresult"):
               summary = json.loads(subprocess.check_output(
                   ["xcrun", "xcresulttool", "get", "test-results", "summary",
                    "--path", bundle, "--compact"], text=True
@@ -188,7 +188,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p test-results
-          for bundle in build/DerivedData-Dev/Logs/Test/*.xcresult; do
+          for bundle in .build/DerivedData-Dev/Logs/Test/*.xcresult; do
             test -d "$bundle" || continue
             ditto -c -k --keepParent "$bundle" "test-results/$(basename "$bundle").zip"
           done
