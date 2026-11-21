@@ -52,6 +52,22 @@ final class MarkdownFootnotesTests: XCTestCase {
         XCTAssertTrue(text.contains("Closing paragraph."))
     }
 
+    func testUnreferencedFootnoteContinuationCannotActivateOtherNotes() async throws {
+        let document = try await MarkdownDocument.parse("""
+            Real citation[^real].
+
+            [^unused]: This note is not cited.
+                It mentions [^nested] on a continuation line.
+            [^nested]: Do not display this orphan.
+            [^real]: Visible note.
+            """)
+        XCTAssertEqual(document.blocks.compactMap(\.anchor), ["bailey-note:real"])
+        XCTAssertFalse(document.blocks.contains { block in
+            guard case .markdown(let text) = block.content else { return false }
+            return String(text.characters).contains("Do not display this orphan")
+        })
+    }
+
     func testFootnoteReferencesInsideLiteralCodeDoNotCreateNotes() async throws {
         let document = try await MarkdownDocument.parse("""
             `[^inline]` and a real note[^valid].
