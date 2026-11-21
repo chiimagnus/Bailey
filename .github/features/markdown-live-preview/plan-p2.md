@@ -11,6 +11,7 @@
 - Mermaid 选 **[MermaidKit 2.10.2](https://github.com/2389-research/MermaidKit)** 的 `MermaidRender` 原生渲染（`MermaidRenderer.image`／`altText`），不打包 Mermaid.js，也不运行 JS。
   隔离工程已实际生成流程、时序、类与状态图，但其语法覆盖与 mermaid.js 不完全一致；unsupported diagram 原样回显，必须以真实 Markdown 样本验收。
 - 公式优先使用 Textual 已依赖的 `SwiftUIMath`（`.math` syntax extension），不再引入 KaTeX、MathJax 或第二套公式引擎；脚注锚点若 Foundation parser 丢失，交给 P1 的 AST 验证门槛。
+  主 Markdown 结构仍在后台准备；Textual 的公开扩展需在主 actor 调用，只处理当前显示块内的有界公式片段。
 - SwiftDraw、MermaidKit 已与 Textual、Yams、SwiftSoup 在隔离 Swift 6.4.2 工程组合编译通过，且真实 SVG 与四种 Mermaid 输出通过；**不是 Bailey App 已验收**。
 
 ## 方案
@@ -37,7 +38,8 @@ MermaidKit 从代码围栏输入直接产出受控原生图像；禁止嵌入 HT
 ### P2-T2 原生保存、恢复和链接操作
 
 - **位置**：`FileTab.save`、会话恢复、文件菜单／标签右键、`docs/features/editor.md`。
-- **实施**：保存仍只写原生源码、保留编码／BOM／CRLF／外部版本检查；
+- **实施**：保存仍只写原生源码、保留编码／BOM／CRLF／外部版本检查；恢复按既有快照打开源码，
+  持久化 Dock 布局时折叠临时预览位置，不修改会话格式。
   模式切换不保存；内部资源点击定位有权限的同项目文件，外链须显式交给 Browser。
 - **验证**：源码→预览→源码后逐字节一致；并排编辑→`⌘S`→重开，含未保存关闭、多窗口同文件、只读、冲突、SSH、路径重命名及 VoiceOver。
 
@@ -53,7 +55,7 @@ MermaidKit 从代码围栏输入直接产出受控原生图像；禁止嵌入 HT
 <a id="p2-t4"></a>
 ### P2-T4 Mermaid 与常见文档扩展
 
-- **位置**：Markdown fenced code 节点、离线 Mermaid 编译和净化后静态 SVG 输出、数学与脚注排版。
+- **位置**：Markdown fenced code 节点、离线 Mermaid 原生位图、数学与脚注排版。
 - **实施**：以 P1 确认的 AST／围栏源范围提取 Mermaid，调用 `MermaidRenderer.renderImage(source:theme:)` 在后台生成原生图像并校验取消／版本；
   图表不启用 HTML 标签、交互链接或回调，禁止远端图像与字体；
   不支持／无效图显示原始围栏代码与可用的解析诊断；公式 `$…$`／`$$…$$` 复用 Textual/SwiftUIMath，脚注保留正确跳转，无 CDN。

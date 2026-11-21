@@ -42,7 +42,9 @@ Front Matter 用无执行能力的 YAML 数据解析器，作为文档头部元�
 - **位置**：`FileTab` 原生正文读取、`FileViewerView` 新增只读渲染、既有 `WorkspaceBackend` 资源读取和 `BaileyTests/Files`。
 - **实施**：`.md`／`.markdown`／`.mdx` 一律路由到本 Markdown 阅读器；CommonMark/GFM、标题锚点、表格、任务清单、围栏代码和安全内联 HTML；
   仅在 BOM 后文首检测配对 `---` 的 YAML Front Matter，保留全部原文字节，允许文件标签右键查看解析出的元数据。
-  相对 PNG／SVG 等通过 Textual **自定义 `AttachmentLoader`** 按当前文件实际项目、机器和获准目录定位；绝不使用它的默认网络图片 loader；外部链接由原生 `OpenURLAction` 拦截并显式交给 Browser，不直接系统打开，失败以局部替代文本展示。
+  相对位图通过 Textual **自定义 `AttachmentLoader`** 按当前文件实际项目、机器和获准目录定位；
+  SVG 保持局部替代文本，P2-T3 随原生 SVG 解码接入。绝不使用默认网络 loader；
+  外部链接由原生 `OpenURLAction` 拦截并显式交给 Browser，不直接系统打开，失败以局部替代文本展示。
 - **验证**：后台解析与主 actor 应用结果分离；测量 2,000～20,000 行及现有 32 MiB 文本边界的解析、布局和主线程卡顿（上述 502 ms 是纯解析基准，非 GUI 指标）；
   `.mdx` 混排 GFM、Front Matter、`import`／`export`、JSX 组件及花括号表达式在预览中仍可读但不执行；以真实渲染和解析器输出交叉核验，而非“能编译”；`SKILL.md` 多行 YAML 值、注释、空值、自定义 YAML 标签、未闭合／非头部横线；
   GFM 的表格、任务清单、删除线、自动链接、代码围栏的完整源片段/语言信息、Unicode、HTML 节点是否可映射原生 View；
@@ -59,7 +61,8 @@ Front Matter 用无执行能力的 YAML 数据解析器，作为文档头部元�
   `.keyboardShortcut("v", modifiers: [.command, .shift])`、
   `.disabled(!canToggleSourcePreview)`。
   源码→预览；预览→源码；并排→源码；CSV 则对应表格／源码。
-  文件标签右键「源码／预览／并排」按需使用原生局部 `.keyboardShortcut`，不重复注册全局按键。
+  文件标签右键提供「源码／预览」；「并排」随 P2-T1 的真实 Dock 展示者接入。
+  右键菜单不重复注册全局按键。
   格式支持、内容可用性及是否为当前真实活动 Dock 文件共同决定启用状态；
   工具栏／终端／Browser／普通代码及失去窗口焦点时系统菜单项置灰。
   只读允许切换；预览出错仍允许返回源码。
