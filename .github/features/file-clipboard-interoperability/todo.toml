@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T3"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -20,7 +20,7 @@ note = ""
 [[tasks]]
 id = "P1-T3"
 title = "接通跨项目粘贴、菜单与跨窗口保存保护"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "08320d35abc26ab02445cc961e4a3f7b5562e667"
+note = "功能实现 9e8611d6；GUI 夹具修正 08320d35；Finder 双向复制 + 显式移动联合 GUI 2/2；焦点与剪切回归 3/3；完整 Host/跨卷证据见 audit-p1.md。"
