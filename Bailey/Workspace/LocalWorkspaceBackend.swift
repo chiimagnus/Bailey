@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-/// Completed paths and independent failures from one Finder copy batch.
+/// Completed paths and independent failures from one local file transfer batch.
 nonisolated struct LocalFileTransferResult: Sendable {
     var copied: [String] = []
     var moved: [(source: String, destination: String)] = []
@@ -485,7 +485,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             path.withCString { listxattr($0, pointer.baseAddress, size_t(size), XATTR_NOFOLLOW) }
         }
         guard read == size else { throw WorkspaceError.changedExternally }
-        let names = buffer.split(separator: 0).map { String(cString: Array($0) + [0]) }
+        let names = buffer.split(separator: 0).map {
+            String(decoding: $0.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
         var result: [String: Data] = [:]
         for name in names {
             let count = path.withCString { pathPointer in
