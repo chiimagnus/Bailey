@@ -407,7 +407,7 @@ struct MarkdownCodeText: View {
 }
 
 /// Compose adjacent AST inline fragments as one Text so selection remains native.
-private enum MarkdownNativeText {
+enum MarkdownNativeText {
     private struct HTMLTag {
         let name: String
         let closing: Bool
@@ -466,7 +466,7 @@ private enum MarkdownNativeText {
                 case "code", "kbd": text = text.font(.system(size: 13.5, design: .monospaced))
                 case "a":
                     if let url = tag.href {
-                        var linked = AttributedString(plain([node]))
+                        var linked = attributed([node])
                         linked.link = url
                         text = Text(linked)
                     }
@@ -515,12 +515,11 @@ private enum MarkdownNativeText {
         case .strike(let children):
             return make(children).strikethrough()
         case .link(let destination, let children):
-            let text = make(children)
-            guard let url = URL(string: destination) else { return text }
-            // Links stay inert until the user clicks; the preview's openURL handles authorization.
-            var attributed = AttributedString(plain(children))
-            attributed.link = url
-            return Text(attributed)
+            guard let url = URL(string: destination) else { return make(children) }
+            // Keep nested bold/italic/code styles when making the entire link clickable.
+            var linked = attributed(children)
+            linked.link = url
+            return Text(linked)
         case .image(_, let alt):
             return Text(verbatim: alt)
         case .html(let source):
@@ -530,15 +529,38 @@ private enum MarkdownNativeText {
         }
     }
 
-    private static func plain(_ nodes: [MarkdownInline]) -> String {
-        nodes.map { node in
+    static func attributed(_ nodes: [MarkdownInline]) -> AttributedString {
+        nodes.reduce(into: AttributedString()) { result, node in
+            var part: AttributedString
             switch node {
-            case .text(let s), .code(let s), .html(let s): s
-            case .emphasis(let children), .strong(let children), .strike(let children): plain(children)
-            case .link(_, let children): plain(children)
-            case .image(_, let alt): alt
-            case .lineBreak: "\n"
+            case .text(let value), .code(let value), .html(let value):
+                part = AttributedString(value)
+                if case .code = node { add(.code, to: &part) }
+            case .strong(let children):
+                part = attributed(children)
+                add(.stronglyEmphasized, to: &part)
+            case .emphasis(let children):
+                part = attributed(children)
+                add(.emphasized, to: &part)
+            case .strike(let children):
+                part = attributed(children)
+                add(.strikethrough, to: &part)
+            case .link(let destination, let children):
+                part = attributed(children)
+                part.link = URL(string: destination)
+            case .image(_, let alt):
+                part = AttributedString(alt)
+            case .lineBreak:
+                part = AttributedString("\n")
             }
-        }.joined()
+            result += part
+        }
+    }
+
+    private static func add(_ intent: InlinePresentationIntent, to text: inout AttributedString) {
+        for run in text.runs {
+            text[run.range].inlinePresentationIntent =
+                (run.inlinePresentationIntent ?? []).union(intent)
+        }
     }
 }

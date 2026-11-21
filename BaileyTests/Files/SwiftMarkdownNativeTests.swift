@@ -77,6 +77,31 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }
     }
 
+    func testNestedStyledLinkPreservesInlineAttributes() async throws {
+        let document = try await MarkdownDocument.parse(
+            "[**粗体** *斜体* ~~删除~~](docs/guide.md)"
+        )
+        guard case let .paragraph(inline) = document.blocks.first?.content else {
+            return XCTFail("Expected linked paragraph")
+        }
+        let attributed = MarkdownNativeText.attributed(inline)
+        XCTAssertEqual(String(attributed.characters), "粗体 斜体 删除")
+        for (substring, style) in [
+            ("粗体", InlinePresentationIntent.stronglyEmphasized),
+            ("斜体", .emphasized),
+            ("删除", .strikethrough),
+        ] {
+            guard let run = attributed.runs.first(where: {
+                String(attributed[$0.range].characters).contains(substring)
+            }) else {
+                return XCTFail("Missing styled text: \(substring)")
+            }
+            XCTAssertTrue(run.inlinePresentationIntent?.contains(style) == true,
+                          "Lost \(style) inside Markdown link")
+            XCTAssertEqual(run.link?.relativeString, "docs/guide.md")
+        }
+    }
+
     func testInlineImageRetainsSourceAndUnicodeParagraphText() async throws {
         let document = try await MarkdownDocument.parse(
             "前文 before ![示意图](assets/plot%20one.svg) 后文 after, with [reference](docs/a.md)."
