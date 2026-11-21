@@ -5,13 +5,15 @@
 
 ## 结论
 
-- **结果**：**No-Go（最终全量复跑进行中）**。F-01、F-02、F-03 已修复并单独验收；最终 HEAD 的首次完整 Host 因既有 Git Graph AX 展开用例失败而未全绿，隔离重测通过，仍需核销复跑结果。
-- **依据**：文件/跨窗口 Host 152 项、真实 Finder GUI 5 项、独立 APFS 跨卷 6 次均 0 失败，构建成功；首次最终 HEAD 全量 Host **1,144 项，21 跳过，9 个断言失败均属于同一个 Git Graph AX 用例**；该用例独立重测 1/1、整个类 3/3 通过。再次执行完整 Host 核对非确定性失败。
+- **结果**：**Go（文件剪贴板 P1）**。F-01、F-02、F-03 均已修复且核销。最终 HEAD 的第二次完整 Host、真实 Finder GUI、独立 APFS 跨卷均通过；首次完整 Host 的 Git Graph AX 不稳定性保留为非本 Feature 的验收记录。
+- **依据**：最终 HEAD 完整 Host 复跑 **1,144 项，0 失败、21 跳过**（命令退出 0，`TEST SUCCEEDED`）；文件/跨窗口 Host 152 项、真实 Finder GUI 5 项、独立 APFS 跨卷 6 次均 0 失败；Debug 构建与验签通过。首次全量 Host 同一 Git Graph AX 用例产生 9 个失败断言，隔离 1/1、整类 3/3、后续完整全量均通过。
 
 ## 独立逐提交复审（2026-11-21）
 
 本轮以 `idea.md`、`plan-p1.md`、`todo.toml`、各提交原始 diff、
 CodeGraph 调用链和真实磁盘／GUI 结果为依据；不采信原有审计结论。
+
+完整 Host 和 GUI 的受测代码位于 `fca8bdea`；复测期间并行提交 `1393940a` 仅更新本 Feature 的 `audit-p1.md` 与 `todo.toml`，未修改任何生产代码、测试或 UI。因此当前 HEAD `1393940a` 与受测版本在可执行代码上相同，不将文档提交误记为另一次编译验收。
 
 | 提交 | 归属 | 实际消费链与审查结论 |
 | --- | --- | --- |
@@ -79,6 +81,6 @@ CodeGraph 调用链和真实磁盘／GUI 结果为依据；不采信原有审计
 - **文件与窗口 Host**：FileTreeTests 112 项、WindowOwnershipIntegrationTests 40 项，合计 **152 项，0 失败、3 跳过**；覆盖多选/Unicode、目录/链接、权限、元数据、冲突/并发防覆盖、跨窗口脏稿、源替换、部分成功与 SSH 隔离。证据：/tmp/bailey-clipboard-audit-symlink-files-final-20261121.log。
 - **真实跨卷 APFS**：两次新建 256 MB 镜像，/private/tmp 与 /tmp 入口各运行 **3/3 通过**，核对目标与来源 dev 不同、普通文件字节、含失效符号链接的目录以及只读来源导致的已验证复制但源未删除；两次均正常卸载并清理。证据：/tmp/bailey-clipboard-audit-apfs-private-20261121.log、/tmp/bailey-clipboard-audit-apfs-public-20261121.log。
 - **真实 Finder GUI**：隔离 Bailey Dev 的双向复制、外部显式移动、右键目标/焦点、内部剪切粘贴与删除，**5/5 通过、0 失败**；验证实际磁盘字节、原文件存留或移除、剪贴板失效 URL 清理和终端焦点。证据：/tmp/bailey-clipboard-audit-f03-gui-final-20261121.log 与对应 Xcode xcresult。
-- **完整 Host 首次**：最终 HEAD 的 `make test` 共 **1,144 项，21 跳过，9 个失败断言集中于 `GitPanelVisibilityTests.testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite`**；命令返回非零，不能记为通过。证据：`/tmp/bailey-clipboard-audit-final-complete-20261121.log`。该测试独立重测 **1/1 通过**：`/tmp/bailey-clipboard-audit-gitgraph-isolated-20261121.log`；整个 GitPanelVisibilityTests 类 **3/3 通过**：`/tmp/bailey-clipboard-audit-gitgraph-suite-20261121.log`。该测试与 Git Graph 生产代码均不在本 Feature 修改范围内；未据此修补 GitGraph，也未把单次成功写成完整全绿。最终 HEAD 全量重跑日志：`/tmp/bailey-clipboard-audit-final-full-recheck-20261121.log`（进行中）。此前 1,141 项、0 失败的全量证据属于 F-03 修复前版本，亦不冒充最终 HEAD 结果。
+- **完整 Host 首次**：最终 HEAD 的 `make test` 共 **1,144 项，21 跳过，9 个失败断言集中于 `GitPanelVisibilityTests.testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite`**；命令返回非零，不能记为通过。证据：`/tmp/bailey-clipboard-audit-final-complete-20261121.log`。该测试独立重测 **1/1 通过**：`/tmp/bailey-clipboard-audit-gitgraph-isolated-20261121.log`；整个 GitPanelVisibilityTests 类 **3/3 通过**：`/tmp/bailey-clipboard-audit-gitgraph-suite-20261121.log`。该测试与 Git Graph 生产代码均不在本 Feature 修改范围内；未据此修补 GitGraph，也未把单次成功写成完整全绿。最终 HEAD 全量重跑日志：`/tmp/bailey-clipboard-audit-final-full-recheck-20261121.log`，**1,144 项，21 跳过，0 失败，退出 0，`TEST SUCCEEDED`**。此前 1,141 项、0 失败的全量证据属于 F-03 修复前版本，未作为最终 HEAD 的完成证据。
 - **构建与清理**：make build 成功；codesign --verify --deep --strict 验签通过；原生 GUI 目标可编译运行；已删除过时的本机 Finder 专用传输入口、冗余导入类型与弃用 UTF-8 解码调用。原有 SSH 复制与拖放 nonce 仍真实使用，不能当死代码删除。
 - **未执行的环境专属项**：18 项真实 Windows SSH Live 测试需要专门授权的远端环境，本次不触碰用户服务器；Host 的 SSH 来源/目标隔离断言已经通过。完整 Host 中原会跳过的 3 项跨卷用例已在上述独立 APFS 镜像单独补齐。
