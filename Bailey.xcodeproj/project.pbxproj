@@ -19,6 +19,7 @@
 		AA60000000000000000000A2 /* FuzzyMatch in Frameworks */ = {isa = PBXBuildFile; productRef = AA60000000000000000000A1 /* FuzzyMatch */; };
 		AA70000000000000000000A2 /* Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA70000000000000000000A1 /* Neon */; };
 		BC1000000000000000000053 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000052 /* Markdown */; };
+		BC1000000000000000000063 /* SwiftUIMath in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000062 /* SwiftUIMath */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -73,6 +74,7 @@
 				BC1000000000000000000023 /* SwiftSoup in Frameworks */,
 				BC1000000000000000000033 /* SwiftDraw in Frameworks */,
 				BC1000000000000000000053 /* Markdown in Frameworks */,
+				BC1000000000000000000063 /* SwiftUIMath in Frameworks */,
 				BC1000000000000000000043 /* MermaidRender in Frameworks */,
 			);
 		};
@@ -153,6 +155,7 @@
 				BC1000000000000000000022 /* SwiftSoup */,
 				BC1000000000000000000032 /* SwiftDraw */,
 				BC1000000000000000000052 /* Markdown */,
+				BC1000000000000000000062 /* SwiftUIMath */,
 				BC1000000000000000000042 /* MermaidRender */,
 			);
 			productName = Bailey;
@@ -222,6 +225,7 @@
 				BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
 				BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */,
+				BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */,
 				BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -581,6 +585,11 @@
 			repositoryURL = "https://github.com/swiftlang/swift-markdown.git";
 			requirement = { kind = exactVersion; version = 0.9.0; };
 		};
+		BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swiftui-math.git";
+			requirement = { kind = exactVersion; version = 0.1.0; };
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -636,6 +645,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */;
 			productName = Markdown;
+		};
+		BC1000000000000000000062 /* SwiftUIMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */;
+			productName = SwiftUIMath;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

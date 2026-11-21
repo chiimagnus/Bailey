@@ -34,18 +34,21 @@ struct MarkdownPreview: View {
                                     .id(row.start)
                             } else {
                                 MarkdownNativeBlockView(block: document.blocks[row.start].content,
-                                                        resource: resource, assetRefresh: assetRefresh)
+                                                        resource: resource, assetRefresh: assetRefresh,
+                                                        anchor: document.blocks[row.start].anchor)
                                     .id(row.start)
                             }
                         }
                     }
                     .scrollTargetLayout()
                     .font(.system(size: 16))
+                    .lineSpacing(4)
                     .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
                     .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
                     .frame(maxWidth: 890, alignment: .leading)
                     .padding(geometry.size.width < 768 ? 15 : 45)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .modifier(MarkdownLinkCursor())
                 }
                 .scrollPosition(id: $position, anchor: .top)
                 .environment(\.openURL, OpenURLAction { url in
@@ -61,7 +64,6 @@ struct MarkdownPreview: View {
             }
         }
         .background(MarkdownGitHubColors.background(dark: colorScheme == .dark))
-        .textSelection(.enabled)
         .accessibilityIdentifier("bailey.markdown.preview")
         .task(id: linkToOpen) {
             guard let url = linkToOpen else { return }
@@ -98,7 +100,8 @@ struct MarkdownPreview: View {
 
     private func canMergeParagraph(at index: Int) -> Bool {
         guard case let .paragraph(inline) = document.blocks[index].content else { return false }
-        return !inline.contains { if case .image = $0 { return true }; return false }
+        return !inline.contains { if case .image = $0 { true } else { false } }
+            && !MarkdownMixedParagraph.containsMath(inline)
     }
 
     private func paragraphRun(_ indices: Range<Int>) -> Text {
@@ -111,6 +114,96 @@ struct MarkdownPreview: View {
         }
         return MarkdownNativeText.make(inlines)
     }
+}
+
+struct MarkdownLinkGlyph: TextAttribute {}
+
+/// Text's selection cursor overrides SwiftUI pointerStyle. The transparent
+/// AppKit cursor rects use SwiftUI's exact glyph layout and never own mouse clicks.
+private struct MarkdownLinkCursor: ViewModifier {
+    func body(content: Content) -> some View {
+        content.overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+            GeometryReader { geometry in
+                MarkdownLinkCursorRects(rects: layouts.flatMap { entry in
+                    let origin = geometry[entry.origin]
+                    return entry.layout.flatMap { line in
+                        line.compactMap { run -> CGRect? in
+                            guard run[MarkdownLinkGlyph.self] != nil else { return nil }
+                            return run.typographicBounds.rect.offsetBy(dx: origin.x, dy: origin.y)
+                        }
+                    }
+                })
+            }
+        }
+    }
+}
+
+private struct MarkdownLinkCursorRects: NSViewRepresentable {
+    let rects: [CGRect]
+
+    func makeNSView(context: Context) -> MarkdownCursorRectView {
+        MarkdownCursorRectView()
+    }
+
+    func updateNSView(_ view: MarkdownCursorRectView, context: Context) {
+        guard view.linkRects != rects else { return }
+        view.linkRects = rects
+        view.updateTrackingAreas()
+    }
+
+    static func dismantleNSView(_ view: MarkdownCursorRectView, coordinator: ()) {
+        view.clearTracking()
+    }
+}
+
+final class MarkdownCursorRectView: NSView {
+    var linkRects: [CGRect] = []
+    private weak var trackingHost: NSView?
+    private var linkTrackingAreas: [NSTrackingArea] = []
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateTrackingAreas()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { clearTracking() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    func clearTracking() {
+        if let trackingHost {
+            linkTrackingAreas.forEach { trackingHost.removeTrackingArea($0) }
+        }
+        linkTrackingAreas.removeAll()
+        trackingHost = nil
+    }
+
+    override func updateTrackingAreas() {
+        clearTracking()
+        var ancestor = superview
+        while let view = ancestor, !(view is NSClipView) {
+            ancestor = view.superview
+        }
+        if let host = (ancestor as? NSClipView)?.documentView ?? window?.contentView {
+            trackingHost = host
+            linkTrackingAreas = linkRects.map {
+                NSTrackingArea(rect: convert($0, to: host),
+                               options: [.activeInKeyWindow, .mouseEnteredAndExited,
+                                         .mouseMoved, .cursorUpdate],
+                               owner: self, userInfo: nil)
+            }
+            linkTrackingAreas.forEach(host.addTrackingArea)
+        }
+        super.updateTrackingAreas()
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+    override func mouseEntered(with event: NSEvent) { NSCursor.pointingHand.set() }
+    override func mouseMoved(with event: NSEvent) { NSCursor.pointingHand.set() }
 }
 
 enum MarkdownGitHubColors {
@@ -143,22 +236,66 @@ private struct MarkdownNativeBlockView: View {
     let block: MarkdownNativeBlock
     let resource: MarkdownResource
     let assetRefresh: UInt
+    var anchor: String? = nil
+    @State private var headingHovered = false
+    @FocusState private var headingLinkFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
+
+    private static let headingSizes: [CGFloat] = [32, 24, 20, 16, 14, 12]
+
+    private static func headingSize(_ level: Int) -> CGFloat {
+        headingSizes[max(1, min(level, 6)) - 1]
+    }
 
     var body: some View {
         switch block {
         case .heading(let level, let inline):
             VStack(alignment: .leading, spacing: 8) {
-                MarkdownNativeText.make(inline)
-                    .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1],
-                                  weight: .semibold))
-                    .textSelection(.enabled)
-                    .accessibilityAddTraits(.isHeader)
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    if let anchor {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString("#" + anchor, forType: .string)
+                        } label: {
+                            Image(systemName: "link")
+                                .font(.system(size: 13))
+                                .frame(width: 20, height: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
+                            .opacity(headingHovered || headingLinkFocused ? 1 : 0.001))
+                        .help("Copy heading link")
+                        .accessibilityLabel("Copy heading link")
+                        .accessibilityIdentifier("bailey.markdown.anchor.\(anchor)")
+                        .focused($headingLinkFocused)
+                        .pointerStyle(.link)
+                    }
+                    Group {
+                        if MarkdownMixedParagraph.containsMath(inline) {
+                            MarkdownMixedParagraph(inline: inline, resource: resource,
+                                                   assetRefresh: assetRefresh,
+                                                   formulaFontSize: Self.headingSize(level))
+                        } else {
+                            MarkdownNativeText.make(inline).textSelection(.enabled)
+                        }
+                    }
+                        .font(.system(size: Self.headingSize(level), weight: .semibold))
+                        .foregroundStyle(level == 6
+                            ? MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
+                            : MarkdownGitHubColors.text(dark: colorScheme == .dark))
+                        .textSelection(.enabled)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .contentShape(Rectangle())
+                .onHover { headingHovered = $0 }
+                .padding(.leading, -20)
                 if level <= 2 { Divider() }
             }
             .padding(.top, 8)
         case .paragraph(let inline):
-            if inline.contains(where: { if case .image = $0 { return true }; return false }) {
+            if inline.contains(where: { if case .image = $0 { true } else { false } })
+                || MarkdownMixedParagraph.containsMath(inline) {
                 MarkdownMixedParagraph(inline: inline, resource: resource, assetRefresh: assetRefresh)
             } else {
                 MarkdownNativeText.make(inline)
@@ -184,7 +321,7 @@ private struct MarkdownNativeBlockView: View {
                 .foregroundStyle(.secondary)
             }
         case .list(let ordered, let start, let items):
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(items.indices, id: \.self) { index in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         if let checked = items[index].checked {
@@ -230,28 +367,13 @@ private struct MarkdownNativeBlockView: View {
                 }
             }
         case .code(let source, let language):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    if let language { Text(verbatim: language).font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(source, forType: .string)
-                    } label: {
-                        Label("Copy", systemImage: "document.on.document")
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                }
-                ScrollView(.horizontal) {
-                    MarkdownCodeText(source: source, language: language)
-                }
-            }
-            .padding(12)
-            .background(MarkdownGitHubColors.muted(dark: colorScheme == .dark),
-                        in: RoundedRectangle(cornerRadius: 6))
+            MarkdownCodeBlockView(source: source, language: language)
         case .mermaid(let source, let line):
             MarkdownMermaidView(source: source, line: line)
+        case .mathBlock(let latex):
+            MarkdownFormulaView(latex: latex, display: true)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .center)
         case .html(let nodes):
             MarkdownHTMLContent(nodes: nodes, resource: resource, assetRefresh: assetRefresh)
         case .rawHTML(let source):
@@ -272,12 +394,19 @@ private struct MarkdownNativeBlockView: View {
     }
 
     private func cell(_ inline: [MarkdownInline], alignment: Alignment, header: Bool) -> some View {
-        MarkdownNativeText.make(inline)
+        Group {
+            if MarkdownMixedParagraph.containsMath(inline) {
+                MarkdownMixedParagraph(inline: inline, resource: resource,
+                                       assetRefresh: assetRefresh)
+            } else {
+                MarkdownNativeText.make(inline)
+                    .textSelection(.enabled)
+            }
+        }
             .fontWeight(header ? .semibold : .regular)
-            .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .frame(minWidth: 64, alignment: alignment)
+            .frame(minWidth: 64, maxWidth: .infinity, alignment: alignment)
             .overlay(alignment: .trailing) {
                 MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 1)
             }
@@ -292,24 +421,56 @@ private struct MarkdownMixedParagraph: View {
     private enum Segment {
         case text([MarkdownInline])
         case image(String, String)
+        case math(String, display: Bool)
     }
 
     let inline: [MarkdownInline]
     let resource: MarkdownResource
     let assetRefresh: UInt
+    var formulaFontSize: CGFloat? = nil
+
+    static func containsMath(_ nodes: [MarkdownInline]) -> Bool {
+        nodes.contains { node in
+            switch node {
+            case .math: true
+            case .strong(let children), .emphasis(let children), .strike(let children),
+                 .link(_, let children): containsMath(children)
+            default: false
+            }
+        }
+    }
 
     private var segments: [Segment] {
         var result: [Segment] = []
         var text: [MarkdownInline] = []
-        for node in inline {
-            if case let .image(source, alt) = node {
-                if !text.isEmpty { result.append(.text(text)); text.removeAll() }
-                result.append(.image(source, alt))
-            } else {
-                text.append(node)
+        func flush() {
+            if !text.isEmpty { result.append(.text(text)); text.removeAll() }
+        }
+        func collect(_ nodes: [MarkdownInline],
+                     decorated: @escaping (MarkdownInline) -> MarkdownInline) {
+            for node in nodes {
+                switch node {
+                case .image(let source, let alt):
+                    flush()
+                    result.append(.image(source, alt))
+                case .math(let latex, let display):
+                    flush()
+                    result.append(.math(latex, display: display))
+                case .strong(let children):
+                    collect(children) { decorated(.strong([$0])) }
+                case .emphasis(let children):
+                    collect(children) { decorated(.emphasis([$0])) }
+                case .strike(let children):
+                    collect(children) { decorated(.strike([$0])) }
+                case .link(let destination, let children):
+                    collect(children) { decorated(.link(destination, [$0])) }
+                default:
+                    text.append(decorated(node))
+                }
             }
         }
-        if !text.isEmpty { result.append(.text(text)) }
+        collect(inline, decorated: { $0 })
+        flush()
         return result
     }
 
@@ -343,7 +504,61 @@ private struct MarkdownMixedParagraph: View {
             } else {
                 Text(verbatim: alt).foregroundStyle(.secondary)
             }
+        case .math(let latex, let display):
+            MarkdownFormulaView(latex: latex, display: display,
+                                fontSize: formulaFontSize)
         }
+    }
+}
+
+private struct MarkdownCodeBlockView: View {
+    let source: String
+    let language: String?
+    @State private var hovering = false
+    @State private var copied = false
+    @FocusState private var copyFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            MarkdownCodeText(source: source, language: language)
+                .padding(16)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button {
+                NSPasteboard.general.clearContents()
+                copied = NSPasteboard.general.setString(source, forType: .string)
+            } label: {
+                Image(systemName: copied ? "checkmark" : "document.on.document")
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .controlSize(.small)
+            .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
+                .opacity(hovering || copyFocused ? 1 : 0.001))
+            .background(MarkdownGitHubColors.background(dark: colorScheme == .dark)
+                            .opacity(hovering || copyFocused ? 1 : 0),
+                        in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                        .opacity(hovering || copyFocused ? 1 : 0))
+            }
+            .accessibilityLabel("Copy")
+            .accessibilityValue(copied ? "Copied" : "Ready")
+            .help(copied ? "Copied" : "Copy code")
+            .focused($copyFocused)
+            .pointerStyle(.link)
+            .padding(7)
+        }
+        .background(MarkdownGitHubColors.muted(dark: colorScheme == .dark),
+                    in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onHover { inside in
+            hovering = inside
+            if !inside { copied = false }
+        }
+        .onChange(of: source) { _, _ in copied = false }
     }
 }
 
@@ -372,7 +587,8 @@ struct MarkdownCodeText: View {
                 Text(verbatim: source)
             }
         }
-        .font(.system(size: 13, design: .monospaced))
+        .font(.system(size: 13.6, design: .monospaced))
+        .lineSpacing(3)
         .textSelection(.enabled)
         .task(id: request) {
             rendered = nil
@@ -468,7 +684,7 @@ enum MarkdownNativeText {
                     if let url = tag.href {
                         var linked = attributed([node])
                         linked.link = url
-                        text = Text(linked)
+                        text = Text(linked).customAttribute(MarkdownLinkGlyph())
                     }
                 default: break
                 }
@@ -506,8 +722,8 @@ enum MarkdownNativeText {
         switch node {
         case .text(let content):
             return Text(verbatim: content)
-        case .code(let source):
-            return Text(verbatim: source).font(.system(size: 13.5, design: .monospaced))
+        case .code:
+            return Text(attributed([node]))
         case .emphasis(let children):
             return make(children).italic()
         case .strong(let children):
@@ -519,9 +735,11 @@ enum MarkdownNativeText {
             // Keep nested bold/italic/code styles when making the entire link clickable.
             var linked = attributed(children)
             linked.link = url
-            return Text(linked)
+            return Text(linked).customAttribute(MarkdownLinkGlyph())
         case .image(_, let alt):
             return Text(verbatim: alt)
+        case .math(let latex, let display):
+            return Text(verbatim: display ? "$$\(latex)$$" : "$\(latex)$")
         case .html(let source):
             return Text(verbatim: source)
         case .lineBreak:
@@ -533,9 +751,12 @@ enum MarkdownNativeText {
         nodes.reduce(into: AttributedString()) { result, node in
             var part: AttributedString
             switch node {
-            case .text(let value), .code(let value), .html(let value):
+            case .text(let value), .html(let value):
                 part = AttributedString(value)
-                if case .code = node { add(.code, to: &part) }
+            case .code(let value):
+                part = AttributedString(value)
+                add(.code, to: &part)
+                part.backgroundColor = Color.primary.opacity(0.08)
             case .strong(let children):
                 part = attributed(children)
                 add(.stronglyEmphasized, to: &part)
@@ -548,8 +769,15 @@ enum MarkdownNativeText {
             case .link(let destination, let children):
                 part = attributed(children)
                 part.link = URL(string: destination)
+                if destination.hasPrefix("#bailey-note:"), !part.characters.isEmpty,
+                   part.characters.allSatisfy(\.isNumber) {
+                    part.font = .system(size: 12, weight: .medium)
+                    part.baselineOffset = 5
+                }
             case .image(_, let alt):
                 part = AttributedString(alt)
+            case .math(let latex, let display):
+                part = AttributedString(display ? "$$\(latex)$$" : "$\(latex)$")
             case .lineBreak:
                 part = AttributedString("\n")
             }

@@ -102,6 +102,22 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }
     }
 
+    func testInlineCodeHasMutedBackgroundInsideAndOutsideLinks() async throws {
+        let document = try await MarkdownDocument.parse(
+            "Plain `code` and [**bold** `linked`](docs/guide.md)."
+        )
+        guard case let .paragraph(inline) = document.blocks.first?.content else {
+            return XCTFail("Expected a paragraph")
+        }
+        let rendered = MarkdownNativeText.attributed(inline)
+        let codeRuns = rendered.runs.filter { $0.inlinePresentationIntent?.contains(.code) == true }
+        XCTAssertEqual(codeRuns.count, 2)
+        for run in codeRuns {
+            XCTAssertNotNil(run.backgroundColor, "GitHub inline code needs a muted background")
+        }
+        XCTAssertEqual(codeRuns.last?.link?.relativeString, "docs/guide.md")
+    }
+
     func testInlineImageRetainsSourceAndUnicodeParagraphText() async throws {
         let document = try await MarkdownDocument.parse(
             "前文 before ![示意图](assets/plot%20one.svg) 后文 after, with [reference](docs/a.md)."
@@ -134,6 +150,103 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         let oversized = await MarkdownCodeText.highlight(String(repeating: "x", count: 1_048_577),
                                                          language: "swift")
         XCTAssertNil(oversized, "Very large code blocks must not monopolize syntax parsing")
+    }
+
+    func testNativeMathProjectionExcludesCodeAndEscapedDollars() async throws {
+        let tick = String(Character(UnicodeScalar(96)!))
+        let fence = String(repeating: tick, count: 3)
+        let source = [
+            "Inline formula $E=mc^2$ and currency \\$5, then another $a+b$.",
+            "",
+            "$$\\frac{1}{2} + \\sqrt{2}$$",
+            "",
+            "$$",
+            "\\sum_{i=1}^{n} x_i",
+            "$$",
+            "",
+            fence + "text",
+            "$must_not_render$",
+            fence,
+            "",
+            "Literal code " + tick + "$x$" + tick + " and an unclosed $oops.",
+        ].joined(separator: "\n")
+        let document = try await MarkdownDocument.parse(source)
+        XCTAssertGreaterThanOrEqual(document.blocks.count, 5)
+        guard case let .paragraph(inline) = document.blocks[0].content else {
+            return XCTFail("Expected formula paragraph")
+        }
+        let expressions = inline.compactMap { node -> String? in
+            guard case let .math(latex, display: false) = node else { return nil }
+            return latex
+        }
+        XCTAssertEqual(expressions, ["E=mc^2", "a+b"])
+        XCTAssertTrue(String(describing: inline).contains("$5"),
+                      "Escaped currency must not turn into a math expression")
+        guard case let .mathBlock(first) = document.blocks[1].content else {
+            return XCTFail("Expected same-line display math block: \(document.blocks[1].content)")
+        }
+        XCTAssertTrue(first.contains("\\frac"))
+        guard case let .mathBlock(second) = document.blocks[2].content else {
+            return XCTFail("Expected multiline display math block: \(document.blocks[2].content)")
+        }
+        XCTAssertTrue(second.contains("\\sum"))
+        XCTAssertTrue(document.blocks.contains {
+            if case let .code(code, _) = $0.content { code.contains("$must_not_render$") }
+            else { false }
+        })
+    }
+
+    func testMathWithMarkdownDelimitersStillTypesetsWholeExpression() async throws {
+        for formula in [
+            "$x*y*z$",
+            "$a_{i} + b_{j}$",
+            "$\\frac{a_b}{\\sqrt{x}}$",
+            "$\\mathbf{x}^T$",
+        ] {
+            let source = "Prose before " + formula + " and after."
+            let document = try await MarkdownDocument.parse(source)
+            guard case let .paragraph(inline) = document.blocks.first?.content else {
+                return XCTFail("Missing paragraph for \(formula)")
+            }
+            let expressions = inline.compactMap { node -> String? in
+                if case let .math(latex, display: false) = node { latex } else { nil }
+            }
+            XCTAssertEqual(expressions, [String(formula.dropFirst().dropLast())],
+                           "Math extension must not let GFM emphasis split TeX: \(inline)")
+        }
+    }
+
+    func testMathTokenizationHonorsSourceEscapesAndDoesNotInventFormulae() async throws {
+        let document = try await MarkdownDocument.parse("escaped \\$x\\$ and $y$")
+        guard case let .paragraph(inline) = document.blocks.first?.content else {
+            return XCTFail("Missing escaped-dollar paragraph")
+        }
+        let expressions = inline.compactMap { node -> String? in
+            if case let .math(latex, _) = node { latex } else { nil }
+        }
+        XCTAssertEqual(expressions, ["y"])
+        XCTAssertTrue(String(describing: inline).contains("$x$"))
+        for source in ["unclosed $x", "cost $5", "\\$escaped"] {
+            let document = try await MarkdownDocument.parse(source)
+            guard case let .paragraph(inline) = document.blocks.first?.content else {
+                return XCTFail("Missing literal paragraph")
+            }
+            XCTAssertFalse(inline.contains { if case .math = $0 { true } else { false } },
+                           "Unexpected formula from \(source)")
+        }
+    }
+
+    func testMathInGFMTableCellUsesNativeFormulaNode() async throws {
+        let source = "| Name | Equation |\n| --- | --- |\n| x | $x_i*y_j$ |"
+        let document = try await MarkdownDocument.parse(source)
+        guard case let .table(_, rows, _) = document.blocks.first?.content else {
+            return XCTFail("Expected GFM table")
+        }
+        XCTAssertEqual(rows.count, 1)
+        guard let cell = rows.first?.last else { return XCTFail("Missing formula cell") }
+        XCTAssertTrue(cell.contains {
+            if case let .math(latex, _) = $0 { latex == "x_i*y_j" } else { false }
+        }, "Math in GFM table must not be swallowed by inline emphasis: \(cell)")
     }
 
     func testFencedCodeLanguageAndLiteralUnsafeText() async throws {
@@ -311,6 +424,43 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(visible.contains("name: [invalid"),
                       "Malformed YAML must not silently discard user source in preview: \(visible)")
         XCTAssertTrue(visible.contains("Main content"))
+    }
+
+    func testFootnotesUseSuperscriptReferencesAndSeparatedDefinitionArea() async throws {
+        let source = "Read this[^note] and another reference[^note].\n\n[^note]: A **rich** note."
+        let document = try await MarkdownDocument.parse(source)
+        guard case let .paragraph(inline) = document.blocks.first?.content else {
+            return XCTFail("Expected paragraph containing footnotes")
+        }
+        let rendered = MarkdownNativeText.attributed(inline)
+        let references = rendered.runs.filter {
+            $0.link?.fragment == "bailey-note:note"
+        }
+        XCTAssertEqual(references.count, 2)
+        for ref in references {
+            XCTAssertGreaterThan(ref.baselineOffset ?? 0, 2,
+                                 "GitHub-style footnote references must be superscript")
+        }
+        let regular = MarkdownNativeText.attributed([.link("#bailey-note:note", [.text("See note")])])
+        XCTAssertNil(regular.runs.first?.baselineOffset,
+                     "An explicit Markdown link to the note must remain normal link text")
+        let index = try XCTUnwrap(document.blocks.firstIndex {
+            $0.anchor == "bailey-note:note"
+        })
+        XCTAssertGreaterThan(index, 0)
+        if case .rule = document.blocks[index - 1].content {
+            // Footnote section is visually separated from article content.
+        } else {
+            XCTFail("Footnotes must start after the native section separator")
+        }
+        guard case let .paragraph(definition) = document.blocks[index].content,
+              case .text("1. ") = definition.first else {
+            return XCTFail("The footnote definition must use GitHub's ordered-list number")
+        }
+        XCTAssertTrue(definition.contains {
+            if case .strong = $0 { return true }
+            return false
+        }, "Footnote definition must retain bold Markdown syntax rather than literal **")
     }
 
     func testFootnotesDoNotLinkEscapedReferences() async throws {

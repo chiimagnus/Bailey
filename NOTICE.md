@@ -37,6 +37,7 @@ Bailey 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参�
 | YAML Front Matter | [Yams](https://github.com/jpsim/Yams)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-yams.txt) |
 | SVG 原生绘制 | [SwiftDraw](https://github.com/swhitty/SwiftDraw)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftdraw.txt) |
 | Mermaid 原生图表 | [MermaidKit](https://github.com/2389-research/MermaidKit)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-mermaidkit.txt) |
+| Markdown 原生数学排版 | [SwiftUIMath](https://github.com/gonzalezreal/swiftui-math)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftui-math.txt)；版本固定见 `Package.resolved` |
 
 升级依赖或重新生成资源时，保留原有许可证与版权文本；自有文档整理不翻译、覆盖或删减这些原文。
 补丁的行为与验证由 [development.md](docs/development.md#依赖与本地补丁) 维护。

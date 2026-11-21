@@ -108,7 +108,8 @@ Debug／Release 构建与签名。
 
 Apple `swift-markdown`（经 `swift-cmark` 使用 cmark-gfm）仅负责解析 Markdown；
 阅读 UI 由 Bailey 自己的 SwiftUI 组件渲染，不使用 Textual、MarkdownView 或 WebKit。
-代码围栏复用现有 Tree-sitter 高亮，资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
+代码围栏复用现有 Tree-sitter 高亮；公式使用公开的 SwiftUIMath Canvas 排版 API，不使用私有 SPI。
+资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
 
 ### Neon
 

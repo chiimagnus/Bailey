@@ -5,6 +5,466 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownLayoutTests: XCTestCase {
+    func testWrappedLinkPointerRegionsFollowNativeWindowResizing() async throws {
+        func descendants(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+        let title = Array(repeating: "GitHub 中文 Unicode link", count: 36)
+            .joined(separator: " ")
+        let document = try await MarkdownDocument.parse("[\(title)](docs/guide.md)")
+        let preview = MarkdownPreview(
+            document: document, revision: "resize-link",
+            resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Resize.md",
+                                       directory: "/tmp/Bailey-Markdown-Layout",
+                                       backend: LocalWorkspaceBackend.shared),
+            assetRefresh: 0, position: .constant(nil)
+        )
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 280, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: preview)
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+
+        var lineCountByWidth: [Int] = []
+        for width in [280, 640, 340] {
+            window.setContentSize(NSSize(width: width, height: 500))
+            for _ in 0..<10 {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                await Task.yield()
+            }
+            let overlay = try XCTUnwrap(descendants(in: host)
+                .compactMap { $0 as? MarkdownCursorRectView }.first)
+            let clip = try XCTUnwrap(descendants(in: host)
+                .compactMap { $0 as? NSClipView }.first(where: {
+                    guard let documentView = $0.documentView else { return false }
+                    return overlay.isDescendant(of: documentView)
+                }))
+            let content = try XCTUnwrap(clip.documentView)
+            let registered = content.trackingAreas.filter {
+                ($0.owner as? MarkdownCursorRectView) === overlay
+            }
+            XCTAssertEqual(registered.count, overlay.linkRects.count,
+                           "Every visible wrapped link line must have an exact cursor region")
+            XCTAssertGreaterThan(overlay.linkRects.count, 1)
+            for (source, area) in zip(overlay.linkRects, registered) {
+                let expected = overlay.convert(source, to: content)
+                XCTAssertEqual(expected.minX, area.rect.minX, accuracy: 1)
+                XCTAssertEqual(expected.minY, area.rect.minY, accuracy: 1)
+            }
+            lineCountByWidth.append(registered.count)
+        }
+        XCTAssertGreaterThan(lineCountByWidth[0], lineCountByWidth[1],
+                             "Narrow Markdown must wrap links into more cursor regions")
+        XCTAssertGreaterThan(lineCountByWidth[2], lineCountByWidth[1],
+                             "Shrinking again must rebuild the true native link bounds")
+    }
+
+    func testLinkCursorRectsRemainAlignedAfterScrollingOneLargeParagraph() async throws {
+        func descendants(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+
+        let source = "[Start](guide.md) "
+            + String(repeating: "word mixed Unicode 中文 café ", count: 450)
+            + " [Finish](guide.md)"
+        let document = try await MarkdownDocument.parse(source)
+        let preview = MarkdownPreview(
+            document: document, revision: "scroll-link",
+            resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Long.md",
+                                       directory: "/tmp/Bailey-Markdown-Layout",
+                                       backend: LocalWorkspaceBackend.shared),
+            assetRefresh: 0, position: .constant(nil)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: -2000, y: -2000, width: 440, height: 220),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: preview)
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<5 {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            await Task.yield()
+        }
+        let overlay = try XCTUnwrap(descendants(in: host)
+            .compactMap { $0 as? MarkdownCursorRectView }.first)
+        XCTAssertEqual(overlay.linkRects.count, 2)
+        var ancestor: NSView? = overlay.superview
+        while let view = ancestor, !(view is NSClipView) {
+            ancestor = view.superview
+        }
+        let trackingSurface = try XCTUnwrap((ancestor as? NSClipView)?.documentView)
+
+        func checkAlignment(_ stage: String) {
+            let expected = overlay.linkRects
+                .map { overlay.convert($0, to: trackingSurface) }
+                .sorted { $0.minY < $1.minY }
+            let actual = trackingSurface.trackingAreas
+                .filter { ($0.owner as? MarkdownCursorRectView) === overlay }
+                .map(\.rect)
+                .sorted { $0.minY < $1.minY }
+            XCTAssertEqual(actual.count, expected.count,
+                           "Tracked link areas must follow both actual glyph runs at \(stage)")
+            for (found, target) in zip(actual, expected) {
+                XCTAssertEqual(found.minX, target.minX, accuracy: 1,
+                               "Stale horizontal link cursor range at \(stage)")
+                XCTAssertEqual(found.minY, target.minY, accuracy: 1,
+                               "Stale vertical link cursor range at \(stage)")
+                XCTAssertEqual(found.width, target.width, accuracy: 1)
+                XCTAssertEqual(found.height, target.height, accuracy: 1)
+            }
+        }
+        checkAlignment("first frame")
+        let scroll = try XCTUnwrap(descendants(in: host)
+            .compactMap { $0 as? NSScrollView }.first(where: {
+                $0.contentView.bounds.height > 100 && $0.contentView.bounds.width > 150
+            }))
+        let content = try XCTUnwrap(scroll.documentView)
+        let bottom = content.frame.height - scroll.contentView.bounds.height
+        XCTAssertGreaterThan(bottom, 100)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        for _ in 0..<5 {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            await Task.yield()
+        }
+        checkAlignment("after scrolling without changing the Markdown text")
+    }
+
+    func testLongLinkedDocumentsKeepCursorTrackingBoundedWhileScrolling() async throws {
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            let own = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrollViews)
+        }
+
+        let resource = MarkdownResource(
+            path: "/tmp/Bailey-Markdown-Layout/Links.md",
+            directory: "/tmp/Bailey-Markdown-Layout",
+            backend: LocalWorkspaceBackend.shared
+        )
+        for count in [500, 5_000, 20_000] {
+            let source = (0..<count)
+                .map { "Paragraph \($0) [document \($0)](docs/\($0).md) **highlighted**." }
+                .joined(separator: "\n\n")
+            let document = try await MarkdownDocument.parse(source)
+            XCTAssertEqual(document.blocks.count, count)
+            let window = NSWindow(
+                contentRect: NSRect(x: -2000, y: -2000, width: 720, height: 420),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: MarkdownPreview(
+                document: document, revision: "\(count)",
+                resource: resource, assetRefresh: 0, position: .constant(nil)
+            ))
+            host.sizingOptions = []
+            window.contentView = host
+            window.orderFront(nil)
+
+            let clock = ContinuousClock()
+            let start = clock.now
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let first = start.duration(to: clock.now)
+            func cursorTrackingCount(in view: NSView) -> Int {
+                view.trackingAreas.filter { $0.owner is MarkdownCursorRectView }.count
+                    + view.subviews.reduce(0) { $0 + cursorTrackingCount(in: $1) }
+            }
+            let tracking = { cursorTrackingCount(in: host) }
+            XCTAssertGreaterThan(tracking(), 0,
+                                 "A visible linked paragraph needs native hand-pointer tracking")
+            XCTAssertLessThanOrEqual(tracking(), 256,
+                                     "A long document must not register a tracking area for every link")
+            guard let scroll = scrollViews(in: host).first(where: {
+                $0.contentView.bounds.height > 200 && $0.contentView.bounds.width > 200
+            }), let content = scroll.documentView else {
+                window.close()
+                return XCTFail("Expected scrollable Markdown content at \(count) paragraphs")
+            }
+            let bottom = max(0, content.frame.height - scroll.contentView.bounds.height)
+            let scrollStart = clock.now
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let scrolling = scrollStart.duration(to: clock.now)
+            XCTAssertLessThanOrEqual(tracking(), 256,
+                                     "Old link hover areas must be replaced after scrolling")
+            print("SWIFTMARKDOWN_LINKS paragraphs=\(count) first=\(first) "
+                + "scroll=\(scrolling) tracking=\(tracking())")
+            window.close()
+        }
+    }
+
+    func testLinkPointerRectanglesComeFromVisibleSwiftUITextRuns() async throws {
+        let document = try await MarkdownDocument.parse(
+            "Before [**linked text**](guide.md) and after.\n\nAnother paragraph."
+        )
+        let preview = MarkdownPreview(
+            document: document, revision: "link-rect",
+            resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Pointer.md",
+                                       directory: "/tmp/Bailey-Markdown-Layout",
+                                       backend: LocalWorkspaceBackend.shared),
+            assetRefresh: 0, position: .constant(nil)
+        )
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 720, height: 350),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: AnyView(preview))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+
+        func cursorViews(in view: NSView) -> [MarkdownCursorRectView] {
+            let own = (view as? MarkdownCursorRectView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(cursorViews)
+        }
+        var overlays: [MarkdownCursorRectView] = []
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            overlays = cursorViews(in: host)
+            if overlays.contains(where: { !$0.linkRects.isEmpty }) { break }
+            await Task.yield()
+        }
+        XCTAssertFalse(overlays.isEmpty, "SwiftUI must host an AppKit cursor-rect overlay")
+        let glyphRects = overlays.flatMap(\.linkRects)
+        XCTAssertFalse(glyphRects.isEmpty,
+                       "Text.Layout must expose exact linked text run bounds")
+        for overlay in overlays {
+            XCTAssertGreaterThan(overlay.bounds.width, 0)
+            XCTAssertGreaterThan(overlay.bounds.height, 0)
+            for rect in overlay.linkRects {
+                XCTAssertGreaterThan(rect.width, 0)
+                XCTAssertGreaterThan(rect.height, 0)
+                XCTAssertTrue(overlay.bounds.intersects(rect), "Link glyph must be inside active cursor-rect view")
+            }
+        }
+        func activeLinkAreas(in view: NSView) -> [NSTrackingArea] {
+            view.trackingAreas.filter { $0.owner is MarkdownCursorRectView }
+                + view.subviews.flatMap(activeLinkAreas)
+        }
+        XCTAssertFalse(activeLinkAreas(in: host).isEmpty,
+                       "Link hover must be tracked in its scrolling content coordinates")
+        host.rootView = AnyView(Text("New document without Markdown links"))
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertTrue(activeLinkAreas(in: host).isEmpty,
+                      "Switching documents must release the old link tracking areas")
+    }
+
+    func testGitHubStylePreviewRendersAcrossLightDarkAndNarrowWidths() async throws {
+        let markdown = """
+            # Repository README
+
+            A paragraph with **strong emphasis**, *italic*, ~~strike~~,
+            `inline code`, and [**styled link**](docs/guide.md).
+
+            ## Installation
+
+            > Important: GitHub-flavored Markdown must remain readable with long quoted text
+            > and links to [documentation](docs/guide.md).
+
+            - [x] Completed task
+            - [ ] Pending task
+            - Nested list item **keeps bold**
+
+            | File | Status | Comment |
+            | :--- | :---: | ---: |
+            | README.md | Ready | Excellent |
+            | AGENTS.md | Review | Pending |
+
+            ```swift
+            let answer = 42
+            print(answer)
+            ```
+
+            ### Additional notes
+
+            The preview remains native, selectable, and keyboard accessible.
+            """
+        let document = try await MarkdownDocument.parse(markdown)
+        let resource = MarkdownResource(
+            path: "/tmp/Bailey-Markdown-Primer/README.md",
+            directory: "/tmp/Bailey-Markdown-Primer",
+            backend: LocalWorkspaceBackend.shared
+        )
+        for (dimension, dark) in [(960.0, false), (960.0, true),
+                                  (340.0, false), (340.0, true)] {
+            let width = CGFloat(dimension)
+            let window = NSWindow(
+                contentRect: NSRect(x: -2000, y: -2000, width: width, height: 620),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let view = MarkdownPreview(document: document, revision: "README",
+                                       resource: resource, assetRefresh: 0,
+                                       position: .constant(nil))
+                .environment(\.colorScheme, dark ? .dark : .light)
+            let host = NSHostingView(rootView: view)
+            host.sizingOptions = []
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let screenshot = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let attachment = XCTAttachment(data: screenshot, uniformTypeIdentifier: "public.png")
+            attachment.name = "GitHub README \(Int(width))pt \(dark ? "dark" : "light")"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let background = try XCTUnwrap(bitmap.colorAt(x: 5, y: bitmap.pixelsHigh - 5)?
+                .usingColorSpace(.sRGB))
+            let luminance = 0.2126 * background.redComponent
+                + 0.7152 * background.greenComponent + 0.0722 * background.blueComponent
+            if dark {
+                XCTAssertLessThan(luminance, 0.2, "Dark preview must use GitHub dark canvas")
+            } else {
+                XCTAssertGreaterThan(luminance, 0.85, "Light preview must use GitHub white canvas")
+            }
+            XCTAssertEqual(host.bounds.width, width, accuracy: 1)
+            window.close()
+        }
+    }
+
+    func testRepositoryDocumentationRendersWithoutLosingContentInNarrowAndWideDocks() async throws {
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            let own = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrollViews)
+        }
+
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for relativePath in ["AGENTS.md", "docs/testing.md", "docs/features/editor.md"] {
+            let url = repository.appendingPathComponent(relativePath)
+            let original = try Data(contentsOf: url)
+            let source = try XCTUnwrap(String(data: original, encoding: .utf8))
+            let document = try await MarkdownDocument.parse(source)
+            XCTAssertGreaterThan(document.blocks.count, 10, relativePath)
+            XCTAssertTrue(document.blocks.contains {
+                if case .heading = $0.content { return true }
+                return false
+            }, "Actual documentation must retain its headings: \(relativePath)")
+
+            let resource = MarkdownResource(
+                path: url.path, directory: url.deletingLastPathComponent().path,
+                backend: LocalWorkspaceBackend.shared
+            )
+            for (width, dark) in [(340.0, false), (960.0, true)] {
+                let window = NSWindow(
+                    contentRect: NSRect(x: -2000, y: -2000, width: width, height: 620),
+                    styleMask: [.titled], backing: .buffered, defer: false
+                )
+                window.isReleasedWhenClosed = false
+                let host = NSHostingView(rootView: MarkdownPreview(
+                    document: document, revision: relativePath,
+                    resource: resource, assetRefresh: 0, position: .constant(nil)
+                ).environment(\.colorScheme, dark ? .dark : .light))
+                host.sizingOptions = []
+                window.contentView = host
+                window.orderFront(nil)
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+
+                let scroll = try XCTUnwrap(scrollViews(in: host).first {
+                    $0.contentView.bounds.width > 200 && $0.contentView.bounds.height > 200
+                }, "Actual Markdown requires a scrollable content surface: \(relativePath)")
+                let content = try XCTUnwrap(scroll.documentView)
+                XCTAssertGreaterThan(content.frame.height, scroll.contentView.bounds.height,
+                                     "Actual documentation should scroll: \(relativePath)")
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                let snapshot = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                snapshot.name = "Real \(relativePath) \(Int(width))pt \(dark ? "dark" : "light")"
+                snapshot.lifetime = .keepAlways
+                add(snapshot)
+
+                let bottom = content.frame.height - scroll.contentView.bounds.height
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0,
+                                     "A long real Markdown file must reach its final blocks")
+                window.close()
+            }
+            XCTAssertEqual(try Data(contentsOf: url), original,
+                           "Rendering actual documentation must never change its bytes")
+        }
+    }
+
+    func testWideGFMTableScrollsHorizontallyWithoutExpandingTheDocument() async throws {
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            let own = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrollViews)
+        }
+        let wideCell = String(repeating: "UNBREAKABLECOLUMN", count: 40)
+        let source = [
+            "# Wide GFM table", "",
+            "| Kind | Long description | Status |",
+            "| --- | --- | --- |",
+            "| Markdown | \(wideCell) | Ready |"
+        ].joined(separator: "\n")
+        let document = try await MarkdownDocument.parse(source)
+        let resource = MarkdownResource(
+            path: "/tmp/Bailey-Markdown-Layout/Wide.md",
+            directory: "/tmp/Bailey-Markdown-Layout",
+            backend: LocalWorkspaceBackend.shared
+        )
+        for width in [340.0, 520.0] {
+            let window = NSWindow(
+                contentRect: NSRect(x: -2000, y: -2000, width: width, height: 620),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: MarkdownPreview(
+                document: document, revision: source,
+                resource: resource, assetRefresh: 0, position: .constant(nil)
+            ))
+            host.sizingOptions = []
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let candidates = scrollViews(in: host)
+            guard let horizontal = candidates.first(where: {
+                guard let documentView = $0.documentView else { return false }
+                return $0.contentView.bounds.width < width - 10
+                    && documentView.frame.width > $0.contentView.bounds.width + 100
+            }) else {
+                window.close()
+                return XCTFail("Wide GFM table must have its own scrollable width at \(Int(width))pt")
+            }
+            guard let documentView = horizontal.documentView else {
+                window.close()
+                return XCTFail("Missing GFM table scroll content")
+            }
+            let right = documentView.frame.width - horizontal.contentView.bounds.width
+            horizontal.contentView.scroll(to: NSPoint(x: right, y: 0))
+            horizontal.reflectScrolledClipView(horizontal.contentView)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            XCTAssertGreaterThan(horizontal.contentView.bounds.minX, 100,
+                                 "The last table column must remain reachable at \(Int(width))pt")
+            XCTAssertEqual(host.bounds.width, width, accuracy: 1)
+            window.close()
+        }
+    }
+
     func testNativePreviewFirstFrameAndLongDocumentScrolling() async throws {
         func scrollViews(in view: NSView) -> [NSScrollView] {
             let own = (view as? NSScrollView).map { [$0] } ?? []

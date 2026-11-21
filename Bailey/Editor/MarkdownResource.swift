@@ -148,6 +148,7 @@ struct MarkdownNativeImage: View {
                 if let url {
                     Button { openURL(url) } label: { frames(picture) }
                         .buttonStyle(.plain)
+                        .pointerStyle(.link)
                 } else {
                     frames(picture)
                 }

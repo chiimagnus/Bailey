@@ -5,6 +5,267 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewUITests: XCTestCase {
+    func testRealBaileyDocumentationPreviewKeepsItsOriginalBytes() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = repository.appendingPathComponent("docs/testing.md")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertGreaterThan(source.utf8.count, 20_000)
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("Actual-Testing.md", text: source)
+        let original = try Data(contentsOf: file)
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertEqual((editor.value as? String)?.count, source.count)
+
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        XCTAssertTrue(preview.staticTexts["测试与验收"].waitForExistence(timeout: 15),
+                      "The real repository document must render its first heading")
+        XCTAssertTrue(preview.staticTexts["完成标准"].waitForExistence(timeout: 15))
+        preview.swipeUp()
+        XCTAssertTrue(preview.exists, "Long real documentation must remain readable after scrolling")
+
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertEqual((editor.value as? String)?.count, source.count)
+        XCTAssertEqual(try Data(contentsOf: file), original,
+                       "Opening, scrolling, and closing preview must not write the source file")
+    }
+
+    func testInlineAndBlockHTMLLinksUseHandPointerWithoutWebKit() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let destination = try fixture.file("docs/guide.md", text: "# Actual guide")
+        let source = try fixture.file("HTMLLinks.md", text: """
+            # Native HTML links
+
+            Before <a href="docs/guide.md"><strong>Inline HTML</strong></a> after.
+
+            <p><a href="docs/guide.md"><em>Block HTML</em></a></p>
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(source, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        for label in ["Inline HTML", "Block HTML"] {
+            let link = preview.links[label]
+            XCTAssertTrue(link.waitForExistence(timeout: 10), preview.debugDescription)
+            link.hover()
+            XCTAssertEqual(NSCursor.currentSystem?.hotSpot, NSCursor.pointingHand.hotSpot,
+                           "HTML \(label) must use the pointing-hand cursor over actual linked text")
+            link.click()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(destination, in: window)
+                .waitForExistence(timeout: 10), "\(label) did not open the authorized project file")
+            app.typeKey("w", modifierFlags: .command)
+            XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        }
+    }
+
+    func testHoverUsesHandOnlyForActualMarkdownLinks() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("Pointer.md", text: """
+            # Plain Heading
+
+            Regular text has a text-selection cursor.
+
+            [Read guide](guide.md) and [More info](guide.md) after.
+            """)
+        let destination = try fixture.file("guide.md", text: "# Guide")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let heading = preview.staticTexts["Plain Heading"].firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 15))
+        heading.hover()
+        guard let normal = NSCursor.currentSystem else { return XCTFail("System cursor unavailable") }
+        let hand = NSCursor.pointingHand
+        XCTAssertFalse(normal.image.tiffRepresentation == hand.image.tiffRepresentation
+                       && normal.hotSpot == hand.hotSpot,
+                       "Ordinary Markdown text must not inherit the hand cursor")
+
+        let link = preview.links["Read guide"]
+        XCTAssertTrue(link.waitForExistence(timeout: 10), preview.debugDescription)
+        link.hover()
+        guard let cursor = NSCursor.currentSystem else { return XCTFail("Link cursor unavailable") }
+        XCTAssertEqual(cursor.hotSpot, hand.hotSpot,
+                       "A link must expose the pointing-hand system cursor")
+        XCTAssertEqual(cursor.image.tiffRepresentation, hand.image.tiffRepresentation,
+                       "Moving onto a Markdown text link must change the actual cursor shape")
+        let second = preview.links["More info"]
+        XCTAssertTrue(second.waitForExistence(timeout: 10))
+        second.hover()
+        XCTAssertEqual(NSCursor.currentSystem?.hotSpot, hand.hotSpot,
+                       "Another link in the same paragraph must also use the hand pointer")
+        let plain = preview.staticTexts.containing(NSPredicate(
+            format: "value CONTAINS %@", "Regular text has a text-selection cursor"
+        )).firstMatch
+        XCTAssertTrue(plain.waitForExistence(timeout: 10))
+        plain.hover()
+        XCTAssertNotEqual(NSCursor.currentSystem?.hotSpot, hand.hotSpot,
+                          "Leaving a link must restore the normal text cursor")
+        guard let textPointer = NSCursor.currentSystem else {
+            return XCTFail("Selectable prose must expose a system cursor")
+        }
+        XCTAssertGreaterThan(textPointer.image.size.height, textPointer.image.size.width * 1.5,
+                             "Selectable Markdown prose must restore the tall I-beam pointer")
+        let anchor = preview.buttons.matching(identifier: "bailey.markdown.anchor.plain-heading").firstMatch
+        XCTAssertTrue(anchor.waitForExistence(timeout: 10))
+        anchor.hover()
+        XCTAssertEqual(NSCursor.currentSystem?.hotSpot, hand.hotSpot,
+                       "Heading link button must retain its native hand pointer")
+        link.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(destination, in: window).waitForExistence(timeout: 10),
+                      "Link cursor tracking must not steal the native Text click action")
+    }
+
+    func testFootnoteLinkOpensSeparatedNumberedSection() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let filler = (0..<40).map { "Paragraph \($0) with safe content." }
+            .joined(separator: "\n\n")
+        let file = try fixture.file("Footnotes.md", text: """
+            # Footnote article
+
+            Read the attached footnote[^ref].
+
+            \(filler)
+
+            [^ref]: A separate, **formatted** native footnote.
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let reference = preview.links["1"].firstMatch
+        XCTAssertTrue(reference.waitForExistence(timeout: 15), preview.debugDescription)
+        reference.hover()
+        let original = XCTAttachment(screenshot: window.screenshot())
+        original.name = "GitHub superscript footnote link"
+        original.lifetime = .keepAlways
+        add(original)
+
+        reference.click()
+        let reached = XCTAttachment(screenshot: window.screenshot())
+        reached.name = "GitHub footnote section immediately after navigation"
+        reached.lifetime = .keepAlways
+        add(reached)
+        let definition = preview.staticTexts.containing(NSPredicate(
+            format: "value CONTAINS %@", "A separate, formatted native footnote"
+        )).firstMatch
+        XCTAssertTrue(definition.waitForExistence(timeout: 15), preview.debugDescription)
+        XCTAssertTrue(preview.frame.intersects(definition.frame),
+                      "Clicking a footnote reference must reveal the separated note")
+    }
+
+    func testHeadingLinkScrollsToAnchorAndProvidesCopyablePointerTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let filler = (0..<45).map { "Paragraph \($0) before the target." }
+            .joined(separator: "\n\n")
+        let file = try fixture.file("Anchors.md", text: """
+            # Navigation
+
+            [Go to details](#detail-section)
+
+            \(filler)
+
+            ## Detail Section
+
+            Target paragraph is visible after navigation.
+
+            [Return to top](#navigation)
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let link = preview.links["Go to details"]
+        XCTAssertTrue(link.waitForExistence(timeout: 15), preview.debugDescription)
+        link.click()
+
+        let heading = preview.staticTexts["Detail Section"].firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 15), preview.debugDescription)
+        XCTAssertTrue(preview.frame.intersects(heading.frame),
+                      "Anchor navigation must scroll the destination into the visible viewport")
+        heading.hover()
+        let hovered = XCTAttachment(screenshot: window.screenshot())
+        hovered.name = "GitHub heading link hovered after in-document navigation"
+        hovered.lifetime = .keepAlways
+        add(hovered)
+        let copy = preview.buttons.matching(
+            identifier: "bailey.markdown.anchor.detail-section"
+        ).firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 10), preview.debugDescription)
+        copy.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "#detail-section")
+        let back = preview.links["Return to top"]
+        XCTAssertTrue(back.waitForExistence(timeout: 10), preview.debugDescription)
+        back.hover()
+        XCTAssertEqual(NSCursor.currentSystem?.hotSpot, NSCursor.pointingHand.hotSpot,
+                       "A link revealed after scrolling must use the hand cursor")
+        back.click()
+        let start = preview.staticTexts["Navigation"].firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        XCTAssertTrue(preview.frame.intersects(start.frame),
+                      "In-document navigation must restore the heading at the top")
+    }
+
+    func testStyledMarkdownLinkRetainsRichTextAndOpensTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let destination = try fixture.file("docs/guide.md", text: "# Target\n\nDestination body.")
+        let source = try fixture.file("Links.md", text: """
+            # Styled links
+
+            [**Bold** *Italic* ~~Strike~~](docs/guide.md)
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(source, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let link = preview.links["Bold Italic Strike"]
+        XCTAssertTrue(link.waitForExistence(timeout: 15), preview.debugDescription)
+        link.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(destination, in: window).waitForExistence(timeout: 10))
+        XCTAssertEqual(window.textViews.firstMatch.value as? String,
+                       "# Target\n\nDestination body.")
+    }
+
     func testImageBetweenParagraphWordsIsAnAccessibleNativeImage() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("tiny.svg", text: """
@@ -64,9 +325,15 @@ final class MarkdownPreviewUITests: XCTestCase {
             format: "value CONTAINS %@", "A native footnote"
         )).firstMatch.waitForExistence(timeout: 15), preview.debugDescription)
         let copy = preview.buttons["Copy"]
-        XCTAssertTrue(copy.waitForExistence(timeout: 10))
+        XCTAssertTrue(copy.waitForExistence(timeout: 10),
+                      "Copy must remain accessible to keyboard and VoiceOver before mouse hover")
+        XCTAssertEqual(copy.value as? String, "Ready")
+        preview.staticTexts.containing(NSPredicate(
+            format: "value CONTAINS %@", "let answer = 42"
+        )).firstMatch.hover()
         copy.click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), code)
+        XCTAssertEqual(copy.value as? String, "Copied")
 
         let screenshot = XCTAttachment(screenshot: window.screenshot())
         screenshot.name = "Swift fenced code and footnote in native Markdown"

@@ -58,6 +58,7 @@ struct MarkdownHTMLContent: View {
                                     .fontWeight(cell.isHeader ? .semibold : .regular)
                                     .padding(.horizontal, 13)
                                     .padding(.vertical, 6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                     .overlay(alignment: .trailing) {
                                         MarkdownGitHubColors.border(dark: colorScheme == .dark)
                                             .frame(width: 1)
@@ -131,6 +132,7 @@ struct MarkdownHTMLContent: View {
                                             assetRefresh: assetRefresh)
                     }
                     .buttonStyle(.plain)
+                    .pointerStyle(.link)
                     .foregroundStyle(MarkdownGitHubColors.link(dark: colorScheme == .dark))
                 }
             case .emphasis(let children, let tag):
@@ -190,7 +192,7 @@ struct MarkdownHTMLContent: View {
                 guard let link else { return result + Text(verbatim: value) }
                 var attributed = AttributedString(value)
                 attributed.link = link
-                return result + Text(attributed)
+                return result + Text(attributed).customAttribute(MarkdownLinkGlyph())
             case .lineBreak: return result + Text(verbatim: "\n")
             case .emphasis(let children, let tag):
                 return result + styledText(inlineText(children, link: link), tag: tag)
@@ -243,6 +245,7 @@ private struct MarkdownHTMLDetails: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
             .accessibilityIdentifier("bailey.markdown.details")
             if expanded {
                 MarkdownHTMLContent(nodes: children, resource: resource,
