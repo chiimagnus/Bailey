@@ -95,53 +95,74 @@ struct MarkdownPreview: View {
     @State private var linkToOpen: URL?
     @State private var failedLink = false
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if let warning = document.warning {
-                        Label(warning, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
-                    }
-                    if failedLink {
-                        Label("Could not open this link.", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(document.blocks.indices, id: \.self) { index in
-                        let block = document.blocks[index]
-                        Group {
-                            switch block.content {
-                            case .markdown(let markup):
-                                StructuredText(revision, parser: PreparedMarkdown(markup: markup))
-                                    .textual.structuredTextStyle(.gitHub)
-                                    .textual.textSelection(.enabled)
-                                    .frame(minHeight: 12, alignment: .topLeading)
-                                    .id(revision)
-                            case .html(let nodes):
-                                MarkdownHTMLContent(nodes: nodes, resource: resource)
-                            case .mermaid(let source, let line):
-                                MarkdownMermaidView(source: source, line: line).id(source)
-                            }
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if let warning = document.warning {
+                            Label(warning, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.secondary)
                         }
-                        .id(index)
+                        if failedLink {
+                            Label("Could not open this link.", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(document.blocks.indices, id: \.self) { index in
+                            let block = document.blocks[index]
+                            let isFootnote = block.anchor?.hasPrefix("bailey-note:") == true
+                            Group {
+                                if isFootnote && (index == 0
+                                    || document.blocks[index - 1].anchor?.hasPrefix("bailey-note:") != true) {
+                                    Divider()
+                                        .overlay(MarkdownGitHubColors.border(dark: colorScheme == .dark))
+                                }
+                                switch block.content {
+                                case .markdown(let markup):
+                                    StructuredText(revision, parser: PreparedMarkdown(markup: markup))
+                                        .textual.headingStyle(MarkdownGitHubHeadingStyle())
+                                        .textual.inlineStyle(MarkdownGitHubColors.inlineStyle)
+                                        .textual.tableStyle(MarkdownGitHubTableStyle())
+                                        .textual.structuredTextStyle(.gitHub)
+                                        .font(.system(size: isFootnote ? 12 : 16))
+                                        .foregroundStyle(isFootnote
+                                            ? MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
+                                            : MarkdownGitHubColors.text(dark: colorScheme == .dark))
+                                        .textual.textSelection(.enabled)
+                                        .frame(minHeight: 12, alignment: .topLeading)
+                                        .id(revision)
+                                case .html(let nodes):
+                                    MarkdownHTMLContent(nodes: nodes, resource: resource)
+                                case .mermaid(let source, let line):
+                                    MarkdownMermaidView(source: source, line: line).id(source)
+                                }
+                            }
+                            .id(index)
+                        }
                     }
+                    .scrollTargetLayout()
+                    .font(.system(size: 16))
+                    .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
+                    // GitHub markdown-body: 980 px including padding, 45 px / 15 px below 768.
+                    .frame(maxWidth: 890, alignment: .leading)
+                    .padding(geometry.size.width < 768 ? 15 : 45)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .scrollTargetLayout()
-                .frame(maxWidth: 820, alignment: .leading)
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .scrollPosition(id: $position, anchor: .top)
+                .environment(\.openURL, OpenURLAction { url in
+                    if url.absoluteString.hasPrefix("#"), let fragment = url.fragment,
+                       let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                        proxy.scrollTo(index, anchor: .top)
+                    } else {
+                        linkToOpen = url
+                    }
+                    return .handled
+                })
             }
-            .scrollPosition(id: $position, anchor: .top)
-            .environment(\.openURL, OpenURLAction { url in
-                if url.absoluteString.hasPrefix("#"), let fragment = url.fragment,
-                   let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                    proxy.scrollTo(index, anchor: .top)
-                } else {
-                    linkToOpen = url
-                }
-                return .handled
-            })
         }
+        .background(MarkdownGitHubColors.background(dark: colorScheme == .dark))
         .textual.imageAttachmentLoader(MarkdownImageLoader(resource: resource))
         .textual.emojiAttachmentLoader(MarkdownImageLoader(resource: resource))
         .accessibilityIdentifier("bailey.markdown.preview")
@@ -152,6 +173,94 @@ struct MarkdownPreview: View {
             failedLink = !opened
             self.linkToOpen = nil
         }
+    }
+}
+
+private enum MarkdownGitHubColors {
+    static let inlineStyle = InlineStyle.gitHub
+        .link(.foregroundColor(DynamicColor(
+            light: Color(red: 9 / 255, green: 105 / 255, blue: 218 / 255),
+            dark: Color(red: 68 / 255, green: 147 / 255, blue: 248 / 255)
+        )))
+        .code(.monospaced, .fontScale(0.85), .backgroundColor(DynamicColor(
+            light: Color(red: 129 / 255, green: 139 / 255, blue: 152 / 255).opacity(31 / 255),
+            dark: Color(red: 101 / 255, green: 108 / 255, blue: 118 / 255).opacity(51 / 255)
+        )))
+
+    static func background(dark: Bool) -> Color {
+        dark ? Color(red: 13 / 255, green: 17 / 255, blue: 23 / 255) : .white
+    }
+
+    static func text(dark: Bool) -> Color {
+        dark ? Color(red: 240 / 255, green: 246 / 255, blue: 252 / 255)
+             : Color(red: 31 / 255, green: 35 / 255, blue: 40 / 255)
+    }
+
+    static func muted(dark: Bool) -> Color {
+        dark ? Color(red: 21 / 255, green: 27 / 255, blue: 35 / 255)
+             : Color(red: 246 / 255, green: 248 / 255, blue: 250 / 255)
+    }
+
+    static func secondary(dark: Bool) -> Color {
+        dark ? Color(red: 145 / 255, green: 152 / 255, blue: 161 / 255)
+             : Color(red: 89 / 255, green: 99 / 255, blue: 110 / 255)
+    }
+
+    static func border(dark: Bool) -> Color {
+        dark ? Color(red: 61 / 255, green: 68 / 255, blue: 77 / 255)
+             : Color(red: 209 / 255, green: 217 / 255, blue: 224 / 255)
+    }
+}
+
+private struct MarkdownGitHubHeadingStyle: StructuredText.HeadingStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
+    @ViewBuilder
+    func makeBody(configuration: Configuration) -> some View {
+        if configuration.headingLevel == 6 {
+            configuration.label
+                .textual.fontScale(0.85)
+                .textual.lineSpacing(.fontScaled(0.125))
+                .textual.blockSpacing(.init(top: 24, bottom: 16))
+                .fontWeight(.semibold)
+                .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
+        } else {
+            StructuredText.GitHubHeadingStyle.gitHub.makeBody(configuration: configuration)
+        }
+    }
+}
+
+private struct MarkdownGitHubTableStyle: StructuredText.TableStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let border = MarkdownGitHubColors.border(dark: colorScheme == .dark)
+        let muted = MarkdownGitHubColors.muted(dark: colorScheme == .dark)
+        configuration.label
+            .textual.tableCellSpacing(horizontal: 0, vertical: 0)
+            .textual.blockSpacing(.init(top: 0, bottom: 16))
+            .textual.tableBackground { layout in
+                Canvas { context, _ in
+                    for row in layout.rowIndices.dropFirst() where row.isMultiple(of: 2) {
+                        context.fill(Path(layout.rowBounds(row)), with: .color(muted))
+                    }
+                }
+            }
+            .textual.tableOverlay { layout in
+                Canvas { context, _ in
+                    for column in layout.columnIndices.dropLast() {
+                        let bounds = layout.columnBounds(column)
+                        context.fill(Path(CGRect(x: bounds.maxX - 0.5, y: layout.bounds.minY,
+                                                 width: 1, height: layout.bounds.height)), with: .color(border))
+                    }
+                    for row in layout.rowIndices.dropLast() {
+                        let bounds = layout.rowBounds(row)
+                        context.fill(Path(CGRect(x: layout.bounds.minX, y: bounds.maxY - 0.5,
+                                                 width: layout.bounds.width, height: 1)), with: .color(border))
+                    }
+                }
+            }
+            .border(border, width: 1)
     }
 }
 
@@ -185,7 +294,7 @@ struct PreparedMarkdown: MarkupParser {
                     let latex = String(notation.dropFirst(markers).dropLast(markers))
                     let bounds = Math.typographicBounds(
                         for: latex, fitting: .unspecified,
-                        font: .init(name: .latinModern, size: 14), style: display ? .display : .text
+                        font: .init(name: .latinModern, size: 16), style: display ? .display : .text
                     )
                     if bounds.size.width > 0 {
                         attributes.textual.attachment = attachment
@@ -205,6 +314,7 @@ struct PreparedMarkdown: MarkupParser {
 private struct MarkdownHTMLContent: View {
     let nodes: [MarkdownHTML]
     let resource: MarkdownResource
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ForEach(nodes.indices, id: \.self) { index in
@@ -213,39 +323,142 @@ private struct MarkdownHTMLContent: View {
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(verbatim: text).textSelection(.enabled)
                 }
+            case .paragraph(let children):
+                if Self.isInline(children) {
+                    Self.inlineText(children).textSelection(.enabled)
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        MarkdownHTMLContent(nodes: children, resource: resource)
+                    }
+                }
+            case .quote(let children):
+                HStack(alignment: .top, spacing: 0) {
+                    MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 4)
+                    MarkdownHTMLContent(nodes: children, resource: resource)
+                        .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
+                        .padding(.leading, 16)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            case .lineBreak:
+                Text(verbatim: "\n")
             case .image(let url, let alt):
                 MarkdownHTMLImage(source: .file(url), alt: alt, resource: resource)
             case .svg(let source, let alt):
                 MarkdownHTMLImage(source: .svg(source), alt: alt, resource: resource)
             case .table(let rows):
                 ScrollView(.horizontal) {
-                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                    Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                         ForEach(rows.indices, id: \.self) { index in
                             GridRow {
                                 ForEach(rows[index].indices, id: \.self) { column in
-                                    Text(verbatim: rows[index][column])
-                                        .fontWeight(index == 0 ? .semibold : nil)
+                                    Text(verbatim: rows[index][column].text)
+                                        .fontWeight(rows[index][column].isHeader ? .semibold : .regular)
+                                        .padding(.horizontal, 13)
+                                        .padding(.vertical, 6)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .overlay(alignment: .trailing) {
+                                            MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                                                .frame(width: 1)
+                                        }
                                 }
+                            }
+                            .background(index.isMultiple(of: 2)
+                                ? MarkdownGitHubColors.background(dark: colorScheme == .dark)
+                                : MarkdownGitHubColors.muted(dark: colorScheme == .dark))
+                            .overlay(alignment: .bottom) {
+                                MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                                    .frame(height: 1)
                             }
                         }
                     }
+                    .border(MarkdownGitHubColors.border(dark: colorScheme == .dark), width: 1)
+                    .textSelection(.enabled)
                 }
             case .media(let url, let video):
                 MarkdownMediaView(url: url, video: video, resource: resource).id(url)
-            case .details(let label, let children):
-                DisclosureGroup {
-                    VStack(alignment: .leading) { MarkdownHTMLContent(nodes: children, resource: resource) }
-                } label: {
-                    Text(verbatim: label)
-                }
+            case .details(let label, let children, let open):
+                MarkdownHTMLDetails(label: label, children: children, initiallyOpen: open,
+                                    resource: resource)
             case .emphasis(let children, let tag):
-                MarkdownHTMLContent(nodes: children, resource: resource)
-                    .fontWeight(["b", "strong"].contains(tag) ? .bold : nil)
-                    .italic(["em", "i"].contains(tag))
-                    .strikethrough(["s", "del"].contains(tag))
-                    .fontDesign(["code", "kbd"].contains(tag) ? .monospaced : nil)
+                if Self.isInline(children) {
+                    Self.styledText(Self.inlineText(children), tag: tag).textSelection(.enabled)
+                } else {
+                    MarkdownHTMLContent(nodes: children, resource: resource)
+                        .fontWeight(["b", "strong"].contains(tag) ? .bold : nil)
+                        .italic(["em", "i"].contains(tag))
+                        .strikethrough(["s", "del"].contains(tag))
+                        .fontDesign(["code", "kbd"].contains(tag) ? .monospaced : nil)
+                }
             }
         }
+    }
+
+    private static func isInline(_ nodes: [MarkdownHTML]) -> Bool {
+        nodes.allSatisfy {
+            switch $0 {
+            case .text, .lineBreak: return true
+            case .emphasis(let children, _): return isInline(children)
+            default: return false
+            }
+        }
+    }
+
+    private static func inlineText(_ nodes: [MarkdownHTML]) -> Text {
+        nodes.reduce(Text(verbatim: "")) { result, node in
+            switch node {
+            case .text(let value): return result + Text(verbatim: value)
+            case .lineBreak: return result + Text(verbatim: "\n")
+            case .emphasis(let children, let tag):
+                return result + styledText(inlineText(children), tag: tag)
+            default: return result
+            }
+        }
+    }
+
+    private static func styledText(_ text: Text, tag: String) -> Text {
+        switch tag {
+        case "b", "strong": text.bold()
+        case "em", "i": text.italic()
+        case "s", "del": text.strikethrough()
+        case "code", "kbd": text.font(.system(size: 13.6, design: .monospaced))
+        default: text
+        }
+    }
+}
+
+private struct MarkdownHTMLDetails: View {
+    let label: String
+    let children: [MarkdownHTML]
+    let resource: MarkdownResource
+    @State private var expanded: Bool
+
+    init(label: String, children: [MarkdownHTML], initiallyOpen: Bool, resource: MarkdownResource) {
+        self.label = label
+        self.children = children
+        self.resource = resource
+        _expanded = State(initialValue: initiallyOpen)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "arrowtriangle.down.fill" : "arrowtriangle.right.fill")
+                        .font(.system(size: 9))
+                        .frame(width: 12)
+                    Text(verbatim: label)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("bailey.markdown.details")
+            if expanded {
+                MarkdownHTMLContent(nodes: children, resource: resource)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

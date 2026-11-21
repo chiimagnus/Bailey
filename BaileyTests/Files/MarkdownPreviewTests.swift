@@ -334,12 +334,46 @@ final class MarkdownPreviewTests: XCTestCase {
             <details><summary>Notes</summary><img src="image.png" alt="A" onerror="doSomething()">
             <script>doSomething()</script><iframe src="https://example.invalid"></iframe></details>
             """))
-        guard case .details("Notes", let children) = nodes.first else {
+        guard case .details("Notes", let children, open: false) = nodes.first else {
             return XCTFail("Expected a native details block")
         }
         XCTAssertTrue(children.contains(.image(try XCTUnwrap(URL(string: "image.png")), alt: "A")))
         XCTAssertTrue(children.contains { if case .text(let text) = $0 { text.contains("<script>") } else { false } })
         XCTAssertTrue(children.contains { if case .text(let text) = $0 { text.contains("<iframe") } else { false } })
+        let opened = try XCTUnwrap(MarkdownHTML.parse("<details open><summary>Open</summary>Content</details>"))
+        XCTAssertTrue(opened.contains {
+            if case .details("Open", _, open: true) = $0 { return true }
+            return false
+        })
+    }
+
+    func testHTMLTablesPreserveHeaderSemanticsAndInlineBlocks() throws {
+        let nodes = try XCTUnwrap(MarkdownHTML.parse("""
+            <p>Hello <strong>bold</strong>, <em>italic</em>, and <code>code</code>.</p>
+            <table><tr><th>Header</th><td>Ordinary cell</td></tr>
+            <tr><td>Value</td><td>123</td></tr></table>
+            <blockquote><p>Quoted paragraph</p></blockquote>
+            """))
+        guard let paragraph = nodes.compactMap({ node -> [MarkdownHTML]? in
+            if case .paragraph(let parts) = node { return parts }
+            return nil
+        }).first else { return XCTFail("HTML paragraph was flattened") }
+        XCTAssertTrue(paragraph.contains(.emphasis([.text("bold")], tag: "strong")))
+        XCTAssertTrue(paragraph.contains(.emphasis([.text("italic")], tag: "em")))
+        XCTAssertTrue(paragraph.contains(.emphasis([.text("code")], tag: "code")))
+
+        guard let table = nodes.compactMap({ node -> [[MarkdownHTML.TableCell]]? in
+            if case .table(let rows) = node { return rows }
+            return nil
+        }).first else { return XCTFail("HTML table missing") }
+        XCTAssertEqual(table.count, 2)
+        XCTAssertEqual(table[0][0], .init(text: "Header", isHeader: true))
+        XCTAssertEqual(table[0][1], .init(text: "Ordinary cell", isHeader: false))
+        XCTAssertEqual(table[1][0], .init(text: "Value", isHeader: false))
+        XCTAssertTrue(nodes.contains {
+            if case .quote([.paragraph([.text("Quoted paragraph")])]) = $0 { return true }
+            return false
+        })
     }
 
     func testActualImageAndBoundedReadStayInsideDocumentProject() async throws {

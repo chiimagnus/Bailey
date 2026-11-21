@@ -266,7 +266,11 @@ Markdown（`.md`、`.markdown` 和 `.mdx`）默认打开原生源码。
 并排右侧是同一文件的只读 Dock 展示位置，沿用外层分隔线，可独立关闭预览而不关闭文件。
 编辑时合并连续输入，后台排版后仅应用当前文件和版本的结果；预览和源码各自保留阅读位置。
 
-预览由原生 SwiftUI 和 Textual 排版，不执行 Markdown 中的 HTML 脚本或 MDX 组件。
+预览由原生 SwiftUI 和 Textual 排版，遵循 [GitHub Markdown 样式](https://github.com/sindresorhus/github-markdown-css)：
+16pt 正文、980pt 最大阅读区域（含边距）、标题层级、代码和表格的 GitHub 配色及间距；
+窄窗口改用 15pt 内边距，深浅色随系统／Bailey 外观切换。
+受限 HTML 保留段落、引用、表格表头和折叠语义；Mermaid 使用同一配色的原生离线渲染。
+不使用 WebView，不执行 Markdown 中的 HTML 脚本或 MDX 组件。
 相对位图使用当前文件同机项目根目录内的资源；缺失、越界和远程网络图片只显示替代内容。
 PNG／JPEG／HEIC／WebP 和 GIF 通过 ImageIO 解码；GIF 超出动画预算时显示首帧。
 相对 SVG 与内联 SVG 使用同一静态画图路径，保留受支持的内部渐变和滤镜，不加载外部引用。

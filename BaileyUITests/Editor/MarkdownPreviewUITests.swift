@@ -4,6 +4,37 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewUITests: XCTestCase {
+    func testHTMLDetailsAndGitHubStyleTableUseNativeControls() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("HTML.md", text: """
+            # Native HTML
+
+            <details open><summary>Open section</summary><p>Hello <strong>world</strong>!</p></details>
+
+            <details><summary>Closed section</summary><p>Hidden content</p></details>
+
+            <table><tr><th>Header</th><td>Ordinary cell</td></tr>
+            <tr><td>Value</td><td>42</td></tr></table>
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let details = preview.buttons.matching(identifier: "bailey.markdown.details")
+        XCTAssertEqual(details.count, 2)
+        XCTAssertTrue(preview.staticTexts["Hello world!"].waitForExistence(timeout: 10))
+        XCTAssertFalse(preview.staticTexts["Hidden content"].exists)
+        details.element(boundBy: 1).click()
+        XCTAssertTrue(preview.staticTexts["Hidden content"].waitForExistence(timeout: 10))
+        details.element(boundBy: 0).click()
+        XCTAssertFalse(preview.staticTexts["Hello world!"].exists)
+        XCTAssertTrue(preview.staticTexts["Header"].exists)
+    }
+
     func testRichMarkdownShowsStaticSVGAndLoadsNativeAudioOnDemand() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("Paper.md", text: """

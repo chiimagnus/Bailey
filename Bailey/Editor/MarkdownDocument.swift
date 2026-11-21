@@ -244,12 +244,20 @@ nonisolated struct MarkdownDocument: Sendable {
 }
 
 nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
+    struct TableCell: Sendable, Equatable {
+        let text: String
+        let isHeader: Bool
+    }
+
     case text(String)
+    case paragraph([Self])
+    case quote([Self])
+    case lineBreak
     case image(URL, alt: String)
     case svg(String, alt: String)
-    case table([[String]])
+    case table([[TableCell]])
     case media(URL, video: Bool)
-    case details(String, [Self])
+    case details(String, [Self], open: Bool)
     case emphasis([Self], tag: String)
 
     private static let supported: Set<String> = [
@@ -288,7 +296,9 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
             return [.svg(try element.outerHtml(), alt: alt)]
         case "table":
             let rows = try element.select("tr").map { row in
-                try row.children().filter { ["th", "td"].contains($0.tagNameNormal()) }.map { try $0.text() }
+                try row.children().filter { ["th", "td"].contains($0.tagNameNormal()) }.map {
+                    TableCell(text: try $0.text(), isHeader: $0.tagNameNormal() == "th")
+                }
             }
             return [.table(rows)]
         case "video", "audio":
@@ -304,14 +314,18 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
             let label = try summary?.text() ?? String(localized: "Details")
             let children = try element.getChildNodes().filter { $0 !== summary }
                 .flatMap { try render($0, depth: depth + 1) }
-            return [.details(label, children)]
+            return [.details(label, children, open: element.hasAttr("open"))]
         case "b", "strong", "em", "i", "s", "del", "code", "kbd":
             let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
             return [.emphasis(children, tag: tag)]
-        case "div", "p", "span", "summary", "blockquote":
+        case "p", "div":
+            return [.paragraph(try element.getChildNodes().flatMap { try render($0, depth: depth + 1) })]
+        case "blockquote":
+            return [.quote(try element.getChildNodes().flatMap { try render($0, depth: depth + 1) })]
+        case "span", "summary":
             return try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
         case "br":
-            return [.text("\n")]
+            return [.lineBreak]
         default:
             return [.text(try element.outerHtml())]
         }

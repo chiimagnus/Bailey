@@ -1,7 +1,7 @@
 # P2｜阶段审查
 
 审查对象：[P2 实施计划](plan-p2.md)。
-实时任务状态以 `todo.toml` 为准。
+实时任务状态以 `todo.toml` 为准。以下历史 P2 验证记录不替代本轮复验。
 
 ## 结论
 
@@ -20,7 +20,55 @@
 - **P2-T4**：`db1b11f`。原生 Mermaid 位图及失败回显，Textual／SwiftUIMath 公式，
   本文脚注锚点。README 入口、功能文档、固定依赖及原许可证同步。
 
+## 本轮独立复核（2026-11-21）
+
+- 逐项追踪 Markdown P1-T1～P2-T4 与文件路由 P1-T1～T2；生产接线仍复用 `FileTab`、Dock 和 File 菜单，未建立第二份编辑或保存链路。
+- 以 [github-markdown-css](https://github.com/sindresorhus/github-markdown-css) 为视觉基准，修复正文、标题、任务清单、表格、受限 HTML、折叠、Mermaid、公式及脚注；保留原生离线安全边界。
+- `make test:MarkdownPreviewTests,AppIdentityTests,NativeFileTabTests,DockWorkspaceTests`：101 项、0 失败，退出 0；包含 32 MiB 文件测试。
+- `make test:ui` 定向 Markdown 3 项、Finder 双向复制与显式移动 2 项：5 项、0 失败，退出 0；新增 HTML 折叠/表格 GUI 1 项在最终代码再次通过、退出 0。
+- 隔离 Dev 实际截图：`/tmp/Bailey-GitHub-final-light-wide.png`、`/tmp/Bailey-GitHub-final-light-narrow.png`、`/tmp/Bailey-GitHub-final-dark-h6.png`、`/tmp/Bailey-GitHub-final-dark-narrow.png`；深浅色与宽窄窗口均完成视觉检查。
+- 未覆盖：macOS 15.6 真机、真实 Windows SSH、VoiceOver 与实体中文 IME、32 MiB 文档的完整 GUI 布局/帧率、全部媒体编解码器与长时间多媒体并发。宿主/组件验证不冒充这些条件。
+
 ## 发现项
+
+## 发现 F-03
+
+- 任务：`P2-T3`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/MarkdownDocument.swift:250`
+- 摘要：`受限 HTML 将 p、blockquote 结构打平，行内 strong/em/code 被拆成独立视图`
+- 风险：`段落与行内语义脱离，无法按 GitHub Markdown 连续排版`
+- 预期修复：`解析时保留安全块结构及 table th；原生 Text 合并行内语义，保留 details open 状态，不执行 HTML`
+- 验证：`宿主 MarkdownPreviewTests、隔离 Dev GUI HTML 逐屏对照`
+- 解决证据：`HTML 结构/表头/details open 语义 Host 回归及真实 GUI 开合测试通过；无 WebView 或脚本执行`
+
+
+## 发现 F-02
+
+- 任务：`P2-T3`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/MarkdownPreview.swift:237`
+- 摘要：`受限 HTML table 直接使用无分隔线无填充 Grid，与 Markdown 表格排版不一致`
+- 风险：`原生 HTML 表格不易区分表头和数据行，尤其窄窗口及深色外观`
+- 预期修复：`按 GitHub 表格规则对齐 1pt 边框、隔行底色、6×13pt 单元格边距，并保留真正的 th 表头语义`
+- 验证：`隔离 Dev 受限 HTML 文档宽窄主题截图，Markdown 主机及 GUI 定向测试`
+- 解决证据：`原生 Markdown/HTML 表格按 GitHub 1pt 线/6x13pt 内边距/隔行色渲染；实际 GUI 截图及 HTML GUI 用例通过`
+
+
+## 发现 F-01
+
+- 任务：`P2-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/MarkdownPreview.swift:100`
+- 摘要：`原先 20pt 边距、独立块间距与 Textual 旧 GitHub 配色不符合 GitHub 当前 CSS；深色 H6 对比度不足`
+- 风险：`Markdown 作为正文阅读器缺乏清楚的标题层级与舒适行距，窄宽显示欠协调`
+- 预期修复：`复用 Textual GitHub 排版，按开源 GitHub CSS 对齐 16pt 正文、980pt 版心、响应式边距、链接与代码配色、H6 对比度`
+- 验证：`隔离 Bailey Dev 宽窄窗口深浅主题截图；make build:dev；make test:MarkdownPreviewTests；make test:ui ONLY_TESTING=BaileyUITests/MarkdownPreviewUITests`
+- 解决证据：`Textual GitHub 版心/字体/标题/配色按 GitHub CSS 校准；深浅宽窄 Dev 截图核对；101 Host+6 GUI 通过`
+
 
 ## 验证与未覆盖
 

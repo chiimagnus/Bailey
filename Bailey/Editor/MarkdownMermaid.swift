@@ -12,9 +12,24 @@ nonisolated enum MarkdownMermaid {
                     line.split(whereSeparator: \.isWhitespace).first?.lowercased() ?? ""
                 )
         }) else { return nil }
-        let image = await MermaidRenderer.renderImage(source: source, theme: DiagramTheme(prefersDark: dark))
+        let theme = DiagramTheme(
+            ink: color(dark ? 0xF0F6FC : 0x1F2328),
+            secondaryTextColor: color(dark ? 0x9198A1 : 0x59636E),
+            tertiaryTextColor: color(dark ? 0x9198A1 : 0x59636E, alpha: 0.72),
+            canvas: color(dark ? 0x0D1117 : 0xFFFFFF),
+            accent: color(dark ? 0x4493F8 : 0x0969DA),
+            hairline: color(dark ? 0x3D444D : 0xD1D9E0),
+            prefersDark: dark
+        )
+        let image = await MermaidRenderer.renderImage(source: source, theme: theme)
         guard !Task.isCancelled, let image, image.size.width > 0, image.size.height > 0 else { return nil }
         return image
+    }
+
+    private static func color(_ rgb: UInt32, alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
+                green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                blue: CGFloat(rgb & 0xFF) / 255, alpha: alpha)
     }
 }
 
@@ -30,6 +45,7 @@ struct MarkdownMermaidView: View {
             if let image {
                 Image(nsImage: image).resizable().scaledToFit()
                     .frame(maxWidth: image.size.width)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .accessibilityLabel(Text("Mermaid diagram"))
                     .accessibilityIdentifier("bailey.markdown.mermaid")
             } else if failed {
