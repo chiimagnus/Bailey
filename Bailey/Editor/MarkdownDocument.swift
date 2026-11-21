@@ -91,7 +91,7 @@ nonisolated struct MarkdownDocument: Sendable {
             }
             if paragraph, content.runs.count == 1, let url = content.runs.first?.imageURL {
                 let node = MarkdownMedia.video(for: url).map { MarkdownHTML.media(url, video: $0) }
-                    ?? .image(url, alt: plain)
+                    ?? .image(url, alt: plain, width: nil, height: nil)
                 blocks.append(Block(anchor: nil, content: .html([node])))
                 return
             }
@@ -123,7 +123,7 @@ nonisolated struct MarkdownDocument: Sendable {
                     if run.inlinePresentationIntent == nil, html.lowercased().hasPrefix("<img"),
                        sourcePrefix(run.markdownSourcePosition, count: 1) == "<",
                        let nodes = MarkdownHTML.parse(html), nodes.count == 1,
-                       case .image(let url, let alt) = nodes.first {
+                       case .image(let url, let alt, _, _) = nodes.first {
                         var attributes = run.attributes
                         attributes.imageURL = url
                         inline.append(AttributedString(alt.isEmpty ? "Image" : alt, attributes: attributes))
@@ -245,24 +245,34 @@ nonisolated struct MarkdownDocument: Sendable {
 
 nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
     struct TableCell: Sendable, Equatable {
-        let text: String
+        let nodes: [MarkdownHTML]
         let isHeader: Bool
+    }
+
+    struct TableRow: Sendable, Equatable {
+        let cells: [TableCell]
+        let shaded: Bool
     }
 
     case text(String)
     case paragraph([Self])
     case quote([Self])
     case lineBreak
-    case image(URL, alt: String)
+    case image(URL, alt: String, width: Int?, height: Int?)
     case svg(String, alt: String)
-    case table([[TableCell]])
+    case table([TableRow])
     case media(URL, video: Bool)
     case details(String, [Self], open: Bool)
     case emphasis([Self], tag: String)
+    case link(URL, [Self])
+    case heading(Int, [Self])
+    case list(ordered: Bool, start: Int, items: [[Self]])
+    case horizontalRule
 
     private static let supported: Set<String> = [
-        "img", "details", "b", "strong", "em", "i", "s", "del", "code", "kbd",
+        "img", "details", "b", "strong", "em", "i", "s", "del", "code", "kbd", "a",
         "div", "p", "span", "summary", "blockquote", "br", "svg", "table", "video", "audio",
+        "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "hr",
     ]
 
     static func parse(_ source: String) -> [Self]? {
@@ -289,16 +299,28 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
             guard let url = try reference(element.attr("src")) else {
                 return [.text(alt)]
             }
-            return [.image(url, alt: alt)]
+            return [.image(url, alt: alt,
+                           width: dimension(try element.attr("width")),
+                           height: dimension(try element.attr("height")))]
         case "svg":
             let title = element.children().first { $0.tagNameNormal() == "title" }
             let alt = try title?.text() ?? String(localized: "SVG image")
             return [.svg(try element.outerHtml(), alt: alt)]
         case "table":
-            let rows = try element.select("tr").map { row in
-                try row.children().filter { ["th", "td"].contains($0.tagNameNormal()) }.map {
-                    TableCell(text: try $0.text(), isHeader: $0.tagNameNormal() == "th")
+            let rows = try element.select("tr").filter { row in
+                var ancestor = row.parent()
+                while let parent = ancestor {
+                    if parent.tagNameNormal() == "table" { return parent === element }
+                    ancestor = parent.parent()
                 }
+                return false
+            }.map { row in
+                let cells = try row.children().filter { ["th", "td"].contains($0.tagNameNormal()) }.map { cell in
+                    TableCell(nodes: try cell.getChildNodes().flatMap { try render($0, depth: depth + 1) },
+                              isHeader: cell.tagNameNormal() == "th")
+                }
+                // CSS tr:nth-child(2n) counts within thead/tbody, not the whole table.
+                return TableRow(cells: cells, shaded: try !row.elementSiblingIndex().isMultiple(of: 2))
             }
             return [.table(rows)]
         case "video", "audio":
@@ -315,6 +337,27 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
             let children = try element.getChildNodes().filter { $0 !== summary }
                 .flatMap { try render($0, depth: depth + 1) }
             return [.details(label, children, open: element.hasAttr("open"))]
+        case "a":
+            let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            guard let url = try reference(element.attr("href")),
+                  url.scheme == nil || (["http", "https"].contains(url.scheme?.lowercased() ?? "")
+                                        && url.host != nil) else { return children }
+            return [.link(url, children)]
+        case "h1", "h2", "h3", "h4", "h5", "h6":
+            let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            return [.heading(Int(String(tag.suffix(1))) ?? 6, children)]
+        case "ul", "ol":
+            let items = try element.children().filter { $0.tagNameNormal() == "li" }.map { child in
+                try child.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            }
+            let start = Int(try element.attr("start")).flatMap {
+                (-1_000_000...1_000_000).contains($0) ? $0 : nil
+            } ?? 1
+            return [.list(ordered: tag == "ol", start: start, items: items)]
+        case "hr":
+            return [.horizontalRule]
+        case "li":
+            return [.paragraph(try element.getChildNodes().flatMap { try render($0, depth: depth + 1) })]
         case "b", "strong", "em", "i", "s", "del", "code", "kbd":
             let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
             return [.emphasis(children, tag: tag)]
@@ -329,6 +372,11 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         default:
             return [.text(try element.outerHtml())]
         }
+    }
+
+    private static func dimension(_ value: String) -> Int? {
+        guard let number = Int(value), (1...4096).contains(number) else { return nil }
+        return number
     }
 
     private static func reference(_ source: String) -> URL? {

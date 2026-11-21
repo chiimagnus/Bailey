@@ -152,12 +152,13 @@ nonisolated struct MarkdownImage: Attachment {
     let image: MarkdownPicture?
     let alt: String
     let url: URL?
+    var htmlSize: CGSize? = nil
 
     var description: String { alt.isEmpty ? String(localized: "Image") : alt }
 
     @MainActor var body: some View {
         if let image {
-            MarkdownImageLink(image: image, alt: description, url: url)
+            MarkdownImageLink(image: image, alt: description, url: url, htmlSize: htmlSize)
         } else {
             Label(description, systemImage: "photo")
                 .foregroundStyle(.secondary)
@@ -181,6 +182,7 @@ private struct MarkdownImageLink: View {
     let image: MarkdownPicture
     let alt: String
     let url: URL?
+    let htmlSize: CGSize?
     @Environment(\.openURL) private var openURL
     @Environment(\.appearsActive) private var active
 
@@ -206,7 +208,17 @@ private struct MarkdownImageLink: View {
         }
     }
 
+    @ViewBuilder
     private func raster(_ image: CGImage) -> some View {
-        Image(decorative: image, scale: 1).resizable().scaledToFit()
+        if let htmlSize {
+            ViewThatFits(in: .horizontal) {
+                Image(decorative: image, scale: 1).resizable()
+                    .frame(width: htmlSize.width, height: htmlSize.height)
+                Image(decorative: image, scale: 1).resizable()
+                    .aspectRatio(htmlSize.width / htmlSize.height, contentMode: .fit)
+            }
+        } else {
+            Image(decorative: image, scale: 1).resizable().scaledToFit()
+        }
     }
 }

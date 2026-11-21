@@ -337,7 +337,7 @@ final class MarkdownPreviewTests: XCTestCase {
         guard case .details("Notes", let children, open: false) = nodes.first else {
             return XCTFail("Expected a native details block")
         }
-        XCTAssertTrue(children.contains(.image(try XCTUnwrap(URL(string: "image.png")), alt: "A")))
+        XCTAssertTrue(children.contains(.image(try XCTUnwrap(URL(string: "image.png")), alt: "A", width: nil, height: nil)))
         XCTAssertTrue(children.contains { if case .text(let text) = $0 { text.contains("<script>") } else { false } })
         XCTAssertTrue(children.contains { if case .text(let text) = $0 { text.contains("<iframe") } else { false } })
         let opened = try XCTUnwrap(MarkdownHTML.parse("<details open><summary>Open</summary>Content</details>"))
@@ -362,14 +362,15 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(paragraph.contains(.emphasis([.text("italic")], tag: "em")))
         XCTAssertTrue(paragraph.contains(.emphasis([.text("code")], tag: "code")))
 
-        guard let table = nodes.compactMap({ node -> [[MarkdownHTML.TableCell]]? in
+        guard let table = nodes.compactMap({ node -> [MarkdownHTML.TableRow]? in
             if case .table(let rows) = node { return rows }
             return nil
         }).first else { return XCTFail("HTML table missing") }
         XCTAssertEqual(table.count, 2)
-        XCTAssertEqual(table[0][0], .init(text: "Header", isHeader: true))
-        XCTAssertEqual(table[0][1], .init(text: "Ordinary cell", isHeader: false))
-        XCTAssertEqual(table[1][0], .init(text: "Value", isHeader: false))
+        XCTAssertEqual(table[0].cells[0], .init(nodes: [.text("Header")], isHeader: true))
+        XCTAssertEqual(table[0].cells[1], .init(nodes: [.text("Ordinary cell")], isHeader: false))
+        XCTAssertEqual(table[1].cells[0], .init(nodes: [.text("Value")], isHeader: false))
+        XCTAssertEqual(table.map(\.shaded), [false, true])
         XCTAssertTrue(nodes.contains {
             if case .quote([.paragraph([.text("Quoted paragraph")])]) = $0 { return true }
             return false
@@ -408,7 +409,7 @@ final class MarkdownPreviewTests: XCTestCase {
             XCTAssertEqual(decoded.height, 3)
         }
         let html = try XCTUnwrap(MarkdownHTML.parse(#"<img src="../红%20图.png" alt="图片">"#))
-        guard case .image(let htmlURL, alt: "图片") = html.first else {
+        guard case .image(let htmlURL, alt: "图片", _, _) = html.first else {
             return XCTFail("Expected HTML image")
         }
         let htmlImage = try await resource.picture(htmlURL).poster
@@ -456,6 +457,75 @@ final class MarkdownPreviewTests: XCTestCase {
         }
         XCTAssertEqual(String(block.characters).utf8.count, count)
         print("Markdown 32 MiB: \(start.duration(to: .now))")
+    }
+
+    func testHTMLLinksAreNotRenderedAsLiteralMarkup() throws {
+        let nodes = try XCTUnwrap(MarkdownHTML.parse("""
+            <p>Read <a href="Guide.md"><strong>the guide</strong></a> now.</p>
+            """))
+        XCTAssertFalse(String(reflecting: nodes).contains("<a "), "The HTML link must be rendered natively")
+        guard case .paragraph(let children) = nodes.first else {
+            return XCTFail("HTML paragraph missing")
+        }
+        let url = try XCTUnwrap(URL(string: "Guide.md"))
+        XCTAssertTrue(children.contains(.link(url, [.emphasis([.text("the guide")], tag: "strong")])))
+        let malicious = try XCTUnwrap(MarkdownHTML.parse("<p><a href='javascript:alert(1)'>Safe text</a></p>"))
+        XCTAssertEqual(malicious, [.paragraph([.text("Safe text")])])
+    }
+
+    func testCommonStaticHTMLBlocksAreNotPrintedAsTags() throws {
+        for markup in [
+            "<h2>Section heading</h2>",
+            "<ul><li>First</li><li>Second</li></ul>",
+            "<hr>"
+        ] {
+            let nodes = try XCTUnwrap(MarkdownHTML.parse(markup), markup)
+            XCTAssertFalse(String(reflecting: nodes).contains("<"), markup)
+        }
+        let ordered = try XCTUnwrap(MarkdownHTML.parse("<ol start='3'><li>Alpha</li><li><strong>Beta</strong></li></ol>"))
+        XCTAssertEqual(ordered, [.list(ordered: true, start: 3, items: [
+            [.text("Alpha")], [.emphasis([.text("Beta")], tag: "strong")]
+        ])])
+    }
+
+    func testHTMLTableKeepsRichInlineLinksAndLineBreaks() throws {
+        let nodes = try XCTUnwrap(MarkdownHTML.parse("""
+            <table><tr><th>Topic</th><th>Result</th></tr>
+            <tr><td><a href='Guide.md'><strong>Guide</strong></a></td><td>Line 1<br>Line 2</td></tr></table>
+            """))
+        guard case .table(let rows) = nodes.first else { return XCTFail("Table not parsed") }
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[1].cells[0], .init(nodes: [.link(try XCTUnwrap(URL(string: "Guide.md")),
+                                                      [.emphasis([.text("Guide")], tag: "strong")])],
+                                        isHeader: false))
+        XCTAssertEqual(rows[1].cells[1], .init(nodes: [.text("Line 1"), .lineBreak, .text("Line 2")],
+                                        isHeader: false))
+    }
+
+    func testHTMLTableStripesFollowRowSiblingsAcrossHeadAndBody() throws {
+        let nodes = try XCTUnwrap(MarkdownHTML.parse("""
+            <table><thead><tr><th>Header</th></tr></thead>
+            <tbody><tr><td>First</td></tr><tr><td>Second</td></tr><tr><td>Third</td></tr></tbody></table>
+            """))
+        guard case .table(let rows) = nodes.first else { return XCTFail("Missing table") }
+        XCTAssertEqual(rows.map(\.shaded), [false, false, true, false],
+                       "GitHub CSS tr:nth-child(2n) restarts in each row group")
+        let flat = try XCTUnwrap(MarkdownHTML.parse("""
+            <table><tr><th>First</th></tr><tr><td>Second</td></tr><tr><td>Third</td></tr></table>
+            """))
+        guard case .table(let flatRows) = flat.first else { return XCTFail("Missing flat table") }
+        XCTAssertEqual(flatRows.map(\.shaded), [false, true, false])
+    }
+
+    func testHTMLImageKeepsExplicitDimensions() throws {
+        let plain = try XCTUnwrap(MarkdownHTML.parse("<img src='plot.png' alt='Plot'>"))
+        let sized = try XCTUnwrap(MarkdownHTML.parse("<img src='plot.png' alt='Plot' width='48' height='32'>"))
+        XCTAssertNotEqual(sized, plain, "An explicit HTML size must not disappear during parsing")
+        XCTAssertEqual(sized, [.image(try XCTUnwrap(URL(string: "plot.png")),
+                                      alt: "Plot", width: 48, height: 32)])
+        let oversized = try XCTUnwrap(MarkdownHTML.parse("<img src='plot.png' width='999999'>"))
+        XCTAssertEqual(oversized, [.image(try XCTUnwrap(URL(string: "plot.png")),
+                                          alt: "", width: nil, height: nil)])
     }
 
     private func previewText(_ document: MarkdownDocument) -> String {

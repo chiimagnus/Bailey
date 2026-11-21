@@ -269,7 +269,7 @@ Markdown（`.md`、`.markdown` 和 `.mdx`）默认打开原生源码。
 预览由原生 SwiftUI 和 Textual 排版，遵循 [GitHub Markdown 样式](https://github.com/sindresorhus/github-markdown-css)：
 16pt 正文、980pt 最大阅读区域（含边距）、标题层级、代码和表格的 GitHub 配色及间距；
 窄窗口改用 15pt 内边距，深浅色随系统／Bailey 外观切换。
-受限 HTML 保留段落、引用、表格表头和折叠语义；Mermaid 使用同一配色的原生离线渲染。
+受限 HTML 原生展示标题、段落、链接、列表、引用、富文本表格与折叠块；图片遵守安全尺寸和窄窗口布局，Mermaid 离线渲染。
 不使用 WebView，不执行 Markdown 中的 HTML 脚本或 MDX 组件。
 相对资源沿用文件所属机器：项目内按项目根限定，Finder 打开的项目外文件按该文件父目录限定；越界、缺失和网络图片不加载。
 PNG／JPEG／HEIC／WebP 和 GIF 通过 ImageIO 解码；GIF 超出动画预算时显示首帧。

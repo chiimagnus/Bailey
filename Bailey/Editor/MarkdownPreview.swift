@@ -145,6 +145,7 @@ struct MarkdownPreview: View {
                     .scrollTargetLayout()
                     .font(.system(size: 16))
                     .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
+                    .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
                     // GitHub markdown-body: 980 px including padding, 45 px / 15 px below 768.
                     .frame(maxWidth: 890, alignment: .leading)
                     .padding(geometry.size.width < 768 ? 15 : 45)
@@ -194,6 +195,11 @@ private enum MarkdownGitHubColors {
     static func text(dark: Bool) -> Color {
         dark ? Color(red: 240 / 255, green: 246 / 255, blue: 252 / 255)
              : Color(red: 31 / 255, green: 35 / 255, blue: 40 / 255)
+    }
+
+    static func link(dark: Bool) -> Color {
+        dark ? Color(red: 68 / 255, green: 147 / 255, blue: 248 / 255)
+             : Color(red: 9 / 255, green: 105 / 255, blue: 218 / 255)
     }
 
     static func muted(dark: Bool) -> Color {
@@ -315,10 +321,12 @@ private struct MarkdownHTMLContent: View {
     let nodes: [MarkdownHTML]
     let resource: MarkdownResource
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
-        ForEach(nodes.indices, id: \.self) { index in
-            switch nodes[index] {
+        let layoutNodes = Self.groupInline(nodes)
+        ForEach(layoutNodes.indices, id: \.self) { index in
+            switch layoutNodes[index] {
             case .text(let text):
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(verbatim: text).textSelection(.enabled)
@@ -341,8 +349,9 @@ private struct MarkdownHTMLContent: View {
                 .fixedSize(horizontal: false, vertical: true)
             case .lineBreak:
                 Text(verbatim: "\n")
-            case .image(let url, let alt):
-                MarkdownHTMLImage(source: .file(url), alt: alt, resource: resource)
+            case .image(let url, let alt, let width, let height):
+                MarkdownHTMLImage(source: .file(url), alt: alt, resource: resource,
+                                  width: width, height: height)
             case .svg(let source, let alt):
                 MarkdownHTMLImage(source: .svg(source), alt: alt, resource: resource)
             case .table(let rows):
@@ -350,21 +359,27 @@ private struct MarkdownHTMLContent: View {
                     Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                         ForEach(rows.indices, id: \.self) { index in
                             GridRow {
-                                ForEach(rows[index].indices, id: \.self) { column in
-                                    Text(verbatim: rows[index][column].text)
-                                        .fontWeight(rows[index][column].isHeader ? .semibold : .regular)
-                                        .padding(.horizontal, 13)
-                                        .padding(.vertical, 6)
-                                        .fixedSize(horizontal: true, vertical: false)
-                                        .overlay(alignment: .trailing) {
-                                            MarkdownGitHubColors.border(dark: colorScheme == .dark)
-                                                .frame(width: 1)
+                                ForEach(rows[index].cells.indices, id: \.self) { column in
+                                    let cell = rows[index].cells[column]
+                                    Group {
+                                        if Self.isInline(cell.nodes) {
+                                            Self.inlineText(cell.nodes)
+                                        } else {
+                                            MarkdownHTMLContent(nodes: cell.nodes, resource: resource)
                                         }
+                                    }
+                                    .fontWeight(cell.isHeader ? .semibold : .regular)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 6)
+                                    .overlay(alignment: .trailing) {
+                                        MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                                            .frame(width: 1)
+                                    }
                                 }
                             }
-                            .background(index.isMultiple(of: 2)
-                                ? MarkdownGitHubColors.background(dark: colorScheme == .dark)
-                                : MarkdownGitHubColors.muted(dark: colorScheme == .dark))
+                            .background(rows[index].shaded
+                                ? MarkdownGitHubColors.muted(dark: colorScheme == .dark)
+                                : MarkdownGitHubColors.background(dark: colorScheme == .dark))
                             .overlay(alignment: .bottom) {
                                 MarkdownGitHubColors.border(dark: colorScheme == .dark)
                                     .frame(height: 1)
@@ -374,11 +389,60 @@ private struct MarkdownHTMLContent: View {
                     .border(MarkdownGitHubColors.border(dark: colorScheme == .dark), width: 1)
                     .textSelection(.enabled)
                 }
+            case .heading(let level, let children):
+                VStack(alignment: .leading, spacing: 8) {
+                    Group {
+                        if Self.isInline(children) {
+                            Self.inlineText(children)
+                        } else {
+                            MarkdownHTMLContent(nodes: children, resource: resource)
+                        }
+                    }
+                    .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1],
+                                  weight: .semibold))
+                    .foregroundStyle(level == 6
+                        ? MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
+                        : MarkdownGitHubColors.text(dark: colorScheme == .dark))
+                    .textSelection(.enabled)
+                    if level <= 2 {
+                        Divider().overlay(MarkdownGitHubColors.border(dark: colorScheme == .dark))
+                    }
+                }
+                .padding(.top, 8)
+            case .list(let ordered, let start, let items):
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(items.indices, id: \.self) { item in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(ordered ? "\(start + item)." : "•")
+                                .frame(width: 24, alignment: .trailing)
+                            if Self.isInline(items[item]) {
+                                Self.inlineText(items[item]).textSelection(.enabled)
+                            } else {
+                                MarkdownHTMLContent(nodes: items[item], resource: resource)
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 8)
+            case .horizontalRule:
+                Divider().overlay(MarkdownGitHubColors.border(dark: colorScheme == .dark))
             case .media(let url, let video):
                 MarkdownMediaView(url: url, video: video, resource: resource).id(url)
             case .details(let label, let children, let open):
                 MarkdownHTMLDetails(label: label, children: children, initiallyOpen: open,
                                     resource: resource)
+            case .link(let url, let children):
+                if Self.isInline(children) {
+                    Self.inlineText([.link(url, children)])
+                        .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
+                        .textSelection(.enabled)
+                } else {
+                    Button { openURL(url) } label: {
+                        MarkdownHTMLContent(nodes: children, resource: resource)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(MarkdownGitHubColors.link(dark: colorScheme == .dark))
+                }
             case .emphasis(let children, let tag):
                 if Self.isInline(children) {
                     Self.styledText(Self.inlineText(children), tag: tag).textSelection(.enabled)
@@ -393,23 +457,54 @@ private struct MarkdownHTMLContent: View {
         }
     }
 
+    private static func groupInline(_ nodes: [MarkdownHTML]) -> [MarkdownHTML] {
+        var blocks: [MarkdownHTML] = []
+        var inline: [MarkdownHTML] = []
+        func flush() {
+            let meaningful = inline.contains { node in
+                if case .text(let value) = node {
+                    return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                return true
+            }
+            if meaningful { blocks.append(.paragraph(inline)) }
+            inline.removeAll(keepingCapacity: true)
+        }
+        for node in nodes {
+            if isInline([node]) {
+                inline.append(node)
+            } else {
+                flush()
+                blocks.append(node)
+            }
+        }
+        flush()
+        return blocks
+    }
+
     private static func isInline(_ nodes: [MarkdownHTML]) -> Bool {
         nodes.allSatisfy {
             switch $0 {
             case .text, .lineBreak: return true
-            case .emphasis(let children, _): return isInline(children)
+            case .emphasis(let children, _), .link(_, let children): return isInline(children)
             default: return false
             }
         }
     }
 
-    private static func inlineText(_ nodes: [MarkdownHTML]) -> Text {
+    private static func inlineText(_ nodes: [MarkdownHTML], link: URL? = nil) -> Text {
         nodes.reduce(Text(verbatim: "")) { result, node in
             switch node {
-            case .text(let value): return result + Text(verbatim: value)
+            case .text(let value):
+                guard let link else { return result + Text(verbatim: value) }
+                var attributed = AttributedString(value)
+                attributed.link = link
+                return result + Text(attributed)
             case .lineBreak: return result + Text(verbatim: "\n")
             case .emphasis(let children, let tag):
-                return result + styledText(inlineText(children), tag: tag)
+                return result + styledText(inlineText(children, link: link), tag: tag)
+            case .link(let destination, let children):
+                return result + inlineText(children, link: destination)
             default: return result
             }
         }
@@ -429,12 +524,14 @@ private struct MarkdownHTMLContent: View {
 private struct MarkdownHTMLDetails: View {
     let label: String
     let children: [MarkdownHTML]
+    let initiallyOpen: Bool
     let resource: MarkdownResource
     @State private var expanded: Bool
 
     init(label: String, children: [MarkdownHTML], initiallyOpen: Bool, resource: MarkdownResource) {
         self.label = label
         self.children = children
+        self.initiallyOpen = initiallyOpen
         self.resource = resource
         _expanded = State(initialValue: initiallyOpen)
     }
@@ -459,6 +556,7 @@ private struct MarkdownHTMLDetails: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: initiallyOpen) { _, next in expanded = next }
     }
 }
 
@@ -471,13 +569,17 @@ private struct MarkdownHTMLImage: View {
     let source: Source
     let alt: String
     let resource: MarkdownResource
+    var width: Int? = nil
+    var height: Int? = nil
     @State private var image: MarkdownImage?
 
     var body: some View {
         Group {
             if let image {
-                image.body
-                    .frame(maxWidth: image.image.map { CGFloat($0.poster.width) }, alignment: .leading)
+                let presented = sized(image)
+                presented.body
+                    .frame(maxWidth: presented.htmlSize?.width
+                        ?? image.image.map { CGFloat($0.poster.width) }, alignment: .leading)
             } else {
                 ProgressView().controlSize(.small)
             }
@@ -497,6 +599,20 @@ private struct MarkdownHTMLImage: View {
             guard !Task.isCancelled else { return }
             image = MarkdownImage(image: decoded, alt: alt, url: url)
         }
+    }
+
+    private func sized(_ image: MarkdownImage) -> MarkdownImage {
+        guard let picture = image.image, width != nil || height != nil else { return image }
+        let naturalWidth = CGFloat(picture.poster.width)
+        let naturalHeight = CGFloat(picture.poster.height)
+        let displayWidth = width.map { CGFloat($0) }
+            ?? height.map { CGFloat($0) * naturalWidth / naturalHeight }
+            ?? naturalWidth
+        let displayHeight = height.map { CGFloat($0) }
+            ?? displayWidth * naturalHeight / naturalWidth
+        var presented = image
+        presented.htmlSize = CGSize(width: displayWidth, height: displayHeight)
+        return presented
     }
 
     @concurrent private static func svgPicture(_ source: String) async throws -> MarkdownPicture {
