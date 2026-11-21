@@ -230,7 +230,7 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testSaveRemainsInEditWhileSingleDiffLayoutToggleBelongsToFile() throws {
+    func testMarkdownPreviewAndSaveBelongToFileWithUniqueNativeShortcuts() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let edit = try XCTUnwrap(main.items.compactMap(\.submenu).first { submenu in
             submenu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
@@ -239,12 +239,33 @@ final class AppIdentityTests: XCTestCase {
         let file = try XCTUnwrap(main.items.first {
             $0.title == String(localized: "File", table: "Interface")
         }?.submenu)
-        let save = try XCTUnwrap(edit.items.first {
+        let save = try XCTUnwrap(file.items.first {
             $0.title == String(localized: "Save", table: "Interface")
         })
         XCTAssertEqual(save.keyEquivalent, "s")
         XCTAssertEqual(save.keyEquivalentModifierMask, .command)
-        XCTAssertFalse(file.items.contains { $0.title == save.title })
+        XCTAssertFalse(edit.items.contains { $0.title == save.title })
+
+        let preview = try XCTUnwrap(file.items.first {
+            $0.title == String(localized: "Show Preview", table: "Editor")
+        })
+        XCTAssertEqual(preview.keyEquivalent, "v")
+        XCTAssertEqual(preview.keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertFalse(preview.isEnabled)
+        let openIndex = try XCTUnwrap(file.items.firstIndex {
+            $0.title == String(localized: "Open File…", table: "Interface")
+        })
+        let previewIndex = try XCTUnwrap(file.items.firstIndex { $0 === preview })
+        let saveIndex = try XCTUnwrap(file.items.firstIndex { $0 === save })
+        XCTAssertLessThan(openIndex, previewIndex)
+        XCTAssertLessThan(previewIndex, saveIndex)
+        let allItems = main.items.compactMap(\.submenu).flatMap(\.items)
+        for (key, modifiers) in [("s", NSEvent.ModifierFlags.command),
+                                 ("v", [.command, .shift])] {
+            XCTAssertEqual(allItems.filter {
+                $0.keyEquivalent == key && $0.keyEquivalentModifierMask == modifiers
+            }.count, 1, "The File menu must own one native shortcut")
+        }
 
         let toggle = try XCTUnwrap(file.items.first {
             $0.title == String(localized: "Diff Layout", table: "Git")

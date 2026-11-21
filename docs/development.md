@@ -104,6 +104,12 @@ Swift 源码及 `GhosttyKit.xcframework` 的校验和由上游包清单管理。
 见[固定提交中的 P1 证据](https://github.com/chiimagnus/Bailey/blob/e1b9fe700424a561910c6dedb0c5653150212740/.github/features/editor-rendering-performance/evidence-p1.md)，不作为所有版本的性能承诺。依赖变化同时核对
 Debug／Release 构建与签名。
 
+### Markdown 原生预览
+
+Apple `swift-markdown`（经 `swift-cmark` 使用 cmark-gfm）仅负责解析 Markdown；
+阅读 UI 由 Bailey 自己的 SwiftUI 组件渲染，不使用 Textual、MarkdownView 或 WebKit。
+代码围栏复用现有 Tree-sitter 高亮，资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
+
 ### Neon
 
 [Vendor/Neon](../Vendor/Neon/README.md) 保留当前固定依赖的最小核心与原始许可证，

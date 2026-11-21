@@ -9,6 +9,9 @@ struct PanelContentView: View {
     var onFocused: () -> Void
     var onNewBrowserTab: (String?) -> Void
     var onNewFileTab: (String) -> Void
+    var markdownDirectory: String?
+    var rendersOnlyMarkdown = false
+    var onMarkdownLink: (FileTab, URL) async -> Bool = { _, _ in false }
     var onExternalFilesDropped: ([NSItemProvider]) -> Bool = { _ in false }
 
     var body: some View {
@@ -30,8 +33,13 @@ struct PanelContentView: View {
                     }
                 }
             case .file(let file):
-                FileViewerView(file: file, isFocused: isFocused, canFocus: canFocus, onFocused: onFocused)
-                    .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
+                FileViewerView(
+                    file: file, isFocused: isFocused, canFocus: canFocus, onFocused: onFocused,
+                    markdownDirectory: markdownDirectory,
+                    rendersOnlyMarkdown: rendersOnlyMarkdown,
+                    onMarkdownLink: { url in await onMarkdownLink(file, url) }
+                )
+                .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
             case .browser(let browser):
                 BrowserView(
                     browser: browser,

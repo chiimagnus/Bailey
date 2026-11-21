@@ -261,7 +261,12 @@ Git 操作的选项与目标检查由 [git.md](git.md#历史提交操作) 维护
 
 使用原生 NSTextView/TextKit 2 和现有增量解析。TSX 使用独立解析器，Markdown／HTML 保留嵌入语言；
 未知语法显示纯文本。文件扩展名变更时，在同一个编辑器上切换语法并清除旧色，不丢未保存内容和撤销历史。
-Markdown 是源码编辑，不承诺排版预览。
+Markdown（`.md`／`.markdown`／`.mdx`）仍以同一原生 TextKit 文件缓冲编辑；
+`⌘⇧V` 在源码和只读预览之间切换，文件标签右键还可选择 Dock 并排。
+预览由 `swift-markdown` 解析 AST，Bailey 的 SwiftUI 组件直接渲染 GFM、YAML 元数据、
+受限 HTML／SVG、Mermaid 和本地媒体；代码围栏复用 Tree-sitter 高亮。
+资源经项目 backend 授权，内容不执行 WebKit 或 JavaScript。
+它不另存一份 Markdown 源码，也不改变 Undo、编码或保存路径。
 
 高亮只添加／清除临时前景色，不写入正文属性或重复设置字体；不能修改文本、污染撤销或更改用户字体。
 实际换字体仍由原生编辑器应用。
