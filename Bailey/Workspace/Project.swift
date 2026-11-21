@@ -349,7 +349,10 @@ final class Project: nonisolated Identifiable {
         }
         guard file.workspaceIdentity == nil || file.workspaceIdentity == workspaceIdentity else { return false }
         let directory = customDirectory
-        let resource = file.markdownResource(in: directory)
+        // A Finder file in an SSH project remains on the Mac even when the
+        // project directory has the same spelling on two different machines.
+        let resourceDirectory = file.workspaceIdentity == workspaceIdentity ? directory : nil
+        let resource = file.markdownResource(in: resourceDirectory)
         let target = file.markdownResourceID
         let sourceWorkspace = file.workspaceIdentity
         do {

@@ -52,6 +52,41 @@ final class MarkdownResourceScopeTests: XCTestCase {
         XCTAssertEqual(project.tabs.count, 2)
     }
 
+    func testFinderFileInSSHProjectCannotBorrowTheRemoteRootByTextualPathCoincidence() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let docs = temporary.appending(path: "docs")
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let document = docs.appending(path: "Readme.md")
+        try Data("# Finder file".utf8).write(to: document)
+        try Data("private".utf8).write(to: temporary.appending(path: "secret.md"))
+        try Data("# Guide".utf8).write(to: docs.appending(path: "Guide.md"))
+
+        let project = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        project.sshHost = "unreachable-ssh-fixture"
+        // Remote and local paths are strings, so they can coincide without
+        // representing files on the same machine.
+        project.customDirectory = temporary.path
+        project.openLocalFile(document.path)
+        guard case .file(let source)? = project.focusedContent else {
+            return XCTFail("Finder file must remain local even in an SSH project")
+        }
+        try await source.waitForText()
+        XCTAssertNil(source.workspaceIdentity)
+        XCTAssertNotNil(project.workspaceIdentity)
+
+        let escaped = await project.openMarkdownLink(try XCTUnwrap(URL(string: "../secret.md")), from: source) { true }
+        XCTAssertFalse(escaped, "The unrelated SSH project root must not authorize reading local parent files")
+        XCTAssertEqual(project.tabs.count, 1)
+
+        let sibling = await project.openMarkdownLink(try XCTUnwrap(URL(string: "Guide.md")), from: source) { true }
+        XCTAssertTrue(sibling, "An explicitly Finder-opened local file should still open local sibling links")
+        guard case .file(let target)? = project.focusedContent else {
+            return XCTFail("Expected a local native file tab")
+        }
+        XCTAssertNil(target.workspaceIdentity)
+    }
+
     func testMarkdownInsideProjectKeepsCrossFolderRelativeResources() async throws {
         let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let docs = temporary.appending(path: "docs")
