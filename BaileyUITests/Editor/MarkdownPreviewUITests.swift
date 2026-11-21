@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import AVFoundation
 import XCTest
@@ -117,6 +118,114 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(preview.staticTexts["Alpha Beta Gamma"].waitForExistence(timeout: 10),
                       "Adjacent HTML inline elements must form a single visual line: \(preview.debugDescription)")
         XCTAssertTrue(preview.staticTexts["One Two Three"].exists, preview.debugDescription)
+    }
+
+    func testMarkdownRelativeLinksOpenActualProjectFiles() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let paths = ["SECURITY.md", "AGENTS.md", "docs/testing.md", "docs/features/ssh.md",
+                     "docs/features/editor.md", "docs/features/git.md", "docs/features/tunnels.md",
+                     "docs/signing.md"]
+        var files: [String: URL] = [:]
+        for path in paths {
+            let original = try String(contentsOf: repository.appending(path: path), encoding: .utf8)
+            files[path] = try fixture.file(path, text: original)
+        }
+        let security = try XCTUnwrap(files["SECURITY.md"])
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(security, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.staticTexts["安全"].waitForExistence(timeout: 10), preview.debugDescription)
+
+        for _ in 0..<2 {
+            for (title, path) in [("编辑器", "docs/features/editor.md"),
+                                  ("SSH", "docs/features/ssh.md"),
+                                  ("AGENTS.md", "AGENTS.md"),
+                                  ("docs/testing.md", "docs/testing.md"),
+                                  ("Git", "docs/features/git.md"),
+                                  ("隧道", "docs/features/tunnels.md"),
+                                  ("签名", "docs/signing.md")] {
+                let link = preview.links[title]
+                XCTAssertTrue(link.waitForExistence(timeout: 10), "Missing \(title): \(preview.debugDescription)")
+                link.click()
+                let destination = try XCTUnwrap(files[path])
+                let editor = window.textViews.firstMatch
+                XCTAssertTrue(editor.waitForExistence(timeout: 10), "SECURITY.md link \(title) must open \(path)")
+                XCTAssertEqual(editor.value as? String,
+                               try String(contentsOf: destination, encoding: .utf8),
+                               "SECURITY.md link \(title) must select and read the real \(path)")
+                app.typeKey("w", modifierFlags: .command)
+                XCTAssertTrue(preview.waitForExistence(timeout: 10), "Closing \(path) must restore SECURITY.md preview")
+            }
+        }
+    }
+
+    func testMarkdownAndHTMLImagesOpenAuthorizedFiles() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let image = try fixture.file("badge.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="80" height="40">
+              <rect width="80" height="40" fill="#2980b9"/>
+            </svg>
+            """)
+        let document = try fixture.file("Images.md", text: """
+            # Image links
+
+            ![Markdown badge](badge.svg)
+
+            <img src="badge.svg" alt="HTML badge" width="60" height="30">
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(document, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        for name in ["Markdown badge", "HTML badge"] {
+            let button = preview.buttons[name]
+            XCTAssertTrue(button.waitForExistence(timeout: 15), "Missing \(name): \(preview.debugDescription)")
+            button.click()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(image, in: window).waitForExistence(timeout: 10),
+                          "\(name) must open the authorized SVG file tab")
+            app.typeKey("w", modifierFlags: .command)
+            XCTAssertTrue(preview.waitForExistence(timeout: 10), "Must return to Markdown preview")
+        }
+    }
+
+    func testSecurityMarkdownSelectionCopiesOriginalText() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = try String(contentsOf: repository.appending(path: "SECURITY.md"), encoding: .utf8)
+        let file = try fixture.file("SECURITY.md", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let prose = preview.staticTexts.containing(NSPredicate(
+            format: "value CONTAINS %@", "本页负责漏洞报告"
+        )).firstMatch
+        XCTAssertTrue(prose.waitForExistence(timeout: 10), preview.debugDescription)
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString("Bailey selection test", forType: .string))
+        prose.doubleClick()
+        app.typeKey("c", modifierFlags: .command)
+        let copied = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertNotEqual(copied, "Bailey selection test", "Markdown selection must reach the native clipboard")
+        XCTAssertTrue(original.contains(copied), "Copied prose must come from SECURITY.md, not a stale source")
     }
 
     func testHTMLHeadingListAndRelativeLinkNavigateInsideProject() throws {

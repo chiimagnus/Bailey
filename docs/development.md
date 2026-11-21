@@ -82,7 +82,9 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 在 [Package.resolved](../Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)。
 不要在别处维护第二份完整版本清单；升级时同步检查下面的必要契约和 [NOTICE](../NOTICE.md)。
 
-Markdown 排版复用 Textual 的原生视图和 Foundation Markdown 结构；
+Markdown 排版使用 [Vendor/Textual](../Vendor/Textual/README.md)（基于 0.5.0）
+和 Foundation Markdown 结构。修正文本选择层在滚动后的链接命中位置，
+保留选区复制；升级时复测真实文档的连续跳转。
 Yams 只解析文件头部的数据，SwiftSoup 只提取受支持的静态 HTML 结构。
 SwiftDraw 只接收剥离脚本和外部引用的 SVG，不从原文 URL 直接加载。
 MermaidKit 直接输出原生位图，不引入 Mermaid.js 或 WebView；

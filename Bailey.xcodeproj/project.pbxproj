@@ -218,7 +218,7 @@
 				AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */,
 				BB80000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/BaileyGrammars" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
-				BC1000000000000000000001 /* XCRemoteSwiftPackageReference "textual" */,
+				BC1000000000000000000001 /* XCLocalSwiftPackageReference "Vendor/Textual" */,
 				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
 				BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
@@ -513,6 +513,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		BC1000000000000000000001 /* XCLocalSwiftPackageReference "Vendor/Textual" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/Textual;
+		};
 		AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/Neon;
@@ -542,14 +546,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 0.30.0;
-			};
-		};
-		BC1000000000000000000001 /* XCRemoteSwiftPackageReference "textual" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/gonzalezreal/textual";
-			requirement = {
-				kind = exactVersion;
-				version = 0.5.0;
 			};
 		};
 		BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */ = {
@@ -599,7 +595,6 @@
 		};
 		BC1000000000000000000002 /* Textual */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = BC1000000000000000000001 /* XCRemoteSwiftPackageReference "textual" */;
 			productName = Textual;
 		};
 		BC1000000000000000000012 /* Yams */ = {
