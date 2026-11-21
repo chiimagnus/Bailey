@@ -11,6 +11,7 @@ nonisolated struct MarkdownFootnotes {
     }
 
     let notes: [Note]
+    let referencedNotes: [Note]
     private let byName: [String: Note]
     private let lines: [Substring]
 
@@ -42,11 +43,30 @@ nonisolated struct MarkdownFootnotes {
             notes.append(note)
             indexed[name] = note
         }
+        var seen: Set<String> = []
+        var referenced: [Note] = []
+        let linked = Self.link(in: markup, lines: lines, byName: indexed)
+        let definitionLines = Set(notes.map(\.line))
+        for run in linked.runs {
+            guard let sourceLine = run.markdownSourcePosition?.startLine,
+                  !definitionLines.contains(sourceLine),
+                  let fragment = run.link?.fragment, fragment.hasPrefix("bailey-note:"),
+                  let note = indexed[String(fragment.dropFirst("bailey-note:".count))],
+                  seen.insert(note.name).inserted else { continue }
+            referenced.append(Note(name: note.name, line: note.line,
+                                   number: referenced.count + 1, text: note.text))
+        }
         self.notes = notes
-        byName = indexed
+        referencedNotes = referenced
+        byName = Dictionary(uniqueKeysWithValues: referenced.map { ($0.name, $0) })
     }
 
     func link(in markup: AttributedString) -> AttributedString {
+        Self.link(in: markup, lines: lines, byName: byName)
+    }
+
+    private static func link(in markup: AttributedString, lines: [Substring],
+                             byName: [String: Note]) -> AttributedString {
         guard !byName.isEmpty, markup.characters.contains("^") else { return markup }
         var result = AttributedString()
         for run in markup.runs {
@@ -84,7 +104,7 @@ nonisolated struct MarkdownFootnotes {
         return result
     }
 
-    private func reference(_ note: Note, attributes: AttributeContainer) -> AttributedString {
+    private static func reference(_ note: Note, attributes: AttributeContainer) -> AttributedString {
         var linked = attributes
         linked.link = URL(string: "#" + note.anchor)
         return AttributedString("[\(note.number)]", attributes: linked)

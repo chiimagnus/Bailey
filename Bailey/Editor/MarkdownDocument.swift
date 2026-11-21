@@ -64,7 +64,7 @@ nonisolated struct MarkdownDocument: Sendable {
             latest = outermost
         }
         if start != rendered.endIndex { append(rendered[start...], intent: latest) }
-        for note in footnotes?.notes ?? [] {
+        for note in footnotes?.referencedNotes ?? [] {
             let text = "[\(note.number)] " + note.text
             let markup = (try? AttributedString(markdown: text)) ?? AttributedString(text)
             blocks.append(Block(anchor: note.anchor, content: .markdown(markup)))
