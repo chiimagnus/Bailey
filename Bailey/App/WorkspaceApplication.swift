@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 /// Application-owned window registry, Finder routing and session persistence.
@@ -332,11 +333,17 @@ final class WorkspaceApplication {
         didSave: (@MainActor (String) -> Void)? = nil,
         operation: @MainActor () async throws -> Result
     ) async throws -> Result {
+        let protectedPaths = paths.filter { path in
+            guard workspace == nil, let source = LocalFileIdentity.read(path) else { return true }
+            return source.mode & UInt16(S_IFMT) != UInt16(S_IFLNK)
+        }
         var seen: Set<UUID> = []
         let affected = windows.flatMap(\.projects).flatMap(\.tabs).compactMap { tab -> PaneContent? in
             let content = tab.content
             guard let location = fileLocation(content), location.workspace == workspace,
-                  paths.contains(where: { matchesFile(location.path, inside: $0, workspace: workspace) }),
+                  protectedPaths.contains(where: {
+                      matchesFile(location.path, inside: $0, workspace: workspace)
+                  }),
                   seen.insert(content.id).inserted else { return nil }
             return content
         }.sorted { $0.id.uuidString < $1.id.uuidString }

@@ -367,6 +367,61 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
                        Data("two".utf8))
     }
 
+    func testMovingSymlinkDoesNotSaveItsUnrelatedDirtyTarget() async throws {
+        for (viaClipboard, openedThroughLink) in [(true, false), (false, false), (true, true), (false, true)] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let destination = root.appendingPathComponent("destination")
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let actual = root.appendingPathComponent("target.txt")
+            let link = root.appendingPathComponent("link.txt")
+            try Data("saved bytes".utf8).write(to: actual)
+            try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "target.txt")
+
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            manager.openFile(openedThroughLink ? link.path : actual.path)
+            let project = try XCTUnwrap(manager.selectedProject)
+            let target = try XCTUnwrap(project.panelContext?.identity)
+            await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+            guard case .file(let file)? = project.selectedTab?.content else {
+                return XCTFail("An open editor of the symlink target is required")
+            }
+            try await file.waitForText()
+            file.text = "unsaved draft"
+            file.refreshDirtyState()
+            XCTAssertTrue(file.isDirty)
+
+            if viaClipboard {
+                let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+                manager.performFileTreeCommand(
+                    .copy([link.path], cut: true), in: project, target: target, pasteboard: pasteboard
+                )
+                manager.performFileTreeCommand(
+                    .paste(into: destination.path), in: project, target: target,
+                    pasteboard: pasteboard
+                )
+            } else {
+                let batch = await manager.performFileOperation(
+                    .move, paths: [link.path], into: destination.path,
+                    in: project, target: target
+                )
+                XCTAssertTrue(batch.failures.isEmpty)
+            }
+
+            let moved = destination.appendingPathComponent("link.txt")
+            try await wait { LocalFileIdentity.read(moved.path) != nil }
+            XCTAssertNil(LocalFileIdentity.read(link.path))
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: moved.path),
+                           "target.txt")
+            XCTAssertEqual(try Data(contentsOf: actual), Data("saved bytes".utf8),
+                           "Moving a link entry must not commit the target editor's draft")
+            XCTAssertEqual(file.path, openedThroughLink ? moved.path : actual.path)
+            XCTAssertTrue(file.isDirty, "The editor's unsaved draft must survive the link move")
+        }
+    }
+
     func testPartialCutCannotReauthorizeAReplacedSourceForRetry() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let destination = root.appendingPathComponent("destination")
