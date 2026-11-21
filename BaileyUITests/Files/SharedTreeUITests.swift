@@ -86,9 +86,15 @@ final class SharedTreeUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
 
         let (_, selected) = WorkspaceUITestSupport.finderDragSource(for: source)
-        selected.click()
+        XCTAssertTrue(selected.exists, "Finder should already select the revealed file")
         XCUIApplication(bundleIdentifier: "com.apple.finder")
             .typeKey("c", modifierFlags: .command)
+        let fileURLs = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        XCTAssertTrue(fileURLs.contains(where: {
+            $0.standardizedFileURL == source.standardizedFileURL
+        }), "Finder must publish the selected file, not only path text")
         app.activate()
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let target = app.windows.firstMatch.descendants(matching: .any)
@@ -96,7 +102,8 @@ final class SharedTreeUITests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", "move-target")).firstMatch
         XCTAssertTrue(target.waitForExistence(timeout: 15))
         target.rightClick()
-        let command = app.menuItems["Move Here"]
+        let command = app.windows.firstMatch.menus
+            .matching(identifier: "bailey.tree.folder").firstMatch.menuItems["Move Here"]
         XCTAssertTrue(command.waitForExistence(timeout: 8))
         XCTAssertTrue(command.isEnabled, "Public Finder file URLs are eligible for explicit move")
         app.typeKey("v", modifierFlags: [.command, .option])

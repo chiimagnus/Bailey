@@ -355,19 +355,40 @@ enum WorkspaceUITestSupport {
     static func finderDragSource(for file: URL) -> (window: XCUIElement, source: XCUIElement) {
         NSWorkspace.shared.activateFileViewerSelecting([file])
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
-        let window = finder.windows.firstMatch
-        XCTAssertTrue(window.waitForExistence(timeout: 20))
         finder.activate()
-        if !window.outlines["ListView"].waitForExistence(timeout: 2) {
+
+        // Finder can retain several windows from earlier test cases. Its first
+        // window is not necessarily the one opened for the requested file.
+        func containingFile() -> (window: XCUIElement, source: XCUIElement)? {
+            for window in finder.windows.allElementsBoundByIndex {
+                let source = window.outlines["ListView"].outlineRows
+                    .textFields[file.lastPathComponent].firstMatch
+                if source.exists { return (window, source) }
+            }
+            return nil
+        }
+        if containingFile() == nil {
+            // Finder may reveal only the sandbox's tmp root rather than the
+            // requested child. Navigate to the exact parent using Finder itself.
+            finder.typeKey("g", modifierFlags: [.command, .shift])
+            let pathField = finder.textFields["PathTextField"]
+            if pathField.waitForExistence(timeout: 10) {
+                pathField.click()
+                pathField.typeKey("a", modifierFlags: .command)
+                pathField.typeText(file.deletingLastPathComponent().path)
+                pathField.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+            }
             finder.typeKey("2", modifierFlags: .command)
         }
-        XCTAssertTrue(window.outlines["ListView"].waitForExistence(timeout: 12),
-                      "The selected Finder file must expose an actual draggable row")
-        let source = window.outlines["ListView"].outlineRows.firstMatch
-            .textFields[file.lastPathComponent]
-        XCTAssertTrue(source.waitForExistence(timeout: 12),
-                      "The system drag must originate from the actual selected file")
-        return (window, source)
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in containingFile() != nil }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 15), .completed,
+                       "Finder must show the exact file in its owning window")
+        if let match = containingFile() { return match }
+        let fallback = finder.windows.firstMatch
+        return (fallback, fallback.outlines["ListView"].outlineRows
+            .textFields[file.lastPathComponent].firstMatch)
     }
 
     static func positionFinderDragWindow(
