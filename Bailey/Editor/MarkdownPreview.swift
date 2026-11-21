@@ -132,7 +132,6 @@ struct MarkdownPreview: View {
                                             : MarkdownGitHubColors.text(dark: colorScheme == .dark))
                                         .textual.textSelection(.enabled)
                                         .frame(minHeight: 12, alignment: .topLeading)
-                                        .id(revision)
                                 case .html(let nodes):
                                     MarkdownHTMLContent(nodes: nodes, resource: resource)
                                 case .mermaid(let source, let line):

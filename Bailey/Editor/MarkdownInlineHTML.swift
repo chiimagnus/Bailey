@@ -10,7 +10,6 @@ nonisolated enum MarkdownInlineHTML {
     }
 
     private struct Element {
-        let name: String
         let intent: InlinePresentationIntent
         let link: URL?
     }
@@ -102,7 +101,7 @@ nonisolated enum MarkdownInlineHTML {
            case .link(let destination, _) = parsed.first {
             link = destination
         }
-        return Element(name: tag.name, intent: intent, link: link)
+        return Element(intent: intent, link: link)
     }
 
     private static func tag(_ source: String) -> Tag? {
