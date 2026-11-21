@@ -212,7 +212,7 @@ final class FileTab: nonisolated Identifiable {
         return MarkdownDocument.supports(path)
     }
 
-    var markdownResourceID: String { "\(targetGeneration)-\(reloadRevision)" }
+    var markdownResourceID: String { "\(id)-\(targetGeneration)-\(reloadRevision)" }
     var markdownRequestID: String { "\(markdownResourceID)-\(markdownEditRevision)" }
 
     func setMarkdownPreview(_ enabled: Bool) {

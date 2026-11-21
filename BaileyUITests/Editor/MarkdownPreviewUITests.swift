@@ -851,6 +851,95 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(player.waitForNonExistence(timeout: 10))
     }
+    func testSwitchingBetweenDifferentMarkdownTabsNeverReusesAnotherPreview() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let firstText = "# First document\n\n" + (0..<500).map {
+            "First-only paragraph \($0) with **markdown**."
+        }.joined(separator: "\n\n")
+        let secondText = "# Second document\n\nSecond-only content."
+        let first = try fixture.file("First.md", text: firstText)
+        let second = try fixture.file("Second.md", text: secondText)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 15))
+        firstRow.doubleClick()
+        let firstTab = WorkspaceUITestSupport.fileTab(first, in: window)
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 15))
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.staticTexts["First document"].waitForExistence(timeout: 15))
+
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window)
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 15))
+        secondRow.doubleClick()
+        let secondTab = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 15))
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(preview.staticTexts["Second document"].waitForExistence(timeout: 15))
+        XCTAssertFalse(preview.staticTexts["First document"].exists,
+                       "The second tab must never inherit another file's parsed AST")
+
+        firstTab.click()
+        XCTAssertTrue(preview.staticTexts["First document"].waitForExistence(timeout: 15))
+        XCTAssertFalse(preview.staticTexts["Second document"].exists,
+                       "Returning to the first tab must restore its own preview")
+        secondTab.click()
+        XCTAssertTrue(preview.staticTexts["Second document"].waitForExistence(timeout: 15))
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), firstText)
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), secondText)
+    }
+
+    func testRapidEditsInLongSideBySidePreviewNeverRestoreOlderSnapshot() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let body = (0..<1_200).map { index in
+            "Paragraph \(index) with **emphasis**, 中文, and [link](guide.md)."
+        }.joined(separator: "\n\n")
+        let original = "# Baseline heading\n\n" + body + "\n"
+        let file = try fixture.file("Rapid-Live.md", text: original)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        tab.rightClick()
+        let companion = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(companion.waitForExistence(timeout: 10))
+        companion.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        XCTAssertTrue(preview.staticTexts["Baseline heading"].waitForExistence(timeout: 20))
+
+        func replaceHeading(_ heading: String) {
+            editor.click()
+            editor.typeKey(.upArrow, modifierFlags: .command)
+            editor.typeKey(.rightArrow, modifierFlags: [.command, .shift])
+            editor.typeText("# " + heading)
+        }
+        replaceHeading("Intermediate heading")
+        replaceHeading("Latest heading")
+
+        XCTAssertTrue(preview.staticTexts["Latest heading"].waitForExistence(timeout: 30),
+                      "Only the newest native TextKit revision may be published")
+        XCTAssertFalse(preview.staticTexts["Intermediate heading"].exists,
+                       "A cancelled background Markdown parse must not restore stale content")
+        XCTAssertTrue(preview.staticTexts.containing(
+            NSPredicate(format: "value CONTAINS %@", "Paragraph 0")
+        ).firstMatch.exists, "A fast heading edit must preserve the long document body")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), original,
+                       "Live preview must never save an unfinished draft")
+    }
+
     func testSideBySideUpdatesWhileEditingAndUsesTheOriginalSavePath() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "# Initial heading\n"

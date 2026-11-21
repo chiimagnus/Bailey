@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownMathPerformanceTests: XCTestCase {
+    func testCancelledLongMarkdownParseCannotReturnASnapshot() async throws {
+        let source = (0..<20_000).map { index in
+            "## Heading \(index) 中文🙂\n\nText with **bold** and [link](guide.md)."
+        }.joined(separator: "\n\n")
+        let pending = Task { try await MarkdownDocument.parse(source) }
+        try await Task.sleep(for: .milliseconds(10))
+        pending.cancel()
+        do {
+            _ = try await pending.value
+            XCTFail("A cancelled long parse must not publish an obsolete snapshot")
+        } catch is CancellationError {
+            // The preview's request identity check additionally rejects stale completions.
+        }
+    }
+
     func testLargeMixedMathAndCodeStaysComplete() async throws {
         for count in [500, 5_000, 20_000] {
             let source = (0..<count).map { index in
