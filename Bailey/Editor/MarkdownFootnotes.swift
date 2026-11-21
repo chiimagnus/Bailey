@@ -3,14 +3,13 @@ import Foundation
 nonisolated struct MarkdownFootnotes {
     struct Note {
         let name: String
-        let line: Int
         let number: Int
         let text: String
 
         var anchor: String { "bailey-note:\(name)" }
     }
 
-    let notes: [Note]
+    let definitionLines: Set<Int>
     let referencedNotes: [Note]
     private let byName: [String: Note]
     private let lines: [Substring]
@@ -29,7 +28,7 @@ nonisolated struct MarkdownFootnotes {
             }
         }
         var indexed: [String: Note] = [:]
-        var notes: [Note] = []
+        var definitionLines: Set<Int> = []
         for (index, line) in lines.enumerated() where !excluded.contains(index + 1) {
             guard let match = line.firstMatch(of: /^ {0,3}\[\^([A-Za-z0-9_-]+)\]:[ \t]*(.*)$/) else { continue }
             let name = match.1.lowercased()
@@ -39,24 +38,22 @@ nonisolated struct MarkdownFootnotes {
                 guard next.hasPrefix("    ") || next.hasPrefix("\t") else { break }
                 body += "\n" + next.trimmingCharacters(in: .whitespaces)
             }
-            let note = Note(name: name, line: index + 1, number: notes.count + 1, text: body)
-            notes.append(note)
-            indexed[name] = note
+            indexed[name] = Note(name: name, number: indexed.count + 1, text: body)
+            definitionLines.insert(index + 1)
         }
         var seen: Set<String> = []
         var referenced: [Note] = []
         let linked = Self.link(in: markup, lines: lines, byName: indexed)
-        let definitionLines = Set(notes.map(\.line))
         for run in linked.runs {
             guard let sourceLine = run.markdownSourcePosition?.startLine,
                   !definitionLines.contains(sourceLine),
                   let fragment = run.link?.fragment, fragment.hasPrefix("bailey-note:"),
                   let note = indexed[String(fragment.dropFirst("bailey-note:".count))],
                   seen.insert(note.name).inserted else { continue }
-            referenced.append(Note(name: note.name, line: note.line,
-                                   number: referenced.count + 1, text: note.text))
+            referenced.append(Note(name: note.name, number: referenced.count + 1,
+                                   text: note.text))
         }
-        self.notes = notes
+        self.definitionLines = definitionLines
         referencedNotes = referenced
         byName = Dictionary(uniqueKeysWithValues: referenced.map { ($0.name, $0) })
     }

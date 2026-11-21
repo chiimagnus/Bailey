@@ -48,7 +48,7 @@ nonisolated struct MarkdownDocument: Sendable {
         )
         try Task.checkCancellation()
         let footnotes = original.contains("[^") ? MarkdownFootnotes(lines: sourceLines(), markup: rendered) : nil
-        let footnoteLines = Set(footnotes?.notes.map(\.line) ?? [])
+        let footnoteLines = footnotes?.definitionLines ?? []
         var blocks: [Block] = []
         var duplicates: [String: Int] = [:]
         var start = rendered.startIndex
