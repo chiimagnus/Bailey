@@ -347,15 +347,18 @@ final class Project: nonisolated Identifiable {
             newBrowserTab(initialURL: url.absoluteString, initialFocus: .webContent)
             return true
         }
-        guard file.workspaceIdentity == workspaceIdentity, let directory = customDirectory else { return false }
+        guard file.workspaceIdentity == nil || file.workspaceIdentity == workspaceIdentity else { return false }
+        let directory = customDirectory
         let resource = file.markdownResource(in: directory)
         let target = file.markdownResourceID
+        let sourceWorkspace = file.workspaceIdentity
         do {
             let resolved = try await resource.resolvedFile(url)
             guard !Task.isCancelled, isCurrent(), file.markdownResourceID == target,
-                  directory == customDirectory, file.workspaceIdentity == workspaceIdentity,
+                  directory == customDirectory, file.workspaceIdentity == sourceWorkspace,
+                  (sourceWorkspace == nil || sourceWorkspace == workspaceIdentity),
                   tabs.contains(where: { $0.content.id == file.id }) else { return false }
-            openFile(resolved, backend: resource.backend, workspace: file.workspaceIdentity,
+            openFile(resolved, backend: resource.backend, workspace: sourceWorkspace,
                      inGroup: dock.activeGroupID)
             return true
         } catch {

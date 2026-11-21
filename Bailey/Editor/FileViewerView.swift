@@ -221,7 +221,11 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func markdownResource(in directory: String?) -> MarkdownResource {
-        MarkdownResource(path: path, directory: readOnlyReason == nil ? directory : nil, backend: backend)
+        // A Finder-opened document may be outside the active project's root.
+        // Its own parent is the narrowest authorized scope for relative assets.
+        let scope = directory.flatMap { LocalPathScope.contains(path, in: $0) ? $0 : nil }
+            ?? (path as NSString).deletingLastPathComponent
+        return MarkdownResource(path: path, directory: readOnlyReason == nil ? scope : nil, backend: backend)
     }
 
     private struct LoadedContent {
