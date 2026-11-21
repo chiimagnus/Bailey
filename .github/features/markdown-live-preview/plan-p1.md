@@ -14,8 +14,8 @@ Markdown AST 的 `Document` 未公开声明 `Sendable`；跨 actor 时在解析�
 不再复制 Textual 的富文本、附件、布局引擎。
 
 Front Matter 仅限文件开头（可带 BOM）由 Yams 解析；元数据和正文分离，源码字节不变。
-相对资源只允许通过 `WorkspaceBackend` 和 `LocalPathScope` 访问已授权项目／机器。
-旧分支 `markdown-live-preview` 的原生资源代码可以**逐函数选择性复用并删除 Textual 依赖**，不是合并整个旧分支。
+相对资源只允许由现有 `MarkdownResource` 经 `WorkspaceBackend` 与 `LocalPathScope` 访问当前项目／机器；
+原生 SVG、图片和 HTML 沿当前 `swift-markdown` 分支的实现演进，不恢复旧 Textual 渲染路径。
 
 真实位置：`Bailey/Editor/FileViewerView.swift`、`Bailey/Workspace/Project.swift`、
 `Bailey/Editor/SourceTextEditor.swift`、`Bailey/App/BaileyApp.swift`、
@@ -40,6 +40,15 @@ Front Matter 仅限文件开头（可带 BOM）由 Yams 解析；元数据和正
 - `BaileyApp.swift` File 菜单统一注册 `⌘⇧V`；`WorkspaceWindowModel` 按前台有效 Dock 焦点路由，`WorkspaceDockView.projectTabMenu` 的右键目标独立。
 - 正确处理 `.md/.markdown/.mdx`、只读、后台标签、多窗口、无效预览及其他非预览类型；菜单动态置灰，不注册第二套按键监听。旧的 Dock、保存／Undo 和编辑器路径不替换。
 - 完成判据：实际隔离 Bailey Dev 中往返切换无新标签、无自动保存，原生编辑器恢复原始选区与焦点；现有相关宿主及 UI 测试通过。
+
+<a id="p1-t3"></a>
+### P1-T3 GitHub Markdown 视觉与指针交互
+
+- 对照 [Primer Markdown 样式](https://github.com/primer/css/tree/main/src/markdown) 调整 `MarkdownPreview`／`MarkdownHTMLContent` 的字号、行高、标题／引用、列表、表格、代码片段及响应式内边距；复用当前 `MarkdownGitHubColors`，不复制 CSS 引擎。此任务只负责基础视觉，复杂嵌套与 GFM Alerts 见 P2-T8。
+- 链接保留 AST 嵌套强调语义；原生系统链接处理真正的文字范围，图片、HTML 交互和标题锚点仅在可点击区域使用 `.pointerStyle(.link)`。正文不要整段显示手形指针。
+- 代码围栏使用 GitHub 风格悬停复制控件；键盘和 VoiceOver 仍可发现操作。错误资源、超长代码、内联图片混排和深浅主题真实复验。
+- 宿主核验嵌套链接与完整源码；隔离 Bailey Dev 以真实 README／`SKILL.md` 和复杂混排文档验证点击跳转、指针形状、Hover／焦点、截图、窄 Dock、选择复制及样式回归。
+  简短专项用例只定位缺陷；跨结构连续选择归 P2-T6，跨环境极端覆盖按 P2 共同验收执行。
 
 ## P1 验收
 

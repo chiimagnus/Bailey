@@ -1,21 +1,21 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
 title = "渲染 CommonMark／GFM 与相对图片"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "9d8fa6f9"
+note = "swift-markdown AST/GFM/YAML/相对资源及原生图片；Host 39/39，布局500/5000/20000通过"
 
 [[tasks]]
 id = "P1-T2"
 title = "单标签预览、源码切换"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "9d8fa6f9"
+note = "同一 FileTab、File 菜单快捷键与 Dock companion，GUI 18用例覆盖（1外部Tinycast弹窗中断）"
 
 [[tasks]]
 id = "P2-T1"
@@ -44,7 +44,55 @@ note = ""
 [[tasks]]
 id = "P2-T4"
 title = "Mermaid 数学公式与脚注安全排版"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
+commit = "58e941d1"
+note = "基础公式与 Mermaid 已随 9ddc6f33 接入，本提交完成边界修复；build:dev 成功，Host 58/58、公式 GUI 4/4，Mermaid 四类型可实际渲染，非法回调被拒绝。实机 VoiceOver 声音与复杂富媒体压力留 P2-T9。"
+
+[[tasks]]
+id = "P1-T3"
+title = "复刻 GitHub Markdown 排版与链接交互"
+status = "completed"
+plan = "plan-p1.md#p1-t3"
+commit = "9ddc6f33"
+note = "GitHub Primer typography+colors, tracked native link cursor, heading anchor, code copy, 340pt tables; Host 54/54, Markdown GUI 23/23, math GUI isolated 2/2; combined math run had clipboard/window isolation failures"
+
+[[tasks]]
+id = "P2-T5"
+title = "精确源码映射与双向滚动定位"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T6"
+title = "跨结构连续选区与语义复制"
+status = "pending"
+plan = "plan-p2.md#p2-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T7"
+title = "标题大纲折叠与富内容阅读操作"
+status = "pending"
+plan = "plan-p2.md#p2-t7"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T8"
+title = "GitHub 复杂排版与 Alerts"
+status = "pending"
+plan = "plan-p2.md#p2-t8"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T9"
+title = "长文档性能和无障碍质量验收"
+status = "pending"
+plan = "plan-p2.md#p2-t9"
 commit = ""
 note = ""
