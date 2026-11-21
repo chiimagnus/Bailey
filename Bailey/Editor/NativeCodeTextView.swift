@@ -410,6 +410,11 @@ class NativeCodeTextView: NSTextView {
         layout.textContainer = container
         super.init(frame: CGRect(x: 0, y: 0, width: 1000, height: 0), textContainer: container)
         isRichText = false
+        // Code must retain the exact characters typed, including HTML attributes.
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+        isAutomaticTextReplacementEnabled = false
+        isAutomaticSpellingCorrectionEnabled = false
         allowsUndo = true
         isVerticallyResizable = true
         isHorizontallyResizable = false
