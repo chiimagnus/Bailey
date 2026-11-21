@@ -1107,23 +1107,24 @@ final class WorkspaceWindowModel {
             && record.map { application.trustedFileClipboard($0, pasteboard: pasteboard) } == true
         let moving = explicitMove || trustedCut
         let clipboardVersion = pasteboard.changeCount
+        var sourceIdentities: [String: LocalFileIdentity] = [:]
+        if moving {
+            for path in paths {
+                if let identity = LocalFileIdentity.read(path) { sourceIdentities[path] = identity }
+            }
+        }
         Task { @MainActor in
+            var expectedIdentities = sourceIdentities
+            guard selectedProjectID == project.id, project.matchesPanelTarget(target),
+                  (!trustedCut || pasteboard.changeCount == clipboardVersion) else { return }
             @MainActor func transfer() async -> LocalFileTransferResult? {
                 guard selectedProjectID == project.id, project.matchesPanelTarget(target),
                       (!trustedCut || pasteboard.changeCount == clipboardVersion) else {
                     return nil
                 }
-                var expectedIdentities: [String: LocalFileIdentity]? = nil
-                if moving {
-                    var sources: [String: LocalFileIdentity] = [:]
-                    for path in paths {
-                        if let identity = LocalFileIdentity.read(path) { sources[path] = identity }
-                    }
-                    expectedIdentities = sources
-                }
                 let result = await project.fileTree.importFromFinder(
                     urls, into: directory, move: moving,
-                    expectedIdentities: expectedIdentities,
+                    expectedIdentities: moving ? expectedIdentities : nil,
                     isCurrentTarget: {
                         self.selectedProjectID == project.id && project.matchesPanelTarget(target)
                     }
@@ -1145,9 +1146,26 @@ final class WorkspaceWindowModel {
 
             let result: LocalFileTransferResult?
             if moving {
+                let protectedPaths = paths.filter { path in
+                    guard let pinned = expectedIdentities[path] else { return false }
+                    return LocalFileIdentity.read(path) == pinned
+                }
                 do {
                     result = try await application.withProtectedFiles(
-                        paths: paths, workspace: nil
+                        paths: protectedPaths, workspace: nil,
+                        didSave: { savedPath in
+                            let savedPhysicalPath = LocalPathScope.resolvedPath(savedPath)
+                            for path in paths {
+                                let physicalSource = LocalPathScope.resolvedPath(path)
+                                guard LocalPathScope.contains(savedPhysicalPath, in: physicalSource),
+                                      let pinned = expectedIdentities[path],
+                                      let current = LocalFileIdentity.read(path),
+                                      savedPhysicalPath == physicalSource
+                                          || current.refersToSameEntry(as: pinned)
+                                else { continue }
+                                expectedIdentities[path] = current
+                            }
+                        }
                     ) {
                         await transfer()
                     }
@@ -1184,7 +1202,14 @@ final class WorkspaceWindowModel {
                 // The old file URLs must not point to deleted files.
                 pasteboard.declareTypes([.string], owner: nil)
                 pasteboard.setString(paths.joined(separator: "\n"), forType: .string)
-            } else if trustedCut, let record {
+            } else if trustedCut, let record, remaining.allSatisfy({ path in
+                let original = result.copiedWithoutRemoval.first(where: {
+                    $0.retainedAt == path
+                })?.source ?? path
+                guard let pinned = expectedIdentities[original],
+                      let current = LocalFileIdentity.read(path) else { return false }
+                return original == path ? current == pinned : current.refersToSameEntry(as: pinned)
+            }) {
                 let pending = FileTreeClipboard.Record(
                     token: record.token, project: record.project, identity: record.identity,
                     root: record.root, connectionRevision: record.connectionRevision,

@@ -329,6 +329,7 @@ final class WorkspaceApplication {
     /// Coordinate file and editable worktree diff tabs across registered windows.
     func withProtectedFiles<Result>(
         paths: [String], workspace: String?,
+        didSave: (@MainActor (String) -> Void)? = nil,
         operation: @MainActor () async throws -> Result
     ) async throws -> Result {
         var seen: Set<UUID> = []
@@ -344,6 +345,8 @@ final class WorkspaceApplication {
 
         var held: [PaneContent] = []
         for content in affected {
+            let hadUnsavedChanges = content.isDirty
+            let originalPath = fileLocation(content)?.path
             let ready: Bool
             switch content {
             case .file(let file): ready = await file.beginFileMutation()
@@ -359,6 +362,7 @@ final class WorkspaceApplication {
                 )
             }
             held.append(content)
+            if hadUnsavedChanges, let originalPath { didSave?(originalPath) }
         }
         defer { held.forEach { releaseFileMutation($0) } }
         return try await operation()
