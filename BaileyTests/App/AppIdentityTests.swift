@@ -230,7 +230,7 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testSaveRemainsInEditWhileSingleDiffLayoutToggleBelongsToFile() throws {
+    func testFileMenuOrdersOpenPreviewAndSaveAndKeepsShortcutsUnique() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let edit = try XCTUnwrap(main.items.compactMap(\.submenu).first { submenu in
             submenu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
@@ -239,12 +239,29 @@ final class AppIdentityTests: XCTestCase {
         let file = try XCTUnwrap(main.items.first {
             $0.title == String(localized: "File", table: "Interface")
         }?.submenu)
-        let save = try XCTUnwrap(edit.items.first {
+        let open = try XCTUnwrap(file.items.first {
+            $0.title == String(localized: "Open File…", table: "Interface")
+        })
+        let preview = try XCTUnwrap(file.items.first {
+            $0.title == String(localized: "Show Preview", table: "Editor")
+        })
+        let save = try XCTUnwrap(file.items.first {
             $0.title == String(localized: "Save", table: "Interface")
         })
+        XCTAssertEqual(file.index(of: preview), file.index(of: open) + 1)
+        XCTAssertEqual(file.index(of: save), file.index(of: preview) + 1)
+        XCTAssertEqual(preview.keyEquivalent, "v")
+        XCTAssertEqual(preview.keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertFalse(preview.isEnabled, "Without an active Markdown file the item must remain disabled")
         XCTAssertEqual(save.keyEquivalent, "s")
         XCTAssertEqual(save.keyEquivalentModifierMask, .command)
-        XCTAssertFalse(file.items.contains { $0.title == save.title })
+        let all = main.items.compactMap(\.submenu).flatMap(\.items)
+        XCTAssertEqual(all.filter {
+            $0.keyEquivalent == "v" && $0.keyEquivalentModifierMask == [.command, .shift]
+        }.count, 1, "Only File registers the preview toggle")
+        XCTAssertEqual(all.filter {
+            $0.keyEquivalent == "s" && $0.keyEquivalentModifierMask == .command
+        }.count, 1, "Moving Save must not leave a second shortcut")
 
         let toggle = try XCTUnwrap(file.items.first {
             $0.title == String(localized: "Diff Layout", table: "Git")
@@ -252,7 +269,6 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(toggle.keyEquivalent, "u")
         XCTAssertEqual(toggle.keyEquivalentModifierMask, [.command, .option])
         XCTAssertFalse(toggle.isEnabled, "Without a focused Diff the command must be disabled")
-        let all = main.items.compactMap(\.submenu).flatMap(\.items)
         XCTAssertEqual(all.filter {
             $0.keyEquivalent == "u" && $0.keyEquivalentModifierMask == [.command, .option]
         }.count, 1, "Only File registers the layout toggle")

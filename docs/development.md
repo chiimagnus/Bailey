@@ -36,12 +36,12 @@ Makefile 通过构建参数选择正式版或开发版，不复制 App Target、
 直接在 Xcode 中运行 scheme 不会自动带入 Makefile 的开发版参数；
 需要隔离的 Bailey Dev 时，应使用 `make build:dev` 生成的开发版 App。
 
-正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
-测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
+正式版产物位于 `.build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
+测试版位于 `.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
 App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.dev`）。
 两者使用独立 DerivedData 和 Bundle ID，
 测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；
-包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
+包依赖仍在 `.build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
 宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；
 `make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给本机阶段验收。
@@ -81,6 +81,13 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 解析版本
 在 [Package.resolved](../Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)。
 不要在别处维护第二份完整版本清单；升级时同步检查下面的必要契约和 [NOTICE](../NOTICE.md)。
+
+Markdown 排版复用 Textual 的原生视图和 Foundation Markdown 结构；
+Yams 只解析文件头部的数据，SwiftSoup 只提取受支持的静态 HTML 结构。
+SwiftDraw 只接收剥离脚本和外部引用的 SVG，不从原文 URL 直接加载。
+MermaidKit 直接输出原生位图，不引入 Mermaid.js 或 WebView；
+公式使用 Textual 的 SwiftUIMath，随 App 提供字体。
+升级 Textual 时核对图片与 emoji 都使用 Bailey 的附件加载器，而非上游的网络默认值。
 
 ### Ghostty
 

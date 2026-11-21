@@ -145,6 +145,33 @@ private actor ReadLimitProbe: RemoteCommandRunner {
 }
 
 final class RemoteCommandsTests: XCTestCase {
+    func testMarkdownReadsConfinementThroughTheRemoteCommandBackend() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let project = temporary.appending(path: "project")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let outside = temporary.appending(path: "outside")
+        try Data("outside".utf8).write(to: outside)
+        let bytes = Data("authorized".utf8)
+        try bytes.write(to: project.appending(path: "inside' 中文.txt"))
+        try FileManager.default.createSymbolicLink(at: project.appending(path: "alias"), withDestinationURL: outside)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture(), timeout: 5)
+        let resource = MarkdownResource(path: project.appending(path: "file.md").path,
+                                        directory: project.path, backend: backend)
+        let url = try XCTUnwrap(URL(string: "inside%27%20%E4%B8%AD%E6%96%87.txt"))
+        let result = try await resource.read(url, maxBytes: bytes.count)
+        XCTAssertEqual(result, bytes)
+        for link in ["alias", "missing", "../outside", "file:///etc/hosts"] {
+            do {
+                _ = try await resource.read(try XCTUnwrap(URL(string: link)), maxBytes: 64)
+                XCTFail("Read denied resource \(link)")
+            } catch is CocoaError {}
+        }
+        do {
+            _ = try await resource.read(url, maxBytes: bytes.count - 1)
+            XCTFail("Exceeded resource ceiling")
+        } catch WorkspaceError.tooLarge {}
+    }
     func testLocalCommandCompletionAndTimeoutIgnoreInheritedOutputPipe() async throws {
         for descriptor in [1, 2] {
             for parentExitsImmediately in [false, true] {

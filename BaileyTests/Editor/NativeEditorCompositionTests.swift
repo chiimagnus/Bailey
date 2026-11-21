@@ -4,6 +4,18 @@ import XCTest
 
 @MainActor
 final class NativeEditorCompositionTests: XCTestCase {
+    func testNativeCodeEditorDisablesAutomaticProseSubstitutions() {
+        let editor = NativeCodeTextView()
+        XCTAssertFalse(editor.isAutomaticQuoteSubstitutionEnabled,
+                       "Typing HTML attributes must retain straight ASCII quotes")
+        XCTAssertFalse(editor.isAutomaticDashSubstitutionEnabled,
+                       "Typing source code must not replace punctuation")
+        XCTAssertFalse(editor.isAutomaticTextReplacementEnabled,
+                       "Source code must not apply user-defined text replacements")
+        XCTAssertFalse(editor.isAutomaticSpellingCorrectionEnabled,
+                       "Source identifiers must never be autocorrected")
+    }
+
     func testNativeEditMetadataAndPrechangeCoverageAcrossInputUndoAndComposition() throws {
         @MainActor final class EditDelegate: NSObject, NSTextViewDelegate {
             var prechanges = 0

@@ -123,7 +123,28 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try Self.readSync(path: path, maxBytes: maxBytes)
     }
 
-    private static func readSync(path: String, maxBytes: Int) throws -> Data {
+    @concurrent func read(path: String, maxBytes: Int, confinedTo directory: String) async throws -> Data {
+        try Self.readSync(path: path, maxBytes: maxBytes, confinedTo: Self.canonicalPath(directory))
+    }
+
+    @concurrent func checkConfinedFile(_ path: String, in directory: String) async throws {
+        let root = try Self.canonicalPath(directory)
+        let resolved = try Self.canonicalPath(path)
+        guard LocalPathScope.contains(resolved, in: root),
+              Self.statSync(resolved)?.isRegular == true else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+    }
+
+    private static func canonicalPath(_ path: String) throws -> String {
+        guard !path.utf8.contains(0), let resolved = realpath(path, nil) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {
         try Task.checkCancellation()
         guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
@@ -138,6 +159,16 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
+        if let root {
+            var resolved = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(fd, F_GETPATH, &resolved) != -1,
+                  LocalPathScope.contains(
+                      String(decoding: resolved.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self),
+                      in: root
+                  ) else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+        }
         var info = Darwin.stat()
         guard fstat(fd, &info) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))

@@ -7,6 +7,9 @@
 围绕原生终端，在同一个窗口使用代码文件、Git、浏览器和 AI 命令行工具，并自由排列。
 支持 Apple Silicon，最低 macOS 15.6。
 
+打开 Markdown 文件后，按 ⌘⇧V 切换[原生预览](docs/features/editor.md#markdown-预览)；
+也可以在同一文件标签的右键菜单选择并排编辑和预览。
+
 ## 截图
 
 <p>

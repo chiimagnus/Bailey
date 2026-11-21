@@ -4,6 +4,18 @@ import ImageIO
 import Observation
 import SwiftUI
 
+enum MarkdownViewMode: CaseIterable {
+    case source, preview, sideBySide
+
+    var title: String {
+        switch self {
+        case .source: String(localized: "Show Source", table: "Editor")
+        case .preview: String(localized: "Show Preview", table: "Editor")
+        case .sideBySide: String(localized: "Show Side by Side", table: "Editor")
+        }
+    }
+}
+
 /// A file opened as a tab in a project. Text content lives here (not in the
 /// view) so edits survive tab switches.
 @MainActor
@@ -123,6 +135,7 @@ final class FileTab: nonisolated Identifiable {
     /// notification; only direct edits require one deferred full reconciliation.
     private func nativeStorageDidChange() {
         guard case .text = content else { return }
+        markdownEditRevision &+= 1
         preparedLineWidths = nil
         pendingStorageChange = true
         if !isDirty {
@@ -151,6 +164,18 @@ final class FileTab: nonisolated Identifiable {
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
+
+    nonisolated static func imageThumbnail(_ source: CGImageSource, index: Int = 0, maximumDimension: Int) -> CGImage? {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any]
+        let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
+        let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
+        guard width > 0, height > 0, width <= maxImagePixels / height else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
     @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
@@ -160,7 +185,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var hasReadDemand = false
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
-    @ObservationIgnored private var targetGeneration: UInt = 0
+    private var targetGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
     @ObservationIgnored private var saveLatestRequested = false
     /// Encoding changes are explicit user actions, never merged or silently dropped.
@@ -178,6 +203,30 @@ final class FileTab: nonisolated Identifiable {
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a file opened locally is never read-only.
     let workspaceIdentity: String?
+    private(set) var showsMarkdownPreview = false
+    private var markdownEditRevision: UInt = 0
+    @ObservationIgnored var markdownScrollPosition: Int?
+
+    var canPreviewMarkdown: Bool {
+        guard case .text = content else { return false }
+        return MarkdownDocument.supports(path)
+    }
+
+    var markdownResourceID: String { "\(targetGeneration)-\(reloadRevision)" }
+    var markdownRequestID: String { "\(markdownResourceID)-\(markdownEditRevision)" }
+
+    func setMarkdownPreview(_ enabled: Bool) {
+        guard canPreviewMarkdown else { return }
+        showsMarkdownPreview = enabled
+    }
+
+    func markdownResource(in directory: String?) -> MarkdownResource {
+        // A Finder-opened document may be outside the active project's root.
+        // Its own parent is the narrowest authorized scope for relative assets.
+        let scope = directory.flatMap { LocalPathScope.contains(path, in: $0) ? $0 : nil }
+            ?? (path as NSString).deletingLastPathComponent
+        return MarkdownResource(path: path, directory: readOnlyReason == nil ? scope : nil, backend: backend)
+    }
 
     private struct LoadedContent {
         let content: Content
@@ -360,6 +409,7 @@ final class FileTab: nonisolated Identifiable {
         invalidateReload()
         targetGeneration &+= 1
         path = newPath
+        if !MarkdownDocument.supports(newPath) { showsMarkdownPreview = false }
         editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if wasReading { loadIfNeeded() }
     }
@@ -764,16 +814,7 @@ final class FileTab: nonisolated Identifiable {
            let source = CGImageSourceCreateWithData(data as CFData,
                                                     [kCGImageSourceShouldCache: false] as CFDictionary),
            CGImageSourceGetType(source) != nil {
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
-            let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
-            let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
-            let thumbnailOptions: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: 4096,
-            ]
-            guard width > 0, height > 0, width <= maxImagePixels / height,
-                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0,
-                                                                      thumbnailOptions as CFDictionary) else {
+            guard let thumbnail = imageThumbnail(source, maximumDimension: 4096) else {
                 return LoadedContent(
                     content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
                     text: "", encoding: nil, imageFingerprint: nil, decodingFailed: false,
@@ -844,10 +885,15 @@ struct FileViewerView: View {
     /// Called when the editor takes focus itself (e.g. a click), so the
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
+    var markdownDirectory: String?
+    var rendersOnlyMarkdown = false
+    var onMarkdownLink: (URL) async -> Bool = { _ in false }
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
     @State private var windowReference = FileWindowReference()
+    @State private var assetRefresh: UInt = 0
+    @Environment(\.appearsActive) private var appearsActive
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -866,23 +912,28 @@ struct FileViewerView: View {
                     if let error = file.saveError {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
-                    HStack {
-                        Spacer()
-                        encodingMenu
+                    if (file.showsMarkdownPreview || rendersOnlyMarkdown) && file.canPreviewMarkdown {
+                        MarkdownFilePreview(file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
+                                            onOpenLink: onMarkdownLink)
+                    } else if !rendersOnlyMarkdown {
+                        HStack {
+                            Spacer()
+                            encodingMenu
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 23)
+                        SourceTextEditor(
+                            file: file,
+                            font: TerminalFont.current(),
+                            palette: .theme(dark: colorScheme == .dark),
+                            wrapLines: settings.wrapLines,
+                            longLineDisplayWidth: settings.longLineDisplayWidth,
+                            isFocused: isFocused,
+                            canFocus: canFocus,
+                            onFocused: onFocused
+                        )
+                        .id(file.reloadRevision)
                     }
-                    .padding(.horizontal, 12)
-                    .frame(height: 23)
-                    SourceTextEditor(
-                        file: file,
-                        font: TerminalFont.current(),
-                        palette: .theme(dark: colorScheme == .dark),
-                        wrapLines: settings.wrapLines,
-                        longLineDisplayWidth: settings.longLineDisplayWidth,
-                        isFocused: isFocused,
-                        canFocus: canFocus,
-                        onFocused: onFocused
-                    )
-                    .id(file.reloadRevision)
                 }
             case .image(let image):
                 VStack(spacing: 0) {
@@ -909,12 +960,15 @@ struct FileViewerView: View {
         }
         .background(FileWindowReader(reference: windowReference).frame(width: 0, height: 0))
         .onAppear {
-            file.refreshWhenSelected()
+            if rendersOnlyMarkdown { file.loadIfNeeded() }
+            else { file.refreshWhenSelected() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
-            guard notification.object as? NSWindow === windowReference.window,
-                  file.readOnlyReason == nil else { return }
-            file.refreshWhenSelected()
+            guard notification.object as? NSWindow === windowReference.window else { return }
+            if !rendersOnlyMarkdown, file.readOnlyReason == nil { file.refreshWhenSelected() }
+        }
+        .onChange(of: appearsActive) { _, active in
+            if active && (rendersOnlyMarkdown || file.showsMarkdownPreview) { assetRefresh &+= 1 }
         }
     }
 
