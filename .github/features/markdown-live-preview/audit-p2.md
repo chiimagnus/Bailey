@@ -41,7 +41,51 @@
 - `9beaf227` 进一步隔离 SSH 项目里 Finder 打开的 Mac 文件，即使路径字符串与远端根同名也不得借用权限。合并后 Markdown／编辑器／Dock／授权 **135 项 Host 通过，0 失败**，对应 `Test-Bailey-2026.11.21_16-28-44-+0800.xcresult`。
 - **仍不宣称**对任意复杂 HTML 达到浏览器逐像素一致，或已完成 VoiceOver、真实中文 IME、Windows SSH、32 MiB 全文 GPU 帧率／内存与长期音视频播放的真实验收。
 
+## 2026-11-21 本次独立复核
+
+- **P2-T1 `eeae2dba`**：现行 Dock 只复用同一 `FileTab`；独立并排、实时编辑、
+  Undo／保存 GUI 通过，不再需要额外的视图层链接任务状态。
+- **P2-T2 `93c71f4b`**：普通 Markdown 链接原本绕过了真实点击回归，
+  而 `Textual` 选择层在滚动／切回后留有旧链接命中坐标；见 F-15。
+- **P2-T3 `6995897e`**：真实 PNG／HTML 图像尺寸、响应式、SVG、音频、
+  折叠及资源刷新 GUI 通过；不引入另一套渲染器。
+- **P2-T4 `04472cf7`**：Mermaid、公式、脚注及输入无损由 `MarkdownPreviewTests` 覆盖；
+  GUI 验证富内容出现，未把未支持的 Mermaid 语法冒充兼容。
+- **回归结果**：`make test:MarkdownPreviewTests,NativeFileTabTests,FileTabPersistenceTests,DockWorkspaceTests,AppIdentityTests,RemoteCommandsTests,NativeEditorCompositionTests`
+  共 215/215；`make test:ui ONLY_TESTING=BaileyUITests/MarkdownPreviewUITests`
+  共 13/13，均为本轮实际执行。真实 `SECURITY.md` 的 7 条内部链接各重复点击两轮，
+  均打开实际文件内容；选择复制正常。将 Bailey 视图层临时异步改动撤回后，
+  单独复验 2/2 仍通过；补测 Markdown／HTML 图片点击打开真实 SVG 文件 1/1 通过。
+  删除旧远程 Textual checkout 与仓库缓存后，Xcode 明确解析 `Vendor/Textual @ local`，
+  Markdown／资源路径宿主回归 24/24 通过。
+- **完整宿主 `make test`**：总计 1,182，跳过 21，失败 1，不能标为全绿。
+  唯一失败是 `FileTreeTests.testNativeLinkedWorktreeGitIndexOutsideProjectInvalidatesQuickOpen`
+  的 FSEvents 通知 3 秒超时；与本轮改动的 Markdown/Textual 调用路径无交集。
+  两次独立同代码复测分别在 0.829 秒与 0.774 秒通过（`/tmp/bailey-md-unrelated-fsevents-rerun1.log`、
+  `/tmp/bailey-md-unrelated-fsevents-rerun2.log`），归属 Files 模块的套件负载时序问题，
+  不在本 feature 中添加等待或修改文件监听实现。
+- **交付与 Gate**：本地提交 `0d4bb191`（未推送），`make build` 与
+  最后一次清缓存后的 `make build:release` 均成功并通过严格签名校验；
+  Release 全包已替换 `/Applications/Bailey.app`，安装后重新验签且可执行文件与构建源一致。
+  没有启动或终止正式 Bailey。**Markdown P2 Gate：Go（已识别范围内）**；
+  不能把 Files/FSEvents 的单次全量失败标成通过。
+- 未复验真实 Windows SSH、VoiceOver、macOS 15.6 和 32 MiB 全 GUI 帧率，
+  不据此宣称跨环境全部验收。
+
 ## 发现项
+
+## 发现 F-15
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`BaileyUITests/Editor/MarkdownPreviewUITests.swift:122`
+- 摘要：`常规 Markdown 相对链接的实际点击导航缺少完整 App 验收，用户报告 AGENTS.md 与 testing.md 无法打开`
+- 风险：`现有测试仅点击 HTML a 标签及直调 Project.openMarkdownLink，未验证 StructuredText 到文件标签的点击链路`
+- 预期修复：`先在 Bailey Dev 复现真实 Markdown 链接点击并定位失效环节，再在共有链路修复并补回归`
+- 验证：`make test:ui ONLY_TESTING=BaileyUITests/MarkdownPreviewUITests/testMarkdownRelativeLinksOpenActualProjectFiles`
+- 解决证据：`Red: /tmp/bailey-md-security-real-red.log (SECURITY.md 编辑器链接失败), /tmp/bailey-md-hittest-instrument.log + unified log (mouseDown url=none); Green: /tmp/bailey-md-vendored-full-gui.log (13/13 Markdown UI), /tmp/bailey-md-vendor-only-ablation.log (2/2, 原视图代码不变), /tmp/bailey-md-vendor-image-click-gui.log (1/1 图片链接), /tmp/bailey-md-vendor-wide-host.log (215/215 Host); make build 和 make build:release 均成功且严格 codesign 验签；修复归属 Vendor/Textual 的布局几何事件+命中缓存相等判断`
+
 
 ## 发现 F-14
 

@@ -18,6 +18,17 @@
   `WorkspaceWindowModel.markdownPreviewTarget` 解析实际目标；File 菜单唯一注册 ⌘⇧V。
   Save 移到同一菜单，不另建命令；源码视图移除前的失焦不会写文件。
 
+## 2026-11-21 当前分支独立复核
+
+按当前 `todo.toml` 核对，不沿用本文件早期的 commit 映射：
+
+- **P1-T1 `712cf012`**：`FileTab` 实际挂载 `MarkdownDocument.parse` 和 `MarkdownResource`，
+  Front Matter、GFM、路径约束与源文件边界均由 `MarkdownPreviewTests` 真实覆盖。
+- **P1-T2 `e7e3e295`**：`BaileyApp` 的 File 命令进入当前活动 `FileTab`，
+  `WorkspaceDockView` 的菜单只操作本次标签；`AppIdentityTests` 与 Dev 菜单 E2E 验证。
+- 本次真实 `SECURITY.md` 及链接回归参见 [P2 F-15](audit-p2.md#发现-f-15)。
+  覆盖结果：定点 Host 215 项、Markdown Dev GUI 13 项均通过。
+
 ## 发现项
 
 ## 发现 F-01
