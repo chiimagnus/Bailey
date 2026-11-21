@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -236,6 +237,49 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }
     }
 
+    func testCurrencyDollarsCannotConsumeLaterValidMathOpeners() async throws {
+        for (source, expected) in [
+            ("Cost $5 and equation $E=mc^2$ is inline.", ["E=mc^2"]),
+            ("Costs $5 and $10 then $x_i$", ["x_i"]),
+            ("Price $5 and \\$escaped, then $\\alpha + 1$", ["\\alpha + 1"]),
+        ] {
+            let document = try await MarkdownDocument.parse(source)
+            guard case let .paragraph(inline) = document.blocks.first?.content else {
+                return XCTFail("Missing prose for \(source)")
+            }
+            let expressions = inline.compactMap { node -> String? in
+                guard case let .math(latex, display: false) = node else { return nil }
+                return latex
+            }
+            XCTAssertEqual(expressions, expected,
+                           "A rejected currency delimiter must not consume a later math opener: \(source)")
+            XCTAssertTrue(MarkdownNativeText.attributed(inline).characters.contains("5"),
+                          "Ordinary currency must remain readable")
+        }
+    }
+
+    func testMathCannotSwallowInlineCodeOrLinksBetweenDelimiters() async throws {
+        let source = "Open $alpha `literal` beta$ then $x$ and $open [docs](guide.md) close$ then $y$."
+        let document = try await MarkdownDocument.parse(source)
+        guard case let .paragraph(inline) = document.blocks.first?.content else {
+            return XCTFail("Expected Markdown prose")
+        }
+        let expressions = inline.compactMap { node -> String? in
+            if case let .math(latex, display: false) = node { return latex }
+            return nil
+        }
+        XCTAssertEqual(expressions, ["x", "y"],
+                       "Math must not cross inline code or linked Markdown nodes")
+        XCTAssertTrue(inline.contains {
+            if case .code("literal") = $0 { return true }
+            return false
+        }, "Inline code must survive math tokenization")
+        XCTAssertTrue(inline.contains {
+            if case .link("guide.md", _) = $0 { return true }
+            return false
+        }, "Links inside a rejected formula candidate must remain interactive Markdown")
+    }
+
     func testMathInGFMTableCellUsesNativeFormulaNode() async throws {
         let source = "| Name | Equation |\n| --- | --- |\n| x | $x_i*y_j$ |"
         let document = try await MarkdownDocument.parse(source)
@@ -247,6 +291,55 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(cell.contains {
             if case let .math(latex, _) = $0 { latex == "x_i*y_j" } else { false }
         }, "Math in GFM table must not be swallowed by inline emphasis: \(cell)")
+    }
+
+    func testMalformedMathRemainsVisibleInsteadOfVanishing() throws {
+        for latex in ["\\unknowncommand", "\\frac{", "\\left(x"] {
+            let window = NSWindow(
+                contentRect: NSRect(x: -1800, y: -1800, width: 460, height: 140),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: MarkdownFormulaView(latex: latex, display: false))
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            XCTAssertGreaterThan(host.fittingSize.width, 1,
+                                 "Malformed TeX must not collapse to invisible zero-width content: \(latex)")
+            XCTAssertGreaterThan(host.fittingSize.height, 1,
+                                 "Malformed TeX must retain readable native fallback height")
+            window.close()
+        }
+    }
+
+    func testMermaidKeepsSourceAndRejectsExecutableCallbacks() async throws {
+        let diagrams = [
+            "flowchart TD\n  A[Start] --> B[Done]",
+            "sequenceDiagram\n  Alice->>Bob: Hello",
+            "classDiagram\n  Animal <|-- Dog",
+            "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running",
+        ]
+        for diagram in diagrams {
+            let markdown = "```mermaid\n\(diagram)\n```"
+            let document = try await MarkdownDocument.parse(markdown)
+            guard case let .mermaid(source, _) = document.blocks.first?.content else {
+                return XCTFail("Mermaid must remain a native AST block: \(diagram)")
+            }
+            XCTAssertEqual(source.trimmingCharacters(in: .whitespacesAndNewlines), diagram)
+            let picture = await MarkdownMermaid.image(source, dark: false)
+            let rendered = try XCTUnwrap(picture, "Supported Mermaid diagram must render: \(diagram)")
+            XCTAssertGreaterThan(rendered.size.width, 0)
+            XCTAssertGreaterThan(rendered.size.height, 0)
+        }
+        for unsafe in [
+            "flowchart TD\n  click A \"https://example.com\"",
+            "flowchart TD\n  link A https://example.com",
+            "flowchart TD\n  links A https://example.com",
+        ] {
+            let image = await MarkdownMermaid.image(unsafe, dark: false)
+            XCTAssertNil(image, "Mermaid's actionable link directives must be rejected")
+        }
     }
 
     func testFencedCodeLanguageAndLiteralUnsafeText() async throws {

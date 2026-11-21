@@ -144,7 +144,9 @@ nonisolated enum MarkdownMath {
                 var found: Int?
                 while close + size <= min(region.upperBound, index + (8 << 10)) {
                     if bytes[close] == 10 || bytes[close] == 13 { break }
-                    if excludedAt(close) { close += 1; continue }
+                    // Never stretch an expression over code, HTML, or link nodes.
+                    // Those regions belong to cmark and must retain their AST semantics.
+                    if excludedAt(close) { break }
                     var closeSlashes = 0
                     while close > region.lowerBound + closeSlashes
                         && bytes[close - closeSlashes - 1] == 92 {
@@ -163,7 +165,9 @@ nonisolated enum MarkdownMath {
                 guard let first = expressionBytes.first, let last = expressionBytes.last,
                       first != 32, first != 9, last != 32, last != 9,
                       !expressionBytes.isEmpty else {
-                    index = found + size
+                    // A rejected candidate has not consumed its closing delimiter:
+                    // that dollar may open the next valid expression after currency.
+                    index += size
                     continue
                 }
                 let latex = String(decoding: expressionBytes, as: UTF8.self)

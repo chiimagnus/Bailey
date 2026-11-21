@@ -264,10 +264,11 @@ Git 操作的选项与目标检查由 [git.md](git.md#历史提交操作) 维护
 Markdown（`.md`／`.markdown`／`.mdx`）仍以同一原生 TextKit 文件缓冲编辑；
 `⌘⇧V` 在源码和只读预览之间切换，文件标签右键还可选择 Dock 并排。
 预览由 `swift-markdown` 解析 AST，Bailey 的 SwiftUI 组件直接渲染 GFM、YAML 元数据、
-受限 HTML／SVG、Mermaid、本地音视频和 Canvas 原生公式；代码围栏复用 Tree-sitter 高亮。
+受限 HTML／SVG、Mermaid、本地音视频和 Canvas 原生公式；无效公式保留可选择的原文，
+货币美元符及代码／链接不被当作公式；代码围栏复用 Tree-sitter 高亮。
 资源经项目 backend 授权，内容不执行 WebKit 或 JavaScript。
 阅读排版沿用 GitHub Primer 的标题、表格、引用、代码与响应式语义；
-链接由原生可选文字处理，仅图片、展开控件、标题锚点和代码复制按钮的真实可点击区域使用手形指针。
+可选择的正文保持 I-beam；只有文字链接、图片、展开控件、标题锚点和复制按钮的实际交互区域使用手形指针。
 代码复制在悬停／键盘聚焦时显示操作与成功反馈，标题锚点支持页内跳转和片段复制。
 它不另存一份 Markdown 源码，也不改变 Undo、编码或保存路径。
 
