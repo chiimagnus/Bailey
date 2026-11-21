@@ -18,12 +18,12 @@ struct MarkdownFilePreview: View {
             if let parsed, parsed.target == target {
                 MarkdownPreview(
                     document: parsed.document, revision: parsed.request,
-                    resource: file.markdownResource(in: directory),
+                    resource: file.markdownResource(in: directory), assetRefresh: assetRefresh,
                     position: Binding(get: { file.markdownScrollPosition },
                                       set: { file.markdownScrollPosition = $0 }),
                     openLink: onOpenLink
                 )
-                .id("\(target)-\(assetRefresh)-\(directory ?? "")")
+                .id("\(target)-\(directory ?? "")")
             } else if failed {
                 ContentUnavailableView("Could not render Markdown.", systemImage: "doc.text")
             } else {
@@ -90,6 +90,7 @@ struct MarkdownPreview: View {
     let document: MarkdownDocument
     let revision: String
     let resource: MarkdownResource
+    let assetRefresh: UInt
     @Binding var position: Int?
     var openLink: (URL) async -> Bool = { _ in false }
     @State private var linkToOpen: URL?
@@ -132,8 +133,14 @@ struct MarkdownPreview: View {
                                             : MarkdownGitHubColors.text(dark: colorScheme == .dark))
                                         .textual.textSelection(.enabled)
                                         .frame(minHeight: 12, alignment: .topLeading)
+                                        // Textual retains old resolved images when attachments disappear.
+                                        // Plain text blocks need no re-mount on every edit or window activation.
+                                        .id(markup.runs.contains {
+                                            $0.imageURL != nil || $0.textual.emojiURL != nil
+                                        } ? "\(revision)-\(assetRefresh)" : "text")
                                 case .html(let nodes):
-                                    MarkdownHTMLContent(nodes: nodes, resource: resource)
+                                    MarkdownHTMLContent(nodes: nodes, resource: resource,
+                                                        assetRefresh: assetRefresh)
                                 case .mermaid(let source, let line):
                                     MarkdownMermaidView(source: source, line: line).id(source)
                                 }
@@ -319,6 +326,7 @@ struct PreparedMarkdown: MarkupParser {
 private struct MarkdownHTMLContent: View {
     let nodes: [MarkdownHTML]
     let resource: MarkdownResource
+    let assetRefresh: UInt
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
 
@@ -335,13 +343,15 @@ private struct MarkdownHTMLContent: View {
                     Self.inlineText(children).textSelection(.enabled)
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
-                        MarkdownHTMLContent(nodes: children, resource: resource)
+                        MarkdownHTMLContent(nodes: children, resource: resource,
+                                            assetRefresh: assetRefresh)
                     }
                 }
             case .quote(let children):
                 HStack(alignment: .top, spacing: 0) {
                     MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 4)
-                    MarkdownHTMLContent(nodes: children, resource: resource)
+                    MarkdownHTMLContent(nodes: children, resource: resource,
+                                        assetRefresh: assetRefresh)
                         .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
                         .padding(.leading, 16)
                 }
@@ -350,7 +360,7 @@ private struct MarkdownHTMLContent: View {
                 Text(verbatim: "\n")
             case .image(let url, let alt, let width, let height):
                 MarkdownHTMLImage(source: .file(url), alt: alt, resource: resource,
-                                  width: width, height: height)
+                                  width: width, height: height, assetRefresh: assetRefresh)
             case .svg(let source, let alt):
                 MarkdownHTMLImage(source: .svg(source), alt: alt, resource: resource)
             case .table(let rows):
@@ -364,7 +374,8 @@ private struct MarkdownHTMLContent: View {
                                         if Self.isInline(cell.nodes) {
                                             Self.inlineText(cell.nodes)
                                         } else {
-                                            MarkdownHTMLContent(nodes: cell.nodes, resource: resource)
+                                            MarkdownHTMLContent(nodes: cell.nodes, resource: resource,
+                                                                assetRefresh: assetRefresh)
                                         }
                                     }
                                     .fontWeight(cell.isHeader ? .semibold : .regular)
@@ -394,7 +405,8 @@ private struct MarkdownHTMLContent: View {
                         if Self.isInline(children) {
                             Self.inlineText(children)
                         } else {
-                            MarkdownHTMLContent(nodes: children, resource: resource)
+                            MarkdownHTMLContent(nodes: children, resource: resource,
+                                                assetRefresh: assetRefresh)
                         }
                     }
                     .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1],
@@ -417,7 +429,8 @@ private struct MarkdownHTMLContent: View {
                             if Self.isInline(items[item]) {
                                 Self.inlineText(items[item]).textSelection(.enabled)
                             } else {
-                                MarkdownHTMLContent(nodes: items[item], resource: resource)
+                                MarkdownHTMLContent(nodes: items[item], resource: resource,
+                                                    assetRefresh: assetRefresh)
                             }
                         }
                     }
@@ -429,7 +442,7 @@ private struct MarkdownHTMLContent: View {
                 MarkdownMediaView(url: url, video: video, resource: resource).id(url)
             case .details(let label, let children, let open):
                 MarkdownHTMLDetails(label: label, children: children, initiallyOpen: open,
-                                    resource: resource)
+                                    resource: resource, assetRefresh: assetRefresh)
             case .link(let url, let children):
                 if Self.isInline(children) {
                     Self.inlineText([.link(url, children)])
@@ -437,7 +450,8 @@ private struct MarkdownHTMLContent: View {
                         .textSelection(.enabled)
                 } else {
                     Button { openURL(url) } label: {
-                        MarkdownHTMLContent(nodes: children, resource: resource)
+                        MarkdownHTMLContent(nodes: children, resource: resource,
+                                            assetRefresh: assetRefresh)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(MarkdownGitHubColors.link(dark: colorScheme == .dark))
@@ -446,7 +460,8 @@ private struct MarkdownHTMLContent: View {
                 if Self.isInline(children) {
                     Self.styledText(Self.inlineText(children), tag: tag).textSelection(.enabled)
                 } else {
-                    MarkdownHTMLContent(nodes: children, resource: resource)
+                    MarkdownHTMLContent(nodes: children, resource: resource,
+                                        assetRefresh: assetRefresh)
                         .fontWeight(["b", "strong"].contains(tag) ? .bold : nil)
                         .italic(["em", "i"].contains(tag))
                         .strikethrough(["s", "del"].contains(tag))
@@ -525,13 +540,16 @@ private struct MarkdownHTMLDetails: View {
     let children: [MarkdownHTML]
     let initiallyOpen: Bool
     let resource: MarkdownResource
+    let assetRefresh: UInt
     @State private var expanded: Bool
 
-    init(label: String, children: [MarkdownHTML], initiallyOpen: Bool, resource: MarkdownResource) {
+    init(label: String, children: [MarkdownHTML], initiallyOpen: Bool,
+         resource: MarkdownResource, assetRefresh: UInt) {
         self.label = label
         self.children = children
         self.initiallyOpen = initiallyOpen
         self.resource = resource
+        self.assetRefresh = assetRefresh
         _expanded = State(initialValue: initiallyOpen)
     }
 
@@ -550,7 +568,8 @@ private struct MarkdownHTMLDetails: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("bailey.markdown.details")
             if expanded {
-                MarkdownHTMLContent(nodes: children, resource: resource)
+                MarkdownHTMLContent(nodes: children, resource: resource,
+                                    assetRefresh: assetRefresh)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -565,11 +584,17 @@ private struct MarkdownHTMLImage: View {
         case svg(String)
     }
 
+    private struct Request: Hashable {
+        let source: Source
+        let assetRefresh: UInt
+    }
+
     let source: Source
     let alt: String
     let resource: MarkdownResource
     var width: Int? = nil
     var height: Int? = nil
+    var assetRefresh: UInt = 0
     @State private var image: MarkdownImage?
 
     var body: some View {
@@ -583,7 +608,7 @@ private struct MarkdownHTMLImage: View {
                 ProgressView().controlSize(.small)
             }
         }
-        .task(id: source) {
+        .task(id: Request(source: source, assetRefresh: assetRefresh)) {
             image = nil
             let decoded: MarkdownPicture?
             let url: URL?

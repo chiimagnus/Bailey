@@ -181,6 +181,105 @@ final class MarkdownPreviewUITests: XCTestCase {
                       "Removing the open attribute must collapse the same details control")
     }
 
+    func testExternalImageRefreshKeepsManualDetailsExpansion() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let badge = try fixture.file("badge.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="120" height="60">
+              <rect width="120" height="60" fill="#336699"/>
+            </svg>
+            """)
+        let file = try fixture.file("Readme.md", text: """
+            # Section
+
+            <details><summary>Instructions</summary><p>Keep this visible.</p></details>
+
+            <img src="badge.svg" alt="Badge">
+            """)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let originalWindow = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: originalWindow)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(originalWindow.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = originalWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.preview").firstMatch
+        let details = preview.buttons["bailey.markdown.details"]
+        guard details.waitForExistence(timeout: 15) else {
+            return XCTFail("The Markdown fixture must display its HTML details control")
+        }
+        details.click()
+        let content = preview.staticTexts["Keep this visible."]
+        XCTAssertTrue(content.waitForExistence(timeout: 10))
+        let image = preview.buttons["Badge"]
+        XCTAssertTrue(image.waitForExistence(timeout: 10), preview.debugDescription)
+        let originalWidth = image.frame.width
+        XCTAssertGreaterThan(originalWidth, 60, "The fixture SVG must load before the external edit")
+
+        try Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">
+              <rect width="50" height="50" fill="#996633"/>
+            </svg>
+            """.utf8).write(to: badge)
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        finder.activate()
+        XCTAssertEqual(finder.state, .runningForeground,
+                       "The fixture must actually activate Finder before returning to Bailey")
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground)
+        let currentPreview = originalWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.preview").firstMatch
+        XCTAssertTrue(currentPreview.waitForExistence(timeout: 10), "The original preview must remain mounted")
+        let screenshot = XCTAttachment(screenshot: originalWindow.screenshot())
+        screenshot.name = "Original Markdown window after external SVG refresh"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        let currentImage = currentPreview.buttons["Badge"]
+        let imageUpdated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            currentImage.exists && abs(currentImage.frame.width - originalWidth * 50 / 120) < 6
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [imageUpdated], timeout: 10), .completed,
+                       "Window reactivation must reload changed relative images")
+        XCTAssertTrue(currentPreview.staticTexts["Keep this visible."].waitForExistence(timeout: 10),
+                      "Reloading an image must not collapse an unrelated details control")
+    }
+
+    func testRemovingMarkdownImageDoesNotLeaveStaleAttachment() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("badge.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="80" height="40">
+              <rect width="80" height="40" fill="#446688"/>
+            </svg>
+            """)
+        let file = try fixture.file("Attachment.md", text: "# Attachment\n\n![Badge](badge.svg)\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 10))
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let badge = preview.buttons["Badge"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 10), preview.debugDescription)
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeText("# Attachment\n\nReplaced by text.\n")
+        XCTAssertTrue(preview.staticTexts["Replaced by text."].waitForExistence(timeout: 10))
+        XCTAssertTrue(badge.waitForNonExistence(timeout: 10),
+                      "Removing a Markdown image must discard Textual's old resolved attachment")
+    }
+
     func testHTMLDetailsAndGitHubStyleTableUseNativeControls() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("HTML.md", text: """

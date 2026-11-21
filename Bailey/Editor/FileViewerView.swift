@@ -893,6 +893,7 @@ struct FileViewerView: View {
     private let themeChanges = Theme.changes
     @State private var windowReference = FileWindowReference()
     @State private var assetRefresh: UInt = 0
+    @Environment(\.appearsActive) private var appearsActive
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -964,8 +965,10 @@ struct FileViewerView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
             guard notification.object as? NSWindow === windowReference.window else { return }
-            if rendersOnlyMarkdown || file.showsMarkdownPreview { assetRefresh &+= 1 }
             if !rendersOnlyMarkdown, file.readOnlyReason == nil { file.refreshWhenSelected() }
+        }
+        .onChange(of: appearsActive) { _, active in
+            if active && (rendersOnlyMarkdown || file.showsMarkdownPreview) { assetRefresh &+= 1 }
         }
     }
 
