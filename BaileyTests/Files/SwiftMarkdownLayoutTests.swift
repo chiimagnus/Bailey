@@ -5,6 +5,54 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownLayoutTests: XCTestCase {
+    func testMarkdownSourceSynchronizationUsesTheActuallyVisibleNativeLine() async throws {
+        let source = (0..<64).map { index in
+            "# Section \(index)\n\n" + String(repeating: "长行 👩‍🚀 Markdown 字符 ", count: 12)
+        }.joined(separator: "\n\n")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).md")
+        try Data(source.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try await MarkdownDocument.parse(source)
+        let expectedBlock = try XCTUnwrap(document.blocks.firstIndex { $0.anchor == "section-32" })
+        let expectedSource = try XCTUnwrap(document.blocks[expectedBlock].sourceRange)
+        for wraps in [false, true] {
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await file.waitForText()
+            file.markdownSourceIndex = (file.markdownRequestID, MarkdownBlockIndex(document))
+            let host = NSHostingView(rootView: SourceTextEditor(
+                file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                palette: .theme(dark: false), wrapLines: wraps, isFocused: false
+            ))
+            host.sizingOptions = []
+            let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 260, height: 170),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.close() }
+            host.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+            let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+            let target = NSRange(location: expectedSource.location, length: 1)
+            editor.scrollRangeToVisible(target)
+            let layout = editor.nativeLayoutManager
+            layout.textViewportLayoutController.layoutViewport()
+            let range = try XCTUnwrap(NSTextRange(target, in: editor.nativeContentManager))
+            let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+            let line = try XCTUnwrap(fragment.textLineFragments.first)
+            let targetY = fragment.layoutFragmentFrame.minY + line.typographicBounds.midY
+                + editor.textContainerOrigin.y
+            let clip = scroll.contentView
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: targetY))
+            scroll.reflectScrolledClipView(clip)
+            layout.textViewportLayoutController.layoutViewport()
+            XCTAssertEqual(clip.bounds.minY, targetY, accuracy: 1)
+            await Task.yield()
+            XCTAssertEqual(file.markdownSourceBlock, expectedBlock,
+                           "Synchronize the line inside the viewport, not prefetched text (wraps: \(wraps))")
+        }
+    }
+
     func testRenderedGlyphIndicesMeasureUTF16AcrossEmojiAndCombiningText() async {
         let literal = "A👩‍🚀e\u{301}Z"
         var measured: [Int] = []
