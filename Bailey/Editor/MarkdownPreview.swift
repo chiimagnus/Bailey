@@ -530,19 +530,26 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
         true
     }
 
+    private func viewportPoint(_ point: NSPoint, in clip: NSClipView) -> CGPoint {
+        let bounds = clip.bounds
+        return CGPoint(x: point.x - bounds.minX,
+                       y: clip.isFlipped ? point.y - bounds.minY : bounds.maxY - point.y)
+    }
+
     @objc private func locateSource(_ recognizer: NSClickGestureRecognizer) {
         guard recognizer.state == .ended,
-              let clip = coordinates?.scrollView?.contentView,
-              let offset = coordinates?.sourceOffset(atViewportPoint: recognizer.location(in: clip))
-        else { return }
+              let clip = coordinates?.scrollView?.contentView else { return }
+        let point = viewportPoint(recognizer.location(in: clip), in: clip)
+        guard let offset = coordinates?.sourceOffset(atViewportPoint: point) else { return }
         onLocateSource?(offset)
     }
 
     @objc private func selectText(_ recognizer: NSPanGestureRecognizer) {
         guard let coordinates, let clip = coordinates.scrollView?.contentView else { return }
-        let point = recognizer.location(in: clip)
+        let location = recognizer.location(in: clip)
         let delta = recognizer.translation(in: clip)
-        let origin = CGPoint(x: point.x - delta.x, y: point.y - delta.y)
+        let point = viewportPoint(location, in: clip)
+        let origin = viewportPoint(CGPoint(x: location.x - delta.x, y: location.y - delta.y), in: clip)
         switch recognizer.state {
         case .began:
             dragAnchor = coordinates.nearestGlyph(to: origin)
@@ -627,8 +634,9 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
         guard let window, let scrollView = coordinates?.scrollView else { return event }
         if event.type == .leftMouseDown || event.type == .rightMouseDown {
             let clip = scrollView.contentView
-            let point = clip.convert(event.locationInWindow, from: nil)
-            previewHasInputFocus = event.window === window && clip.bounds.contains(point)
+            let location = clip.convert(event.locationInWindow, from: nil)
+            let point = viewportPoint(location, in: clip)
+            previewHasInputFocus = event.window === window && clip.bounds.contains(location)
             if previewHasInputFocus, event.type == .leftMouseDown {
                 if event.modifierFlags.contains(.shift), let anchor = selectionAnchorOffset,
                    let glyph = coordinates?.nearestGlyph(to: point) {

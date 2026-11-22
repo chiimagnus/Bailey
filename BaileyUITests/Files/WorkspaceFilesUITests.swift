@@ -1326,10 +1326,17 @@ final class WorkspaceFilesUITests: XCTestCase {
                 "rm -r -- '\(root)' && test ! -e '\(root)' && printf cleaned"), "cleaned")
         }
         let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"35\"><rect width=\"80\" height=\"35\" fill=\"#0969da\"/></svg>"
+        let sections = (0..<40).map { index in
+            "printf '%s\\r\\n' '## Section \(index)' '' 'Paragraph with Unicode 中文 🛰️.' ''"
+        }.joined(separator: "\n")
         _ = try runSSH(host: host, command: """
             set -e
             mkdir -- '\(project)'
-            printf '%s\\r\\n' '# Remote Markdown' '' '![Scoped badge](badge.svg)' '' '![Outside badge](../outside.svg)' > '\(markdown)'
+            {
+                printf '%s\\r\\n' '# Remote Markdown' '' '![Scoped badge](badge.svg)' '' '![Outside badge](../outside.svg)' ''
+                \(sections)
+                printf '%s\\r\\n' '## Destination'
+            } > '\(markdown)'
             printf '%s' '\(svg)' > '\(asset)'
             cp -- '\(asset)' '\(root)/outside.svg'
             """)
@@ -1347,12 +1354,67 @@ final class WorkspaceFilesUITests: XCTestCase {
         let entry = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: markdown), in: window)
         XCTAssertTrue(entry.waitForExistence(timeout: 40))
         entry.doubleClick()
-        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 25))
-        app.typeKey("v", modifierFlags: [.command, .shift])
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 25))
+        let source = try XCTUnwrap(editor.value as? String)
+        XCTAssertTrue(source.contains("Paragraph with Unicode 中文 🛰️."))
+        let tab = WorkspaceUITestSupport.fileTab(URL(fileURLWithPath: markdown), in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         let badge = preview.buttons["Scoped badge"]
         XCTAssertTrue(badge.waitForExistence(timeout: 25), "The real SSH image must decode")
         XCTAssertFalse(preview.buttons["Outside badge"].exists)
+
+        let first = preview.staticTexts["Remote Markdown"]
+        XCTAssertGreaterThan(first.frame.intersection(preview.frame).height, 1)
+        let sourceScroll = window.scrollViews.containing(.textView, identifier: nil).firstMatch
+        let bar = try XCTUnwrap(sourceScroll.scrollBars.allElementsBoundByIndex.first {
+            $0.frame.height > $0.frame.width
+        })
+        func fraction() -> Double { Double(String(describing: bar.value ?? "")) ?? -1 }
+        func visibleHeading() -> XCUIElement? {
+            let viewport = preview.frame
+            return preview.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+                                                               "bailey.markdown.heading.section-"))
+                .allElementsBoundByIndex.first { text in
+                    let frame = text.frame
+                    return frame.width > 0 && frame.height > 0 && viewport.contains(frame)
+                }
+        }
+        for _ in 0..<5 { editor.swipeUp() }
+        let atSection = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fraction() > 0.04 && (!first.exists || first.frame.intersection(preview.frame).height < 1)
+                && visibleHeading() != nil
+        }, object: nil)
+        guard XCTWaiter.wait(for: [atSection], timeout: 10) == .completed else {
+            return XCTFail("Scrolling the remote TextKit buffer did not expose the corresponding preview heading")
+        }
+        let destination = try XCTUnwrap(visibleHeading())
+        let title = destination.label
+        XCTAssertTrue(source.contains("## " + title))
+        destination.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).doubleClick()
+        app.typeKey("x", modifierFlags: [])
+        let range = try XCTUnwrap(source.range(of: "## " + title + "\r\n"))
+        let expected = source.replacingCharacters(in: range, with: "## x" + title + "\r\n")
+        let edited = try XCTUnwrap(editor.value as? String)
+        let editOffset = zip(source.utf16, edited.utf16).prefix(while: ==).count
+        XCTAssertTrue(edited == expected,
+                      "Double-click must locate \(title): edited UTF-16 offset \(editOffset), expected \((expected as NSString).range(of: "x" + title).location)")
+        XCTAssertTrue(preview.exists)
+        editor.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, source)
+        for _ in 0..<10 { preview.swipeDown() }
+        let atStart = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fraction() >= 0 && fraction() < 0.04
+                && badge.exists && badge.frame.intersection(preview.frame).height > 1
+        }, object: nil)
+        guard XCTWaiter.wait(for: [atStart], timeout: 10) == .completed else {
+            return XCTFail("Scrolling the real remote preview back to the start did not move TextKit")
+        }
         badge.click()
         let imageTab = WorkspaceUITestSupport.fileTab(URL(fileURLWithPath: asset), in: window)
         XCTAssertTrue(imageTab.waitForExistence(timeout: 25),
