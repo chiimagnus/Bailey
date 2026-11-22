@@ -3,19 +3,13 @@ import Foundation
 import SwiftDraw
 
 nonisolated enum MarkdownSVG {
-    static func render(_ data: Data) throws -> CGImage {
-        guard data.count <= 1 << 20 else { throw WorkspaceError.tooLarge }
-        guard let source = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16),
-              !source.localizedCaseInsensitiveContains("<!doctype") else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let xml = try XMLDocument(xmlString: source, options: [.nodeLoadExternalEntitiesNever])
-        guard let root = xml.rootElement(), root.localName == "svg" else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        var budget = 4_096
-        try clean(root, depth: 0, budget: &budget)
-        guard let svg = SVG(xml: root.xmlString),
+    struct Raster: Sendable {
+        let image: CGImage
+        let pointSize: CGSize
+    }
+
+    static func render(_ data: Data) throws -> Raster {
+        guard let svg = SVG(xml: try sanitizedXML(data)),
               svg.size.width.isFinite, svg.size.height.isFinite,
               svg.size.width > 0, svg.size.height > 0 else { throw CocoaError(.fileReadCorruptFile) }
         let scale = min(2, 2048 / max(svg.size.width, svg.size.height))
@@ -29,7 +23,22 @@ nonisolated enum MarkdownSVG {
         context.scaleBy(x: 1, y: -1)
         context.draw(svg, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
-        return image
+        return Raster(image: image, pointSize: svg.size)
+    }
+
+    static func sanitizedXML(_ data: Data) throws -> String {
+        guard data.count <= 1 << 20 else { throw WorkspaceError.tooLarge }
+        guard let source = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16),
+              !source.localizedCaseInsensitiveContains("<!doctype") else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let xml = try XMLDocument(xmlString: source, options: [.nodeLoadExternalEntitiesNever])
+        guard let root = xml.rootElement(), root.localName == "svg" else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        var budget = 4_096
+        try clean(root, depth: 0, budget: &budget)
+        return root.xmlString
     }
 
     private static let allowed: Set<String> = [
@@ -48,7 +57,7 @@ nonisolated enum MarkdownSVG {
             let value = attribute.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if name.hasPrefix("on") || name == "href" || name == "base"
                 || name == "style" && value.contains("@")
-                || value.localizedCaseInsensitiveContains("url(") && !value.starts(with: "url(#") {
+                || containsNonlocalURL(value) {
                 attribute.detach()
             }
         }
@@ -59,5 +68,23 @@ nonisolated enum MarkdownSVG {
                 child.detach()
             }
         }
+    }
+
+    private static func containsNonlocalURL(_ value: String) -> Bool {
+        var remaining = value[...]
+        while let start = remaining.range(of: "url(", options: .caseInsensitive) {
+            remaining = remaining[start.upperBound...]
+            guard let end = remaining.firstIndex(of: ")") else { return true }
+            let token = remaining[..<end].trimmingCharacters(
+                in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'"))
+            )
+            let fragment = token.dropFirst()
+            guard token.first == "#", !fragment.isEmpty,
+                  !fragment.contains(where: {
+                      $0.isWhitespace || "#/()'\"\\".contains($0)
+                  }) else { return true }
+            remaining = remaining[remaining.index(after: end)...]
+        }
+        return false
     }
 }

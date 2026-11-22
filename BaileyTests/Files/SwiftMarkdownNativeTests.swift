@@ -1,6 +1,9 @@
 import AppKit
+import AVFoundation
 import Foundation
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
@@ -504,9 +507,197 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         </svg>
         """
         let image = try MarkdownSVG.render(Data(svg.utf8))
-        XCTAssertEqual(image.width, 40)
-        XCTAssertEqual(image.height, 20)
+        XCTAssertEqual(image.image.width, 40)
+        XCTAssertEqual(image.image.height, 20)
         XCTAssertThrowsError(try MarkdownSVG.render(Data("<!DOCTYPE svg><svg/>".utf8)))
+    }
+
+    func testSVGOnlyAllowsLocalFragmentURLsInsideStyledGradientsAndFilters() throws {
+        let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="12">
+              <defs>
+                <linearGradient id="safe"><stop offset="0" stop-color="red"/>
+                  <stop offset="1" stop-color="blue"/></linearGradient>
+                <filter id="localBlur"><feGaussianBlur stdDeviation="0.2"/></filter>
+              </defs>
+              <rect width="24" height="12" style="fill:url(#safe);filter:url(#localBlur)" onclick="alert(1)"/>
+              <rect width="24" height="12" fill="url(#safe) url(https://example.invalid/exfil)"/>
+              <rect width="24" height="12"
+                style="fill:url(#safe);filter:url('https://example.invalid/exfil')"/>
+              <rect width="24" height="12" fill="url('https://example.invalid/exfil')"/>
+              <image href="file:///etc/passwd"/>
+              <script>alert(1)</script>
+            </svg>
+            """
+        let cleaned = try MarkdownSVG.sanitizedXML(Data(source.utf8))
+        XCTAssertTrue(cleaned.contains("linearGradient"))
+        XCTAssertTrue(cleaned.contains("fill:url(#safe)"),
+                      "A valid local CSS gradient must survive sanitization")
+        XCTAssertTrue(cleaned.contains("filter:url(#localBlur)"),
+                      "A valid local SVG filter must survive sanitization")
+        XCTAssertFalse(cleaned.contains("example.invalid"),
+                       "Every URL function must be checked, not only the first one")
+        XCTAssertFalse(cleaned.contains("file:///"))
+        XCTAssertFalse(cleaned.contains("onclick"))
+        XCTAssertFalse(cleaned.contains("<script"))
+        let image = try MarkdownSVG.render(Data(source.utf8))
+        XCTAssertEqual(image.image.width, 48)
+        XCTAssertEqual(image.image.height, 24)
+        XCTAssertEqual(image.pointSize.width, 24)
+        XCTAssertEqual(image.pointSize.height, 12)
+
+        let gradient = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="40" height="12">
+              <defs><linearGradient id="fade"><stop offset="0" stop-color="red"/>
+                <stop offset="1" stop-color="blue"/></linearGradient></defs>
+              <rect width="40" height="12" fill="url(#fade)"/>
+            </svg>
+            """
+        let raster = NSBitmapImageRep(cgImage: try MarkdownSVG.render(Data(gradient.utf8)).image)
+        let left = try XCTUnwrap(raster.colorAt(x: 6, y: 12)?.usingColorSpace(.deviceRGB))
+        let right = try XCTUnwrap(raster.colorAt(x: 74, y: 12)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(left.redComponent, right.redComponent + 0.25,
+                             "SVG gradients must produce different actual pixel colors")
+        XCTAssertGreaterThan(right.blueComponent, left.blueComponent + 0.25)
+    }
+
+    func testStaticPNGJPEGHEICAndWebPUseNativeImageIODecoding() throws {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        let source = try XCTUnwrap(context.makeImage())
+        for codec in [UTType.png, .jpeg, .heic] {
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                bytes, codec.identifier as CFString, 1, nil
+            ), "ImageIO must encode \(codec.identifier) on this Mac")
+            CGImageDestinationAddImage(destination, source, nil)
+            XCTAssertTrue(CGImageDestinationFinalize(destination), codec.identifier)
+            let picture = try MarkdownPicture.decode(bytes as Data)
+            XCTAssertEqual(picture.poster.width, 16, codec.identifier)
+            XCTAssertEqual(picture.poster.height, 16, codec.identifier)
+            XCTAssertTrue(picture.animation.isEmpty, codec.identifier)
+        }
+        // macOS decodes WebP but has no WebP ImageIO encoder. This 16px
+        // lossless image is a complete static fixture, not an external dependency.
+        let webp = try XCTUnwrap(Data(base64Encoded:
+            "UklGRhwAAABXRUJQVlA4TA8AAAAvD8ADAAcQ9Y/+ByKi/wEA"
+        ))
+        let picture = try MarkdownPicture.decode(webp)
+        XCTAssertEqual(picture.poster.width, 16)
+        XCTAssertEqual(picture.poster.height, 16)
+        XCTAssertTrue(picture.animation.isEmpty)
+    }
+
+    func testGIFFramesHonorTimingAndAnimationBudget() throws {
+        func frame(_ color: CGColor, dimension: Int = 16) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: dimension, height: dimension, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.setFillColor(color)
+            context.fill(CGRect(x: 0, y: 0, width: dimension, height: dimension))
+            return try XCTUnwrap(context.makeImage())
+        }
+
+        let red = try frame(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        let blue = try frame(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-gif-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func animatedGIF(frameCount: Int, at path: URL,
+                         images: (CGImage, CGImage)? = nil) throws -> Data {
+            let pair = images ?? (red, blue)
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+                path as CFURL, UTType.gif.identifier as CFString, frameCount, nil
+            ))
+            for index in 0..<frameCount {
+                let properties = [
+                    kCGImagePropertyGIFDictionary: [
+                        kCGImagePropertyGIFDelayTime: index.isMultiple(of: 2) ? 0.2 : 0.6
+                    ]
+                ] as CFDictionary
+                CGImageDestinationAddImage(destination, index.isMultiple(of: 2) ? pair.0 : pair.1, properties)
+            }
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            return try Data(contentsOf: path)
+        }
+
+        let picture = try MarkdownPicture.decode(animatedGIF(frameCount: 2, at: root.appending(path: "animated.gif")))
+        XCTAssertEqual(picture.animation.count, 2)
+        XCTAssertEqual(picture.animation[0].seconds, 0.2, accuracy: 0.01)
+        XCTAssertEqual(picture.animation[1].seconds, 0.6, accuracy: 0.01)
+        XCTAssertEqual(picture.image(at: 0), picture.animation[0].image)
+        XCTAssertEqual(picture.image(at: 0.3), picture.animation[1].image)
+        XCTAssertEqual(picture.image(at: 0.85), picture.animation[0].image,
+                       "Animations must loop rather than freeze on the last frame")
+
+        let overBudget = try MarkdownPicture.decode(animatedGIF(
+            frameCount: 33, at: root.appending(path: "oversized-animation.gif")
+        ))
+        XCTAssertTrue(overBudget.animation.isEmpty,
+                      "More than 32 GIF frames must degrade to a static poster")
+        XCTAssertEqual(overBudget.poster.width, 16)
+        let large = try frame(CGColor(red: 1, green: 0, blue: 0, alpha: 1), dimension: 600)
+        let overPixelBudget = try MarkdownPicture.decode(animatedGIF(
+            frameCount: 32, at: root.appending(path: "oversized-pixels.gif"),
+            images: (large, large)
+        ))
+        XCTAssertTrue(overPixelBudget.animation.isEmpty,
+                      "32 frames exceeding eight million decoded pixels must use a static poster")
+        XCTAssertThrowsError(try MarkdownPicture.decode(Data("not an image".utf8)))
+    }
+
+    func testMediaStageUsesAuthorizedBytesAndRejectsUnboundedFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-audio-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let document = root.appending(path: "Readme.md")
+        try Data("# Audio".utf8).write(to: document)
+        let audio = root.appending(path: "sound.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
+        buffer.frameLength = 8_000
+        buffer.floatChannelData?[0].initialize(repeating: 0, count: 8_000)
+        let writer = try AVAudioFile(forWriting: audio, settings: format.settings)
+        try writer.write(from: buffer)
+        let resource = MarkdownResource(
+            path: document.path, directory: root.path, backend: LocalWorkspaceBackend.shared
+        )
+        let staged = try await MarkdownMedia.stage(try XCTUnwrap(URL(string: "sound.wav")), from: resource)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        XCTAssertNotEqual(staged, audio)
+        XCTAssertEqual(try Data(contentsOf: staged), try Data(contentsOf: audio))
+        let permissions = try XCTUnwrap(FileManager.default.attributesOfItem(
+            atPath: staged.deletingLastPathComponent().path
+        )[.posixPermissions] as? Int)
+        XCTAssertEqual(permissions & 0o077, 0,
+                       "The staged file must reside in a private directory")
+        let playable = try await MarkdownMedia.asset(at: staged).load(.isPlayable)
+        XCTAssertTrue(playable)
+
+        let tooBig = root.appending(path: "oversized.wav")
+        XCTAssertTrue(FileManager.default.createFile(atPath: tooBig.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: tooBig)
+        try handle.truncate(atOffset: UInt64((64 << 20) + 1))
+        try handle.close()
+        for rawURL in ["oversized.wav", "../secret.wav", "https://example.invalid/sound.wav",
+                       "file:///etc/passwd", "unsupported.bin"] {
+            do {
+                _ = try await MarkdownMedia.stage(try XCTUnwrap(URL(string: rawURL)), from: resource)
+                XCTFail("Media staging must reject \(rawURL)")
+            } catch {
+                // Rejection must happen before an unauthorized resource is staged.
+            }
+        }
     }
 
     func testRelativeImagesCannotFetchOutsideProject() async throws {

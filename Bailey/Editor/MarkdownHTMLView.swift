@@ -306,6 +306,7 @@ private struct MarkdownHTMLImage: View {
     }
 
     @concurrent private static func svgPicture(_ xml: String) async throws -> MarkdownPicture {
-        MarkdownPicture(poster: try MarkdownSVG.render(Data(xml.utf8)))
+        let raster = try MarkdownSVG.render(Data(xml.utf8))
+        return MarkdownPicture(poster: raster.image, pointSize: raster.pointSize)
     }
 }

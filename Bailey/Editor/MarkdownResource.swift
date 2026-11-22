@@ -78,7 +78,10 @@ nonisolated struct MarkdownResource: Sendable {
         let svg = url.pathExtension.lowercased() == "svg"
         let data = try await read(url, maxBytes: svg ? 1 << 20 : 16 << 20)
         try Task.checkCancellation()
-        if svg { return MarkdownPicture(poster: try MarkdownSVG.render(data)) }
+        if svg {
+            let raster = try MarkdownSVG.render(data)
+            return MarkdownPicture(poster: raster.image, pointSize: raster.pointSize)
+        }
         return try MarkdownPicture.decode(data)
     }
 }
@@ -90,6 +93,7 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
     }
 
     let poster: CGImage
+    var pointSize: CGSize? = nil
     var animation: [Frame] = []
 
     static func decode(_ data: Data) throws -> Self {
@@ -164,20 +168,21 @@ struct MarkdownNativeImage: View {
     @ViewBuilder
     private func frames(_ picture: MarkdownPicture) -> some View {
         if picture.animation.isEmpty {
-            raster(picture.poster)
+            raster(picture.poster, pointSize: picture.pointSize)
         } else {
             TimelineView(.animation(minimumInterval: 0.04, paused: !active)) { context in
-                raster(picture.image(at: context.date.timeIntervalSinceReferenceDate))
+                raster(picture.image(at: context.date.timeIntervalSinceReferenceDate),
+                       pointSize: picture.pointSize)
             }
         }
     }
 
-    private func raster(_ image: CGImage) -> some View {
-        let natural = CGSize(width: image.width, height: image.height)
+    private func raster(_ image: CGImage, pointSize: CGSize?) -> some View {
+        let natural = pointSize ?? CGSize(width: image.width, height: image.height)
         let w = width ?? height.map { $0 * natural.width / natural.height }
         let h = height ?? width.map { $0 * natural.height / natural.width }
-        let targetW = w ?? CGFloat(image.width)
-        let targetH = h ?? CGFloat(image.height)
+        let targetW = w ?? natural.width
+        let targetH = h ?? natural.height
         return ViewThatFits(in: .horizontal) {
             Image(decorative: image, scale: 1)
                 .resizable()

@@ -1,6 +1,9 @@
 import AppKit
-import Foundation
 import AVFoundation
+import CoreVideo
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
@@ -999,6 +1002,186 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(preview.staticTexts["Header"].exists)
     }
 
+    func testSVGUsesIntrinsicPointSizeWithoutLosingRetinaPixels() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let document = try fixture.file("Retina.md", text: "# Retina\n\n![Red SVG](red.svg)\n")
+        _ = try fixture.file("red.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+              <rect width="40" height="20" fill="#ff0000"/>
+            </svg>
+            """)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(document, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let picture = preview.buttons["Red SVG"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 10), preview.debugDescription)
+        let tiff = try XCTUnwrap(picture.screenshot().image.tiffRepresentation)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+        XCTAssertEqual(picture.frame.width, 40, accuracy: 2,
+                       "Retina SVG rasterization must not double the declared CSS display width")
+        XCTAssertEqual(CGFloat(bitmap.pixelsWide) / picture.frame.width, 2, accuracy: 0.2,
+                       "The SVG must still use sharp two-pixel-per-point Retina rasterization")
+    }
+
+    func testAnimatedGIFChangesVisibleFramesAndSourceBytesStayUntouched() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let document = try fixture.file("Animated.md", text: "# Animation\n\n![Pulse](pulse.gif)\n")
+        let original = try Data(contentsOf: document)
+        let gif = fixture.root.appending(path: "pulse.gif")
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+            gif as CFURL, UTType.gif.identifier as CFString, 2, nil
+        ))
+        for color in [CGColor(red: 1, green: 0, blue: 0, alpha: 1),
+                      CGColor(red: 0, green: 0, blue: 1, alpha: 1)] {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: 20, height: 20, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.setFillColor(color)
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+            let frame = try XCTUnwrap(context.makeImage())
+            CGImageDestinationAddImage(destination, frame, [
+                kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.4]
+            ] as CFDictionary)
+        }
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(document, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let image = preview.buttons["Pulse"]
+        XCTAssertTrue(image.waitForExistence(timeout: 10), preview.debugDescription)
+
+        var redSeen = false
+        var blueSeen = false
+        let changingFrames = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let tiff = image.screenshot().image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let sampled = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
+                    .usingColorSpace(.deviceRGB) else { return false }
+            redSeen = redSeen || sampled.redComponent > 0.7 && sampled.blueComponent < 0.3
+            blueSeen = blueSeen || sampled.blueComponent > 0.7 && sampled.redComponent < 0.3
+            return redSeen && blueSeen
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changingFrames], timeout: 8), .completed,
+                       "Animated GIF must display both actual frames, not only a static poster")
+        XCTAssertEqual(try Data(contentsOf: document), original)
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+    }
+
+    func testNativeVideoLoadsOnlyOnDemandAndSupportsSeekPauseAndRelease() async throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let document = try fixture.file("Video.md", text: """
+            # Local Video
+
+            <video controls src="clip.mov"></video>
+            """)
+        let movie = fixture.root.appending(path: "clip.mov")
+        let writer = try AVAssetWriter(outputURL: movie, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 64,
+            AVVideoHeightKey: 64
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: 64,
+                kCVPixelBufferHeightKey as String: 64
+            ]
+        )
+        writer.add(input)
+        XCTAssertTrue(writer.startWriting())
+        writer.startSession(atSourceTime: .zero)
+        for frameIndex in 0..<16 {
+            var pixelBuffer: CVPixelBuffer?
+            XCTAssertEqual(CVPixelBufferCreate(
+                kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32ARGB,
+                nil, &pixelBuffer
+            ), kCVReturnSuccess)
+            let frame = try XCTUnwrap(pixelBuffer)
+            CVPixelBufferLockBaseAddress(frame, [])
+            if let bytes = CVPixelBufferGetBaseAddress(frame) {
+                memset(bytes, 0xff, CVPixelBufferGetDataSize(frame))
+            }
+            CVPixelBufferUnlockBaseAddress(frame, [])
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while !input.isReadyForMoreMediaData && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertTrue(input.isReadyForMoreMediaData, "The local video encoder must accept each frame")
+            XCTAssertTrue(adaptor.append(frame, withPresentationTime: CMTime(value: Int64(frameIndex), timescale: 2)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        XCTAssertEqual(writer.status, .completed, writer.error?.localizedDescription ?? "")
+        let asset = AVURLAsset(url: movie)
+        let playable = try await asset.load(.isPlayable)
+        XCTAssertTrue(playable)
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(document, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let start = preview.buttons["Load Video"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        let player = WorkspaceUITestSupport.element("bailey.markdown.media", in: app)
+        XCTAssertFalse(player.exists, "Video must not create an AVPlayer before a user requests it")
+        start.click()
+        XCTAssertTrue(player.waitForExistence(timeout: 12), preview.debugDescription)
+        player.hover()
+        let toggle = player.checkBoxes["play/pause"]
+        let timeline = player.sliders["timeline"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertTrue(timeline.waitForExistence(timeout: 10))
+        let stopped = String(describing: toggle.value ?? "")
+        toggle.click()
+        let playing = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: toggle.value ?? "") != stopped
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [playing], timeout: 5), .completed)
+        toggle.click()
+        let paused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: toggle.value ?? "") == stopped
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [paused], timeout: 5), .completed)
+        let before = String(describing: timeline.value ?? "")
+        timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).click()
+        let seeked = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: timeline.value ?? "") != before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [seeked], timeout: 5), .completed,
+                       "Video must seek through the native AVKit timeline")
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(player.waitForNonExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(preview.buttons["Load Video"].waitForExistence(timeout: 10),
+                      "Video player must release its previous asset on preview dismissal")
+    }
+
     func testRichMarkdownShowsStaticSVGAndLoadsNativeAudioOnDemand() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("Paper.md", text: """
@@ -1022,9 +1205,10 @@ final class MarkdownPreviewUITests: XCTestCase {
             </svg>
             """)
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
-        buffer.frameLength = 8_000
-        buffer.floatChannelData?[0].initialize(repeating: 0, count: 8_000)
+        let frameCount: AVAudioFrameCount = 64_000
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+        buffer.floatChannelData?[0].initialize(repeating: 0, count: Int(frameCount))
         do {
             let audio = try AVAudioFile(forWriting: fixture.root.appending(path: "sound.wav"), settings: format.settings)
             try audio.write(from: buffer)
@@ -1046,10 +1230,40 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertFalse(player.exists)
         start.click()
         XCTAssertTrue(player.waitForExistence(timeout: 10), preview.debugDescription)
+        player.hover()
+        let toggle = player.checkBoxes["play/pause"]
+        let timeline = player.sliders["timeline"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10),
+                      "The native AVKit player must expose its play/pause control")
+        XCTAssertTrue(timeline.waitForExistence(timeout: 10),
+                      "The native AVKit player must expose its seek timeline")
+        let before = String(describing: toggle.value ?? "")
+        toggle.click()
+        let started = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: toggle.value ?? "") != before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [started], timeout: 5), .completed,
+                       "Playing audio must change the native AVKit play/pause state")
+        toggle.click()
+        let paused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: toggle.value ?? "") == before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [paused], timeout: 5), .completed,
+                       "Pause must restore the actual native AVKit control state")
+        let positionBefore = String(describing: timeline.value ?? "")
+        timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).click()
+        let seeked = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: timeline.value ?? "") != positionBefore
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [seeked], timeout: 5), .completed,
+                       "Dragging the AVKit timeline must seek within the original local WAV")
         let diagram = WorkspaceUITestSupport.element("bailey.markdown.mermaid", in: app)
         XCTAssertTrue(diagram.waitForExistence(timeout: 10), preview.debugDescription)
         app.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(player.waitForNonExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(preview.buttons["Load Audio"].waitForExistence(timeout: 10),
+                      "Reopening the Markdown preview must not reuse a retired AVPlayer")
     }
     func testSwitchingBetweenDifferentMarkdownTabsNeverReusesAnotherPreview() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
