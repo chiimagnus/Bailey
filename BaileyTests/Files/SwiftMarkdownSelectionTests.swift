@@ -214,6 +214,30 @@ final class SwiftMarkdownSelectionTests: XCTestCase {
                        "- [x] Complete\n- [ ] Pending\n  - Child line")
     }
 
+    func testQuotedTasksKeepTheirStateAndOnlyTheLabelHasTextCoordinates() async throws {
+        let source = [
+            "> - [X] 完成 🧪", ">   - [ ] Nested", "> - [ ] Pending",
+            "> - \\[x] Literal", "> - &#91;x] Entity", "> - [x]unseparated",
+        ].joined(separator: "\r\n")
+        let document = try await MarkdownDocument.parse(source)
+        guard case .quote(let blocks) = document.blocks.first?.content,
+              case .list(_, _, let items) = blocks.first,
+              items.count == 5,
+              case .paragraph(let label) = items[0].blocks.first,
+              case .text("完成 🧪", let labelRange) = label.first,
+              case .list(_, _, let nested) = items[0].blocks.last else {
+            return XCTFail("A quoted task must have a state, a marker-free label and its nested list")
+        }
+        XCTAssertEqual(items.map(\.checked), [true, false, nil, nil, nil])
+        XCTAssertEqual(nested.map(\.checked), [false])
+        let expected = (source as NSString).range(of: "完成 🧪")
+        XCTAssertEqual(labelRange, expected)
+        XCTAssertEqual(MarkdownSelectionText.copy(expected, from: document), "完成 🧪")
+        let full = try XCTUnwrap(MarkdownSelectionText.fullRange(in: document))
+        XCTAssertEqual(MarkdownSelectionText.copy(full, from: document),
+                       "- [x] 完成 🧪\n  - [ ] Nested\n- [ ] Pending\n- [x] Literal\n- [x] Entity\n- [x]unseparated")
+    }
+
     func testInlineHTMLCopyMatchesRenderedTagsAndLineBreaks() async throws {
         let source = "Before <strong>Bold</strong> and <br> after <em>italic</em>."
         let document = try await MarkdownDocument.parse(source)

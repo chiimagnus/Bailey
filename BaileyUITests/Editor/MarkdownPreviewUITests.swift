@@ -80,6 +80,58 @@ final class MarkdownPreviewUITests: XCTestCase {
                        "Opening, scrolling, and closing preview must not write the source file")
     }
 
+    func testGFMTaskMarkersAreReadOnlyAndLineBreaksKeepTheirReadingSemantics() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # GFM interaction
+
+            Soft first
+            soft second
+
+            Hard first\\
+            hard second
+
+            > - [x] Completed fixture task
+            >   - Nested action with **emphasis** and العربية
+            > - [ ] Pending fixture task
+            """
+        let file = try fixture.file("GFM.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String, source)
+        app.typeKey("v", modifierFlags: [.command, .shift])
+
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        func text(containing value: String) -> XCUIElement {
+            preview.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@",
+                                                     value, value)).firstMatch
+        }
+        XCTAssertTrue(text(containing: "Soft first soft second").waitForExistence(timeout: 10))
+        XCTAssertTrue(text(containing: "Hard first\nhard second").exists)
+        XCTAssertTrue(text(containing: "Nested action with emphasis and العربية").exists)
+        for state in ["Completed", "Incomplete"] {
+            let marker = preview.descendants(matching: .any).matching(NSPredicate(
+                format: "label == %@ OR value == %@", state, state
+            )).firstMatch
+            guard marker.waitForExistence(timeout: 5) else {
+                return XCTFail("Missing task state \(state) in the native AX tree: \(preview.debugDescription)")
+            }
+            marker.click()
+            XCTAssertTrue(marker.exists, "A read-only marker must keep its original state")
+        }
+        XCTAssertEqual(preview.checkBoxes.count, 0, "A task marker must not expose a toggle action")
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String, source, "Task marks must not edit the TextKit buffer")
+        XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+    }
+
     func testInlineAndBlockHTMLLinksUseHandPointerWithoutWebKit() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let destination = try fixture.file("docs/guide.md", text: "# Actual guide")

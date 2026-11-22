@@ -419,17 +419,38 @@ nonisolated struct MarkdownDocument: Sendable {
                                      projectBlockCode: BlockCodeProjection,
                                      projectHTML: HTMLProjection) -> [MarkdownListItem] {
         nodes.compactMap { $0 as? Markdown.ListItem }.map { item in
+            var blocks = item.children.compactMap {
+                project($0, math: math, projectText: projectText, projectCode: projectCode,
+                        imageRange: imageRange, projectBlockCode: projectBlockCode, projectHTML: projectHTML)
+            }
             let checked: Bool?
             switch item.checkbox {
             case .checked: checked = true
             case .unchecked: checked = false
-            case nil: checked = nil
+            case nil: checked = recoverTaskMarker(in: &blocks)
             }
-            return MarkdownListItem(checked: checked,
-                                    blocks: item.children.compactMap { project($0, math: math, projectText: projectText,
-                        projectCode: projectCode, imageRange: imageRange,
-                        projectBlockCode: projectBlockCode, projectHTML: projectHTML) })
+            return MarkdownListItem(checked: checked, blocks: blocks)
         }
+    }
+
+    private static func recoverTaskMarker(in blocks: inout [MarkdownNativeBlock]) -> Bool? {
+        guard case .paragraph(var inline) = blocks.first,
+              case .text(let value, let source?) = inline.first,
+              source.length == value.utf16.count,
+              value.first == "[", value.dropFirst(2).first == "]",
+              let mark = value.dropFirst().first,
+              mark == "x" || mark == "X" || mark.isWhitespace else { return nil }
+        let afterMarker = value.dropFirst(3)
+        guard afterMarker.first?.isWhitespace == true else { return nil }
+        let label = afterMarker.drop(while: \.isWhitespace)
+        if label.isEmpty {
+            inline.removeFirst()
+        } else {
+            let length = label.utf16.count
+            inline[0] = .text(String(label), source: NSRange(location: NSMaxRange(source) - length, length: length))
+        }
+        blocks[0] = .paragraph(inline)
+        return !mark.isWhitespace
     }
 
     private static func projectInline(_ nodes: Markdown.MarkupChildren,
