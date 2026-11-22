@@ -316,6 +316,11 @@ private struct DockTreeView: View {
 }
 
 struct DockTabGroupView: View {
+    private enum MarkdownPopover: Equatable {
+        case metadata(UUID)
+        case outline(UUID)
+    }
+
     private let themeChanges = Theme.changes
     let group: DockGroup
     let project: Project
@@ -330,7 +335,7 @@ struct DockTabGroupView: View {
     @State private var tabKeyboardFocused = false
     @State private var tabStripContentWidth: CGFloat = 0
     @State private var dragGestureItem: DockItem?
-    @State private var markdownMetadataTabID: UUID?
+    @State private var markdownPopover: MarkdownPopover?
     @GestureState private var isTabDragging = false
     @Environment(\.appearsActive) private var windowAppearsActive
 
@@ -417,11 +422,29 @@ struct DockTabGroupView: View {
             }
         }
         .popover(isPresented: Binding(
-            get: { markdownMetadataTabID != nil },
-            set: { if !$0 { markdownMetadataTabID = nil } }
+            get: { markdownPopover != nil },
+            set: { if !$0 { markdownPopover = nil } }
         )) {
-            if let id = markdownMetadataTabID, case .file(let file)? = currentMenuTab(id)?.content {
-                MarkdownMetadataView(file: file)
+            switch markdownPopover {
+            case .metadata(let id):
+                if case .file(let file)? = currentMenuTab(id)?.content {
+                    MarkdownMetadataView(file: file)
+                }
+            case .outline(let id):
+                if let tab = currentMenuTab(id), case .file(let file) = tab.content {
+                    MarkdownOutlineView(file: file) { heading in
+                        guard let current = currentMenuTab(id) else { return }
+                        file.pendingMarkdownFragment = heading.anchor
+                        if project.markdownMode(for: current) == .source {
+                            project.setMarkdownMode(.preview, for: current)
+                        }
+                        markdownPopover = nil
+                    } onDismiss: {
+                        markdownPopover = nil
+                    }
+                }
+            case nil:
+                EmptyView()
             }
         }
     }
@@ -853,8 +876,11 @@ struct DockTabGroupView: View {
                         if value { current.editorCoordinator?.refreshMarkdownViewport() }
                     }
                 ))
+                Button(String(localized: "Outline…", table: "Editor")) {
+                    if currentMenuTab(tabID) != nil { markdownPopover = .outline(tabID) }
+                }
                 Button(String(localized: "Front Matter…", table: "Editor")) {
-                    if currentMenuTab(tabID) != nil { markdownMetadataTabID = tabID }
+                    if currentMenuTab(tabID) != nil { markdownPopover = .metadata(tabID) }
                 }
                 Divider()
             }

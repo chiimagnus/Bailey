@@ -52,6 +52,60 @@ final class MarkdownSelectionBoundaryUITests: XCTestCase {
                       && fromHeading.contains("FINAL_TAIL_VISIBLE"), fromHeading)
     }
 
+    func testFoldedSectionSelectAllCopiesOnlyVisibleBlocks() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Start
+
+            FIRST_VISIBLE_CONTENT
+
+            ## Fold
+
+            HIDDEN_SECTION_BODY
+
+            ### Child
+
+            HIDDEN_CHILD_BODY
+
+            ## Next
+
+            LAST_VISIBLE_CONTENT
+            """
+        let file = try fixture.file("FoldCopy.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let heading = preview.staticTexts["Fold"].firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 10))
+        heading.hover()
+        let fold = preview.buttons["bailey.markdown.fold.fold"]
+        XCTAssertTrue(fold.waitForExistence(timeout: 10))
+        fold.click()
+        XCTAssertFalse(preview.staticTexts["HIDDEN_SECTION_BODY"].exists)
+        let first = preview.staticTexts["FIRST_VISIBLE_CONTENT"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        first.click()
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString("Untouched", forType: .string))
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
+        let copied = NSPasteboard.general.string(forType: .string) ?? ""
+        XCTAssertTrue(copied.contains("FIRST_VISIBLE_CONTENT")
+                      && copied.contains("LAST_VISIBLE_CONTENT")
+                      && copied.contains("Fold"), copied)
+        XCTAssertFalse(copied.contains("HIDDEN_SECTION_BODY") ||
+                       copied.contains("HIDDEN_CHILD_BODY"),
+                       "Selection must honor the same collapsed block visibility as the renderer")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
     func testDetailsSelectionCopyTracksUserExpansionAndCollapse() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = """

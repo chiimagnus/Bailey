@@ -27,6 +27,39 @@ final class SwiftMarkdownSelectionTests: XCTestCase {
                       "All rendered blocks must have original source ranges: \(spans) / \(copied)")
     }
 
+    func testCollapsedHeadingExcludesHiddenBodyFromReaderSelectAllAndCopy() async throws {
+        let source = """
+            # Outline
+
+            BEGIN_VISIBLE
+
+            ## Folded
+
+            SECRET_TEXT_NOT_VISIBLE
+
+            ### Child
+
+            CHILD_TEXT_NOT_VISIBLE
+
+            ## Kept
+
+            END_VISIBLE
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let heading = try XCTUnwrap(document.headingOutline.first { $0.anchor == "folded" })
+        let collapsed: Set<MarkdownDocument.HeadingIdentity> = [heading.identity]
+        let visibleRange = try XCTUnwrap(MarkdownSelectionText.fullRange(
+            in: document, collapsed: collapsed
+        ))
+        let copied = MarkdownSelectionText.copy(visibleRange, from: document, collapsed: collapsed)
+        XCTAssertTrue(copied.contains("BEGIN_VISIBLE") && copied.contains("END_VISIBLE"), copied)
+        XCTAssertTrue(copied.contains("Folded"), copied)
+        XCTAssertFalse(copied.contains("SECRET_TEXT_NOT_VISIBLE"), copied)
+        XCTAssertFalse(copied.contains("CHILD_TEXT_NOT_VISIBLE"), copied)
+        let original = MarkdownSelectionText.copy(visibleRange, from: document)
+        XCTAssertTrue(original.contains("SECRET_TEXT_NOT_VISIBLE"))
+    }
+
     func testDetailsToggleChangesCopyAndKeepsOriginalDocument() async throws {
         let source = "<details><summary>Read more</summary><p>Secret body</p></details>"
         let document = try await MarkdownDocument.parse(source)

@@ -21,6 +21,85 @@ nonisolated struct MarkdownDocument: Sendable {
     let warning: String?
     let blocks: [Block]
 
+    struct HeadingIdentity: Sendable, Hashable {
+        let offset: Int
+        let anchor: String
+
+        func moved(by editing: NSRange, delta: Int) -> Self? {
+            let oldEnd = NSMaxRange(editing) - delta
+            if offset < editing.location { return self }
+            if offset < oldEnd { return nil }
+            return Self(offset: offset + delta, anchor: anchor)
+        }
+    }
+
+    struct OutlineHeading: Sendable, Identifiable {
+        let blockIndex: Int
+        let level: Int
+        let title: String
+        let anchor: String
+        let identity: HeadingIdentity
+
+        var id: HeadingIdentity { identity }
+    }
+
+    var headingOutline: [OutlineHeading] {
+        blocks.enumerated().compactMap { index, block in
+            guard case let .heading(level, inline) = block.content,
+                  let anchor = block.anchor, let offset = block.sourceRange?.location else { return nil }
+            return OutlineHeading(
+                blockIndex: index, level: level, title: Self.inlinePlainText(inline),
+                anchor: anchor, identity: HeadingIdentity(offset: offset, anchor: anchor)
+            )
+        }
+    }
+
+    private var footnoteSectionStart: Int? {
+        blocks.firstIndex { block in
+            guard block.sourceRange == nil else { return false }
+            if case .rule = block.content { return true }
+            return false
+        }
+    }
+
+    func collapsedAncestors(of blockIndex: Int, collapsed: Set<HeadingIdentity>) -> [HeadingIdentity] {
+        if let start = footnoteSectionStart, blockIndex >= start { return [] }
+        var ancestors: [OutlineHeading] = []
+        for heading in headingOutline where heading.blockIndex < blockIndex {
+            while let last = ancestors.last, last.level >= heading.level {
+                ancestors.removeLast()
+            }
+            ancestors.append(heading)
+        }
+        return ancestors.compactMap { collapsed.contains($0.identity) ? $0.identity : nil }
+    }
+
+    func visibleBlockIndices(collapsed: Set<HeadingIdentity>) -> [Int] {
+        guard !collapsed.isEmpty else { return Array(blocks.indices) }
+        let headings = headingOutline
+        let notesStart = footnoteSectionStart
+        var output: [Int] = []
+        output.reserveCapacity(blocks.count)
+        var headingIndex = 0
+        var hiddenLevels: [Int] = []
+
+        for index in blocks.indices {
+            if index == notesStart { hiddenLevels.removeAll() }
+            if headingIndex < headings.count, headings[headingIndex].blockIndex == index {
+                let heading = headings[headingIndex]
+                while let last = hiddenLevels.last, last >= heading.level {
+                    hiddenLevels.removeLast()
+                }
+                if hiddenLevels.isEmpty { output.append(index) }
+                if collapsed.contains(heading.identity) { hiddenLevels.append(heading.level) }
+                headingIndex += 1
+            } else if hiddenLevels.isEmpty {
+                output.append(index)
+            }
+        }
+        return output
+    }
+
     static func supports(_ path: String) -> Bool {
         ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased())
     }
@@ -199,9 +278,12 @@ nonisolated struct MarkdownDocument: Sendable {
                                   projectCode: { [.code($0.code)] })
                 }
                 ?? [.text(note.text)]
+            let returnLink: [MarkdownInline] = footnotes.firstReferenceByte[note.name]
+                .flatMap { coordinates.utf16Range($0..<($0 + 1))?.location }
+                .map { [.text(" "), .link("#bailey-return:\($0)", [.text("↩")])] } ?? []
             blocks.append(Block(anchor: "bailey-note:\(note.name)",
                                 line: note.line + headerLineCount,
-                                content: .paragraph([.text("\(note.number). ")] + noteInline),
+                                content: .paragraph([.text("\(note.number). ")] + noteInline + returnLink),
                                 sourceRange: coordinates.lines(note.line...note.endLine)))
         }
         return Self(properties: header.properties, warning: header.warning, blocks: blocks)

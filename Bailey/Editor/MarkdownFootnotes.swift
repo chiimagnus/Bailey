@@ -20,6 +20,7 @@ nonisolated struct MarkdownFootnotes {
 
     private let notes: [String: Note]
     private(set) var referenced: [String] = []
+    private(set) var firstReferenceByte: [String: Int] = [:]
     let rewrite: MarkdownSourceRewrite
     var source: String { rewrite.source }
 
@@ -119,14 +120,17 @@ nonisolated struct MarkdownFootnotes {
         visit(document)
 
         found.sort { $0.line == $1.line ? $0.start < $1.start : $0.line < $1.line }
+        let originalBytes = original.utf8
         var numbers: [String: Int] = [:]
         for item in found {
             if numbers[item.name] == nil {
                 referenced.append(item.name)
                 numbers[item.name] = referenced.count
+                let start = originalBytes.distance(from: originalBytes.startIndex,
+                                                   to: rawLines[item.line].startIndex)
+                firstReferenceByte[item.name] = start + item.start
             }
         }
-        let originalBytes = original.utf8
         var edits = rawLines.indices.compactMap { index -> MarkdownSourceRewrite.Replacement? in
             guard lines[index].isEmpty, !rawLines[index].isEmpty else { return nil }
             let start = originalBytes.distance(from: originalBytes.startIndex, to: rawLines[index].startIndex)

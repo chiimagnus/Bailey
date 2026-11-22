@@ -8,11 +8,12 @@ nonisolated enum MarkdownSelectionText {
         let source: NSRange?
     }
 
-    static func fullRange(in document: MarkdownDocument) -> NSRange? {
+    static func fullRange(in document: MarkdownDocument,
+                          collapsed: Set<MarkdownDocument.HeadingIdentity> = []) -> NSRange? {
         var lower = Int.max
         var upper = 0
-        for block in document.blocks {
-            guard let range = block.sourceRange else { continue }
+        for index in document.visibleBlockIndices(collapsed: collapsed) {
+            guard let range = document.blocks[index].sourceRange else { continue }
             lower = min(lower, range.location)
             upper = max(upper, NSMaxRange(range))
         }
@@ -21,10 +22,12 @@ nonisolated enum MarkdownSelectionText {
     }
 
     static func copy(_ range: NSRange, from document: MarkdownDocument,
-                     details: [String: Bool] = [:]) -> String {
+                     details: [String: Bool] = [:],
+                     collapsed: Set<MarkdownDocument.HeadingIdentity> = []) -> String {
         guard range.length > 0 else { return "" }
         var result: [String] = []
-        for (index, block) in document.blocks.enumerated() {
+        for index in document.visibleBlockIndices(collapsed: collapsed) {
+            let block = document.blocks[index]
             guard let source = block.sourceRange,
                   NSIntersectionRange(range, source).length > 0 else { continue }
             let pieces = visible(block.content, path: [index], details: details)

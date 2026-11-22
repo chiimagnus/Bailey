@@ -6,6 +6,9 @@ struct MarkdownPreview: View {
     let revision: String
     let resource: MarkdownResource
     let assetRefresh: UInt
+    var collapsedHeadings: Set<MarkdownDocument.HeadingIdentity> = []
+    var onToggleHeading: (MarkdownDocument.HeadingIdentity) -> Void = { _ in }
+    var onRevealHeading: (MarkdownDocument.HeadingIdentity) -> Void = { _ in }
     var restoredBlock: Int? = nil
     var sourceBlock: Int? = nil
     var restoredSourceOffset: Int? = nil
@@ -26,6 +29,7 @@ struct MarkdownPreview: View {
     @State private var sourceCoordinates = MarkdownReaderCoordinates()
     @State private var detailsState = MarkdownDetailsState()
     @State private var selectedSource: NSRange?
+    @State private var pendingReveal: (index: Int, sourceOffset: Int?)?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -50,7 +54,11 @@ struct MarkdownPreview: View {
                                     MarkdownNativeBlockView(block: document.blocks[row.start].content,
                                                             resource: resource, assetRefresh: assetRefresh,
                                                             anchor: document.blocks[row.start].anchor,
-                                                            selectionPath: [row.start])
+                                                            selectionPath: [row.start],
+                                                            headingIdentity: headingIdentity(at: row.start),
+                                                            collapsed: headingIdentity(at: row.start)
+                                                                .map { collapsedHeadings.contains($0) } ?? false,
+                                                            onToggleHeading: onToggleHeading)
                                         .modifier(MarkdownGlyphMapping(group: row.start))
                                         .id(row.start)
                                 }
@@ -61,6 +69,7 @@ struct MarkdownPreview: View {
                             MarkdownReaderClipBridge(
                                 coordinates: sourceCoordinates, document: document,
                                 detailsState: detailsState,
+                                collapsedHeadings: collapsedHeadings,
                                 onSelectionChanged: { selectedSource = $0 },
                                 onLocateSource: onLocateSource
                             )
@@ -115,6 +124,16 @@ struct MarkdownPreview: View {
                     .onChange(of: position) { _, position in
                         if readerIsScrolling { reportReaderScroll(position) }
                     }
+                    .onChange(of: collapsedHeadings) { _, _ in
+                        sourceCoordinates.clearSelection()
+                        guard let pendingReveal,
+                              document.collapsedAncestors(
+                                of: pendingReveal.index, collapsed: collapsedHeadings
+                              ).isEmpty else { return }
+                        self.pendingReveal = nil
+                        scroll(to: pendingReveal.index, sourceOffset: pendingReveal.sourceOffset,
+                               rows: renderRows, proxy: proxy)
+                    }
                     .onChange(of: revision, initial: true) { _, _ in
                         guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
                         scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
@@ -132,7 +151,7 @@ struct MarkdownPreview: View {
                     .task(id: navigation.wrappedValue) {
                         guard let fragment = navigation.wrappedValue else { return }
                         if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                            scroll(to: index, rows: rows, proxy: proxy)
+                            revealAndScroll(to: index, rows: rows, proxy: proxy)
                             failedLink = false
                         } else {
                             failedLink = true
@@ -142,8 +161,15 @@ struct MarkdownPreview: View {
                     .environment(\.openURL, OpenURLAction { url in
                         if url.absoluteString.hasPrefix("#") {
                             let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment
-                            if let fragment, let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                                scroll(to: index, rows: rows, proxy: proxy)
+                            if let fragment, fragment.hasPrefix("bailey-return:"),
+                               let offset = Int(fragment.dropFirst("bailey-return:".count)),
+                               let index = MarkdownBlockIndex(document).block(atUTF16Offset: offset) {
+                                revealAndScroll(to: index, sourceOffset: offset,
+                                                rows: rows, proxy: proxy)
+                                failedLink = false
+                            } else if let fragment,
+                                      let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                                revealAndScroll(to: index, rows: rows, proxy: proxy)
                                 failedLink = false
                             } else {
                                 failedLink = true
@@ -180,6 +206,27 @@ struct MarkdownPreview: View {
             guard !Task.isCancelled else { return }
             failedLink = !opened
             linkToOpen = nil
+        }
+    }
+
+    private func headingIdentity(at index: Int) -> MarkdownDocument.HeadingIdentity? {
+        let block = document.blocks[index]
+        guard case .heading = block.content, let anchor = block.anchor,
+              let offset = block.sourceRange?.location else { return nil }
+        return .init(offset: offset, anchor: anchor)
+    }
+
+    private func revealAndScroll(to index: Int, sourceOffset: Int? = nil,
+                                 rows: [RenderRow], proxy: ScrollViewProxy) {
+        var hidden = document.collapsedAncestors(of: index, collapsed: collapsedHeadings)
+        if let heading = headingIdentity(at: index), collapsedHeadings.contains(heading) {
+            hidden.append(heading)
+        }
+        if hidden.isEmpty {
+            scroll(to: index, sourceOffset: sourceOffset, rows: rows, proxy: proxy)
+        } else {
+            pendingReveal = (index, sourceOffset)
+            for heading in hidden { onRevealHeading(heading) }
         }
     }
 
@@ -222,18 +269,21 @@ struct MarkdownPreview: View {
     // One SwiftUI Text owns consecutive prose, so text selection can cross paragraphs.
     // Keep groups bounded: a single giant Text would defeat long-document lazy layout.
     private var renderRows: [RenderRow] {
+        let visible = document.visibleBlockIndices(collapsed: collapsedHeadings)
         var result: [RenderRow] = []
-        var start = 0
-        while start < document.blocks.count {
+        var cursor = 0
+        while cursor < visible.count {
+            let start = visible[cursor]
             var end = start + 1
             if canMergeParagraph(at: start) {
-                while end < document.blocks.count, end - start < 12 {
-                    guard canMergeParagraph(at: end) else { break }
+                while cursor + (end - start) < visible.count, end - start < 12 {
+                    guard visible[cursor + end - start] == end,
+                          canMergeParagraph(at: end) else { break }
                     end += 1
                 }
             }
             result.append(RenderRow(start: start, end: end))
-            start = end
+            cursor += end - start
         }
         return result
     }
@@ -342,9 +392,12 @@ private final class MarkdownReaderCoordinates {
         return closest
     }
 
-    func copySelection(details: [String: Bool]) -> String? {
+    func copySelection(details: [String: Bool],
+                       collapsed: Set<MarkdownDocument.HeadingIdentity>) -> String? {
         guard let selectedRange, let document else { return nil }
-        return MarkdownSelectionText.copy(selectedRange, from: document, details: details)
+        return MarkdownSelectionText.copy(
+            selectedRange, from: document, details: details, collapsed: collapsed
+        )
     }
 
     func scrollPending() {
@@ -395,6 +448,7 @@ private struct MarkdownReaderClipBridge: NSViewRepresentable {
     let coordinates: MarkdownReaderCoordinates
     let document: MarkdownDocument
     let detailsState: MarkdownDetailsState
+    let collapsedHeadings: Set<MarkdownDocument.HeadingIdentity>
     let onSelectionChanged: (NSRange?) -> Void
     let onLocateSource: ((Int) -> Void)?
 
@@ -405,6 +459,7 @@ private struct MarkdownReaderClipBridge: NSViewRepresentable {
     func updateNSView(_ view: MarkdownReaderClipView, context: Context) {
         view.coordinates = coordinates
         view.detailsState = detailsState
+        view.collapsedHeadings = collapsedHeadings
         view.onLocateSource = onLocateSource
         coordinates.document = document
         coordinates.onSelectionChanged = onSelectionChanged
@@ -429,6 +484,7 @@ private struct MarkdownReaderClipBridge: NSViewRepresentable {
 private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate {
     var coordinates: MarkdownReaderCoordinates?
     var detailsState: MarkdownDetailsState?
+    var collapsedHeadings: Set<MarkdownDocument.HeadingIdentity> = []
     var onLocateSource: ((Int) -> Void)?
     private var dragAnchor: MarkdownSelectionGlyph?
     private var selectionAnchorOffset: Int?
@@ -488,15 +544,18 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
     }
 
     @objc func copy(_ sender: Any?) {
-        guard let text = coordinates?.copySelection(details: detailsState?.expanded ?? [:]),
-              !text.isEmpty else { return }
+        guard let text = coordinates?.copySelection(
+            details: detailsState?.expanded ?? [:], collapsed: collapsedHeadings
+        ), !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 
     @objc override func selectAll(_ sender: Any?) {
         guard let document = coordinates?.document,
-              let range = MarkdownSelectionText.fullRange(in: document) else { return }
+              let range = MarkdownSelectionText.fullRange(
+                in: document, collapsed: collapsedHeadings
+              ) else { return }
         selectionAnchorOffset = range.location
         selectionCaretOffset = NSMaxRange(range)
         coordinates?.select(between: range.location, and: NSMaxRange(range))
@@ -937,8 +996,12 @@ private struct MarkdownNativeBlockView: View {
     let assetRefresh: UInt
     var anchor: String? = nil
     var selectionPath: [Int] = []
+    var headingIdentity: MarkdownDocument.HeadingIdentity?
+    var collapsed = false
+    var onToggleHeading: (MarkdownDocument.HeadingIdentity) -> Void = { _ in }
     @State private var headingHovered = false
     @FocusState private var headingLinkFocused: Bool
+    @FocusState private var headingFoldFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     private static let headingSizes: [CGFloat] = [32, 24, 20, 16, 14, 12]
@@ -1001,6 +1064,25 @@ private struct MarkdownNativeBlockView: View {
                             : MarkdownGitHubColors.text(dark: colorScheme == .dark))
                         .textSelection(.enabled)
                         .accessibilityAddTraits(.isHeader)
+                    if let headingIdentity {
+                        Button { onToggleHeading(headingIdentity) } label: {
+                            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 24, height: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .focused($headingFoldFocused)
+                        .opacity(headingHovered || headingFoldFocused ? 1 : 0.001)
+                        .pointerStyle(.link)
+                        .help(collapsed ? String(localized: "Expand section", table: "Editor")
+                                        : String(localized: "Collapse section", table: "Editor"))
+                        .accessibilityLabel(collapsed ? String(localized: "Expand section", table: "Editor")
+                                                       : String(localized: "Collapse section", table: "Editor"))
+                        .accessibilityValue(collapsed ? String(localized: "Collapsed", table: "Editor")
+                                                       : String(localized: "Expanded", table: "Editor"))
+                        .accessibilityIdentifier("bailey.markdown.fold.\(headingIdentity.anchor)")
+                    }
                 }
                 .contentShape(Rectangle())
                 .onHover { headingHovered = $0 }

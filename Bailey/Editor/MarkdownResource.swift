@@ -136,6 +136,84 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
 }
 
 
+/// Native inspection surface shared by file images and rendered diagrams.
+struct MarkdownImageInspector: View {
+    let image: NSImage
+    var showsCloseButton = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedScale: CGFloat?
+    @GestureState private var pinchScale: CGFloat = 1
+
+    var body: some View {
+        GeometryReader { viewport in
+            let natural = CGSize(width: max(1, image.size.width), height: max(1, image.size.height))
+            let fit = min(1, max(0.05, min(
+                (viewport.size.width - 24) / natural.width,
+                (viewport.size.height - 64) / natural.height
+            )))
+            let scale = max(0.05, min(8, (selectedScale ?? fit) * pinchScale))
+            let width = natural.width * scale
+            let height = natural.height * scale
+
+            VStack(spacing: 0) {
+                ScrollView([.horizontal, .vertical]) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: width, height: height)
+                        .frame(
+                            width: max(width, viewport.size.width),
+                            height: max(height, viewport.size.height - 46)
+                        )
+                }
+                .accessibilityIdentifier("bailey.image.inspector")
+                .simultaneousGesture(MagnifyGesture()
+                    .updating($pinchScale) { value, state, _ in
+                        state = value.magnification
+                    }
+                    .onEnded { value in
+                        selectedScale = max(0.05, min(8, (selectedScale ?? fit) * value.magnification))
+                    })
+                HStack(spacing: 10) {
+                    Button {
+                        selectedScale = max(0.05, scale / 1.25)
+                    } label: {
+                        Image(systemName: "minus.magnifyingglass")
+                    }
+                    .accessibilityLabel(String(localized: "Zoom out", table: "Editor"))
+                    .accessibilityIdentifier("bailey.image.zoom-out")
+                    Button(String(localized: "Fit", table: "Editor")) { selectedScale = nil }
+                        .accessibilityIdentifier("bailey.image.fit")
+                    Button("100%") { selectedScale = 1 }
+                        .accessibilityIdentifier("bailey.image.actual")
+                    Button {
+                        selectedScale = min(8, scale * 1.25)
+                    } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .accessibilityLabel(String(localized: "Zoom in", table: "Editor"))
+                    .accessibilityIdentifier("bailey.image.zoom-in")
+                    Spacer()
+                    Text(verbatim: "\(Int(scale * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .accessibilityLabel("\(Int(scale * 100))%")
+                        .accessibilityValue("\(Int(scale * 100))%")
+                        .accessibilityIdentifier("bailey.image.zoom-level")
+                    if showsCloseButton {
+                        Button(String(localized: "Done", table: "Editor")) { dismiss() }
+                            .keyboardShortcut(.cancelAction)
+                            .accessibilityIdentifier("bailey.image.close")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .frame(height: 46)
+            }
+        }
+    }
+}
+
 /// SwiftUI owns displayed images; bytes always come from the file's backend.
 struct MarkdownNativeImage: View {
     let picture: MarkdownPicture?
@@ -145,6 +223,7 @@ struct MarkdownNativeImage: View {
     var height: CGFloat? = nil
     @Environment(\.openURL) private var openURL
     @Environment(\.appearsActive) private var active
+    @State private var inspecting = false
 
     var body: some View {
         Group {
@@ -154,7 +233,19 @@ struct MarkdownNativeImage: View {
                         .buttonStyle(.plain)
                         .pointerStyle(.link)
                 } else {
-                    frames(picture)
+                    Button { inspecting = true } label: { frames(picture) }
+                        .buttonStyle(.plain)
+                        .pointerStyle(.link)
+                        .help("Inspect image")
+                        .sheet(isPresented: $inspecting) {
+                            MarkdownImageInspector(image: NSImage(
+                                cgImage: picture.poster,
+                                size: picture.pointSize ?? CGSize(
+                                    width: picture.poster.width, height: picture.poster.height
+                                )
+                            ), showsCloseButton: true)
+                            .frame(minWidth: 360, minHeight: 280)
+                        }
                 }
             } else {
                 Label(alt.isEmpty ? String(localized: "Image") : alt, systemImage: "photo")

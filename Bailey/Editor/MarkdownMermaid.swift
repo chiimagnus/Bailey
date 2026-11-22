@@ -39,15 +39,21 @@ struct MarkdownMermaidView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var image: NSImage?
     @State private var failed = false
+    @State private var inspecting = false
 
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image).resizable().scaledToFit()
-                    .frame(maxWidth: image.size.width)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .accessibilityLabel(Text("Mermaid diagram"))
-                    .accessibilityIdentifier("bailey.markdown.mermaid")
+                Button { inspecting = true } label: {
+                    Image(nsImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: image.size.width)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .help(Text("Inspect diagram", tableName: "Editor"))
+                .accessibilityLabel(Text("Mermaid diagram"))
+                .accessibilityIdentifier("bailey.markdown.mermaid")
             } else if failed {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Could not render Mermaid at line \(line).", systemImage: "exclamationmark.triangle")
@@ -59,6 +65,12 @@ struct MarkdownMermaidView: View {
                 }
             } else {
                 ProgressView().controlSize(.small)
+            }
+        }
+        .sheet(isPresented: $inspecting) {
+            if let image {
+                MarkdownImageInspector(image: image, showsCloseButton: true)
+                    .frame(minWidth: 360, minHeight: 280)
             }
         }
         .task(id: colorScheme) {

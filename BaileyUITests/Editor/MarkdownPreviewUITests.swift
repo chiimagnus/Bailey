@@ -1731,6 +1731,432 @@ final class MarkdownPreviewUITests: XCTestCase {
                        "Scrolling both panes must not modify or save the source bytes")
     }
 
+    func testNativeImageViewerZoomFitAndActualSizePreservesOriginalPNG() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 960, pixelsHigh: 680,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let file = fixture.root.appendingPathComponent("Zoom.png")
+        try png.write(to: file)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let actual = app.buttons["bailey.image.actual"]
+        XCTAssertTrue(actual.waitForExistence(timeout: 15),
+                      "The native image file tab must expose zoom controls")
+        let level = app.staticTexts["bailey.image.zoom-level"]
+        actual.click()
+        XCTAssertEqual(level.label, "100%")
+        app.buttons["bailey.image.zoom-in"].click()
+        XCTAssertEqual(level.label, "125%")
+        let fit = app.buttons["bailey.image.fit"]
+        fit.click()
+        XCTAssertNotEqual(level.label, "125%", "Fit must restore the viewport-dependent scale")
+        XCTAssertEqual(try Data(contentsOf: file), png)
+    }
+
+    func testMermaidDiagramOpensNativeZoomSurfaceAndCloses() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Diagram
+
+            ```mermaid
+            flowchart TD
+              A[Start] --> B[Finish]
+            ```
+            """
+        let file = try fixture.file("Inspect.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let diagram = app.buttons["bailey.markdown.mermaid"]
+        XCTAssertTrue(diagram.waitForExistence(timeout: 20),
+                      "A valid Mermaid diagram must be a native inspectable image")
+        diagram.click()
+        let close = app.buttons["bailey.image.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        app.buttons["bailey.image.actual"].click()
+        XCTAssertEqual(app.staticTexts["bailey.image.zoom-level"].label, "100%")
+        let inspectorScreenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        inspectorScreenshot.name = "Native Mermaid image inspector at actual size"
+        inspectorScreenshot.lifetime = .keepAlways
+        add(inspectorScreenshot)
+        close.click()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testHeadingFoldStateFollowsPrependedTextEditsUndoAndPreviewRemount() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Intro
+
+            The initial paragraph.
+
+            ## Folded
+
+            SECRET_AFTER_HEADING
+
+            ## Following
+
+            FOLLOWING_BODY
+            """
+        let file = try fixture.file("FoldEdits.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window)
+            .waitForExistence(timeout: 15))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let heading = preview.staticTexts["Folded"].firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 10))
+        heading.hover()
+        let toggle = preview.buttons["bailey.markdown.fold.folded"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        toggle.click()
+        XCTAssertEqual(toggle.value as? String, "Collapsed")
+        XCTAssertFalse(preview.staticTexts["SECRET_AFTER_HEADING"].exists)
+
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.click()
+        editor.typeKey(.upArrow, modifierFlags: .command)
+        let prefix = "Inserted paragraph before heading.\n\n"
+        editor.typeText(prefix)
+        XCTAssertEqual(editor.value as? String, prefix + source)
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15))
+        XCTAssertEqual(toggle.value as? String, "Collapsed",
+                       "Folded heading must retain its identity when earlier text changes")
+        XCTAssertFalse(preview.staticTexts["SECRET_AFTER_HEADING"].exists)
+
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.click()
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, source)
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(toggle.waitForExistence(timeout: 15))
+        XCTAssertEqual(toggle.value as? String, "Collapsed")
+        XCTAssertFalse(preview.staticTexts["SECRET_AFTER_HEADING"].exists)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testChineseOutlineMenuUsesLocalizedLabel() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("中文大纲.md", text: "# 第一节\n\n内容。\n\n## 第二节\n\n尾声。")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "zh-Hans", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 10))
+        tab.rightClick()
+        let outline = app.menuItems["大纲…"]
+        XCTAssertTrue(outline.waitForExistence(timeout: 10),
+                      "The document tab outline must be localized in Simplified Chinese")
+        outline.click()
+        let destination = app.buttons["bailey.markdown.outline.第二节"]
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        destination.click()
+        XCTAssertTrue(WorkspaceUITestSupport.element(
+            "bailey.markdown.preview", in: app
+        ).waitForExistence(timeout: 15))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8),
+                       "# 第一节\n\n内容。\n\n## 第二节\n\n尾声。")
+    }
+
+    func testOutlineKeyboardNavigationAndEscapeFromSourceMode() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # First
+
+            FIRST_KB_BODY
+
+            ## Second
+
+            SECOND_KB_BODY
+
+            # Third
+
+            THIRD_KB_BODY
+            """
+        let file = try fixture.file("OutlineKeys.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        let outlineAction = app.menuItems["Outline…"]
+        tab.rightClick()
+        XCTAssertTrue(outlineAction.waitForExistence(timeout: 10))
+        outlineAction.click()
+        let second = app.buttons["bailey.markdown.outline.second"]
+        XCTAssertTrue(second.waitForExistence(timeout: 15))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(second.waitForNonExistence(timeout: 10),
+                      "Escape must dismiss the native outline without navigating")
+
+        tab.rightClick()
+        XCTAssertTrue(outlineAction.waitForExistence(timeout: 10))
+        outlineAction.click()
+        XCTAssertTrue(second.waitForExistence(timeout: 10))
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.return, modifierFlags: [])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let destination = preview.staticTexts["SECOND_KB_BODY"].firstMatch
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(destination.frame.intersection(preview.frame).height, 1,
+                             "Arrow and Return must navigate to the selected heading")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testLastFoldedChapterStillShowsGlobalFootnoteAndReturnRevealsReference() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Last chapter
+
+            RETURN_POINT[^note] is hidden after folding.
+
+            HIDDEN_BODY_TEXT
+
+            [^note]: Global note stays visible.
+            """
+        let file = try fixture.file("FoldedFootnote.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let heading = preview.staticTexts["Last chapter"].firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 10))
+        heading.hover()
+        let fold = preview.buttons["bailey.markdown.fold.last-chapter"]
+        XCTAssertTrue(fold.waitForExistence(timeout: 10))
+        fold.click()
+        XCTAssertEqual(fold.value as? String, "Collapsed")
+        XCTAssertFalse(preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "HIDDEN_BODY_TEXT")
+        ).firstMatch.exists)
+
+        let note = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "Global note stays visible.")
+        ).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10),
+                      "Footnotes are a document-level section, never part of the final collapsed heading")
+        let back = preview.links["↩"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        back.click()
+        XCTAssertEqual(fold.value as? String, "Expanded")
+        let reference = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "RETURN_POINT")
+        ).firstMatch
+        XCTAssertTrue(reference.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(reference.frame.intersection(preview.frame).height, 1)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testFootnoteReturnNavigatesBackToOriginalReference() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = "# Footnotes\n\nRETURN_TARGET_TEXT[^note] at the beginning.\n\n"
+            + (0..<50).map { "A long intervening paragraph \($0) with 中文 content." }
+                .joined(separator: "\n\n")
+            + "\n\n[^note]: Definition at the end."
+        let file = try fixture.file("Return.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let noteLink = preview.links["1"].firstMatch
+        XCTAssertTrue(noteLink.waitForExistence(timeout: 10), preview.debugDescription)
+        noteLink.click()
+        let definition = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "Definition at the end.")
+        ).firstMatch
+        XCTAssertTrue(definition.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(definition.frame.intersection(preview.frame).height, 1,
+                             "Clicking footnote reference must show its native definition")
+        let back = preview.links["↩"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 10),
+                      "The footnote needs a native return-to-reference link")
+        back.click()
+        let reference = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "RETURN_TARGET_TEXT")
+        ).firstMatch
+        XCTAssertTrue(reference.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(reference.frame.intersection(preview.frame).height, 1,
+                             "Return link must actually restore the original reference's viewport")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testInternalLinkRevealsFoldedAncestorWithoutEditingSource() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Index
+
+            [Jump to hidden section](#nested)
+
+            ## Parent
+
+            Parent body.
+
+            ### Nested
+
+            HIDDEN_DESTINATION_TEXT
+
+            # End
+
+            Finish.
+            """
+        let file = try fixture.file("FoldLink.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let parent = preview.staticTexts["Parent"].firstMatch
+        XCTAssertTrue(parent.waitForExistence(timeout: 10))
+        parent.hover()
+        let fold = preview.buttons["bailey.markdown.fold.parent"]
+        XCTAssertTrue(fold.waitForExistence(timeout: 10))
+        fold.click()
+        XCTAssertEqual(fold.value as? String, "Collapsed")
+        XCTAssertFalse(preview.staticTexts["HIDDEN_DESTINATION_TEXT"].exists)
+
+        let link = preview.links["Jump to hidden section"]
+        XCTAssertTrue(link.waitForExistence(timeout: 10))
+        link.click()
+        let destination = preview.staticTexts["HIDDEN_DESTINATION_TEXT"].firstMatch
+        XCTAssertTrue(destination.waitForExistence(timeout: 10),
+                      "Internal heading links must reveal collapsed ancestor sections")
+        XCTAssertEqual(fold.value as? String, "Expanded")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testOutlineOpensDuplicateHeadingAndFoldsOnlyItsSection() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Main
+
+            ## Topic
+
+            FIRST_TOPIC_BODY
+
+            ## Topic
+
+            SECOND_TOPIC_BODY
+
+            ### Child
+
+            CHILD_BODY
+
+            # Tail
+
+            TAIL_BODY
+            """
+        let file = try fixture.file("Outline.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15),
+                      "The file tab must exist before opening its outline")
+        tab.rightClick()
+        let outlineAction = app.menuItems["Outline…"]
+        XCTAssertTrue(outlineAction.waitForExistence(timeout: 10))
+        outlineAction.click()
+        let destination = app.buttons["bailey.markdown.outline.topic-1"]
+        XCTAssertTrue(destination.waitForExistence(timeout: 15),
+                      "The native tab outline must distinguish repeated headings")
+        let outlineScreenshot = XCTAttachment(screenshot: window.screenshot())
+        outlineScreenshot.name = "Markdown native outline with duplicate headings"
+        outlineScreenshot.lifetime = .keepAlways
+        add(outlineScreenshot)
+        destination.click()
+
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let secondBody = preview.staticTexts["SECOND_TOPIC_BODY"].firstMatch
+        guard secondBody.waitForExistence(timeout: 10) else {
+            return XCTFail("Outline must reveal the selected section: \(preview.debugDescription)")
+        }
+        XCTAssertGreaterThan(secondBody.frame.intersection(preview.frame).height, 1,
+                             "Outline selection must scroll to the requested repeated heading")
+
+        let duplicate = preview.staticTexts.matching(identifier: "Topic").element(boundBy: 1)
+        XCTAssertTrue(duplicate.waitForExistence(timeout: 10))
+        duplicate.hover()
+        let fold = preview.buttons["bailey.markdown.fold.topic-1"]
+        XCTAssertTrue(fold.waitForExistence(timeout: 10))
+        fold.click()
+        XCTAssertEqual(fold.value as? String, "Collapsed")
+        XCTAssertTrue(secondBody.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(preview.staticTexts["CHILD_BODY"].exists,
+                       "A folded heading must also hide descendants")
+        XCTAssertTrue(preview.staticTexts["TAIL_BODY"].waitForExistence(timeout: 10),
+                      "The next top-level heading must stay visible")
+        let foldedScreenshot = XCTAttachment(screenshot: window.screenshot())
+        foldedScreenshot.name = "Markdown folded heading with following sections"
+        foldedScreenshot.lifetime = .keepAlways
+        add(foldedScreenshot)
+        fold.click()
+        XCTAssertEqual(fold.value as? String, "Expanded")
+        XCTAssertTrue(secondBody.waitForExistence(timeout: 10))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source,
+                       "Folding and navigation must not edit or save source bytes")
+    }
+
     func testAlternatingScrollBetweenCodeHeavyReaderAndSourcePreservesOriginalPositions() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = (0..<64).map { index -> String in

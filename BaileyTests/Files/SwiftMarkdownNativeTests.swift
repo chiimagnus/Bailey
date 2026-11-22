@@ -9,6 +9,162 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownNativeTests: XCTestCase {
+    func testFootnotesRemainVisibleOutsideLastCollapsedHeading() async throws {
+        let source = """
+            # Chapter
+
+            The body has a reference[^note].
+
+            HIDDEN_CHAPTER_BODY
+
+            [^note]: The final footnote must remain accessible.
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let heading = try XCTUnwrap(document.headingOutline.first)
+        let collapsed: Set<MarkdownDocument.HeadingIdentity> = [heading.identity]
+        let footnoteIndex = try XCTUnwrap(document.blocks.firstIndex {
+            $0.anchor == "bailey-note:note"
+        })
+        let visible = document.visibleBlockIndices(collapsed: collapsed)
+        XCTAssertTrue(visible.contains(heading.blockIndex))
+        XCTAssertTrue(visible.contains(footnoteIndex),
+                      "The global footnote area must not be treated as part of the last folded chapter")
+        XCTAssertTrue(visible.contains(footnoteIndex - 1),
+                      "The global footnote separator must stay visible")
+        XCTAssertTrue(document.collapsedAncestors(of: footnoteIndex, collapsed: collapsed).isEmpty)
+        XCTAssertTrue(MarkdownSelectionText.copy(
+            try XCTUnwrap(MarkdownSelectionText.fullRange(in: document, collapsed: collapsed)),
+            from: document, collapsed: collapsed
+        ).contains("The final footnote must remain accessible."))
+    }
+
+    func testFootnoteDefinitionHasReturnLinkToFirstSourceReference() async throws {
+        let source = """
+            # Citation
+
+            中文 🛰️ sentence with first[^ref] and second[^ref].
+
+            A separate paragraph.
+
+            [^ref]: Footnote definition.
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let footnote = try XCTUnwrap(document.blocks.first { $0.anchor == "bailey-note:ref" })
+        guard case .paragraph(let inlines) = footnote.content,
+              case .link(let target, let label) = inlines.last else {
+            return XCTFail("Footnote definitions need a native return link")
+        }
+        let offset = (source as NSString).range(of: "[^ref]").location
+        XCTAssertEqual(target, "#bailey-return:\(offset)")
+        guard case .text("↩", _) = label.first else {
+            return XCTFail("Return control must have a visible navigation label")
+        }
+    }
+
+    func testHeadingOutlineKeepsOrderDepthAndUniqueAnchors() async throws {
+        let source = """
+            # Root
+
+            Intro.
+
+            ## Second **bold**
+
+            - Nested
+
+            ### Deep
+
+            Body.
+
+            ## Second **bold**
+
+            Repeated.
+
+            # Final
+
+            End.
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let outline = document.headingOutline
+        XCTAssertEqual(outline.map(\.title), ["Root", "Second bold", "Deep", "Second bold", "Final"])
+        XCTAssertEqual(outline.map(\.level), [1, 2, 3, 2, 1])
+        XCTAssertEqual(outline.map(\.anchor),
+                       ["root", "second-bold", "deep", "second-bold-1", "final"])
+        XCTAssertEqual(Set(outline.map(\.identity)).count, 5)
+        XCTAssertTrue(outline.allSatisfy { $0.blockIndex < document.blocks.count })
+    }
+
+    func testCollapsedHeadingHidesDescendantsAndRestoresNestedCollapse() async throws {
+        let source = """
+            # Root
+
+            Root body.
+
+            ## Branch
+
+            Visible when expanded.
+
+            ### Leaf
+
+            Leaf body.
+
+            ## Next
+
+            Next body.
+
+            # Tail
+
+            Tail body.
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let outline = document.headingOutline
+        XCTAssertEqual(outline.count, 5)
+        let hiddenWithBranch = document.visibleBlockIndices(
+            collapsed: [outline[1].identity]
+        )
+        let visibleTitles = hiddenWithBranch.compactMap { index -> String? in
+            guard case .heading = document.blocks[index].content else { return nil }
+            return document.headingOutline.first { $0.blockIndex == index }?.title
+        }
+        XCTAssertEqual(visibleTitles, ["Root", "Branch", "Next", "Tail"])
+        XCTAssertFalse(hiddenWithBranch.contains(outline[2].blockIndex),
+                       "Nested heading must become hidden with its ancestor")
+        let nested = document.visibleBlockIndices(collapsed: [
+            outline[0].identity, outline[2].identity,
+        ])
+        XCTAssertEqual(nested, [outline[0].blockIndex, outline[4].blockIndex,
+                               document.blocks.count - 1],
+                       "Collapsing a root hides all descendants, but not subsequent sibling roots")
+        let restored = document.visibleBlockIndices(collapsed: [outline[2].identity])
+        XCTAssertTrue(restored.contains(outline[1].blockIndex))
+        XCTAssertTrue(restored.contains(outline[2].blockIndex))
+        XCTAssertFalse(restored.contains(outline[2].blockIndex + 1),
+                       "Previously folded child retains its own collapsed state")
+        XCTAssertEqual(document.collapsedAncestors(
+            of: outline[2].blockIndex, collapsed: [outline[0].identity, outline[2].identity]
+        ), [outline[0].identity], "Navigation to a folded heading reveals its parents only")
+        XCTAssertEqual(document.collapsedAncestors(
+            of: outline[2].blockIndex + 1,
+            collapsed: [outline[0].identity, outline[2].identity]
+        ), [outline[0].identity, outline[2].identity],
+        "Navigation to a folded descendant reveals the entire ancestor chain")
+    }
+
+    func testCollapsedHeadingIdentityFollowsSourceEditsButExpiresWhenDeleted() {
+        let heading = MarkdownDocument.HeadingIdentity(offset: 42, anchor: "example")
+        XCTAssertEqual(heading.moved(by: NSRange(location: 7, length: 5), delta: 5)?.offset, 47)
+        XCTAssertEqual(heading.moved(by: NSRange(location: 7, length: 0), delta: -5)?.offset, 37)
+        XCTAssertNil(heading.moved(by: NSRange(location: 40, length: 4), delta: -1))
+        XCTAssertEqual(heading.moved(by: NSRange(location: 45, length: 3), delta: 0)?.offset, 42)
+        XCTAssertEqual(heading.moved(by: NSRange(location: 42, length: 2), delta: 2)?.offset, 44)
+    }
+
+    func testEmptyOutlineAndNonheadingBlocksRemainVisible() async throws {
+        let document = try await MarkdownDocument.parse("Just a paragraph.\n\n- item\n")
+        XCTAssertTrue(document.headingOutline.isEmpty)
+        XCTAssertEqual(document.visibleBlockIndices(collapsed: []),
+                       Array(document.blocks.indices))
+    }
+
     func testGFMAndNestedContentRetainStructure() async throws {
         let source = """
         # Heading **emphasis**

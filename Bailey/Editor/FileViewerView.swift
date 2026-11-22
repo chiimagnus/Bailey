@@ -108,6 +108,9 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func installNativeDocument(_ text: String) {
+        markdownCollapsedHeadings.removeAll()
+        markdownHeadingOutline.removeAll()
+        markdownOutlineRequest = nil
         let storage = NSTextStorage(string: text)
         let contentStorage = NSTextContentStorage()
         contentStorage.textStorage = storage
@@ -135,14 +138,19 @@ final class FileTab: nonisolated Identifiable {
     /// notification; only direct edits require one deferred full reconciliation.
     private func nativeStorageDidChange() {
         guard case .text = content else { return }
+        let edited = nativeTextStorage.editedRange
+        let delta = nativeTextStorage.changeInLength
         if let offset = markdownReadingOffset {
-            let edited = nativeTextStorage.editedRange
-            let delta = nativeTextStorage.changeInLength
             if offset >= NSMaxRange(edited) - delta {
                 markdownReadingOffset = offset + delta
             } else if offset >= edited.location {
                 markdownReadingOffset = min(offset, NSMaxRange(edited))
             }
+        }
+        if !markdownCollapsedHeadings.isEmpty {
+            markdownCollapsedHeadings = Set(markdownCollapsedHeadings.compactMap {
+                $0.moved(by: edited, delta: delta)
+            })
         }
         markdownEditRevision &+= 1
         markdownSourceOffset = nil
@@ -222,6 +230,16 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored var markdownSourceIndex: (request: String, index: MarkdownBlockIndex)?
     @ObservationIgnored var pendingMarkdownSource: (request: String, offset: Int, focus: Bool)?
     var pendingMarkdownFragment: String?
+    var markdownCollapsedHeadings: Set<MarkdownDocument.HeadingIdentity> = []
+    var markdownHeadingOutline: [MarkdownDocument.OutlineHeading] = []
+    @ObservationIgnored var markdownOutlineRequest: String?
+
+    func installMarkdownOutline(_ headings: [MarkdownDocument.OutlineHeading], request: String) {
+        guard request == markdownRequestID else { return }
+        markdownCollapsedHeadings.formIntersection(Set(headings.map(\.identity)))
+        markdownHeadingOutline = headings
+        markdownOutlineRequest = request
+    }
 
     var canPreviewMarkdown: Bool {
         guard case .text = content else { return false }
@@ -974,10 +992,8 @@ struct FileViewerView: View {
                     if let error = file.reloadError {
                         errorBar(error)
                     }
-                    ScrollView([.horizontal, .vertical]) {
-                        Image(nsImage: image)
-                            .padding(16)
-                    }
+                    MarkdownImageInspector(image: image)
+                        .id(file.reloadRevision)
                 }
             case .loading:
                 Color.clear
