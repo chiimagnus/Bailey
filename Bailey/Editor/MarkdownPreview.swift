@@ -55,6 +55,7 @@ struct MarkdownPreview: View {
                                                             resource: resource, assetRefresh: assetRefresh,
                                                             anchor: document.blocks[row.start].anchor,
                                                             selectionPath: [row.start],
+                                                            sourceRange: document.blocks[row.start].sourceRange,
                                                             headingIdentity: headingIdentity(at: row.start),
                                                             collapsed: headingIdentity(at: row.start)
                                                                 .map { collapsedHeadings.contains($0) } ?? false,
@@ -193,6 +194,7 @@ struct MarkdownPreview: View {
             }
         }
         .background(MarkdownGitHubColors.background(dark: colorScheme == .dark))
+        .environment(\.markdownSourceLocation, onLocateSource)
         .onChange(of: revision) { _, _ in
             sourceCoordinates.clearSelection()
             detailsState.expanded.removeAll()
@@ -996,6 +998,7 @@ private struct MarkdownNativeBlockView: View {
     let assetRefresh: UInt
     var anchor: String? = nil
     var selectionPath: [Int] = []
+    var sourceRange: NSRange? = nil
     var headingIdentity: MarkdownDocument.HeadingIdentity?
     var collapsed = false
     var onToggleHeading: (MarkdownDocument.HeadingIdentity) -> Void = { _ in }
@@ -1162,7 +1165,7 @@ private struct MarkdownNativeBlockView: View {
         case .mermaid(let source, let line):
             MarkdownMermaidView(source: source, line: line)
         case .mathBlock(let latex):
-            MarkdownFormulaView(latex: latex, display: true)
+            MarkdownFormulaView(latex: latex, display: true, source: sourceRange)
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .center)
         case .html(let nodes):
@@ -1237,7 +1240,7 @@ private struct MarkdownMixedParagraph: View {
     private enum Segment {
         case text([MarkdownInline])
         case image(String, String)
-        case math(String, display: Bool)
+        case math(String, display: Bool, source: NSRange?)
     }
 
     let inline: [MarkdownInline]
@@ -1269,9 +1272,9 @@ private struct MarkdownMixedParagraph: View {
                 case .image(let source, let alt):
                     flush()
                     result.append(.image(source, alt))
-                case .math(let latex, let display):
+                case .math(let latex, let display, let source):
                     flush()
-                    result.append(.math(latex, display: display))
+                    result.append(.math(latex, display: display, source: source))
                 case .strong(let children):
                     collect(children) { decorated(.strong([$0])) }
                 case .emphasis(let children):
@@ -1320,9 +1323,9 @@ private struct MarkdownMixedParagraph: View {
             } else {
                 Text(verbatim: alt).foregroundStyle(.secondary)
             }
-        case .math(let latex, let display):
+        case .math(let latex, let display, let source):
             MarkdownFormulaView(latex: latex, display: display,
-                                fontSize: formulaFontSize)
+                                fontSize: formulaFontSize, source: source)
         }
     }
 }
@@ -1536,7 +1539,7 @@ enum MarkdownNativeText {
             return linkedText(children, url: url)
         case .image(_, let alt):
             return Text(verbatim: alt)
-        case .math(let latex, let display):
+        case .math(let latex, let display, _):
             return Text(verbatim: display ? "$$\(latex)$$" : "$\(latex)$")
         case .html(let source):
             return Text(verbatim: source)
@@ -1576,7 +1579,7 @@ enum MarkdownNativeText {
                 collectSourceRuns(children, position: &position, runs: &runs)
             case .image(_, let alt):
                 position += alt.utf16.count
-            case .math(let latex, let display):
+            case .math(let latex, let display, _):
                 position += latex.utf16.count + (display ? 4 : 2)
             case .html(let raw):
                 position += raw.utf16.count
@@ -1615,7 +1618,7 @@ enum MarkdownNativeText {
                 }
             case .image(_, let alt):
                 part = AttributedString(alt)
-            case .math(let latex, let display):
+            case .math(let latex, let display, _):
                 part = AttributedString(display ? "$$\(latex)$$" : "$\(latex)$")
             case .lineBreak:
                 part = AttributedString("\n")

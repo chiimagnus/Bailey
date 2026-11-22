@@ -152,7 +152,7 @@ nonisolated struct MarkdownDocument: Sendable {
                 normalized = rewrite
             }
             let bytes = value.utf8
-            return protected.inlines(value) { part in
+            return protected.inlines(value, projectText: { part in
                 let from = bytes.distance(from: bytes.startIndex, to: part.startIndex)
                 let display = from..<(from + part.utf8.count)
                 if let normalized {
@@ -168,7 +168,15 @@ nonisolated struct MarkdownDocument: Sendable {
                 return [.text(String(part), source: originalByteRange(
                     (span.lowerBound + display.lowerBound)..<(span.lowerBound + display.upperBound)
                 ))]
-            }
+            }, expressionSource: { token in
+                let lower = bytes.distance(from: bytes.startIndex, to: token.lowerBound)
+                let upper = bytes.distance(from: bytes.startIndex, to: token.upperBound)
+                let displayed = lower..<upper
+                let source = normalized?.originalBytes(for: displayed) ?? (normalized == nil ? displayed : nil)
+                return source.flatMap {
+                    originalByteRange((span.lowerBound + $0.lowerBound)..<(span.lowerBound + $0.upperBound))
+                }
+            })
         }
         func projectCode(_ node: Markdown.InlineCode) -> [MarkdownInline] {
             let fallback: [MarkdownInline] = [.code(node.code)]
@@ -309,7 +317,7 @@ nonisolated struct MarkdownDocument: Sendable {
             let inline = projectInline(
                 paragraph.children, projectText: projectText, projectCode: projectCode
             )
-            if inline.count == 1, case let .math(latex, display: true) = inline[0] {
+            if inline.count == 1, case let .math(latex, display: true, source: _) = inline[0] {
                 return .mathBlock(latex)
             }
             if inline.count == 1, case let .image(source, alt) = inline[0] {
@@ -442,7 +450,7 @@ nonisolated struct MarkdownDocument: Sendable {
             case .link(_, let children): inlinePlainText(children)
             case .image(_, let alt): alt
             case .lineBreak: "\n"
-            case .math(let latex, let display): display ? "$$\(latex)$$" : "$\(latex)$"
+            case .math(let latex, let display, _): display ? "$$\(latex)$$" : "$\(latex)$"
             }
         }.joined()
     }
@@ -936,7 +944,7 @@ nonisolated indirect enum MarkdownInline: Sendable {
     case strike([Self])
     case link(String, [Self])
     case image(String, String)
-    case math(String, display: Bool)
+    case math(String, display: Bool, source: NSRange? = nil)
     case html(String)
     case lineBreak
 }

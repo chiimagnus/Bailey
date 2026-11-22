@@ -97,8 +97,8 @@ nonisolated enum MarkdownSelectionText {
                 return visible(children)
             case .image(_, let alt):
                 return [Piece(text: alt, source: nil)]
-            case .math(let latex, _):
-                return [Piece(text: latex, source: nil)]
+            case .math(let latex, _, let source):
+                return [Piece(text: latex, source: source)]
             case .html(let raw):
                 return [Piece(text: raw, source: nil)]
             case .lineBreak:

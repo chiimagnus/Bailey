@@ -9,6 +9,29 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownNativeTests: XCTestCase {
+    func testMathTokensRetainExactOriginalUTF16RangesAcrossUnicodeFrontMatterAndFootnotes() async throws {
+        let source = "\u{FEFF}---\r\ntitle: Test\r\n---\r\n\r\n# Math\r\n\r\n"
+            + "Emoji 🧪 and e\u{301} $x_i+y$ with [^note], plus $a^2$.\r\n\r\n"
+            + "[^note]: A definition."
+        let document = try await MarkdownDocument.parse(source)
+        let paragraph = try XCTUnwrap(document.blocks.first { block in
+            if case .paragraph(let inline) = block.content {
+                return inline.contains { if case .math = $0 { return true }; return false }
+            }
+            return false
+        })
+        guard case .paragraph(let inline) = paragraph.content else {
+            return XCTFail("Expected math paragraph")
+        }
+        let math = inline.compactMap { item -> (String, NSRange)? in
+            guard case let .math(latex, display: false, source: range?) = item else { return nil }
+            return (latex, range)
+        }
+        XCTAssertEqual(math.map(\.0), ["x_i+y", "a^2"])
+        XCTAssertEqual(math.map { (source as NSString).substring(with: $0.1) },
+                       ["$x_i+y$", "$a^2$"])
+    }
+
     func testFootnotesRemainVisibleOutsideLastCollapsedHeading() async throws {
         let source = """
             # Chapter
@@ -336,7 +359,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             return XCTFail("Expected formula paragraph")
         }
         let expressions = inline.compactMap { node -> String? in
-            guard case let .math(latex, display: false) = node else { return nil }
+            guard case let .math(latex, display: false, source: _) = node else { return nil }
             return latex
         }
         XCTAssertEqual(expressions, ["E=mc^2", "a+b"])
@@ -369,7 +392,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
                 return XCTFail("Missing paragraph for \(formula)")
             }
             let expressions = inline.compactMap { node -> String? in
-                if case let .math(latex, display: false) = node { latex } else { nil }
+                if case let .math(latex, display: false, source: _) = node { latex } else { nil }
             }
             XCTAssertEqual(expressions, [String(formula.dropFirst().dropLast())],
                            "Math extension must not let GFM emphasis split TeX: \(inline)")
@@ -382,7 +405,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             return XCTFail("Missing escaped-dollar paragraph")
         }
         let expressions = inline.compactMap { node -> String? in
-            if case let .math(latex, _) = node { latex } else { nil }
+            if case let .math(latex, _, _) = node { latex } else { nil }
         }
         XCTAssertEqual(expressions, ["y"])
         XCTAssertTrue(String(MarkdownNativeText.attributed(inline).characters).contains("$x$"))
@@ -407,7 +430,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
                 return XCTFail("Missing prose for \(source)")
             }
             let expressions = inline.compactMap { node -> String? in
-                guard case let .math(latex, display: false) = node else { return nil }
+                guard case let .math(latex, display: false, source: _) = node else { return nil }
                 return latex
             }
             XCTAssertEqual(expressions, expected,
@@ -424,7 +447,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             return XCTFail("Expected Markdown prose")
         }
         let expressions = inline.compactMap { node -> String? in
-            if case let .math(latex, display: false) = node { return latex }
+            if case let .math(latex, display: false, source: _) = node { return latex }
             return nil
         }
         XCTAssertEqual(expressions, ["x", "y"],
@@ -448,7 +471,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(rows.count, 1)
         guard let cell = rows.first?.last else { return XCTFail("Missing formula cell") }
         XCTAssertTrue(cell.contains {
-            if case let .math(latex, _) = $0 { latex == "x_i*y_j" } else { false }
+            if case let .math(latex, _, _) = $0 { latex == "x_i*y_j" } else { false }
         }, "Math in GFM table must not be swallowed by inline emphasis: \(cell)")
     }
 
@@ -1005,7 +1028,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
                 XCTAssertNotNil(document.blocks.first { $0.anchor == "bailey-note:note" })
                 XCTAssertTrue(document.blocks.contains {
                     guard case .paragraph(let inline) = $0.content else { return false }
-                    return inline.contains { if case .math("x^2", display: false) = $0 { true } else { false } }
+                    return inline.contains { if case .math("x^2", display: false, source: _) = $0 { true } else { false } }
                 })
             }
         }

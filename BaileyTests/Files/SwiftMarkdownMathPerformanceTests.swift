@@ -40,7 +40,7 @@ final class SwiftMarkdownMathPerformanceTests: XCTestCase {
             for block in document.blocks {
                 if case let .paragraph(inline) = block.content {
                     for fragment in inline {
-                        if case let .math(latex, _) = fragment {
+                        if case let .math(latex, _, _) = fragment {
                             XCTAssertEqual(latex, "x_{i}*y_{j}")
                             expressionCount += 1
                         }

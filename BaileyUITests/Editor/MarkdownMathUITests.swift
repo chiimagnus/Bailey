@@ -3,6 +3,53 @@ import XCTest
 
 @MainActor
 final class MarkdownMathUITests: XCTestCase {
+    func testDoubleClickCanvasFormulaLocatesOriginalUTF16Delimiters() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let cases = [
+            (name: "Inline",
+             source: "# Coordinates\n\nBefore 🧪 e\u{301} $x_i+y$ then after.\n",
+             latex: "x_i+y", raw: "$x_i+y$"),
+            (name: "Display",
+             source: "# Coordinates\n\nBefore paragraph.\n\n$$\n\\frac{a+b}{2}\n$$\n",
+             latex: "\\frac{a+b}{2}", raw: "$$\n\\frac{a+b}{2}\n$$")
+        ]
+        let documents = try cases.map {
+            (file: try fixture.file("\($0.name).md", text: $0.source),
+             source: $0.source, latex: $0.latex, raw: $0.raw)
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        for entry in documents {
+            let row = WorkspaceUITestSupport.fileRow(entry.file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            app.activate()
+            row.doubleClick()
+            XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 12))
+            app.typeKey("v", modifierFlags: [.command, .shift])
+            let formula = preview.descendants(matching: .any).matching(
+                NSPredicate(format: "label == %@", "Math: " + entry.latex)
+            ).firstMatch
+            XCTAssertTrue(formula.waitForExistence(timeout: 15),
+                          "Actual native math Canvas must be reachable")
+            formula.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleClick()
+            XCTAssertTrue(preview.waitForNonExistence(timeout: 10),
+                          "Double-clicking Canvas must switch to the original source buffer")
+            let editor = window.textViews.firstMatch
+            XCTAssertTrue(editor.waitForExistence(timeout: 10))
+            app.typeKey("z", modifierFlags: [])
+            let expected = entry.source.replacingOccurrences(
+                of: entry.raw, with: "z" + entry.raw
+            )
+            XCTAssertEqual(editor.value as? String, expected,
+                           "The inserted character must land before the exact original TeX delimiter")
+            XCTAssertEqual(try String(contentsOf: entry.file, encoding: .utf8), entry.source,
+                           "Source navigation must not save text implicitly")
+        }
+    }
+
     func testNativeMathInsideHeadingsEmphasisAndTables() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("MathBlocks.md", text: [

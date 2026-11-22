@@ -3,6 +3,34 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownSelectionTests: XCTestCase {
+    func testFormulaSemanticCopyRespectsExactSourceIntervalWithoutAdjacentText() async throws {
+        let source = "# Equations\n\n中文 🧪 before $x_i+y$ between $z^2$ after.\n"
+        let document = try await MarkdownDocument.parse(source)
+        let paragraph = try XCTUnwrap(document.blocks.first { block in
+            if case .paragraph(let inline) = block.content {
+                return inline.contains { if case .math = $0 { return true }; return false }
+            }
+            return false
+        })
+        guard case .paragraph(let inline) = paragraph.content else {
+            return XCTFail("Missing formula paragraph")
+        }
+        let ranges = inline.compactMap { item -> NSRange? in
+            guard case .math(_, _, let source) = item else { return nil }
+            return source
+        }
+        XCTAssertEqual(ranges.count, 2)
+        XCTAssertEqual((source as NSString).substring(with: ranges[0]), "$x_i+y$")
+        XCTAssertEqual((source as NSString).substring(with: ranges[1]), "$z^2$")
+        XCTAssertEqual(MarkdownSelectionText.copy(ranges[0], from: document), "x_i+y")
+        XCTAssertEqual(MarkdownSelectionText.copy(ranges[1], from: document), "z^2")
+        let spanning = NSRange(location: ranges[0].location,
+                               length: NSMaxRange(ranges[1]) - ranges[0].location)
+        XCTAssertEqual(MarkdownSelectionText.copy(spanning, from: document),
+                       "x_i+y between z^2",
+                       "Only the visible formula labels and intervening text should be copied")
+    }
+
     func testFootnoteDefinitionBeforeTrailingBodyKeepsEverySourceRange() async throws {
         let source = """
             # Footnote selection

@@ -14,7 +14,9 @@ nonisolated enum MarkdownMath {
         var source: String { rewrite.source }
         let expressions: [String: Expression]
 
-        func inlines(_ text: String, projectText: (Substring) -> [MarkdownInline] = { [.text(String($0))] })
+        func inlines(_ text: String,
+                     projectText: (Substring) -> [MarkdownInline] = { [.text(String($0))] },
+                     expressionSource: (Range<String.Index>) -> NSRange? = { _ in nil })
             -> [MarkdownInline] {
             guard !expressions.isEmpty,
                   let first = text.range(of: "\u{E000}BAILEY_MATH_")
@@ -35,7 +37,8 @@ nonisolated enum MarkdownMath {
                 if cursor < open.lowerBound {
                     result.append(contentsOf: projectText(text[cursor..<open.lowerBound]))
                 }
-                result.append(.math(expression.latex, display: expression.display))
+                result.append(.math(expression.latex, display: expression.display,
+                                    source: expressionSource(open.lowerBound..<end)))
                 cursor = end
                 searching = end
             }

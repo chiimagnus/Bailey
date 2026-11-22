@@ -1,11 +1,24 @@
 import SwiftUI
 import SwiftUIMath
 
+private struct MarkdownSourceLocationKey: EnvironmentKey {
+    static let defaultValue: ((Int) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var markdownSourceLocation: ((Int) -> Void)? {
+        get { self[MarkdownSourceLocationKey.self] }
+        set { self[MarkdownSourceLocationKey.self] = newValue }
+    }
+}
+
 /// Public SwiftUI Canvas-based math typesetting; no WebKit, JS, or SPI.
 struct MarkdownFormulaView: View {
     let latex: String
     let display: Bool
     var fontSize: CGFloat? = nil
+    var source: NSRange? = nil
+    @Environment(\.markdownSourceLocation) private var locateSource
     @State private var cannotTypeset = false
 
     var body: some View {
@@ -31,6 +44,9 @@ struct MarkdownFormulaView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Math: \(latex)")
+        .onTapGesture(count: 2) {
+            if let source { locateSource?(source.location) }
+        }
         .onChange(of: latex) { _, _ in cannotTypeset = false }
     }
 }
