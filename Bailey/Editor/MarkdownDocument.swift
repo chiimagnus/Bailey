@@ -45,13 +45,13 @@ nonisolated struct MarkdownDocument: Sendable {
         let document = protected.expressions.isEmpty ? unprotectedDocument
             : Markdown.Document(parsing: protected.source, options: [.disableSmartOpts])
         let math = MarkdownMath.Source(protected.source)
-        // Render from the rewritten AST, but only the original AST can provide
-        // exact source ranges when formulas or footnotes changed byte lengths.
-        var originalByLine: [Int: [Markdown.SourceRange]] = [:]
-        for node in initialDocument.children {
-            if let range = node.range {
-                originalByLine[range.lowerBound.line, default: []].append(range)
-            }
+        let renderedCoordinates = protected.source == original ? coordinates
+            : MarkdownOriginalCoordinates(body: protected.source, headerUTF16: 0)
+        func originalRange(_ range: Markdown.SourceRange) -> NSRange? {
+            guard let rendered = renderedCoordinates.bytes(range),
+                  let beforeMath = protected.rewrite.originalBytes(for: rendered),
+                  let beforeNotes = footnotes.rewrite.originalBytes(for: beforeMath) else { return nil }
+            return coordinates.utf16Range(beforeNotes)
         }
         var occupiedAnchors = Set<String>()
         var blocks = try document.children.compactMap { node -> Block? in
@@ -73,17 +73,9 @@ nonisolated struct MarkdownDocument: Sendable {
             } else {
                 anchor = nil
             }
-            let sourceRange: NSRange?
-            if let line = node.range?.lowerBound.line,
-               var originalRanges = originalByLine[line], !originalRanges.isEmpty {
-                sourceRange = coordinates.range(originalRanges.removeFirst())
-                originalByLine[line] = originalRanges
-            } else {
-                sourceRange = nil
-            }
             return Block(anchor: anchor,
                          line: (node.range?.lowerBound.line ?? 1) + headerLineCount,
-                         content: rendered, sourceRange: sourceRange)
+                         content: rendered, sourceRange: node.range.flatMap(originalRange))
         }
         let notes = footnotes.definitions
         if let first = notes.first {
@@ -323,6 +315,71 @@ nonisolated struct MarkdownBlockIndex: Sendable {
     }
 }
 
+nonisolated struct MarkdownSourceRewrite {
+    struct Replacement {
+        let bytes: Range<Int>
+        let text: String
+    }
+
+    private struct Edit {
+        let original: Range<Int>
+        let rewritten: Range<Int>
+    }
+
+    let source: String
+    private let edits: [Edit]
+
+    init(_ source: String, replacing replacements: [Replacement] = []) {
+        guard !replacements.isEmpty else {
+            self.source = source
+            edits = []
+            return
+        }
+        let bytes = Array(source.utf8)
+        var result: [UInt8] = []
+        result.reserveCapacity(bytes.count)
+        var edits: [Edit] = []
+        var cursor = 0
+        for replacement in replacements {
+            let range = replacement.bytes
+            guard range.lowerBound >= cursor, range.upperBound <= bytes.count else { continue }
+            result.append(contentsOf: bytes[cursor..<range.lowerBound])
+            let start = result.count
+            result.append(contentsOf: replacement.text.utf8)
+            edits.append(Edit(original: range, rewritten: start..<result.count))
+            cursor = range.upperBound
+        }
+        result.append(contentsOf: bytes[cursor...])
+        self.source = String(decoding: result, as: UTF8.self)
+        self.edits = edits
+    }
+
+    func originalBytes(for rewritten: Range<Int>) -> Range<Int>? {
+        guard rewritten.lowerBound >= 0, rewritten.upperBound <= source.utf8.count else { return nil }
+        let start = originalBoundary(rewritten.lowerBound, leading: true)
+        guard !rewritten.isEmpty else { return start..<start }
+        let end = originalBoundary(rewritten.upperBound, leading: false)
+        return start..<end
+    }
+
+    private func originalBoundary(_ offset: Int, leading: Bool) -> Int {
+        var lower = 0
+        var upper = edits.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            let start = edits[middle].rewritten.lowerBound
+            if start < offset || (leading && start == offset) { lower = middle + 1 }
+            else { upper = middle }
+        }
+        guard lower > 0 else { return offset }
+        let edit = edits[lower - 1]
+        if offset < edit.rewritten.upperBound {
+            return leading ? edit.original.lowerBound : edit.original.upperBound
+        }
+        return edit.original.upperBound + (offset - edit.rewritten.upperBound)
+    }
+}
+
 /// Converts cmark's 1-based UTF-8 byte columns into TextKit's original UTF-16
 /// offsets. Line breaks (including CRLF) are measured in the unmodified source.
 private nonisolated struct MarkdownOriginalCoordinates {
@@ -359,22 +416,44 @@ private nonisolated struct MarkdownOriginalCoordinates {
         lineUTF16Ends = ends
     }
 
-    private func offset(_ location: Markdown.SourceLocation) -> Int? {
+    private func byteOffset(_ location: Markdown.SourceLocation) -> Int? {
         let row = location.line - 1
         let column = location.column - 1
         guard row >= 0, row < lineStarts.count, column >= 0 else { return nil }
         let start = lineStarts[row]
         let end = row + 1 < lineStarts.count ? lineStarts[row + 1] : body.endIndex
         let bytes = body.utf8
-        guard let boundary = bytes.index(start, offsetBy: column, limitedBy: end),
-              let prefix = String(bytes: bytes[start..<boundary], encoding: .utf8)
+        guard let boundary = bytes.index(start, offsetBy: column, limitedBy: end) else { return nil }
+        return bytes.distance(from: bytes.startIndex, to: boundary)
+    }
+
+    func bytes(_ source: Markdown.SourceRange) -> Range<Int>? {
+        guard let lower = byteOffset(source.lowerBound),
+              let upper = byteOffset(source.upperBound),
+              upper >= lower else { return nil }
+        return lower..<upper
+    }
+
+    private func utf16Offset(_ byteOffset: Int) -> Int? {
+        let bytes = body.utf8
+        guard let boundary = bytes.index(bytes.startIndex, offsetBy: byteOffset,
+                                         limitedBy: bytes.endIndex) else { return nil }
+        var lower = 0
+        var upper = lineStarts.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if lineStarts[middle] <= boundary { lower = middle + 1 }
+            else { upper = middle }
+        }
+        let row = lower - 1
+        guard let prefix = String(bytes: bytes[lineStarts[row]..<boundary], encoding: .utf8)
         else { return nil }
         return headerUTF16 + lineUTF16Starts[row] + prefix.utf16.count
     }
 
-    func range(_ source: Markdown.SourceRange) -> NSRange? {
-        guard let lower = offset(source.lowerBound),
-              let upper = offset(source.upperBound),
+    func utf16Range(_ bytes: Range<Int>) -> NSRange? {
+        guard let lower = utf16Offset(bytes.lowerBound),
+              let upper = utf16Offset(bytes.upperBound),
               upper >= lower else { return nil }
         return NSRange(location: lower, length: upper - lower)
     }

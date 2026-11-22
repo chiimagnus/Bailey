@@ -20,12 +20,13 @@ nonisolated struct MarkdownFootnotes {
 
     private let notes: [String: Note]
     private(set) var referenced: [String] = []
-    var source: String
+    let rewrite: MarkdownSourceRewrite
+    var source: String { rewrite.source }
 
     init(source original: String, document: Markdown.Document) {
-        source = original
         guard original.contains("[^") else {
             notes = [:]
+            rewrite = MarkdownSourceRewrite(original)
             return
         }
 
@@ -40,7 +41,6 @@ nonisolated struct MarkdownFootnotes {
         excludeCode(document)
 
         let rawLines = original.split(omittingEmptySubsequences: false, whereSeparator: \.isMarkdownLineEnding)
-            .map(String.init)
         var lines = rawLines
         var definitions: [String: Note] = [:]
         var index = 0
@@ -63,7 +63,10 @@ nonisolated struct MarkdownFootnotes {
             definitions[name] = Note(name: name, source: body, line: line, endLine: index + 1)
         }
         notes = definitions
-        guard !definitions.isEmpty else { return }
+        guard !definitions.isEmpty else {
+            rewrite = MarkdownSourceRewrite(original)
+            return
+        }
 
         func rawText(_ range: Markdown.SourceRange) -> String? {
             guard range.lowerBound.line == range.upperBound.line,
@@ -123,16 +126,22 @@ nonisolated struct MarkdownFootnotes {
                 numbers[item.name] = referenced.count
             }
         }
-        for item in found.reversed() {
-            guard let number = numbers[item.name] else { continue }
-            let bytes = Array(lines[item.line].utf8)
-            guard item.start >= 0, item.end <= bytes.count, item.start <= item.end else { continue }
-            let target = "[\(number)](#bailey-note:\(item.name))"
-            lines[item.line] = String(decoding:
-                Array(bytes[..<item.start]) + Array(target.utf8) + Array(bytes[item.end...]),
-                as: UTF8.self)
+        let originalBytes = original.utf8
+        var edits = rawLines.indices.compactMap { index -> MarkdownSourceRewrite.Replacement? in
+            guard lines[index].isEmpty, !rawLines[index].isEmpty else { return nil }
+            let start = originalBytes.distance(from: originalBytes.startIndex, to: rawLines[index].startIndex)
+            return .init(bytes: start..<(start + rawLines[index].utf8.count), text: "")
         }
-        source = lines.joined(separator: "\n")
+        for item in found {
+            guard let number = numbers[item.name], item.start >= 0,
+                  item.end <= lines[item.line].utf8.count, item.start <= item.end else { continue }
+            let start = originalBytes.distance(from: originalBytes.startIndex,
+                                               to: rawLines[item.line].startIndex)
+            let target = "[\(number)](#bailey-note:\(item.name))"
+            edits.append(.init(bytes: (start + item.start)..<(start + item.end), text: target))
+        }
+        edits.sort { $0.bytes.lowerBound < $1.bytes.lowerBound }
+        rewrite = MarkdownSourceRewrite(original, replacing: edits)
     }
 
     var definitions: [(number: Int, name: String, text: String, line: Int, endLine: Int)] {

@@ -10,7 +10,8 @@ nonisolated enum MarkdownMath {
             let display: Bool
         }
 
-        let source: String
+        let rewrite: MarkdownSourceRewrite
+        var source: String { rewrite.source }
         let expressions: [String: Expression]
 
         func inlines(_ text: String) -> [MarkdownInline] {
@@ -50,7 +51,7 @@ nonisolated enum MarkdownMath {
     static func protect(_ source: String, ast: Markdown.Document) -> Protected {
         guard source.contains("$"),
               !source.contains("\u{E000}BAILEY_MATH_") else {
-            return Protected(source: source, expressions: [:])
+            return Protected(rewrite: MarkdownSourceRewrite(source), expressions: [:])
         }
 
         let bytes = Array(source.utf8)
@@ -178,22 +179,15 @@ nonisolated enum MarkdownMath {
             }
         }
         guard !replacements.isEmpty else {
-            return Protected(source: source, expressions: [:])
+            return Protected(rewrite: MarkdownSourceRewrite(source), expressions: [:])
         }
-        var rewritten: [UInt8] = []
-        rewritten.reserveCapacity(bytes.count + replacements.count * 8)
         var expressions: [String: Protected.Expression] = [:]
-        var cursor = 0
-        for replacement in replacements {
-            rewritten.append(contentsOf: bytes[cursor..<replacement.range.lowerBound])
-            rewritten.append(contentsOf: replacement.token.utf8)
+        let edits = replacements.map { replacement in
             expressions[replacement.token] = Protected.Expression(
                 latex: replacement.latex, display: replacement.display)
-            cursor = replacement.range.upperBound
+            return MarkdownSourceRewrite.Replacement(bytes: replacement.range, text: replacement.token)
         }
-        rewritten.append(contentsOf: bytes[cursor...])
-        return Protected(source: String(decoding: rewritten, as: UTF8.self),
-                         expressions: expressions)
+        return Protected(rewrite: MarkdownSourceRewrite(source, replacing: edits), expressions: expressions)
     }
 
     struct Source {

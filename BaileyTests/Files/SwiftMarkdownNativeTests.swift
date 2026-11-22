@@ -628,6 +628,36 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }, "The original-coordinate projection must not change math rendering")
     }
 
+    func testMarkdownRewriteMapsUnchangedTextSyntheticTokensAndDeletionEdges() throws {
+        let original = "🛰️ $x$ 中文 [^n]\r\n[^n]: text\r\nNext"
+        let bytes = Array(original.utf8)
+        func span(_ needle: String, in text: String) throws -> Range<Int> {
+            let match = try XCTUnwrap(text.range(of: needle))
+            let start = text.utf8.distance(from: text.startIndex, to: match.lowerBound)
+            return start..<text.utf8.distance(from: text.startIndex, to: match.upperBound)
+        }
+        let math = try span("$x$", in: original)
+        let reference = try span("[^n]", in: original)
+        let definition = try span("[^n]: text", in: original)
+        let rewrite = MarkdownSourceRewrite(original, replacing: [
+            .init(bytes: math, text: "MATH_TOKEN"),
+            .init(bytes: reference, text: "[1](#note)"),
+            .init(bytes: definition, text: "")
+        ])
+        XCTAssertEqual(rewrite.source, "🛰️ MATH_TOKEN 中文 [1](#note)\r\n\r\nNext")
+        for (visible, raw) in [("🛰️", "🛰️"), ("中文", "中文"), ("TOKEN", "$x$"),
+                               ("[1](#note)", "[^n]"), ("Next", "Next")] {
+            let mapped = try XCTUnwrap(rewrite.originalBytes(for: span(visible, in: rewrite.source)))
+            XCTAssertEqual(String(decoding: bytes[mapped], as: UTF8.self), raw)
+        }
+        let next = try span("Next", in: rewrite.source)
+        let deletion = next.lowerBound - 2
+        XCTAssertEqual(rewrite.originalBytes(for: (deletion - 2)..<deletion),
+                       (definition.lowerBound - 2)..<definition.lowerBound)
+        XCTAssertEqual(rewrite.originalBytes(for: deletion..<(deletion + 2)),
+                       definition.upperBound..<(definition.upperBound + 2))
+    }
+
     func testMarkdownCoordinatesDistinguishUnicodeSeparatorsFromSourceLineEndings() async throws {
         for ending in ["\n", "\r\n", "\r"] {
             for separator in ["\u{0085}", "\u{2028}", "\u{2029}", "\u{000B}", "\u{000C}"] {
