@@ -245,6 +245,21 @@ nonisolated extension GhosttyThemeDefinition {
 
     var backgroundNSColor: NSColor { Self.nsColor(background) }
     var foregroundNSColor: NSColor { Self.nsColor(foreground) }
+    var selectionBackgroundNSColor: NSColor {
+        selectionNSColor(selectionBackground, fallback: foregroundNSColor)
+    }
+    var selectionForegroundNSColor: NSColor {
+        selectionNSColor(selectionForeground, fallback: backgroundNSColor)
+    }
+
+    private func selectionNSColor(_ value: String?, fallback: NSColor) -> NSColor {
+        switch value?.lowercased() {
+        case "cell-background": backgroundNSColor
+        case "cell-foreground": foregroundNSColor
+        case let value?: Self.nsColor(value)
+        case nil: fallback
+        }
+    }
     func paletteNSColor(_ index: Int) -> NSColor? {
         palette[index].map(Self.nsColor)
     }

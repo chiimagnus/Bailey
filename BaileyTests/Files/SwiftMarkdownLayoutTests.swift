@@ -709,15 +709,6 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             attachment.name = "GitHub README \(Int(width))pt \(dark ? "dark" : "light")"
             attachment.lifetime = .keepAlways
             add(attachment)
-            let background = try XCTUnwrap(bitmap.colorAt(x: 5, y: bitmap.pixelsHigh - 5)?
-                .usingColorSpace(.sRGB))
-            let luminance = 0.2126 * background.redComponent
-                + 0.7152 * background.greenComponent + 0.0722 * background.blueComponent
-            if dark {
-                XCTAssertLessThan(luminance, 0.2, "Dark preview must use GitHub dark canvas")
-            } else {
-                XCTAssertGreaterThan(luminance, 0.85, "Light preview must use GitHub white canvas")
-            }
             let expectedRails: [UInt32] = dark
                 ? [0x4493F8, 0x3FB950, 0xAB7DF8, 0xD29922, 0xF85149]
                 : [0x0969DA, 0x1A7F37, 0x8250DF, 0x9A6700, 0xD1242F]
@@ -730,6 +721,11 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             ))
             context.draw(input, in: CGRect(x: 0, y: 0, width: input.width, height: input.height))
             let normalized = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+            let actualCanvas = try XCTUnwrap(normalized.colorAt(x: 5, y: normalized.pixelsHigh - 5))
+            let themeCanvas = try XCTUnwrap(Theme.terminal(dark: dark).backgroundNSColor.usingColorSpace(.sRGB))
+            XCTAssertEqual(actualCanvas.redComponent, themeCanvas.redComponent, accuracy: 0.025)
+            XCTAssertEqual(actualCanvas.greenComponent, themeCanvas.greenComponent, accuracy: 0.025)
+            XCTAssertEqual(actualCanvas.blueComponent, themeCanvas.blueComponent, accuracy: 0.025)
             let inset = width < 768 ? 17.0 : 47.0
             let railX = Int(inset * CGFloat(normalized.pixelsWide) / width)
             for color in expectedRails {

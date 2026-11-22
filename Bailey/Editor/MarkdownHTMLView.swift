@@ -29,11 +29,11 @@ struct MarkdownHTMLContent: View {
             switch layoutNodes[index] {
             case .text(let text, _):
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Self.inlineText([layoutNodes[index]]).textSelection(.enabled)
+                    Self.inlineText([layoutNodes[index]]).pointerStyle(.horizontalText)
                 }
             case .paragraph(let children):
                 if MarkdownHTML.isInline(children) {
-                    Self.inlineText(children).textSelection(.enabled)
+                    Self.inlineText(children).pointerStyle(.horizontalText)
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
                         MarkdownHTMLContent(nodes: children, resource: resource,
@@ -42,10 +42,10 @@ struct MarkdownHTMLContent: View {
                 }
             case .quote(let children):
                 HStack(alignment: .top, spacing: 0) {
-                    MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 4)
+                    MarkdownReaderColors.border(dark: colorScheme == .dark).frame(width: 4)
                     MarkdownHTMLContent(nodes: children, resource: resource,
                                         assetRefresh: assetRefresh, selectionPath: selectionPath + [index])
-                        .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
+                        .foregroundStyle(MarkdownReaderColors.secondary(dark: colorScheme == .dark))
                         .padding(.leading, 16)
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -79,22 +79,22 @@ struct MarkdownHTMLContent: View {
                                     .padding(.vertical, 6)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .overlay(alignment: .trailing) {
-                                        MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                                        MarkdownReaderColors.border(dark: colorScheme == .dark)
                                             .frame(width: 1)
                                     }
                                 }
                             }
                             .background(rows[row].shaded
-                                ? MarkdownGitHubColors.muted(dark: colorScheme == .dark)
-                                : MarkdownGitHubColors.background(dark: colorScheme == .dark))
+                                ? MarkdownReaderColors.muted(dark: colorScheme == .dark)
+                                : MarkdownReaderColors.background(dark: colorScheme == .dark))
                             .overlay(alignment: .bottom) {
-                                MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                                MarkdownReaderColors.border(dark: colorScheme == .dark)
                                     .frame(height: 1)
                             }
                         }
                     }
-                    .border(MarkdownGitHubColors.border(dark: colorScheme == .dark), width: 1)
-                    .textSelection(.enabled)
+                    .border(MarkdownReaderColors.border(dark: colorScheme == .dark), width: 1)
+                    .pointerStyle(.horizontalText)
                 }
             case .heading(let level, let children):
                 VStack(alignment: .leading, spacing: 8) {
@@ -110,11 +110,11 @@ struct MarkdownHTMLContent: View {
                     .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1],
                                   weight: .semibold))
                     .foregroundStyle(level == 6
-                        ? MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
-                        : MarkdownGitHubColors.text(dark: colorScheme == .dark))
-                    .textSelection(.enabled)
+                        ? MarkdownReaderColors.secondary(dark: colorScheme == .dark)
+                        : MarkdownReaderColors.text(dark: colorScheme == .dark))
+                    .pointerStyle(.horizontalText)
                     if level <= 2 {
-                        Divider().overlay(MarkdownGitHubColors.border(dark: colorScheme == .dark))
+                        Divider().overlay(MarkdownReaderColors.border(dark: colorScheme == .dark))
                     }
                 }
                 .padding(.top, 8)
@@ -125,7 +125,7 @@ struct MarkdownHTMLContent: View {
                             Text(ordered ? "\(start + item)." : "•")
                                 .frame(width: 24, alignment: .trailing)
                             if MarkdownHTML.isInline(items[item]) {
-                                Self.inlineText(items[item]).textSelection(.enabled)
+                                Self.inlineText(items[item]).pointerStyle(.horizontalText)
                             } else {
                                 MarkdownHTMLContent(nodes: items[item], resource: resource,
                                                     assetRefresh: assetRefresh,
@@ -136,7 +136,7 @@ struct MarkdownHTMLContent: View {
                 }
                 .padding(.leading, 8)
             case .horizontalRule:
-                Divider().overlay(MarkdownGitHubColors.border(dark: colorScheme == .dark))
+                Divider().overlay(MarkdownReaderColors.border(dark: colorScheme == .dark))
             case .media(let url, let video):
                 MarkdownMediaView(url: url, video: video, resource: resource).id(url)
             case .details(let label, let children, let open):
@@ -146,8 +146,8 @@ struct MarkdownHTMLContent: View {
             case .link(let url, let children):
                 if MarkdownHTML.isInline(children) {
                     Self.inlineText([.link(url, children)])
-                        .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
-                        .textSelection(.enabled)
+                        .tint(MarkdownReaderColors.link(dark: colorScheme == .dark))
+                        .pointerStyle(.horizontalText)
                 } else {
                     Button { openURL(url) } label: {
                         MarkdownHTMLContent(nodes: children, resource: resource,
@@ -155,11 +155,11 @@ struct MarkdownHTMLContent: View {
                     }
                     .buttonStyle(.plain)
                     .pointerStyle(.link)
-                    .foregroundStyle(MarkdownGitHubColors.link(dark: colorScheme == .dark))
+                    .foregroundStyle(MarkdownReaderColors.link(dark: colorScheme == .dark))
                 }
             case .emphasis(let children, let tag):
                 if MarkdownHTML.isInline(children) {
-                    Self.styledText(Self.inlineText(children), tag: tag).textSelection(.enabled)
+                    Self.styledText(Self.inlineText(children), tag: tag).pointerStyle(.horizontalText)
                 } else {
                     MarkdownHTMLContent(nodes: children, resource: resource,
                                         assetRefresh: assetRefresh, selectionPath: selectionPath + [index])

@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTheme
 import SwiftUI
 
 struct MarkdownPreview: View {
@@ -34,6 +35,7 @@ struct MarkdownPreview: View {
 
     var body: some View {
         let rows = renderRows
+        let palette = MarkdownReaderColors.theme(dark: colorScheme == .dark)
         GeometryReader { geometry in
             ZStack(alignment: .top) {
                 ScrollViewReader { proxy in
@@ -47,8 +49,8 @@ struct MarkdownPreview: View {
                                 if row.end - row.start > 1 {
                                     paragraphRun(row.start..<row.end)
                                         .fixedSize(horizontal: false, vertical: true)
-                                        .textSelection(.enabled)
-                                        .modifier(MarkdownGlyphMapping(group: row.start))
+                                        .pointerStyle(.horizontalText)
+                                        .modifier(MarkdownGlyphMapping())
                                         .id(row.start)
                                 } else {
                                     MarkdownNativeBlockView(block: document.blocks[row.start].content,
@@ -60,7 +62,7 @@ struct MarkdownPreview: View {
                                                             collapsed: headingIdentity(at: row.start)
                                                                 .map { collapsedHeadings.contains($0) } ?? false,
                                                             onToggleHeading: onToggleHeading)
-                                        .modifier(MarkdownGlyphMapping(group: row.start))
+                                        .modifier(MarkdownGlyphMapping())
                                         .id(row.start)
                                 }
                             }
@@ -78,8 +80,8 @@ struct MarkdownPreview: View {
                         }
                         .font(.system(size: 16))
                         .lineSpacing(4)
-                        .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
-                        .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
+                        .foregroundStyle(Color(nsColor: palette.foregroundNSColor))
+                        .tint(Color(nsColor: palette.accentNSColor))
                         .frame(maxWidth: 890, alignment: .leading)
                         .padding(geometry.size.width < 768 ? 15 : 45)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -89,13 +91,14 @@ struct MarkdownPreview: View {
                     .coordinateSpace(name: "bailey.markdown.reader")
                     .environment(detailsState)
                     .overlay {
-                        Canvas { context, _ in
+                        Canvas { context, size in
                             guard let selectedSource else { return }
-                            let tint = Color(nsColor: .selectedTextBackgroundColor).opacity(0.42)
-                            for hit in sourceCoordinates.hits {
-                                for rect in hit.selectedGlyphRects(intersecting: selectedSource) {
-                                    context.fill(Path(rect), with: .color(tint))
-                                }
+                            let background = Color(nsColor: palette.selectionBackgroundNSColor)
+                            let foreground = Color(nsColor: palette.selectionForegroundNSColor)
+                            let viewport = CGRect(origin: .zero, size: size)
+                            for hit in sourceCoordinates.hits where hit.viewportFrame.intersects(viewport) {
+                                hit.drawSelection(selectedSource, in: context,
+                                                  background: background, foreground: foreground)
                             }
                         }
                         .allowsHitTesting(false)
@@ -197,7 +200,7 @@ struct MarkdownPreview: View {
                 }
             }
         }
-        .background(MarkdownGitHubColors.background(dark: colorScheme == .dark))
+        .background(Color(nsColor: palette.backgroundNSColor))
         .environment(\.markdownSourceLocation, onLocateSource)
         .onChange(of: revision) { _, _ in
             sourceCoordinates.clearSelection()
@@ -550,14 +553,12 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
             if dragAnchor == nil { dragAnchor = coordinates.nearestGlyph(to: origin) }
             guard let anchor = dragAnchor,
                   let end = coordinates.nearestGlyph(to: point) else { return }
-            if anchor.requiresUnifiedSelection(from: end) {
-                coordinates.select(from: anchor, to: end)
-                selectionCaretOffset = end.insertionOffset(at: point)
-                if recognizer.state == .ended { window?.makeFirstResponder(self) }
-            } else {
-                coordinates.clearSelection()
+            coordinates.select(from: anchor, to: end)
+            selectionCaretOffset = end.insertionOffset(at: point)
+            if recognizer.state == .ended {
+                window?.makeFirstResponder(self)
+                dragAnchor = nil
             }
-            if recognizer.state == .ended { dragAnchor = nil }
         default:
             dragAnchor = nil
         }
@@ -710,16 +711,9 @@ struct MarkdownSourceGlyph: TextAttribute, Equatable {
 private struct MarkdownSelectionGlyph {
     let source: NSRange
     let frame: CGRect
-    let group: Int
-    let textIndex: Int
-    let isLink: Bool
 
     func insertionOffset(at point: CGPoint) -> Int {
         point.x < frame.midX ? source.location : NSMaxRange(source)
-    }
-
-    func requiresUnifiedSelection(from other: Self) -> Bool {
-        group != other.group || textIndex != other.textIndex || isLink || other.isLink
     }
 }
 
@@ -728,8 +722,6 @@ private struct MarkdownGlyphHit: Equatable {
     let first: Text.Layout.CharacterIndex
     let run: Text.Layout.Run
     let viewportOrigin: CGPoint
-    let group: Int
-    let textIndex: Int
     let isLink: Bool
     let displayedLineStart: Int
 
@@ -739,26 +731,39 @@ private struct MarkdownGlyphHit: Equatable {
 
     func selectionGlyphs() -> [MarkdownSelectionGlyph] {
         run.compactMap { glyph in
-            guard let firstIndex = glyph.characterIndices.min(),
-                  let lastIndex = glyph.characterIndices.max() else { return nil }
-            let displayed = NSRange(
-                location: displayedLineStart + max(0, first.distance(to: firstIndex)),
-                length: max(1, firstIndex.distance(to: lastIndex) + 1)
-            )
-            guard let mapped = mark.original(for: displayed), mapped.length > 0 else { return nil }
+            guard let mapped = source(for: glyph), mapped.length > 0 else { return nil }
             return MarkdownSelectionGlyph(source: mapped,
                                           frame: glyph.typographicBounds.rect.offsetBy(
                                             dx: viewportOrigin.x, dy: viewportOrigin.y
-                                          ),
-                                          group: group, textIndex: textIndex, isLink: isLink)
+                                          ))
         }
     }
 
-    func selectedGlyphRects(intersecting selection: NSRange) -> [CGRect] {
-        guard NSIntersectionRange(mark.source, selection).length > 0 else { return [] }
-        return selectionGlyphs().compactMap {
-            NSIntersectionRange($0.source, selection).length > 0 ? $0.frame : nil
+    private func source(for glyph: Text.Layout.RunSlice) -> NSRange? {
+        guard let start = glyph.characterIndices.min(), let end = glyph.characterIndices.max()
+        else { return nil }
+        return mark.original(for: NSRange(
+            location: displayedLineStart + max(0, first.distance(to: start)),
+            length: max(1, start.distance(to: end) + 1)
+        ))
+    }
+
+    func drawSelection(_ selection: NSRange, in context: GraphicsContext,
+                       background: Color, foreground: Color) {
+        guard NSIntersectionRange(mark.source, selection).length > 0 else { return }
+        let glyphs = run.filter { glyph in
+            source(for: glyph).map { NSIntersectionRange($0, selection).length > 0 } ?? false
         }
+        guard !glyphs.isEmpty else { return }
+        var selected = Path()
+        for glyph in glyphs { selected.addRect(glyph.typographicBounds.rect) }
+        var local = context
+        local.translateBy(x: viewportOrigin.x, y: viewportOrigin.y)
+        local.fill(selected, with: .color(background))
+        local.clipToLayer { mask in
+            for glyph in glyphs { mask.draw(glyph) }
+        }
+        local.fill(selected, with: .color(foreground))
     }
 
     var firstSourceOffset: Int {
@@ -773,13 +778,7 @@ private struct MarkdownGlyphHit: Equatable {
     func viewportFrame(forSourceOffset target: Int) -> CGRect? {
         guard target >= mark.source.location, target < NSMaxRange(mark.source) else { return nil }
         for glyph in run {
-            guard let start = glyph.characterIndices.min(),
-                  let end = glyph.characterIndices.max() else { continue }
-            let displayed = NSRange(
-                location: displayedLineStart + max(0, first.distance(to: start)),
-                length: max(1, start.distance(to: end) + 1)
-            )
-            guard let mapped = mark.original(for: displayed) else { continue }
+            guard let mapped = source(for: glyph) else { continue }
             if target >= mapped.location && target < NSMaxRange(mapped) {
                 return glyph.typographicBounds.rect
                     .offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y)
@@ -811,13 +810,11 @@ private struct MarkdownGlyphHitPreference: PreferenceKey {
 }
 
 private struct MarkdownGlyphMapping: ViewModifier {
-    let group: Int
-
     func body(content: Content) -> some View {
         content
             .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
                     GeometryReader { geometry in
-                        let mapped = layouts.enumerated().flatMap { textIndex, entry in
+                        let mapped = layouts.flatMap { entry in
                             let origin = geometry[entry.origin]
                             let viewportFrame = geometry.frame(in: .named("bailey.markdown.reader"))
                             let viewportOrigin = CGPoint(x: origin.x + viewportFrame.minX,
@@ -848,7 +845,7 @@ private struct MarkdownGlyphMapping: ViewModifier {
                                               : firstIndices[mark.source] else { return nil }
                                     return MarkdownGlyphHit(
                                         mark: mark, first: first, run: run,
-                                        viewportOrigin: viewportOrigin, group: group, textIndex: textIndex,
+                                        viewportOrigin: viewportOrigin,
                                         isLink: run[MarkdownLinkGlyph.self] != nil,
                                         displayedLineStart: isCode ? mark.displayedLineStarts[lineIndex] : 0
                                     )
@@ -864,8 +861,7 @@ private struct MarkdownGlyphMapping: ViewModifier {
 
 struct MarkdownLinkGlyph: TextAttribute {}
 
-/// Text's selection cursor overrides SwiftUI pointerStyle. The transparent
-/// AppKit cursor rects use SwiftUI's exact glyph layout and never own mouse clicks.
+/// The transparent AppKit cursor rects use SwiftUI's exact glyph layout and never own mouse clicks.
 private struct MarkdownLinkCursor: ViewModifier {
     func body(content: Content) -> some View {
         content.overlayPreferenceValue(Text.LayoutKey.self) { layouts in
@@ -952,29 +948,29 @@ final class MarkdownCursorRectView: NSView {
     override func mouseMoved(with event: NSEvent) { NSCursor.pointingHand.set() }
 }
 
-enum MarkdownGitHubColors {
+enum MarkdownReaderColors {
+    static func theme(dark: Bool) -> GhosttyThemeDefinition {
+        let _ = Theme.changes.revision
+        return Theme.terminal(dark: dark)
+    }
+
     static func background(dark: Bool) -> Color {
-        dark ? Color(red: 13 / 255, green: 17 / 255, blue: 23 / 255) : .white
+        Color(nsColor: theme(dark: dark).backgroundNSColor)
     }
     static func text(dark: Bool) -> Color {
-        dark ? Color(red: 240 / 255, green: 246 / 255, blue: 252 / 255)
-             : Color(red: 31 / 255, green: 35 / 255, blue: 40 / 255)
+        Color(nsColor: theme(dark: dark).foregroundNSColor)
     }
     static func link(dark: Bool) -> Color {
-        dark ? Color(red: 68 / 255, green: 147 / 255, blue: 248 / 255)
-             : Color(red: 9 / 255, green: 105 / 255, blue: 218 / 255)
+        Color(nsColor: theme(dark: dark).accentNSColor)
     }
     static func muted(dark: Bool) -> Color {
-        dark ? Color(red: 21 / 255, green: 27 / 255, blue: 35 / 255)
-             : Color(red: 246 / 255, green: 248 / 255, blue: 250 / 255)
+        Color(nsColor: theme(dark: dark).surfaceNSColor(elevation: 0.045))
     }
     static func secondary(dark: Bool) -> Color {
-        dark ? Color(red: 145 / 255, green: 152 / 255, blue: 161 / 255)
-             : Color(red: 89 / 255, green: 99 / 255, blue: 110 / 255)
+        Color(nsColor: theme(dark: dark).surfaceNSColor(elevation: 0.75))
     }
     static func border(dark: Bool) -> Color {
-        dark ? Color(red: 61 / 255, green: 68 / 255, blue: 77 / 255)
-             : Color(red: 209 / 255, green: 217 / 255, blue: 224 / 255)
+        Color(nsColor: theme(dark: dark).surfaceNSColor(elevation: 0.21))
     }
 }
 
@@ -1058,7 +1054,7 @@ private struct MarkdownNativeBlockView: View {
 
                             Image(systemName: "link")
                                 .font(.system(size: 13))
-                                .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
+                                .foregroundStyle(MarkdownReaderColors.secondary(dark: colorScheme == .dark))
                                 .opacity(headingHovered || headingLinkFocused ? 1 : 0)
                                 .allowsHitTesting(false)
                                 .accessibilityHidden(true)
@@ -1079,15 +1075,15 @@ private struct MarkdownNativeBlockView: View {
                                                    assetRefresh: assetRefresh,
                                                    formulaFontSize: Self.headingSize(level))
                         } else {
-                            MarkdownNativeText.make(inline).textSelection(.enabled)
+                            MarkdownNativeText.make(inline).pointerStyle(.horizontalText)
                         }
                     }
                         .font(.system(size: Self.headingSize(level), weight: .semibold))
                         .foregroundStyle(level == 6
-                            ? MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
-                            : MarkdownGitHubColors.text(dark: colorScheme == .dark))
-                        .textSelection(.enabled)
+                            ? MarkdownReaderColors.secondary(dark: colorScheme == .dark)
+                            : MarkdownReaderColors.text(dark: colorScheme == .dark))
                         .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier(anchor.map { "bailey.markdown.heading.\($0)" } ?? "")
                     if let headingIdentity {
                         Button { onToggleHeading(headingIdentity) } label: {
                             Image(systemName: collapsed ? "chevron.right" : "chevron.down")
@@ -1120,7 +1116,7 @@ private struct MarkdownNativeBlockView: View {
             } else {
                 MarkdownNativeText.make(inline)
                     .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                    .pointerStyle(.horizontalText)
             }
         case .image(let source, let alt, let range):
             if let url = URL(string: source) {
@@ -1171,19 +1167,19 @@ private struct MarkdownNativeBlockView: View {
                             }
                         }
                         .background(!row.isMultiple(of: 2)
-                            ? MarkdownGitHubColors.muted(dark: colorScheme == .dark)
-                            : MarkdownGitHubColors.background(dark: colorScheme == .dark))
+                            ? MarkdownReaderColors.muted(dark: colorScheme == .dark)
+                            : MarkdownReaderColors.background(dark: colorScheme == .dark))
                     }
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 3)
-                        .stroke(MarkdownGitHubColors.border(dark: colorScheme == .dark))
+                        .stroke(MarkdownReaderColors.border(dark: colorScheme == .dark))
                 }
             }
         case .code(let source, let language, let sourceRuns):
             MarkdownCodeBlockView(source: source, language: language, sourceRuns: sourceRuns)
         case .mermaid(let source, let line):
-            MarkdownMermaidView(source: source, line: line)
+            MarkdownMermaidView(source: source, line: line, sourceRange: sourceRange)
         case .mathBlock(let latex):
             MarkdownFormulaView(latex: latex, display: true, source: sourceRange)
                 .padding(.vertical, 6)
@@ -1192,8 +1188,9 @@ private struct MarkdownNativeBlockView: View {
             MarkdownHTMLContent(nodes: nodes, resource: resource, assetRefresh: assetRefresh,
                                 selectionPath: selectionPath)
         case .rawHTML(let source):
-            Text(verbatim: source).font(.system(size: 14, design: .monospaced))
-                .foregroundStyle(.secondary).textSelection(.enabled)
+            MarkdownNativeText.make([.text(source, source: sourceRange)])
+                .font(.system(size: 14, design: .monospaced))
+                .foregroundStyle(.secondary).pointerStyle(.horizontalText)
         case .rule:
             Divider()
         }
@@ -1210,7 +1207,7 @@ private struct MarkdownNativeBlockView: View {
 
     private func quotation(_ blocks: [MarkdownNativeBlock], alert: MarkdownAlert? = nil) -> some View {
         let dark = colorScheme == .dark
-        let tint = alert?.tint(dark: dark) ?? MarkdownGitHubColors.border(dark: dark)
+        let tint = alert?.tint(dark: dark) ?? MarkdownReaderColors.border(dark: dark)
         return VStack(alignment: .leading, spacing: 8) {
             if let alert {
                 Label {
@@ -1228,8 +1225,8 @@ private struct MarkdownNativeBlockView: View {
                                         selectionPath: selectionPath + [index])
             }
         }
-        .foregroundStyle(alert == nil ? MarkdownGitHubColors.secondary(dark: dark)
-                                      : MarkdownGitHubColors.text(dark: dark))
+        .foregroundStyle(alert == nil ? MarkdownReaderColors.secondary(dark: dark)
+                                      : MarkdownReaderColors.text(dark: dark))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 20)
         .overlay(alignment: .leading) {
@@ -1244,7 +1241,7 @@ private struct MarkdownNativeBlockView: View {
                                        assetRefresh: assetRefresh)
             } else {
                 MarkdownNativeText.make(inline)
-                    .textSelection(.enabled)
+                    .pointerStyle(.horizontalText)
             }
         }
             .fontWeight(header ? .semibold : .regular)
@@ -1254,10 +1251,10 @@ private struct MarkdownNativeBlockView: View {
             .padding(.vertical, 7)
             .frame(minWidth: 64, maxWidth: .infinity, alignment: alignment)
             .overlay(alignment: .trailing) {
-                MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 1)
+                MarkdownReaderColors.border(dark: colorScheme == .dark).frame(width: 1)
             }
             .overlay(alignment: .bottom) {
-                MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(height: 1)
+                MarkdownReaderColors.border(dark: colorScheme == .dark).frame(height: 1)
             }
     }
 }
@@ -1342,7 +1339,7 @@ private struct MarkdownMixedParagraph: View {
         case .text(let inlines):
             MarkdownNativeText.make(inlines)
                 .fixedSize(horizontal: inline, vertical: true)
-                .textSelection(.enabled)
+                .pointerStyle(.horizontalText)
         case .image(let source, let alt, let range):
             if let url = URL(string: source) {
                 MarkdownResourceImage(url: url, alt: alt, resource: resource, refresh: assetRefresh,
@@ -1382,14 +1379,14 @@ private struct MarkdownCodeBlockView: View {
             }
             .buttonStyle(.plain)
             .controlSize(.small)
-            .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
+            .foregroundStyle(MarkdownReaderColors.secondary(dark: colorScheme == .dark)
                 .opacity(hovering || copyFocused ? 1 : 0.001))
-            .background(MarkdownGitHubColors.background(dark: colorScheme == .dark)
+            .background(MarkdownReaderColors.background(dark: colorScheme == .dark)
                             .opacity(hovering || copyFocused ? 1 : 0),
                         in: RoundedRectangle(cornerRadius: 6))
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(MarkdownGitHubColors.border(dark: colorScheme == .dark)
+                    .stroke(MarkdownReaderColors.border(dark: colorScheme == .dark)
                         .opacity(hovering || copyFocused ? 1 : 0))
             }
             .accessibilityLabel("Copy")
@@ -1399,7 +1396,7 @@ private struct MarkdownCodeBlockView: View {
             .pointerStyle(.link)
             .padding(7)
         }
-        .background(MarkdownGitHubColors.muted(dark: colorScheme == .dark),
+        .background(MarkdownReaderColors.muted(dark: colorScheme == .dark),
                     in: RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onHover { inside in
@@ -1453,7 +1450,7 @@ struct MarkdownCodeText: View {
         mappedText
         .font(.system(size: 13.6, design: .monospaced))
         .lineSpacing(3)
-        .textSelection(.enabled)
+        .pointerStyle(.horizontalText)
         .task(id: request) {
             rendered = nil
             guard let value = await Self.highlight(source, language: language),

@@ -3,6 +3,85 @@ import XCTest
 
 @MainActor
 final class MarkdownSelectionBoundaryUITests: XCTestCase {
+    func testMarkdownSelectionAndCanvasUseTheTerminalTheme() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: """
+            theme = "dark"
+            theme-dark = "Dracula"
+            """)
+        let source = "# Theme preview\n\nFIRST selection stays visible.\n\n> LAST selection is across a quote.\n"
+        let file = try fixture.file("ThemeSelection.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    configurationHome: fixture.root, project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let start = preview.staticTexts["FIRST selection stays visible."].firstMatch
+        let quote = preview.staticTexts["LAST selection is across a quote."].firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 15))
+        XCTAssertTrue(quote.waitForExistence(timeout: 10))
+
+        func pixels(_ color: UInt32) throws -> Int {
+            let shot = preview.screenshot()
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: shot.pngRepresentation))
+            let image = try XCTUnwrap(bitmap.cgImage)
+            let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let bytes = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+            let expected = [Int((color >> 16) & 255), Int((color >> 8) & 255), Int(color & 255)]
+            var count = 0
+            for row in stride(from: 0, to: image.height, by: 2) {
+                for column in stride(from: 0, to: image.width, by: 2) {
+                    let offset = row * context.bytesPerRow + column * 4
+                    if expected.indices.allSatisfy({ abs(Int(bytes[offset + $0]) - expected[$0]) <= 4 }) {
+                        count += 1
+                    }
+                }
+            }
+            return count
+        }
+
+        XCTAssertGreaterThan(try pixels(0x282A36), 1000, "Dracula's canvas must replace the fixed GitHub background")
+        let unselected = try pixels(0x44475A)
+        for destination in [start, quote] {
+            start.coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5)).click(
+                forDuration: 0.15,
+                thenDragTo: destination.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+            )
+            XCTAssertGreaterThan(try pixels(0x44475A), unselected + 40,
+                                 "Single-text and cross-block drag must both use the terminal selection color")
+            app.typeKey("c", modifierFlags: .command)
+            XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.hasPrefix("FIRST selection") == true)
+        }
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 12))
+        let darkPicker = settings.popUpButtons.element(boundBy: 1)
+        darkPicker.click()
+        let gruvbox = darkPicker.menuItems["Gruvbox Dark"]
+        XCTAssertTrue(gruvbox.waitForExistence(timeout: 12))
+        gruvbox.click()
+        let closeSettings = settings.buttons[XCUIIdentifierCloseWindow]
+        XCTAssertTrue(closeSettings.waitForExistence(timeout: 12))
+        closeSettings.click()
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(preview.waitForExistence(timeout: 12), "The same reading view remains open after a theme change")
+        XCTAssertGreaterThan(try pixels(0x282828), 1000, "An open preview must repaint for the new theme")
+        start.coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5)).click(
+            forDuration: 0.15, thenDragTo: quote.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        )
+        XCTAssertGreaterThan(try pixels(0x665C54), 40, "Selection must not retain the previous theme's color")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
     func testHTMLBlockGlyphLocatesSourceAndSelectsAcrossMarkdownParagraph() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = """

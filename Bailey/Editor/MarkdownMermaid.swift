@@ -36,6 +36,7 @@ nonisolated enum MarkdownMermaid {
 struct MarkdownMermaidView: View {
     let source: String
     let line: Int
+    var sourceRange: NSRange? = nil
     @Environment(\.colorScheme) private var colorScheme
     @State private var image: NSImage?
     @State private var failed = false
@@ -59,8 +60,9 @@ struct MarkdownMermaidView: View {
                     Label("Could not render Mermaid at line \(line).", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.secondary)
                     ScrollView(.horizontal) {
-                        Text(verbatim: source).font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
+                        MarkdownNativeText.make([.text(source, source: sourceRange)])
+                            .font(.system(.body, design: .monospaced))
+                            .pointerStyle(.horizontalText)
                     }
                 }
             } else {

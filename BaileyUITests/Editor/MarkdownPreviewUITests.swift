@@ -55,15 +55,19 @@ final class MarkdownPreviewUITests: XCTestCase {
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
         row.doubleClick()
         let editor = window.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual((editor.value as? String)?.count, source.count)
+        XCTAssertTrue((editor.value as? String)?.hasPrefix("# 测试与验收") == true,
+                      "Opening the source must preserve the original heading delimiter")
 
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
-        XCTAssertTrue(preview.staticTexts["测试与验收"].waitForExistence(timeout: 15),
+        XCTAssertTrue(preview.descendants(matching: .any).matching(
+            identifier: "bailey.markdown.heading.测试与验收").firstMatch.waitForExistence(timeout: 15),
                       "The real repository document must render its first heading")
         XCTAssertTrue(preview.staticTexts["完成标准"].waitForExistence(timeout: 15))
         preview.swipeUp()
@@ -129,7 +133,8 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let heading = preview.staticTexts["Plain Heading"].firstMatch
+        let heading = preview.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.plain-heading").firstMatch
         XCTAssertTrue(heading.waitForExistence(timeout: 15))
         heading.hover()
         guard let normal = NSCursor.currentSystem else { return XCTFail("System cursor unavailable") }

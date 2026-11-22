@@ -58,10 +58,10 @@ struct MarkdownFormulaView: View {
     var body: some View {
         Group {
             if cannotTypeset {
-                Text(verbatim: display ? "$$\n\(latex)\n$$" : "$\(latex)$")
+                MarkdownNativeText.make([.text(display ? "$$\n\(latex)\n$$" : "$\(latex)$", source: source)])
                     .font(.system(size: fontSize ?? (display ? 18 : 16), design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                    .pointerStyle(.horizontalText)
             } else {
                 SwiftUIMath.Math(latex)
                     .mathFont(SwiftUIMath.Math.Font(name: .latinModern,
