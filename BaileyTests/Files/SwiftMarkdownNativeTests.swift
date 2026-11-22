@@ -561,6 +561,73 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertGreaterThan(right.blueComponent, left.blueComponent + 0.25)
     }
 
+    func testOriginalUTF16BlockRangesSurviveFrontMatterCRLFMathAndFootnotes() async throws {
+        let heading = "# 👩‍🚀 中文 Café"
+        let paragraph = "e\u{301}moji 😀\tmath $a_b$ and [^note]."
+        let definition = "[^note]: 原文 🍵"
+        let source = "\u{FEFF}---\r\nname: 位置\r\n---\r\n" + heading
+            + "\r\n\r\n" + paragraph + "\r\n\r\n" + definition + "\r\n"
+        let document = try await MarkdownDocument.parse(source)
+        let nsSource = source as NSString
+        for (label, original) in [
+            ("heading", heading), ("paragraph", paragraph), ("note", definition)
+        ] {
+            let expected = nsSource.range(of: original)
+            XCTAssertNotEqual(expected.location, NSNotFound)
+            let block: MarkdownDocument.Block?
+            if label == "note" {
+                block = document.blocks.first { $0.anchor == "bailey-note:note" }
+            } else {
+                block = document.blocks.first { $0.line == (label == "heading" ? 4 : 6) }
+            }
+            let mapped = try XCTUnwrap(block?.sourceRange,
+                                       "Missing original range for \(label)")
+            XCTAssertEqual(mapped, expected,
+                           "The \(label) range must index the untouched UTF-16 file, not the rewritten AST")
+            XCTAssertEqual(nsSource.substring(with: mapped), original)
+        }
+        XCTAssertEqual(document.blocks.first?.line, 4)
+        XCTAssertTrue(document.blocks.contains {
+            if case .mathBlock = $0.content { return true }
+            if case .paragraph(let inline) = $0.content {
+                return inline.contains { if case .math = $0 { return true }; return false }
+            }
+            return false
+        }, "The original-coordinate projection must not change math rendering")
+    }
+
+    func testOriginalRangesKeepNestedListQuoteAndMultilineFootnoteContent() async throws {
+        let source = """
+            # Title
+
+            > Quote 🌏
+            > still quoted
+
+            - **item** with `code`
+            - next
+
+            Footnote[^deep].
+
+            [^deep]: First line
+                second line with e\u{301}
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let original = source as NSString
+        for label in ["> Quote 🌏\n> still quoted",
+                      "- **item** with `code`\n- next\n",
+                      "Footnote[^deep].",
+                      "[^deep]: First line\n    second line with e\u{301}"] {
+            let expected = original.range(of: label)
+            XCTAssertNotEqual(expected.location, NSNotFound)
+            let match = document.blocks.first {
+                guard let range = $0.sourceRange else { return false }
+                return range.location == expected.location
+            }
+            let range = try XCTUnwrap(match?.sourceRange, "No original mapping for \(label)")
+            XCTAssertEqual(range, expected)
+        }
+    }
+
     func testStaticPNGJPEGHEICAndWebPUseNativeImageIODecoding() throws {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,

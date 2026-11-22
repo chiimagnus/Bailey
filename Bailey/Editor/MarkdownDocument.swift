@@ -13,6 +13,7 @@ nonisolated struct MarkdownDocument: Sendable {
         let anchor: String?
         let line: Int
         let content: MarkdownNativeBlock
+        var sourceRange: NSRange? = nil
     }
 
     let properties: [Property]
@@ -33,6 +34,9 @@ nonisolated struct MarkdownDocument: Sendable {
         let header = splitHeader(source)
         let headerLineCount = source[..<header.body.startIndex].filter(\.isNewline).count
         let original = String(header.body)
+        let coordinates = MarkdownOriginalCoordinates(
+            body: original, headerUTF16: source[..<header.body.startIndex].utf16.count
+        )
         let initialDocument = Markdown.Document(parsing: original, options: [.disableSmartOpts])
         let footnotes = MarkdownFootnotes(source: original, document: initialDocument)
         let unprotectedDocument = footnotes.source == original ? initialDocument
@@ -41,6 +45,14 @@ nonisolated struct MarkdownDocument: Sendable {
         let document = protected.expressions.isEmpty ? unprotectedDocument
             : Markdown.Document(parsing: protected.source, options: [.disableSmartOpts])
         let math = MarkdownMath.Source(protected.source)
+        // Render from the rewritten AST, but only the original AST can provide
+        // exact source ranges when formulas or footnotes changed byte lengths.
+        var originalByLine: [Int: [Markdown.SourceRange]] = [:]
+        for node in initialDocument.children {
+            if let range = node.range {
+                originalByLine[range.lowerBound.line, default: []].append(range)
+            }
+        }
         var occupiedAnchors = Set<String>()
         var blocks = try document.children.compactMap { node -> Block? in
             try Task.checkCancellation()
@@ -61,9 +73,17 @@ nonisolated struct MarkdownDocument: Sendable {
             } else {
                 anchor = nil
             }
+            let sourceRange: NSRange?
+            if let line = node.range?.lowerBound.line,
+               var originalRanges = originalByLine[line], !originalRanges.isEmpty {
+                sourceRange = coordinates.range(originalRanges.removeFirst())
+                originalByLine[line] = originalRanges
+            } else {
+                sourceRange = nil
+            }
             return Block(anchor: anchor,
                          line: (node.range?.lowerBound.line ?? 1) + headerLineCount,
-                         content: rendered)
+                         content: rendered, sourceRange: sourceRange)
         }
         let notes = footnotes.definitions
         if let first = notes.first {
@@ -82,7 +102,8 @@ nonisolated struct MarkdownDocument: Sendable {
                 ?? [.text(note.text)]
             blocks.append(Block(anchor: "bailey-note:\(note.name)",
                                 line: note.line + headerLineCount,
-                                content: .paragraph([.text("\(note.number). ")] + noteInline)))
+                                content: .paragraph([.text("\(note.number). ")] + noteInline),
+                                sourceRange: coordinates.lines(note.line...note.endLine)))
         }
         return Self(properties: header.properties, warning: header.warning, blocks: blocks)
     }
@@ -271,6 +292,72 @@ nonisolated struct MarkdownDocument: Sendable {
             }
         case .alias: break
         }
+    }
+}
+
+/// Converts cmark's 1-based UTF-8 byte columns into TextKit's original UTF-16
+/// offsets. Line breaks (including CRLF) are measured in the unmodified source.
+private nonisolated struct MarkdownOriginalCoordinates {
+    private let body: String
+    private let headerUTF16: Int
+    private let lineStarts: [String.Index]
+    private let lineUTF16Starts: [Int]
+    private let lineUTF16Ends: [Int]
+
+    init(body: String, headerUTF16: Int) {
+        self.body = body
+        self.headerUTF16 = headerUTF16
+        var indices = [body.startIndex]
+        var starts = [0]
+        var ends: [Int] = []
+        var offset = 0
+        var index = body.startIndex
+        while index < body.endIndex {
+            let character = body[index]
+            let next = body.index(after: index)
+            if character.isNewline {
+                ends.append(offset)
+                offset += character.utf16.count
+                indices.append(next)
+                starts.append(offset)
+            } else {
+                offset += character.utf16.count
+            }
+            index = next
+        }
+        ends.append(offset)
+        lineStarts = indices
+        lineUTF16Starts = starts
+        lineUTF16Ends = ends
+    }
+
+    private func offset(_ location: Markdown.SourceLocation) -> Int? {
+        let row = location.line - 1
+        let column = location.column - 1
+        guard row >= 0, row < lineStarts.count, column >= 0 else { return nil }
+        let start = lineStarts[row]
+        let end = row + 1 < lineStarts.count ? lineStarts[row + 1] : body.endIndex
+        let bytes = body.utf8
+        guard let boundary = bytes.index(start, offsetBy: column, limitedBy: end),
+              let prefix = String(bytes: bytes[start..<boundary], encoding: .utf8)
+        else { return nil }
+        return headerUTF16 + lineUTF16Starts[row] + prefix.utf16.count
+    }
+
+    func range(_ source: Markdown.SourceRange) -> NSRange? {
+        guard let lower = offset(source.lowerBound),
+              let upper = offset(source.upperBound),
+              upper >= lower else { return nil }
+        return NSRange(location: lower, length: upper - lower)
+    }
+
+    func lines(_ lines: ClosedRange<Int>) -> NSRange? {
+        let first = lines.lowerBound - 1
+        let last = lines.upperBound - 1
+        guard first >= 0, last < lineUTF16Ends.count else { return nil }
+        let start = headerUTF16 + lineUTF16Starts[first]
+        let end = headerUTF16 + lineUTF16Ends[last]
+        return NSRange(location: start, length: end - start)
     }
 }
 

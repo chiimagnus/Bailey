@@ -8,6 +8,7 @@ nonisolated struct MarkdownFootnotes {
         let name: String
         let source: String
         let line: Int
+        let endLine: Int
     }
 
     private struct Reference {
@@ -59,7 +60,7 @@ nonisolated struct MarkdownFootnotes {
                 body += "\n" + lines[index].trimmingCharacters(in: .whitespaces)
                 lines[index] = ""
             }
-            definitions[name] = Note(name: name, source: body, line: line)
+            definitions[name] = Note(name: name, source: body, line: line, endLine: index + 1)
         }
         notes = definitions
         guard !definitions.isEmpty else { return }
@@ -134,10 +135,10 @@ nonisolated struct MarkdownFootnotes {
         source = lines.joined(separator: "\n")
     }
 
-    var definitions: [(number: Int, name: String, text: String, line: Int)] {
+    var definitions: [(number: Int, name: String, text: String, line: Int, endLine: Int)] {
         referenced.enumerated().compactMap { index, name in
             guard let note = notes[name] else { return nil }
-            return (index + 1, name, note.source, note.line)
+            return (index + 1, name, note.source, note.line, note.endLine)
         }
     }
 }
