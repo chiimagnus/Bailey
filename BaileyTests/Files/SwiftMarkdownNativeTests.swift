@@ -274,7 +274,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(expressions, ["x", "y"],
                        "Math must not cross inline code or linked Markdown nodes")
         XCTAssertTrue(inline.contains {
-            if case .code("literal") = $0 { return true }
+            if case .code("literal", _) = $0 { return true }
             return false
         }, "Inline code must survive math tokenization")
         XCTAssertTrue(inline.contains {
@@ -700,6 +700,74 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             XCTAssertEqual(value, displayed)
             XCTAssertEqual(range, original.range(of: raw))
         }
+    }
+
+    func testMultilineInlineCodePreservesEachGlyphsOriginalUTF16Range() async throws {
+        let source = "before `abc\r\n🚀` after"
+        let original = source as NSString
+        let document = try await MarkdownDocument.parse(source)
+        guard case .paragraph(let inline) = document.blocks.first?.content else {
+            return XCTFail("Expected a paragraph containing a multiline code span")
+        }
+        let runs = inline.compactMap { node -> (String, NSRange?)? in
+            if case .code(let value, let range) = node { return (value, range) }
+            return nil
+        }
+        XCTAssertEqual(runs.map(\.0).joined(), "abc 🚀")
+        XCTAssertEqual(runs.count, 3)
+        for (run, expected) in zip(runs, ["abc", "\r\n", "🚀"]) {
+            XCTAssertEqual(run.1, original.range(of: expected),
+                           "Each rendered code run must locate its own original source bytes")
+        }
+    }
+
+    func testInlineCodeBacktickPayloadDoesNotPointAtOpeningDelimiter() async throws {
+        let source = "before `` ` `` after"
+        let document = try await MarkdownDocument.parse(source)
+        guard case .paragraph(let inline) = document.blocks.first?.content,
+              let node = inline.first(where: {
+                  if case .code = $0 { return true }
+                  return false
+              }),
+              case .code(let value, let location) = node else {
+            return XCTFail("Expected a code span containing a literal backtick")
+        }
+        XCTAssertEqual(value, "`")
+        let payload = (source as NSString).range(of: " ` ")
+        XCTAssertNotEqual(payload.location, NSNotFound)
+        XCTAssertEqual(location, NSRange(location: payload.location + 1, length: 1),
+                       "The opening fence is not the visible code glyph")
+    }
+
+    func testInlineCodeMapsVisibleGlyphsToOriginalUTF16AfterDelimitersAndRewrites() async throws {
+        let source = "\u{FEFF}---\r\nname: source\r\n---\r\n"
+            + "普通 `🧪` 和 **`` 🚀中文 ``** then $x$ and [^note].\r\n\r\n"
+            + "[^note]: reminder"
+        let original = source as NSString
+        let document = try await MarkdownDocument.parse(source)
+        guard case .paragraph(let inline) = document.blocks.first?.content else {
+            return XCTFail("Expected paragraph after front matter")
+        }
+        let direct = try XCTUnwrap(inline.first {
+            if case .code = $0 { return true }
+            return false
+        })
+        guard case .code(let first, let firstRange) = direct else {
+            return XCTFail("Expected inline code")
+        }
+        XCTAssertEqual(first, "🧪")
+        XCTAssertEqual(firstRange, original.range(of: first))
+
+        let strong = try XCTUnwrap(inline.first {
+            if case .strong = $0 { return true }
+            return false
+        })
+        guard case .strong(let children) = strong,
+              case .code(let nested, let nestedRange) = children.first else {
+            return XCTFail("Expected nested code")
+        }
+        XCTAssertEqual(nested, "🚀中文")
+        XCTAssertEqual(nestedRange, original.range(of: nested))
     }
 
     func testInlineSourceRangesSurviveCombinedMathFootnotesAndUnicode() async throws {

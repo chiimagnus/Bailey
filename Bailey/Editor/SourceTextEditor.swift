@@ -302,6 +302,21 @@ struct SourceTextEditor: NSViewRepresentable {
                   let editor = scrollView.documentView as? NativeCodeTextView,
                   offset >= 0, offset <= file.nativeTextStorage.length else { return false }
             editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            guard let layout = editor.textLayoutManager,
+                  let storage = editor.textContentStorage,
+                  let position = storage.location(storage.documentRange.location, offsetBy: offset),
+                  let fragment = layout.textLayoutFragment(for: position) else { return true }
+            let relative = storage.offset(from: fragment.rangeInElement.location, to: position)
+            guard let line = fragment.textLineFragments.first(where: {
+                relative >= $0.characterRange.location
+                    && relative < NSMaxRange($0.characterRange)
+            }) ?? fragment.textLineFragments.last else { return true }
+            let y = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY
+                + editor.textContainerOrigin.y
+            let clip = scrollView.contentView
+            let maximumY = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(max(0, y), maximumY)))
+            scrollView.reflectScrolledClipView(clip)
             return true
         }
 
@@ -324,10 +339,31 @@ struct SourceTextEditor: NSViewRepresentable {
                   let scrollView, scrollView.window != nil,
                   let editor = scrollView.documentView as? NativeCodeTextView else { return }
             guard let layout = editor.textLayoutManager,
-                  let content = editor.textContentStorage,
-                  let viewport = layout.textViewportLayoutController.viewportRange else { return }
-            let offset = content.offset(from: content.documentRange.location, to: viewport.location)
-            guard offset >= 0, offset <= file.nativeTextStorage.length,
+                  let content = editor.textContentStorage else { return }
+            let controller = layout.textViewportLayoutController
+            controller.layoutViewport()
+            guard let viewport = controller.viewportRange else { return }
+            let visibleY = scrollView.contentView.bounds.minY - editor.textContainerOrigin.y
+            var firstVisible: Int?
+            layout.enumerateTextLayoutFragments(in: viewport) { fragment in
+                let lines = fragment.textLineFragments
+                var lower = 0
+                var upper = lines.count
+                while lower < upper {
+                    let middle = lower + (upper - lower) / 2
+                    let bottom = fragment.layoutFragmentFrame.minY
+                        + lines[middle].typographicBounds.maxY
+                    if bottom <= visibleY { lower = middle + 1 }
+                    else { upper = middle }
+                }
+                guard lower < lines.count else { return true }
+                firstVisible = content.offset(from: content.documentRange.location,
+                                              to: fragment.rangeInElement.location)
+                    + lines[lower].characterRange.location
+                return false
+            }
+            guard let offset = firstVisible, offset >= 0,
+                  offset <= file.nativeTextStorage.length,
                   let block = mapping.index.block(atUTF16Offset: offset),
                   block != file.markdownSourceBlock else { return }
             file.markdownSourceBlock = block

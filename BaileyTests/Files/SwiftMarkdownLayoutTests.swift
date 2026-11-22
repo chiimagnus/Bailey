@@ -5,6 +5,53 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownLayoutTests: XCTestCase {
+    func testPreviewScrollAlignsActualTextKitLineEvenWhenAlreadyVisible() async throws {
+        let source = (0..<90).map { "Line \($0) 中文 👩‍🚀" }.joined(separator: "\n")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).md")
+        try Data(source.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 400, height: 180),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+        let offset = (source as NSString).range(of: "Line 40").location
+        let target = NSRange(location: offset, length: 1)
+        editor.scrollRangeToVisible(target)
+        let layout = try XCTUnwrap(editor.textLayoutManager)
+        let manager = try XCTUnwrap(editor.textContentStorage)
+        let range = try XCTUnwrap(NSTextRange(target, in: manager))
+        let fragment = try XCTUnwrap(layout.textLayoutFragment(for: range.location))
+        let line = try XCTUnwrap(fragment.textLineFragments.first)
+        let y = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY
+            + editor.textContainerOrigin.y
+        let clip = scroll.contentView
+        clip.scroll(to: CGPoint(x: clip.bounds.minX, y: y - 35))
+        scroll.reflectScrolledClipView(clip)
+        XCTAssertGreaterThan(clip.bounds.minY, 0)
+        XCTAssertLessThan(clip.bounds.minY, y)
+        let originalSelection = editor.selectedRange()
+
+        XCTAssertTrue(file.editorCoordinator?.showMarkdownSource(atUTF16Offset: offset) == true)
+        XCTAssertEqual(clip.bounds.minY, y, accuracy: 2,
+                       "Preview-originated scrolling must align the actual source line at the viewport top")
+        XCTAssertEqual(editor.selectedRange(), originalSelection,
+                       "Scrolling must not move the insertion point or steal the editor selection")
+    }
+
     func testMarkdownSourceSynchronizationUsesTheActuallyVisibleNativeLine() async throws {
         let source = (0..<64).map { index in
             "# Section \(index)\n\n" + String(repeating: "长行 👩‍🚀 Markdown 字符 ", count: 12)

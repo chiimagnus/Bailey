@@ -932,8 +932,12 @@ enum MarkdownNativeText {
                 )
             }
             return Text(verbatim: content)
-        case .code:
-            return Text(attributed([node]))
+        case .code(let content, let source):
+            let text = Text(attributed([node]))
+            guard let source else { return text }
+            return text.customAttribute(
+                MarkdownSourceGlyph(source: source, displayLength: content.utf16.count)
+            )
         case .emphasis(let children):
             return make(children).italic()
         case .strong(let children):
@@ -963,7 +967,7 @@ enum MarkdownNativeText {
             switch node {
             case .text(let value, _), .html(let value):
                 part = AttributedString(value)
-            case .code(let value):
+            case .code(let value, _):
                 part = AttributedString(value)
                 add(.code, to: &part)
                 part.backgroundColor = Color.primary.opacity(0.08)

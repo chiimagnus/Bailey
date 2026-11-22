@@ -91,11 +91,62 @@ nonisolated struct MarkdownDocument: Sendable {
                 ))]
             }
         }
+        func projectCode(_ node: Markdown.InlineCode) -> [MarkdownInline] {
+            let fallback: [MarkdownInline] = [.code(node.code)]
+            guard let span = node.range.flatMap(renderedCoordinates.bytes) else { return fallback }
+            let bytes = protected.source.utf8
+            let start = bytes.index(bytes.startIndex, offsetBy: span.lowerBound)
+            let end = bytes.index(start, offsetBy: span.count)
+            let raw = bytes[start..<end]
+            let fence = raw.prefix(while: { $0 == 0x60 }).count
+            guard fence > 0, raw.count >= fence * 2,
+                  raw.suffix(fence).allSatisfy({ $0 == 0x60 }) else { return fallback }
+
+            let inner = String(decoding: raw.dropFirst(fence).dropLast(fence), as: UTF8.self)
+            let innerBytes = Array(inner.utf8)
+            var edits: [MarkdownSourceRewrite.Replacement] = []
+            var cursor = 0
+            while cursor < innerBytes.count {
+                let size: Int
+                if innerBytes[cursor] == 13 {
+                    size = cursor + 1 < innerBytes.count && innerBytes[cursor + 1] == 10 ? 2 : 1
+                } else if innerBytes[cursor] == 10 {
+                    size = 1
+                } else {
+                    cursor += 1
+                    continue
+                }
+                edits.append(.init(bytes: cursor..<(cursor + size), text: " "))
+                cursor += size
+            }
+            let rewrite = MarkdownSourceRewrite(inner, replacing: edits)
+            let normalized = rewrite.source
+            let trimmed = normalized.first == " " && normalized.last == " "
+                && normalized.contains(where: { $0 != " " })
+            let lower = trimmed ? 1 : 0
+            let upper = normalized.utf8.count - (trimmed ? 1 : 0)
+            guard lower <= upper else { return fallback }
+            let rewrittenBytes = Array(normalized.utf8)
+            guard String(decoding: rewrittenBytes[lower..<upper], as: UTF8.self) == node.code
+            else { return fallback }
+
+            var mapped: [MarkdownInline] = []
+            for segment in rewrite.segments(in: lower..<upper) where !segment.isEmpty {
+                guard let original = rewrite.originalBytes(for: segment) else { return fallback }
+                let offset = span.lowerBound + fence
+                let originalSpan = (offset + original.lowerBound)..<(offset + original.upperBound)
+                mapped.append(.code(String(decoding: rewrittenBytes[segment], as: UTF8.self),
+                                    source: originalByteRange(originalSpan)))
+            }
+            return mapped.isEmpty ? fallback : mapped
+        }
         var occupiedAnchors = Set<String>()
         var blocks = try document.children.compactMap { node -> Block? in
             try Task.checkCancellation()
-            guard let rendered = project(node, math: math, projectText: projectText, allowsAlert: true)
-            else { return nil }
+            guard let rendered = project(
+                node, math: math, projectText: projectText,
+                projectCode: projectCode, allowsAlert: true
+            ) else { return nil }
             let anchor: String?
             if case let .heading(_, inline) = rendered {
                 let initial = inlinePlainText(inline).lowercased()
@@ -128,7 +179,10 @@ nonisolated struct MarkdownDocument: Sendable {
             let mathAST = noteProtected.expressions.isEmpty ? noteAST
                 : Markdown.Document(parsing: noteProtected.source, options: [.disableSmartOpts])
             let noteInline = (mathAST.child(at: 0) as? Markdown.Paragraph)
-                .map { projectInline($0.children) { noteProtected.inlines($0.string) } }
+                .map {
+                    projectInline($0.children, projectText: { noteProtected.inlines($0.string) },
+                                  projectCode: { [.code($0.code)] })
+                }
                 ?? [.text(note.text)]
             blocks.append(Block(anchor: "bailey-note:\(note.name)",
                                 line: note.line + headerLineCount,
@@ -139,17 +193,23 @@ nonisolated struct MarkdownDocument: Sendable {
     }
 
     private typealias TextProjection = (Markdown.Text) -> [MarkdownInline]
+    private typealias CodeProjection = (Markdown.InlineCode) -> [MarkdownInline]
 
     private static func project(_ node: any Markdown.Markup,
                                 math: MarkdownMath.Source,
                                 projectText: TextProjection,
+                                projectCode: CodeProjection,
                                 allowsAlert: Bool = false) -> MarkdownNativeBlock? {
         if let heading = node as? Markdown.Heading {
-            return .heading(heading.level, projectInline(heading.children, projectText: projectText))
+            return .heading(heading.level, projectInline(
+                heading.children, projectText: projectText, projectCode: projectCode
+            ))
         }
         if let paragraph = node as? Markdown.Paragraph {
             if let latex = math.display(paragraph) { return .mathBlock(latex) }
-            let inline = projectInline(paragraph.children, projectText: projectText)
+            let inline = projectInline(
+                paragraph.children, projectText: projectText, projectCode: projectCode
+            )
             if inline.count == 1, case let .math(latex, display: true) = inline[0] {
                 return .mathBlock(latex)
             }
@@ -166,7 +226,9 @@ nonisolated struct MarkdownDocument: Sendable {
             return .paragraph(inline)
         }
         if let quote = node as? Markdown.BlockQuote {
-            let blocks = quote.children.compactMap { project($0, math: math, projectText: projectText) }
+            let blocks = quote.children.compactMap {
+                project($0, math: math, projectText: projectText, projectCode: projectCode)
+            }
             guard allowsAlert,
                   let opening = quote.child(at: 0) as? Markdown.Paragraph,
                   opening.childCount == 1 || opening.child(at: 1) is Markdown.SoftBreak
@@ -181,19 +243,19 @@ nonisolated struct MarkdownDocument: Sendable {
             return .alert(alert, body + blocks.dropFirst())
         }
         if let list = node as? Markdown.UnorderedList {
-            return .list(ordered: false, start: 1, items: projectItems(list.children, math: math, projectText: projectText))
+            return .list(ordered: false, start: 1, items: projectItems(list.children, math: math, projectText: projectText, projectCode: projectCode))
         }
         if let list = node as? Markdown.OrderedList {
             return .list(ordered: true, start: Int(clamping: list.startIndex),
-                         items: projectItems(list.children, math: math, projectText: projectText))
+                         items: projectItems(list.children, math: math, projectText: projectText, projectCode: projectCode))
         }
         if let table = node as? Markdown.Table {
             let head = table.head.children.compactMap { $0 as? Markdown.Table.Cell }
-                .map { projectInline($0.children, projectText: projectText) }
+                .map { projectInline($0.children, projectText: projectText, projectCode: projectCode) }
             var rows: [[[MarkdownInline]]] = []
             for row in table.body.rows {
                 rows.append(row.children.compactMap { $0 as? Markdown.Table.Cell }
-                    .map { projectInline($0.children, projectText: projectText) })
+                    .map { projectInline($0.children, projectText: projectText, projectCode: projectCode) })
             }
             let alignments: [MarkdownColumnAlignment] = table.columnAlignments.map {
                 switch $0 {
@@ -223,7 +285,8 @@ nonisolated struct MarkdownDocument: Sendable {
 
     private static func projectItems(_ nodes: Markdown.MarkupChildren,
                                      math: MarkdownMath.Source,
-                                     projectText: TextProjection) -> [MarkdownListItem] {
+                                      projectText: TextProjection,
+                                     projectCode: CodeProjection) -> [MarkdownListItem] {
         nodes.compactMap { $0 as? Markdown.ListItem }.map { item in
             let checked: Bool?
             switch item.checkbox {
@@ -232,31 +295,32 @@ nonisolated struct MarkdownDocument: Sendable {
             case nil: checked = nil
             }
             return MarkdownListItem(checked: checked,
-                                    blocks: item.children.compactMap { project($0, math: math, projectText: projectText) })
+                                    blocks: item.children.compactMap { project($0, math: math, projectText: projectText, projectCode: projectCode) })
         }
     }
 
     private static func projectInline(_ nodes: Markdown.MarkupChildren,
-                                      projectText: TextProjection) -> [MarkdownInline] {
+                                      projectText: TextProjection,
+                                      projectCode: CodeProjection) -> [MarkdownInline] {
         nodes.flatMap { node -> [MarkdownInline] in
             if let text = node as? Markdown.Text {
                 return projectText(text)
             }
-            if let text = node as? Markdown.InlineCode { return [.code(text.code)] }
+            if let code = node as? Markdown.InlineCode { return projectCode(code) }
             if let emphasized = node as? Markdown.Emphasis {
-                return [.emphasis(projectInline(emphasized.children, projectText: projectText))]
+                return [.emphasis(projectInline(emphasized.children, projectText: projectText, projectCode: projectCode))]
             }
             if let strong = node as? Markdown.Strong {
-                return [.strong(projectInline(strong.children, projectText: projectText))]
+                return [.strong(projectInline(strong.children, projectText: projectText, projectCode: projectCode))]
             }
             if let strike = node as? Markdown.Strikethrough {
-                return [.strike(projectInline(strike.children, projectText: projectText))]
+                return [.strike(projectInline(strike.children, projectText: projectText, projectCode: projectCode))]
             }
             if let link = node as? Markdown.Link {
-                return [.link(link.destination ?? "", projectInline(link.children, projectText: projectText))]
+                return [.link(link.destination ?? "", projectInline(link.children, projectText: projectText, projectCode: projectCode))]
             }
             if let image = node as? Markdown.Image {
-                return [.image(image.source ?? "", inlinePlainText(projectInline(image.children, projectText: projectText)))]
+                return [.image(image.source ?? "", inlinePlainText(projectInline(image.children, projectText: projectText, projectCode: projectCode)))]
             }
             if let html = node as? Markdown.InlineHTML { return [.html(html.rawHTML)] }
             if node is Markdown.LineBreak { return [.lineBreak] }
@@ -268,7 +332,7 @@ nonisolated struct MarkdownDocument: Sendable {
     private static func inlinePlainText(_ inline: [MarkdownInline]) -> String {
         inline.map { node in
             switch node {
-            case .text(let source, _), .code(let source), .html(let source): source
+            case .text(let source, _), .code(let source, _), .html(let source): source
             case .strong(let children), .emphasis(let children), .strike(let children):
                 inlinePlainText(children)
             case .link(_, let children): inlinePlainText(children)
@@ -618,7 +682,7 @@ nonisolated indirect enum MarkdownNativeBlock: Sendable {
 
 nonisolated indirect enum MarkdownInline: Sendable {
     case text(String, source: NSRange? = nil)
-    case code(String)
+    case code(String, source: NSRange? = nil)
     case emphasis([Self])
     case strong([Self])
     case strike([Self])
