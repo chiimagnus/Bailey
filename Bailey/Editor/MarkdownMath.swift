@@ -14,10 +14,11 @@ nonisolated enum MarkdownMath {
         var source: String { rewrite.source }
         let expressions: [String: Expression]
 
-        func inlines(_ text: String) -> [MarkdownInline] {
+        func inlines(_ text: String, projectText: (Substring) -> MarkdownInline = { .text(String($0)) })
+            -> [MarkdownInline] {
             guard !expressions.isEmpty,
                   let first = text.range(of: "\u{E000}BAILEY_MATH_")
-            else { return [.text(text)] }
+            else { return [projectText(text[...])] }
 
             var result: [MarkdownInline] = []
             var cursor = text.startIndex
@@ -32,16 +33,16 @@ nonisolated enum MarkdownMath {
                     continue
                 }
                 if cursor < open.lowerBound {
-                    result.append(.text(String(text[cursor..<open.lowerBound])))
+                    result.append(projectText(text[cursor..<open.lowerBound]))
                 }
                 result.append(.math(expression.latex, display: expression.display))
                 cursor = end
                 searching = end
             }
             if cursor < text.endIndex {
-                result.append(.text(String(text[cursor...])))
+                result.append(projectText(text[cursor...]))
             }
-            return result.isEmpty ? [.text(text)] : result
+            return result.isEmpty ? [projectText(text[...])] : result
         }
     }
 

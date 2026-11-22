@@ -797,7 +797,7 @@ enum MarkdownNativeText {
 
     private static func part(_ node: MarkdownInline) -> Text {
         switch node {
-        case .text(let content):
+        case .text(let content, _):
             return Text(verbatim: content)
         case .code:
             return Text(attributed([node]))
@@ -828,7 +828,7 @@ enum MarkdownNativeText {
         nodes.reduce(into: AttributedString()) { result, node in
             var part: AttributedString
             switch node {
-            case .text(let value), .html(let value):
+            case .text(let value, _), .html(let value):
                 part = AttributedString(value)
             case .code(let value):
                 part = AttributedString(value)

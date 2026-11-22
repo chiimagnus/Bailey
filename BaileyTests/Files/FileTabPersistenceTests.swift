@@ -218,7 +218,7 @@ final class FileTabPersistenceTests: XCTestCase {
                 return XCTFail("Edited document heading missing for \(count) lines")
             }
             XCTAssertTrue(heading.contains {
-                if case .text("After") = $0 { return true }
+                if case .text("After", _) = $0 { return true }
                 return false
             })
             guard case .paragraph = document.blocks.last?.content else {

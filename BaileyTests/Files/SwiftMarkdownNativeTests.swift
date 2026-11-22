@@ -130,9 +130,9 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               case let .paragraph(inlines) = document.blocks[0].content else {
             return XCTFail("Mixed image and prose must share one Markdown paragraph")
         }
-        XCTAssertTrue(inlines.contains { if case .text(let text) = $0 { text.contains("前文 before") } else { false } })
+        XCTAssertTrue(inlines.contains { if case .text(let text, _) = $0 { text.contains("前文 before") } else { false } })
         XCTAssertTrue(inlines.contains { if case .image("assets/plot%20one.svg", "示意图") = $0 { true } else { false } })
-        XCTAssertTrue(inlines.contains { if case .text(let text) = $0 { text.contains("后文 after") } else { false } })
+        XCTAssertTrue(inlines.contains { if case .text(let text, _) = $0 { text.contains("后文 after") } else { false } })
         XCTAssertTrue(inlines.contains { if case .link("docs/a.md", _) = $0 { true } else { false } })
     }
 
@@ -628,6 +628,36 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }, "The original-coordinate projection must not change math rendering")
     }
 
+    func testInlineSourceRangesSurviveCombinedMathFootnotesAndUnicode() async throws {
+        let paragraph = "首段 $x_y$ **e\u{301}中文** 脚注[^note] 最后 👩‍🚀。"
+        let source = "\u{FEFF}---\r\nname: text\r\n---\r\n\(paragraph)\r\n\r\n[^note]: 注释"
+        let document = try await MarkdownDocument.parse(source)
+        guard case .paragraph(let inline) = document.blocks.first?.content else {
+            return XCTFail("Expected the original prose block")
+        }
+        let original = source as NSString
+        let bold = try XCTUnwrap(inline.first {
+            if case .strong = $0 { return true }
+            return false
+        })
+        guard case .strong(let children) = bold, case .text(let label, let sourceRange) = children.first else {
+            return XCTFail("Expected the inner text of the strong node")
+        }
+        XCTAssertEqual(label, "e\u{301}中文")
+        XCTAssertEqual(sourceRange, original.range(of: label))
+        guard case .text(let tail, let tailRange) = inline.last else {
+            return XCTFail("Expected text following the footnote reference")
+        }
+        XCTAssertEqual(tail, " 最后 👩‍🚀。")
+        XCTAssertEqual(tailRange, original.range(of: tail))
+        let leading = try XCTUnwrap(inline.first)
+        guard case .text(let prefix, let prefixRange) = leading else {
+            return XCTFail("Expected the text before the formula")
+        }
+        XCTAssertEqual(prefix, "首段 ")
+        XCTAssertEqual(prefixRange, original.range(of: prefix))
+    }
+
     func testMarkdownRewriteMapsUnchangedTextSyntheticTokensAndDeletionEdges() throws {
         let original = "🛰️ $x$ 中文 [^n]\r\n[^n]: text\r\nNext"
         let bytes = Array(original.utf8)
@@ -921,7 +951,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             XCTFail("Footnotes must start after the native section separator")
         }
         guard case let .paragraph(definition) = document.blocks[index].content,
-              case .text("1. ") = definition.first else {
+              case .text("1. ", _) = definition.first else {
             return XCTFail("The footnote definition must use GitHub's ordered-list number")
         }
         XCTAssertTrue(definition.contains {
