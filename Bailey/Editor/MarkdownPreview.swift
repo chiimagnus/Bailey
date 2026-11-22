@@ -999,14 +999,17 @@ private extension MarkdownAlert {
         }
     }
 
-    var tint: Color {
-        switch self {
-        case .note: .blue
-        case .tip: .green
-        case .important: .purple
-        case .warning: .orange
-        case .caution: .red
+    func tint(dark: Bool) -> Color {
+        let rgb: UInt32 = switch self {
+        case .note: dark ? 0x4493F8 : 0x0969DA
+        case .tip: dark ? 0x3FB950 : 0x1A7F37
+        case .important: dark ? 0xAB7DF8 : 0x8250DF
+        case .warning: dark ? 0xD29922 : 0x9A6700
+        case .caution: dark ? 0xF85149 : 0xD1242F
         }
+        return Color(red: Double((rgb >> 16) & 255) / 255,
+                     green: Double((rgb >> 8) & 255) / 255,
+                     blue: Double(rgb & 255) / 255)
     }
 }
 
@@ -1167,7 +1170,7 @@ private struct MarkdownNativeBlockView: View {
                                      alignment: aligned(at: column, in: alignments), header: false)
                             }
                         }
-                        .background(rows.indices.contains(row) && row.isMultiple(of: 2)
+                        .background(!row.isMultiple(of: 2)
                             ? MarkdownGitHubColors.muted(dark: colorScheme == .dark)
                             : MarkdownGitHubColors.background(dark: colorScheme == .dark))
                     }
@@ -1206,26 +1209,31 @@ private struct MarkdownNativeBlockView: View {
     }
 
     private func quotation(_ blocks: [MarkdownNativeBlock], alert: MarkdownAlert? = nil) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            (alert?.tint ?? MarkdownGitHubColors.border(dark: colorScheme == .dark)).frame(width: 4)
-            VStack(alignment: .leading, spacing: 8) {
-                if let alert {
-                    Label {
-                        Text(alert.title)
-                    } icon: {
-                        Image(systemName: alert.symbol).accessibilityHidden(true)
-                    }
-                    .fontWeight(.semibold)
-                    .foregroundStyle(alert.tint)
-                    .accessibilityAddTraits(.isHeader)
+        let dark = colorScheme == .dark
+        let tint = alert?.tint(dark: dark) ?? MarkdownGitHubColors.border(dark: dark)
+        return VStack(alignment: .leading, spacing: 8) {
+            if let alert {
+                Label {
+                    Text(alert.title)
+                } icon: {
+                    Image(systemName: alert.symbol).accessibilityHidden(true)
                 }
-                ForEach(blocks.indices, id: \.self) { index in
-                    MarkdownNativeBlockView(block: blocks[index], resource: resource,
-                                            assetRefresh: assetRefresh,
-                                            selectionPath: selectionPath + [index])
-                }
+                .fontWeight(.semibold)
+                .foregroundStyle(tint)
+                .accessibilityAddTraits(.isHeader)
             }
-            .foregroundStyle(alert == nil ? Color.secondary : MarkdownGitHubColors.text(dark: colorScheme == .dark))
+            ForEach(blocks.indices, id: \.self) { index in
+                MarkdownNativeBlockView(block: blocks[index], resource: resource,
+                                        assetRefresh: assetRefresh,
+                                        selectionPath: selectionPath + [index])
+            }
+        }
+        .foregroundStyle(alert == nil ? MarkdownGitHubColors.secondary(dark: dark)
+                                      : MarkdownGitHubColors.text(dark: dark))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 20)
+        .overlay(alignment: .leading) {
+            tint.frame(width: 4).allowsHitTesting(false).accessibilityHidden(true)
         }
     }
 
@@ -1240,6 +1248,8 @@ private struct MarkdownNativeBlockView: View {
             }
         }
             .fontWeight(header ? .semibold : .regular)
+            .monospacedDigit()
+            .accessibilityAddTraits(header ? .isHeader : [])
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .frame(minWidth: 64, maxWidth: .infinity, alignment: alignment)

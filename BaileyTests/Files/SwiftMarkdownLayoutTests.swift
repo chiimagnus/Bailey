@@ -638,6 +638,21 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let markdown = """
             # Repository README
 
+            > [!NOTE]
+            > 本文包含 mixed Latin, 中文, and emoji 🧪.
+
+            > [!TIP]
+            > Read the examples first.
+
+            > [!IMPORTANT]
+            > Use the same source for preview and editing.
+
+            > [!WARNING]
+            > Long links and tables should not scroll the whole page sideways.
+
+            > [!CAUTION]
+            > Read-only tasks must not edit the document.
+
             A paragraph with **strong emphasis**, *italic*, ~~strike~~,
             `inline code`, and [**styled link**](docs/guide.md).
 
@@ -702,6 +717,34 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                 XCTAssertLessThan(luminance, 0.2, "Dark preview must use GitHub dark canvas")
             } else {
                 XCTAssertGreaterThan(luminance, 0.85, "Light preview must use GitHub white canvas")
+            }
+            let expectedRails: [UInt32] = dark
+                ? [0x4493F8, 0x3FB950, 0xAB7DF8, 0xD29922, 0xF85149]
+                : [0x0969DA, 0x1A7F37, 0x8250DF, 0x9A6700, 0xD1242F]
+            let input = try XCTUnwrap(bitmap.cgImage)
+            let srgb = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: input.width, height: input.height,
+                bitsPerComponent: 8, bytesPerRow: 0, space: srgb,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(input, in: CGRect(x: 0, y: 0, width: input.width, height: input.height))
+            let normalized = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+            let inset = width < 768 ? 17.0 : 47.0
+            let railX = Int(inset * CGFloat(normalized.pixelsWide) / width)
+            for color in expectedRails {
+                let red = CGFloat((color >> 16) & 255) / 255
+                let green = CGFloat((color >> 8) & 255) / 255
+                let blue = CGFloat(color & 255) / 255
+                let painted = (0..<normalized.pixelsHigh).count { row in
+                    guard let actual = normalized.colorAt(x: railX, y: row) else {
+                        return false
+                    }
+                    return abs(actual.redComponent - red) < 0.025
+                        && abs(actual.greenComponent - green) < 0.025
+                        && abs(actual.blueComponent - blue) < 0.025
+                }
+                XCTAssertGreaterThan(painted, 20, "Missing GitHub Alert \(String(color, radix: 16)) at \(width)pt dark=\(dark)")
             }
             XCTAssertEqual(host.bounds.width, width, accuracy: 1)
             window.close()

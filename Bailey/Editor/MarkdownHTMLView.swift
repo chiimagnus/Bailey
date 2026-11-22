@@ -73,6 +73,8 @@ struct MarkdownHTMLContent: View {
                                         }
                                     }
                                     .fontWeight(cell.isHeader ? .semibold : .regular)
+                                    .monospacedDigit()
+                                    .accessibilityAddTraits(cell.isHeader ? .isHeader : [])
                                     .padding(.horizontal, 13)
                                     .padding(.vertical, 6)
                                     .frame(maxWidth: .infinity, alignment: .leading)
