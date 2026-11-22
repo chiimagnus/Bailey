@@ -353,16 +353,23 @@ final class Project: nonisolated Identifiable {
         // project directory has the same spelling on two different machines.
         let resourceDirectory = file.workspaceIdentity == workspaceIdentity ? directory : nil
         let resource = file.markdownResource(in: resourceDirectory)
-        let target = file.markdownResourceID
+        let target = file.markdownRequestID
         let sourceWorkspace = file.workspaceIdentity
         do {
             let resolved = try await resource.resolvedFile(url)
-            guard !Task.isCancelled, isCurrent(), file.markdownResourceID == target,
+            guard !Task.isCancelled, isCurrent(), file.markdownRequestID == target,
                   directory == customDirectory, file.workspaceIdentity == sourceWorkspace,
                   (sourceWorkspace == nil || sourceWorkspace == workspaceIdentity),
                   tabs.contains(where: { $0.content.id == file.id }) else { return false }
             openFile(resolved, backend: resource.backend, workspace: sourceWorkspace,
                      inGroup: dock.activeGroupID)
+            if let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment,
+               !fragment.isEmpty, MarkdownDocument.supports(resolved),
+               let tab = findFileTab(path: resolved, workspace: sourceWorkspace),
+               case let .file(destination) = tab.content {
+                destination.pendingMarkdownFragment = fragment
+                destination.setMarkdownPreview(true)
+            }
             return true
         } catch {
             return false

@@ -133,9 +133,26 @@ final class MarkdownPreviewUITests: XCTestCase {
                              "Selectable Markdown prose must restore the tall I-beam pointer")
         let anchor = preview.buttons.matching(identifier: "bailey.markdown.anchor.plain-heading").firstMatch
         XCTAssertTrue(anchor.waitForExistence(timeout: 10))
-        anchor.hover()
-        XCTAssertEqual(NSCursor.currentSystem?.hotSpot, hand.hotSpot,
-                       "Heading link button must retain its native hand pointer")
+        for iteration in 0..<10 {
+            anchor.hover()
+            let handReady = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in NSCursor.currentSystem?.hotSpot == hand.hotSpot },
+                object: nil
+            )
+            let handSettled = XCTWaiter.wait(for: [handReady], timeout: 2) == .completed
+            if !handSettled {
+                print("ANCHOR_HOVER_FAILURE iteration=\(iteration) mouse=\(NSEvent.mouseLocation) anchor=\(anchor.frame) cursor=\(String(describing: NSCursor.currentSystem?.hotSpot))")
+            }
+            XCTAssertTrue(handSettled,
+                          "The heading button must settle to the native hand cursor after each hover")
+            plain.hover()
+            let textReady = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in NSCursor.currentSystem?.hotSpot != hand.hotSpot },
+                object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [textReady], timeout: 2), .completed,
+                           "Leaving a heading link must restore the text-selection cursor")
+        }
         link.click()
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(destination, in: window).waitForExistence(timeout: 10),
                       "Link cursor tracking must not steal the native Text click action")
@@ -182,6 +199,155 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(definition.waitForExistence(timeout: 15), preview.debugDescription)
         XCTAssertTrue(preview.frame.intersects(definition.frame),
                       "Clicking a footnote reference must reveal the separated note")
+    }
+
+    func testRepeatedHeadingFootnoteAndInvalidCrossFileFragments() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let filler = (0..<48).map { "Paragraph \($0) before the second heading." }
+            .joined(separator: "\n\n")
+        let targetSource = [
+            "# Target document", "", "## Duplicate", "",
+            filler, "", "## Duplicate", "", "Footnote reference[^ref].", "",
+            "[^ref]: Destination note **with emphasis**."
+        ].joined(separator: "\n")
+        let target = try fixture.file("Notes.md", text: targetSource)
+        let index = try fixture.file("Index.md", text: [
+            "# Index", "",
+            "[Second repeated heading](Notes.md#duplicate-1)", "",
+            "[Linked footnote](Notes.md#bailey-note:ref)", "",
+            "[Invalid fragment](Notes.md#heading-does-not-exist)"
+        ].joined(separator: "\n"))
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(index, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let indexTab = WorkspaceUITestSupport.fileTab(index, in: window)
+        let targetTab = WorkspaceUITestSupport.fileTab(target, in: window)
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+
+        let repeated = preview.links["Second repeated heading"]
+        XCTAssertTrue(repeated.waitForExistence(timeout: 10))
+        repeated.click()
+        XCTAssertTrue(targetTab.waitForExistence(timeout: 15))
+        let secondAnchor = WorkspaceUITestSupport.element(
+            "bailey.markdown.anchor.duplicate-1", in: app
+        )
+        XCTAssertTrue(secondAnchor.waitForExistence(timeout: 15))
+        XCTAssertGreaterThan(secondAnchor.frame.intersection(window.frame).height, 1,
+                             "The duplicate suffix must select the second heading, not the first")
+
+        indexTab.click()
+        let footnote = preview.links["Linked footnote"]
+        XCTAssertTrue(footnote.waitForExistence(timeout: 10))
+        footnote.click()
+        let note = preview.staticTexts.containing(NSPredicate(
+            format: "value CONTAINS %@", "Destination note with emphasis"
+        )).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 15))
+        XCTAssertGreaterThan(note.frame.intersection(window.frame).height, 1,
+                             "A cross-file footnote fragment must reach its definition")
+
+        indexTab.click()
+        let invalid = preview.links["Invalid fragment"]
+        XCTAssertTrue(invalid.waitForExistence(timeout: 10))
+        invalid.click()
+        let warning = app.staticTexts["Could not open this link."].firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 15))
+        XCTAssertGreaterThan(warning.frame.intersection(window.frame).height, 1,
+                             "An invalid cross-file fragment must show an immediately visible error")
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), targetSource)
+    }
+
+    func testRelativeMarkdownUnicodeFileFragmentOpensItsTargetHeading() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let destinationText = "# Document\n\n" + (0..<70).map { index in
+            "Paragraph \(index): 中英 mixed content."
+        }.joined(separator: "\n\n") + "\n\n## 章节 中文\n\nReached target."
+        let destination = try fixture.file("Notes 中文.md", text: destinationText)
+        let index = try fixture.file("Index.md", text: [
+            "# Index", "",
+            "[Open Chinese chapter](Notes%20%E4%B8%AD%E6%96%87.md#%E7%AB%A0%E8%8A%82-%E4%B8%AD%E6%96%87)"
+        ].joined(separator: "\n"))
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(index, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let link = preview.links["Open Chinese chapter"]
+        XCTAssertTrue(link.waitForExistence(timeout: 10))
+        link.click()
+        let targetTab = WorkspaceUITestSupport.fileTab(destination, in: window)
+        XCTAssertTrue(targetTab.waitForExistence(timeout: 15),
+                      "Relative links must reuse the real authorized destination FileTab")
+        XCTAssertTrue(preview.waitForExistence(timeout: 20),
+                      "A target link with a heading fragment must open native Markdown preview")
+        let heading = preview.staticTexts["章节 中文"].firstMatch
+        XCTAssertTrue(heading.waitForExistence(timeout: 20))
+        XCTAssertGreaterThan(heading.frame.intersection(window.frame).height, 1,
+                             "The cross-file heading fragment must scroll its target into view")
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), destinationText)
+    }
+
+    func testPercentEncodedChineseHeadingAndMissingFragmentNavigateNatively() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let filler = (0..<65).map { "Long paragraph \($0) of Markdown content." }
+            .joined(separator: "\n\n")
+        let file = try fixture.file("Chinese-Anchor.md", text: [
+            "# Navigation", "",
+            "[Jump Chinese](#章节-中文) and [Missing](#no-such-heading).", "",
+            filler, "", "## 章节 中文", "", "Destination reached.", "",
+            "[Missing near destination](#no-such-heading)"
+        ].joined(separator: "\n"))
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 15))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+
+        let missing = preview.links["Missing"]
+        XCTAssertTrue(missing.waitForExistence(timeout: 10))
+        missing.click()
+        XCTAssertTrue(app.staticTexts["Could not open this link."].waitForExistence(timeout: 10),
+                      "An unknown fragment must show an inline navigation error")
+
+        let valid = preview.links["Jump Chinese"]
+        XCTAssertTrue(valid.waitForExistence(timeout: 10))
+        valid.click()
+        let destination = preview.staticTexts["章节 中文"].firstMatch
+        XCTAssertTrue(destination.waitForExistence(timeout: 15),
+                      "Percent-encoded Unicode fragment must resolve to its decoded heading")
+        let visibleRect = destination.frame.intersection(window.frame)
+        XCTAssertGreaterThan(visibleRect.height, 1,
+                             "Clicking a distant Unicode heading must scroll it into the visible window")
+        XCTAssertGreaterThan(visibleRect.width, 5)
+        let missingAtBottom = preview.links["Missing near destination"]
+        XCTAssertTrue(missingAtBottom.waitForExistence(timeout: 10))
+        missingAtBottom.click()
+        let warning = app.staticTexts["Could not open this link."].firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(warning.frame.intersection(window.frame).height, 1,
+                             "Invalid in-page anchors must reveal their error from deep in a document")
+        XCTAssertGreaterThan(missingAtBottom.frame.intersection(window.frame).height, 1,
+                             "An invalid anchor must not jump the reader away from the clicked link")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8).contains("## 章节 中文"), true)
     }
 
     func testHeadingLinkScrollsToAnchorAndProvidesCopyablePointerTarget() throws {
@@ -278,6 +444,9 @@ final class MarkdownPreviewUITests: XCTestCase {
                                                     project: fixture.root, clipboardIsReadOnly: true)
         let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground,
+                       "The GUI test must own the graphical session before opening the file")
         row.doubleClick()
         XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
@@ -451,9 +620,16 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        XCTAssertTrue(preview.staticTexts["Alpha Beta Gamma"].waitForExistence(timeout: 10),
-                      "Adjacent HTML inline elements must form a single visual line: \(preview.debugDescription)")
-        XCTAssertTrue(preview.staticTexts["One Two Three"].exists, preview.debugDescription)
+        for _ in 0..<5 {
+            XCTAssertTrue(preview.staticTexts["Alpha Beta Gamma"].waitForExistence(timeout: 10),
+                          "Adjacent HTML inline elements must form a single visual line")
+            XCTAssertTrue(preview.staticTexts["One Two Three"].waitForExistence(timeout: 10),
+                          "HTML details open must survive each preview mount")
+            app.typeKey("v", modifierFlags: [.command, .shift])
+            XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+            app.typeKey("v", modifierFlags: [.command, .shift])
+            XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        }
     }
 
     func testMarkdownRelativeLinksOpenActualProjectFiles() throws {
@@ -479,6 +655,8 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         XCTAssertTrue(preview.staticTexts["安全"].waitForExistence(timeout: 10), preview.debugDescription)
+        let sourceTab = WorkspaceUITestSupport.fileTab(security, in: window)
+        XCTAssertTrue(sourceTab.exists)
 
         for _ in 0..<2 {
             for (title, path) in [("编辑器", "docs/features/editor.md"),
@@ -492,13 +670,35 @@ final class MarkdownPreviewUITests: XCTestCase {
                 XCTAssertTrue(link.waitForExistence(timeout: 10), "Missing \(title): \(preview.debugDescription)")
                 link.click()
                 let destination = try XCTUnwrap(files[path])
-                let editor = window.textViews.firstMatch
-                XCTAssertTrue(editor.waitForExistence(timeout: 10), "SECURITY.md link \(title) must open \(path)")
-                XCTAssertEqual(editor.value as? String,
-                               try String(contentsOf: destination, encoding: .utf8),
-                               "SECURITY.md link \(title) must select and read the real \(path)")
+                let destinationTab = WorkspaceUITestSupport.fileTab(destination, in: window)
+                XCTAssertTrue(destinationTab.waitForExistence(timeout: 10),
+                              "SECURITY.md link \(title) must open \(path)")
+                if path == "docs/testing.md" {
+                    // This source link includes #隔离环境. An anchored file link opens
+                    // the authorized Markdown preview at its requested heading.
+                    XCTAssertTrue(preview.waitForExistence(timeout: 15))
+                    let anchor = WorkspaceUITestSupport.element(
+                        "bailey.markdown.anchor.隔离环境", in: app
+                    )
+                    XCTAssertTrue(anchor.waitForExistence(timeout: 15))
+                    XCTAssertGreaterThan(anchor.frame.intersection(window.frame).height, 1,
+                                         "The original SECURITY.md link must reach its target section")
+                    XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8),
+                                   try String(contentsOf: repository.appending(path: path), encoding: .utf8))
+                } else {
+                    let editor = window.textViews.firstMatch
+                    XCTAssertTrue(editor.waitForExistence(timeout: 10),
+                                  "Unanchored SECURITY.md link \(title) must open source \(path)")
+                    XCTAssertEqual(editor.value as? String,
+                                   try String(contentsOf: destination, encoding: .utf8))
+                }
+                destinationTab.click()
                 app.typeKey("w", modifierFlags: .command)
-                XCTAssertTrue(preview.waitForExistence(timeout: 10), "Closing \(path) must restore SECURITY.md preview")
+                XCTAssertTrue(destinationTab.waitForNonExistence(timeout: 10),
+                              "⌘W must close the explicitly selected \(path) tab")
+                sourceTab.click()
+                XCTAssertTrue(preview.waitForExistence(timeout: 10),
+                              "Re-selecting SECURITY.md must restore its own preview")
             }
         }
     }

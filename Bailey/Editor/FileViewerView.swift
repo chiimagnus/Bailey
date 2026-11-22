@@ -206,6 +206,7 @@ final class FileTab: nonisolated Identifiable {
     private(set) var showsMarkdownPreview = false
     private var markdownEditRevision: UInt = 0
     @ObservationIgnored var markdownScrollPosition: Int?
+    var pendingMarkdownFragment: String?
 
     var canPreviewMarkdown: Bool {
         guard case .text = content else { return false }
@@ -216,8 +217,11 @@ final class FileTab: nonisolated Identifiable {
     var markdownRequestID: String { "\(markdownResourceID)-\(markdownEditRevision)" }
 
     func setMarkdownPreview(_ enabled: Bool) {
-        guard canPreviewMarkdown else { return }
-        showsMarkdownPreview = enabled
+        guard MarkdownDocument.supports(path) else { return }
+        switch content {
+        case .text, .loading: showsMarkdownPreview = enabled
+        case .image, .unavailable: break
+        }
     }
 
     func markdownResource(in directory: String?) -> MarkdownResource {

@@ -8,6 +8,7 @@ struct MarkdownPreview: View {
     let assetRefresh: UInt
     @Binding var position: Int?
     var openLink: (URL) async -> Bool = { _ in false }
+    var navigation: Binding<String?> = .constant(nil)
 
     @State private var linkToOpen: URL?
     @State private var failedLink = false
@@ -15,56 +16,84 @@ struct MarkdownPreview: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        if let warning = document.warning {
-                            Label(warning, systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.secondary)
-                        }
-                        if failedLink {
-                            Label("Could not open this link.", systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(renderRows, id: \.start) { row in
-                            if row.end - row.start > 1 {
-                                paragraphRun(row.start..<row.end)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
-                                    .id(row.start)
-                            } else {
-                                MarkdownNativeBlockView(block: document.blocks[row.start].content,
-                                                        resource: resource, assetRefresh: assetRefresh,
-                                                        anchor: document.blocks[row.start].anchor)
-                                    .id(row.start)
+            ZStack(alignment: .top) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            if let warning = document.warning {
+                                Label(warning, systemImage: "exclamationmark.triangle")
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(renderRows, id: \.start) { row in
+                                if row.end - row.start > 1 {
+                                    paragraphRun(row.start..<row.end)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .textSelection(.enabled)
+                                        .id(row.start)
+                                } else {
+                                    MarkdownNativeBlockView(block: document.blocks[row.start].content,
+                                                            resource: resource, assetRefresh: assetRefresh,
+                                                            anchor: document.blocks[row.start].anchor)
+                                        .id(row.start)
+                                }
                             }
                         }
+                        .scrollTargetLayout()
+                        .font(.system(size: 16))
+                        .lineSpacing(4)
+                        .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
+                        .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
+                        .frame(maxWidth: 890, alignment: .leading)
+                        .padding(geometry.size.width < 768 ? 15 : 45)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .modifier(MarkdownLinkCursor())
                     }
-                    .scrollTargetLayout()
-                    .font(.system(size: 16))
-                    .lineSpacing(4)
-                    .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
-                    .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
-                    .frame(maxWidth: 890, alignment: .leading)
-                    .padding(geometry.size.width < 768 ? 15 : 45)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .modifier(MarkdownLinkCursor())
+                    .accessibilityIdentifier("bailey.markdown.preview")
+                    .scrollPosition(id: $position, anchor: .top)
+                    .task(id: navigation.wrappedValue) {
+                        guard let fragment = navigation.wrappedValue else { return }
+                        if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                            proxy.scrollTo(index, anchor: .top)
+                            position = index
+                            failedLink = false
+                        } else {
+                            failedLink = true
+                        }
+                        navigation.wrappedValue = nil
+                    }
+                    .environment(\.openURL, OpenURLAction { url in
+                        if url.absoluteString.hasPrefix("#") {
+                            let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment
+                            if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                                proxy.scrollTo(index, anchor: .top)
+                                position = index
+                                failedLink = false
+                            } else {
+                                failedLink = true
+                            }
+                        } else {
+                            linkToOpen = url
+                        }
+                        return .handled
+                    })
                 }
-                .scrollPosition(id: $position, anchor: .top)
-                .environment(\.openURL, OpenURLAction { url in
-                    if url.absoluteString.hasPrefix("#"),
-                       let fragment = url.fragment,
-                       let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                        proxy.scrollTo(index, anchor: .top)
-                    } else {
-                        linkToOpen = url
-                    }
-                    return .handled
-                })
+                if failedLink {
+                    Label("Could not open this link.", systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .padding(.top, 8)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .background(MarkdownGitHubColors.background(dark: colorScheme == .dark))
-        .accessibilityIdentifier("bailey.markdown.preview")
+        .onChange(of: revision) { _, _ in
+            linkToOpen = nil
+            failedLink = false
+        }
         .task(id: linkToOpen) {
             guard let url = linkToOpen else { return }
             let opened = await openLink(url)
@@ -253,23 +282,38 @@ private struct MarkdownNativeBlockView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     if let anchor {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("#" + anchor, forType: .string)
-                        } label: {
+                        ZStack {
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString("#" + anchor, forType: .string)
+                            } label: {
+                                Rectangle()
+                                    .fill(.white.opacity(0.001))
+                                    .frame(width: 20, height: 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy heading link")
+                            .accessibilityLabel("Copy heading link")
+                            .accessibilityIdentifier("bailey.markdown.anchor.\(anchor)")
+                            .focused($headingLinkFocused)
+
                             Image(systemName: "link")
                                 .font(.system(size: 13))
-                                .frame(width: 20, height: 24)
-                                .contentShape(Rectangle())
+                                .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
+                                .opacity(headingHovered || headingLinkFocused ? 1 : 0)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark)
-                            .opacity(headingHovered || headingLinkFocused ? 1 : 0.001))
-                        .help("Copy heading link")
-                        .accessibilityLabel("Copy heading link")
-                        .accessibilityIdentifier("bailey.markdown.anchor.\(anchor)")
-                        .focused($headingLinkFocused)
-                        .pointerStyle(.link)
+                        .frame(width: 20, height: 24)
+                        .overlay {
+                            GeometryReader { geometry in
+                                MarkdownLinkCursorRects(rects: [
+                                    CGRect(origin: .zero, size: geometry.size)
+                                ])
+                                .accessibilityHidden(true)
+                            }
+                        }
                     }
                     Group {
                         if MarkdownMixedParagraph.containsMath(inline) {

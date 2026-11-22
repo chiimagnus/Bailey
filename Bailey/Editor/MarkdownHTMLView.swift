@@ -254,7 +254,7 @@ private struct MarkdownHTMLDetails: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: initiallyOpen) { _, next in expanded = next }
+        .onChange(of: initiallyOpen, initial: true) { _, next in expanded = next }
     }
 }
 

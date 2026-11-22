@@ -19,7 +19,14 @@ struct MarkdownFilePreview: View {
                     resource: file.markdownResource(in: directory), assetRefresh: assetRefresh,
                     position: Binding(get: { file.markdownScrollPosition },
                                       set: { file.markdownScrollPosition = $0 }),
-                    openLink: onOpenLink
+                    openLink: { url in
+                        guard file.markdownRequestID == parsed.request else { return false }
+                        return await onOpenLink(url)
+                    },
+                    navigation: parsed.request == request
+                        ? Binding(get: { file.pendingMarkdownFragment },
+                                  set: { file.pendingMarkdownFragment = $0 })
+                        : .constant(nil)
                 )
                 .id("\(target)-\(directory ?? "")")
             } else if failed {

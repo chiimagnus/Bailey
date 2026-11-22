@@ -87,6 +87,48 @@ final class MarkdownResourceScopeTests: XCTestCase {
         XCTAssertNil(target.workspaceIdentity)
     }
 
+    func testAsyncMarkdownLinkCannotOpenOldTargetAfterSourceEdit() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-link-revision-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let document = root.appendingPathComponent("Index.md")
+        let target = root.appendingPathComponent("Guide.md")
+        let original = Data("# Index\n\n[Open Guide](Guide.md)\n".utf8)
+        try original.write(to: document)
+        try Data("# Guide\n".utf8).write(to: target)
+
+        let project = Project(fallbackName: "Markdown", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        project.openFile(document.path)
+        guard case .file(let source)? = project.focusedContent else {
+            return XCTFail("Project must open the native Markdown source")
+        }
+        try await source.waitForText()
+        source.autoSaveSuspendedForClose = true
+        let previousRequest = source.markdownRequestID
+        var identityChecks = 0
+
+        let opened = await project.openMarkdownLink(try XCTUnwrap(URL(string: "Guide.md")),
+                                                    from: source) {
+            identityChecks += 1
+            if identityChecks == 2 {
+                source.nativeTextStorage.replaceCharacters(
+                    in: NSRange(location: source.text.utf16.count, length: 0),
+                    with: "\nNew unsaved edit"
+                )
+            }
+            return true
+        }
+        XCTAssertEqual(identityChecks, 2, "The link must recheck its source after authorization")
+        XCTAssertNotEqual(source.markdownRequestID, previousRequest)
+        XCTAssertFalse(opened, "An old link must not open after its source content changes")
+        XCTAssertEqual(project.tabs.count, 1, "A stale async result cannot create a destination tab")
+        XCTAssertTrue(source.isDirty)
+        XCTAssertEqual(try Data(contentsOf: document), original)
+    }
+
     func testMarkdownInsideProjectKeepsCrossFolderRelativeResources() async throws {
         let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let docs = temporary.appending(path: "docs")

@@ -416,6 +416,35 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(renderText.contains("score + 1"))
     }
 
+    func testInlineHTMLDetailsOpenStateSurvivesNativeASTProjection() async throws {
+        let source = """
+            # HTML inline
+
+            <span>Alpha </span><strong>Beta</strong><span> Gamma</span>
+
+            <details open><summary>Notes</summary><span>One </span><em>Two</em> Three</details>
+            """
+        for _ in 0..<10 {
+            let document = try await MarkdownDocument.parse(source)
+            let nativeHTML = document.blocks.flatMap { block -> [MarkdownHTML] in
+                if case let .html(nodes) = block.content { return nodes }
+                return []
+            }
+            let details = nativeHTML.compactMap { node -> (String, [MarkdownHTML], Bool)? in
+                guard case let .details(label, children, open) = node else { return nil }
+                return (label, children, open)
+            }
+            XCTAssertEqual(details.count, 1)
+            let detail = try XCTUnwrap(details.first)
+            XCTAssertEqual(detail.0, "Notes")
+            XCTAssertTrue(detail.2, "The native HTML AST must preserve the open attribute")
+            XCTAssertTrue(detail.1.contains {
+                if case .emphasis(_, tag: "em") = $0 { return true }
+                return false
+            }, "Inline emphasis nested inside details must remain in the native AST")
+        }
+    }
+
     func testSameLineHTMLContainersBecomeNativeBlocks() async throws {
         let cases = [
             "<details><summary>Notes</summary><p>Editable content</p></details>",
