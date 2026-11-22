@@ -131,6 +131,85 @@ final class MarkdownSelectionBoundaryUITests: XCTestCase {
                        "Cross-group selection must copy exactly the visible text, with paragraph separators")
     }
 
+    func testDragFromNestedListIntoTableSelectsWithoutEarlierItems() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Selection
+
+            - FIRST_ITEM must not copy
+            - SECOND_ITEM selection starts
+
+            | Key | Result |
+            | --- | ------ |
+            | One | RESULT_CELL_B |
+
+            Last paragraph.
+            """
+        let file = try fixture.file("SelectMixed.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let start = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "SECOND_ITEM")
+        ).firstMatch
+        let end = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "RESULT_CELL_B")
+        ).firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 10), preview.debugDescription)
+        XCTAssertTrue(end.waitForExistence(timeout: 10), preview.debugDescription)
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString("Untouched", forType: .string))
+        start.coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5))
+            .click(forDuration: 0.15,
+                   thenDragTo: end.coordinate(withNormalizedOffset: CGVector(dx: 0.999, dy: 0.5)))
+        app.typeKey("c", modifierFlags: .command)
+        let copied = NSPasteboard.general.string(forType: .string) ?? ""
+        XCTAssertTrue(copied.contains("SECOND_ITEM") && copied.contains("RESULT_CELL_B"),
+                      "Drag must cross list and table text: \(copied)")
+        XCTAssertFalse(copied.contains("FIRST_ITEM"), copied)
+    }
+
+    func testDraggingFromLinkedTextIntoNextParagraphCopiesActualLinkLabel() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Selection
+
+            [OPEN_LINK](https://example.org) following prose.
+
+            AFTER_LINK destination.
+            """
+        let file = try fixture.file("LinkedSelect.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let start = preview.links["OPEN_LINK"].firstMatch
+        let end = preview.staticTexts.matching(
+            NSPredicate(format: "value CONTAINS %@", "AFTER_LINK")
+        ).firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 10), preview.debugDescription)
+        XCTAssertTrue(end.waitForExistence(timeout: 10), preview.debugDescription)
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString("Untouched", forType: .string))
+        start.coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5))
+            .click(forDuration: 0.15,
+                   thenDragTo: end.coordinate(withNormalizedOffset: CGVector(dx: 0.999, dy: 0.97)))
+        app.typeKey("c", modifierFlags: .command)
+        let copied = NSPasteboard.general.string(forType: .string) ?? ""
+        XCTAssertTrue(copied.contains("OPEN_LINK") && copied.contains("AFTER_LINK"),
+                      "Selection starting on a link must include its visible label: \(copied)")
+        XCTAssertTrue(preview.exists, "Dragging a link must not open its target")
+    }
+
     func testShiftClickExtendsAcrossHeadingQuoteAndParagraph() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = "# Starting Heading\n\n> Quoted 中文 sentence.\n\nClosing destination text."

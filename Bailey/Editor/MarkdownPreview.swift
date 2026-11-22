@@ -474,7 +474,7 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
             if dragAnchor == nil { dragAnchor = coordinates.nearestGlyph(to: origin) }
             guard let anchor = dragAnchor,
                   let end = coordinates.nearestGlyph(to: point) else { return }
-            if anchor.isSeparateText(from: end) {
+            if anchor.requiresUnifiedSelection(from: end) {
                 coordinates.select(from: anchor, to: end)
                 selectionCaretOffset = end.insertionOffset(at: point)
                 if recognizer.state == .ended { window?.makeFirstResponder(self) }
@@ -633,13 +633,14 @@ private struct MarkdownSelectionGlyph {
     let frame: CGRect
     let group: Int
     let textIndex: Int
+    let isLink: Bool
 
     func insertionOffset(at point: CGPoint) -> Int {
         point.x < frame.midX ? source.location : NSMaxRange(source)
     }
 
-    func isSeparateText(from other: Self) -> Bool {
-        group != other.group || textIndex != other.textIndex
+    func requiresUnifiedSelection(from other: Self) -> Bool {
+        group != other.group || textIndex != other.textIndex || isLink || other.isLink
     }
 }
 
@@ -670,7 +671,7 @@ private struct MarkdownGlyphHit: Equatable {
                                           frame: glyph.typographicBounds.rect.offsetBy(
                                             dx: viewportOrigin.x, dy: viewportOrigin.y
                                           ),
-                                          group: group, textIndex: textIndex)
+                                          group: group, textIndex: textIndex, isLink: isLink)
         }
     }
 
@@ -1411,9 +1412,7 @@ enum MarkdownNativeText {
                 case "code", "kbd": text = text.font(.system(size: 13.5, design: .monospaced))
                 case "a":
                     if let url = tag.href {
-                        var linked = attributed([node])
-                        linked.link = url
-                        text = Text(linked).customAttribute(MarkdownLinkGlyph())
+                        text = linkedText([node], url: url)
                     }
                 default: break
                 }
@@ -1452,10 +1451,7 @@ enum MarkdownNativeText {
             return make(children).strikethrough()
         case .link(let destination, let children):
             guard let url = URL(string: destination) else { return make(children) }
-            // Keep nested bold/italic/code styles when making the entire link clickable.
-            var linked = attributed(children)
-            linked.link = url
-            return Text(linked).customAttribute(MarkdownLinkGlyph())
+            return linkedText(children, url: url)
         case .image(_, let alt):
             return Text(verbatim: alt)
         case .math(let latex, let display):
@@ -1464,6 +1460,47 @@ enum MarkdownNativeText {
             return Text(verbatim: source)
         case .lineBreak:
             return Text(verbatim: "\n")
+        }
+    }
+
+    private static func linkedText(_ nodes: [MarkdownInline], url: URL) -> Text {
+        var linked = attributed(nodes)
+        linked.link = url
+        let text = Text(linked).customAttribute(MarkdownLinkGlyph())
+        var runs: [MarkdownSourceRun] = []
+        var position = 0
+        collectSourceRuns(nodes, position: &position, runs: &runs)
+        guard let first = runs.first, let last = runs.last else { return text }
+        let source = NSRange(location: first.original.location,
+                             length: NSMaxRange(last.original) - first.original.location)
+        return text.customAttribute(MarkdownSourceGlyph(
+            source: source, displayLength: position, sourceRuns: runs
+        ))
+    }
+
+    private static func collectSourceRuns(_ nodes: [MarkdownInline], position: inout Int,
+                                          runs: inout [MarkdownSourceRun]) {
+        for node in nodes {
+            switch node {
+            case .text(let value, let source), .code(let value, let source):
+                let length = value.utf16.count
+                if let source, length > 0 {
+                    runs.append(MarkdownSourceRun(displayed: NSRange(location: position, length: length),
+                                                   original: source))
+                }
+                position += length
+            case .strong(let children), .emphasis(let children), .strike(let children),
+                 .link(_, let children):
+                collectSourceRuns(children, position: &position, runs: &runs)
+            case .image(_, let alt):
+                position += alt.utf16.count
+            case .math(let latex, let display):
+                position += latex.utf16.count + (display ? 4 : 2)
+            case .html(let raw):
+                position += raw.utf16.count
+            case .lineBreak:
+                position += 1
+            }
         }
     }
 
