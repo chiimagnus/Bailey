@@ -298,8 +298,7 @@ struct MarkdownPreview: View {
 
     private func canMergeParagraph(at index: Int) -> Bool {
         guard case let .paragraph(inline) = document.blocks[index].content else { return false }
-        return !inline.contains { if case .image = $0 { true } else { false } }
-            && !MarkdownMixedParagraph.containsMath(inline)
+        return !MarkdownMixedParagraph.containsEmbedded(inline)
     }
 
     private func paragraphRun(_ indices: Range<Int>) -> Text {
@@ -1072,7 +1071,7 @@ private struct MarkdownNativeBlockView: View {
                         }
                     }
                     Group {
-                        if MarkdownMixedParagraph.containsMath(inline) {
+                        if MarkdownMixedParagraph.containsEmbedded(inline) {
                             MarkdownMixedParagraph(inline: inline, resource: resource,
                                                    assetRefresh: assetRefresh,
                                                    formulaFontSize: Self.headingSize(level))
@@ -1113,18 +1112,17 @@ private struct MarkdownNativeBlockView: View {
             }
             .padding(.top, 8)
         case .paragraph(let inline):
-            if inline.contains(where: { if case .image = $0 { true } else { false } })
-                || MarkdownMixedParagraph.containsMath(inline) {
+            if MarkdownMixedParagraph.containsEmbedded(inline) {
                 MarkdownMixedParagraph(inline: inline, resource: resource, assetRefresh: assetRefresh)
             } else {
                 MarkdownNativeText.make(inline)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
-        case .image(let source, let alt):
+        case .image(let source, let alt, let range):
             if let url = URL(string: source) {
                 MarkdownResourceImage(url: url, alt: alt, resource: resource,
-                                      refresh: assetRefresh)
+                                      refresh: assetRefresh, sourceRange: range)
             } else {
                 Text(verbatim: alt).foregroundStyle(.secondary)
             }
@@ -1233,7 +1231,7 @@ private struct MarkdownNativeBlockView: View {
 
     private func cell(_ inline: [MarkdownInline], alignment: Alignment, header: Bool) -> some View {
         Group {
-            if MarkdownMixedParagraph.containsMath(inline) {
+            if MarkdownMixedParagraph.containsEmbedded(inline) {
                 MarkdownMixedParagraph(inline: inline, resource: resource,
                                        assetRefresh: assetRefresh)
             } else {
@@ -1258,7 +1256,7 @@ private struct MarkdownNativeBlockView: View {
 private struct MarkdownMixedParagraph: View {
     private enum Segment {
         case text([MarkdownInline])
-        case image(String, String)
+        case image(String, String, source: NSRange?)
         case math(String, display: Bool, source: NSRange?)
     }
 
@@ -1267,12 +1265,12 @@ private struct MarkdownMixedParagraph: View {
     let assetRefresh: UInt
     var formulaFontSize: CGFloat? = nil
 
-    static func containsMath(_ nodes: [MarkdownInline]) -> Bool {
+    static func containsEmbedded(_ nodes: [MarkdownInline]) -> Bool {
         nodes.contains { node in
             switch node {
-            case .math: true
+            case .math, .image: true
             case .strong(let children), .emphasis(let children), .strike(let children),
-                 .link(_, let children): containsMath(children)
+                 .link(_, let children): containsEmbedded(children)
             default: false
             }
         }
@@ -1288,9 +1286,9 @@ private struct MarkdownMixedParagraph: View {
                      decorated: @escaping (MarkdownInline) -> MarkdownInline) {
             for node in nodes {
                 switch node {
-                case .image(let source, let alt):
+                case .image(let source, let alt, let range):
                     flush()
-                    result.append(.image(source, alt))
+                    result.append(.image(source, alt, source: range))
                 case .math(let latex, let display, let source):
                     flush()
                     result.append(.math(latex, display: display, source: source))
@@ -1335,9 +1333,10 @@ private struct MarkdownMixedParagraph: View {
             MarkdownNativeText.make(inlines)
                 .fixedSize(horizontal: inline, vertical: true)
                 .textSelection(.enabled)
-        case .image(let source, let alt):
+        case .image(let source, let alt, let range):
             if let url = URL(string: source) {
-                MarkdownResourceImage(url: url, alt: alt, resource: resource, refresh: assetRefresh)
+                MarkdownResourceImage(url: url, alt: alt, resource: resource, refresh: assetRefresh,
+                                      sourceRange: range)
                     .fixedSize(horizontal: inline, vertical: false)
             } else {
                 Text(verbatim: alt).foregroundStyle(.secondary)
@@ -1556,8 +1555,12 @@ enum MarkdownNativeText {
         case .link(let destination, let children):
             guard let url = URL(string: destination) else { return make(children) }
             return linkedText(children, url: url)
-        case .image(_, let alt):
-            return Text(verbatim: alt)
+        case .image(_, let alt, let source):
+            let text = Text(verbatim: alt)
+            guard let source, !alt.isEmpty else { return text }
+            return text.customAttribute(MarkdownSourceGlyph(
+                source: source, displayLength: alt.utf16.count
+            ))
         case .math(let latex, let display, _):
             return Text(verbatim: display ? "$$\(latex)$$" : "$\(latex)$")
         case .html(let source):
@@ -1596,7 +1599,7 @@ enum MarkdownNativeText {
             case .strong(let children), .emphasis(let children), .strike(let children),
                  .link(_, let children):
                 collectSourceRuns(children, position: &position, runs: &runs)
-            case .image(_, let alt):
+            case .image(_, let alt, _):
                 position += alt.utf16.count
             case .math(let latex, let display, _):
                 position += latex.utf16.count + (display ? 4 : 2)
@@ -1635,7 +1638,7 @@ enum MarkdownNativeText {
                     part.font = .system(size: 12, weight: .medium)
                     part.baselineOffset = 5
                 }
-            case .image(_, let alt):
+            case .image(_, let alt, _):
                 part = AttributedString(alt)
             case .math(let latex, let display, _):
                 part = AttributedString(display ? "$$\(latex)$$" : "$\(latex)$")

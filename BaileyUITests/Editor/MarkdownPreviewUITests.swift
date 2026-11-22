@@ -735,6 +735,38 @@ final class MarkdownPreviewUITests: XCTestCase {
         }
     }
 
+    func testNestedMarkdownImageInsideEmphasisUsesRealAuthorizedNativeImage() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let image = try fixture.file("nested.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="90" height="45">
+              <rect width="90" height="45" fill="#2980b9"/>
+            </svg>
+            """)
+        let source = """
+            # Nested media
+
+            **Styled prose with ![Nested chart](nested.svg) in the same paragraph.**
+            """
+        let document = try fixture.file("NestedImage.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(document, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let nested = preview.buttons["Nested chart"]
+        XCTAssertTrue(nested.waitForExistence(timeout: 15),
+                      "Image nested inside emphasis must render as interactive native media, not alt-only Text")
+        XCTAssertGreaterThan(nested.frame.height, 30)
+        nested.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(image, in: window).waitForExistence(timeout: 10))
+        XCTAssertEqual(try String(contentsOf: document, encoding: .utf8), source)
+    }
+
     func testMarkdownAndHTMLImagesOpenAuthorizedFiles() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let image = try fixture.file("badge.svg", text: """

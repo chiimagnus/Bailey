@@ -52,6 +52,76 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                        "Scrolling must not move the insertion point or steal the editor selection")
     }
 
+    func testReaderSynchronizesTwoLoadedImagesInsideOneRichParagraph() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Markdown-Images-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 180,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        for name in ["first.png", "second.png"] {
+            try png.write(to: folder.appendingPathComponent(name))
+        }
+
+        let before = String(repeating: "Prefix text 🧪 with rich Unicode. ", count: 55)
+        let between = String(repeating: "Intermediate words and paragraph text. ", count: 65)
+        let after = String(repeating: "Remaining content after the images. ", count: 45)
+        let source = before + "![First](first.png) " + between + "![Second](second.png) " + after
+        let document = try await MarkdownDocument.parse(source)
+        XCTAssertEqual(document.blocks.count, 1)
+        let first = (source as NSString).range(of: "![First](first.png)").location
+        let second = (source as NSString).range(of: "![Second](second.png)").location
+        let file = folder.appendingPathComponent("Document.md")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+        let resource = MarkdownResource(path: file.path, directory: folder.path,
+                                        backend: LocalWorkspaceBackend.shared)
+        let firstPicture = try await resource.picture(XCTUnwrap(URL(string: "first.png")))
+        XCTAssertEqual(firstPicture.poster.width, 320)
+        func view(synced: Int?) -> MarkdownPreview {
+            MarkdownPreview(document: document, revision: "image-same", resource: resource, assetRefresh: 0,
+                            restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
+                            synchronizedSourceOffset: synced)
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: view(synced: nil))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? []
+                + view.subviews.flatMap(scrollViews)
+        }
+        let scroll = try XCTUnwrap(scrollViews(in: host).first {
+            $0.contentView.bounds.width > 200 && $0.contentView.bounds.height > 100
+        })
+        let initial = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > 100
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [initial], timeout: 6), .completed,
+                       "First loaded image must restore to its real viewport, not paragraph top")
+        let originalY = scroll.contentView.bounds.minY
+
+        host.rootView = view(synced: second)
+        host.layoutSubtreeIfNeeded()
+        let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > originalY + 150
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 6), .completed,
+                       "Second image in same paragraph needs its own source-mapped viewport")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
     func testReaderRestoresAndSynchronizesActualCanvasFormulasWithinOneParagraph() async throws {
         let firstPart = String(repeating: "Rich 中文 text with emoji 🧪 before formula. ", count: 55)
         let middle = String(repeating: "Intermediate text with nested structures and words. ", count: 65)

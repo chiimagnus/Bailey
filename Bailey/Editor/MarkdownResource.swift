@@ -299,6 +299,7 @@ struct MarkdownResourceImage: View {
     let refresh: UInt
     var width: CGFloat? = nil
     var height: CGFloat? = nil
+    var sourceRange: NSRange? = nil
     @State private var picture: MarkdownPicture?
     @State private var loaded = false
 
@@ -311,6 +312,7 @@ struct MarkdownResourceImage: View {
                     .accessibilityLabel(alt.isEmpty ? "Image" : alt)
             }
         }
+        .modifier(MarkdownEmbeddedSourceMapping(source: sourceRange))
         .task(id: Request(url: url, refresh: refresh, path: resource.path)) {
             loaded = false
             picture = nil

@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownSelectionTests: XCTestCase {
+    func testImageAltCopyUsesOriginalImageTokenRanges() async throws {
+        let source = "# Images\n\n中文 🧪 before ![First](first.png) then ![Second](second.svg) end.\n"
+        let document = try await MarkdownDocument.parse(source)
+        let paragraph = try XCTUnwrap(document.blocks.first { block in
+            if case .paragraph(let inline) = block.content {
+                return inline.contains { if case .image = $0 { return true }; return false }
+            }
+            return false
+        })
+        guard case .paragraph(let inline) = paragraph.content else {
+            return XCTFail("Missing inline image paragraph")
+        }
+        let ranges = inline.compactMap { item -> NSRange? in
+            guard case .image(_, _, let source) = item else { return nil }
+            return source
+        }
+        XCTAssertEqual(ranges.count, 2)
+        XCTAssertEqual(MarkdownSelectionText.copy(ranges[0], from: document), "First")
+        XCTAssertEqual(MarkdownSelectionText.copy(ranges[1], from: document), "Second")
+        let combined = NSRange(location: ranges[0].location,
+                               length: NSMaxRange(ranges[1]) - ranges[0].location)
+        XCTAssertEqual(MarkdownSelectionText.copy(combined, from: document), "First then Second")
+    }
+
     func testFormulaSemanticCopyRespectsExactSourceIntervalWithoutAdjacentText() async throws {
         let source = "# Equations\n\n中文 🧪 before $x_i+y$ between $z^2$ after.\n"
         let document = try await MarkdownDocument.parse(source)

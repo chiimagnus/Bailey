@@ -9,6 +9,28 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownNativeTests: XCTestCase {
+    func testImageNodesRetainDistinctOriginalUTF16RangesInsideOneParagraph() async throws {
+        let source = "\u{FEFF}# Images\r\n\r\n前文 🧪 ![First](one.png) 中间 ![Second](two.svg) 末尾。\r\n"
+        let document = try await MarkdownDocument.parse(source)
+        let paragraph = try XCTUnwrap(document.blocks.first { block in
+            if case .paragraph(let inline) = block.content {
+                return inline.contains { if case .image = $0 { return true }; return false }
+            }
+            return false
+        })
+        guard case .paragraph(let inline) = paragraph.content else {
+            return XCTFail("Missing mixed image paragraph")
+        }
+        let images = inline.compactMap { item -> (String, NSRange)? in
+            guard case let .image(_, alt, source: range?) = item else { return nil }
+            return (alt, range)
+        }
+        XCTAssertEqual(images.map(\.0), ["First", "Second"])
+        XCTAssertEqual(images.map { (source as NSString).substring(with: $0.1) },
+                       ["![First](one.png)", "![Second](two.svg)"])
+        XCTAssertLessThan(NSMaxRange(images[0].1), images[1].1.location)
+    }
+
     func testMathTokensRetainExactOriginalUTF16RangesAcrossUnicodeFrontMatterAndFootnotes() async throws {
         let source = "\u{FEFF}---\r\ntitle: Test\r\n---\r\n\r\n# Math\r\n\r\n"
             + "Emoji 🧪 and e\u{301} $x_i+y$ with [^note], plus $a^2$.\r\n\r\n"
@@ -310,7 +332,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             return XCTFail("Mixed image and prose must share one Markdown paragraph")
         }
         XCTAssertTrue(inlines.contains { if case .text(let text, _) = $0 { text.contains("前文 before") } else { false } })
-        XCTAssertTrue(inlines.contains { if case .image("assets/plot%20one.svg", "示意图") = $0 { true } else { false } })
+        XCTAssertTrue(inlines.contains { if case .image("assets/plot%20one.svg", "示意图", source: _) = $0 { true } else { false } })
         XCTAssertTrue(inlines.contains { if case .text(let text, _) = $0 { text.contains("后文 after") } else { false } })
         XCTAssertTrue(inlines.contains { if case .link("docs/a.md", _) = $0 { true } else { false } })
     }

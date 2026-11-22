@@ -95,8 +95,8 @@ nonisolated enum MarkdownSelectionText {
             case .strong(let children), .emphasis(let children), .strike(let children),
                  .link(_, let children):
                 return visible(children)
-            case .image(_, let alt):
-                return [Piece(text: alt, source: nil)]
+            case .image(_, let alt, let source):
+                return [Piece(text: alt, source: source)]
             case .math(let latex, _, let source):
                 return [Piece(text: latex, source: source)]
             case .html(let raw):
@@ -112,8 +112,8 @@ nonisolated enum MarkdownSelectionText {
         switch block {
         case .paragraph(let inline), .heading(_, let inline):
             return visible(inline)
-        case .image(_, let alt):
-            return [Piece(text: alt, source: nil)]
+        case .image(_, let alt, let source):
+            return [Piece(text: alt, source: source)]
         case .quote(let blocks), .alert(_, let blocks):
             return separated(blocks.enumerated().map { index, child in
                 visible(child, path: path + [index], details: details, depth: depth)
