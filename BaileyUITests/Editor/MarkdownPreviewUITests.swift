@@ -1354,6 +1354,171 @@ final class MarkdownPreviewUITests: XCTestCase {
                        "Live preview must never save an unfinished draft")
     }
 
+    func testMarkdownScrollSynchronizationCanBeDisabledAndReenabledFromFileMenu() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = (0..<80).map { index in
+            "## Section \(index)\n\nParagraph \(index) is kept in the original source."
+        }.joined(separator: "\n\n")
+        let file = try fixture.file("ScrollMenu.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let nativeSource = window.scrollViews.containing(.textView, identifier: nil).firstMatch
+        let sourceBar = nativeSource.scrollBars.element(boundBy: 1)
+        XCTAssertTrue(sourceBar.waitForExistence(timeout: 10))
+        func sourceProgress() -> Double {
+            Double(String(describing: sourceBar.value ?? "")) ?? -1
+        }
+        XCTAssertEqual(sourceProgress(), 0, accuracy: 0.02)
+        tab.rightClick()
+        let syncMenu = app.menuItems["Synchronize Scrolling"]
+        XCTAssertTrue(syncMenu.waitForExistence(timeout: 10))
+        syncMenu.click()
+        for _ in 0..<5 { preview.swipeUp() }
+        XCTAssertEqual(sourceProgress(), 0, accuracy: 0.02,
+                       "Disabling sync must not scroll the source during reader interaction")
+        tab.rightClick()
+        XCTAssertTrue(syncMenu.waitForExistence(timeout: 10))
+        syncMenu.click()
+        for _ in 0..<5 { preview.swipeUp() }
+        let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            sourceProgress() > 0.08
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 8), .completed,
+                       "Reenabling sync must reconnect the original source editor")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testReaderScrollPositionSurvivesSwitchBackToNativeSource() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = (0..<90).map { index in
+            "## Section \(index)\n\nParagraph \(index) with 中文 and 👩‍🚀."
+        }.joined(separator: "\n\n")
+        let file = try fixture.file("SourceRestore.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let showPreview = app.menus["bailey.tab.file"].menuItems["Show Preview"]
+        XCTAssertTrue(showPreview.waitForExistence(timeout: 10))
+        showPreview.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        for _ in 0..<8 { preview.swipeUp() }
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let sourceScroll = window.scrollViews.containing(.textView, identifier: nil).firstMatch
+        XCTAssertTrue(sourceScroll.waitForExistence(timeout: 10))
+        let sourceBar = try XCTUnwrap(sourceScroll.scrollBars.allElementsBoundByIndex.first {
+            $0.frame.height > $0.frame.width
+        }, "The restored source should expose its actual vertical scroll bar")
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (Double(String(describing: sourceBar.value ?? "")) ?? -1) > 0.08
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 8), .completed,
+                       "Switching reader to source must show the same original paragraph")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testPreviewScrollMovesActualSourceViewport() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = (0..<80).map { index in
+            "## Section \(index)\n\nParagraph \(index) with regular content and 中文 emoji 🛰️."
+        }.joined(separator: "\n\n")
+        let file = try fixture.file("PreviewScroll.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let sourceScroll = window.scrollViews.containing(.textView, identifier: nil).firstMatch
+        let sourceVerticalBar = sourceScroll.scrollBars.element(boundBy: 1)
+        XCTAssertTrue(sourceVerticalBar.waitForExistence(timeout: 10))
+        func value() -> Double {
+            Double(String(describing: sourceVerticalBar.value ?? "")) ?? -1
+        }
+        let before = value()
+        XCTAssertEqual(before, 0, accuracy: 0.02,
+                       "The source must begin at its actual first line, not an unsettled layout")
+        for _ in 0..<6 { preview.swipeUp() }
+        let follows = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            value() > before + 0.08
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [follows], timeout: 8), .completed,
+                       "Scrolling the native preview must advance the actual TextKit scroll bar")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source,
+                       "Scrolling both panes must not modify or save the source bytes")
+    }
+
+    func testSideBySideScrollTracksOriginalSourcePosition() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = (0..<60).map { index in
+            "## Section \(index)\n\nParagraph \(index) with real selectable content and 中文 emoji 🛰️."
+        }.joined(separator: "\n\n")
+        let file = try fixture.file("Scroll.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let first = preview.staticTexts["Section 0"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        XCTAssertGreaterThan(first.frame.intersection(preview.frame).height, 1)
+
+        for _ in 0..<8 { editor.swipeUp() }
+        let sourceDrivesPreview = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !first.exists || first.frame.intersection(preview.frame).height < 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [sourceDrivesPreview], timeout: 5), .completed,
+                       "Scrolling native TextKit source must move the companion preview to the same source block")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source,
+                       "Navigation must never save the buffer or alter the original bytes")
+    }
+
     func testSideBySideUpdatesWhileEditingAndUsesTheOriginalSavePath() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "# Initial heading\n"

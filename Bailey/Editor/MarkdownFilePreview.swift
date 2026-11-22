@@ -19,6 +19,20 @@ struct MarkdownFilePreview: View {
                     resource: file.markdownResource(in: directory), assetRefresh: assetRefresh,
                     position: Binding(get: { file.markdownScrollPosition },
                                       set: { file.markdownScrollPosition = $0 }),
+                    sourceBlock: file.markdownScrollSyncEnabled && parsed.request == request
+                        ? file.markdownSourceBlock : nil,
+                    onReaderScroll: { block in
+                        guard file.markdownScrollSyncEnabled,
+                              parsed.request == file.markdownRequestID,
+                              parsed.document.blocks.indices.contains(block),
+                              let source = parsed.document.blocks[block].sourceRange else { return }
+                        file.pendingMarkdownSource = (request: parsed.request, offset: source.location)
+                        if file.editorCoordinator?.showMarkdownSource(
+                            atUTF16Offset: source.location
+                        ) == true {
+                            file.pendingMarkdownSource = nil
+                        }
+                    },
                     openLink: { url in
                         guard file.markdownRequestID == parsed.request else { return false }
                         return await onOpenLink(url)
@@ -44,6 +58,8 @@ struct MarkdownFilePreview: View {
                 let document = try await MarkdownDocument.parse(source)
                 guard !Task.isCancelled, request == file?.markdownRequestID else { return }
                 parsed = (document, request, target)
+                file?.markdownSourceIndex = (request: request, index: MarkdownBlockIndex(document))
+                file?.editorCoordinator?.refreshMarkdownViewport()
             } catch {
                 guard !Task.isCancelled, request == file?.markdownRequestID else { return }
                 parsed = nil

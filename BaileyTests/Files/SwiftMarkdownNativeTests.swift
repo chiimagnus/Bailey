@@ -561,6 +561,38 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertGreaterThan(right.blueComponent, left.blueComponent + 0.25)
     }
 
+    func testOriginalBlockIndexTracksRepeatedHeadingsUnicodeAndExtractedFootnotes() async throws {
+        let source = """
+            # Same 🧪
+
+            第一段 e\u{301} and $x^2$.
+
+            # Same 🧪
+
+            第二段[^note] with 👩‍💻.
+
+            [^note]: 真实脚注
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let index = MarkdownBlockIndex(document)
+        let nsSource = source as NSString
+        for (text, number) in [("# Same 🧪", 0), ("第一段 e\u{301}", 0),
+                               ("# Same 🧪", 1), ("第二段[^note]", 0),
+                               ("[^note]: 真实脚注", 0)] {
+            let first = nsSource.range(of: text)
+            let match = number == 0 ? first : nsSource.range(
+                of: text, options: [], range: NSRange(
+                    location: NSMaxRange(first), length: nsSource.length - NSMaxRange(first)
+                )
+            )
+            let mapped = try XCTUnwrap(index.block(atUTF16Offset: match.location))
+            let sourceRange = try XCTUnwrap(document.blocks[mapped].sourceRange)
+            XCTAssertTrue(sourceRange.location <= match.location
+                          && match.location < NSMaxRange(sourceRange),
+                          "The source index must resolve the original UTF-16 containing block")
+        }
+    }
+
     func testOriginalUTF16BlockRangesSurviveFrontMatterCRLFMathAndFootnotes() async throws {
         let heading = "# 👩‍🚀 中文 Café"
         let paragraph = "e\u{301}moji 😀\tmath $a_b$ and [^note]."

@@ -206,6 +206,10 @@ final class FileTab: nonisolated Identifiable {
     private(set) var showsMarkdownPreview = false
     private var markdownEditRevision: UInt = 0
     @ObservationIgnored var markdownScrollPosition: Int?
+    var markdownScrollSyncEnabled = true
+    var markdownSourceBlock: Int?
+    @ObservationIgnored var markdownSourceIndex: (request: String, index: MarkdownBlockIndex)?
+    @ObservationIgnored var pendingMarkdownSource: (request: String, offset: Int)?
     var pendingMarkdownFragment: String?
 
     var canPreviewMarkdown: Bool {

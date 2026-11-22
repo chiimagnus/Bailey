@@ -295,6 +295,34 @@ nonisolated struct MarkdownDocument: Sendable {
     }
 }
 
+/// A sorted, compact lookup over the original source ranges of rendered blocks.
+/// The extra footnote views can appear in a different order than their source.
+nonisolated struct MarkdownBlockIndex: Sendable {
+    private struct Entry: Sendable {
+        let range: NSRange
+        let index: Int
+    }
+    private let entries: [Entry]
+
+    init(_ document: MarkdownDocument) {
+        entries = document.blocks.enumerated().compactMap { index, block in
+            block.sourceRange.map { Entry(range: $0, index: index) }
+        }.sorted { $0.range.location < $1.range.location }
+    }
+
+    func block(atUTF16Offset offset: Int) -> Int? {
+        guard !entries.isEmpty else { return nil }
+        var lower = 0
+        var upper = entries.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if entries[middle].range.location <= offset { lower = middle + 1 }
+            else { upper = middle }
+        }
+        return entries[max(0, lower - 1)].index
+    }
+}
+
 /// Converts cmark's 1-based UTF-8 byte columns into TextKit's original UTF-16
 /// offsets. Line breaks (including CRLF) are measured in the unmodified source.
 private nonisolated struct MarkdownOriginalCoordinates {

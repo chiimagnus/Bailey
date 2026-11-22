@@ -78,6 +78,17 @@ struct SourceTextEditor: NSViewRepresentable {
             apply(to: textView, scrollView: scrollView)
         }
         context.coordinator.wasFocused = isFocused
+        if let pending = file.pendingMarkdownSource {
+            file.pendingMarkdownSource = nil
+            if pending.request == file.markdownRequestID,
+               let restorable = scrollView as? RestorableScrollView {
+                restorable.restoreOnFirstLayout = { [weak textView] in
+                    guard let textView else { return }
+                    let offset = min(pending.offset, textView.textStorage?.length ?? 0)
+                    textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+                }
+            }
+        }
         file.editorView = scrollView
         container.focusOnAttach = isFocused
         container.canFocus = canFocus
@@ -277,6 +288,33 @@ struct SourceTextEditor: NSViewRepresentable {
             revision = file.reloadRevision
         }
 
+        @discardableResult
+        func showMarkdownSource(atUTF16Offset offset: Int) -> Bool {
+            guard let file, file.editorCoordinator === self,
+                  file.markdownScrollSyncEnabled,
+                  let scrollView, scrollView.window != nil,
+                  let editor = scrollView.documentView as? NativeCodeTextView,
+                  offset >= 0, offset <= file.nativeTextStorage.length else { return false }
+            editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            return true
+        }
+
+        func refreshMarkdownViewport() {
+            guard let file, file.canPreviewMarkdown, file.markdownScrollSyncEnabled,
+                  let mapping = file.markdownSourceIndex,
+                  mapping.request == file.markdownRequestID,
+                  let scrollView, scrollView.window != nil,
+                  let editor = scrollView.documentView as? NativeCodeTextView else { return }
+            guard let layout = editor.textLayoutManager,
+                  let content = editor.textContentStorage,
+                  let viewport = layout.textViewportLayoutController.viewportRange else { return }
+            let offset = content.offset(from: content.documentRange.location, to: viewport.location)
+            guard offset >= 0, offset <= file.nativeTextStorage.length,
+                  let block = mapping.index.block(atUTF16Offset: offset),
+                  block != file.markdownSourceBlock else { return }
+            file.markdownSourceBlock = block
+        }
+
         func attach(textView: NativeCodeTextView, scrollView: NSScrollView) {
             self.textView = textView
             self.scrollView = scrollView
@@ -305,6 +343,7 @@ struct SourceTextEditor: NSViewRepresentable {
                     editor?.syntaxCoordinator?.updateViewportRange(
                         editor?.textLayoutManager?.textViewportLayoutController.viewportRange
                     )
+                    self.refreshMarkdownViewport()
                 }
             }
         }
@@ -468,7 +507,12 @@ final class FocusReportingTextView: NativeCodeTextView {
 /// pass — before the first paint — so a restored file opens already scrolled to
 /// its saved position instead of visibly jumping there afterward.
 private final class RestorableScrollView: NSScrollView {
-    var restoreOnFirstLayout: (() -> Void)?
+    var restoreOnFirstLayout: (() -> Void)? {
+        didSet {
+            // A requested source position supersedes an origin saved before unmount.
+            if restoreOnFirstLayout != nil { reparentedOffset = nil }
+        }
+    }
     private var lastViewportSize: NSSize = .zero
     private var geometryUpdateScheduled = false
     private var reparentedOffset: NSPoint?

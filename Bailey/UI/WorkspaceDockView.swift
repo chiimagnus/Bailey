@@ -840,6 +840,14 @@ struct DockTabGroupView: View {
                     }
                     .disabled(project.markdownMode(for: tab) == mode)
                 }
+                Toggle(String(localized: "Synchronize Scrolling", table: "Editor"), isOn: Binding(
+                    get: { file.markdownScrollSyncEnabled },
+                    set: { value in
+                        guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
+                        current.markdownScrollSyncEnabled = value
+                        if value { current.editorCoordinator?.refreshMarkdownViewport() }
+                    }
+                ))
                 Button(String(localized: "Front Matter…", table: "Editor")) {
                     if currentMenuTab(tabID) != nil { markdownMetadataTabID = tabID }
                 }

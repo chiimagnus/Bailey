@@ -7,11 +7,14 @@ struct MarkdownPreview: View {
     let resource: MarkdownResource
     let assetRefresh: UInt
     @Binding var position: Int?
+    var sourceBlock: Int? = nil
+    var onReaderScroll: (Int) -> Void = { _ in }
     var openLink: (URL) async -> Bool = { _ in false }
     var navigation: Binding<String?> = .constant(nil)
 
     @State private var linkToOpen: URL?
     @State private var failedLink = false
+    @State private var readerIsScrolling = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -50,6 +53,23 @@ struct MarkdownPreview: View {
                     }
                     .accessibilityIdentifier("bailey.markdown.preview")
                     .scrollPosition(id: $position, anchor: .top)
+                    .onScrollPhaseChange { _, phase in
+                        let isUserScroll = phase == .interacting || phase == .decelerating
+                        if readerIsScrolling && !isUserScroll, let position {
+                            onReaderScroll(position)
+                        }
+                        readerIsScrolling = isUserScroll
+                    }
+                    .onChange(of: position) { _, position in
+                        if readerIsScrolling, let position { onReaderScroll(position) }
+                    }
+                    .onChange(of: sourceBlock, initial: true) { _, block in
+                        guard !readerIsScrolling, let block,
+                              let row = renderRows.first(where: { $0.start <= block && block < $0.end }),
+                              position != row.start else { return }
+                        position = row.start
+                        proxy.scrollTo(row.start, anchor: .top)
+                    }
                     .task(id: navigation.wrappedValue) {
                         guard let fragment = navigation.wrappedValue else { return }
                         if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
