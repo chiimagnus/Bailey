@@ -1731,6 +1731,64 @@ final class MarkdownPreviewUITests: XCTestCase {
                        "Scrolling both panes must not modify or save the source bytes")
     }
 
+    func testAlternatingScrollBetweenCodeHeavyReaderAndSourcePreservesOriginalPositions() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = (0..<64).map { index -> String in
+            let prose = "## Section \(index)\n\nParagraph 中文 🛰️ \(index) with **emphasis**."
+            guard index.isMultiple(of: 4) else { return prose }
+            return prose + "\n\n```swift\nlet number = \(index)\nprint(number)\n```"
+        }.joined(separator: "\n\n")
+        let file = try fixture.file("Alt.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let first = preview.staticTexts["Section 0"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        let sourceScroll = window.scrollViews.containing(.textView, identifier: nil).firstMatch
+        XCTAssertTrue(sourceScroll.waitForExistence(timeout: 10))
+        let bar = try XCTUnwrap(sourceScroll.scrollBars.allElementsBoundByIndex.first {
+            $0.frame.height > $0.frame.width
+        })
+        func fraction() -> Double { Double(String(describing: bar.value ?? "")) ?? -1 }
+        func awaitFraction(_ predicate: @escaping () -> Bool) -> Bool {
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in predicate() }, object: nil
+            )], timeout: 8) == .completed
+        }
+        for _ in 0..<8 { preview.swipeUp() }
+        XCTAssertTrue(awaitFraction { fraction() > 0.07 },
+                      "Reader scrolling must move the actual native editor")
+        for _ in 0..<12 { editor.swipeDown() }
+        XCTAssertTrue(awaitFraction { fraction() < 0.04 },
+                      "The source editor must scroll back to its beginning")
+        XCTAssertTrue(awaitFraction {
+            first.exists && first.frame.intersection(preview.frame).height > 1
+        }, "Source scrolling back to the top must restore the first rendered heading")
+        for _ in 0..<8 { editor.swipeUp() }
+        XCTAssertTrue(awaitFraction { fraction() > 0.07 },
+                      "Source scroll must continue to work after reader-driven scrolling")
+        XCTAssertTrue(awaitFraction {
+            !first.exists || first.frame.intersection(preview.frame).height < 1
+        }, "The reader must follow source scroll after direction changes")
+        for _ in 0..<12 { preview.swipeDown() }
+        XCTAssertTrue(awaitFraction { fraction() < 0.04 },
+                      "Reader must scroll the source back to top after alternating directions")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
     func testSideBySideScrollTracksOriginalSourcePosition() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = (0..<60).map { index in
