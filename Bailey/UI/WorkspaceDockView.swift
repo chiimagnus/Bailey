@@ -782,6 +782,11 @@ struct DockTabGroupView: View {
                             manager.selectedProject === project && manager.attachedWindow?.isKeyWindow == true
                         }
                     },
+                    onMarkdownLocateSource: {
+                        guard manager.selectedProject === project,
+                              project.tabs.contains(where: { $0 === tab }) else { return }
+                        project.dock.select(.tab(id))
+                    },
                     onExternalFilesDropped: { FinderWindowDrop.receive(
                         $0, preferred: manager,
                         destination: (projectID: project.id, groupID: group.id)

@@ -1471,6 +1471,138 @@ final class MarkdownPreviewUITests: XCTestCase {
                        "After a new parse and remount, the original heading must remain visible")
     }
 
+    func testDoubleClickInsidePreviewTextLocatesActuallyClickedGlyph() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let paragraph = String(repeating: "M", count: 20)
+        let source = "# Click location\n\n" + paragraph
+        let file = try fixture.file("GlyphLocate.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let text = preview.staticTexts.matching(NSPredicate(format: "value == %@", paragraph)).firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 15))
+        text.coordinate(withNormalizedOffset: CGVector(dx: 0.775, dy: 0.5)).doubleClick()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.typeKey("z", modifierFlags: [])
+        XCTAssertEqual(editor.value as? String, "# Click location\n\n"
+                       + String(repeating: "M", count: 15) + "z" + String(repeating: "M", count: 5))
+        XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+    }
+
+    func testDoubleClickSecondMergedParagraphLocatesItsOwnOriginalSourceRange() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Title
+
+            Alpha first paragraph content.
+
+            Beta second paragraph content.
+
+            Gamma third paragraph content.
+            """
+        let file = try fixture.file("MergedLocate.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let merged = preview.staticTexts.containing(NSPredicate(
+            format: "value CONTAINS %@", "Beta second paragraph content."
+        )).firstMatch
+        XCTAssertTrue(merged.waitForExistence(timeout: 10), preview.debugDescription)
+        merged.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.5)).doubleClick()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.typeKey("z", modifierFlags: [])
+        let edited = try XCTUnwrap(editor.value as? String)
+        let insertion = (edited as NSString).range(of: "z")
+        let beta = (source as NSString).range(of: "Beta second paragraph content.")
+        XCTAssertTrue(insertion.location >= beta.location
+                      && insertion.location <= NSMaxRange(beta),
+                      "The double click must use the actual glyph's source block, not the merged run's first paragraph")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testDoubleClickInCompanionFocusesExistingTextKitWithoutClosingPreview() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = "# Introduction\n\nIntro content.\n\n## Destination\n\nBody after heading.\n"
+        let file = try fixture.file("CompanionLocate.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let destination = preview.staticTexts["Destination"].firstMatch
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        destination.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).doubleClick()
+        XCTAssertTrue(preview.exists,
+                      "Double-clicking companion text must preserve the side-by-side Dock layout")
+        app.typeKey("x", modifierFlags: [])
+        XCTAssertEqual(editor.value as? String,
+                       source.replacingOccurrences(of: "## Destination", with: "## xDestination"),
+                       "Double-click must focus the already-mounted TextKit caret at its original text")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
+    func testDoubleClickOnPlainPreviewHeadingLocatesOriginalSourceText() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = "# Introduction\n\nIntro content.\n\n## Destination\n\nBody after heading.\n"
+        let file = try fixture.file("Locate.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let destination = preview.staticTexts["Destination"].firstMatch
+        XCTAssertTrue(destination.waitForExistence(timeout: 10))
+        destination.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).doubleClick()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10),
+                      "Double-clicking ordinary preview text must switch to the source")
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.typeKey("x", modifierFlags: [])
+        XCTAssertEqual(editor.value as? String,
+                       source.replacingOccurrences(of: "## Destination", with: "## xDestination"),
+                       "The caret must land on the original heading text, not its Markdown markers")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source,
+                       "Locating source and editing the buffer must not save bytes implicitly")
+    }
+
     func testReaderScrollPositionSurvivesSwitchBackToNativeSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = (0..<90).map { index in

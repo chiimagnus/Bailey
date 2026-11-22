@@ -219,7 +219,7 @@ final class FileTab: nonisolated Identifiable {
     var markdownScrollSyncEnabled = true
     var markdownSourceBlock: Int?
     @ObservationIgnored var markdownSourceIndex: (request: String, index: MarkdownBlockIndex)?
-    @ObservationIgnored var pendingMarkdownSource: (request: String, offset: Int)?
+    @ObservationIgnored var pendingMarkdownSource: (request: String, offset: Int, focus: Bool)?
     var pendingMarkdownFragment: String?
 
     var canPreviewMarkdown: Bool {
@@ -906,6 +906,7 @@ struct FileViewerView: View {
     var markdownDirectory: String?
     var rendersOnlyMarkdown = false
     var onMarkdownLink: (URL) async -> Bool = { _ in false }
+    var onMarkdownLocateSource: () -> Void = {}
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
@@ -931,8 +932,22 @@ struct FileViewerView: View {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
                     if (file.showsMarkdownPreview || rendersOnlyMarkdown) && file.canPreviewMarkdown {
-                        MarkdownFilePreview(file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
-                                            onOpenLink: onMarkdownLink)
+                        MarkdownFilePreview(
+                            file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
+                            onOpenLink: onMarkdownLink,
+                            onLocateSource: { offset in
+                                file.pendingMarkdownSource = (
+                                    request: file.markdownRequestID, offset: offset, focus: true
+                                )
+                                if rendersOnlyMarkdown { onMarkdownLocateSource() }
+                                else { file.setMarkdownPreview(false) }
+                                if file.editorCoordinator?.locateMarkdownSource(
+                                    atUTF16Offset: offset
+                                ) == true {
+                                    file.pendingMarkdownSource = nil
+                                }
+                            }
+                        )
                     } else if !rendersOnlyMarkdown {
                         HStack {
                             Spacer()

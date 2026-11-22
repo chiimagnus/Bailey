@@ -85,7 +85,13 @@ struct SourceTextEditor: NSViewRepresentable {
                 restorable.restoreOnFirstLayout = { [weak textView] in
                     guard let textView else { return }
                     let offset = min(pending.offset, textView.textStorage?.length ?? 0)
+                    if pending.focus {
+                        textView.textSelection = NSRange(location: offset, length: 0)
+                    }
                     textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+                    if pending.focus, let window = textView.window, window.isKeyWindow {
+                        window.makeFirstResponder(textView)
+                    }
                 }
             }
         }
@@ -296,6 +302,18 @@ struct SourceTextEditor: NSViewRepresentable {
                   let editor = scrollView.documentView as? NativeCodeTextView,
                   offset >= 0, offset <= file.nativeTextStorage.length else { return false }
             editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            return true
+        }
+
+        @discardableResult
+        func locateMarkdownSource(atUTF16Offset offset: Int) -> Bool {
+            guard let file, file.editorCoordinator === self,
+                  let scrollView, let window = scrollView.window,
+                  let editor = scrollView.documentView as? NativeCodeTextView,
+                  offset >= 0, offset <= file.nativeTextStorage.length else { return false }
+            editor.textSelection = NSRange(location: offset, length: 0)
+            editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            if window.isKeyWindow { window.makeFirstResponder(editor) }
             return true
         }
 

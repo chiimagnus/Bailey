@@ -10,6 +10,7 @@ struct MarkdownPreview: View {
     var sourceBlock: Int? = nil
     var onReadingPosition: (Int) -> Void = { _ in }
     var onReaderScroll: (Int) -> Void = { _ in }
+    var onLocateSource: ((Int) -> Void)? = nil
     var openLink: (URL) async -> Bool = { _ in false }
     var navigation: Binding<String?> = .constant(nil)
 
@@ -35,11 +36,13 @@ struct MarkdownPreview: View {
                                     paragraphRun(row.start..<row.end)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .textSelection(.enabled)
+                                        .modifier(MarkdownMappedTap(onLocate: onLocateSource))
                                         .id(row.start)
                                 } else {
                                     MarkdownNativeBlockView(block: document.blocks[row.start].content,
                                                             resource: resource, assetRefresh: assetRefresh,
                                                             anchor: document.blocks[row.start].anchor)
+                                        .modifier(MarkdownMappedTap(onLocate: onLocateSource))
                                         .id(row.start)
                                 }
                             }
@@ -167,14 +170,90 @@ struct MarkdownPreview: View {
     }
 
     private func paragraphRun(_ indices: Range<Int>) -> Text {
-        var inlines: [MarkdownInline] = []
+        var result = Text(verbatim: "")
         for index in indices {
-            if !inlines.isEmpty { inlines.append(.text("\n\n")) }
+            if index != indices.lowerBound { result = result + Text(verbatim: "\n\n") }
             if case .paragraph(let inline) = document.blocks[index].content {
-                inlines.append(contentsOf: inline)
+                result = result + MarkdownNativeText.make(inline)
             }
         }
-        return MarkdownNativeText.make(inlines)
+        return result
+    }
+}
+
+private struct MarkdownSourceGlyph: TextAttribute {
+    let source: NSRange
+}
+
+private struct MarkdownGlyphHit: Equatable {
+    let source: NSRange
+    let first: Text.Layout.CharacterIndex
+    let run: Text.Layout.Run
+    let origin: CGPoint
+
+    func sourceOffset(at target: CGPoint) -> Int? {
+        let point = CGPoint(x: target.x - origin.x, y: target.y - origin.y)
+        guard run.typographicBounds.rect.contains(point),
+              let glyph = run.first(where: { $0.typographicBounds.rect.contains(point) }),
+              let index = glyph.characterIndices.min() else { return nil }
+        let relative = first.distance(to: index)
+        guard relative >= 0, relative < source.length else { return nil }
+        return source.location + relative
+    }
+}
+
+private struct MarkdownGlyphHitPreference: PreferenceKey {
+    static var defaultValue: [MarkdownGlyphHit] { [] }
+
+    static func reduce(value: inout [MarkdownGlyphHit], nextValue: () -> [MarkdownGlyphHit]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+private struct MarkdownMappedTap: ViewModifier {
+    let onLocate: ((Int) -> Void)?
+    @State private var hits: [MarkdownGlyphHit] = []
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let onLocate {
+            content
+                .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                    GeometryReader { geometry in
+                        let mapped = layouts.flatMap { entry in
+                            let origin = geometry[entry.origin]
+                            var firstIndices: [NSRange: Text.Layout.CharacterIndex] = [:]
+                            let runs = entry.layout.flatMap { line in
+                                line.compactMap { run -> (Text.Layout.Run, NSRange)? in
+                                    guard let marker = run[MarkdownSourceGlyph.self],
+                                          run[MarkdownLinkGlyph.self] == nil,
+                                          let index = run.characterIndices.min() else { return nil }
+                                    firstIndices[marker.source] = min(index, firstIndices[marker.source] ?? index)
+                                    return (run, marker.source)
+                                }
+                            }
+                            return runs.compactMap { run, source in
+                                firstIndices[source].map {
+                                    MarkdownGlyphHit(source: source, first: $0, run: run, origin: origin)
+                                }
+                            }
+                        }
+                        Color.clear.preference(key: MarkdownGlyphHitPreference.self, value: mapped)
+                    }
+                    .allowsHitTesting(false)
+                }
+                .onPreferenceChange(MarkdownGlyphHitPreference.self) { hits = $0 }
+                .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
+                    for hit in hits {
+                        if let offset = hit.sourceOffset(at: tap.location) {
+                            onLocate(offset)
+                            break
+                        }
+                    }
+                })
+        } else {
+            content
+        }
     }
 }
 
@@ -797,7 +876,10 @@ enum MarkdownNativeText {
 
     private static func part(_ node: MarkdownInline) -> Text {
         switch node {
-        case .text(let content, _):
+        case .text(let content, let source):
+            if let source, source.length == content.utf16.count {
+                return Text(verbatim: content).customAttribute(MarkdownSourceGlyph(source: source))
+            }
             return Text(verbatim: content)
         case .code:
             return Text(attributed([node]))

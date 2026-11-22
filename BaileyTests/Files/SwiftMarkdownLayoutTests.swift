@@ -5,6 +5,47 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownLayoutTests: XCTestCase {
+    func testRenderedGlyphIndicesMeasureUTF16AcrossEmojiAndCombiningText() async {
+        let literal = "A👩‍🚀e\u{301}Z"
+        var measured: [Int] = []
+        let view = Text(verbatim: literal)
+            .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                let indices = layouts.flatMap { entry in
+                    entry.layout.flatMap { line in
+                        line.flatMap { run in run.flatMap(\.characterIndices) }
+                    }
+                }
+                let first = indices.min()
+                let offsets = first.map { start in
+                    Set(indices.map { start.distance(to: $0) }).sorted()
+                } ?? []
+                Color.clear.preference(key: MarkdownGlyphOffsets.self, value: offsets)
+            }
+            .onPreferenceChange(MarkdownGlyphOffsets.self) { measured = $0 }
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 240, height: 80),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            await Task.yield()
+        }
+        XCTAssertEqual(measured.last, literal.dropLast().utf16.count)
+        XCTAssertTrue(measured.contains("A👩‍🚀".utf16.count))
+    }
+
+    private struct MarkdownGlyphOffsets: PreferenceKey {
+        static let defaultValue: [Int] = []
+
+        static func reduce(value: inout [Int], nextValue: () -> [Int]) {
+            value.append(contentsOf: nextValue())
+        }
+    }
+
     func testWrappedLinkPointerRegionsFollowNativeWindowResizing() async throws {
         func descendants(in view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap(descendants)

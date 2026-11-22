@@ -5,6 +5,7 @@ struct MarkdownFilePreview: View {
     let directory: String?
     let assetRefresh: UInt
     let onOpenLink: (URL) async -> Bool
+    var onLocateSource: (Int) -> Void = { _ in }
 
     @State private var parsed: (document: MarkdownDocument, request: String, target: String)?
     @State private var failed = false
@@ -35,12 +36,18 @@ struct MarkdownFilePreview: View {
                               parsed.request == file.markdownRequestID,
                               parsed.document.blocks.indices.contains(block),
                               let source = parsed.document.blocks[block].sourceRange else { return }
-                        file.pendingMarkdownSource = (request: parsed.request, offset: source.location)
+                        file.pendingMarkdownSource = (
+                            request: parsed.request, offset: source.location, focus: false
+                        )
                         if file.editorCoordinator?.showMarkdownSource(
                             atUTF16Offset: source.location
                         ) == true {
                             file.pendingMarkdownSource = nil
                         }
+                    },
+                    onLocateSource: { offset in
+                        guard parsed.request == file.markdownRequestID else { return }
+                        onLocateSource(offset)
                     },
                     openLink: { url in
                         guard file.markdownRequestID == parsed.request else { return false }

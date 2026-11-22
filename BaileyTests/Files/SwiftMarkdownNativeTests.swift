@@ -561,6 +561,26 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertGreaterThan(right.blueComponent, left.blueComponent + 0.25)
     }
 
+    func testRenderedHeadingTextRangePointsPastMarkdownMarkers() async throws {
+        let source = "\u{FEFF}---\r\nname: try\r\n---\r\n## Destination 👩‍🚀\r\n\r\n**Strong** paragraph."
+        let document = try await MarkdownDocument.parse(source)
+        let original = source as NSString
+        let heading = try XCTUnwrap(document.blocks.first)
+        XCTAssertEqual(heading.sourceRange, original.range(of: "## Destination 👩‍🚀"))
+        guard case .heading(_, let title) = heading.content, case .text(_, let headingText) = title.first
+        else { return XCTFail("Expected original heading text") }
+        XCTAssertEqual(headingText, original.range(of: "Destination 👩‍🚀"),
+                       "Double-click navigation must not position the caret on heading markers")
+        let paragraph = try XCTUnwrap(document.blocks.first {
+            if case .paragraph = $0.content { return true }
+            return false
+        })
+        guard case .paragraph(let inline) = paragraph.content, case .strong(let children) = inline.first,
+              case .text(_, let strongText) = children.first
+        else { return XCTFail("Expected bold text in the original paragraph") }
+        XCTAssertEqual(strongText, original.range(of: "Strong"))
+    }
+
     func testOriginalBlockIndexTracksRepeatedHeadingsUnicodeAndExtractedFootnotes() async throws {
         let source = """
             # Same 🧪
