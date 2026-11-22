@@ -177,7 +177,7 @@ nonisolated enum MarkdownSelectionText {
     private static func visible(_ nodes: [MarkdownHTML], grouped: Bool,
                                 path: [Int], details: [String: Bool]) -> [Piece] {
         let layoutNodes = grouped ? MarkdownHTML.groupedForPresentation(nodes) : nodes
-        return layoutNodes.enumerated().flatMap { index, item -> [Piece] in
+        let groups = layoutNodes.enumerated().map { index, item -> [Piece] in
             let childPath = path + [index]
             switch item {
             case .text(let text, let source):
@@ -217,5 +217,6 @@ nonisolated enum MarkdownSelectionText {
                 return [Piece(text: "—", source: nil)]
             }
         }
+        return grouped ? separated(groups.filter { !$0.isEmpty }, by: "\n\n") : groups.flatMap { $0 }
     }
 }

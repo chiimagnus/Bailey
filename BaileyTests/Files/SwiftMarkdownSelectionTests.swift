@@ -35,6 +35,14 @@ final class SwiftMarkdownSelectionTests: XCTestCase {
         }
     }
 
+    func testHTMLCopySeparatesVisibleParagraphsWithoutCopyingMarkup() async throws {
+        let source = "<div><p>First paragraph</p><p>Second paragraph<br>next line</p></div>"
+        let document = try await MarkdownDocument.parse(source)
+        let range = try XCTUnwrap(MarkdownSelectionText.fullRange(in: document))
+        XCTAssertEqual(MarkdownSelectionText.copy(range, from: document),
+                       "First paragraph\n\nSecond paragraph\nnext line")
+    }
+
     func testImageAltCopyUsesOriginalImageTokenRanges() async throws {
         let source = "# Images\n\n中文 🧪 before ![First](first.png) then ![Second](second.svg) end.\n"
         let document = try await MarkdownDocument.parse(source)
