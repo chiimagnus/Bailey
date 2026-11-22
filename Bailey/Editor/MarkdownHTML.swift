@@ -12,7 +12,7 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         let shaded: Bool
     }
 
-    case text(String)
+    case text(String, source: NSRange? = nil)
     case paragraph([Self])
     case quote([Self])
     case lineBreak
@@ -37,7 +37,7 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         var inline: [Self] = []
         func flush() {
             let meaningful = inline.contains { node in
-                if case .text(let value) = node {
+                if case .text(let value, _) = node {
                     return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 }
                 return true
@@ -73,23 +73,34 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "hr",
     ]
 
-    static func parse(_ source: String) -> [Self]? {
-        guard source.utf8.count <= 256 << 10 else { return nil }
+    static let byteLimit = 256 << 10
+    private typealias TextProjection = (String, Range<Int>) -> [Self]
+
+    static func parse(_ source: String, mapText: ((String, Range<Int>) -> [Self])? = nil) -> [Self]? {
+        guard source.utf8.count <= byteLimit else { return nil }
         do {
             let parser = Parser.htmlParser().settings(.preserveCase)
             let document = try parser.parseInput(source, "")
             _ = document.outputSettings().prettyPrint(pretty: false)
             guard let body = document.body(),
                   body.children().contains(where: { supported.contains($0.tagNameNormal()) }) else { return nil }
-            return try body.getChildNodes().flatMap { try render($0, depth: 0) }
+            return try body.getChildNodes().flatMap { try render($0, depth: 0, mapText: mapText) }
         } catch {
             return nil
         }
     }
 
-    private static func render(_ node: SwiftSoup.Node, depth: Int) throws -> [Self] {
-        if let text = node as? TextNode { return [.text(text.getWholeText())] }
+    private static func render(_ node: SwiftSoup.Node, depth: Int, mapText: TextProjection?) throws -> [Self] {
+        if let text = node as? TextNode {
+            if let mapText, let segments = text.originalTextSegments() {
+                return segments.flatMap { mapText($0.text, $0.bytes) }
+            }
+            return [.text(text.getWholeText())]
+        }
         guard let element = node as? Element, depth < 32 else { return [] }
+        func children(of container: Element) throws -> [Self] {
+            try container.getChildNodes().flatMap { try render($0, depth: depth + 1, mapText: mapText) }
+        }
         let tag = element.tagNameNormal()
         switch tag {
         case "img":
@@ -114,7 +125,7 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
                 return false
             }.map { row in
                 let cells = try row.children().filter { ["th", "td"].contains($0.tagNameNormal()) }.map { cell in
-                    TableCell(nodes: try cell.getChildNodes().flatMap { try render($0, depth: depth + 1) },
+                    TableCell(nodes: try children(of: cell),
                               isHeader: cell.tagNameNormal() == "th")
                 }
                 // CSS tr:nth-child(2n) counts within thead/tbody, not the whole table.
@@ -133,20 +144,20 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
             let summary = element.children().first { $0.tagNameNormal() == "summary" }
             let label = try summary?.text() ?? String(localized: "Details")
             let children = try element.getChildNodes().filter { $0 !== summary }
-                .flatMap { try render($0, depth: depth + 1) }
+                .flatMap { try render($0, depth: depth + 1, mapText: mapText) }
             return [.details(label, children, open: element.hasAttr("open"))]
         case "a":
-            let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            let children = try children(of: element)
             guard let url = try reference(element.attr("href")),
                   url.scheme == nil || (["http", "https"].contains(url.scheme?.lowercased() ?? "")
                                         && url.host != nil) else { return children }
             return [.link(url, children)]
         case "h1", "h2", "h3", "h4", "h5", "h6":
-            let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            let children = try children(of: element)
             return [.heading(Int(String(tag.suffix(1))) ?? 6, children)]
         case "ul", "ol":
             let items = try element.children().filter { $0.tagNameNormal() == "li" }.map { child in
-                try child.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+                try children(of: child)
             }
             let start = Int(try element.attr("start")).flatMap {
                 (-1_000_000...1_000_000).contains($0) ? $0 : nil
@@ -155,16 +166,16 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         case "hr":
             return [.horizontalRule]
         case "li":
-            return [.paragraph(try element.getChildNodes().flatMap { try render($0, depth: depth + 1) })]
+            return [.paragraph(try children(of: element))]
         case "b", "strong", "em", "i", "s", "del", "code", "kbd":
-            let children = try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            let children = try children(of: element)
             return [.emphasis(children, tag: tag)]
         case "p", "div":
-            return [.paragraph(try element.getChildNodes().flatMap { try render($0, depth: depth + 1) })]
+            return [.paragraph(try children(of: element))]
         case "blockquote":
-            return [.quote(try element.getChildNodes().flatMap { try render($0, depth: depth + 1) })]
+            return [.quote(try children(of: element))]
         case "span", "summary":
-            return try element.getChildNodes().flatMap { try render($0, depth: depth + 1) }
+            return try children(of: element)
         case "br":
             return [.lineBreak]
         default:

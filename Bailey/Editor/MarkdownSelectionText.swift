@@ -180,8 +180,8 @@ nonisolated enum MarkdownSelectionText {
         return layoutNodes.enumerated().flatMap { index, item -> [Piece] in
             let childPath = path + [index]
             switch item {
-            case .text(let text):
-                return [Piece(text: text, source: nil)]
+            case .text(let text, let source):
+                return [Piece(text: text, source: source)]
             case .quote(let children):
                 return visible(children, grouped: true, path: childPath, details: details)
             case .paragraph(let children), .heading(_, let children),

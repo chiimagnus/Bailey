@@ -3,6 +3,38 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownSelectionTests: XCTestCase {
+    func testPartialSelectionInHTMLUsesOriginalTextNodeAndEntityRanges() async throws {
+        let source = [
+            "---", "name: 中文 🧪", "---", "",
+            "> <div>", "> <p>重复 e\u{301} &amp; 尾</p>",
+            "> <p><strong>重复 e\u{301} &amp; 尾</strong></p>", "> </div>", "",
+            "After block"
+        ].joined(separator: "\r\n")
+        let original = source as NSString
+        let selected = original.range(of: "e\u{301} &amp;", options: .backwards)
+        let entity = original.range(of: "&amp;", options: .backwards)
+        let document = try await MarkdownDocument.parse(source)
+
+        XCTAssertEqual(MarkdownSelectionText.copy(selected, from: document), "e\u{301} &")
+        XCTAssertEqual(MarkdownSelectionText.copy(entity, from: document), "&")
+    }
+
+    func testHTMLSelectionRetainsEntityBoundariesAcrossLinesAndTableCells() async throws {
+        let source = """
+            1. <table>
+               <tr><th>Label</th><th>Value</th></tr>
+               <tr><td>前 &copy
+               中文</td><td>🧪 &#x1F680; &amp; 尾</td></tr>
+               </table>
+            """
+        let document = try await MarkdownDocument.parse(source)
+        let original = source as NSString
+        for (raw, shown) in [("&copy", "©"), ("中文", "中文"), ("&#x1F680;", "🚀"), ("&amp;", "&")] {
+            let range = original.range(of: raw)
+            XCTAssertEqual(MarkdownSelectionText.copy(range, from: document), shown, raw)
+        }
+    }
+
     func testImageAltCopyUsesOriginalImageTokenRanges() async throws {
         let source = "# Images\n\n中文 🧪 before ![First](first.png) then ![Second](second.svg) end.\n"
         let document = try await MarkdownDocument.parse(source)

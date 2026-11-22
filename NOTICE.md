@@ -33,7 +33,7 @@ Bailey 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参�
 | TSX 本地解析器 | 来源、固定修订和更新边界见 [development.md](docs/development.md#语法解析与-diff) |
 | Apple `swift-markdown` | [上游代码](https://github.com/swiftlang/swift-markdown)、[Apache-2.0 原文](Bailey/Resources/Licenses/LICENSE-swift-markdown.txt)；版本固定见 `Package.resolved` |
 | `swift-cmark`（cmark-gfm 解析器） | [上游代码](https://github.com/swiftlang/swift-cmark)、[BSD/MIT 等许可证原文](Bailey/Resources/Licenses/LICENSE-swift-cmark.txt)；版本固定见 `Package.resolved` |
-| Markdown HTML 解析 | [SwiftSoup](https://github.com/scinfu/SwiftSoup)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftsoup.txt) |
+| Markdown HTML 解析 | [SwiftSoup 及本地补丁](Vendor/SwiftSoup/README.md)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftsoup.txt) |
 | YAML Front Matter | [Yams](https://github.com/jpsim/Yams)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-yams.txt) |
 | SVG 原生绘制 | [SwiftDraw](https://github.com/swhitty/SwiftDraw)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftdraw.txt) |
 | Mermaid 原生图表 | [MermaidKit](https://github.com/2389-research/MermaidKit)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-mermaidkit.txt) |

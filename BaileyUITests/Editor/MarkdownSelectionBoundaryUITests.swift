@@ -3,6 +3,51 @@ import XCTest
 
 @MainActor
 final class MarkdownSelectionBoundaryUITests: XCTestCase {
+    func testHTMLBlockGlyphLocatesSourceAndSelectsAcrossMarkdownParagraph() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # HTML coordinates
+
+            <div>
+            <p>🧪 DUPLICATE</p>
+            <p><code>🧪 DUPLICATE</code></p>
+            </div>
+
+            MARKDOWN_TAIL
+            """
+        let file = try fixture.file("HTMLCoordinates.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let repeated = preview.staticTexts.matching(NSPredicate(format: "value == %@", "🧪 DUPLICATE"))
+        let second = repeated.element(boundBy: 1)
+        let tail = preview.staticTexts["MARKDOWN_TAIL"].firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 15), preview.debugDescription)
+        XCTAssertTrue(tail.waitForExistence(timeout: 10), preview.debugDescription)
+        let target = second.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.50))
+        target.click(forDuration: 0.15,
+                     thenDragTo: tail.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.53)))
+        app.typeKey("c", modifierFlags: .command)
+        let copied = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertTrue(copied.hasSuffix("MARKDOWN_TAIL"), copied)
+        XCTAssertTrue("DUPLICATE".hasSuffix(String(copied.prefix { !$0.isNewline })), copied)
+        XCTAssertFalse(copied.contains("🧪") || copied.contains("DUPLICATE"), copied)
+
+        target.doubleClick()
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+        app.typeKey("z", modifierFlags: [])
+        let value = try XCTUnwrap(window.textViews.firstMatch.value as? String)
+        let edited = try XCTUnwrap(value.components(separatedBy: "<code>🧪 ").last?.components(separatedBy: "</code>").first)
+        XCTAssertTrue(edited.contains("z"), value)
+        XCTAssertEqual(edited.replacingOccurrences(of: "z", with: ""), "DUPLICATE")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+    }
+
     func testSelectAllIncludesBodyAfterEarlierFootnoteDefinition() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = """

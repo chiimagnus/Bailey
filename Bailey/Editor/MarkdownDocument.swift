@@ -136,6 +136,16 @@ nonisolated struct MarkdownDocument: Sendable {
         func originalRange(_ range: Markdown.SourceRange) -> NSRange? {
             renderedCoordinates.bytes(range).flatMap(originalByteRange)
         }
+        func projectHTML(_ node: Markdown.HTMLBlock) -> MarkdownNativeBlock {
+            let raw = node.rawHTML
+            let positions = node.range.flatMap { renderedCoordinates.htmlByteMapping(raw, at: $0) }
+            let nodes = MarkdownHTML.parse(raw, mapText: positions.map { positions in
+                { text, bytes in
+                    positions.textNodes(text, bytes: bytes, remap: originalByteRange)
+                }
+            })
+            return nodes.map(MarkdownNativeBlock.html) ?? .rawHTML(raw)
+        }
         func projectText(_ node: Markdown.Text) -> [MarkdownInline] {
             let value = node.string
             let rawBytes = protected.source.utf8
@@ -248,7 +258,7 @@ nonisolated struct MarkdownDocument: Sendable {
             guard let rendered = project(
                 node, math: math, projectText: projectText,
                 projectCode: projectCode, imageRange: { $0.range.flatMap(originalRange) },
-                projectBlockCode: projectBlockCode, allowsAlert: true
+                projectBlockCode: projectBlockCode, projectHTML: projectHTML, allowsAlert: true
             ) else { return nil }
             let anchor: String?
             if case let .heading(_, inline) = rendered {
@@ -302,6 +312,7 @@ nonisolated struct MarkdownDocument: Sendable {
     private typealias CodeProjection = (Markdown.InlineCode) -> [MarkdownInline]
     private typealias ImageRangeProjection = (Markdown.Image) -> NSRange?
     private typealias BlockCodeProjection = (Markdown.CodeBlock) -> MarkdownNativeBlock
+    private typealias HTMLProjection = (Markdown.HTMLBlock) -> MarkdownNativeBlock
 
     private static func project(_ node: any Markdown.Markup,
                                 math: MarkdownMath.Source,
@@ -309,6 +320,7 @@ nonisolated struct MarkdownDocument: Sendable {
                                 projectCode: CodeProjection,
                                 imageRange: ImageRangeProjection,
                                 projectBlockCode: BlockCodeProjection,
+                                projectHTML: HTMLProjection,
                                 allowsAlert: Bool = false) -> MarkdownNativeBlock? {
         if let heading = node as? Markdown.Heading {
             return .heading(heading.level, projectInline(
@@ -341,7 +353,7 @@ nonisolated struct MarkdownDocument: Sendable {
             let blocks = quote.children.compactMap {
                 project($0, math: math, projectText: projectText,
                         projectCode: projectCode, imageRange: imageRange,
-                        projectBlockCode: projectBlockCode)
+                        projectBlockCode: projectBlockCode, projectHTML: projectHTML)
             }
             guard allowsAlert,
                   let opening = quote.child(at: 0) as? Markdown.Paragraph,
@@ -360,13 +372,13 @@ nonisolated struct MarkdownDocument: Sendable {
             return .list(ordered: false, start: 1,
                          items: projectItems(list.children, math: math, projectText: projectText,
                                              projectCode: projectCode, imageRange: imageRange,
-                                             projectBlockCode: projectBlockCode))
+                                             projectBlockCode: projectBlockCode, projectHTML: projectHTML))
         }
         if let list = node as? Markdown.OrderedList {
             return .list(ordered: true, start: Int(clamping: list.startIndex),
                          items: projectItems(list.children, math: math, projectText: projectText,
                                              projectCode: projectCode, imageRange: imageRange,
-                                             projectBlockCode: projectBlockCode))
+                                             projectBlockCode: projectBlockCode, projectHTML: projectHTML))
         }
         if let table = node as? Markdown.Table {
             let head = table.head.children.compactMap { $0 as? Markdown.Table.Cell }
@@ -393,12 +405,7 @@ nonisolated struct MarkdownDocument: Sendable {
             }
             return projectBlockCode(code)
         }
-        if let html = node as? Markdown.HTMLBlock {
-            if let elements = MarkdownHTML.parse(html.rawHTML) {
-                return .html(elements)
-            }
-            return .rawHTML(html.rawHTML)
-        }
+        if let html = node as? Markdown.HTMLBlock { return projectHTML(html) }
         if node is Markdown.ThematicBreak { return .rule }
         // Unsupported extensions stay visible as source rather than silently disappearing.
         return .rawHTML(node.format())
@@ -409,7 +416,8 @@ nonisolated struct MarkdownDocument: Sendable {
                                      projectText: TextProjection,
                                      projectCode: CodeProjection,
                                      imageRange: ImageRangeProjection,
-                                     projectBlockCode: BlockCodeProjection) -> [MarkdownListItem] {
+                                     projectBlockCode: BlockCodeProjection,
+                                     projectHTML: HTMLProjection) -> [MarkdownListItem] {
         nodes.compactMap { $0 as? Markdown.ListItem }.map { item in
             let checked: Bool?
             switch item.checkbox {
@@ -420,7 +428,7 @@ nonisolated struct MarkdownDocument: Sendable {
             return MarkdownListItem(checked: checked,
                                     blocks: item.children.compactMap { project($0, math: math, projectText: projectText,
                         projectCode: projectCode, imageRange: imageRange,
-                        projectBlockCode: projectBlockCode) })
+                        projectBlockCode: projectBlockCode, projectHTML: projectHTML) })
         }
     }
 
@@ -740,6 +748,62 @@ private nonisolated struct MarkdownOriginalCoordinates {
         return lower..<upper
     }
 
+    func htmlByteMapping(_ html: String, at source: Markdown.SourceRange) -> MarkdownHTMLByteMapping? {
+        guard html.utf8.count <= MarkdownHTML.byteLimit else { return nil }
+        let rendered = html.utf8
+        let original = body.utf8
+        let first = source.lowerBound.line - 1
+        let last = source.upperBound.line - 1
+        guard lineStarts.indices.contains(first), lineStarts.indices.contains(last), first <= last
+        else { return nil }
+
+        var runs: [MarkdownHTMLByteMapping.Run] = []
+        var cursor = rendered.startIndex
+        var offset = 0
+        for row in first...last {
+            let end = rendered[cursor...].firstIndex { $0 == 10 || $0 == 13 } ?? rendered.endIndex
+            let content = rendered[cursor..<end]
+            let originalStart = lineStarts[row]
+            let originalEnd = row + 1 < lineStarts.count ? lineStarts[row + 1] : original.endIndex
+            var lineEnd = originalEnd
+            while lineEnd > originalStart {
+                let previous = original.index(before: lineEnd)
+                guard original[previous] == 10 || original[previous] == 13 else { break }
+                lineEnd = previous
+            }
+
+            let length = content.count
+            if length > 0 {
+                guard let start = original.index(lineEnd, offsetBy: -length, limitedBy: originalStart),
+                      original[start..<lineEnd].elementsEqual(content) else { return nil }
+                let firstByte = original.distance(from: original.startIndex, to: start)
+                runs.append(.init(rendered: offset..<(offset + length),
+                                  source: firstByte..<(firstByte + length)))
+                offset += length
+            }
+            if end < rendered.endIndex {
+                var afterBreak = rendered.index(after: end)
+                if rendered[end] == 13, afterBreak < rendered.endIndex, rendered[afterBreak] == 10 {
+                    afterBreak = rendered.index(after: afterBreak)
+                }
+                let displayedBreak = rendered.distance(from: end, to: afterBreak)
+                let breakStart = original.distance(from: original.startIndex, to: lineEnd)
+                let breakLength = original.distance(from: lineEnd, to: originalEnd)
+                if breakLength > 0 {
+                    runs.append(.init(rendered: offset..<(offset + displayedBreak),
+                                      source: breakStart..<(breakStart + breakLength)))
+                }
+                cursor = afterBreak
+                offset += displayedBreak
+            } else {
+                cursor = end
+                guard row == last else { return nil }
+            }
+        }
+        guard cursor == rendered.endIndex else { return nil }
+        return MarkdownHTMLByteMapping(runs: runs)
+    }
+
     private func utf16Offset(_ byteOffset: Int) -> Int? {
         let bytes = body.utf8
         guard let boundary = bytes.index(bytes.startIndex, offsetBy: byteOffset,
@@ -771,6 +835,51 @@ private nonisolated struct MarkdownOriginalCoordinates {
         let start = headerUTF16 + lineUTF16Starts[first]
         let end = headerUTF16 + lineUTF16Ends[last]
         return NSRange(location: start, length: end - start)
+    }
+}
+
+private nonisolated struct MarkdownHTMLByteMapping {
+    struct Run {
+        let rendered: Range<Int>
+        let source: Range<Int>
+    }
+
+    let runs: [Run]
+
+    func textNodes(_ text: String, bytes: Range<Int>,
+                   remap: (Range<Int>) -> NSRange?) -> [MarkdownHTML] {
+        let rendered = text.utf8
+        var lower = 0
+        var upper = runs.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if runs[middle].rendered.upperBound <= bytes.lowerBound { lower = middle + 1 }
+            else { upper = middle }
+        }
+        var result: [MarkdownHTML] = []
+        var cursor = bytes.lowerBound
+        for run in runs[lower...] where run.rendered.lowerBound < bytes.upperBound {
+            let start = max(run.rendered.lowerBound, bytes.lowerBound)
+            let end = min(run.rendered.upperBound, bytes.upperBound)
+            guard cursor == start else { return [.text(text)] }
+            let sourceBytes: Range<Int>
+            if run.rendered.count == run.source.count {
+                let first = run.source.lowerBound + start - run.rendered.lowerBound
+                sourceBytes = first..<(first + end - start)
+            } else {
+                sourceBytes = run.source
+            }
+            if start == bytes.lowerBound, end == bytes.upperBound {
+                return [.text(text, source: remap(sourceBytes))]
+            }
+            guard rendered.count == bytes.count else { return [.text(text)] }
+            let first = rendered.index(rendered.startIndex, offsetBy: start - bytes.lowerBound)
+            let last = rendered.index(first, offsetBy: end - start)
+            result.append(.text(String(decoding: rendered[first..<last], as: UTF8.self),
+                                source: remap(sourceBytes)))
+            cursor = end
+        }
+        return cursor == bytes.upperBound ? result : [.text(text)]
     }
 }
 

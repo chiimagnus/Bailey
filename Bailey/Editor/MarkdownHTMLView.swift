@@ -27,9 +27,9 @@ struct MarkdownHTMLContent: View {
         let layoutNodes = MarkdownHTML.groupedForPresentation(nodes)
         ForEach(layoutNodes.indices, id: \.self) { index in
             switch layoutNodes[index] {
-            case .text(let text):
+            case .text(let text, _):
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(verbatim: text).textSelection(.enabled)
+                    Self.inlineText([layoutNodes[index]]).textSelection(.enabled)
                 }
             case .paragraph(let children):
                 if MarkdownHTML.isInline(children) {
@@ -173,11 +173,19 @@ struct MarkdownHTMLContent: View {
     private static func inlineText(_ nodes: [MarkdownHTML], link: URL? = nil) -> Text {
         nodes.reduce(Text(verbatim: "")) { result, node in
             switch node {
-            case .text(let value):
-                guard let link else { return result + Text(verbatim: value) }
-                var attributed = AttributedString(value)
-                attributed.link = link
-                return result + Text(attributed).customAttribute(MarkdownLinkGlyph())
+            case .text(let value, let source):
+                let text: Text
+                if let link {
+                    var attributed = AttributedString(value)
+                    attributed.link = link
+                    text = Text(attributed).customAttribute(MarkdownLinkGlyph())
+                } else {
+                    text = Text(verbatim: value)
+                }
+                guard let source else { return result + text }
+                return result + text.customAttribute(
+                    MarkdownSourceGlyph(source: source, displayLength: value.utf16.count)
+                )
             case .lineBreak: return result + Text(verbatim: "\n")
             case .emphasis(let children, let tag):
                 return result + styledText(inlineText(children, link: link), tag: tag)

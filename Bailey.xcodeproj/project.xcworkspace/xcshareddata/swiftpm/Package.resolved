@@ -74,15 +74,6 @@
       }
     },
     {
-      "identity" : "swiftsoup",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/scinfu/SwiftSoup",
-      "state" : {
-        "revision" : "8397a860c6955924b584c50c5265c6aac0970015",
-        "version" : "2.14.4"
-      }
-    },
-    {
       "identity" : "swifttreesitter",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ChimeHQ/SwiftTreeSitter",

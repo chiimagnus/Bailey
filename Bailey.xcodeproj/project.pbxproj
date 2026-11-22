@@ -222,7 +222,7 @@
 				BB80000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/BaileyGrammars" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
 				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
-				BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
+				BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */,
 				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
 				BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */,
@@ -529,6 +529,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/BaileyGrammars;
 		};
+		BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/SwiftSoup;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -554,14 +558,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 6.2.2;
-			};
-		};
-		BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/scinfu/SwiftSoup";
-			requirement = {
-				kind = exactVersion;
-				version = 2.14.4;
 			};
 		};
 		AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
@@ -610,7 +606,7 @@
 		};
 		BC1000000000000000000022 /* SwiftSoup */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = BC1000000000000000000021 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			package = BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */;
 			productName = SwiftSoup;
 		};
 		AA10000000000000000000B1 /* GhosttyTerminal */ = {

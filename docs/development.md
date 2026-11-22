@@ -110,6 +110,8 @@ Apple `swift-markdown`（经 `swift-cmark` 使用 cmark-gfm）仅负责解析 Ma
 阅读 UI 由 Bailey 自己的 SwiftUI 组件渲染，不使用 Textual、MarkdownView 或 WebKit。
 代码围栏复用现有 Tree-sitter 高亮；公式使用公开的 SwiftUIMath Canvas 排版 API，不使用私有 SPI。
 资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
+块 HTML 复用 [本地 SwiftSoup](../Vendor/SwiftSoup/README.md) 的分词和节点原文区间；
+补丁只负责保留并公开文字和实体的字节位置，不替换 HTML 解析规则。
 
 ### Neon
 

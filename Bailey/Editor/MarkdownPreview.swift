@@ -678,7 +678,7 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
     }
 }
 
-private struct MarkdownSourceGlyph: TextAttribute, Equatable {
+struct MarkdownSourceGlyph: TextAttribute, Equatable {
     let source: NSRange
     let displayLength: Int
     var sourceRuns: [MarkdownSourceRun] = []
