@@ -8,8 +8,13 @@ struct MarkdownPreview: View {
     let assetRefresh: UInt
     var restoredBlock: Int? = nil
     var sourceBlock: Int? = nil
+    var restoredSourceOffset: Int? = nil
+    var synchronizedSourceOffset: Int? = nil
+    var restoredViewportY: CGFloat = 0
     var onReadingPosition: (Int) -> Void = { _ in }
     var onReaderScroll: (Int) -> Void = { _ in }
+    var onReadingSourceAnchor: (Int, CGFloat) -> Void = { _, _ in }
+    var onReaderSourceScroll: (Int) -> Void = { _ in }
     var onLocateSource: ((Int) -> Void)? = nil
     var openLink: (URL) async -> Bool = { _ in false }
     var navigation: Binding<String?> = .constant(nil)
@@ -18,6 +23,7 @@ struct MarkdownPreview: View {
     @State private var linkToOpen: URL?
     @State private var failedLink = false
     @State private var readerIsScrolling = false
+    @State private var sourceCoordinates = MarkdownReaderCoordinates()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -48,6 +54,10 @@ struct MarkdownPreview: View {
                             }
                         }
                         .scrollTargetLayout()
+                        .background {
+                            MarkdownReaderClipBridge(coordinates: sourceCoordinates)
+                                .frame(width: 0, height: 0)
+                        }
                         .font(.system(size: 16))
                         .lineSpacing(4)
                         .foregroundStyle(MarkdownGitHubColors.text(dark: colorScheme == .dark))
@@ -58,23 +68,43 @@ struct MarkdownPreview: View {
                         .modifier(MarkdownLinkCursor())
                     }
                     .accessibilityIdentifier("bailey.markdown.preview")
-                    .scrollPosition(id: $position, anchor: .top)
+                    .coordinateSpace(name: "bailey.markdown.reader")
+                    .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.1) { visible in
+                        position = visible.min()
+                    }
+                    .onPreferenceChange(MarkdownGlyphHitPreference.self) { hits in
+                        sourceCoordinates.hits = hits
+                        if !readerIsScrolling { sourceCoordinates.scrollPending() }
+                    }
                     .onScrollPhaseChange { _, phase in
                         let isUserScroll = phase == .interacting || phase == .decelerating
-                        if readerIsScrolling && !isUserScroll, let position {
+                        if readerIsScrolling && !isUserScroll {
                             reportReaderScroll(position)
+                        }
+                        if isUserScroll && !readerIsScrolling {
+                            sourceCoordinates.pendingSource = nil
+                            sourceCoordinates.lastReportedOffset = nil
                         }
                         readerIsScrolling = isUserScroll
                     }
+                    .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
+                        if readerIsScrolling { reportReaderScroll(position) }
+                    }
                     .onChange(of: position) { _, position in
-                        if readerIsScrolling, let position { reportReaderScroll(position) }
+                        if readerIsScrolling { reportReaderScroll(position) }
                     }
                     .onChange(of: revision, initial: true) { _, _ in
                         guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
-                        scroll(to: block, rows: rows, proxy: proxy)
+                        scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
+                               viewportY: restoredViewportY, rows: rows, proxy: proxy)
+                    }
+                    .onChange(of: synchronizedSourceOffset) { _, offset in
+                        guard !readerIsScrolling, let offset, let block = sourceBlock else { return }
+                        scroll(to: block, sourceOffset: offset, rows: rows, proxy: proxy)
                     }
                     .onChange(of: sourceBlock) { _, block in
-                        guard !readerIsScrolling, let block else { return }
+                        guard !readerIsScrolling, synchronizedSourceOffset == nil,
+                              let block else { return }
                         scroll(to: block, rows: rows, proxy: proxy)
                     }
                     .task(id: navigation.wrappedValue) {
@@ -128,13 +158,33 @@ struct MarkdownPreview: View {
         }
     }
 
-    private func reportReaderScroll(_ block: Int) {
-        onReadingPosition(block)
-        onReaderScroll(block)
+    private func reportReaderScroll(_ block: Int?) {
+        if let visible = sourceCoordinates.firstVisibleSource() {
+            onReadingSourceAnchor(visible.offset, visible.viewportY)
+            if sourceCoordinates.lastReportedOffset != visible.offset {
+                sourceCoordinates.lastReportedOffset = visible.offset
+                onReaderSourceScroll(visible.offset)
+            }
+        } else if let block {
+            onReadingPosition(block)
+            onReaderScroll(block)
+        }
     }
 
-    private func scroll(to block: Int, rows: [RenderRow], proxy: ScrollViewProxy) {
+    private func scroll(to block: Int, sourceOffset: Int? = nil, viewportY: CGFloat = 0,
+                        rows: [RenderRow], proxy: ScrollViewProxy) {
         guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
+        if let sourceOffset {
+            if sourceCoordinates.scroll(to: sourceOffset, atViewportY: viewportY) {
+                sourceCoordinates.pendingSource = nil
+                onReadingSourceAnchor(sourceOffset, viewportY)
+                return
+            }
+            sourceCoordinates.pendingSource = (sourceOffset, viewportY)
+            if sourceCoordinates.hits.contains(where: {
+                $0.viewportFrame(forSourceOffset: sourceOffset) != nil
+            }) { return }
+        }
         proxy.scrollTo(row.start, anchor: .top)
         onReadingPosition(block)
     }
@@ -181,6 +231,109 @@ struct MarkdownPreview: View {
     }
 }
 
+@MainActor
+private final class MarkdownReaderCoordinates {
+    weak var scrollView: NSScrollView?
+    weak var attachedBridge: MarkdownReaderClipView?
+    var hits: [MarkdownGlyphHit] = []
+    var lastReportedOffset: Int?
+    var pendingSource: (offset: Int, viewportY: CGFloat)?
+
+    func scrollPending() {
+        guard let pendingSource else { return }
+        if scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY) {
+            self.pendingSource = nil
+        }
+    }
+
+    func firstVisibleSource() -> (offset: Int, viewportY: CGFloat)? {
+        guard let height = scrollView?.contentView.bounds.height else { return nil }
+        var first: MarkdownGlyphHit?
+        for hit in hits {
+            let frame = hit.viewportFrame
+            guard frame.maxY > 0, frame.minY < height else { continue }
+            if let current = first {
+                let previous = current.viewportFrame
+                guard frame.minY < previous.minY - 1
+                    || abs(frame.minY - previous.minY) <= 1 && frame.minX < previous.minX
+                else { continue }
+            }
+            first = hit
+        }
+        return first.map { ($0.firstSourceOffset, $0.viewportFrame.minY) }
+    }
+
+    @discardableResult
+    func scroll(to offset: Int, atViewportY viewportY: CGFloat) -> Bool {
+        guard let scrollView, let document = scrollView.documentView else { return false }
+        for hit in hits where hit.mark.source.location <= offset
+                && offset < NSMaxRange(hit.mark.source) {
+            guard let frame = hit.viewportFrame(forSourceOffset: offset) else { continue }
+            let clip = scrollView.contentView
+            let maximumY = max(0, document.frame.height - clip.bounds.height)
+            let target = min(max(0, clip.bounds.minY + frame.minY - viewportY), maximumY)
+            if abs(clip.bounds.minY - target) > 1 {
+                clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
+                scrollView.reflectScrolledClipView(clip)
+            }
+            return true
+        }
+        return false
+    }
+}
+
+/// Attach to the existing native ScrollView without owning gestures, text selection or layout.
+private struct MarkdownReaderClipBridge: NSViewRepresentable {
+    let coordinates: MarkdownReaderCoordinates
+
+    func makeNSView(context: Context) -> MarkdownReaderClipView {
+        let view = MarkdownReaderClipView()
+        view.coordinates = coordinates
+        return view
+    }
+
+    func updateNSView(_ view: MarkdownReaderClipView, context: Context) {
+        view.coordinates = coordinates
+        view.attach()
+    }
+
+    static func dismantleNSView(_ view: MarkdownReaderClipView, coordinator: ()) {
+        if let coordinates = view.coordinates, coordinates.attachedBridge === view {
+            coordinates.attachedBridge = nil
+            coordinates.scrollView = nil
+        }
+        view.coordinates = nil
+    }
+}
+
+private final class MarkdownReaderClipView: NSView {
+    var coordinates: MarkdownReaderCoordinates?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        attach()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil, coordinates?.attachedBridge === self {
+            coordinates?.attachedBridge = nil
+            coordinates?.scrollView = nil
+        } else {
+            attach()
+        }
+    }
+
+    func attach() {
+        guard window != nil, let coordinates, let scrollView = enclosingScrollView,
+              coordinates.attachedBridge !== self || coordinates.scrollView !== scrollView else { return }
+        coordinates.attachedBridge = self
+        coordinates.scrollView = scrollView
+        coordinates.scrollPending()
+    }
+}
+
 private struct MarkdownSourceGlyph: TextAttribute, Equatable {
     let source: NSRange
     let displayLength: Int
@@ -191,6 +344,34 @@ private struct MarkdownGlyphHit: Equatable {
     let first: Text.Layout.CharacterIndex
     let run: Text.Layout.Run
     let origin: CGPoint
+    let viewportOrigin: CGPoint
+
+    var viewportFrame: CGRect {
+        run.typographicBounds.rect.offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y)
+    }
+
+    var firstSourceOffset: Int {
+        let index = run.characterIndices.min() ?? first
+        let distance = first.distance(to: index)
+        return mark.source.location + (mark.source.length == mark.displayLength ? max(0, distance) : 0)
+    }
+
+    func viewportFrame(forSourceOffset target: Int) -> CGRect? {
+        guard target >= mark.source.location, target < NSMaxRange(mark.source) else { return nil }
+        for glyph in run {
+            guard let start = glyph.characterIndices.min(),
+                  let end = glyph.characterIndices.max() else { continue }
+            let exact = mark.source.length == mark.displayLength
+            let startOffset = mark.source.location + (exact ? first.distance(to: start) : 0)
+            let endOffset = exact ? mark.source.location + first.distance(to: end) + 1
+                : NSMaxRange(mark.source)
+            if target >= startOffset && target < endOffset {
+                return glyph.typographicBounds.rect
+                    .offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y)
+            }
+        }
+        return nil
+    }
 
     func sourceOffset(at target: CGPoint) -> Int? {
         let point = CGPoint(x: target.x - origin.x, y: target.y - origin.y)
@@ -223,6 +404,9 @@ private struct MarkdownMappedTap: ViewModifier {
                     GeometryReader { geometry in
                         let mapped = layouts.flatMap { entry in
                             let origin = geometry[entry.origin]
+                            let viewportFrame = geometry.frame(in: .named("bailey.markdown.reader"))
+                            let viewportOrigin = CGPoint(x: origin.x + viewportFrame.minX,
+                                                         y: origin.y + viewportFrame.minY)
                             var firstIndices: [NSRange: Text.Layout.CharacterIndex] = [:]
                             let runs = entry.layout.flatMap { line in
                                 line.compactMap { run -> (Text.Layout.Run, MarkdownSourceGlyph)? in
@@ -235,7 +419,8 @@ private struct MarkdownMappedTap: ViewModifier {
                             }
                             return runs.compactMap { run, mark in
                                 firstIndices[mark.source].map {
-                                    MarkdownGlyphHit(mark: mark, first: $0, run: run, origin: origin)
+                                    MarkdownGlyphHit(mark: mark, first: $0, run: run, origin: origin,
+                                                     viewportOrigin: viewportOrigin)
                                 }
                             }
                         }

@@ -24,26 +24,32 @@ struct MarkdownFilePreview: View {
                         }
                         : nil,
                     sourceBlock: file.markdownScrollSyncEnabled && parsed.request == request
-                        ? file.markdownSourceBlock : nil,
+                        ? file.markdownSourceOffset.flatMap {
+                            file.markdownSourceIndex?.index.block(atUTF16Offset: $0)
+                        } : nil,
+                    restoredSourceOffset: parsed.request == request ? file.markdownReadingOffset : nil,
+                    synchronizedSourceOffset: file.markdownScrollSyncEnabled && parsed.request == request
+                        ? file.markdownSourceOffset : nil,
+                    restoredViewportY: file.markdownReadingViewportY,
                     onReadingPosition: { block in
                         guard parsed.request == file.markdownRequestID,
                               parsed.document.blocks.indices.contains(block),
                               let source = parsed.document.blocks[block].sourceRange else { return }
                         file.markdownReadingOffset = source.location
+                        file.markdownReadingViewportY = 0
                     },
                     onReaderScroll: { block in
-                        guard file.markdownScrollSyncEnabled,
-                              parsed.request == file.markdownRequestID,
-                              parsed.document.blocks.indices.contains(block),
+                        guard parsed.document.blocks.indices.contains(block),
                               let source = parsed.document.blocks[block].sourceRange else { return }
-                        file.pendingMarkdownSource = (
-                            request: parsed.request, offset: source.location, focus: false
-                        )
-                        if file.editorCoordinator?.showMarkdownSource(
-                            atUTF16Offset: source.location
-                        ) == true {
-                            file.pendingMarkdownSource = nil
-                        }
+                        followReader(offset: source.location, request: parsed.request)
+                    },
+                    onReadingSourceAnchor: { offset, viewportY in
+                        guard parsed.request == file.markdownRequestID else { return }
+                        file.markdownReadingOffset = offset
+                        file.markdownReadingViewportY = viewportY
+                    },
+                    onReaderSourceScroll: { offset in
+                        followReader(offset: offset, request: parsed.request)
                     },
                     onLocateSource: { offset in
                         guard parsed.request == file.markdownRequestID else { return }
@@ -83,6 +89,15 @@ struct MarkdownFilePreview: View {
                 parsed = nil
                 failed = true
             }
+        }
+    }
+
+    private func followReader(offset: Int, request: String) {
+        guard file.markdownScrollSyncEnabled,
+              request == file.markdownRequestID else { return }
+        file.pendingMarkdownSource = (request: request, offset: offset, focus: false)
+        if file.editorCoordinator?.showMarkdownSource(atUTF16Offset: offset) == true {
+            file.pendingMarkdownSource = nil
         }
     }
 }

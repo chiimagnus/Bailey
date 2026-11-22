@@ -145,7 +145,7 @@ final class FileTab: nonisolated Identifiable {
             }
         }
         markdownEditRevision &+= 1
-        markdownSourceBlock = nil
+        markdownSourceOffset = nil
         preparedLineWidths = nil
         pendingStorageChange = true
         if !isDirty {
@@ -216,8 +216,9 @@ final class FileTab: nonisolated Identifiable {
     private(set) var showsMarkdownPreview = false
     private var markdownEditRevision: UInt = 0
     @ObservationIgnored var markdownReadingOffset: Int?
+    @ObservationIgnored var markdownReadingViewportY: CGFloat = 0
     var markdownScrollSyncEnabled = true
-    var markdownSourceBlock: Int?
+    var markdownSourceOffset: Int?
     @ObservationIgnored var markdownSourceIndex: (request: String, index: MarkdownBlockIndex)?
     @ObservationIgnored var pendingMarkdownSource: (request: String, offset: Int, focus: Bool)?
     var pendingMarkdownFragment: String?

@@ -52,6 +52,120 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                        "Scrolling must not move the insertion point or steal the editor selection")
     }
 
+    func testReaderRestoresAndTracksExactGlyphWithinOneLongParagraph() async throws {
+        let source = (0..<150).map { "token-\($0) 中文 👩‍🚀" }.joined(separator: " ")
+        let parsed = try await MarkdownDocument.parse(source)
+        XCTAssertEqual(parsed.blocks.count, 1)
+        let first = (source as NSString).range(of: "token-50").location
+        let second = (source as NSString).range(of: "token-110").location
+        let resource = MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Source.md",
+                                        directory: "/tmp/Bailey-Markdown-Layout",
+                                        backend: LocalWorkspaceBackend.shared)
+        func view(sourceOffset: Int?) -> MarkdownPreview {
+            MarkdownPreview(document: parsed, revision: "same", resource: resource, assetRefresh: 0,
+                            restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
+                            synchronizedSourceOffset: sourceOffset,
+                            onLocateSource: { _ in })
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: view(sourceOffset: nil))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? []
+                + view.subviews.flatMap(scrollViews)
+        }
+        let scroll = try XCTUnwrap(scrollViews(in: host).first {
+            $0.contentView.bounds.width > 200 && $0.contentView.bounds.height > 100
+        })
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > 75
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 4), .completed,
+                       "Restoration must reach the glyph inside the first paragraph")
+        let initialY = scroll.contentView.bounds.minY
+
+        host.rootView = view(sourceOffset: second)
+        host.layoutSubtreeIfNeeded()
+        let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > initialY + 75
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 4), .completed,
+                       "Source offsets changing inside the same block must move the reader viewport")
+    }
+
+    func testMarkdownSourceReportsDifferentUTF16OffsetsInsideOneWrappedParagraph() async throws {
+        let source = String(repeating: "Long 中文 👩‍🚀 wrapped source text ", count: 160)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).md")
+        try Data(source.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.markdownSourceIndex = (file.markdownRequestID, MarkdownBlockIndex(
+            try await MarkdownDocument.parse(source)
+        ))
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            palette: .theme(dark: false), wrapLines: true, isFocused: false
+        ))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 270, height: 175),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+        let layout = editor.nativeLayoutManager
+        let start = editor.nativeContentManager.documentRange.location
+        let initial = try XCTUnwrap(layout.textLayoutFragment(for: start))
+        let lines = initial.textLineFragments
+        XCTAssertGreaterThan(lines.count, 36, "The single paragraph must wrap into many visual lines")
+        var previous = -1
+        for lineIndex in [15, 35] {
+            let expected = lines[lineIndex].characterRange.location
+            editor.scrollRangeToVisible(NSRange(location: expected, length: 0))
+            let location = try XCTUnwrap(editor.nativeContentManager.location(start, offsetBy: expected))
+            let currentFragment = try XCTUnwrap(layout.textLayoutFragment(for: location))
+            let relative = editor.nativeContentManager.offset(
+                from: currentFragment.rangeInElement.location, to: location
+            )
+            let visualLines = currentFragment.textLineFragments
+            let selected = try XCTUnwrap(visualLines.firstIndex {
+                $0.characterRange.location <= relative && NSMaxRange($0.characterRange) > relative
+            })
+            let bottom = visualLines[selected].typographicBounds.maxY
+            let previousBottom = selected == 0 ? visualLines[selected].typographicBounds.minY
+                : visualLines[selected - 1].typographicBounds.maxY
+            let y = currentFragment.layoutFragmentFrame.minY
+                + (previousBottom + bottom) / 2 + editor.textContainerOrigin.y
+            let clip = scroll.contentView
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+            scroll.reflectScrolledClipView(clip)
+            layout.textViewportLayoutController.layoutViewport()
+            await Task.yield()
+            XCTAssertEqual(clip.bounds.minY, y, accuracy: 2,
+                           "The requested wrapped line must reach the viewport; document height: \(scroll.documentView?.frame.height ?? -1)")
+            let visibleLineStart = visualLines[selected].characterRange.location
+            XCTAssertEqual(file.markdownSourceOffset, visibleLineStart,
+                           "Use the actual first visible glyph line after TextKit reflows the paragraph")
+            XCTAssertGreaterThan(visibleLineStart, previous,
+                                 "Scrolling within one AST paragraph must update its source coordinate")
+            previous = visibleLineStart
+        }
+    }
+
     func testMarkdownSourceSynchronizationUsesTheActuallyVisibleNativeLine() async throws {
         let source = (0..<64).map { index in
             "# Section \(index)\n\n" + String(repeating: "长行 👩‍🚀 Markdown 字符 ", count: 12)
@@ -95,8 +209,8 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             layout.textViewportLayoutController.layoutViewport()
             XCTAssertEqual(clip.bounds.minY, targetY, accuracy: 1)
             await Task.yield()
-            XCTAssertEqual(file.markdownSourceBlock, expectedBlock,
-                           "Synchronize the line inside the viewport, not prefetched text (wraps: \(wraps))")
+            XCTAssertEqual(file.markdownSourceOffset, expectedSource.location,
+                           "Report the exact visible UTF-16 offset, not a prefetched block (wraps: \(wraps))")
         }
     }
 

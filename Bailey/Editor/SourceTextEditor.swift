@@ -364,9 +364,9 @@ struct SourceTextEditor: NSViewRepresentable {
             }
             guard let offset = firstVisible, offset >= 0,
                   offset <= file.nativeTextStorage.length,
-                  let block = mapping.index.block(atUTF16Offset: offset),
-                  block != file.markdownSourceBlock else { return }
-            file.markdownSourceBlock = block
+                  mapping.index.block(atUTF16Offset: offset) != nil,
+                  offset != file.markdownSourceOffset else { return }
+            file.markdownSourceOffset = offset
         }
 
         func attach(textView: NativeCodeTextView, scrollView: NSScrollView) {
