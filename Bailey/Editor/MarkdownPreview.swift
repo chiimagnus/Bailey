@@ -373,6 +373,38 @@ enum MarkdownGitHubColors {
     }
 }
 
+private extension MarkdownAlert {
+    var title: LocalizedStringResource {
+        switch self {
+        case .note: LocalizedStringResource("Note", table: "Editor")
+        case .tip: LocalizedStringResource("Tip", table: "Editor")
+        case .important: LocalizedStringResource("Important", table: "Editor")
+        case .warning: LocalizedStringResource("Warning", table: "Editor")
+        case .caution: LocalizedStringResource("Caution", table: "Editor")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .note: "info.circle"
+        case .tip: "lightbulb"
+        case .important: "exclamationmark.circle"
+        case .warning: "exclamationmark.triangle"
+        case .caution: "stop.circle"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .note: .blue
+        case .tip: .green
+        case .important: .purple
+        case .warning: .orange
+        case .caution: .red
+        }
+    }
+}
+
 private struct MarkdownNativeBlockView: View {
     let block: MarkdownNativeBlock
     let resource: MarkdownResource
@@ -466,16 +498,9 @@ private struct MarkdownNativeBlockView: View {
                 Text(verbatim: alt).foregroundStyle(.secondary)
             }
         case .quote(let blocks):
-            HStack(alignment: .top, spacing: 16) {
-                MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 4)
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(blocks.indices, id: \.self) { index in
-                        MarkdownNativeBlockView(block: blocks[index], resource: resource,
-                                                assetRefresh: assetRefresh)
-                    }
-                }
-                .foregroundStyle(.secondary)
-            }
+            quotation(blocks)
+        case .alert(let alert, let blocks):
+            quotation(blocks, alert: alert)
         case .list(let ordered, let start, let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(items.indices, id: \.self) { index in
@@ -546,6 +571,29 @@ private struct MarkdownNativeBlockView: View {
         case .leading: return .leading
         case .center: return .center
         case .trailing: return .trailing
+        }
+    }
+
+    private func quotation(_ blocks: [MarkdownNativeBlock], alert: MarkdownAlert? = nil) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            (alert?.tint ?? MarkdownGitHubColors.border(dark: colorScheme == .dark)).frame(width: 4)
+            VStack(alignment: .leading, spacing: 8) {
+                if let alert {
+                    Label {
+                        Text(alert.title)
+                    } icon: {
+                        Image(systemName: alert.symbol).accessibilityHidden(true)
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(alert.tint)
+                    .accessibilityAddTraits(.isHeader)
+                }
+                ForEach(blocks.indices, id: \.self) { index in
+                    MarkdownNativeBlockView(block: blocks[index], resource: resource,
+                                            assetRefresh: assetRefresh)
+                }
+            }
+            .foregroundStyle(alert == nil ? Color.secondary : MarkdownGitHubColors.text(dark: colorScheme == .dark))
         }
     }
 

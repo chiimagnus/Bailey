@@ -72,7 +72,8 @@ nonisolated struct MarkdownDocument: Sendable {
         var occupiedAnchors = Set<String>()
         var blocks = try document.children.compactMap { node -> Block? in
             try Task.checkCancellation()
-            guard let rendered = project(node, math: math, projectText: projectText) else { return nil }
+            guard let rendered = project(node, math: math, projectText: projectText, allowsAlert: true)
+            else { return nil }
             let anchor: String?
             if case let .heading(_, inline) = rendered {
                 let initial = inlinePlainText(inline).lowercased()
@@ -119,7 +120,8 @@ nonisolated struct MarkdownDocument: Sendable {
 
     private static func project(_ node: any Markdown.Markup,
                                 math: MarkdownMath.Source,
-                                projectText: TextProjection) -> MarkdownNativeBlock? {
+                                projectText: TextProjection,
+                                allowsAlert: Bool = false) -> MarkdownNativeBlock? {
         if let heading = node as? Markdown.Heading {
             return .heading(heading.level, projectInline(heading.children, projectText: projectText))
         }
@@ -142,7 +144,19 @@ nonisolated struct MarkdownDocument: Sendable {
             return .paragraph(inline)
         }
         if let quote = node as? Markdown.BlockQuote {
-            return .quote(quote.children.compactMap { project($0, math: math, projectText: projectText) })
+            let blocks = quote.children.compactMap { project($0, math: math, projectText: projectText) }
+            guard allowsAlert,
+                  let opening = quote.child(at: 0) as? Markdown.Paragraph,
+                  opening.childCount == 1 || opening.child(at: 1) is Markdown.SoftBreak
+                      || opening.child(at: 1) is Markdown.LineBreak,
+                  case .paragraph(let contents) = blocks.first,
+                  case .text(let marker, let source?) = contents.first,
+                  source.length == marker.utf16.count,
+                  let alert = MarkdownAlert(rawValue: marker)
+            else { return .quote(blocks) }
+            let openingBody = Array(contents.dropFirst(2))
+            let body = openingBody.isEmpty ? [] : [MarkdownNativeBlock.paragraph(openingBody)]
+            return .alert(alert, body + blocks.dropFirst())
         }
         if let list = node as? Markdown.UnorderedList {
             return .list(ordered: false, start: 1, items: projectItems(list.children, math: math, projectText: projectText))
@@ -224,7 +238,7 @@ nonisolated struct MarkdownDocument: Sendable {
             }
             if let html = node as? Markdown.InlineHTML { return [.html(html.rawHTML)] }
             if node is Markdown.LineBreak { return [.lineBreak] }
-            if node is Markdown.SoftBreak { return [.text("\n")] }
+            if node is Markdown.SoftBreak { return [.text(" ")] }
             return [.text(node.format())]
         }
     }
@@ -500,11 +514,20 @@ nonisolated enum MarkdownColumnAlignment: Sendable {
     case leading, center, trailing
 }
 
+nonisolated enum MarkdownAlert: String, Sendable {
+    case note = "[!NOTE]"
+    case tip = "[!TIP]"
+    case important = "[!IMPORTANT]"
+    case warning = "[!WARNING]"
+    case caution = "[!CAUTION]"
+}
+
 nonisolated indirect enum MarkdownNativeBlock: Sendable {
     case heading(Int, [MarkdownInline])
     case paragraph([MarkdownInline])
     case image(String, String)
     case quote([Self])
+    case alert(MarkdownAlert, [Self])
     case list(ordered: Bool, start: Int, items: [MarkdownListItem])
     case table(head: [[MarkdownInline]], rows: [[[MarkdownInline]]], alignments: [MarkdownColumnAlignment])
     case code(String, language: String?)

@@ -8,6 +8,35 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewUITests: XCTestCase {
+    func testGitHubAlertsShowFiveNativeTitlesAndPreserveQuotedContent() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let titles = ["Note", "Tip", "Important", "Warning", "Caution"]
+        let source = titles.enumerated().map { index, title in
+            "> [!\(title.uppercased())]\n> Body \(index + 1) 中文"
+        }.joined(separator: "\n\n")
+        let file = try fixture.file("Alerts.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        for (index, title) in titles.enumerated() {
+            let header = preview.descendants(matching: .any).matching(NSPredicate(
+                format: "label == %@ OR value == %@", title, title
+            )).firstMatch
+            XCTAssertTrue(header.waitForExistence(timeout: 10), "Missing native \(title) title")
+            let body = preview.staticTexts["Body \(index + 1) 中文"].firstMatch
+            XCTAssertTrue(body.waitForExistence(timeout: 5), "Missing quoted body for \(title)")
+        }
+        XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+    }
+
     func testRealBaileyDocumentationPreviewKeepsItsOriginalBytes() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

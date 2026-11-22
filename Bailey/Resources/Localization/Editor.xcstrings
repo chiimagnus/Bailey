@@ -1,6 +1,56 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Caution" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "注意"
+          }
+        }
+      }
+    },
+    "Important" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重要"
+          }
+        }
+      }
+    },
+    "Note" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明"
+          }
+        }
+      }
+    },
+    "Tip" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提示"
+          }
+        }
+      }
+    },
+    "Warning" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "警告"
+          }
+        }
+      }
+    },
     "Preview" : {
       "localizations" : {
         "zh-Hans" : {

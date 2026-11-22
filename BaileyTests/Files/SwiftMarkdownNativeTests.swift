@@ -648,6 +648,42 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }, "The original-coordinate projection must not change math rendering")
     }
 
+    func testMarkdownFileSoftBreaksBecomeSpacesAndExplicitBreaksStayNewlines() async throws {
+        for ending in ["\n", "\r\n", "\r"] {
+            let source = ["软", "换行  ", "双空格\\", "反斜杠"].joined(separator: ending)
+            let document = try await MarkdownDocument.parse(source)
+            guard case .paragraph(let inline) = document.blocks.first?.content else {
+                return XCTFail("Expected the original paragraph")
+            }
+            XCTAssertEqual(String(MarkdownNativeText.attributed(inline).characters), "软 换行\n双空格\n反斜杠")
+        }
+    }
+
+    func testGitHubAlertsRequireAnUnescapedStandaloneMarkerInATopLevelQuote() async throws {
+        let tags = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"]
+        let source = tags.map { "> [!\($0)]\n> **中文 \($0)**" }.joined(separator: "\n\n")
+            + "\n\n> [!UNKNOWN]\n> 普通引用"
+            + "\n\n> [!NOTE] trailing\n> 普通引用"
+            + "\n\n> \\[!NOTE]\n> 转义"
+            + "\n\n> > [!NOTE]\n> > 嵌套引用"
+            + "\n\n```markdown\n> [!NOTE]\n> 代码\n```"
+        let document = try await MarkdownDocument.parse(source)
+        XCTAssertEqual(document.blocks.count, tags.count + 5)
+        for (block, tag) in zip(document.blocks, tags) {
+            guard case .alert(let kind, let children) = block.content,
+                  case .paragraph(let inline) = children.first else {
+                return XCTFail("The top-level \(tag) quote should render as an alert")
+            }
+            XCTAssertEqual(kind.rawValue, "[!\(tag)]")
+            XCTAssertEqual(String(MarkdownNativeText.attributed(inline).characters), "中文 \(tag)")
+            XCTAssertNotNil(block.sourceRange)
+        }
+        for block in document.blocks.dropFirst(tags.count).dropLast() {
+            guard case .quote = block.content else { return XCTFail("Keep ordinary quotes as quotes") }
+        }
+        guard case .code = document.blocks.last?.content else { return XCTFail("Keep fenced markup literal") }
+    }
+
     func testInlineSourceRangesSurviveCombinedMathFootnotesAndUnicode() async throws {
         let paragraph = "首段 $x_y$ **e\u{301}中文** 脚注[^note] 最后 👩‍🚀。"
         let source = "\u{FEFF}---\r\nname: text\r\n---\r\n\(paragraph)\r\n\r\n[^note]: 注释"
