@@ -135,7 +135,17 @@ final class FileTab: nonisolated Identifiable {
     /// notification; only direct edits require one deferred full reconciliation.
     private func nativeStorageDidChange() {
         guard case .text = content else { return }
+        if let offset = markdownReadingOffset {
+            let edited = nativeTextStorage.editedRange
+            let delta = nativeTextStorage.changeInLength
+            if offset >= NSMaxRange(edited) - delta {
+                markdownReadingOffset = offset + delta
+            } else if offset >= edited.location {
+                markdownReadingOffset = min(offset, NSMaxRange(edited))
+            }
+        }
         markdownEditRevision &+= 1
+        markdownSourceBlock = nil
         preparedLineWidths = nil
         pendingStorageChange = true
         if !isDirty {
@@ -205,7 +215,7 @@ final class FileTab: nonisolated Identifiable {
     let workspaceIdentity: String?
     private(set) var showsMarkdownPreview = false
     private var markdownEditRevision: UInt = 0
-    @ObservationIgnored var markdownScrollPosition: Int?
+    @ObservationIgnored var markdownReadingOffset: Int?
     var markdownScrollSyncEnabled = true
     var markdownSourceBlock: Int?
     @ObservationIgnored var markdownSourceIndex: (request: String, index: MarkdownBlockIndex)?

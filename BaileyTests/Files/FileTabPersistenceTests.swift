@@ -244,7 +244,8 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertTrue(file.canPreviewMarkdown)
         let resource = file.markdownResourceID
         let firstRequest = file.markdownRequestID
-        file.markdownScrollPosition = 2
+        let bodyOffset = (file.text as NSString).range(of: "中文").location
+        file.markdownReadingOffset = bodyOffset
         file.setMarkdownPreview(true)
         XCTAssertTrue(file.showsMarkdownPreview)
         XCTAssertEqual(file.markdownRequestID, firstRequest)
@@ -256,6 +257,7 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.markdownResourceID, resource,
                        "Ordinary typing must not invalidate the file's resource identity")
         XCTAssertEqual(file.text, "# After\n\n中文🙂 and code.\n")
+        XCTAssertEqual(file.markdownReadingOffset, bodyOffset - 1)
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 5),
                                                 with: "Newest")
         XCTAssertNotEqual(file.markdownRequestID, secondRequest,
@@ -263,7 +265,7 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.text, "# Newest\n\n中文🙂 and code.\n")
         file.setMarkdownPreview(false)
         file.setMarkdownPreview(true)
-        XCTAssertEqual(file.markdownScrollPosition, 2,
+        XCTAssertEqual(file.markdownReadingOffset, bodyOffset,
                        "Switching source/preview cannot reset the stored reading position")
         XCTAssertEqual(file.markdownResourceID, resource)
         XCTAssertTrue(file.isDirty)

@@ -17,10 +17,19 @@ struct MarkdownFilePreview: View {
                 MarkdownPreview(
                     document: parsed.document, revision: parsed.request,
                     resource: file.markdownResource(in: directory), assetRefresh: assetRefresh,
-                    position: Binding(get: { file.markdownScrollPosition },
-                                      set: { file.markdownScrollPosition = $0 }),
+                    restoredBlock: parsed.request == request
+                        ? file.markdownReadingOffset.flatMap {
+                            file.markdownSourceIndex?.index.block(atUTF16Offset: $0)
+                        }
+                        : nil,
                     sourceBlock: file.markdownScrollSyncEnabled && parsed.request == request
                         ? file.markdownSourceBlock : nil,
+                    onReadingPosition: { block in
+                        guard parsed.request == file.markdownRequestID,
+                              parsed.document.blocks.indices.contains(block),
+                              let source = parsed.document.blocks[block].sourceRange else { return }
+                        file.markdownReadingOffset = source.location
+                    },
                     onReaderScroll: { block in
                         guard file.markdownScrollSyncEnabled,
                               parsed.request == file.markdownRequestID,
@@ -57,9 +66,11 @@ struct MarkdownFilePreview: View {
                 guard let source = file?.text else { return }
                 let document = try await MarkdownDocument.parse(source)
                 guard !Task.isCancelled, request == file?.markdownRequestID else { return }
-                parsed = (document, request, target)
                 file?.markdownSourceIndex = (request: request, index: MarkdownBlockIndex(document))
-                file?.editorCoordinator?.refreshMarkdownViewport()
+                if file?.markdownReadingOffset == nil {
+                    file?.editorCoordinator?.refreshMarkdownViewport()
+                }
+                parsed = (document, request, target)
             } catch {
                 guard !Task.isCancelled, request == file?.markdownRequestID else { return }
                 parsed = nil

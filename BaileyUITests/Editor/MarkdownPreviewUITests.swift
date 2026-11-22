@@ -1403,6 +1403,74 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
     }
 
+    func testPreviewKeepsReadingTheSameHeadingWhenSourceGrowsAboveIt() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            # Overview
+
+            [Jump to destination](#reading-destination)
+
+            """ + (0..<44).map { index in
+                let title = index == 22 ? "Reading destination" : "Section \(index)"
+                return "\n## \(title)\n\n中文 paragraph e\u{301} 🛰️ with **emphasis** and `code`.\n"
+            }.joined()
+        let file = try fixture.file("ReadingPosition.md", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        app.activate()
+        row.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        tab.rightClick()
+        let syncMenu = app.menuItems["Synchronize Scrolling"]
+        XCTAssertTrue(syncMenu.waitForExistence(timeout: 10))
+        syncMenu.click()
+
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let link = preview.links["Jump to destination"]
+        XCTAssertTrue(link.waitForExistence(timeout: 15))
+        link.click()
+        let destination = preview.staticTexts["Reading destination"].firstMatch
+        func destinationIsVisible() -> Bool {
+            guard destination.exists else { return false }
+            return destination.frame.intersection(preview.frame).height > 1
+        }
+        let located = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            destinationIsVisible()
+        }, object: nil)
+        guard XCTWaiter.wait(for: [located], timeout: 10) == .completed else {
+            return XCTFail("The internal link must make the original heading visible before the edit")
+        }
+
+        editor.click()
+        editor.typeKey(.upArrow, modifierFlags: .command)
+        let prefix = (0..<16).map { "## Inserted \($0)\n\n" }.joined()
+        editor.typeText(prefix)
+        XCTAssertEqual(editor.value as? String, prefix + source)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
+
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+        tab.rightClick()
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            destinationIsVisible()
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 10), .completed,
+                       "After a new parse and remount, the original heading must remain visible")
+    }
+
     func testReaderScrollPositionSurvivesSwitchBackToNativeSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = (0..<90).map { index in

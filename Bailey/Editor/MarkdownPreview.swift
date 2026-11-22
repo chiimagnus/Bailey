@@ -6,18 +6,21 @@ struct MarkdownPreview: View {
     let revision: String
     let resource: MarkdownResource
     let assetRefresh: UInt
-    @Binding var position: Int?
+    var restoredBlock: Int? = nil
     var sourceBlock: Int? = nil
+    var onReadingPosition: (Int) -> Void = { _ in }
     var onReaderScroll: (Int) -> Void = { _ in }
     var openLink: (URL) async -> Bool = { _ in false }
     var navigation: Binding<String?> = .constant(nil)
 
+    @State private var position: Int?
     @State private var linkToOpen: URL?
     @State private var failedLink = false
     @State private var readerIsScrolling = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let rows = renderRows
         GeometryReader { geometry in
             ZStack(alignment: .top) {
                 ScrollViewReader { proxy in
@@ -27,7 +30,7 @@ struct MarkdownPreview: View {
                                 Label(warning, systemImage: "exclamationmark.triangle")
                                     .foregroundStyle(.secondary)
                             }
-                            ForEach(renderRows, id: \.start) { row in
+                            ForEach(rows, id: \.start) { row in
                                 if row.end - row.start > 1 {
                                     paragraphRun(row.start..<row.end)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -56,25 +59,25 @@ struct MarkdownPreview: View {
                     .onScrollPhaseChange { _, phase in
                         let isUserScroll = phase == .interacting || phase == .decelerating
                         if readerIsScrolling && !isUserScroll, let position {
-                            onReaderScroll(position)
+                            reportReaderScroll(position)
                         }
                         readerIsScrolling = isUserScroll
                     }
                     .onChange(of: position) { _, position in
-                        if readerIsScrolling, let position { onReaderScroll(position) }
+                        if readerIsScrolling, let position { reportReaderScroll(position) }
                     }
-                    .onChange(of: sourceBlock, initial: true) { _, block in
-                        guard !readerIsScrolling, let block,
-                              let row = renderRows.first(where: { $0.start <= block && block < $0.end }),
-                              position != row.start else { return }
-                        position = row.start
-                        proxy.scrollTo(row.start, anchor: .top)
+                    .onChange(of: revision, initial: true) { _, _ in
+                        guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
+                        scroll(to: block, rows: rows, proxy: proxy)
+                    }
+                    .onChange(of: sourceBlock) { _, block in
+                        guard !readerIsScrolling, let block else { return }
+                        scroll(to: block, rows: rows, proxy: proxy)
                     }
                     .task(id: navigation.wrappedValue) {
                         guard let fragment = navigation.wrappedValue else { return }
                         if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                            proxy.scrollTo(index, anchor: .top)
-                            position = index
+                            scroll(to: index, rows: rows, proxy: proxy)
                             failedLink = false
                         } else {
                             failedLink = true
@@ -84,9 +87,8 @@ struct MarkdownPreview: View {
                     .environment(\.openURL, OpenURLAction { url in
                         if url.absoluteString.hasPrefix("#") {
                             let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment
-                            if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                                proxy.scrollTo(index, anchor: .top)
-                                position = index
+                            if let fragment, let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                                scroll(to: index, rows: rows, proxy: proxy)
                                 failedLink = false
                             } else {
                                 failedLink = true
@@ -121,6 +123,18 @@ struct MarkdownPreview: View {
             failedLink = !opened
             linkToOpen = nil
         }
+    }
+
+    private func reportReaderScroll(_ block: Int) {
+        onReadingPosition(block)
+        onReaderScroll(block)
+    }
+
+    private func scroll(to block: Int, rows: [RenderRow], proxy: ScrollViewProxy) {
+        guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
+        position = row.start
+        proxy.scrollTo(row.start, anchor: .top)
+        onReadingPosition(block)
     }
 
     private struct RenderRow {

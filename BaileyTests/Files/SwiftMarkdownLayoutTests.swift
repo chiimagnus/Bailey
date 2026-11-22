@@ -17,7 +17,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Resize.md",
                                        directory: "/tmp/Bailey-Markdown-Layout",
                                        backend: LocalWorkspaceBackend.shared),
-            assetRefresh: 0, position: .constant(nil)
+            assetRefresh: 0
         )
         let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 280, height: 500),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -77,7 +77,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Long.md",
                                        directory: "/tmp/Bailey-Markdown-Layout",
                                        backend: LocalWorkspaceBackend.shared),
-            assetRefresh: 0, position: .constant(nil)
+            assetRefresh: 0
         )
         let window = NSWindow(
             contentRect: NSRect(x: -2000, y: -2000, width: 440, height: 220),
@@ -164,7 +164,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             window.isReleasedWhenClosed = false
             let host = NSHostingView(rootView: MarkdownPreview(
                 document: document, revision: "\(count)",
-                resource: resource, assetRefresh: 0, position: .constant(nil)
+                resource: resource, assetRefresh: 0
             ))
             host.sizingOptions = []
             window.contentView = host
@@ -214,7 +214,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Pointer.md",
                                        directory: "/tmp/Bailey-Markdown-Layout",
                                        backend: LocalWorkspaceBackend.shared),
-            assetRefresh: 0, position: .constant(nil)
+            assetRefresh: 0
         )
         let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 720, height: 350),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -308,8 +308,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             )
             window.isReleasedWhenClosed = false
             let view = MarkdownPreview(document: document, revision: "README",
-                                       resource: resource, assetRefresh: 0,
-                                       position: .constant(nil))
+                                       resource: resource, assetRefresh: 0)
                 .environment(\.colorScheme, dark ? .dark : .light)
             let host = NSHostingView(rootView: view)
             host.sizingOptions = []
@@ -371,7 +370,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                 window.isReleasedWhenClosed = false
                 let host = NSHostingView(rootView: MarkdownPreview(
                     document: document, revision: relativePath,
-                    resource: resource, assetRefresh: 0, position: .constant(nil)
+                    resource: resource, assetRefresh: 0
                 ).environment(\.colorScheme, dark ? .dark : .light))
                 host.sizingOptions = []
                 window.contentView = host
@@ -433,7 +432,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             window.isReleasedWhenClosed = false
             let host = NSHostingView(rootView: MarkdownPreview(
                 document: document, revision: source,
-                resource: resource, assetRefresh: 0, position: .constant(nil)
+                resource: resource, assetRefresh: 0
             ))
             host.sizingOptions = []
             window.contentView = host
@@ -480,8 +479,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             let document = try await MarkdownDocument.parse(text)
             XCTAssertEqual(document.blocks.count, count)
             let preview = MarkdownPreview(document: document, revision: "0",
-                                          resource: resource, assetRefresh: 0,
-                                          position: .constant(nil))
+                                          resource: resource, assetRefresh: 0)
             let window = NSWindow(
                 contentRect: NSRect(x: -2000, y: -2000, width: 800, height: 600),
                 styleMask: [.titled], backing: .buffered, defer: false
