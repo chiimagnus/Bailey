@@ -11,10 +11,10 @@
 `MarkdownFilePreview` 根据 `FileTab.markdownRequestID` 合并快速修改、后台解析并拒绝过期结果；
 P2-T1 核验与完善这条链，而非重做 Dock 或擅自引入增量 AST 引擎。
 
-尚未解决的结构性问题来自**展示身份与文字选择**：
-`MarkdownDocument.Block` 目前仅记录起始行，`MarkdownPreview` 按块索引恢复滚动，
-`renderRows` 最多合并 12 个普通段落；不能据此实现精确源码回跳、复杂文档位置保持或跨结构选区。
-P2-T5/T6 应修复共同的原始源码定位和只读展示选择问题，不靠滚动比例、固定时间延迟或复制全文打补丁。
+`MarkdownDocument.Block` 保留原始 UTF-16 块区间，`MarkdownBlockIndex` 用于源码和预览之间的双向定位。
+阅读位置应由文件标签记住原文偏移，并随原生字符编辑变换；块序号只用于当前预览布局。
+`renderRows` 仍最多合并 12 个普通段落，块区间不等于单个字形的位置，也不能提供跨结构选区。
+P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例、固定时间延迟或复制全文打补丁。
 
 内容沿用现有职责：`MarkdownDocument` 将 swift-markdown AST 投影成不可变展示节点；
 `MarkdownHTML`／SwiftSoup 只处理静态白名单 HTML，`MarkdownSVG`／SwiftDraw 净化 SVG，
@@ -68,15 +68,17 @@ P2-T5/T6 应修复共同的原始源码定位和只读展示选择问题，不�
 <a id="p2-t5"></a>
 ### P2-T5 精确源码映射、双向滚动和定位
 
-- **依赖**：P2-T1 已接通的实时快照和 Dock companion。现有 `MarkdownDocument.Block.line` 仅有起始行，
-  `MarkdownPreview.renderRows` 用索引作视图 ID，`FileTab.markdownScrollPosition` 是块索引；
-  这些事实不足以支撑文本级定位、编辑前插内容后的阅读锚点。
+- **依赖**：P2-T1 已接通的实时快照和 Dock companion。复用 `MarkdownDocument.Block.sourceRange`
+  和 `MarkdownBlockIndex`，不要用 `renderRows` 的视图 ID 作为原文身份。
 - **实施**：在 `MarkdownDocument.parse/project/projectInline` 保留与**原始文件**对应的
   AST 源码区间及必要的内联子节点映射，统一转换到 TextKit 的 UTF-16 坐标；
   覆盖 Front Matter、BOM／CRLF、非 BMP 字符、组合字、Tab、脚注和公式的原文回溯。
-  `MarkdownFootnotes.source`／`MarkdownMath.protect` 会生成供解析使用的变换文本，
-  不能把变换后 AST 的 offset 直接当作原文 offset。复用一次解析产物而非创建第二套 parser，
+  脚注和公式的替换通过 `MarkdownSourceRewrite` 保留逆向区间；
+  先把 AST 字节区间还原到原文，再转换为 TextKit 坐标。解析入口统一准备连续 UTF-8，
+  避免在来自 TextKit 的桥接字符串上反复扫描前文。复用解析产物而非创建第二套 parser，
   不依赖渲染行高或滚动百分比推算源码位置。
+  块 HTML 的逐字坐标依赖 SwiftSoup 暴露其已有节点源码区间；当前该 API 为内部实现，
+  不使用重复字符串搜索猜位置，也不为定位引入第二套 HTML parser。
 - **交互**：`MarkdownFilePreview`、`MarkdownPreview`、`FileTab.editorState` 与
   `SourceTextEditor.Coordinator` 按同一文件身份、请求代次和可见范围交接定位意图；
   源码↔预览默认双向滚动，可在现有文件标签菜单关闭同步。
@@ -141,9 +143,8 @@ P2-T5/T6 应修复共同的原始源码定位和只读展示选择问题，不�
 - **规范**：对照 [GitHub Primer Markdown](https://github.com/primer/css/tree/main/src/markdown)
   与 [GFM 规范](https://github.github.io/gfm/) 验证标题 H1–H6、段落间距、行内代码基线、
   粗体／斜体／删除线嵌套、水平分隔线、任务列表、嵌套引用和多段列表。
-  当前 `MarkdownDocument.projectInline` 将 `SoftBreak` 投影成 `Text` 内的换行符，
-  而浏览器常将软换行折叠为空白；要区分可自然折行的软换行与尾部双空格／反斜杠产生的硬换行，
-  核对渲染及复制语义。节点间距不能仅由全局 `VStack(spacing:)` 决定。
+  `MarkdownDocument.projectInline` 将软换行投影为空格、硬换行投影为独立换行节点，
+  按文件预览的阅读语义核对渲染及复制。节点间距不能仅由全局 `VStack(spacing:)` 决定。
 - **扩展**：在 `MarkdownDocument.project` 的普通引用语义上识别 GitHub 扩展
   `> [!NOTE]`／`TIP`／`IMPORTANT`／`WARNING`／`CAUTION`，展示语义图标、强调边线与层级；
   不新增 Markdown parser，不把普通 `[!TEXT]` 或代码围栏中的文本误识别为 Alert。

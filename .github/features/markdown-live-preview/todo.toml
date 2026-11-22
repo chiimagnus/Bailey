@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P2-T6"
 
 [[tasks]]
 id = "P1-T1"
@@ -20,26 +20,26 @@ note = "同一 FileTab、File 菜单快捷键与 Dock companion，GUI 18用例�
 [[tasks]]
 id = "P2-T1"
 title = "合并实时渲染与位置保持"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "fc2e6191"
+note = "原生 TextKit 唯一源，解析任务按 FileTab UUID+重载+编辑代次区分，取消旧结果；make build:dev、Host 122/122、编辑器/窗口 Host 78/78、Markdown GUI 25/25 及 500/5000/20000 段落专项通过。真实中文 IME 与授权 SSH GUI 交 P2 最终跨环境验收。"
 
 [[tasks]]
 id = "P2-T2"
 title = "保存／恢复及原生行为验收"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "dfd7720b"
+note = "正式 build 与签名通过；Markdown GUI 28/28，相关 Host 通过；全量 Host 一次 runner 提前退出（NativeDiff 性能项），单项重跑通过；真机 VoiceOver/授权 SSH GUI 纳入最终跨环境验收。"
 
 [[tasks]]
 id = "P2-T3"
 title = "静态图片 SVG HTML 和音视频嵌入"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = ""
+commit = "67d65462"
+note = "正式 build 与 codesign 通过；Markdown Host 43/43、完整 GUI 31/31；SVG 渐变过滤和 Retina 点宽度、GIF 动画/预算、PNG JPEG HEIC WebP、音视频 seek/暂停/释放已真实验收。授权 SSH GUI 和 VoiceOver 留 P2-T9 跨环境。"
 
 [[tasks]]
 id = "P2-T4"
@@ -60,34 +60,34 @@ note = "GitHub Primer typography+colors, tracked native link cursor, heading anc
 [[tasks]]
 id = "P2-T5"
 title = "精确源码映射与双向滚动定位"
-status = "pending"
+status = "in_progress"
 plan = "plan-p2.md#p2-t5"
 commit = ""
-note = ""
+note = "原始 UTF-16 字形/代码/链接、Math Canvas、Markdown 图片与真实视口映射；2026-11-22 提交 0b52f91e、5705c1ca、4c2cdd3a、877429d3。最新 Markdown Host 88/88、公式完整 GUI 5/5、两图片及嵌套 SVG GUI 通过、正式 make build/codesign 通过；复杂交替滚动与音频 AVKit 在 GUI 组合时曾出现应用窗口 AX 树丢失，隔离各自复跑通过。剩余 SwiftSoup 块 HTML 文本子节点缺乏公开源码位置 API、跨远端/VoiceOver 组合和精确稳定性验收。"
 
 [[tasks]]
 id = "P2-T6"
 title = "跨结构连续选区与语义复制"
-status = "pending"
+status = "in_progress"
 plan = "plan-p2.md#p2-t6"
 commit = ""
-note = ""
+note = "核心 d5d145d5、7942832c 及 P2-T7 折叠可见复制；Markdown 链接起点、列表至表格、普通跨段、脚注、代码块与 Math/图片 ALT 原文字节区间覆盖。剩余块 HTML 内部逐字拖选及 VoiceOver/授权 SSH 组合；不对没有可验证源码坐标的 SwiftSoup 子节点猜区间。"
 
 [[tasks]]
 id = "P2-T7"
 title = "标题大纲折叠与富内容阅读操作"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t7"
-commit = ""
-note = ""
+commit = "9011638b"
+note = "大纲层级/重名标题、章节折叠及编辑 Undo 原文区间跟随、可见选区复制、脚注全局区域与往返、图片/内嵌SVG/Mermaid缩放；最新正式 build+签名、关联 Host 147/147、真实 GUI 12/12 通过；完整 Host 1231项0失败/21项隔离磁盘和SSH环境跳过。授权SSH实机、VoiceOver与性能压力组合纳入P2-T9验收。"
 
 [[tasks]]
 id = "P2-T8"
 title = "GitHub 复杂排版与 Alerts"
-status = "pending"
+status = "in_progress"
 plan = "plan-p2.md#p2-t8"
 commit = ""
-note = ""
+note = "69fb08da 五种顶层 Alerts 与软硬换行；Host 116/116、串行真实 GUI 3/3、正式构建与验签。与 GitHub 的多尺度视觉对照和高密度无障碍矩阵尚未完成。"
 
 [[tasks]]
 id = "P2-T9"
