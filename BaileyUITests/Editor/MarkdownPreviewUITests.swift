@@ -1428,10 +1428,28 @@ final class MarkdownPreviewUITests: XCTestCase {
 
     func testRapidEditsInLongSideBySidePreviewNeverRestoreOlderSnapshot() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let body = (0..<1_200).map { index in
-            "Paragraph \(index) with **emphasis**, 中文, and [link](guide.md)."
-        }.joined(separator: "\n\n")
-        let original = "# Baseline heading\n\n" + body + "\n"
+        let targetLines = 20_000
+        func section(_ index: Int) -> [String] {
+            ["## Section \(index) 中文 🧪", "",
+             "Paragraph \(index) with **emphasis**, العربية, [link](guide.md), and $x_i+y$.", "",
+             "> [!NOTE]", "> A mixed-content reading fixture.", "",
+             "- [x] Checked", "  - Nested step", "",
+             "| 名称 | Value |", "| --- | ---: |", "| 中文 | \(index) |", "",
+             "```swift", "let sample = \(index)", "```", "",
+             "<details>", "<summary>Method</summary>", "<p>HTML &amp; text</p>", "</details>", "",
+             index.isMultiple(of: 4) ? "![Scoped SVG](asset.svg)" : "![Missing resource](missing.png)", ""]
+        }
+        _ = try fixture.file("asset.svg", text: """
+            <svg xmlns="http://www.w3.org/2000/svg" width="80" height="32"><rect width="80" height="32" fill="#0969da"/></svg>
+            """)
+        _ = try fixture.file("guide.md", text: "# Linked guide\n")
+        var lines = ["# Baseline heading", ""]
+        for index in 0..<((targetLines - lines.count - 1) / section(0).count) {
+            lines += section(index)
+        }
+        while lines.count < targetLines - 1 { lines.append("") }
+        lines.append("## End marker")
+        let original = lines.joined(separator: "\n")
         let file = try fixture.file("Rapid-Live.md", text: original)
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
@@ -1451,6 +1469,16 @@ final class MarkdownPreviewUITests: XCTestCase {
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
         XCTAssertTrue(preview.staticTexts["Baseline heading"].waitForExistence(timeout: 20))
+        let end = preview.staticTexts["End marker"]
+        editor.click()
+        editor.typeKey(.downArrow, modifierFlags: .command)
+        let atEnd = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            end.exists && end.frame.intersection(preview.frame).height > 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [atEnd], timeout: 20), .completed,
+                       "The real companion must reach the end of the mixed 20,000-line Markdown")
+        editor.typeKey(.upArrow, modifierFlags: .command)
+        XCTAssertTrue(preview.staticTexts["Baseline heading"].waitForExistence(timeout: 15))
 
         func replaceHeading(_ heading: String) {
             editor.click()
