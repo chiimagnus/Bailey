@@ -181,12 +181,13 @@ struct MarkdownPreview: View {
     }
 }
 
-private struct MarkdownSourceGlyph: TextAttribute {
+private struct MarkdownSourceGlyph: TextAttribute, Equatable {
     let source: NSRange
+    let displayLength: Int
 }
 
 private struct MarkdownGlyphHit: Equatable {
-    let source: NSRange
+    let mark: MarkdownSourceGlyph
     let first: Text.Layout.CharacterIndex
     let run: Text.Layout.Run
     let origin: CGPoint
@@ -197,8 +198,8 @@ private struct MarkdownGlyphHit: Equatable {
               let glyph = run.first(where: { $0.typographicBounds.rect.contains(point) }),
               let index = glyph.characterIndices.min() else { return nil }
         let relative = first.distance(to: index)
-        guard relative >= 0, relative < source.length else { return nil }
-        return source.location + relative
+        guard relative >= 0, relative < mark.displayLength else { return nil }
+        return mark.source.location + (mark.source.length == mark.displayLength ? relative : 0)
     }
 }
 
@@ -224,17 +225,17 @@ private struct MarkdownMappedTap: ViewModifier {
                             let origin = geometry[entry.origin]
                             var firstIndices: [NSRange: Text.Layout.CharacterIndex] = [:]
                             let runs = entry.layout.flatMap { line in
-                                line.compactMap { run -> (Text.Layout.Run, NSRange)? in
+                                line.compactMap { run -> (Text.Layout.Run, MarkdownSourceGlyph)? in
                                     guard let marker = run[MarkdownSourceGlyph.self],
                                           run[MarkdownLinkGlyph.self] == nil,
                                           let index = run.characterIndices.min() else { return nil }
                                     firstIndices[marker.source] = min(index, firstIndices[marker.source] ?? index)
-                                    return (run, marker.source)
+                                    return (run, marker)
                                 }
                             }
-                            return runs.compactMap { run, source in
-                                firstIndices[source].map {
-                                    MarkdownGlyphHit(source: source, first: $0, run: run, origin: origin)
+                            return runs.compactMap { run, mark in
+                                firstIndices[mark.source].map {
+                                    MarkdownGlyphHit(mark: mark, first: $0, run: run, origin: origin)
                                 }
                             }
                         }
@@ -925,8 +926,10 @@ enum MarkdownNativeText {
     private static func part(_ node: MarkdownInline) -> Text {
         switch node {
         case .text(let content, let source):
-            if let source, source.length == content.utf16.count {
-                return Text(verbatim: content).customAttribute(MarkdownSourceGlyph(source: source))
+            if let source {
+                return Text(verbatim: content).customAttribute(
+                    MarkdownSourceGlyph(source: source, displayLength: content.utf16.count)
+                )
             }
             return Text(verbatim: content)
         case .code:

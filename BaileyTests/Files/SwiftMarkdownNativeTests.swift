@@ -184,7 +184,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             return latex
         }
         XCTAssertEqual(expressions, ["E=mc^2", "a+b"])
-        XCTAssertTrue(String(describing: inline).contains("$5"),
+        XCTAssertTrue(String(MarkdownNativeText.attributed(inline).characters).contains("$5"),
                       "Escaped currency must not turn into a math expression")
         guard case let .mathBlock(first) = document.blocks[1].content else {
             return XCTFail("Expected same-line display math block: \(document.blocks[1].content)")
@@ -229,7 +229,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             if case let .math(latex, _) = node { latex } else { nil }
         }
         XCTAssertEqual(expressions, ["y"])
-        XCTAssertTrue(String(describing: inline).contains("$x$"))
+        XCTAssertTrue(String(MarkdownNativeText.attributed(inline).characters).contains("$x$"))
         for source in ["unclosed $x", "cost $5", "\\$escaped"] {
             let document = try await MarkdownDocument.parse(source)
             guard case let .paragraph(inline) = document.blocks.first?.content else {
@@ -682,6 +682,24 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             guard case .quote = block.content else { return XCTFail("Keep ordinary quotes as quotes") }
         }
         guard case .code = document.blocks.last?.content else { return XCTFail("Keep fenced markup literal") }
+    }
+
+    func testEscapedTextAndEntitiesRetainIndividualOriginalTokenRanges() async throws {
+        let source = #"A \* B & no &amp; C &#x1F680; 末"#
+        let expected = [("A ", "A "), ("*", #"\*"#), (" B & no ", " B & no "), ("&", "&amp;"),
+                        (" C ", " C "), ("🚀", "&#x1F680;"), (" 末", " 末")]
+        let original = source as NSString
+        let document = try await MarkdownDocument.parse(source)
+        guard case .paragraph(let inline) = document.blocks.first?.content else {
+            return XCTFail("Expected a literal paragraph")
+        }
+        XCTAssertEqual(String(MarkdownNativeText.attributed(inline).characters), "A * B & no & C 🚀 末")
+        XCTAssertEqual(inline.count, expected.count)
+        for (node, (displayed, raw)) in zip(inline, expected) {
+            guard case .text(let value, let range) = node else { return XCTFail("Expected text") }
+            XCTAssertEqual(value, displayed)
+            XCTAssertEqual(range, original.range(of: raw))
+        }
     }
 
     func testInlineSourceRangesSurviveCombinedMathFootnotesAndUnicode() async throws {

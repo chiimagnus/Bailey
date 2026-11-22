@@ -1502,29 +1502,40 @@ final class MarkdownPreviewUITests: XCTestCase {
 
     func testDoubleClickInsidePreviewTextLocatesActuallyClickedGlyph() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let paragraph = String(repeating: "M", count: 20)
-        let source = "# Click location\n\n" + paragraph
-        let file = try fixture.file("GlyphLocate.md", text: source)
+        let cases = [("Literal", "M", "M"), ("Named", "&amp;", "&"), ("Numeric", "&#x1F680;", "🚀")]
+        let glyphCount = 12
+        let target = 9
+        let files = try cases.map { name, raw, rendered in
+            let source = "# Click location\n\n" + String(repeating: raw, count: glyphCount)
+            return (file: try fixture.file("\(name).md", text: source), source: source,
+                    raw: raw, rendered: rendered)
+        }
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
         )
         let window = app.windows.firstMatch
-        let row = WorkspaceUITestSupport.fileRow(file, in: window)
-        XCTAssertTrue(row.waitForExistence(timeout: 15))
-        row.doubleClick()
-        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
-        app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let text = preview.staticTexts.matching(NSPredicate(format: "value == %@", paragraph)).firstMatch
-        XCTAssertTrue(text.waitForExistence(timeout: 15))
-        text.coordinate(withNormalizedOffset: CGVector(dx: 0.775, dy: 0.5)).doubleClick()
-        XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
-        let editor = window.textViews.firstMatch
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        app.typeKey("z", modifierFlags: [])
-        XCTAssertEqual(editor.value as? String, "# Click location\n\n"
-                       + String(repeating: "M", count: 15) + "z" + String(repeating: "M", count: 5))
-        XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+        for entry in files {
+            let row = WorkspaceUITestSupport.fileRow(entry.file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+            app.typeKey("v", modifierFlags: [.command, .shift])
+            let paragraph = String(repeating: entry.rendered, count: glyphCount)
+            let text = preview.staticTexts.matching(NSPredicate(format: "value == %@", paragraph)).firstMatch
+            XCTAssertTrue(text.waitForExistence(timeout: 15))
+            XCTAssertLessThan(text.frame.height, 32, "This coordinate targets a known glyph on a single line")
+            let fraction = (CGFloat(target) + 0.5) / CGFloat(glyphCount)
+            text.coordinate(withNormalizedOffset: CGVector(dx: fraction, dy: 0.5)).doubleClick()
+            XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+            let editor = window.textViews.firstMatch
+            XCTAssertTrue(editor.waitForExistence(timeout: 10))
+            app.typeKey("z", modifierFlags: [])
+            XCTAssertEqual(editor.value as? String, "# Click location\n\n"
+                           + String(repeating: entry.raw, count: target) + "z"
+                           + String(repeating: entry.raw, count: glyphCount - target))
+            XCTAssertEqual(try Data(contentsOf: entry.file), Data(entry.source.utf8))
+        }
     }
 
     func testDoubleClickSecondMergedParagraphLocatesItsOwnOriginalSourceRange() throws {

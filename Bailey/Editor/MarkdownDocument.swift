@@ -1,5 +1,6 @@
 import Foundation
 import Markdown
+import SwiftSoup
 import Yams
 
 /// An immutable, Sendable projection of swift-markdown's AST for the native SwiftUI reader.
@@ -59,14 +60,35 @@ nonisolated struct MarkdownDocument: Sendable {
         func projectText(_ node: Markdown.Text) -> [MarkdownInline] {
             let value = node.string
             let rawBytes = protected.source.utf8
-            guard let span = node.range.flatMap(renderedCoordinates.bytes),
-                  span.count == value.utf8.count else { return protected.inlines(value) }
+            guard let span = node.range.flatMap(renderedCoordinates.bytes) else { return protected.inlines(value) }
             let start = rawBytes.index(rawBytes.startIndex, offsetBy: span.lowerBound)
             let end = rawBytes.index(start, offsetBy: span.count)
-            guard value.utf8.elementsEqual(rawBytes[start..<end]) else { return protected.inlines(value) }
+            let raw = rawBytes[start..<end]
+            let normalized: MarkdownSourceRewrite?
+            if value.utf8.elementsEqual(raw) {
+                normalized = nil
+            } else {
+                let rewrite = MarkdownSourceRewrite.normalizingInlineText(String(decoding: raw, as: UTF8.self))
+                guard rewrite.source.utf8.elementsEqual(value.utf8) else { return protected.inlines(value) }
+                normalized = rewrite
+            }
+            let bytes = value.utf8
             return protected.inlines(value) { part in
-                let from = span.lowerBound + value.utf8.distance(from: value.startIndex, to: part.startIndex)
-                return .text(String(part), source: originalByteRange(from..<(from + part.utf8.count)))
+                let from = bytes.distance(from: bytes.startIndex, to: part.startIndex)
+                let display = from..<(from + part.utf8.count)
+                if let normalized {
+                    return normalized.segments(in: display).map { segment in
+                        let start = bytes.index(part.startIndex, offsetBy: segment.lowerBound - from)
+                        let end = bytes.index(start, offsetBy: segment.count)
+                        let source = normalized.originalBytes(for: segment).flatMap {
+                            originalByteRange((span.lowerBound + $0.lowerBound)..<(span.lowerBound + $0.upperBound))
+                        }
+                        return .text(String(decoding: bytes[start..<end], as: UTF8.self), source: source)
+                    }
+                }
+                return [.text(String(part), source: originalByteRange(
+                    (span.lowerBound + display.lowerBound)..<(span.lowerBound + display.upperBound)
+                ))]
             }
         }
         var occupiedAnchors = Set<String>()
@@ -360,6 +382,41 @@ nonisolated struct MarkdownSourceRewrite {
     let source: String
     private let edits: [Edit]
 
+    static func normalizingInlineText(_ source: String) -> Self {
+        let bytes = Array(source.utf8)
+        var edits: [Replacement] = []
+        var index = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 92, index + 1 < bytes.count {
+                let next = bytes[index + 1]
+                if (33...47).contains(next) || (58...64).contains(next)
+                    || (91...96).contains(next) || (123...126).contains(next) {
+                    edits.append(.init(bytes: index..<(index + 2),
+                                       text: String(decoding: [next], as: UTF8.self)))
+                    index += 2
+                    continue
+                }
+            } else if byte == 38, index + 1 < bytes.count,
+                      let semicolon = bytes[(index + 1)..<min(index + 34, bytes.count)].firstIndex(of: 59) {
+                let range = index..<(semicolon + 1)
+                if bytes[(index + 1)..<semicolon].allSatisfy({
+                    $0 == 35 || (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+                }) {
+                    let reference = String(decoding: bytes[range], as: UTF8.self)
+                    if let value = try? Entities.unescape(string: reference, strict: true),
+                       value != reference {
+                        edits.append(.init(bytes: range, text: value))
+                        index = range.upperBound
+                        continue
+                    }
+                }
+            }
+            index += 1
+        }
+        return Self(source, replacing: edits)
+    }
+
     init(_ source: String, replacing replacements: [Replacement] = []) {
         guard !replacements.isEmpty else {
             self.source = source
@@ -394,20 +451,41 @@ nonisolated struct MarkdownSourceRewrite {
     }
 
     private func originalBoundary(_ offset: Int, leading: Bool) -> Int {
+        let upper = firstEdit(after: offset, includingSameStart: leading)
+        guard upper > 0 else { return offset }
+        let edit = edits[upper - 1]
+        if offset < edit.rewritten.upperBound {
+            return leading ? edit.original.lowerBound : edit.original.upperBound
+        }
+        return edit.original.upperBound + (offset - edit.rewritten.upperBound)
+    }
+
+    func segments(in range: Range<Int>) -> [Range<Int>] {
+        let start = max(0, firstEdit(after: range.lowerBound, includingSameStart: true) - 1)
+        var segments: [Range<Int>] = []
+        var cursor = range.lowerBound
+        for edit in edits[start...] {
+            if edit.rewritten.lowerBound >= range.upperBound { break }
+            for boundary in [edit.rewritten.lowerBound, edit.rewritten.upperBound] {
+                guard boundary > cursor, boundary < range.upperBound else { continue }
+                segments.append(cursor..<boundary)
+                cursor = boundary
+            }
+        }
+        segments.append(cursor..<range.upperBound)
+        return segments
+    }
+
+    private func firstEdit(after offset: Int, includingSameStart: Bool) -> Int {
         var lower = 0
         var upper = edits.count
         while lower < upper {
             let middle = lower + (upper - lower) / 2
             let start = edits[middle].rewritten.lowerBound
-            if start < offset || (leading && start == offset) { lower = middle + 1 }
+            if start < offset || (includingSameStart && start == offset) { lower = middle + 1 }
             else { upper = middle }
         }
-        guard lower > 0 else { return offset }
-        let edit = edits[lower - 1]
-        if offset < edit.rewritten.upperBound {
-            return leading ? edit.original.lowerBound : edit.original.upperBound
-        }
-        return edit.original.upperBound + (offset - edit.rewritten.upperBound)
+        return lower
     }
 }
 
