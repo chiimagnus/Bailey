@@ -132,7 +132,6 @@ struct MarkdownPreview: View {
 
     private func scroll(to block: Int, rows: [RenderRow], proxy: ScrollViewProxy) {
         guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
-        position = row.start
         proxy.scrollTo(row.start, anchor: .top)
         onReadingPosition(block)
     }
