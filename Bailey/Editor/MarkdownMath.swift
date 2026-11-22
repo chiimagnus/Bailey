@@ -201,7 +201,7 @@ nonisolated enum MarkdownMath {
 
         init(_ markdown: String) {
             lines = markdown.contains("$")
-                ? markdown.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                ? markdown.split(omittingEmptySubsequences: false, whereSeparator: \.isMarkdownLineEnding)
                     .map(String.init)
                 : []
         }

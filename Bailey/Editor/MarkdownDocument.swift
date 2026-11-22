@@ -32,7 +32,7 @@ nonisolated struct MarkdownDocument: Sendable {
     @concurrent static func parse(_ source: String) async throws -> Self {
         try Task.checkCancellation()
         let header = splitHeader(source)
-        let headerLineCount = source[..<header.body.startIndex].filter(\.isNewline).count
+        let headerLineCount = source[..<header.body.startIndex].filter(\.isMarkdownLineEnding).count
         let original = String(header.body)
         let coordinates = MarkdownOriginalCoordinates(
             body: original, headerUTF16: source[..<header.body.startIndex].utf16.count
@@ -237,13 +237,13 @@ nonisolated struct MarkdownDocument: Sendable {
     private static func splitHeader(_ source: String)
         -> (body: Substring, properties: [Property], warning: String?) {
         let content = source.first == "\u{FEFF}" ? source.dropFirst() : source[...]
-        guard let firstLineEnd = content.firstIndex(where: \.isNewline),
+        guard let firstLineEnd = content.firstIndex(where: \.isMarkdownLineEnding),
               content[..<firstLineEnd] == "---"
         else { return (content, [], nil) }
         let yamlStart = content.index(after: firstLineEnd)
         var cursor = yamlStart
         while cursor < content.endIndex {
-            let newline = content[cursor...].firstIndex(where: \.isNewline)
+            let newline = content[cursor...].firstIndex(where: \.isMarkdownLineEnding)
             let lineEnd = newline ?? content.endIndex
             let line = content[cursor..<lineEnd]
             if line == "---" {
@@ -343,7 +343,7 @@ private nonisolated struct MarkdownOriginalCoordinates {
         while index < body.endIndex {
             let character = body[index]
             let next = body.index(after: index)
-            if character.isNewline {
+            if character.isMarkdownLineEnding {
                 ends.append(offset)
                 offset += character.utf16.count
                 indices.append(next)
@@ -386,6 +386,12 @@ private nonisolated struct MarkdownOriginalCoordinates {
         let start = headerUTF16 + lineUTF16Starts[first]
         let end = headerUTF16 + lineUTF16Ends[last]
         return NSRange(location: start, length: end - start)
+    }
+}
+
+extension Character {
+    nonisolated var isMarkdownLineEnding: Bool {
+        self == "\n" || self == "\r" || self == "\r\n"
     }
 }
 

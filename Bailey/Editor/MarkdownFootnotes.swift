@@ -39,7 +39,7 @@ nonisolated struct MarkdownFootnotes {
         }
         excludeCode(document)
 
-        let rawLines = original.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let rawLines = original.split(omittingEmptySubsequences: false, whereSeparator: \.isMarkdownLineEnding)
             .map(String.init)
         var lines = rawLines
         var definitions: [String: Note] = [:]

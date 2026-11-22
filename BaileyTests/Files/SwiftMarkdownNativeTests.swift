@@ -628,6 +628,31 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }, "The original-coordinate projection must not change math rendering")
     }
 
+    func testMarkdownCoordinatesDistinguishUnicodeSeparatorsFromSourceLineEndings() async throws {
+        for ending in ["\n", "\r\n", "\r"] {
+            for separator in ["\u{0085}", "\u{2028}", "\u{2029}", "\u{000B}", "\u{000C}"] {
+                let body = "First\(separator)still the same Markdown line."
+                let heading = "## Destination 👩‍🚀"
+                let paragraph = "Use $x^2$ and [^note]."
+                let note = "[^note]: 中文 👩‍🚀"
+                let source = [body, "", heading, "", paragraph, "", note].joined(separator: ending)
+                let original = source as NSString
+                let document = try await MarkdownDocument.parse(source)
+                for text in [body, heading, paragraph, note] {
+                    let expected = original.range(of: text)
+                    let block = document.blocks.first { $0.sourceRange == expected }
+                    XCTAssertNotNil(block, "Expected untouched source range for \(text.debugDescription)")
+                }
+                XCTAssertEqual(document.blocks.first { $0.anchor == "destination-" }?.line, 3)
+                XCTAssertNotNil(document.blocks.first { $0.anchor == "bailey-note:note" })
+                XCTAssertTrue(document.blocks.contains {
+                    guard case .paragraph(let inline) = $0.content else { return false }
+                    return inline.contains { if case .math("x^2", display: false) = $0 { true } else { false } }
+                })
+            }
+        }
+    }
+
     func testOriginalRangesKeepNestedListQuoteAndMultilineFootnoteContent() async throws {
         let source = """
             # Title
