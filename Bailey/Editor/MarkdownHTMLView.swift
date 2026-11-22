@@ -1,14 +1,30 @@
 import SwiftUI
 
+@Observable
+@MainActor
+final class MarkdownDetailsState {
+    var expanded: [String: Bool] = [:]
+
+    func isExpanded(_ path: [Int], initiallyOpen: Bool) -> Bool {
+        expanded[MarkdownHTML.detailKey(path)] ?? initiallyOpen
+    }
+
+    func toggle(_ path: [Int], initiallyOpen: Bool) {
+        let key = MarkdownHTML.detailKey(path)
+        expanded[key] = !(expanded[key] ?? initiallyOpen)
+    }
+}
+
 struct MarkdownHTMLContent: View {
     let nodes: [MarkdownHTML]
     let resource: MarkdownResource
     let assetRefresh: UInt
+    var selectionPath: [Int] = []
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        let layoutNodes = Self.groupInline(nodes)
+        let layoutNodes = MarkdownHTML.groupedForPresentation(nodes)
         ForEach(layoutNodes.indices, id: \.self) { index in
             switch layoutNodes[index] {
             case .text(let text):
@@ -16,19 +32,19 @@ struct MarkdownHTMLContent: View {
                     Text(verbatim: text).textSelection(.enabled)
                 }
             case .paragraph(let children):
-                if Self.isInline(children) {
+                if MarkdownHTML.isInline(children) {
                     Self.inlineText(children).textSelection(.enabled)
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
                         MarkdownHTMLContent(nodes: children, resource: resource,
-                                            assetRefresh: assetRefresh)
+                                            assetRefresh: assetRefresh, selectionPath: selectionPath + [index])
                     }
                 }
             case .quote(let children):
                 HStack(alignment: .top, spacing: 0) {
                     MarkdownGitHubColors.border(dark: colorScheme == .dark).frame(width: 4)
                     MarkdownHTMLContent(nodes: children, resource: resource,
-                                        assetRefresh: assetRefresh)
+                                        assetRefresh: assetRefresh, selectionPath: selectionPath + [index])
                         .foregroundStyle(MarkdownGitHubColors.secondary(dark: colorScheme == .dark))
                         .padding(.leading, 16)
                 }
@@ -43,16 +59,17 @@ struct MarkdownHTMLContent: View {
             case .table(let rows):
                 ScrollView(.horizontal) {
                     Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                        ForEach(rows.indices, id: \.self) { index in
+                        ForEach(rows.indices, id: \.self) { row in
                             GridRow {
-                                ForEach(rows[index].cells.indices, id: \.self) { column in
-                                    let cell = rows[index].cells[column]
+                                ForEach(rows[row].cells.indices, id: \.self) { column in
+                                    let cell = rows[row].cells[column]
                                     Group {
-                                        if Self.isInline(cell.nodes) {
+                                        if MarkdownHTML.isInline(cell.nodes) {
                                             Self.inlineText(cell.nodes)
                                         } else {
                                             MarkdownHTMLContent(nodes: cell.nodes, resource: resource,
-                                                                assetRefresh: assetRefresh)
+                                                                assetRefresh: assetRefresh,
+                                                                selectionPath: selectionPath + [index, row, column])
                                         }
                                     }
                                     .fontWeight(cell.isHeader ? .semibold : .regular)
@@ -65,7 +82,7 @@ struct MarkdownHTMLContent: View {
                                     }
                                 }
                             }
-                            .background(rows[index].shaded
+                            .background(rows[row].shaded
                                 ? MarkdownGitHubColors.muted(dark: colorScheme == .dark)
                                 : MarkdownGitHubColors.background(dark: colorScheme == .dark))
                             .overlay(alignment: .bottom) {
@@ -80,11 +97,12 @@ struct MarkdownHTMLContent: View {
             case .heading(let level, let children):
                 VStack(alignment: .leading, spacing: 8) {
                     Group {
-                        if Self.isInline(children) {
+                        if MarkdownHTML.isInline(children) {
                             Self.inlineText(children)
                         } else {
                             MarkdownHTMLContent(nodes: children, resource: resource,
-                                                assetRefresh: assetRefresh)
+                                                assetRefresh: assetRefresh,
+                                                selectionPath: selectionPath + [index])
                         }
                     }
                     .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1],
@@ -104,11 +122,12 @@ struct MarkdownHTMLContent: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(ordered ? "\(start + item)." : "•")
                                 .frame(width: 24, alignment: .trailing)
-                            if Self.isInline(items[item]) {
+                            if MarkdownHTML.isInline(items[item]) {
                                 Self.inlineText(items[item]).textSelection(.enabled)
                             } else {
                                 MarkdownHTMLContent(nodes: items[item], resource: resource,
-                                                    assetRefresh: assetRefresh)
+                                                    assetRefresh: assetRefresh,
+                                                    selectionPath: selectionPath + [index, item])
                             }
                         }
                     }
@@ -120,67 +139,33 @@ struct MarkdownHTMLContent: View {
                 MarkdownMediaView(url: url, video: video, resource: resource).id(url)
             case .details(let label, let children, let open):
                 MarkdownHTMLDetails(label: label, children: children, initiallyOpen: open,
-                                    resource: resource, assetRefresh: assetRefresh)
+                                    resource: resource, assetRefresh: assetRefresh,
+                                    selectionPath: selectionPath + [index])
             case .link(let url, let children):
-                if Self.isInline(children) {
+                if MarkdownHTML.isInline(children) {
                     Self.inlineText([.link(url, children)])
                         .tint(MarkdownGitHubColors.link(dark: colorScheme == .dark))
                         .textSelection(.enabled)
                 } else {
                     Button { openURL(url) } label: {
                         MarkdownHTMLContent(nodes: children, resource: resource,
-                                            assetRefresh: assetRefresh)
+                                            assetRefresh: assetRefresh, selectionPath: selectionPath + [index])
                     }
                     .buttonStyle(.plain)
                     .pointerStyle(.link)
                     .foregroundStyle(MarkdownGitHubColors.link(dark: colorScheme == .dark))
                 }
             case .emphasis(let children, let tag):
-                if Self.isInline(children) {
+                if MarkdownHTML.isInline(children) {
                     Self.styledText(Self.inlineText(children), tag: tag).textSelection(.enabled)
                 } else {
                     MarkdownHTMLContent(nodes: children, resource: resource,
-                                        assetRefresh: assetRefresh)
+                                        assetRefresh: assetRefresh, selectionPath: selectionPath + [index])
                         .fontWeight(["b", "strong"].contains(tag) ? .bold : nil)
                         .italic(["em", "i"].contains(tag))
                         .strikethrough(["s", "del"].contains(tag))
                         .fontDesign(["code", "kbd"].contains(tag) ? .monospaced : nil)
                 }
-            }
-        }
-    }
-
-    private static func groupInline(_ nodes: [MarkdownHTML]) -> [MarkdownHTML] {
-        var blocks: [MarkdownHTML] = []
-        var inline: [MarkdownHTML] = []
-        func flush() {
-            let meaningful = inline.contains { node in
-                if case .text(let value) = node {
-                    return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                }
-                return true
-            }
-            if meaningful { blocks.append(.paragraph(inline)) }
-            inline.removeAll(keepingCapacity: true)
-        }
-        for node in nodes {
-            if isInline([node]) {
-                inline.append(node)
-            } else {
-                flush()
-                blocks.append(node)
-            }
-        }
-        flush()
-        return blocks
-    }
-
-    private static func isInline(_ nodes: [MarkdownHTML]) -> Bool {
-        nodes.allSatisfy {
-            switch $0 {
-            case .text, .lineBreak: return true
-            case .emphasis(let children, _), .link(_, let children): return isInline(children)
-            default: return false
             }
         }
     }
@@ -220,21 +205,16 @@ private struct MarkdownHTMLDetails: View {
     let initiallyOpen: Bool
     let resource: MarkdownResource
     let assetRefresh: UInt
-    @State private var expanded: Bool
+    let selectionPath: [Int]
+    @Environment(MarkdownDetailsState.self) private var disclosure
 
-    init(label: String, children: [MarkdownHTML], initiallyOpen: Bool,
-         resource: MarkdownResource, assetRefresh: UInt) {
-        self.label = label
-        self.children = children
-        self.initiallyOpen = initiallyOpen
-        self.resource = resource
-        self.assetRefresh = assetRefresh
-        _expanded = State(initialValue: initiallyOpen)
+    private var expanded: Bool {
+        disclosure.isExpanded(selectionPath, initiallyOpen: initiallyOpen)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Button { expanded.toggle() } label: {
+            Button { disclosure.toggle(selectionPath, initiallyOpen: initiallyOpen) } label: {
                 HStack(spacing: 6) {
                     Image(systemName: expanded ? "arrowtriangle.down.fill" : "arrowtriangle.right.fill")
                         .font(.system(size: 9))
@@ -249,12 +229,11 @@ private struct MarkdownHTMLDetails: View {
             .accessibilityIdentifier("bailey.markdown.details")
             if expanded {
                 MarkdownHTMLContent(nodes: children, resource: resource,
-                                    assetRefresh: assetRefresh)
+                                    assetRefresh: assetRefresh, selectionPath: selectionPath)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: initiallyOpen, initial: true) { _, next in expanded = next }
     }
 }
 

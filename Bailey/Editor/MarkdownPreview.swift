@@ -24,6 +24,8 @@ struct MarkdownPreview: View {
     @State private var failedLink = false
     @State private var readerIsScrolling = false
     @State private var sourceCoordinates = MarkdownReaderCoordinates()
+    @State private var detailsState = MarkdownDetailsState()
+    @State private var selectedSource: NSRange?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -42,21 +44,27 @@ struct MarkdownPreview: View {
                                     paragraphRun(row.start..<row.end)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .textSelection(.enabled)
-                                        .modifier(MarkdownMappedTap(onLocate: onLocateSource))
+                                        .modifier(MarkdownGlyphMapping(group: row.start))
                                         .id(row.start)
                                 } else {
                                     MarkdownNativeBlockView(block: document.blocks[row.start].content,
                                                             resource: resource, assetRefresh: assetRefresh,
-                                                            anchor: document.blocks[row.start].anchor)
-                                        .modifier(MarkdownMappedTap(onLocate: onLocateSource))
+                                                            anchor: document.blocks[row.start].anchor,
+                                                            selectionPath: [row.start])
+                                        .modifier(MarkdownGlyphMapping(group: row.start))
                                         .id(row.start)
                                 }
                             }
                         }
                         .scrollTargetLayout()
                         .background {
-                            MarkdownReaderClipBridge(coordinates: sourceCoordinates)
-                                .frame(width: 0, height: 0)
+                            MarkdownReaderClipBridge(
+                                coordinates: sourceCoordinates, document: document,
+                                detailsState: detailsState,
+                                onSelectionChanged: { selectedSource = $0 },
+                                onLocateSource: onLocateSource
+                            )
+                            .frame(width: 0, height: 0)
                         }
                         .font(.system(size: 16))
                         .lineSpacing(4)
@@ -69,6 +77,20 @@ struct MarkdownPreview: View {
                     }
                     .accessibilityIdentifier("bailey.markdown.preview")
                     .coordinateSpace(name: "bailey.markdown.reader")
+                    .environment(detailsState)
+                    .overlay {
+                        Canvas { context, _ in
+                            guard let selectedSource else { return }
+                            let tint = Color(nsColor: .selectedTextBackgroundColor).opacity(0.42)
+                            for hit in sourceCoordinates.hits {
+                                for rect in hit.selectedGlyphRects(intersecting: selectedSource) {
+                                    context.fill(Path(rect), with: .color(tint))
+                                }
+                            }
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
                     .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.1) { visible in
                         position = visible.min()
                     }
@@ -146,6 +168,9 @@ struct MarkdownPreview: View {
         }
         .background(MarkdownGitHubColors.background(dark: colorScheme == .dark))
         .onChange(of: revision) { _, _ in
+            sourceCoordinates.clearSelection()
+            detailsState.expanded.removeAll()
+            selectedSource = nil
             linkToOpen = nil
             failedLink = false
         }
@@ -238,6 +263,89 @@ private final class MarkdownReaderCoordinates {
     var hits: [MarkdownGlyphHit] = []
     var lastReportedOffset: Int?
     var pendingSource: (offset: Int, viewportY: CGFloat)?
+    var document: MarkdownDocument?
+    var selectedRange: NSRange?
+    var onSelectionChanged: ((NSRange?) -> Void)?
+
+    func clearSelection() {
+        guard selectedRange != nil else { return }
+        selectedRange = nil
+        onSelectionChanged?(nil)
+    }
+
+    func select(from start: MarkdownSelectionGlyph, to end: MarkdownSelectionGlyph) {
+        let lower = min(start.source.location, end.source.location)
+        let upper = max(NSMaxRange(start.source), NSMaxRange(end.source))
+        updateSelection(NSRange(location: lower, length: upper - lower))
+    }
+
+    func select(between anchor: Int, and caret: Int) {
+        updateSelection(NSRange(location: min(anchor, caret), length: abs(anchor - caret)))
+    }
+
+    private func updateSelection(_ range: NSRange) {
+        guard range.length > 0 else { clearSelection(); return }
+        guard range != selectedRange else { return }
+        selectedRange = range
+        onSelectionChanged?(range)
+    }
+
+    func nextBoundary(from caret: Int, forward: Bool) -> Int? {
+        var candidate: Int?
+        for hit in hits {
+            for glyph in hit.selectionGlyphs() {
+                let boundary = forward ? NSMaxRange(glyph.source) : glyph.source.location
+                guard forward ? boundary > caret : boundary < caret else { continue }
+                if let best = candidate {
+                    candidate = forward ? min(best, boundary) : max(best, boundary)
+                } else {
+                    candidate = boundary
+                }
+            }
+        }
+        return candidate
+    }
+
+    func sourceOffset(atViewportPoint point: CGPoint) -> Int? {
+        for hit in hits {
+            if let source = hit.sourceOffset(atViewportPoint: point) { return source }
+        }
+        return nil
+    }
+
+    func nearestGlyph(to point: CGPoint) -> MarkdownSelectionGlyph? {
+        var nearest: MarkdownGlyphHit?
+        var nearestDistance = CGFloat.infinity
+        for hit in hits {
+            let rect = hit.viewportFrame
+            let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+            let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+            let distance = dy * dy * 4 + dx * dx
+            if distance < nearestDistance {
+                nearest = hit
+                nearestDistance = distance
+            }
+        }
+        guard let hit = nearest else { return nil }
+        var closest: MarkdownSelectionGlyph?
+        var closestDistance = CGFloat.infinity
+        for glyph in hit.selectionGlyphs() {
+            let rect = glyph.frame
+            let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+            let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+            let distance = dy * dy * 4 + dx * dx
+            if distance < closestDistance {
+                closest = glyph
+                closestDistance = distance
+            }
+        }
+        return closest
+    }
+
+    func copySelection(details: [String: Bool]) -> String? {
+        guard let selectedRange, let document else { return nil }
+        return MarkdownSelectionText.copy(selectedRange, from: document, details: details)
+    }
 
     func scrollPending() {
         guard let pendingSource else { return }
@@ -282,33 +390,121 @@ private final class MarkdownReaderCoordinates {
     }
 }
 
-/// Attach to the existing native ScrollView without owning gestures, text selection or layout.
+/// Reuses the reader ScrollView and Text.Layout for cross-structure selection and source navigation.
 private struct MarkdownReaderClipBridge: NSViewRepresentable {
     let coordinates: MarkdownReaderCoordinates
+    let document: MarkdownDocument
+    let detailsState: MarkdownDetailsState
+    let onSelectionChanged: (NSRange?) -> Void
+    let onLocateSource: ((Int) -> Void)?
 
     func makeNSView(context: Context) -> MarkdownReaderClipView {
-        let view = MarkdownReaderClipView()
-        view.coordinates = coordinates
-        return view
+        MarkdownReaderClipView()
     }
 
     func updateNSView(_ view: MarkdownReaderClipView, context: Context) {
         view.coordinates = coordinates
+        view.detailsState = detailsState
+        view.onLocateSource = onLocateSource
+        coordinates.document = document
+        coordinates.onSelectionChanged = onSelectionChanged
         view.attach()
     }
 
     static func dismantleNSView(_ view: MarkdownReaderClipView, coordinator: ()) {
+        view.detachSelectionGesture()
+        view.detachKeyboardMonitor()
+        view.onLocateSource = nil
+        view.detailsState = nil
         if let coordinates = view.coordinates, coordinates.attachedBridge === view {
             coordinates.attachedBridge = nil
             coordinates.scrollView = nil
+            coordinates.onSelectionChanged = nil
+            coordinates.document = nil
         }
         view.coordinates = nil
     }
 }
 
-private final class MarkdownReaderClipView: NSView {
+private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate {
     var coordinates: MarkdownReaderCoordinates?
+    var detailsState: MarkdownDetailsState?
+    var onLocateSource: ((Int) -> Void)?
+    private var dragAnchor: MarkdownSelectionGlyph?
+    private var selectionAnchorOffset: Int?
+    private var selectionCaretOffset: Int?
+    private var keyboardMonitor: Any?
+    private var previewHasInputFocus = false
+    private lazy var selectionGesture = NSPanGestureRecognizer(target: self, action: #selector(selectText(_:)))
+    private lazy var sourceClickGesture: NSClickGestureRecognizer = {
+        let recognizer = NSClickGestureRecognizer(target: self, action: #selector(locateSource(_:)))
+        recognizer.numberOfClicksRequired = 2
+        recognizer.delegate = self
+        return recognizer
+    }()
+
+    override var acceptsFirstResponder: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer) -> Bool {
+        true
+    }
+
+    @objc private func locateSource(_ recognizer: NSClickGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let clip = coordinates?.scrollView?.contentView,
+              let offset = coordinates?.sourceOffset(atViewportPoint: recognizer.location(in: clip))
+        else { return }
+        onLocateSource?(offset)
+    }
+
+    @objc private func selectText(_ recognizer: NSPanGestureRecognizer) {
+        guard let coordinates, let clip = coordinates.scrollView?.contentView else { return }
+        let point = recognizer.location(in: clip)
+        let delta = recognizer.translation(in: clip)
+        let origin = CGPoint(x: point.x - delta.x, y: point.y - delta.y)
+        switch recognizer.state {
+        case .began:
+            dragAnchor = coordinates.nearestGlyph(to: origin)
+            selectionAnchorOffset = dragAnchor?.insertionOffset(at: origin)
+            selectionCaretOffset = selectionAnchorOffset
+            coordinates.clearSelection()
+        case .changed, .ended:
+            if dragAnchor == nil { dragAnchor = coordinates.nearestGlyph(to: origin) }
+            guard let anchor = dragAnchor,
+                  let end = coordinates.nearestGlyph(to: point) else { return }
+            if anchor.isSeparateText(from: end) {
+                coordinates.select(from: anchor, to: end)
+                selectionCaretOffset = end.insertionOffset(at: point)
+                if recognizer.state == .ended { window?.makeFirstResponder(self) }
+            } else {
+                coordinates.clearSelection()
+            }
+            if recognizer.state == .ended { dragAnchor = nil }
+        default:
+            dragAnchor = nil
+        }
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard let text = coordinates?.copySelection(details: detailsState?.expanded ?? [:]),
+              !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @objc override func selectAll(_ sender: Any?) {
+        guard let document = coordinates?.document,
+              let range = MarkdownSelectionText.fullRange(in: document) else { return }
+        selectionAnchorOffset = range.location
+        selectionCaretOffset = NSMaxRange(range)
+        coordinates?.select(between: range.location, and: NSMaxRange(range))
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        coordinates?.clearSelection()
+    }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
@@ -318,6 +514,8 @@ private final class MarkdownReaderClipView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil, coordinates?.attachedBridge === self {
+            detachSelectionGesture()
+            detachKeyboardMonitor()
             coordinates?.attachedBridge = nil
             coordinates?.scrollView = nil
         } else {
@@ -328,32 +526,168 @@ private final class MarkdownReaderClipView: NSView {
     func attach() {
         guard window != nil, let coordinates, let scrollView = enclosingScrollView,
               coordinates.attachedBridge !== self || coordinates.scrollView !== scrollView else { return }
+        detachSelectionGesture()
         coordinates.attachedBridge = self
         coordinates.scrollView = scrollView
+        selectionGesture.delegate = self
+        scrollView.contentView.addGestureRecognizer(selectionGesture)
+        scrollView.contentView.addGestureRecognizer(sourceClickGesture)
+        if keyboardMonitor == nil {
+            keyboardMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .keyDown]
+            ) { [weak self] event in
+                guard let self else { return event }
+                return self.routeReaderSelection(event)
+            }
+        }
         coordinates.scrollPending()
+    }
+
+    private func routeReaderSelection(_ event: NSEvent) -> NSEvent? {
+        guard let window, let scrollView = coordinates?.scrollView else { return event }
+        if event.type == .leftMouseDown || event.type == .rightMouseDown {
+            let clip = scrollView.contentView
+            let point = clip.convert(event.locationInWindow, from: nil)
+            previewHasInputFocus = event.window === window && clip.bounds.contains(point)
+            if previewHasInputFocus, event.type == .leftMouseDown {
+                if event.modifierFlags.contains(.shift), let anchor = selectionAnchorOffset,
+                   let glyph = coordinates?.nearestGlyph(to: point) {
+                    let caret = glyph.insertionOffset(at: point)
+                    selectionCaretOffset = caret
+                    coordinates?.select(between: anchor, and: caret)
+                    window.makeFirstResponder(self)
+                    return nil
+                }
+                selectionAnchorOffset = coordinates?.nearestGlyph(to: point)?.insertionOffset(at: point)
+                selectionCaretOffset = selectionAnchorOffset
+            } else {
+                selectionAnchorOffset = nil
+                selectionCaretOffset = nil
+            }
+            coordinates?.clearSelection()
+            return event
+        }
+        guard previewHasInputFocus, event.window === window, window.isKeyWindow else { return event }
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .control, .option])
+        if modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "a" {
+            selectAll(nil)
+            window.makeFirstResponder(self)
+            return nil
+        }
+        if modifiers == .shift, let caret = selectionCaretOffset,
+           let anchor = selectionAnchorOffset, event.keyCode == 123 || event.keyCode == 124,
+           let next = coordinates?.nextBoundary(from: caret, forward: event.keyCode == 124) {
+            selectionCaretOffset = next
+            coordinates?.select(between: anchor, and: next)
+            window.makeFirstResponder(self)
+            return nil
+        }
+        return event
+    }
+
+    func detachKeyboardMonitor() {
+        if let keyboardMonitor { NSEvent.removeMonitor(keyboardMonitor) }
+        keyboardMonitor = nil
+        previewHasInputFocus = false
+        selectionAnchorOffset = nil
+        selectionCaretOffset = nil
+    }
+
+    func detachSelectionGesture() {
+        selectionGesture.view?.removeGestureRecognizer(selectionGesture)
+        sourceClickGesture.view?.removeGestureRecognizer(sourceClickGesture)
     }
 }
 
 private struct MarkdownSourceGlyph: TextAttribute, Equatable {
     let source: NSRange
     let displayLength: Int
+    var sourceRuns: [MarkdownSourceRun] = []
+    var displayedLineStarts: [Int] = []
+
+    func original(for display: NSRange) -> NSRange? {
+        if sourceRuns.isEmpty {
+            guard source.length == displayLength else { return source }
+            return NSRange(location: source.location + display.location, length: display.length)
+        }
+        var lower = 0
+        var upper = sourceRuns.count
+        while lower < upper {
+            let mid = lower + (upper - lower) / 2
+            if NSMaxRange(sourceRuns[mid].displayed) <= display.location { lower = mid + 1 }
+            else { upper = mid }
+        }
+        guard lower < sourceRuns.count else { return nil }
+        let run = sourceRuns[lower]
+        guard run.displayed.location <= display.location,
+              display.location < NSMaxRange(run.displayed) else { return nil }
+        if run.displayed.length != run.original.length { return run.original }
+        let offset = display.location - run.displayed.location
+        return NSRange(location: run.original.location + offset,
+                       length: min(display.length, run.original.length - offset))
+    }
+}
+
+private struct MarkdownSelectionGlyph {
+    let source: NSRange
+    let frame: CGRect
+    let group: Int
+    let textIndex: Int
+
+    func insertionOffset(at point: CGPoint) -> Int {
+        point.x < frame.midX ? source.location : NSMaxRange(source)
+    }
+
+    func isSeparateText(from other: Self) -> Bool {
+        group != other.group || textIndex != other.textIndex
+    }
 }
 
 private struct MarkdownGlyphHit: Equatable {
     let mark: MarkdownSourceGlyph
     let first: Text.Layout.CharacterIndex
     let run: Text.Layout.Run
-    let origin: CGPoint
     let viewportOrigin: CGPoint
+    let group: Int
+    let textIndex: Int
+    let isLink: Bool
+    let displayedLineStart: Int
 
     var viewportFrame: CGRect {
         run.typographicBounds.rect.offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y)
     }
 
+    func selectionGlyphs() -> [MarkdownSelectionGlyph] {
+        run.compactMap { glyph in
+            guard let firstIndex = glyph.characterIndices.min(),
+                  let lastIndex = glyph.characterIndices.max() else { return nil }
+            let displayed = NSRange(
+                location: displayedLineStart + max(0, first.distance(to: firstIndex)),
+                length: max(1, firstIndex.distance(to: lastIndex) + 1)
+            )
+            guard let mapped = mark.original(for: displayed), mapped.length > 0 else { return nil }
+            return MarkdownSelectionGlyph(source: mapped,
+                                          frame: glyph.typographicBounds.rect.offsetBy(
+                                            dx: viewportOrigin.x, dy: viewportOrigin.y
+                                          ),
+                                          group: group, textIndex: textIndex)
+        }
+    }
+
+    func selectedGlyphRects(intersecting selection: NSRange) -> [CGRect] {
+        guard NSIntersectionRange(mark.source, selection).length > 0 else { return [] }
+        return selectionGlyphs().compactMap {
+            NSIntersectionRange($0.source, selection).length > 0 ? $0.frame : nil
+        }
+    }
+
     var firstSourceOffset: Int {
         let index = run.characterIndices.min() ?? first
         let distance = first.distance(to: index)
-        return mark.source.location + (mark.source.length == mark.displayLength ? max(0, distance) : 0)
+        return mark.original(for: NSRange(
+            location: displayedLineStart + max(0, distance), length: 1
+        ))?.location
+            ?? mark.source.location
     }
 
     func viewportFrame(forSourceOffset target: Int) -> CGRect? {
@@ -361,11 +695,12 @@ private struct MarkdownGlyphHit: Equatable {
         for glyph in run {
             guard let start = glyph.characterIndices.min(),
                   let end = glyph.characterIndices.max() else { continue }
-            let exact = mark.source.length == mark.displayLength
-            let startOffset = mark.source.location + (exact ? first.distance(to: start) : 0)
-            let endOffset = exact ? mark.source.location + first.distance(to: end) + 1
-                : NSMaxRange(mark.source)
-            if target >= startOffset && target < endOffset {
+            let displayed = NSRange(
+                location: displayedLineStart + max(0, first.distance(to: start)),
+                length: max(1, start.distance(to: end) + 1)
+            )
+            guard let mapped = mark.original(for: displayed) else { continue }
+            if target >= mapped.location && target < NSMaxRange(mapped) {
                 return glyph.typographicBounds.rect
                     .offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y)
             }
@@ -373,14 +708,17 @@ private struct MarkdownGlyphHit: Equatable {
         return nil
     }
 
-    func sourceOffset(at target: CGPoint) -> Int? {
-        let point = CGPoint(x: target.x - origin.x, y: target.y - origin.y)
-        guard run.typographicBounds.rect.contains(point),
-              let glyph = run.first(where: { $0.typographicBounds.rect.contains(point) }),
-              let index = glyph.characterIndices.min() else { return nil }
-        let relative = first.distance(to: index)
-        guard relative >= 0, relative < mark.displayLength else { return nil }
-        return mark.source.location + (mark.source.length == mark.displayLength ? relative : 0)
+    func sourceOffset(atViewportPoint point: CGPoint) -> Int? {
+        guard !isLink, viewportFrame.contains(point) else { return nil }
+        for glyph in run {
+            let frame = glyph.typographicBounds.rect
+                .offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y)
+            guard frame.contains(point), let index = glyph.characterIndices.min() else { continue }
+            let relative = displayedLineStart + first.distance(to: index)
+            guard relative >= 0, relative < mark.displayLength else { return nil }
+            return mark.original(for: NSRange(location: relative, length: 1))?.location
+        }
+        return nil
     }
 }
 
@@ -392,54 +730,55 @@ private struct MarkdownGlyphHitPreference: PreferenceKey {
     }
 }
 
-private struct MarkdownMappedTap: ViewModifier {
-    let onLocate: ((Int) -> Void)?
-    @State private var hits: [MarkdownGlyphHit] = []
+private struct MarkdownGlyphMapping: ViewModifier {
+    let group: Int
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if let onLocate {
-            content
-                .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+        content
+            .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
                     GeometryReader { geometry in
-                        let mapped = layouts.flatMap { entry in
+                        let mapped = layouts.enumerated().flatMap { textIndex, entry in
                             let origin = geometry[entry.origin]
                             let viewportFrame = geometry.frame(in: .named("bailey.markdown.reader"))
                             let viewportOrigin = CGPoint(x: origin.x + viewportFrame.minX,
                                                          y: origin.y + viewportFrame.minY)
                             var firstIndices: [NSRange: Text.Layout.CharacterIndex] = [:]
-                            let runs = entry.layout.flatMap { line in
+                            let lines = entry.layout.map { line in
                                 line.compactMap { run -> (Text.Layout.Run, MarkdownSourceGlyph)? in
                                     guard let marker = run[MarkdownSourceGlyph.self],
-                                          run[MarkdownLinkGlyph.self] == nil,
                                           let index = run.characterIndices.min() else { return nil }
-                                    firstIndices[marker.source] = min(index, firstIndices[marker.source] ?? index)
+                                    if marker.displayedLineStarts.isEmpty {
+                                        firstIndices[marker.source] = min(
+                                            index, firstIndices[marker.source] ?? index
+                                        )
+                                    }
                                     return (run, marker)
                                 }
                             }
-                            return runs.compactMap { run, mark in
-                                firstIndices[mark.source].map {
-                                    MarkdownGlyphHit(mark: mark, first: $0, run: run, origin: origin,
-                                                     viewportOrigin: viewportOrigin)
+                            return lines.enumerated().flatMap { lineIndex, runs in
+                                var lineFirst: [NSRange: Text.Layout.CharacterIndex] = [:]
+                                for (run, mark) in runs where !mark.displayedLineStarts.isEmpty {
+                                    guard let index = run.characterIndices.min() else { continue }
+                                    lineFirst[mark.source] = min(index, lineFirst[mark.source] ?? index)
+                                }
+                                return runs.compactMap { run, mark -> MarkdownGlyphHit? in
+                                    let isCode = !mark.displayedLineStarts.isEmpty
+                                    guard !isCode || mark.displayedLineStarts.indices.contains(lineIndex),
+                                          let first = isCode ? lineFirst[mark.source]
+                                              : firstIndices[mark.source] else { return nil }
+                                    return MarkdownGlyphHit(
+                                        mark: mark, first: first, run: run,
+                                        viewportOrigin: viewportOrigin, group: group, textIndex: textIndex,
+                                        isLink: run[MarkdownLinkGlyph.self] != nil,
+                                        displayedLineStart: isCode ? mark.displayedLineStarts[lineIndex] : 0
+                                    )
                                 }
                             }
                         }
                         Color.clear.preference(key: MarkdownGlyphHitPreference.self, value: mapped)
                     }
                     .allowsHitTesting(false)
-                }
-                .onPreferenceChange(MarkdownGlyphHitPreference.self) { hits = $0 }
-                .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
-                    for hit in hits {
-                        if let offset = hit.sourceOffset(at: tap.location) {
-                            onLocate(offset)
-                            break
-                        }
-                    }
-                })
-        } else {
-            content
-        }
+            }
     }
 }
 
@@ -596,6 +935,7 @@ private struct MarkdownNativeBlockView: View {
     let resource: MarkdownResource
     let assetRefresh: UInt
     var anchor: String? = nil
+    var selectionPath: [Int] = []
     @State private var headingHovered = false
     @FocusState private var headingLinkFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
@@ -700,7 +1040,8 @@ private struct MarkdownNativeBlockView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(items[index].blocks.indices, id: \.self) { blockIndex in
                                 MarkdownNativeBlockView(block: items[index].blocks[blockIndex],
-                                                        resource: resource, assetRefresh: assetRefresh)
+                                                        resource: resource, assetRefresh: assetRefresh,
+                                                        selectionPath: selectionPath + [index, blockIndex])
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -733,8 +1074,8 @@ private struct MarkdownNativeBlockView: View {
                         .stroke(MarkdownGitHubColors.border(dark: colorScheme == .dark))
                 }
             }
-        case .code(let source, let language):
-            MarkdownCodeBlockView(source: source, language: language)
+        case .code(let source, let language, let sourceRuns):
+            MarkdownCodeBlockView(source: source, language: language, sourceRuns: sourceRuns)
         case .mermaid(let source, let line):
             MarkdownMermaidView(source: source, line: line)
         case .mathBlock(let latex):
@@ -742,7 +1083,8 @@ private struct MarkdownNativeBlockView: View {
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .center)
         case .html(let nodes):
-            MarkdownHTMLContent(nodes: nodes, resource: resource, assetRefresh: assetRefresh)
+            MarkdownHTMLContent(nodes: nodes, resource: resource, assetRefresh: assetRefresh,
+                                selectionPath: selectionPath)
         case .rawHTML(let source):
             Text(verbatim: source).font(.system(size: 14, design: .monospaced))
                 .foregroundStyle(.secondary).textSelection(.enabled)
@@ -776,7 +1118,8 @@ private struct MarkdownNativeBlockView: View {
                 }
                 ForEach(blocks.indices, id: \.self) { index in
                     MarkdownNativeBlockView(block: blocks[index], resource: resource,
-                                            assetRefresh: assetRefresh)
+                                            assetRefresh: assetRefresh,
+                                            selectionPath: selectionPath + [index])
                 }
             }
             .foregroundStyle(alert == nil ? Color.secondary : MarkdownGitHubColors.text(dark: colorScheme == .dark))
@@ -904,6 +1247,7 @@ private struct MarkdownMixedParagraph: View {
 private struct MarkdownCodeBlockView: View {
     let source: String
     let language: String?
+    let sourceRuns: [MarkdownSourceRun]
     @State private var hovering = false
     @State private var copied = false
     @FocusState private var copyFocused: Bool
@@ -911,7 +1255,7 @@ private struct MarkdownCodeBlockView: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            MarkdownCodeText(source: source, language: language)
+            MarkdownCodeText(source: source, language: language, sourceRuns: sourceRuns)
                 .padding(16)
         }
         .overlay(alignment: .topTrailing) {
@@ -965,18 +1309,34 @@ struct MarkdownCodeText: View {
 
     let source: String
     let language: String?
+    let sourceRuns: [MarkdownSourceRun]
     @State private var rendered: Rendered?
 
     private var request: Request { Request(source: source, language: language) }
 
-    var body: some View {
-        Group {
-            if let rendered, rendered.request == request {
-                Text(rendered.value)
-            } else {
-                Text(verbatim: source)
-            }
+    private var mappedText: Text {
+        let text: Text
+        if let rendered, rendered.request == request {
+            text = Text(rendered.value)
+        } else {
+            text = Text(verbatim: source)
         }
+        guard let first = sourceRuns.first, let last = sourceRuns.last else { return text }
+        let sourceRange = NSRange(location: first.original.location,
+                                  length: NSMaxRange(last.original) - first.original.location)
+        let code = source as NSString
+        var lineStarts = [0]
+        for offset in 0..<code.length where code.character(at: offset) == 10 {
+            lineStarts.append(offset + 1)
+        }
+        return text.customAttribute(MarkdownSourceGlyph(
+            source: sourceRange, displayLength: code.length, sourceRuns: sourceRuns,
+            displayedLineStarts: lineStarts
+        ))
+    }
+
+    var body: some View {
+        mappedText
         .font(.system(size: 13.6, design: .monospaced))
         .lineSpacing(3)
         .textSelection(.enabled)
@@ -1014,34 +1374,13 @@ struct MarkdownCodeText: View {
 
 /// Compose adjacent AST inline fragments as one Text so selection remains native.
 enum MarkdownNativeText {
-    private struct HTMLTag {
-        let name: String
-        let closing: Bool
-        let raw: String
-    }
-
     private struct ActiveHTML {
         let name: String
         let href: URL?
     }
 
     static func make(_ nodes: [MarkdownInline]) -> Text {
-        var matched = Set<Int>()
-        var opened: [(name: String, index: Int)] = []
-        var tags: [Int: HTMLTag] = [:]
-        for (index, node) in nodes.enumerated() {
-            guard case let .html(raw) = node, let tag = parseTag(raw) else { continue }
-            tags[index] = tag
-            guard tag.name != "br" else { continue }
-            if tag.closing {
-                guard let last = opened.last, last.name == tag.name else { continue }
-                matched.insert(last.index)
-                matched.insert(index)
-                opened.removeLast()
-            } else if opened.count < 32 {
-                opened.append((tag.name, index))
-            }
-        }
+        let (tags, matched) = MarkdownInlineHTML.scan(nodes)
 
         var active: [ActiveHTML] = []
         var result = Text(verbatim: "")
@@ -1082,24 +1421,6 @@ enum MarkdownNativeText {
             result = result + text
         }
         return result
-    }
-
-    private static func parseTag(_ raw: String) -> HTMLTag? {
-        guard raw.utf8.count <= 8_192, raw.first == "<", raw.last == ">" else { return nil }
-        var content = String(raw.dropFirst().dropLast())
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let closing = content.hasPrefix("/")
-        if closing { content.removeFirst() }
-        let name = String(content.prefix { $0.isASCII && $0.isLetter }).lowercased()
-        guard ["a", "span", "b", "strong", "i", "em", "s", "del", "code", "kbd", "br"].contains(name)
-        else { return nil }
-        let remainder = content.dropFirst(name.count)
-        guard remainder.isEmpty || remainder.first?.isWhitespace == true || remainder.first == "/"
-        else { return nil }
-        if closing && !remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return nil
-        }
-        return HTMLTag(name: name, closing: closing, raw: raw)
     }
 
     private static func validLink(in openTag: String) -> URL? {

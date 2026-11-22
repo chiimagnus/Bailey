@@ -27,6 +27,46 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
     case list(ordered: Bool, start: Int, items: [[Self]])
     case horizontalRule
 
+    static func detailKey(_ path: [Int]) -> String {
+        path.map(String.init).joined(separator: ".")
+    }
+
+    /// Structural grouping shared by the SwiftUI renderer and semantic text selection.
+    static func groupedForPresentation(_ nodes: [Self]) -> [Self] {
+        var blocks: [Self] = []
+        var inline: [Self] = []
+        func flush() {
+            let meaningful = inline.contains { node in
+                if case .text(let value) = node {
+                    return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                return true
+            }
+            if meaningful { blocks.append(.paragraph(inline)) }
+            inline.removeAll(keepingCapacity: true)
+        }
+        for node in nodes {
+            if isInline([node]) {
+                inline.append(node)
+            } else {
+                flush()
+                blocks.append(node)
+            }
+        }
+        flush()
+        return blocks
+    }
+
+    static func isInline(_ nodes: [Self]) -> Bool {
+        nodes.allSatisfy {
+            switch $0 {
+            case .text, .lineBreak: return true
+            case .emphasis(let children, _), .link(_, let children): return isInline(children)
+            default: return false
+            }
+        }
+    }
+
     private static let supported: Set<String> = [
         "img", "details", "b", "strong", "em", "i", "s", "del", "code", "kbd", "a",
         "div", "p", "span", "summary", "blockquote", "br", "svg", "table", "video", "audio",

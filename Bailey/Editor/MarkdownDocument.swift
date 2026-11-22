@@ -140,12 +140,27 @@ nonisolated struct MarkdownDocument: Sendable {
             }
             return mapped.isEmpty ? fallback : mapped
         }
+        func projectBlockCode(_ node: Markdown.CodeBlock) -> MarkdownNativeBlock {
+            guard let bytes = node.range.flatMap(renderedCoordinates.bytes) else {
+                return .code(node.code, language: node.language, sourceRuns: [])
+            }
+            let rawBytes = protected.source.utf8
+            let start = rawBytes.index(rawBytes.startIndex, offsetBy: bytes.lowerBound)
+            let end = rawBytes.index(start, offsetBy: bytes.count)
+            let raw = String(decoding: rawBytes[start..<end], as: UTF8.self)
+            let runs = MarkdownCodeSourceMapping.runs(
+                raw: raw, displayed: node.code, renderedStart: bytes.lowerBound,
+                remap: originalByteRange
+            )
+            return .code(node.code, language: node.language, sourceRuns: runs)
+        }
+
         var occupiedAnchors = Set<String>()
         var blocks = try document.children.compactMap { node -> Block? in
             try Task.checkCancellation()
             guard let rendered = project(
                 node, math: math, projectText: projectText,
-                projectCode: projectCode, allowsAlert: true
+                projectCode: projectCode, projectBlockCode: projectBlockCode, allowsAlert: true
             ) else { return nil }
             let anchor: String?
             if case let .heading(_, inline) = rendered {
@@ -194,11 +209,13 @@ nonisolated struct MarkdownDocument: Sendable {
 
     private typealias TextProjection = (Markdown.Text) -> [MarkdownInline]
     private typealias CodeProjection = (Markdown.InlineCode) -> [MarkdownInline]
+    private typealias BlockCodeProjection = (Markdown.CodeBlock) -> MarkdownNativeBlock
 
     private static func project(_ node: any Markdown.Markup,
                                 math: MarkdownMath.Source,
                                 projectText: TextProjection,
                                 projectCode: CodeProjection,
+                                projectBlockCode: BlockCodeProjection,
                                 allowsAlert: Bool = false) -> MarkdownNativeBlock? {
         if let heading = node as? Markdown.Heading {
             return .heading(heading.level, projectInline(
@@ -227,7 +244,8 @@ nonisolated struct MarkdownDocument: Sendable {
         }
         if let quote = node as? Markdown.BlockQuote {
             let blocks = quote.children.compactMap {
-                project($0, math: math, projectText: projectText, projectCode: projectCode)
+                project($0, math: math, projectText: projectText,
+                        projectCode: projectCode, projectBlockCode: projectBlockCode)
             }
             guard allowsAlert,
                   let opening = quote.child(at: 0) as? Markdown.Paragraph,
@@ -243,11 +261,13 @@ nonisolated struct MarkdownDocument: Sendable {
             return .alert(alert, body + blocks.dropFirst())
         }
         if let list = node as? Markdown.UnorderedList {
-            return .list(ordered: false, start: 1, items: projectItems(list.children, math: math, projectText: projectText, projectCode: projectCode))
+            return .list(ordered: false, start: 1, items: projectItems(list.children, math: math, projectText: projectText,
+                                             projectCode: projectCode, projectBlockCode: projectBlockCode))
         }
         if let list = node as? Markdown.OrderedList {
             return .list(ordered: true, start: Int(clamping: list.startIndex),
-                         items: projectItems(list.children, math: math, projectText: projectText, projectCode: projectCode))
+                         items: projectItems(list.children, math: math, projectText: projectText,
+                                             projectCode: projectCode, projectBlockCode: projectBlockCode))
         }
         if let table = node as? Markdown.Table {
             let head = table.head.children.compactMap { $0 as? Markdown.Table.Cell }
@@ -270,7 +290,7 @@ nonisolated struct MarkdownDocument: Sendable {
             if code.language?.lowercased() == "mermaid" {
                 return .mermaid(source: code.code, line: node.range?.lowerBound.line ?? 1)
             }
-            return .code(code.code, language: code.language)
+            return projectBlockCode(code)
         }
         if let html = node as? Markdown.HTMLBlock {
             if let elements = MarkdownHTML.parse(html.rawHTML) {
@@ -286,7 +306,8 @@ nonisolated struct MarkdownDocument: Sendable {
     private static func projectItems(_ nodes: Markdown.MarkupChildren,
                                      math: MarkdownMath.Source,
                                       projectText: TextProjection,
-                                     projectCode: CodeProjection) -> [MarkdownListItem] {
+                                     projectCode: CodeProjection,
+                                     projectBlockCode: BlockCodeProjection) -> [MarkdownListItem] {
         nodes.compactMap { $0 as? Markdown.ListItem }.map { item in
             let checked: Bool?
             switch item.checkbox {
@@ -295,7 +316,8 @@ nonisolated struct MarkdownDocument: Sendable {
             case nil: checked = nil
             }
             return MarkdownListItem(checked: checked,
-                                    blocks: item.children.compactMap { project($0, math: math, projectText: projectText, projectCode: projectCode) })
+                                    blocks: item.children.compactMap { project($0, math: math, projectText: projectText,
+                        projectCode: projectCode, projectBlockCode: projectBlockCode) })
         }
     }
 
@@ -647,6 +669,103 @@ extension Character {
     }
 }
 
+/// Derives original UTF-16 positions for the text displayed by a fenced or indented code block.
+/// Only byte-identical source lines are mapped; delimiters and indentation are never selected.
+private nonisolated enum MarkdownCodeSourceMapping {
+    private struct Line {
+        let body: Range<Int>
+        let ending: Range<Int>
+    }
+
+    private static func lines(_ bytes: [UInt8]) -> [Line] {
+        var result: [Line] = []
+        var start = 0
+        var cursor = 0
+        while cursor < bytes.count {
+            guard bytes[cursor] == 10 || bytes[cursor] == 13 else {
+                cursor += 1
+                continue
+            }
+            let end = bytes[cursor] == 13 && cursor + 1 < bytes.count && bytes[cursor + 1] == 10
+                ? cursor + 2 : cursor + 1
+            result.append(Line(body: start..<cursor, ending: cursor..<end))
+            start = end
+            cursor = end
+        }
+        if start < bytes.count {
+            result.append(Line(body: start..<bytes.count, ending: bytes.count..<bytes.count))
+        }
+        return result
+    }
+
+    static func runs(raw: String, displayed: String, renderedStart: Int,
+                     remap: (Range<Int>) -> NSRange?) -> [MarkdownSourceRun] {
+        let rawBytes = Array(raw.utf8)
+        let visibleBytes = Array(displayed.utf8)
+        let sourceLines = lines(rawBytes)
+        let visibleLines = lines(visibleBytes)
+        guard !sourceLines.isEmpty, !visibleLines.isEmpty else { return [] }
+
+        let opening = rawBytes[sourceLines[0].body].drop(while: { $0 == 32 || $0 == 9 })
+        let fence = opening.prefix(while: { $0 == 96 || $0 == 126 })
+        let fenced = fence.count >= 3 && fence.allSatisfy({ $0 == fence.first })
+        var sourceCursor = fenced ? 1 : 0
+        var sourceLimit = sourceLines.count
+        if fenced, sourceLimit > 1 {
+            let closing = rawBytes[sourceLines[sourceLimit - 1].body]
+                .drop(while: { $0 == 32 || $0 == 9 })
+            if closing.prefix(while: { $0 == fence.first }).count >= fence.count {
+                sourceLimit -= 1
+            }
+        }
+
+        var runs: [MarkdownSourceRun] = []
+        var visibleOffset = 0
+        for visible in visibleLines {
+            let text = visibleBytes[visible.body]
+            let visibleLength = String(decoding: text, as: UTF8.self).utf16.count
+            var mapped: Line?
+            var prefixLength = 0
+            while sourceCursor < sourceLimit {
+                let candidate = sourceLines[sourceCursor]
+                sourceCursor += 1
+                guard candidate.body.count >= text.count else { continue }
+                let prefix = candidate.body.count - text.count
+                let split = candidate.body.lowerBound + prefix
+                guard rawBytes[split..<candidate.body.upperBound].elementsEqual(text),
+                      rawBytes[candidate.body.lowerBound..<split].allSatisfy({
+                          $0 == 32 || $0 == 9 || $0 == 62
+                      }) else { continue }
+                mapped = candidate
+                prefixLength = prefix
+                break
+            }
+            if let mapped {
+                let firstByte = renderedStart + mapped.body.lowerBound + prefixLength
+                if visibleLength > 0,
+                   let source = remap(firstByte..<(firstByte + text.count)) {
+                    runs.append(.init(displayed: NSRange(location: visibleOffset, length: visibleLength),
+                                      original: source))
+                }
+                let newlineStart = renderedStart + mapped.ending.lowerBound
+                let newlineEnd = renderedStart + mapped.ending.upperBound
+                if !visible.ending.isEmpty, let source = remap(newlineStart..<newlineEnd) {
+                    runs.append(.init(displayed: NSRange(location: visibleOffset + visibleLength,
+                                                         length: 1),
+                                      original: source))
+                }
+            }
+            visibleOffset += visibleLength + (visible.ending.isEmpty ? 0 : 1)
+        }
+        return runs
+    }
+}
+
+nonisolated struct MarkdownSourceRun: Sendable, Hashable {
+    let displayed: NSRange
+    let original: NSRange
+}
+
 nonisolated struct MarkdownListItem: Sendable {
     let checked: Bool?
     let blocks: [MarkdownNativeBlock]
@@ -672,12 +791,59 @@ nonisolated indirect enum MarkdownNativeBlock: Sendable {
     case alert(MarkdownAlert, [Self])
     case list(ordered: Bool, start: Int, items: [MarkdownListItem])
     case table(head: [[MarkdownInline]], rows: [[[MarkdownInline]]], alignments: [MarkdownColumnAlignment])
-    case code(String, language: String?)
+    case code(String, language: String?, sourceRuns: [MarkdownSourceRun])
     case mermaid(source: String, line: Int)
     case mathBlock(String)
     case html([MarkdownHTML])
     case rawHTML(String)
     case rule
+}
+
+/// Single description of inline HTML tags recognized by both the native Text renderer and clipboard.
+nonisolated enum MarkdownInlineHTML {
+    struct Tag: Sendable {
+        let name: String
+        let closing: Bool
+        let raw: String
+    }
+
+    static func scan(_ nodes: [MarkdownInline]) -> (tags: [Int: Tag], matched: Set<Int>) {
+        var tags: [Int: Tag] = [:]
+        var matched = Set<Int>()
+        var opened: [(name: String, index: Int)] = []
+        for (index, node) in nodes.enumerated() {
+            guard case .html(let raw) = node, let tag = parse(raw) else { continue }
+            tags[index] = tag
+            guard tag.name != "br" else { continue }
+            if tag.closing {
+                guard let last = opened.last, last.name == tag.name else { continue }
+                matched.insert(last.index)
+                matched.insert(index)
+                opened.removeLast()
+            } else if opened.count < 32 {
+                opened.append((tag.name, index))
+            }
+        }
+        return (tags, matched)
+    }
+
+    private static func parse(_ raw: String) -> Tag? {
+        guard raw.utf8.count <= 8_192, raw.first == "<", raw.last == ">" else { return nil }
+        var content = String(raw.dropFirst().dropLast())
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let closing = content.hasPrefix("/")
+        if closing { content.removeFirst() }
+        let name = String(content.prefix { $0.isASCII && $0.isLetter }).lowercased()
+        guard ["a", "span", "b", "strong", "i", "em", "s", "del", "code", "kbd", "br"]
+            .contains(name) else { return nil }
+        let remainder = content.dropFirst(name.count)
+        guard remainder.isEmpty || remainder.first?.isWhitespace == true || remainder.first == "/"
+        else { return nil }
+        if closing && !remainder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nil
+        }
+        return Tag(name: name, closing: closing, raw: raw)
+    }
 }
 
 nonisolated indirect enum MarkdownInline: Sendable {

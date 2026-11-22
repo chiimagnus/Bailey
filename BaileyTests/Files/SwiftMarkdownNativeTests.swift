@@ -195,7 +195,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }
         XCTAssertTrue(second.contains("\\sum"))
         XCTAssertTrue(document.blocks.contains {
-            if case let .code(code, _) = $0.content { code.contains("$must_not_render$") }
+            if case let .code(code, _, _) = $0.content { code.contains("$must_not_render$") }
             else { false }
         })
     }
@@ -355,7 +355,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         ].joined(separator: "\n")
         let doc = try await MarkdownDocument.parse(source)
         XCTAssertEqual(doc.blocks.count, 2)
-        guard case let .code(code, language) = doc.blocks[0].content else {
+        guard case let .code(code, language, _) = doc.blocks[0].content else {
             return XCTFail("Missing code fence")
         }
         XCTAssertEqual(language, "swift")
@@ -1147,7 +1147,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(links, ["#bailey-note:ref", "#bailey-note:ref", "#bailey-note:second"])
         XCTAssertTrue(String(describing: noteBlocks).contains("Continued line"))
         XCTAssertTrue(document.blocks.contains {
-            if case let .code(source, _) = $0.content { source.contains("[^fake]") }
+            if case let .code(source, _, _) = $0.content { source.contains("[^fake]") }
             else { false }
         })
     }

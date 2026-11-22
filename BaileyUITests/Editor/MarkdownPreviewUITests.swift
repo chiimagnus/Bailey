@@ -1502,13 +1502,19 @@ final class MarkdownPreviewUITests: XCTestCase {
 
     func testDoubleClickInsidePreviewTextLocatesActuallyClickedGlyph() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let cases = [("Literal", "M", "M"), ("Named", "&amp;", "&"), ("Numeric", "&#x1F680;", "🚀")]
+        let cases = [
+            (name: "Literal", raw: "M", rendered: "M", opening: "", closing: ""),
+            (name: "Named", raw: "&amp;", rendered: "&", opening: "", closing: ""),
+            (name: "Numeric", raw: "&#x1F680;", rendered: "🚀", opening: "", closing: ""),
+            (name: "InlineCode", raw: "M", rendered: "M", opening: "`` ", closing: " ``")
+        ]
         let glyphCount = 12
         let target = 9
-        let files = try cases.map { name, raw, rendered in
-            let source = "# Click location\n\n" + String(repeating: raw, count: glyphCount)
-            return (file: try fixture.file("\(name).md", text: source), source: source,
-                    raw: raw, rendered: rendered)
+        let files = try cases.map { entry in
+            let prefix = "# Click location\n\n" + entry.opening
+            let source = prefix + String(repeating: entry.raw, count: glyphCount) + entry.closing
+            return (file: try fixture.file("\(entry.name).md", text: source), source: source,
+                    raw: entry.raw, rendered: entry.rendered, prefix: prefix, suffix: entry.closing)
         }
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
@@ -1527,13 +1533,15 @@ final class MarkdownPreviewUITests: XCTestCase {
             XCTAssertLessThan(text.frame.height, 32, "This coordinate targets a known glyph on a single line")
             let fraction = (CGFloat(target) + 0.5) / CGFloat(glyphCount)
             text.coordinate(withNormalizedOffset: CGVector(dx: fraction, dy: 0.5)).doubleClick()
-            XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
+            guard preview.waitForNonExistence(timeout: 10) else {
+                return XCTFail("Double-click must open the source of \(entry.file.lastPathComponent)")
+            }
             let editor = window.textViews.firstMatch
             XCTAssertTrue(editor.waitForExistence(timeout: 10))
             app.typeKey("z", modifierFlags: [])
-            XCTAssertEqual(editor.value as? String, "# Click location\n\n"
+            XCTAssertEqual(editor.value as? String, entry.prefix
                            + String(repeating: entry.raw, count: target) + "z"
-                           + String(repeating: entry.raw, count: glyphCount - target))
+                           + String(repeating: entry.raw, count: glyphCount - target) + entry.suffix)
             XCTAssertEqual(try Data(contentsOf: entry.file), Data(entry.source.utf8))
         }
     }
