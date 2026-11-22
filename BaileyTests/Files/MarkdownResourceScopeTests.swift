@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import Bailey
@@ -12,21 +13,29 @@ final class MarkdownResourceScopeTests: XCTestCase {
         let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
         var verifiedFixture: String?
 
+        func stopMaster() async throws {
+            guard FileManager.default.fileExists(atPath: socket) else { return }
+            let exited = try await Task.detached {
+                try ProcessRemoteCommandRunner.launch(
+                    sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                    stdin: nil, timeout: 10
+                )
+            }.value
+            XCTAssertEqual(exited.status, 0)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while FileManager.default.fileExists(atPath: socket) {
+                guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+        }
+
         func cleanup() async {
             if let verifiedFixture {
                 do { try await backend.delete(paths: [verifiedFixture]) }
                 catch { XCTFail("Could not remove the isolated remote Markdown fixture: \(error)") }
             }
-            guard FileManager.default.fileExists(atPath: socket) else { return }
-            do {
-                let exited = try await Task.detached {
-                    try ProcessRemoteCommandRunner.launch(
-                        sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
-                        stdin: nil, timeout: 10
-                    )
-                }.value
-                XCTAssertEqual(exited.status, 0)
-            } catch { XCTFail("Could not stop the test-owned SSH master: \(error)") }
+            do { try await stopMaster() }
+            catch { XCTFail("Could not stop the test-owned SSH master: \(error)") }
         }
 
         do {
@@ -57,7 +66,11 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try await backend.write(path: asset, data: svg)
             try await backend.write(path: outside, data: svg)
 
-            let tab = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            let connection = RemoteConnection(user: "", host: host, port: 22,
+                                              controlSocket: URL(fileURLWithPath: socket), sshPID: 0)
+            guard await connection.check() else { throw RemoteConnectionError.notConnected }
+            let channel = SSHWorkspaceBackend(runner: connection)
+            let tab = FileTab(path: path, backend: channel, workspaceIdentity: "ssh:\(host)")
             try await tab.waitForText()
             let document = try await MarkdownDocument.parse(tab.text)
             XCTAssertEqual(document.headingOutline.first?.title, "测试 🧪")
@@ -79,6 +92,43 @@ final class MarkdownResourceScopeTests: XCTestCase {
             }
             let stillOnDisk = try await backend.read(path: path, maxBytes: original.count)
             XCTAssertEqual(stillOnDisk, original, "Reading and parsing must preserve remote source bytes")
+
+            guard mkdir(fixture, 0o700) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            defer { try? FileManager.default.removeItem(atPath: fixture) }
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: false)
+            let localTwin = Data("local twin must not be read or overwritten".utf8)
+            try localTwin.write(to: URL(fileURLWithPath: path))
+            try localTwin.write(to: URL(fileURLWithPath: asset))
+
+            try await stopMaster()
+            do {
+                _ = try await resource.read(relative, maxBytes: 1024)
+                XCTFail("A real disconnected channel must not read the same path on the Mac")
+            } catch RemoteConnectionError.notConnected {}
+            XCTAssertEqual(connection.state, .disconnected)
+            tab.autoSaveSuspendedForClose = true
+            let draft = "\r\nDraft after disconnect"
+            tab.nativeTextStorage.replaceCharacters(in: NSRange(location: tab.text.utf16.count, length: 0),
+                                                    with: draft)
+            await tab.save()
+            XCTAssertTrue(tab.isDirty)
+            XCTAssertNotNil(tab.saveError)
+            XCTAssertTrue(tab.text.hasSuffix(draft))
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), localTwin)
+
+            let reopened = try await backend.read(path: path, maxBytes: original.count)
+            XCTAssertEqual(reopened, original, "Reconnecting before retry must show the original remote bytes")
+            let revisedSVG = Data(String(decoding: svg, as: UTF8.self)
+                .replacingOccurrences(of: "width=\"40\"", with: "width=\"52\"").utf8)
+            try await backend.write(path: asset, data: revisedSVG)
+            let refreshed = try await resource.picture(relative)
+            XCTAssertEqual(refreshed.pointSize?.width, 52, "Recovery must render the revised remote image")
+            await tab.save()
+            XCTAssertFalse(tab.isDirty)
+            XCTAssertNil(tab.saveError)
+            let updated = try await backend.read(path: path, maxBytes: original.count + draft.utf8.count)
+            XCTAssertEqual(updated, original + Data(draft.utf8), "Retry saves only the remote BOM/CRLF Markdown")
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), localTwin)
         } catch {
             await cleanup()
             throw error
