@@ -12,6 +12,19 @@ extension EnvironmentValues {
     }
 }
 
+struct MarkdownEmbeddedSourceHit: Equatable {
+    let source: NSRange
+    let viewportFrame: CGRect
+}
+
+struct MarkdownEmbeddedSourceHitPreference: PreferenceKey {
+    static var defaultValue: [MarkdownEmbeddedSourceHit] { [] }
+
+    static func reduce(value: inout [MarkdownEmbeddedSourceHit], nextValue: () -> [MarkdownEmbeddedSourceHit]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
 /// Public SwiftUI Canvas-based math typesetting; no WebKit, JS, or SPI.
 struct MarkdownFormulaView: View {
     let latex: String
@@ -44,6 +57,20 @@ struct MarkdownFormulaView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Math: \(latex)")
+        .background {
+            if let source {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: MarkdownEmbeddedSourceHitPreference.self,
+                        value: [MarkdownEmbeddedSourceHit(
+                            source: source,
+                            viewportFrame: geometry.frame(in: .named("bailey.markdown.reader"))
+                        )]
+                    )
+                }
+                .allowsHitTesting(false)
+            }
+        }
         .onTapGesture(count: 2) {
             if let source { locateSource?(source.location) }
         }

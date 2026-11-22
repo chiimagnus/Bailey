@@ -52,6 +52,57 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                        "Scrolling must not move the insertion point or steal the editor selection")
     }
 
+    func testReaderRestoresAndSynchronizesActualCanvasFormulasWithinOneParagraph() async throws {
+        let firstPart = String(repeating: "Rich 中文 text with emoji 🧪 before formula. ", count: 55)
+        let middle = String(repeating: "Intermediate text with nested structures and words. ", count: 65)
+        let ending = String(repeating: "Final paragraphs of the same AST block. ", count: 55)
+        let source = firstPart + "$x_i+y$ " + middle + "$z^2$ " + ending
+        let document = try await MarkdownDocument.parse(source)
+        XCTAssertEqual(document.blocks.count, 1)
+        let first = (source as NSString).range(of: "$x_i+y$").location
+        let second = (source as NSString).range(of: "$z^2$").location
+        let resource = MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Formula.md",
+                                        directory: "/tmp/Bailey-Markdown-Layout",
+                                        backend: LocalWorkspaceBackend.shared)
+        func view(synced: Int?) -> MarkdownPreview {
+            MarkdownPreview(document: document, revision: "same", resource: resource, assetRefresh: 0,
+                            restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
+                            synchronizedSourceOffset: synced)
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: view(synced: nil))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? []
+                + view.subviews.flatMap(scrollViews)
+        }
+        let scroll = try XCTUnwrap(scrollViews(in: host).first {
+            $0.contentView.bounds.width > 200 && $0.contentView.bounds.height > 100
+        })
+        let firstPosition = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > 100
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [firstPosition], timeout: 5), .completed,
+                       "Canvas formula must restore its actual position, not the paragraph top")
+        let firstY = scroll.contentView.bounds.minY
+
+        host.rootView = view(synced: second)
+        host.layoutSubtreeIfNeeded()
+        let secondPosition = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > firstY + 140
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [secondPosition], timeout: 5), .completed,
+                       "Source offset for another formula in the same AST block must shift the reader")
+    }
+
     func testReaderRestoresAndTracksExactGlyphWithinOneLongParagraph() async throws {
         let source = (0..<150).map { "token-\($0) 中文 👩‍🚀" }.joined(separator: " ")
         let parsed = try await MarkdownDocument.parse(source)

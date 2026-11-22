@@ -108,6 +108,10 @@ struct MarkdownPreview: View {
                         sourceCoordinates.hits = hits
                         if !readerIsScrolling { sourceCoordinates.scrollPending() }
                     }
+                    .onPreferenceChange(MarkdownEmbeddedSourceHitPreference.self) { hits in
+                        sourceCoordinates.embeddedHits = hits
+                        if !readerIsScrolling { sourceCoordinates.scrollPending() }
+                    }
                     .onScrollPhaseChange { _, phase in
                         let isUserScroll = phase == .interacting || phase == .decelerating
                         if readerIsScrolling && !isUserScroll {
@@ -257,6 +261,8 @@ struct MarkdownPreview: View {
             sourceCoordinates.pendingSource = (sourceOffset, viewportY)
             if sourceCoordinates.hits.contains(where: {
                 $0.viewportFrame(forSourceOffset: sourceOffset) != nil
+            }) || sourceCoordinates.embeddedHits.contains(where: {
+                NSLocationInRange(sourceOffset, $0.source)
             }) { return }
         }
         proxy.scrollTo(row.start, anchor: .top)
@@ -313,6 +319,7 @@ private final class MarkdownReaderCoordinates {
     weak var scrollView: NSScrollView?
     weak var attachedBridge: MarkdownReaderClipView?
     var hits: [MarkdownGlyphHit] = []
+    var embeddedHits: [MarkdownEmbeddedSourceHit] = []
     var lastReportedOffset: Int?
     var pendingSource: (offset: Int, viewportY: CGFloat)?
     var document: MarkdownDocument?
@@ -411,37 +418,49 @@ private final class MarkdownReaderCoordinates {
 
     func firstVisibleSource() -> (offset: Int, viewportY: CGFloat)? {
         guard let height = scrollView?.contentView.bounds.height else { return nil }
-        var first: MarkdownGlyphHit?
-        for hit in hits {
-            let frame = hit.viewportFrame
-            guard frame.maxY > 0, frame.minY < height else { continue }
+        var first: (offset: Int, frame: CGRect)?
+        func consider(_ frame: CGRect, offset: Int) {
+            guard frame.maxY > 0, frame.minY < height else { return }
             if let current = first {
-                let previous = current.viewportFrame
-                guard frame.minY < previous.minY - 1
-                    || abs(frame.minY - previous.minY) <= 1 && frame.minX < previous.minX
-                else { continue }
+                guard frame.minY < current.frame.minY - 1
+                    || abs(frame.minY - current.frame.minY) <= 1 && frame.minX < current.frame.minX
+                else { return }
             }
-            first = hit
+            first = (offset, frame)
         }
-        return first.map { ($0.firstSourceOffset, $0.viewportFrame.minY) }
+        for hit in hits {
+            consider(hit.viewportFrame, offset: hit.firstSourceOffset)
+        }
+        for hit in embeddedHits {
+            consider(hit.viewportFrame, offset: hit.source.location)
+        }
+        return first.map { ($0.offset, $0.frame.minY) }
     }
 
     @discardableResult
     func scroll(to offset: Int, atViewportY viewportY: CGFloat) -> Bool {
-        guard let scrollView, let document = scrollView.documentView else { return false }
-        for hit in hits where hit.mark.source.location <= offset
-                && offset < NSMaxRange(hit.mark.source) {
-            guard let frame = hit.viewportFrame(forSourceOffset: offset) else { continue }
-            let clip = scrollView.contentView
-            let maximumY = max(0, document.frame.height - clip.bounds.height)
-            let target = min(max(0, clip.bounds.minY + frame.minY - viewportY), maximumY)
-            if abs(clip.bounds.minY - target) > 1 {
-                clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
-                scrollView.reflectScrolledClipView(clip)
+        for hit in hits where NSLocationInRange(offset, hit.mark.source) {
+            if let frame = hit.viewportFrame(forSourceOffset: offset) {
+                return align(frame, atViewportY: viewportY)
             }
-            return true
+        }
+        for hit in embeddedHits where NSLocationInRange(offset, hit.source) {
+            return align(hit.viewportFrame, atViewportY: viewportY)
         }
         return false
+    }
+
+    private func align(_ frame: CGRect, atViewportY viewportY: CGFloat) -> Bool {
+        guard let scrollView, let document = scrollView.documentView,
+              frame.width > 0, frame.height > 0 else { return false }
+        let clip = scrollView.contentView
+        let maximumY = max(0, document.frame.height - clip.bounds.height)
+        let target = min(max(0, clip.bounds.minY + frame.minY - viewportY), maximumY)
+        if abs(clip.bounds.minY - target) > 1 {
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
+            scrollView.reflectScrolledClipView(clip)
+        }
+        return true
     }
 }
 
