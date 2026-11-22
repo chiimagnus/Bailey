@@ -4,6 +4,88 @@ import XCTest
 
 @MainActor
 final class MarkdownResourceScopeTests: XCTestCase {
+    func testAuthorizedSSHMarkdownKeepsScopedResourcesAndOriginalBytes() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
+        }
+        let socket = "/tmp/bailey-md-\(UUID().uuidString.prefix(12)).sock"
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        var verifiedFixture: String?
+
+        func cleanup() async {
+            if let verifiedFixture {
+                do { try await backend.delete(paths: [verifiedFixture]) }
+                catch { XCTFail("Could not remove the isolated remote Markdown fixture: \(error)") }
+            }
+            guard FileManager.default.fileExists(atPath: socket) else { return }
+            do {
+                let exited = try await Task.detached {
+                    try ProcessRemoteCommandRunner.launch(
+                        sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                        stdin: nil, timeout: 10
+                    )
+                }.value
+                XCTAssertEqual(exited.status, 0)
+            } catch { XCTFail("Could not stop the test-owned SSH master: \(error)") }
+        }
+
+        do {
+            let prefix = "/tmp/bailey-markdown-"
+            let created = try await backend.run(argv: ["mktemp", "-d", prefix + "XXXXXX"],
+                                                cwd: nil, env: nil, stdin: nil, timeout: 25)
+            let fixture = String(decoding: created.stdout, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard created.status == 0, fixture.hasPrefix(prefix),
+                  fixture.utf8.count == prefix.utf8.count + 6,
+                  fixture.utf8.dropFirst(prefix.utf8.count).allSatisfy({
+                      (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+                  })
+            else { throw WorkspaceError.notFound }
+            verifiedFixture = fixture
+            let directory = fixture + "/Project"
+            let path = directory + "/Readme.md"
+            let asset = directory + "/asset.svg"
+            let outside = fixture + "/outside.svg"
+            let original = Data("\u{feff}# 测试 🧪\r\n\r\n![Scoped asset](asset.svg)\r\n".utf8)
+            let svg = Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a7f37"/></svg>
+                """.utf8)
+            let made = try await backend.run(argv: ["mkdir", "--", directory],
+                                             cwd: nil, env: nil, stdin: nil, timeout: 20)
+            XCTAssertEqual(made.status, 0)
+            try await backend.write(path: path, data: original)
+            try await backend.write(path: asset, data: svg)
+            try await backend.write(path: outside, data: svg)
+
+            let tab = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            try await tab.waitForText()
+            let document = try await MarkdownDocument.parse(tab.text)
+            XCTAssertEqual(document.headingOutline.first?.title, "测试 🧪")
+            let resource = tab.markdownResource(in: directory)
+            let relative = try XCTUnwrap(URL(string: "asset.svg"))
+            let picture = try await resource.picture(relative)
+            XCTAssertEqual(picture.pointSize?.width, 40)
+            let resolved = try await resource.resolvedFile(relative)
+            XCTAssertEqual(resolved, asset)
+            do {
+                _ = try await resource.read(relative, maxBytes: svg.count - 1)
+                XCTFail("A real remote read must enforce its byte budget")
+            } catch WorkspaceError.tooLarge {}
+            do {
+                _ = try await resource.read(try XCTUnwrap(URL(string: "../outside.svg")), maxBytes: 1024)
+                XCTFail("A relative resource must not escape the authorized remote project")
+            } catch let failure as CocoaError {
+                XCTAssertEqual(failure.code, .fileReadNoPermission)
+            }
+            let stillOnDisk = try await backend.read(path: path, maxBytes: original.count)
+            XCTAssertEqual(stillOnDisk, original, "Reading and parsing must preserve remote source bytes")
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
     func testFinderMarkdownOutsideCurrentProjectCanReadOwnAssetsAndLinksOnlyInsideItsFolder() async throws {
         let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let projectRoot = temporary.appending(path: "Workspace")

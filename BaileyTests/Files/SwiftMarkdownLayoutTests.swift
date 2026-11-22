@@ -880,27 +880,56 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             return own + view.subviews.flatMap(scrollViews)
         }
 
-        let resource = MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/README.md",
-                                        directory: "/tmp/Bailey-Markdown-Layout",
-                                        backend: LocalWorkspaceBackend.shared)
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Markdown-Mixed-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let svg = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="80" height="32"><rect width="80" height="32" fill="#0969da"/></svg>
+            """
+        try Data(svg.utf8).write(to: folder.appendingPathComponent("asset.svg"))
+        let resource = MarkdownResource(path: folder.appendingPathComponent("README.md").path,
+                                        directory: folder.path, backend: LocalWorkspaceBackend.shared)
         for count in [500, 5_000, 20_000] {
-            let text = (0..<count).map { "Paragraph \($0) **emphasized**." }
-                .joined(separator: "\n\n")
+            var lines: [String] = []
+            func section(_ index: Int) -> [String] {
+                [
+                    "## Section \(index) 中文 🧪", "",
+                    "Paragraph e\u{301} [anchor](#section-0-中文-) with $x_i+y$ and **emphasis**.", "",
+                    "> [!NOTE]", "> A mixed-content reading fixture.", "",
+                    "- [x] Checked", "  - Nested step", "",
+                    "| 名称 | Value |", "| --- | ---: |", "| العربية | \(index) |", "",
+                    "```swift", "let sample = \(index)", "```", "",
+                    "<details>", "<summary>Method</summary>", "<p>HTML &amp; text</p>", "</details>", "",
+                    index.isMultiple(of: 4) ? "![Scoped SVG](asset.svg)" : "![Missing resource](missing.png)", ""
+                ]
+            }
+            let sectionHeight = section(0).count
+            for index in 0..<((count - 1) / sectionHeight) {
+                lines += section(index)
+            }
+            while lines.count < count - 1 { lines.append("") }
+            lines.append("## End marker")
+            let text = lines.joined(separator: "\n")
+            let clock = ContinuousClock()
+            let parseStart = clock.now
             let document = try await MarkdownDocument.parse(text)
-            XCTAssertEqual(document.blocks.count, count)
+            let parse = parseStart.duration(to: clock.now)
+            XCTAssertEqual(document.headingOutline.last?.title, "End marker")
+            XCTAssertEqual(document.headingOutline.count, (count - 1) / sectionHeight + 1)
             let preview = MarkdownPreview(document: document, revision: "0",
                                           resource: resource, assetRefresh: 0)
+                .environment(\.colorScheme, .dark)
             let window = NSWindow(
-                contentRect: NSRect(x: -2000, y: -2000, width: 800, height: 600),
+                contentRect: NSRect(x: -2000, y: -2000, width: 340, height: 600),
                 styleMask: [.titled], backing: .buffered, defer: false
             )
             window.isReleasedWhenClosed = false
             let host = NSHostingView(rootView: preview)
             host.sizingOptions = []
+            let start = clock.now
             window.contentView = host
             window.orderFront(nil)
-            let clock = ContinuousClock()
-            let start = clock.now
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             let first = start.duration(to: clock.now)
@@ -911,7 +940,17 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                 return XCTFail("Expected a native scroll container at \(count) paragraphs")
             }
             XCTAssertGreaterThan(content.frame.height, scroll.contentView.bounds.height,
-                                 "Lazy preview must be scrollable at \(count) paragraphs")
+                                 "Lazy preview must be scrollable at \(count) mixed lines")
+            var warm: [Duration] = []
+            for sample in 1...30 {
+                let warmStart = clock.now
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(sample * 124)))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                warm.append(warmStart.duration(to: clock.now))
+            }
+            XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1000)
             let scrollStart = clock.now
             let bottom = max(0, content.frame.height - scroll.contentView.bounds.height)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
@@ -919,9 +958,14 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             let scrolling = scrollStart.duration(to: clock.now)
+            XCTAssertGreaterThan(scroll.contentView.bounds.maxY,
+                                 content.frame.height - scroll.contentView.bounds.height,
+                                 "Jump into the final viewport even if the lazy height estimate is revised")
+            warm.sort()
             var usage = rusage()
             _ = getrusage(RUSAGE_SELF, &usage)
-            print("SWIFTMARKDOWN_LAYOUT paragraphs=\(count) first=\(first) scroll=\(scrolling) "
+            print("SWIFTMARKDOWN_LAYOUT mixed_lines=\(count) width=340 dark=true parse=\(parse) first=\(first) "
+                    + "jump_end=\(scrolling) warm_p50=\((warm[14] + warm[15]) / 2) warm_p95=\(warm[28]) worst=\(warm[29]) "
                     + "process_peak_rss_mib=\(Double(usage.ru_maxrss) / 1_048_576)")
             window.close()
         }

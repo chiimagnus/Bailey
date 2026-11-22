@@ -1310,6 +1310,56 @@ final class WorkspaceFilesUITests: XCTestCase {
                        Data("b original\n".utf8))
     }
 
+    func testAuthorizedSSHMarkdownPreviewOpensOnlyScopedNativeAssets() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace }) else {
+            throw XCTSkip("Markdown GUI requires an explicitly authorized SSH test host")
+        }
+        let root = "/tmp/bailey-md-ui-" + UUID().uuidString.lowercased()
+        let project = root + "/Project"
+        let markdown = project + "/Readme.md"
+        let asset = project + "/badge.svg"
+        _ = try runSSH(host: host, command: "mkdir -- '\(root)'")
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host, command:
+                "rm -r -- '\(root)' && test ! -e '\(root)' && printf cleaned"), "cleaned")
+        }
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"35\"><rect width=\"80\" height=\"35\" fill=\"#0969da\"/></svg>"
+        _ = try runSSH(host: host, command: """
+            set -e
+            mkdir -- '\(project)'
+            printf '%s\\r\\n' '# Remote Markdown' '' '![Scoped badge](badge.svg)' '' '![Outside badge](../outside.svg)' > '\(markdown)'
+            printf '%s' '\(svg)' > '\(asset)'
+            cp -- '\(asset)' '\(root)/outside.svg'
+            """)
+        let original = try runSSH(host: host, command: "sha256sum -- '\(markdown)'")
+        let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        addSSHFolder(project, host: host, in: app)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        let entry = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: markdown), in: window)
+        XCTAssertTrue(entry.waitForExistence(timeout: 40))
+        entry.doubleClick()
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 25))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let badge = preview.buttons["Scoped badge"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 25), "The real SSH image must decode")
+        XCTAssertFalse(preview.buttons["Outside badge"].exists)
+        badge.click()
+        let imageTab = WorkspaceUITestSupport.fileTab(URL(fileURLWithPath: asset), in: window)
+        XCTAssertTrue(imageTab.waitForExistence(timeout: 25),
+                      "Click opens the authorized SVG in a remote file tab")
+        XCTAssertEqual(try runSSH(host: host, command: "sha256sum -- '\(markdown)'"), original)
+    }
+
     func testAuthorizedSSHRemoteBulkDeleteRequiresNativeConfirmation() throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
               !host.isEmpty, !host.hasPrefix("-"),

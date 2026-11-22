@@ -156,6 +156,7 @@ Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项
 | Finder ↔ Bailey 原生文件剪贴板、⌥⌘V 显式移动及 Files 系统菜单焦点 | `SharedTreeUITests`（剪贴板完整备份后真实操作） | `WindowOwnershipIntegrationTests`（跨项目／脏稿／身份与重试）、`FileTreeTests`（磁盘复制／跨卷／边界） |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift 与纯文本的真实 App 像素差异；Markdown／TSX／HTML／CSS 的原生着色与正文保持 | `EditorHighlightingUITests`（Swift 实际 GUI） | `NativeSyntaxHighlightingTests`（四语言真实 TextKit）、`HighlightQueryCacheTests` |
+| Markdown 并排定位、跨块复制、导航与富内容 | `MarkdownPreviewUITests`、`MarkdownSelectionBoundaryUITests`、`MarkdownMathUITests` | `SwiftMarkdownLayoutTests`（深浅色像素、宽表格与混排长文）、`MarkdownResourceScopeTests`（文件和授权 SSH） |
 | Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitNativeDialogTests`、`GitRemoteBranchActionTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
 | Git 历史 revision 只读、历史文件菜单、危险重置的取消／确认与工作区／index／HEAD 字节 | `GitHistoryUITests`（真实 Git Graph；同路径 Changes/History 行按独立 AX 标识区分） | `NativeGitHistoryFileTests`、`NativeDiffTabTests`、`GitExecutionTests`、`GitStatusModelTests` |
 | 系统文件投递、双窗归属、原生 Sheet、脏文件关闭和重启恢复 | `WorkspaceWindowsUITests` | `FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`（队列、保存失败、状态快照与身份） |
@@ -345,7 +346,7 @@ Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or 
 因此 `WorkspaceGitUITests` 的夹具明确禁用多路复用，独立握手；
 Cloudflare 连接失败不得算作测试通过，失败后须核对测试专属远端目录是否残留。
 真实 Windows SSH 回归必须**明确指定获授权的测试主机**。
-`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；
+`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，Git 外部刷新与 Markdown 资源实测也使用它；
 未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
 `GitGraphSelectionTests` 验证 Git Graph 独立多选、⌘ 切换、Shift 范围、
