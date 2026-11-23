@@ -63,6 +63,13 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertTrue(file.gifPlayback === playback)
         XCTAssertTrue(isGreen(remountedScroll))
         XCTAssertEqual(try Data(contentsOf: url), bytes)
+
+        file.retireContent()
+        try await waitFor("Remove the native image viewer after a true close") { previewScroll(in: remounted) == nil }
+        let retired = try XCTUnwrap(renderedBitmap(remountedScroll))
+        let center = try XCTUnwrap(retired.colorAt(x: retired.pixelsWide / 2, y: retired.pixelsHigh / 2))
+        XCTAssertEqual(center.alphaComponent, 0, accuracy: 0.01, "A cached native view must release its image on dismantle")
+        XCTAssertNil(remountedScroll.menu?.item(withTitle: resumeTitle))
     }
 
     func testLongGIFDecodeStaysBoundedAndClosingReleasesThePoster() async throws {
@@ -170,17 +177,21 @@ final class PreviewScrollViewTests: XCTestCase {
     }
 
     private func isGreen(_ scroll: PreviewScrollView) -> Bool {
+        renderedBitmap(scroll).map { isGreen($0) } ?? false
+    }
+
+    private func renderedBitmap(_ scroll: PreviewScrollView) -> NSBitmapImageRep? {
         guard let canvas = scroll.documentView,
               let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(canvas.bounds.width),
                                             pixelsHigh: Int(canvas.bounds.height), bitsPerSample: 8,
                                             samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                             bytesPerRow: 0, bitsPerPixel: 0),
-              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return false }
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         canvas.draw(canvas.bounds)
         NSGraphicsContext.restoreGraphicsState()
-        return isGreen(bitmap)
+        return bitmap
     }
 
     private func isGreen(_ bitmap: NSBitmapImageRep) -> Bool {

@@ -69,7 +69,7 @@ private struct RasterViewport: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scroll: RasterScrollView, coordinator: ()) {
-        scroll.resetDetail()
+        scroll.retire()
     }
 }
 
@@ -290,7 +290,16 @@ private final class RasterScrollView: PreviewScrollView {
         if window == nil { resetDetail() }
     }
 
-    func resetDetail() {
+    func retire() {
+        thumbnail = nil
+        loadOriginal = nil
+        onDetailFailure = nil
+        toggleAnimation = nil
+        animationMenuItem.menu?.removeItem(animationMenuItem)
+        resetDetail()
+    }
+
+    private func resetDetail() {
         detailTask?.cancel()
         detailTask = nil
         if canvas.image !== thumbnail { canvas.image = thumbnail }
