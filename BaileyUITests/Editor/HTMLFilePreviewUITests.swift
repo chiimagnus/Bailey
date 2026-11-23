@@ -81,7 +81,7 @@ final class HTMLFilePreviewUITests: XCTestCase {
             """
         let file = try fixture.file("布局.HTM", text: source)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+            in: self, language: "en", project: fixture.root
         )
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window)
@@ -92,6 +92,13 @@ final class HTMLFilePreviewUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, source)
         let webView = window.webViews.firstMatch
         XCTAssertFalse(webView.exists)
+        editor.click()
+        let initialFieldCount = window.textFields.count + window.searchFields.count
+        app.typeKey("f", modifierFlags: .command)
+        let nativeFind = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textFields.count + window.searchFields.count > initialFieldCount
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [nativeFind], timeout: 5), .completed)
         app.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(webView.waitForExistence(timeout: 10), window.debugDescription)
         let heading = webView.staticTexts.matching(identifier: "WebKit layout acceptance").firstMatch
@@ -108,6 +115,16 @@ final class HTMLFilePreviewUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String, source)
         heading.click()
+        let clipboard = NSPasteboard.general
+        let initialClipboardVersion = clipboard.changeCount
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            clipboard.changeCount != initialClipboardVersion
+                && clipboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == "WebKit layout acceptance"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 5), .completed)
         app.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(webView.waitForNonExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String, source)
