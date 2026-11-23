@@ -157,6 +157,7 @@ final class SVGArtworkTests: XCTestCase {
         let end = "</svg>"
         let root = start + end
         let exact = root + String(repeating: " ", count: SVGArtwork.byteLimit - root.utf8.count)
+        XCTAssertEqual(try SVGArtwork.parse(Data(exact.utf8.dropLast())).image.size, CGSize(width: 24, height: 16))
         XCTAssertEqual(try SVGArtwork.parse(Data(exact.utf8)).image.size, CGSize(width: 24, height: 16))
         XCTAssertThrowsError(try SVGArtwork.parse(Data((exact + " ").utf8))) { error in
             guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected SVG byte limit: \(error)") }

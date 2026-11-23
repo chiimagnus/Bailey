@@ -80,4 +80,51 @@ final class SVGFilePreviewUITests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
         }
     }
+
+    func testSVGPreviewByteBudgetKeepsTheOverLimitDocumentAvailableAsSource() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let prefix = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"180\" height=\"120\">\n<!--"
+        let suffix = "--><rect width=\"180\" height=\"120\" fill=\"red\"/></svg>"
+        let byteLimit = 1 << 20
+        let remaining = byteLimit - prefix.utf8.count - suffix.utf8.count
+        let line = String(repeating: " ", count: 1023) + "\n"
+        let exact = prefix + String(repeating: line, count: remaining / 1024)
+            + String(repeating: " ", count: remaining % 1024) + suffix
+        let overflow = exact + "\n"
+        XCTAssertEqual(exact.utf8.count, byteLimit)
+        XCTAssertEqual(overflow.utf8.count, byteLimit + 1)
+        let accepted = try fixture.file("Exact.svg", text: exact)
+        let tooLarge = try fixture.file("Overflow.svg", text: overflow)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        func open(_ url: URL) {
+            let row = WorkspaceUITestSupport.fileRow(url, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+        }
+
+        open(accepted)
+        let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 15))
+        let painted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let bitmap = NSBitmapImageRep(data: preview.screenshot().pngRepresentation),
+                  let color = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+            else { return false }
+            return color.redComponent - color.greenComponent > 0.45
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 8), .completed)
+
+        open(tooLarge)
+        let reason = "SVG is too large to preview. You can still edit the source."
+        let message = app.staticTexts.matching(NSPredicate(format: "value == %@ OR label == %@", reason, reason)).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertFalse(preview.exists)
+        WorkspaceUITestSupport.element("bailey.svg.showSource", in: app).click()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String, overflow)
+        XCTAssertEqual(try Data(contentsOf: accepted), Data(exact.utf8))
+        XCTAssertEqual(try Data(contentsOf: tooLarge), Data(overflow.utf8))
+    }
 }
