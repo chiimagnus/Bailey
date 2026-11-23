@@ -114,7 +114,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try await tab.waitForText()
             let document = try await MarkdownDocument.parse(tab.text)
             XCTAssertEqual(document.headingOutline.first?.title, "测试 🧪")
-            let resource = tab.markdownResource(in: directory)
+            let resource = tab.previewResource(in: directory)
             let table = FileTab(path: tablePath, backend: channel, workspaceIdentity: "ssh:\(host)")
             try await table.waitForText()
             let tableSnapshot = try await table.delimitedSnapshot()
@@ -298,7 +298,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             return XCTFail("Finder must deliver one local Markdown file tab")
         }
         try await source.waitForText()
-        let resource = source.markdownResource(in: project.customDirectory)
+        let resource = source.previewResource(in: project.customDirectory)
         let bytes = try await resource.read(try XCTUnwrap(URL(string: "asset.txt")), maxBytes: 128)
         XCTAssertEqual(bytes, Data("safe resource".utf8))
         let opened = await project.openMarkdownLink(try XCTUnwrap(URL(string: "Guide.md")), from: source) { true }
@@ -413,7 +413,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             return XCTFail("Project file must be a native FileTab")
         }
         try await source.waitForText()
-        let bytes = try await source.markdownResource(in: project.customDirectory)
+        let bytes = try await source.previewResource(in: project.customDirectory)
             .read(try XCTUnwrap(URL(string: "../assets/image.dat")), maxBytes: 128)
         XCTAssertEqual(bytes, Data("safe".utf8))
     }

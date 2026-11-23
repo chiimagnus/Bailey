@@ -1246,7 +1246,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         buffer.floatChannelData?[0].initialize(repeating: 0, count: 8_000)
         let writer = try AVAudioFile(forWriting: audio, settings: format.settings)
         try writer.write(from: buffer)
-        let resource = MarkdownResource(
+        let resource = PreviewResource(
             path: document.path, directory: root.path, backend: LocalWorkspaceBackend.shared
         )
         let staged = try await MarkdownMedia.stage(try XCTUnwrap(URL(string: "sound.wav")), from: resource)
@@ -1290,7 +1290,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         try Data("secret".utf8).write(to: temporary.appendingPathComponent("secret"))
         try FileManager.default.createSymbolicLink(at: assets.appendingPathComponent("escape"),
                                                      withDestinationURL: temporary.appendingPathComponent("secret"))
-        let resource = MarkdownResource(path: docs.appendingPathComponent("README.md").path,
+        let resource = PreviewResource(path: docs.appendingPathComponent("README.md").path,
                                         directory: root.path, backend: LocalWorkspaceBackend.shared)
         let approved = try await resource.read(try XCTUnwrap(URL(string: "../assets/image.bin")), maxBytes: 100)
         XCTAssertEqual(approved, Data("safe".utf8))

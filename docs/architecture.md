@@ -167,8 +167,10 @@ Settings、Sheet 和 `NSPopover` 自己维护原生输入生命周期，不建�
 
 ## 原生表面与生命周期
 
-SwiftUI 负责外层布局，Ghostty 负责终端，WebKit 只负责浏览器，
-Apple NSTextView/TextKit 2 负责文件和 Diff。标签内容拥有相应原生对象；
+SwiftUI 负责外层布局，Ghostty 负责终端，Apple NSTextView/TextKit 2 负责文件和 Diff。
+WebKit 分别服务浏览器和隔离的 HTML 文件预览；
+预览由 `FileTab` 持有，不继承浏览器的网络、脚本或数据存储权限，也不拥有编辑权。
+标签内容拥有相应原生对象；
 切换项目、停靠、重挂载只移动它们，不重建 Shell、WebView、编辑器或撤销栈。
 
 `DockNode` 是外层布局真源。一个标签不再拥有第二套分屏。

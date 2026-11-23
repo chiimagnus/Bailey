@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 nonisolated enum MarkdownMedia {
-    @concurrent static func stage(_ url: URL, from resource: MarkdownResource) async throws -> URL {
+    @concurrent static func stage(_ url: URL, from resource: PreviewResource) async throws -> URL {
         guard NativeMedia.candidate(url.pathExtension) != nil else { throw CocoaError(.fileReadUnsupportedScheme) }
         let bytes = try await resource.read(url, maxBytes: 64 << 20)
         try Task.checkCancellation()
@@ -25,7 +25,7 @@ nonisolated enum MarkdownMedia {
 struct MarkdownMediaView: View {
     let url: URL
     let video: Bool
-    let resource: MarkdownResource
+    let resource: PreviewResource
     @State private var loading = false
     @State private var failed = false
     @State private var player: AVPlayer?

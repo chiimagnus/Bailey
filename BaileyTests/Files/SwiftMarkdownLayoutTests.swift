@@ -98,7 +98,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let second = (source as NSString).range(of: "![Second](second.png)").location
         let file = folder.appendingPathComponent("Document.md")
         try source.write(to: file, atomically: true, encoding: .utf8)
-        let resource = MarkdownResource(path: file.path, directory: folder.path,
+        let resource = PreviewResource(path: file.path, directory: folder.path,
                                         backend: LocalWorkspaceBackend.shared)
         let firstPicture = try await resource.picture(XCTUnwrap(URL(string: "first.png")))
         XCTAssertEqual(firstPicture.poster.width, 320)
@@ -153,7 +153,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         XCTAssertEqual(document.blocks.count, 1)
         let first = (source as NSString).range(of: "$x_i+y$").location
         let second = (source as NSString).range(of: "$z^2$").location
-        let resource = MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Formula.md",
+        let resource = PreviewResource(path: "/tmp/Bailey-Markdown-Layout/Formula.md",
                                         directory: "/tmp/Bailey-Markdown-Layout",
                                         backend: LocalWorkspaceBackend.shared)
         func view(synced: Int?) -> MarkdownPreview {
@@ -203,7 +203,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         XCTAssertEqual(parsed.blocks.count, 1)
         let first = (source as NSString).range(of: "token-50").location
         let second = (source as NSString).range(of: "token-110").location
-        let resource = MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Source.md",
+        let resource = PreviewResource(path: "/tmp/Bailey-Markdown-Layout/Source.md",
                                         directory: "/tmp/Bailey-Markdown-Layout",
                                         backend: LocalWorkspaceBackend.shared)
         func view(sourceOffset: Int?) -> MarkdownPreview {
@@ -421,7 +421,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let document = try await MarkdownDocument.parse("[\(title)](docs/guide.md)")
         let preview = MarkdownPreview(
             document: document, revision: "resize-link",
-            resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Resize.md",
+            resource: PreviewResource(path: "/tmp/Bailey-Markdown-Layout/Resize.md",
                                        directory: "/tmp/Bailey-Markdown-Layout",
                                        backend: LocalWorkspaceBackend.shared),
             assetRefresh: 0
@@ -481,7 +481,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let document = try await MarkdownDocument.parse(source)
         let preview = MarkdownPreview(
             document: document, revision: "scroll-link",
-            resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Long.md",
+            resource: PreviewResource(path: "/tmp/Bailey-Markdown-Layout/Long.md",
                                        directory: "/tmp/Bailey-Markdown-Layout",
                                        backend: LocalWorkspaceBackend.shared),
             assetRefresh: 0
@@ -553,7 +553,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             return own + view.subviews.flatMap(scrollViews)
         }
 
-        let resource = MarkdownResource(
+        let resource = PreviewResource(
             path: "/tmp/Bailey-Markdown-Layout/Links.md",
             directory: "/tmp/Bailey-Markdown-Layout",
             backend: LocalWorkspaceBackend.shared
@@ -618,7 +618,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         )
         let preview = MarkdownPreview(
             document: document, revision: "link-rect",
-            resource: MarkdownResource(path: "/tmp/Bailey-Markdown-Layout/Pointer.md",
+            resource: PreviewResource(path: "/tmp/Bailey-Markdown-Layout/Pointer.md",
                                        directory: "/tmp/Bailey-Markdown-Layout",
                                        backend: LocalWorkspaceBackend.shared),
             assetRefresh: 0
@@ -716,7 +716,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             The preview remains native, selectable, and keyboard accessible.
             """
         let document = try await MarkdownDocument.parse(markdown)
-        let resource = MarkdownResource(
+        let resource = PreviewResource(
             path: "/tmp/Bailey-Markdown-Primer/README.md",
             directory: "/tmp/Bailey-Markdown-Primer",
             backend: LocalWorkspaceBackend.shared
@@ -804,7 +804,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                 return false
             }, "Actual documentation must retain its headings: \(relativePath)")
 
-            let resource = MarkdownResource(
+            let resource = PreviewResource(
                 path: url.path, directory: url.deletingLastPathComponent().path,
                 backend: LocalWorkspaceBackend.shared
             )
@@ -865,7 +865,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             "| Markdown | \(wideCell) | Ready |"
         ].joined(separator: "\n")
         let document = try await MarkdownDocument.parse(source)
-        let resource = MarkdownResource(
+        let resource = PreviewResource(
             path: "/tmp/Bailey-Markdown-Layout/Wide.md",
             directory: "/tmp/Bailey-Markdown-Layout",
             backend: LocalWorkspaceBackend.shared
@@ -924,7 +924,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             <svg xmlns="http://www.w3.org/2000/svg" width="80" height="32"><rect width="80" height="32" fill="#0969da"/></svg>
             """
         try Data(svg.utf8).write(to: folder.appendingPathComponent("asset.svg"))
-        let resource = MarkdownResource(path: folder.appendingPathComponent("README.md").path,
+        let resource = PreviewResource(path: folder.appendingPathComponent("README.md").path,
                                         directory: folder.path, backend: LocalWorkspaceBackend.shared)
         for count in [500, 5_000, 20_000] {
             var lines: [String] = []

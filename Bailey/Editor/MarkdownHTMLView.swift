@@ -17,7 +17,7 @@ final class MarkdownDetailsState {
 
 struct MarkdownHTMLContent: View {
     let nodes: [MarkdownHTML]
-    let resource: MarkdownResource
+    let resource: PreviewResource
     let assetRefresh: UInt
     var selectionPath: [Int] = []
     @Environment(\.colorScheme) private var colorScheme
@@ -213,7 +213,7 @@ private struct MarkdownHTMLDetails: View {
     let label: String
     let children: [MarkdownHTML]
     let initiallyOpen: Bool
-    let resource: MarkdownResource
+    let resource: PreviewResource
     let assetRefresh: UInt
     let selectionPath: [Int]
     @Environment(MarkdownDetailsState.self) private var disclosure
@@ -259,7 +259,7 @@ private struct MarkdownHTMLImage: View {
 
     let source: Source
     let alt: String
-    let resource: MarkdownResource
+    let resource: PreviewResource
     var width: Int? = nil
     var height: Int? = nil
     var assetRefresh: UInt = 0

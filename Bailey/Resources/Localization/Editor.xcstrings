@@ -291,6 +291,16 @@
         }
       }
     },
+    "HTML Preview Unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法预览 HTML"
+          }
+        }
+      }
+    },
     "Show Source" : {
       "localizations" : {
         "zh-Hans" : {

@@ -29,6 +29,7 @@ enum FilePreviewKind: Equatable {
     case markdown
     case delimited
     case svg
+    case html
 
     init?(path: String) {
         if MarkdownDocument.supports(path) {
@@ -37,6 +38,8 @@ enum FilePreviewKind: Equatable {
             self = .delimited
         } else if (path as NSString).pathExtension.lowercased() == "svg" {
             self = .svg
+        } else if ["html", "htm"].contains((path as NSString).pathExtension.lowercased()) {
+            self = .html
         } else {
             return nil
         }
@@ -67,6 +70,7 @@ final class FileTab: nonisolated Identifiable {
 
     private(set) var content: Content
     private(set) var mediaPlayer: AVPlayer?
+    private(set) var htmlPreview: HTMLPreview?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
@@ -141,6 +145,7 @@ final class FileTab: nonisolated Identifiable {
     func retireContent() {
         isRetired = true
         targetGeneration &+= 1
+        htmlPreview = nil
         invalidateReload()
         retireMedia()
         if case .media = content { content = .loading }
@@ -220,10 +225,11 @@ final class FileTab: nonisolated Identifiable {
     }
 
     isolated deinit {
+        htmlPreview?.invalidate()
         if let nativeEditObserver { NotificationCenter.default.removeObserver(nativeEditObserver) }
     }
 
-    private nonisolated static let maxTextBytes = 32 << 20
+    nonisolated static let maxTextBytes = 32 << 20
     private nonisolated static let maxImageBytes = 256 << 20
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
@@ -239,7 +245,9 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var hasReadDemand = false
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
-    private var targetGeneration: UInt = 0
+    private var targetGeneration: UInt = 0 {
+        didSet { htmlPreview?.invalidate() }
+    }
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
     @ObservationIgnored private var saveLatestRequested = false
     /// Encoding changes are explicit user actions, never merged or silently dropped.
@@ -293,7 +301,7 @@ final class FileTab: nonisolated Identifiable {
         guard let previewKind else { return false }
         if let previewOverride { return previewOverride }
         switch previewKind {
-        case .markdown: return false
+        case .markdown, .html: return false
         case .delimited, .svg: return true
         }
     }
@@ -338,12 +346,21 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
-    func markdownResource(in directory: String?) -> MarkdownResource {
+    func previewResource(in directory: String?) -> PreviewResource {
         // A Finder-opened document may be outside the active project's root.
         // Its own parent is the narrowest authorized scope for relative assets.
         let scope = directory.flatMap { LocalPathScope.contains(path, in: $0) ? $0 : nil }
             ?? (path as NSString).deletingLastPathComponent
-        return MarkdownResource(path: path, directory: readOnlyReason == nil ? scope : nil, backend: backend)
+        return PreviewResource(path: path, directory: readOnlyReason == nil ? scope : nil, backend: backend)
+    }
+
+    func showHTMLPreview(request: String, in directory: String?) async {
+        guard !isRetired, canPreviewFile, previewKind == .html, request == textPreviewRequestID else { return }
+        let preview = htmlPreview ?? HTMLPreview()
+        htmlPreview = preview
+        await preview.display(text, resource: previewResource(in: directory), request: request) {
+            !isRetired && request == textPreviewRequestID
+        }
     }
 
     private nonisolated struct LoadedContent: Sendable {
@@ -530,6 +547,7 @@ final class FileTab: nonisolated Identifiable {
         let previousKind = previewKind
         path = newPath
         if previewKind != previousKind { previewOverride = nil }
+        if previewKind != .html { htmlPreview = nil }
         editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if hasReadDemand, !isDirty, wasMedia || isMediaFile {
             if case .media = content {
@@ -1068,7 +1086,7 @@ struct FileViewerView: View {
     /// Called when the editor takes focus itself (e.g. a click), so the
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
-    var markdownDirectory: String?
+    var resourceDirectory: String?
     var rendersOnlyPreview = false
     var onMarkdownLink: (URL) async -> Bool = { _ in false }
     var onRevealFileSource: () -> Void = {}
@@ -1100,7 +1118,7 @@ struct FileViewerView: View {
                         switch kind {
                         case .markdown:
                             MarkdownFilePreview(
-                                file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
+                                file: file, directory: resourceDirectory, assetRefresh: assetRefresh,
                                 onOpenLink: onMarkdownLink,
                                 onLocateSource: { offset in
                                     file.pendingMarkdownSource = (
@@ -1119,6 +1137,9 @@ struct FileViewerView: View {
                                          onShowSource: revealSource)
                         case .svg:
                             SVGFilePreview(file: file, onFocused: onFocused, onShowSource: revealSource)
+                        case .html:
+                            HTMLFilePreview(file: file, directory: resourceDirectory,
+                                            onFocused: onFocused, onShowSource: revealSource)
                         }
                     } else if !rendersOnlyPreview {
                         HStack {

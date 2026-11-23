@@ -46,6 +46,18 @@ nonisolated enum SVGArtwork {
     }
 
     static func sanitizedXML(_ data: Data) throws -> Sanitized {
+        let root = try documentRoot(data)
+        var budget = 4_096
+        var omitted = Set<String>()
+        try clean(root, depth: 0, budget: &budget, omitted: &omitted)
+        return Sanitized(xml: root.xmlString, omitted: omitted.sorted())
+    }
+
+    static func validateDocument(_ data: Data) throws {
+        _ = try documentRoot(data)
+    }
+
+    private static func documentRoot(_ data: Data) throws -> XMLElement {
         try Task.checkCancellation()
         guard data.count <= byteLimit else { throw WorkspaceError.tooLarge }
         guard let source = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16),
@@ -56,10 +68,7 @@ nonisolated enum SVGArtwork {
         guard let root = xml.rootElement(), root.localName == "svg" else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        var budget = 4_096
-        var omitted = Set<String>()
-        try clean(root, depth: 0, budget: &budget, omitted: &omitted)
-        return Sanitized(xml: root.xmlString, omitted: omitted.sorted())
+        return root
     }
 
     private static func utf8XML(_ source: String) -> String {

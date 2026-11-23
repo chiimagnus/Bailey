@@ -798,7 +798,7 @@ struct DockTabGroupView: View {
                         manager.newBrowserTab(initialURL: $0)
                     },
                     onNewFileTab: { manager.openFile($0) },
-                    markdownDirectory: markdownDirectory(for: tab),
+                    resourceDirectory: resourceDirectory(for: tab),
                     rendersOnlyPreview: active == .filePreview(id),
                     onMarkdownLink: { file, url in
                         await project.openMarkdownLink(url, from: file) {
@@ -842,7 +842,7 @@ struct DockTabGroupView: View {
 
     private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }
 
-    private func markdownDirectory(for tab: PaneTab) -> String? {
+    private func resourceDirectory(for tab: PaneTab) -> String? {
         guard case .file(let file) = tab.content,
               file.workspaceIdentity == project.workspaceIdentity else { return nil }
         return project.customDirectory

@@ -17,7 +17,7 @@ struct MarkdownFilePreview: View {
             if let parsed, parsed.target == target {
                 MarkdownPreview(
                     document: parsed.document, revision: parsed.request,
-                    resource: file.markdownResource(in: directory), assetRefresh: assetRefresh,
+                    resource: file.previewResource(in: directory), assetRefresh: assetRefresh,
                     collapsedHeadings: file.markdownCollapsedHeadings,
                     onToggleHeading: { heading in
                         guard parsed.request == file.textPreviewRequestID else { return }
