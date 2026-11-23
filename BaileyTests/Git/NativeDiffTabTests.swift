@@ -5819,6 +5819,37 @@ final class NativeDiffTabTests: XCTestCase {
         try await wait { tab.display != nil }
     }
 
+    func testCSVWorktreeAndGitBlobKeepCodingCellAndConvertOnlyOnExplicitSave() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let name = "实验.CSV"
+        let file = directory.appendingPathComponent(name)
+        let old = "# coding: GBK,模型🧪\r\n0,10\r\n"
+        let current = "# coding: GBK,模型🧪\r\n0,20\r\n"
+        try Data(old.utf8).write(to: file)
+        for args in [["add", name], ["commit", "-qm", "CSV baseline"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data(current.utf8).write(to: file)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: name, source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        tab.autoSaveSuspendedForClose = true
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(Data(tab.oldContent.utf8), Data(old.utf8))
+        XCTAssertEqual(Data(tab.newContent.utf8), Data(current.utf8))
+        XCTAssertEqual(tab.fileEncoding, .utf8)
+        XCTAssertEqual(try Data(contentsOf: file), Data(current.utf8))
+
+        await tab.save(as: .utf16BEBOM)
+        XCTAssertNil(tab.saveError)
+        XCTAssertEqual(try Data(contentsOf: file), TextFileEncoding.utf16BEBOM.encoded(current))
+    }
+
     func testEncodingOnlyGitChangeRemainsVisibleWhenDecodedTextMatches() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

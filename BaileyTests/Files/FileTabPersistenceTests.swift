@@ -2288,6 +2288,37 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.fileEncoding, .utf8)
     }
 
+    func testDelimitedDataKeepsUTF8CellsRatherThanApplyingCodingCookies() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for (extensionName, separator) in [("CSV", ","), ("tSv", "\t")] {
+            for label in ["GBK", "mbcs", "unsupported"] {
+                let path = folder.appendingPathComponent("\(label).\(extensionName)")
+                let original = "# coding: \(label)\(separator)模型🧪\r\n=1\(separator)é\r"
+                let bytes = Data(original.utf8)
+                try bytes.write(to: path)
+                let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                do {
+                    try await file.waitForText()
+                } catch {
+                    XCTFail("A UTF-8 data field must not be interpreted as a \(label) declaration: \(error)")
+                    continue
+                }
+                XCTAssertEqual(file.text, original)
+                XCTAssertEqual(file.fileEncoding, .utf8)
+                XCTAssertEqual(try Data(contentsOf: path), bytes)
+                await file.save(as: .utf16LEBOM)
+                XCTAssertNil(file.saveError)
+                XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.utf16LEBOM.encoded(original))
+                let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                try await reopened.waitForText()
+                XCTAssertEqual(reopened.fileEncoding, .utf16LEBOM)
+                XCTAssertEqual(reopened.text, original)
+            }
+        }
+    }
+
     func testUTF8AndUTF16ByteOrderMarksRemainByteExact() async throws {
         for encoding in [TextFileEncoding.utf8BOM, .utf16LEBOM, .utf16BEBOM] {
             let path = "/fixture/bom-\(encoding.name).txt"

@@ -1125,7 +1125,7 @@ final class DiffTab: nonisolated Identifiable {
         let generation = targetGeneration
         let filePath = (repoRoot as NSString).appendingPathComponent(path)
         let prepared = await TextFileEncoding.prepareSave(
-            written, as: chosen, checkDeclaration: chosen != fileEncoding
+            written, as: chosen, path: filePath, checkDeclaration: chosen != fileEncoding
         )
         guard generation == targetGeneration, readOnlyReason == nil, isEditable else { return }
         let payload: TextFileEncoding.EncodedSave
@@ -1284,6 +1284,12 @@ final class DiffTab: nonisolated Identifiable {
     private nonisolated enum GitLocation {
         case index(path: String, stages: [Int])
         case tree(revision: String, path: String)
+
+        var path: String {
+            switch self {
+            case .index(let path, _), .tree(_, let path): path
+            }
+        }
     }
 
     private nonisolated static func firstGitContent(
@@ -1376,7 +1382,7 @@ final class DiffTab: nonisolated Identifiable {
                 blob = content
             }
         }
-        switch await TextFileEncoding.decode(blob, backend: backend, override: override) {
+        switch await TextFileEncoding.decode(blob, path: location.path, backend: backend, override: override) {
         case .success(let document):
             return (.content(document, oid: oid, isLFS: pointer != nil), selection.isUnmerged)
         case .failure(.binary):
@@ -1389,19 +1395,17 @@ final class DiffTab: nonisolated Identifiable {
     private nonisolated static func gitObject(
         _ location: GitLocation, in root: String, backend: WorkspaceBackend
     ) async -> (oid: String?, isUnmerged: Bool, error: String?) {
-        let path: String
+        let path = location.path
         let args: [String]
         switch location {
-        case .index(let name, _):
-            path = name
+        case .index:
             // A literal pathspec includes directory descendants. Exclude that
             // subtree in Git itself so a reused directory cannot exhaust the
             // metadata budget before we can determine the exact index entry.
             args = ["--no-literal-pathspecs", "ls-files", "--stage", "-z", "--",
-                    ":(literal)" + name, ":(exclude,literal)" + name + "/"]
-        case .tree(let revision, let name):
-            path = name
-            args = ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", revision, "--", name]
+                    ":(literal)" + path, ":(exclude,literal)" + path + "/"]
+        case .tree(let revision, _):
+            args = ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", revision, "--", path]
         }
         let limit = 1 << 16
         let metadata = await GitCommandExecution.runData(
@@ -1662,7 +1666,7 @@ final class DiffTab: nonisolated Identifiable {
         }
         do {
             let data = try await backend.read(path: filePath, maxBytes: maxBytes)
-            switch await TextFileEncoding.decode(data, backend: backend, override: override) {
+            switch await TextFileEncoding.decode(data, path: filePath, backend: backend, override: override) {
             case .success(let document):
                 return (document.text, nil, document.encoding, data,
                         WorkspaceFileVersion(data: data))

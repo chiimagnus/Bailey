@@ -593,7 +593,7 @@ final class FileTab: nonisolated Identifiable {
         let generation = targetGeneration
         let target = backend
         let prepared = await TextFileEncoding.prepareSave(
-            written, as: chosen, checkDeclaration: chosen != fileEncoding
+            written, as: chosen, path: savedPath, checkDeclaration: chosen != fileEncoding
         )
         guard generation == targetGeneration, path == savedPath,
               readOnlyReason == nil else { return }
@@ -890,7 +890,7 @@ final class FileTab: nonisolated Identifiable {
             )
         }
         guard data.count <= maxTextBytes else { throw WorkspaceError.tooLarge }
-        let decoded = await TextFileEncoding.decode(data, backend: backend, override: override)
+        let decoded = await TextFileEncoding.decode(data, path: path, backend: backend, override: override)
         switch decoded {
         case .success(let document):
             return LoadedContent(content: .text, text: document.text,
