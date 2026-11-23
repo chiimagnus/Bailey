@@ -861,7 +861,7 @@ struct DockTabGroupView: View {
         if case .file(let file) = tab.content {
             if file.canPreviewFile {
                 ForEach(FilePreviewMode.allCases, id: \.self) { mode in
-                    Button(mode.title) {
+                    Button(mode.title(for: file.previewKind)) {
                         if let current = currentMenuTab(tabID) {
                             project.setFilePreviewMode(mode, for: current)
                         }

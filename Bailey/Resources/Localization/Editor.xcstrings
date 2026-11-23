@@ -1,6 +1,156 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Show Table" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示表格"
+          }
+        }
+      }
+    },
+    "Table issue at line %lld, column %lld." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表格在第 %lld 行、第 %lld 列有问题。"
+          }
+        }
+      }
+    },
+    "This table has too many columns to display." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列数超过可显示的上限。"
+          }
+        }
+      }
+    },
+    "No table rows to display." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可显示的表格行。"
+          }
+        }
+      }
+    },
+    "Could not display the table." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法显示表格。"
+          }
+        }
+      }
+    },
+    "Choose the table delimiter." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请选择表格分隔符。"
+          }
+        }
+      }
+    },
+    "Delimiter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分隔符"
+          }
+        }
+      }
+    },
+    "Comma" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "逗号"
+          }
+        }
+      }
+    },
+    "Semicolon" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分号"
+          }
+        }
+      }
+    },
+    "Tab" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "制表符"
+          }
+        }
+      }
+    },
+    "Filter Column" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选此列"
+          }
+        }
+      }
+    },
+    "Filter Column…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选此列…"
+          }
+        }
+      }
+    },
+    "Apply Filter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用筛选"
+          }
+        }
+      }
+    },
+    "Clear Column Filter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除列筛选"
+          }
+        }
+      }
+    },
+    "Use First Row as Header" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用首行作表头"
+          }
+        }
+      }
+    },
     "Caution" : {
       "localizations" : {
         "zh-Hans" : {

@@ -405,7 +405,7 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("o", modifiers: .command)
             .disabled(manager?.selectedProject == nil)
 
-            Button(manager?.filePreviewMenuMode?.title ?? FilePreviewMode.preview.title) {
+            Button(manager?.filePreviewMenuTitle ?? FilePreviewMode.preview.title) {
                 manager?.toggleFilePreview()
             }
             .keyboardShortcut("v", modifiers: [.command, .shift])

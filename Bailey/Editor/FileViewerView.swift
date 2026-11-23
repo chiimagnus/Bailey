@@ -14,6 +14,13 @@ enum FilePreviewMode: CaseIterable {
         case .sideBySide: String(localized: "Show Side by Side", table: "Editor")
         }
     }
+
+    func title(for kind: FilePreviewKind?) -> String {
+        if self == .preview, kind == .delimited {
+            return String(localized: "Show Table", table: "Editor")
+        }
+        return title
+    }
 }
 
 enum FilePreviewKind: Equatable {
@@ -233,6 +240,7 @@ final class FileTab: nonisolated Identifiable {
     /// machines is two tabs, and a file opened locally is never read-only.
     let workspaceIdentity: String?
     private var previewOverride: Bool?
+    @ObservationIgnored lazy var delimitedTable = DelimitedTableControls()
     private var textEditRevision: UInt = 0
     @ObservationIgnored var markdownReadingOffset: Int?
     @ObservationIgnored var markdownReadingViewportY: CGFloat = 0
@@ -1042,7 +1050,8 @@ struct FileViewerView: View {
                                 }
                             )
                         case .delimited:
-                            CSVTableView(file: file, onFocused: onFocused, onShowSource: revealSource)
+                            CSVTableView(file: file, canFocus: canFocus, onFocused: onFocused,
+                                         onShowSource: revealSource)
                         }
                     } else if !rendersOnlyPreview {
                         HStack {

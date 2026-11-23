@@ -28,6 +28,33 @@ final class DelimitedTableIndexTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), bytes)
     }
 
+    func testRestoredTableDropsItsCompanionWhenRenamedAcrossFormats() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("values.csv")
+        let destination = directory.appendingPathComponent("values.txt")
+        let bytes = Data("Name,Value\na,2\n".utf8)
+        try bytes.write(to: path)
+        let project = Project(fallbackName: "Restored table", workspaceConfiguration: .standard)
+        let tab = project.restoreTab(from: .init(content: .file(path: path.path, editorState: nil)))
+        guard case .file(let file) = tab.content else { return XCTFail("Expected restored file") }
+        guard case .loading = file.content else { return XCTFail("Restore must keep file IO lazy") }
+        try await file.waitForText()
+        XCTAssertEqual(project.filePreviewMode(for: tab), .preview)
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        let original = file.nativeTextStorage
+        try FileManager.default.moveItem(at: path, to: destination)
+        project.updateFilePaths(from: path.path, to: destination.path, workspace: nil)
+        XCTAssertEqual(file.path, destination.path)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .source)
+        XCTAssertFalse(file.canPreviewFile)
+        XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.nativeTextStorage === original)
+        XCTAssertEqual(try Data(contentsOf: destination), bytes)
+    }
+
     func testPhysicalAndLogicalRecordsPreserveUTF16FieldRangesAndTerminators() async throws {
         let text = "\"e\u{301}😀\",,\"a\"\"b\"\r\n\"x\r\ny\rz\nw\",last,\r\r\nend,,!"
         let utf16 = text as NSString

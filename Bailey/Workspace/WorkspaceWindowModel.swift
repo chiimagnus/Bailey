@@ -664,6 +664,10 @@ final class WorkspaceWindowModel {
     /// the find bar's own field holds keyboard focus.
     func performFindAction(_ action: FindAction) {
         guard canFind else { return }
+        if let focusedDelimitedTable {
+            focusedDelimitedTable.perform(action)
+            return
+        }
         switch selectedProject?.focusedContent {
         case .session(let session): session.find.perform(action)
         case .file(let file): file.performFindAction(action)
@@ -674,6 +678,7 @@ final class WorkspaceWindowModel {
 
     /// Find uses the active pane's existing native text or terminal surface.
     var canFind: Bool {
+        if focusedDelimitedTable != nil { return true }
         switch selectedProject?.focusedContent {
         case .session, .diff: return true
         case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsFilePreview
@@ -683,10 +688,18 @@ final class WorkspaceWindowModel {
 
     var canReplace: Bool {
         switch selectedProject?.focusedContent {
-        case .file: return canFind
+        case .file: return canFind && focusedDelimitedTable == nil
         case .diff(let diff): return diff.isEditing && diff.isEditableNow
         case .session, .browser, .none: return false
         }
+    }
+
+    private var focusedDelimitedTable: DelimitedTableControls? {
+        guard let project = selectedProject, let tab = project.focusedTab,
+              case .file(let file) = tab.content, file.previewKind == .delimited, file.canPreviewFile,
+              let item = project.dock.activeGroup?.selected,
+              item == .filePreview(tab.id) || (item == .tab(tab.id) && file.showsFilePreview) else { return nil }
+        return file.delimitedTable
     }
 
     func closeActivePanelOrWindow() {
@@ -840,6 +853,13 @@ final class WorkspaceWindowModel {
     var filePreviewMenuMode: FilePreviewMode? {
         guard let project = selectedProject, let tab = activePreviewTab else { return nil }
         return project.filePreviewMode(for: tab) == .source ? .preview : .source
+    }
+
+    var filePreviewMenuTitle: String {
+        guard let mode = filePreviewMenuMode, case .file(let file)? = activePreviewTab?.content else {
+            return FilePreviewMode.preview.title
+        }
+        return mode.title(for: file.previewKind)
     }
 
     func toggleFilePreview() {
