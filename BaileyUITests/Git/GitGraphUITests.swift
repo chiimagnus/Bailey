@@ -32,10 +32,15 @@ final class GitGraphUITests: XCTestCase {
                       "Deleted file must coexist with the new folder at the same Git path")
         XCTAssertTrue(addedFirst.waitForExistence(timeout: 12))
         XCTAssertTrue(addedSecond.waitForExistence(timeout: 12))
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("No working path", forType: .string))
         deleted.rightClick()
-        XCTAssertFalse(app.menuItems["Copy Path"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists,
-                       "Deleted history files do not have filesystem path menus")
+        app.typeKey("c", modifierFlags: [.command, .option])
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(pasteboard.string(forType: .string), "No working path",
+                       "A deleted historical file must not copy a nonexistent working-tree path")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         folder.click()
         XCTAssertTrue(addedFirst.waitForNonExistence(timeout: 12))
@@ -59,6 +64,8 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: first), Data("new first body\n".utf8))
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+        XCTAssertEqual(pasteboard.string(forType: .string), "No working path",
+                       "Native menu actions must not copy a deleted history path later")
     }
 
     func testGraphHistoryContextActionOpensRevisionAndPreservesSelection() throws {

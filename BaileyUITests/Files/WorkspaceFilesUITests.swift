@@ -37,7 +37,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(header.waitForExistence(timeout: 8))
         header.click()
         XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
-        app.menuItems["Hide Excluded Files"].click()
+        // The header popup and File main menu share a title; activate the header menu itself.
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         let hidden = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: excluded
         )
