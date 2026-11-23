@@ -5,18 +5,17 @@
 
 ## 当前代码与共用边界
 
-- `MarkdownMedia.asset(at:)` 已包装禁止外部引用的 `AVURLAsset`，
-  `MarkdownNativePlayer` 已将 `AVPlayer` 嵌入原生 `AVPlayerView`。
+- `NativeMedia.open` 共用禁止外部引用的 `AVURLAsset` 及实际轨道检查，
+  `NativePlayerView` 将文件和 Markdown 的 `AVPlayer` 嵌入同一种原生 `AVPlayerView`。
   Markdown 内嵌视频通过授权的 `MarkdownResource` 限制读取、点击后最多暂存 64 MiB，
   播放器由嵌入视图临时持有，离开时释放。
 - **独立本机文件**的 `AVURLAsset` 应直接绑定实际有权限的 `file://`，
   不经过 Markdown 的暂存／整文件 64 MiB 限制，更不经过 32 MiB 文本读取。
   共享的是**AVAsset 验证、引用限制、AVPlayerView 控件适配**，
   不是 Markdown 的暂存任务或内嵌 View 生命周期。
-  第一种独立音视频格式先复用 AVAsset 检查；当本计划实际需要
-  第二处 `AVPlayerView` 时，才将 Markdown 的 `MarkdownNativePlayer` 收敛为中性组件，
-  当场替换旧调用，绝不留下两个同功能的原生视频适配。
-- 当前 `FileTab.Content` 无媒体 case；按候选扩展名在 `readContent` 前分流，
+  独立视频已成为 `NativePlayerView` 的第二个调用方；Markdown 的旧适配已删除，
+  不再保留两个同功能的原生视频视图。
+- `FileTab.Content.media` 按候选扩展名在文本整读前分流，
   再由系统 AVAsset.load 的实际 playable／轨道验证，
   文件身份、generation、错误、刷新、保存禁用、关闭和 `TabSwitcherView`
   由现有 `FileTab` 生命周期处理，保持文本／图片原路径不变。

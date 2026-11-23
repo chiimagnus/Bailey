@@ -1,21 +1,21 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "与音频共享的本机媒体检查、路由及版本保护"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "共享读取 cdf773a3；真实同名 Windows Tailscale ddf88857；原生 HEVC／ProRes／H.264 M4V 导出、定位和解码帧 7452b16d。外部引用、受保护／非法容器、超大视频及更多并发组合待核销。"
 
 [[tasks]]
 id = "P1-T2"
 title = "原生 AVPlayerView 画面内操控与文件生命周期"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "原生全屏与失焦边界 c0b414a4：4 GUI、58 宿主及构建验签通过，播放／暂停状态分别经过全屏往返；AVKit 原有内部布局告警仍可见。多屏、其他画幅及设备切换待验证。"
 
 [[tasks]]
 id = "P2-T1"

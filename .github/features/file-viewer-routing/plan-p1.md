@@ -27,7 +27,7 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 | `MarkdownResource`＋`LocalPathScope` | HTML 的 CSS／图片和 SVG 的授权相对资源应共用当前项目／机器的路径解析、范围与实际 IO 校验。HTML 引用链须以**发起请求的 CSS／资源文件**为相对基准，不能都从 HTML 文档目录解析。第二个消费者落地时把公共部分改为中性名称并删除旧同义包装；WebKit 仍独立限制脚本、网络与子请求。 |
 | `RasterPreview`／`MarkdownPicture.decode`／`ImageInspector` | 文件和 Markdown 共用 ImageIO 解码；文件图片和内嵌图形共用原生缩放视口。继续按图片计划核销原像素、区域解码与内存预算。 |
 | `SVGArtwork.sanitizedXML`／`SVGArtwork.render` | 共用一次安全解析与 SwiftDraw；Markdown 可用有界栅格，独立 SVG 要在相同净化结果上矢量重绘，不重写第二套 XML 校验／SVG parser。 |
-| `MarkdownMedia.asset`／`MarkdownNativePlayer` | 音视频共用 AVAsset 验证，视频与 Markdown 嵌入播放器共用 `AVPlayerView` 适配；独立音频若需自有紧凑控件则直接操纵同一个 AVPlayer，不强加视频 UI。嵌入媒体才需要有界暂存，独立本机文件使用真实 URL，生命周期各归其主。 |
+| `NativeMedia.open`／`NativePlayerView` | 音视频共用 AVAsset 验证及 `AVPlayerView` 适配，包含独立音频和 Markdown 嵌入播放器。原生样式按场景选择，不重做播放工具条。嵌入媒体才需要有界暂存，独立本机文件使用真实 URL，生命周期各归其主。 |
 | `FilePreviewMode`／`showsFilePreview`／`DockItem.filePreview`／`rendersOnlyPreview` | 下一种文本预览落地时将**展示模式与 Dock companion** 收敛为文件通用语义，替换所有调用、菜单和测试，删除旧 Markdown 专用状态及分支；Markdown AST、滚动映射和独立的 `MarkdownFilePreview` 仍归 Markdown。 |
 
 **不能强行共用：**完整 HTML 页面需隔离 `WKWebView`；Markdown 的 `MarkdownHTML`

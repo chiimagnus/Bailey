@@ -6,21 +6,16 @@
 ## 当前代码与技术边界
 
 - Markdown 内嵌 `<audio controls>`／`<video controls>` 已经使用
-  `MarkdownMedia.stage → MarkdownMedia.asset → AVPlayer → MarkdownNativePlayer`
-  和系统 `AVPlayerView`。其中 `asset(at:)` 设置外部引用禁止策略；
-  `MarkdownNativePlayer` 是仅限 Markdown 文件的私有 AppKit 适配。
-  **独立音／视频首个落地任务**应共用受控 AVAsset 验证。
-  只有独立视频需要第二处 `AVPlayerView` 时，再把 Markdown 的私有适配改成中性组件，
-  替换所有调用并删除旧类；独立音频可直接以紧凑控件操作同一 AVPlayer，
-  不强加视频控件，也不实现第二套 asset loader／PlayerRepresentable。
+  `MarkdownMedia.stage → NativeMedia.open → AVPlayer → NativePlayerView`。
+  独立音视频实际共用 `NativeMedia` 的普通文件、外部引用与轨道校验，以及同一原生 `AVPlayerView`。
+  音频只约束播放器的显示尺寸，优先保留系统的布局、焦点、键盘和无障碍行为。
 - Markdown 嵌入资源须通过 `MarkdownResource` 授权并在**用户点击后**
   将最多 64 MiB 的资源暂存到受控临时目录，播放器由内嵌 View 暂时持有，卸载清理。
   **独立本机媒体不用这条暂存路径**：经当前 `FileTab` 真实本机身份／文件检查后，
   `AVURLAsset` 直接读取原始 `file://`；播放不经过 `WorkspaceBackend.read(maxBytes:)`
   整文件读入。SSH 媒体没有随机读取协议，本阶段明确不支持，
   不能把 SSH 路径转成同名 Mac 文件。
-- `FileTab.Content` 目前没有 `.media`。媒体真正接入时在
-  `FileTab.readContent` 的文本 32 MiB 读取**之前**按扩展名筛选候选，
+- `FileTab.Content.media` 在 `FileTab.readContent` 的文本 32 MiB 读取**之前**按扩展名筛选候选，
   再经本机文件身份／真实 AV 轨道和可播放性异步确认，
   让音视频共享一个经 AVFoundation 确认类型的文件媒体结果（如 `.media`），
   不在同一 `Content` 中分别增设 `.audio`／`.video` 两套读取、错误或生命周期；
@@ -31,9 +26,8 @@
   Markdown 的内嵌播放器仍归内嵌内容所有，两者**共享 AVFoundation 核心，
   不强行共享互不相同的文件标签／嵌入生命周期**。
   仅真正可用的播放器控件接管 Space；不以全局事件监听抢终端焦点。
-- 音频最常用的进度、倍速、播放／暂停、音量／静音放在内容区一行；
-  不复制视频原生画面控件完整工具栏，也不提供未实现的全轨波形。
-  P2 波形未准备好时，P1 普通 Slider 就能正常播放和定位。
+- 进度、倍速、播放／暂停、音量／静音优先由内容区原生 `AVPlayerView` 提供；
+  只有实际缺失的操作才补最小的原生入口，不复制工具栏。P2 波形尚未交付时，系统进度也能播放和定位。
 
 ## 任务
 
@@ -41,7 +35,7 @@
 ### P1-T1 共用音视频实际文件校验与正确读取分支
 
 - **位置**：`FileTab.readContent / matches / reloadFromDiskIfClean`、
-  `MarkdownMedia`／原生 `AVPlayerView` 适配、`TabSwitcherView` 及宿主测试。
+  `NativeMedia`／既有 Markdown 暂存、`TabSwitcherView` 及宿主测试。
 - **实施**：同步 [文件路由 P1-T1](../file-viewer-routing/plan-p1.md#p1-t1)，
   真实本机音频先验证有权限且属于当前标签的普通文件，再用
   `AVURLAsset.load(.isPlayable)` 和实际音轨判断，异步展示时长与错误，
@@ -63,8 +57,8 @@
 
 - **位置**：新音频内容视图、`FileTab` 的播放器持有／释放、
   `PaneContent` 文件生命周期、`docs/features/editor.md`。
-- **实施**：播放／暂停、连续 seek、0.5×～2×、静音与音量为直接可点击控件；
-  速度与音量不塞进右键。修改暂停态的倍速只改期望 rate，不能触发播放。
+- **实施**：优先使用系统原生播放／暂停、连续 seek、0.5×～2×、静音与音量。
+  不自定义整行或复制已有系统入口。修改暂停态的倍速只改期望 rate，不能触发播放。
   Dock 隐藏或切标签默认暂停且不后台发声；重挂载复用同一 player，
   真实 `Project.remove/terminateAll`／FileTab 退役时取消加载、清空 item 和观察者、停止实际播放；
   不能仅依靠 SwiftUI `onDisappear` 当作最终关闭信号。

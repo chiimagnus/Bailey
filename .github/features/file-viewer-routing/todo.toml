@@ -1,13 +1,13 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "核销读取与公共资源边界，移除新格式产生的重复路径"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "媒体真实分流 cdf773a3，同名不同内容的 Windows Tailscale 身份测试 ddf88857；HTML 公共资源权限仍待落地。"
 
 [[tasks]]
 id = "P1-T2"

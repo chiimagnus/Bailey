@@ -1,21 +1,21 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "共用音视频实际文件校验与正确读取分支"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "共享读取 cdf773a3、原生播放 919d2c41；同名不同内容的真实 Windows Tailscale ddf88857 覆盖连接／断线／重连且两端字节不变。MP3 和部分非常规容器待核销。"
 
 [[tasks]]
 id = "P1-T2"
 title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "原生 AVPlayerView 浮动样式 919d2c41，已确认播放、定位、倍速、音量、静音和切标签暂停；84 宿主、2 GUI、构建验签通过。物理音频输出／设备变更／睡眠、VoiceOver 和长生命周期组合未核销，P1 未过门禁。"
 
 [[tasks]]
 id = "P2-T1"
