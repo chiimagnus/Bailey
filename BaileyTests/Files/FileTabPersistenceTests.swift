@@ -1,8 +1,10 @@
 import AppKit
 import Darwin
 import Foundation
+import ImageIO
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
@@ -715,7 +717,7 @@ final class FileTabPersistenceTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bitmap = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 2048, pixelsHigh: 2048,
+            bitmapDataPlanes: nil, pixelsWide: 4096, pixelsHigh: 3072,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
             isPlanar: false, colorSpaceName: .deviceRGB,
             bytesPerRow: 0, bitsPerPixel: 0
@@ -729,7 +731,7 @@ final class FileTabPersistenceTests: XCTestCase {
             buffer[i] = UInt8(truncatingIfNeeded: entropy)
         }
         let pixels = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        XCTAssertGreaterThan(pixels.count, 8 << 20)
+        XCTAssertGreaterThan(pixels.count, 32 << 20)
         let path = root.appendingPathComponent("large-image.png")
         try pixels.write(to: path)
 
@@ -740,7 +742,7 @@ final class FileTabPersistenceTests: XCTestCase {
         guard case .image(let preview) = file.content else {
             return XCTFail("Real PNG larger than text limit must remain previewable")
         }
-        XCTAssertEqual(preview.representations.first?.pixelsWide, 2048)
+        XCTAssertEqual(preview.poster.width, 4096)
         XCTAssertEqual(try Data(contentsOf: path), pixels)
 
         let linked = root.appendingPathComponent("linked-image.png")
@@ -777,6 +779,76 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
+    func testFileAndMarkdownImagePreviewsRespectEXIFOrientation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 20, height: 12, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        let quadrantColors = [4, 2, 1, 7]
+        for (index, color) in quadrantColors.enumerated() {
+            context.setFillColor(CGColor(
+                red: color & 4 == 0 ? 0 : 1, green: color & 2 == 0 ? 0 : 1,
+                blue: color & 1 == 0 ? 0 : 1, alpha: 1
+            ))
+            context.fill(CGRect(x: (index % 2) * 10, y: (1 - index / 2) * 6, width: 10, height: 6))
+        }
+        let original = try XCTUnwrap(context.makeImage())
+        let expectedQuadrants = [
+            [0, 1, 2, 3], [1, 0, 3, 2], [3, 2, 1, 0], [2, 3, 0, 1],
+            [0, 2, 1, 3], [2, 0, 3, 1], [3, 1, 2, 0], [1, 3, 0, 2],
+        ]
+
+        func quadrants(_ image: CGImage) throws -> [Int] {
+            let sample = try XCTUnwrap(CGContext(
+                data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            let pixels = try XCTUnwrap(sample.data).assumingMemoryBound(to: UInt8.self)
+            return try (0..<4).map { index in
+                let rect = CGRect(x: (1 + 2 * (index % 2)) * image.width / 4,
+                                  y: (1 + 2 * (index / 2)) * image.height / 4, width: 1, height: 1)
+                let pixel = try XCTUnwrap(image.cropping(to: rect))
+                sample.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return (pixels[0] >= 128 ? 4 : 0) + (pixels[1] >= 128 ? 2 : 0) + (pixels[2] >= 128 ? 1 : 0)
+            }
+        }
+
+        for orientation in 1...8 {
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                bytes, UTType.jpeg.identifier as CFString, 1, nil
+            ))
+            CGImageDestinationAddImage(destination, original, [
+                kCGImagePropertyOrientation: orientation,
+            ] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            let data = bytes as Data
+            let path = directory.appendingPathComponent("orientation-\(orientation).JPG")
+            try data.write(to: path)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            XCTAssertEqual(properties?[kCGImagePropertyOrientation] as? Int, orientation)
+            let expected = orientation >= 5 ? CGSize(width: 12, height: 20) : CGSize(width: 20, height: 12)
+
+            let picture = try MarkdownPicture.decode(data)
+            XCTAssertEqual(CGSize(width: picture.poster.width, height: picture.poster.height), expected)
+            let expectedColors = expectedQuadrants[orientation - 1].map { quadrantColors[$0] }
+            XCTAssertEqual(try quadrants(picture.poster), expectedColors, "EXIF \(orientation) in Markdown")
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .image = file.content { return true }; return false }
+            guard case .image(let image) = file.content else { return XCTFail("Expected JPEG preview") }
+            XCTAssertEqual(image.pixelSize, expected)
+            XCTAssertEqual(CGSize(width: image.poster.width, height: image.poster.height), expected)
+            XCTAssertEqual(try quadrants(image.poster), expectedColors, "EXIF \(orientation) in FileTab")
+            XCTAssertEqual(try Data(contentsOf: path), data)
+        }
+    }
+
     func testLargeImagePreviewUsesBoundedDecodedDimensions() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -798,8 +870,9 @@ final class FileTabPersistenceTests: XCTestCase {
         guard case .image(let image) = file.content else {
             return XCTFail("Valid image must remain previewable")
         }
-        XCTAssertLessThanOrEqual(image.representations.first?.pixelsWide ?? .max, 4096)
-        XCTAssertLessThanOrEqual(image.representations.first?.pixelsHigh ?? .max, 4096)
+        XCTAssertEqual(image.pixelSize, CGSize(width: 5000, height: 2500))
+        XCTAssertLessThanOrEqual(image.poster.width, 4096)
+        XCTAssertLessThanOrEqual(image.poster.height, 4096)
         XCTAssertEqual(try Data(contentsOf: path), imageBytes)
     }
 
@@ -847,7 +920,7 @@ final class FileTabPersistenceTests: XCTestCase {
         image.loadIfNeeded()
         try await waitForFileTabState { if case .image = image.content { return true }; return false }
         guard case .image(let preview) = image.content else { return XCTFail("Expected actual image preview") }
-        XCTAssertEqual(preview.representations.first?.pixelsWide, 2)
+        XCTAssertEqual(preview.poster.width, 2)
     }
 
     func testFixedHostDisconnectRebindsDirtyFileWithoutLosingDraft() async throws {

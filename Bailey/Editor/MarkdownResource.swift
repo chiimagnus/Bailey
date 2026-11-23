@@ -97,9 +97,8 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
     var animation: [Frame] = []
 
     static func decode(_ data: Data) throws -> Self {
-        guard let source = CGImageSourceCreateWithData(
-            data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
-        ), let poster = FileTab.imageThumbnail(source, maximumDimension: 2048) else {
+        guard let source = RasterPreview.source(data),
+              let poster = RasterPreview.decode(source, maximumDimension: 2048)?.poster else {
             throw CocoaError(.fileReadCorruptFile)
         }
         let count = CGImageSourceGetCount(source)
@@ -109,7 +108,7 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
         var frames: [Frame] = []
         for index in 0..<count {
             try Task.checkCancellation()
-            guard let frame = FileTab.imageThumbnail(source, index: index, maximumDimension: 1024) else {
+            guard let frame = RasterPreview.decode(source, index: index, maximumDimension: 1024)?.poster else {
                 return Self(poster: poster)
             }
             pixels += frame.width * frame.height

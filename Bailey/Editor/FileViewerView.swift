@@ -29,9 +29,9 @@ final class FileTab: nonisolated Identifiable {
     }
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
 
-    enum Content {
+    nonisolated enum Content: Sendable {
         case text
-        case image(NSImage)
+        case image(RasterPreview)
         case unavailable(String)
         /// Waiting for a consumer to request the first read.
         case loading
@@ -178,23 +178,10 @@ final class FileTab: nonisolated Identifiable {
 
     private nonisolated static let maxTextBytes = 32 << 20
     private nonisolated static let maxImageBytes = 256 << 20
-    private nonisolated static let maxImagePixels = 32_000_000
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
 
-    nonisolated static func imageThumbnail(_ source: CGImageSource, index: Int = 0, maximumDimension: Int) -> CGImage? {
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any]
-        let width = (properties?[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue ?? 0
-        let height = (properties?[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue ?? 0
-        guard width > 0, height > 0, width <= maxImagePixels / height else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
-    }
-    @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var refreshPending = false
@@ -265,11 +252,10 @@ final class FileTab: nonisolated Identifiable {
         return MarkdownResource(path: path, directory: readOnlyReason == nil ? scope : nil, backend: backend)
     }
 
-    private struct LoadedContent {
+    private nonisolated struct LoadedContent: Sendable {
         let content: Content
         let text: String
         let encoding: TextFileEncoding?
-        let imageFingerprint: Int?
         let decodingFailed: Bool
         let sourceVersion: WorkspaceFileVersion?
     }
@@ -698,11 +684,9 @@ final class FileTab: nonisolated Identifiable {
             }
             let loaded: LoadedContent
             do {
-                let (data, decoded, sourceVersion) = try await Self.readContent(
+                loaded = try await Self.readContent(
                     path: expectedPath, backend: backend, override: self?.preferredEncoding
                 )
-                loaded = Self.loadedContent(path: expectedPath, data: data,
-                                            decoded: decoded, sourceVersion: sourceVersion)
             } catch {
                 let missingOrOversized: Bool
                 switch error {
@@ -728,7 +712,7 @@ final class FileTab: nonisolated Identifiable {
                     reason = String(localized: "Could not read file", table: "Workspace")
                 }
                 loaded = LoadedContent(content: .unavailable(reason), text: "",
-                                       encoding: nil, imageFingerprint: nil,
+                                       encoding: nil,
                                        decodingFailed: false, sourceVersion: nil)
             }
             guard !Task.isCancelled,
@@ -780,7 +764,6 @@ final class FileTab: nonisolated Identifiable {
             self.savedText = loaded.text
             self.savedSourceVersion = loaded.sourceVersion
             self.nativeCodeUnitDelta = [:]
-            self.imageFingerprint = loaded.imageFingerprint
             self.reloadRevision &+= 1
         }
     }
@@ -797,7 +780,7 @@ final class FileTab: nonisolated Identifiable {
         case (.text, .text):
             return fileEncoding == loaded.encoding && TextFileEncoding.hasIdenticalCodeUnits(savedText, loaded.text)
         case (.image, .image):
-            return imageFingerprint == loaded.imageFingerprint
+            return savedSourceVersion == loaded.sourceVersion
         case (.unavailable(let current), .unavailable(let new)):
             return current == new
         default:
@@ -807,11 +790,12 @@ final class FileTab: nonisolated Identifiable {
 
     @concurrent private static func readContent(
         path: String, backend: WorkspaceBackend, override: TextFileEncoding?
-    ) async throws -> (Data, Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?, WorkspaceFileVersion?) {
+    ) async throws -> LoadedContent {
         guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
         let isImage = imageExtensions.contains((path as NSString).pathExtension.lowercased())
+        var limit = maxTextBytes
         if isImage, let info = try await backend.stat(path: path), info.size > maxTextBytes {
             guard (info.isRegular || info.isSymlink), info.size <= maxImageBytes else {
                 throw WorkspaceError.tooLarge
@@ -829,61 +813,37 @@ final class FileTab: nonisolated Identifiable {
             CGImageSourceUpdateData(source, probe.stdout as CFData, false)
             guard CGImageSourceGetType(source) != nil else { throw WorkspaceError.tooLarge }
             // Never use .max: the path may grow between stat and the actual read.
-            let data = try await backend.read(path: path, maxBytes: info.size)
-            guard data.count > maxTextBytes else {
-                return (data, await TextFileEncoding.decode(data, backend: backend,
-                                                             override: override), WorkspaceFileVersion(data: data))
-            }
-            return (data, nil, nil)
+            limit = info.size
         }
-        let data = try await backend.read(path: path, maxBytes: maxTextBytes)
-        return (data, await TextFileEncoding.decode(data, backend: backend, override: override),
-                WorkspaceFileVersion(data: data))
-    }
-
-    private static func loadedContent(
-        path: String, data: Data,
-        decoded: Result<TextFileEncoding.Document, TextFileEncoding.DecodeFailure>?,
-        sourceVersion: WorkspaceFileVersion?
-    ) -> LoadedContent {
-        let url = URL(fileURLWithPath: path)
-        if imageExtensions.contains(url.pathExtension.lowercased()),
-           let source = CGImageSourceCreateWithData(data as CFData,
-                                                    [kCGImageSourceShouldCache: false] as CFDictionary),
+        let data = try await backend.read(path: path, maxBytes: limit)
+        try Task.checkCancellation()
+        if isImage, let source = RasterPreview.source(data),
            CGImageSourceGetType(source) != nil {
-            guard let thumbnail = imageThumbnail(source, maximumDimension: 4096) else {
+            guard let preview = RasterPreview.decode(source, maximumDimension: 4096) else {
                 return LoadedContent(
                     content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
-                    text: "", encoding: nil, imageFingerprint: nil, decodingFailed: false,
+                    text: "", encoding: nil, decodingFailed: false,
                     sourceVersion: nil
                 )
             }
-            let image = NSImage(size: NSSize(width: thumbnail.width, height: thumbnail.height))
-            image.addRepresentation(NSBitmapImageRep(cgImage: thumbnail))
             return LoadedContent(
-                content: .image(image), text: "", encoding: nil,
-                imageFingerprint: data.hashValue, decodingFailed: false, sourceVersion: nil
+                content: .image(preview), text: "", encoding: nil,
+                decodingFailed: false, sourceVersion: WorkspaceFileVersion(data: data)
             )
         }
-        guard data.count <= maxTextBytes else {
-            return LoadedContent(
-                content: .unavailable(String(localized: "File is too large to open", table: "Workspace")),
-                text: "", encoding: nil,
-                imageFingerprint: nil, decodingFailed: false, sourceVersion: nil
-            )
-        }
-        guard let decoded else { preconditionFailure("Text input was not decoded") }
+        guard data.count <= maxTextBytes else { throw WorkspaceError.tooLarge }
+        let decoded = await TextFileEncoding.decode(data, backend: backend, override: override)
         switch decoded {
         case .success(let document):
             return LoadedContent(content: .text, text: document.text,
-                                 encoding: document.encoding, imageFingerprint: nil,
-                                 decodingFailed: false, sourceVersion: sourceVersion)
+                                 encoding: document.encoding, decodingFailed: false,
+                                 sourceVersion: WorkspaceFileVersion(data: data))
         case .failure(let failure):
             let unknownTextEncoding: Bool
             if case .binary = failure { unknownTextEncoding = false }
             else { unknownTextEncoding = true }
             return LoadedContent(content: .unavailable(failure.message), text: "",
-                                 encoding: nil, imageFingerprint: nil,
+                                 encoding: nil,
                                  decodingFailed: unknownTextEncoding, sourceVersion: nil)
         }
     }
@@ -992,7 +952,7 @@ struct FileViewerView: View {
                     if let error = file.reloadError {
                         errorBar(error)
                     }
-                    MarkdownImageInspector(image: image)
+                    MarkdownImageInspector(image: NSImage(cgImage: image.poster, size: .zero))
                         .id(file.reloadRevision)
                 }
             case .loading:

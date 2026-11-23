@@ -685,7 +685,7 @@ private struct TabContentThumbnail: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(5)
         case .image(let image):
-            Image(nsImage: image)
+            Image(decorative: image.poster, scale: 1)
                 .resizable()
                 .scaledToFit()
                 .padding(5)
