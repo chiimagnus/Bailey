@@ -25,7 +25,7 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
             throw CocoaError(.fileReadCorruptFile)
         }
         let count = RasterPreview.gifFrameCount(source)
-        guard (2...32).contains(count) else { return Self(poster: poster) }
+        guard (2...32).contains(count), !RasterPreview.hasEmptyGIFFrame(data) else { return Self(poster: poster) }
         var pixels = 0
         var frames: [RasterPreview.GIFFrame] = []
         for index in 0..<count {

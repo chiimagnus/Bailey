@@ -35,9 +35,39 @@ nonisolated struct RasterPreview: Sendable {
         return CGImageSourceGetCount(source)
     }
 
+    static func hasEmptyGIFFrame(_ data: Data) -> Bool {
+        data.withUnsafeBytes { bytes in
+            func colorTableSize(_ packed: UInt8) -> Int {
+                packed & 0x80 == 0 ? 0 : 3 << (Int(packed & 7) + 1)
+            }
+
+            guard bytes.count >= 13 else { return false }
+            var offset = 13 + colorTableSize(bytes[10])
+            while offset < bytes.count {
+                switch bytes[offset] {
+                case 0x21:
+                    offset += 2
+                case 0x2c:
+                    guard offset + 9 < bytes.count else { return false }
+                    offset += 11 + colorTableSize(bytes[offset + 9])
+                    if offset < bytes.count, bytes[offset] == 0 { return true }
+                default:
+                    return false
+                }
+                while offset < bytes.count {
+                    let size = Int(bytes[offset])
+                    offset += size + 1
+                    if size == 0 { break }
+                }
+            }
+            return false
+        }
+    }
+
     static func gifFrame(_ source: CGImageSource, at index: Int, maximumDimension: Int) throws -> GIFFrame {
         try Task.checkCancellation()
-        guard let image = decode(source, index: index, maximumDimension: maximumDimension)?.poster else {
+        guard let image = decode(source, index: index, maximumDimension: maximumDimension)?.poster,
+              CGImageSourceGetStatusAtIndex(source, index) == .statusComplete else {
             throw CocoaError(.fileReadCorruptFile)
         }
         let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]

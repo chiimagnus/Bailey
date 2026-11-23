@@ -943,7 +943,7 @@ final class FileTab: nonisolated Identifiable {
               preview.poster.width < Int(preview.pixelSize.width) ||
                 preview.poster.height < Int(preview.pixelSize.height) else { return nil }
         let size = preview.pixelSize
-        return imageRequest { source in
+        return imageRequest { _, source in
             guard let image = RasterPreview.decode(source, maximumDimension: Int(max(size.width, size.height))),
                   image.poster.width == Int(size.width), image.poster.height == Int(size.height) else {
                 throw CocoaError(.fileReadCorruptFile)
@@ -956,14 +956,15 @@ final class FileTab: nonisolated Identifiable {
         guard case .image(let preview) = content, preview.animationFrameCount > 1 else { return nil }
         let count = preview.animationFrameCount
         let maximumDimension = Int(max(preview.pixelSize.width, preview.pixelSize.height))
-        return imageRequest { source in
+        return imageRequest { bytes, source in
+            guard !RasterPreview.hasEmptyGIFFrame(bytes) else { throw CocoaError(.fileReadCorruptFile) }
             let frames = GIFFrameSource(source: source, maximumDimension: maximumDimension)
             return GIFPlayback.Frames(count: count) { index in try await frames.frame(at: index) }
         }
     }
 
     private func imageRequest<Output: Sendable>(
-        _ decode: @escaping @Sendable (sending CGImageSource) throws -> Output
+        _ decode: @escaping @Sendable (Data, sending CGImageSource) throws -> Output
     ) -> (() async throws -> Output)? {
         guard readOnlyReason == nil, let version = savedSourceVersion else { return nil }
         let backend = self.backend
@@ -997,7 +998,7 @@ final class FileTab: nonisolated Identifiable {
 
     @concurrent private static func readOriginalImage<Output: Sendable>(
         _ path: String, backend: WorkspaceBackend, version: WorkspaceFileVersion,
-        decode: @Sendable (sending CGImageSource) throws -> Output
+        decode: @Sendable (Data, sending CGImageSource) throws -> Output
     ) async throws -> Output {
         let bytes = try await backend.read(path: path, maxBytes: version.byteCount)
         try Task.checkCancellation()
@@ -1006,7 +1007,7 @@ final class FileTab: nonisolated Identifiable {
         guard let source = RasterPreview.source(bytes) else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        return try decode(source)
+        return try decode(bytes, source)
     }
 
     @concurrent private static func readContent(

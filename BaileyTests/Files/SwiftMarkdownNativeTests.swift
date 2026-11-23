@@ -1171,14 +1171,14 @@ final class SwiftMarkdownNativeTests: XCTestCase {
     }
 
     func testGIFFramesHonorTimingAndAnimationBudget() throws {
-        func frame(_ color: CGColor, dimension: Int = 16) throws -> CGImage {
+        func frame(_ color: CGColor, width: Int = 16, height: Int = 16) throws -> CGImage {
             let context = try XCTUnwrap(CGContext(
-                data: nil, width: dimension, height: dimension, bitsPerComponent: 8, bytesPerRow: 0,
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ))
             context.setFillColor(color)
-            context.fill(CGRect(x: 0, y: 0, width: dimension, height: dimension))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
             return try XCTUnwrap(context.makeImage())
         }
 
@@ -1211,6 +1211,10 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(picture.animation.count, 2)
         XCTAssertEqual(picture.animation[0].seconds, 0.2, accuracy: 0.01)
         XCTAssertEqual(picture.animation[1].seconds, 0.6, accuracy: 0.01)
+        let single = try MarkdownPicture.decode(animatedGIF(frameCount: 1, at: root.appending(path: "single.gif")))
+        XCTAssertTrue(single.animation.isEmpty)
+        let capped = try MarkdownPicture.decode(animatedGIF(frameCount: 32, at: root.appending(path: "32.gif")))
+        XCTAssertEqual(capped.animation.count, 32)
 
         let overBudget = try MarkdownPicture.decode(animatedGIF(
             frameCount: 33, at: root.appending(path: "oversized-animation.gif")
@@ -1218,13 +1222,17 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(overBudget.animation.isEmpty,
                       "More than 32 GIF frames must degrade to a static poster")
         XCTAssertEqual(overBudget.poster.width, 16)
-        let large = try frame(CGColor(red: 1, green: 0, blue: 0, alpha: 1), dimension: 600)
-        let overPixelBudget = try MarkdownPicture.decode(animatedGIF(
-            frameCount: 32, at: root.appending(path: "oversized-pixels.gif"),
-            images: (large, large)
-        ))
-        XCTAssertTrue(overPixelBudget.animation.isEmpty,
-                      "32 frames exceeding eight million decoded pixels must use a static poster")
+        for (count, width, height, pixels) in [(8, 999, 1001, 7_999_992), (8, 1000, 1000, 8_000_000),
+                                               (10, 863, 927, 8_000_010)] {
+            XCTAssertEqual(count * width * height, pixels)
+            let large = try frame(CGColor(red: 1, green: 0, blue: 0, alpha: 1), width: width, height: height)
+            let boundary = try MarkdownPicture.decode(animatedGIF(
+                frameCount: count, at: root.appending(path: "\(pixels).gif"), images: (large, large)
+            ))
+            XCTAssertEqual(boundary.animation.count, pixels > 8_000_000 ? 0 : count)
+            XCTAssertEqual(boundary.poster.width, width)
+            XCTAssertEqual(boundary.poster.height, height)
+        }
         XCTAssertThrowsError(try MarkdownPicture.decode(Data("not an image".utf8)))
     }
 
@@ -1279,6 +1287,48 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         let source = try XCTUnwrap(RasterPreview.source(Data(bytes.dropLast(4))))
         XCTAssertEqual(try RasterPreview.gifFrame(source, at: 1, maximumDimension: 8).image.width, 4)
         XCTAssertThrowsError(try RasterPreview.gifFrame(source, at: 2, maximumDimension: 8))
+    }
+
+    func testGIFMissingMiddleFrameDataKeepsThePosterInBothViewers() async throws {
+        var bytes = try gifDelayFixture()
+        var withComment = bytes
+        let descriptorInsideComment: [UInt8] = [0x2c, 0, 0, 0, 0, 4, 0, 4, 0, 0, 2, 0]
+        withComment.insert(contentsOf: [0x21, 0xfe, UInt8(descriptorInsideComment.count)]
+                           + descriptorInsideComment + [0], at: 19)
+        XCTAssertEqual(try MarkdownPicture.decode(withComment).animation.count, 3)
+
+        let middleData = 0x58..<0x5e
+        XCTAssertEqual(Array(bytes[middleData]), [4, 0x84, 0x8f, 0x09, 0x05, 0])
+        bytes.replaceSubrange(middleData, with: [0])
+        let source = try XCTUnwrap(RasterPreview.source(bytes))
+        XCTAssertEqual(RasterPreview.gifFrameCount(source), 3, "The malformed frame must be followed by another frame")
+        let inline = try MarkdownPicture.decode(bytes)
+        XCTAssertTrue(inline.animation.isEmpty)
+        XCTAssertEqual(inline.poster.width, 4)
+
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "Missing middle.gif")
+        try bytes.write(to: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        file.loadIfNeeded()
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in file.gifFramesRequest() != nil }, object: nil)
+        await fulfillment(of: [loaded], timeout: 5)
+        let request = try XCTUnwrap(file.gifFramesRequest())
+        let playback = try XCTUnwrap(file.gifPlayback)
+        let running = Task { await playback.play(load: request) }
+        defer { running.cancel() }
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            playback.failed || playback.image != nil
+        }, object: nil)
+        await fulfillment(of: [settled], timeout: 3)
+        XCTAssertTrue(playback.failed)
+        XCTAssertNil(playback.image)
+        guard case .image(let preview) = file.content else { return XCTFail("The valid poster must stay visible") }
+        XCTAssertEqual(preview.poster.width, 4)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
     func testGIFResetCancelsLongHoldAndItsSuspendedPrefetch() async throws {
