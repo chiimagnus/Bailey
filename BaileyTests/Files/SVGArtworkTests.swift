@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import XCTest
 @testable import Bailey
 
@@ -15,7 +16,7 @@ final class SVGArtworkTests: XCTestCase {
         </svg>
         """
 
-    func testNativeCanvasDisplaysSettledBlurOutsideTheSourceShape() async throws {
+    func testNativeCanvasSettlesTheCurrentSVGFilterWithoutReusingOldPixels() async throws {
         let svg = try SVGArtwork.parse(Data(Self.blur.utf8)).image
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -28,27 +29,70 @@ final class SVGArtworkTests: XCTestCase {
         scroll.layoutSubtreeIfNeeded()
         scroll.setZoom(4, at: CGPoint(x: 24, y: 24))
         let canvas = try XCTUnwrap(scroll.documentView)
-        func reds() throws -> (near: CGFloat, far: CGFloat) {
+        func shades(_ contrast: (NSColor) -> CGFloat) throws -> (near: CGFloat, far: CGFloat) {
             window.displayIfNeeded()
             let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
             scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
-            func red(at sourceX: CGFloat) throws -> CGFloat {
+            func shade(at sourceX: CGFloat) throws -> CGFloat {
                 let point = canvas.convert(CGPoint(x: sourceX, y: 24), to: scroll)
                 let column = Int(point.x * CGFloat(bitmap.pixelsWide) / scroll.bounds.width)
                 let row = Int(point.y * CGFloat(bitmap.pixelsHigh) / scroll.bounds.height)
                 let pixel = try XCTUnwrap(bitmap.colorAt(x: column, y: row)?.usingColorSpace(.deviceRGB))
-                return (pixel.redComponent - pixel.greenComponent) * pixel.alphaComponent
+                return contrast(pixel) * pixel.alphaComponent
             }
-            return (try red(at: 14.5), try red(at: 3))
+            return (try shade(at: 14.5), try shade(at: 3))
         }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        var pixels = try reds()
-        while pixels.near < 0.04, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-            pixels = try reds()
+        func settled(_ contrast: (NSColor) -> CGFloat) async throws -> (near: CGFloat, far: CGFloat) {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            var pixels = try shades(contrast)
+            while pixels.near < 0.04, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+                pixels = try shades(contrast)
+            }
+            return pixels
         }
-        XCTAssertGreaterThan(pixels.near, 0.04)
-        XCTAssertLessThan(pixels.far, 0.02)
+        let red = try await settled { $0.redComponent - $0.greenComponent }
+        XCTAssertGreaterThan(red.near, 0.04)
+        XCTAssertLessThan(red.far, 0.02)
+
+        let revised = Self.blur.replacingOccurrences(of: "fill=\"red\"", with: "fill=\"blue\"")
+        scroll.install(try SVGArtwork.parse(Data(revised.utf8)).image, request: "revised-blur")
+        scroll.layoutSubtreeIfNeeded()
+        scroll.setZoom(4, at: CGPoint(x: 24, y: 24))
+        let blue = try await settled { $0.blueComponent - $0.greenComponent }
+        XCTAssertGreaterThan(blue.near, 0.04)
+        XCTAssertLessThan(blue.far, 0.02)
+        XCTAssertLessThan(try shades { $0.redComponent - $0.greenComponent }.near, 0.02)
+    }
+
+    func testRepeatedNativeMountsReleaseCanvasesAcrossAppearances() throws {
+        let svg = try SVGArtwork.parse(Data(Self.blur.utf8)).image
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderBack(nil)
+        defer { window.close() }
+        var before = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
+        let started = ContinuousClock.now
+        for serial in 0..<100 {
+            try autoreleasepool {
+                window.appearance = NSAppearance(named: serial.isMultiple(of: 2) ? .aqua : .darkAqua)
+                let scroll = SVGPreviewScrollView()
+                window.contentView = scroll
+                scroll.install(svg, request: String(serial))
+                scroll.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let canvas = try XCTUnwrap(scroll.documentView)
+                XCTAssertEqual(canvas.subviews.count, 1)
+                scroll.clear()
+                XCTAssertTrue(canvas.subviews.isEmpty)
+                window.contentView = nil
+            }
+        }
+        var after = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &after), 0)
+        print("SVG_MOUNTS count=100 elapsed=\(started.duration(to: .now)) maxrss_before=\(before.ru_maxrss) maxrss_after=\(after.ru_maxrss)")
     }
 
     func testDecodedUnicodeSourceIsNotReinterpretedUsingItsDiskDeclaration() throws {
