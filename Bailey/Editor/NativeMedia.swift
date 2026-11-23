@@ -10,6 +10,7 @@ nonisolated struct NativeMedia: Sendable {
     let asset: AVURLAsset
     let identity: LocalFileIdentity
     let kind: Kind
+    let videoAspectRatio: CGFloat?
 
     static func candidate(_ pathExtension: String) -> Kind? {
         switch pathExtension.lowercased() {
@@ -31,15 +32,25 @@ nonisolated struct NativeMedia: Sendable {
                 let (playable, protected) = try await asset.load(.isPlayable, .hasProtectedContent)
                 guard playable, !protected else { throw Failure.unsupported }
                 let kind: Kind
-                if try await hasDecodableTrack(.video, in: asset) { kind = .video }
-                else if try await hasDecodableTrack(.audio, in: asset) { kind = .audio }
-                else { throw Failure.unsupported }
+                let videoAspectRatio: CGFloat?
+                if let track = try await decodableTrack(.video, in: asset) {
+                    kind = .video
+                    let (size, transform) = try await track.load(.naturalSize, .preferredTransform)
+                    let displayed = CGRect(origin: .zero, size: size).applying(transform).size
+                    let ratio = displayed.width / displayed.height
+                    videoAspectRatio = ratio.isFinite && ratio > 0 ? ratio : nil
+                } else if try await decodableTrack(.audio, in: asset) != nil {
+                    kind = .audio
+                    videoAspectRatio = nil
+                } else {
+                    throw Failure.unsupported
+                }
                 try Task.checkCancellation()
                 let accepted = try LocalWorkspaceBackend.readableFile(at: path)
                 guard accepted.path == source.path, accepted.identity == source.identity else {
                     throw WorkspaceError.changedExternally
                 }
-                return Self(asset: asset, identity: source.identity, kind: kind)
+                return Self(asset: asset, identity: source.identity, kind: kind, videoAspectRatio: videoAspectRatio)
             } catch is AVError {
                 try Task.checkCancellation()
                 throw Failure.unsupported
@@ -49,12 +60,12 @@ nonisolated struct NativeMedia: Sendable {
         }
     }
 
-    private static func hasDecodableTrack(_ type: AVMediaType, in asset: AVURLAsset) async throws -> Bool {
+    private static func decodableTrack(_ type: AVMediaType, in asset: AVURLAsset) async throws -> AVAssetTrack? {
         for track in try await asset.loadTracks(withMediaType: type) {
             try Task.checkCancellation()
-            if try await track.load(.isDecodable, .isSelfContained) == (true, true) { return true }
+            if try await track.load(.isDecodable, .isSelfContained) == (true, true) { return track }
         }
-        return false
+        return nil
     }
 }
 

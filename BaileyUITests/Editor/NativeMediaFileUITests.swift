@@ -232,6 +232,17 @@ final class NativeMediaFileUITests: XCTestCase {
         let timeline = window.sliders["timeline"]
         XCTAssertTrue(play.waitForExistence(timeout: 10))
         XCTAssertTrue(timeline.waitForExistence(timeout: 10))
+        let tab = WorkspaceUITestSupport.fileTab(video, in: window)
+        let dividerFrames = window.descendants(matching: .any).matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.map(\.frame)
+        let left = try XCTUnwrap(dividerFrames.map(\.maxX).filter { $0 < timeline.frame.midX }.max())
+        let right = try XCTUnwrap(dividerFrames.map(\.minX).filter { $0 > timeline.frame.midX }.min())
+        let panel = CGRect(x: left, y: tab.frame.maxY, width: right - left, height: window.frame.maxY - tab.frame.maxY)
+        let videoHeight = panel.width * 9 / 16
+        XCTAssertGreaterThan(panel.height - videoHeight, 100, "The fixture needs real letterbox bars")
+        let videoBottom = panel.midY + videoHeight / 2
+        XCTAssertLessThan(timeline.frame.maxY, videoBottom + 8, "Native playback controls must remain over the image")
+        XCTAssertGreaterThan(timeline.frame.minY, panel.midY - videoHeight / 2 - 8)
         let paused = String(describing: play.value ?? "")
         timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.56, dy: 0.5)).click()
         let sought = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -242,22 +253,30 @@ final class NativeMediaFileUITests: XCTestCase {
         let frameTime = try XCTUnwrap(Double(String(describing: timeline.value ?? "")))
         let subtitles = window.buttons["show legible media selection menu"]
         XCTAssertTrue(subtitles.waitForExistence(timeout: 5), window.debugDescription)
+        let captionBottom = videoBottom - 1
+        let captionTop = videoBottom - videoHeight * 0.2
+        let restingPointer = window.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.72))
         func setCaptions(_ title: String) {
             subtitles.click()
             let option = WorkspaceUITestSupport.menuItem(title, in: subtitles)
             XCTAssertTrue(option.waitForExistence(timeout: 5))
             option.click()
+            restingPointer.hover()
         }
-        func framePixels() -> [NSColor] {
-            guard let bitmap = NSBitmapImageRep(data: window.screenshot().pngRepresentation) else { return [] }
+        func framePixels(_ screenshot: XCUIScreenshot) -> [NSColor] {
+            guard let bitmap = NSBitmapImageRep(data: screenshot.pngRepresentation) else { return [] }
+            let top = Int((captionTop - window.frame.minY) * CGFloat(bitmap.pixelsHigh) / window.frame.height)
+            let bottom = Int((captionBottom - window.frame.minY) * CGFloat(bitmap.pixelsHigh) / window.frame.height)
+            guard top >= 0, bottom < bitmap.pixelsHigh, top < bottom else { return [] }
             return stride(from: bitmap.pixelsWide * 40 / 100, to: bitmap.pixelsWide * 64 / 100, by: 4).flatMap { column in
-                stride(from: bitmap.pixelsHigh * 60 / 100, to: bitmap.pixelsHigh * 86 / 100, by: 4).compactMap { row in
+                stride(from: top, to: bottom, by: 4).compactMap { row in
                     bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB)
                 }
             }
         }
         setCaptions("Off")
-        let withoutText = framePixels()
+        let initialScreenshot = window.screenshot()
+        let withoutText = framePixels(initialScreenshot)
         XCTAssertGreaterThan(withoutText.count, 1_000)
         let language = WorkspaceUITestSupport.menuItem("Language", in: subtitles)
         let chinese = WorkspaceUITestSupport.menuItem("Chinese", in: language)
@@ -274,7 +293,7 @@ final class NativeMediaFileUITests: XCTestCase {
         chinese.click()
         setCaptions("On")
         func changedPixels() -> Int? {
-            let current = framePixels()
+            let current = framePixels(window.screenshot())
             guard current.count == withoutText.count else { return nil }
             return zip(withoutText, current).filter { old, new in
                 max(abs(old.redComponent - new.redComponent), abs(old.greenComponent - new.greenComponent),
@@ -284,14 +303,24 @@ final class NativeMediaFileUITests: XCTestCase {
         let rendered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (changedPixels() ?? 0) > 15
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 8), .completed)
+        let enabled = XCTWaiter.wait(for: [rendered], timeout: 8)
+        if enabled != .completed {
+            add(XCTAttachment(screenshot: initialScreenshot))
+            add(XCTAttachment(screenshot: window.screenshot()))
+        }
+        XCTAssertEqual(enabled, .completed)
         XCTAssertEqual(String(describing: play.value ?? ""), paused)
         XCTAssertEqual(try XCTUnwrap(Double(String(describing: timeline.value ?? ""))), frameTime, accuracy: 0.04)
         setCaptions("Off")
         let removed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (changedPixels() ?? .max) < 10
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 8), .completed)
+        let disabled = XCTWaiter.wait(for: [removed], timeout: 8)
+        if disabled != .completed {
+            add(XCTAttachment(screenshot: initialScreenshot))
+            add(XCTAttachment(screenshot: window.screenshot()))
+        }
+        XCTAssertEqual(disabled, .completed)
 
         open(noCaptions, in: window, app: app)
         let plainTab = WorkspaceUITestSupport.fileTab(noCaptions, in: window)

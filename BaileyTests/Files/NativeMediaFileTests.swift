@@ -1,7 +1,10 @@
+import AppKit
 import AVFoundation
+import AVKit
 import CryptoKit
 import Darwin
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -432,6 +435,66 @@ final class NativeMediaFileTests: XCTestCase {
             XCTAssertTrue(tab.mediaPlayer?.currentItem?.asset === accepted.asset)
             XCTAssertEqual(try Data(contentsOf: reference), bytes)
             XCTAssertEqual(try Data(contentsOf: source), bytes)
+        }
+    }
+
+    func testNativeVideoControlsFitTheActualLandscapeAndRotatedVideoBounds() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let landscape = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+        let asset = AVURLAsset(url: landscape)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let naturalSize = try await track.load(.naturalSize)
+        let composition = AVMutableComposition()
+        let portraitTrack = try XCTUnwrap(composition.addMutableTrack(withMediaType: .video,
+                                                                      preferredTrackID: kCMPersistentTrackID_Invalid))
+        let duration = try await asset.load(.duration)
+        try portraitTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: track, at: .zero)
+        portraitTrack.preferredTransform = CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: naturalSize.height, ty: 0)
+        let portrait = directory.appending(path: "Portrait.mov")
+        let export = try XCTUnwrap(AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough))
+        try await export.export(to: portrait, as: .mov)
+
+        func playerView(in view: NSView) -> AVPlayerView? {
+            (view as? AVPlayerView) ?? view.subviews.lazy.compactMap { playerView(in: $0) }.first
+        }
+        let panelSizes = [CGSize(width: 800, height: 440), CGSize(width: 460, height: 680), CGSize(width: 240, height: 440)]
+        for (url, ratio) in [(landscape, naturalSize.width / naturalSize.height),
+                             (portrait, naturalSize.height / naturalSize.width)] {
+            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await load(tab)
+            let player = try XCTUnwrap(tab.mediaPlayer)
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: panelSizes[0]),
+                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close(); tab.retireContent() }
+            let host = NSHostingView(rootView: FileViewerView(file: tab))
+            window.contentView = host
+            window.orderBack(nil)
+            try await waitUntil { playerView(in: host)?.videoBounds.width ?? 0 > 0 }
+            let native = try XCTUnwrap(playerView(in: host))
+            XCTAssertEqual(native.controlsStyle, .inline)
+            for size in panelSizes {
+                window.setContentSize(size)
+                host.layoutSubtreeIfNeeded()
+                let expectedWidth = min(size.width, size.height * ratio)
+                let expectedHeight = expectedWidth / ratio
+                try await waitUntil {
+                    host.layoutSubtreeIfNeeded()
+                    return abs(native.videoBounds.width - expectedWidth) < 1
+                        && abs(native.videoBounds.height - expectedHeight) < 1
+                }
+                XCTAssertTrue(native === playerView(in: host))
+                XCTAssertTrue(native.player === player)
+                XCTAssertEqual(native.videoBounds.width / native.videoBounds.height, ratio, accuracy: 0.02)
+                XCTAssertEqual(native.bounds.width, native.videoBounds.width, accuracy: 1)
+                XCTAssertEqual(native.bounds.height, native.videoBounds.height, accuracy: 1)
+                XCTAssertEqual(native.videoBounds.midX, native.bounds.midX, accuracy: 1)
+                XCTAssertEqual(native.videoBounds.midY, native.bounds.midY, accuracy: 1)
+            }
         }
     }
 

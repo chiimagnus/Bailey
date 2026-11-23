@@ -1218,17 +1218,22 @@ struct FileViewerView: View {
             case .media(let media):
                 if let player = file.mediaPlayer {
                     let isAudio = media.kind == .audio
-                    NativePlayerView(player: player, allowsFullScreen: !isAudio,
-                                     controlsStyle: isAudio ? .floating : .inline,
-                                     isDockActive: isFocused && appearsActive)
-                        .frame(maxWidth: isAudio ? 520 : .infinity)
-                        .frame(height: isAudio ? 112 : nil)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .id(ObjectIdentifier(player))
-                        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-                            player.pause()
+                    let surface = NativePlayerView(player: player, allowsFullScreen: !isAudio,
+                                                   controlsStyle: isAudio ? .floating : .inline,
+                                                   isDockActive: isFocused && appearsActive)
+                    Group {
+                        if let aspectRatio = media.videoAspectRatio {
+                            surface.aspectRatio(aspectRatio, contentMode: .fit)
+                        } else {
+                            surface.frame(maxWidth: isAudio ? 520 : .infinity).frame(height: isAudio ? 112 : nil)
                         }
-                        .onDisappear { player.pause() }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(ObjectIdentifier(player))
+                    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                        player.pause()
+                    }
+                    .onDisappear { player.pause() }
                 }
             case .loading:
                 Color.clear
