@@ -168,6 +168,12 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         handler.enabled = false
     }
 
+    func retire() {
+        webView.navigationDelegate = nil
+        webView.onFocused = nil
+        invalidate()
+    }
+
     func invalidate() {
         attempt &+= 1
         revision = nil

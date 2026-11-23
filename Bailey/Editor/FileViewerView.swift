@@ -70,7 +70,11 @@ final class FileTab: nonisolated Identifiable {
 
     private(set) var content: Content
     private(set) var mediaPlayer: AVPlayer?
-    private(set) var htmlPreview: HTMLPreview?
+    private(set) var htmlPreview: HTMLPreview? {
+        didSet {
+            if let oldValue, oldValue !== htmlPreview { oldValue.retire() }
+        }
+    }
     private(set) var gifPlayback: GIFPlayback?
     @ObservationIgnored var imageViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
@@ -146,8 +150,8 @@ final class FileTab: nonisolated Identifiable {
 
     func retireContent() {
         isRetired = true
-        targetGeneration &+= 1
         htmlPreview = nil
+        targetGeneration &+= 1
         gifPlayback = nil
         imageViewportPosition = nil
         invalidateReload()
@@ -229,7 +233,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     isolated deinit {
-        htmlPreview?.invalidate()
+        htmlPreview?.retire()
         if let nativeEditObserver { NotificationCenter.default.removeObserver(nativeEditObserver) }
     }
 

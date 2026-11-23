@@ -405,6 +405,70 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(widths, Array(repeating: 34, count: 12))
     }
 
+    func testTerminatedWebContentCancelsReadsAndRecoversOnTheSameStaticView() async throws {
+        let source = """
+            <!doctype html><title>Static preview</title><p id="status">Original</p>
+            <script>document.getElementById('status').textContent = 'Ran script'</script>
+            """ + (1...12).map { "<img src='image-\($0).svg'>" }.joined()
+        let runner = SuspendedAssetRunner(source: source)
+        let backend = SSHWorkspaceBackend(runner: runner)
+        let project = Project(fallbackName: "Preview renderer exit", workspaceConfiguration: .standard)
+        defer { project.terminateAll() }
+        let file = FileTab(path: "/fixture/index.html", backend: backend, workspaceIdentity: "ssh:fixture")
+        let tab = PaneTab(content: .file(file))
+        project.tabs = [tab]
+        try await file.waitForText()
+        let request = file.textPreviewRequestID
+        await file.showHTMLPreview(request: request, in: "/fixture")
+        let preview = try XCTUnwrap(file.htmlPreview)
+        let webView = preview.webView
+        let store = webView.configuration.websiteDataStore
+        try await waitUntil {
+            let reads = await runner.counts
+            return webView.title == "Static preview" && reads.active == 4
+        }
+        let initialURL = try XCTUnwrap(webView.url)
+
+        let terminateRenderer = NSSelectorFromString("_killWebContentProcess")
+        try XCTSkipUnless(webView.responds(to: terminateRenderer), "WebKit does not expose its renderer test hook")
+        let implementation = webView.method(for: terminateRenderer)
+        let terminate = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Void).self)
+        terminate(webView, terminateRenderer)
+        try await waitUntil {
+            let reads = await runner.counts
+            return preview.failed && reads.active == 0 && reads.cancelled == 4
+        }
+        let interrupted = await runner.counts
+        XCTAssertEqual(interrupted.started, 4, "The crash must not restart or advance the old queue")
+        XCTAssertEqual(file.text, source)
+        XCTAssertFalse(file.isDirty)
+
+        await runner.resumeReads()
+        await file.showHTMLPreview(request: request, in: "/fixture")
+        try await waitUntil { webView.url != initialURL && webView.title == "Static preview" && !webView.isLoading }
+        XCTAssertTrue(file.htmlPreview === preview)
+        XCTAssertTrue(file.htmlPreview?.webView === webView)
+        XCTAssertTrue(webView.configuration.websiteDataStore === store)
+        XCTAssertFalse(preview.failed)
+        let status = try await webView.evaluateJavaScript(
+            "document.getElementById('status').textContent", contentWorld: .defaultClient
+        ) as? String
+        XCTAssertEqual(status, "Original")
+        let widths = try await webView.evaluateJavaScript(
+            "Array.from(document.images, img => img.naturalWidth)", contentWorld: .defaultClient
+        ) as? [Int]
+        XCTAssertEqual(widths, Array(repeating: 34, count: 12))
+        XCTAssertEqual(file.text, source)
+        XCTAssertFalse(file.isDirty)
+
+        project.close(tab)
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(file.htmlPreview)
+        XCTAssertNil(webView.navigationDelegate, "Closing must detach the delegate even if the view is still retained")
+        await file.showHTMLPreview(request: file.textPreviewRequestID, in: "/fixture")
+        XCTAssertNil(file.htmlPreview)
+    }
+
     private func solidPNG(width: Int, height: Int) throws -> Data {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
