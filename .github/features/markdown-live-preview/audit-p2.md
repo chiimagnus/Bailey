@@ -5,9 +5,9 @@
 
 ## 结论
 
-- **结果**：No-Go（P2-T9 的最终验收未完成）。
-- **依据**：T5、T6、T8 已补齐实现与任务级验证；真实中文输入已通过，整窗卡顿和部分组合仍需结清。
-- **本轮范围**：按用户确认免除 macOS 15.6 实机门槛，保留最低部署版本。当前 Mac 的定向 Release GUI 已重新跑通。
+- **结果**：Go（已知正确性阻塞完成修复与跨环境验收；F-01 依用户决定延期）。
+- **依据**：1× CI 15/15、当前 Mac 宿主 230 通过／1 授权 SSH 跳过、真实 GUI 5/5；Debug／Release 构建和签名通过。未测边界在下文逐项披露，不视为已通过。
+- **本轮范围**：macOS 15.6 实机门槛已获用户免除，最低部署版本不变；108.3 ms 尾部卡顿按用户决定接受，不作为本轮阻塞。
 
 ## 任务与改动
 
@@ -57,14 +57,14 @@
 
 - 任务：`P2-T9`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`Bailey/Editor/MarkdownPreview.swift`
 - 摘要：`两万行混排 Release 功能用例通过，但实际 App Instruments 捕获 45 条卡顿，最大 758.3 ms`
 - 风险：`宿主热视口 P95 约 13 ms 不能证明实际 App 首屏、跳转和编辑流畅`
 - 预期修复：`使用同夹具定位长耗时线程及操作阶段，先排除启动、XCTest 访问和真实首次布局的混合影响，再修复实证热点`
 - 验证：`隔离 Release Dev 的所选两万行 GUI、Animation Hitches 和按现行计划的定向性能复验`
 - 解决证据：已修复导致屏外跳转阻塞的两层布局工作；整窗仍有 108.3 ms 尾部事件，
-  热操作和内存判据未达到阶段验收所需覆盖。
+  用户 2026-11-23 明确接受该尾部事件；热操作和长时内存未完整量化，延期项不等于已解决。
 - 继续定位：消除原生 AX 前缀后仍有 228 条主线程样本在 `ScrollViewProxy.scrollTo` 内，
   其中 204 条进入视图 body。这个代理查找子视图身份时展开屏外 Markdown 行；
   行身份应由懒布局的一对一目标提供，而不是每个分支各挂一个内层 `.id`。
@@ -74,20 +74,37 @@
 
 ## 验证与未覆盖
 
+- **2026-11-23 最终正确性验收**：CI 验收时 PR #101 HEAD 为 `fb2658c4`；历史合并后，
+  `0743dd15` 负责稳定文档坐标、`dce36f98` 负责原生 `NSClipView` 边界变化恢复阅读锚点。
+  合并前后的源码及测试 tree 完全一致；CI 仍记录当时真实运行的旧提交。
+  首次文字、Canvas 公式和图片在 CI 1× 滚动环境准确回到源码位置。
+  [CI #45163210156](https://github.com/chiimagnus/Bailey/actions/runs/45163210156) 15/15，
+  删除诊断输出后的 [CI #45164989969](https://github.com/chiimagnus/Bailey/actions/runs/45164989969) 再次 15/15。
+  本机相关宿主 140 项／139 通过／1 项需授权 SSH 环境跳过，持久化／生命周期 91/91，
+  真实 GUI 定向 5/5；`make build`、`make build:release` 和对应严格验签均退出 0。
+  已整包更新 `/Applications/Bailey.app`，未退出、启动或重启正式 App。
+- **延期且未冒称完成的条件**：32 MiB *富 Markdown* 的实际 App 解析及内存极值
+  （已验证原生文本文件边界，但不是该组合）、反复开关后的长时 retained heap／RSS
+  （以原生内容生命周期 26 项宿主作部分替代）、缩放／减弱动态效果／触控板专项
+  （当前 GUI 环境未分别执行）、SSH 断线＋旧资源返回＋项目切换三因素同场景
+  （单项授权 SSH／过期结果证据存在，但组合未执行）。
+  这些不是已证实的功能缺陷，也不是已通过的验收；
+  后续若列为发布强制要求，必须在对应环境补测，发现异常重新打开 P2-T9。
+
 - 2026-11-23 全量 CI [#45102596345](https://github.com/chiimagnus/Bailey/actions/runs/45102596345)
   在旧提交 `751ebf49` 上运行：宿主 1,246 项、5 失败、22 跳过；GUI 331 项、
   36 个用例失败、9 跳过。定向 CI [#45113933622](https://github.com/chiimagnus/Bailey/actions/runs/45113933622)
   复现了 Markdown 段内字形／公式／图片位置恢复与 Git 主题采样失败，SSH 进度超时用例单独通过。
   两项运行均在旧提交，不代表当前 PR。
-- PR [#101](https://github.com/chiimagnus/Bailey/pull/101) 已推送至 `f12a358e`。
+- 历史记录：PR [#101](https://github.com/chiimagnus/Bailey/pull/101) 当时位于 `f12a358e`。
   菜单／Git／Files 定向 GUI CI [#45139516620](https://github.com/chiimagnus/Bailey/actions/runs/45139516620)
   与 [#45141511479](https://github.com/chiimagnus/Bailey/actions/runs/45141511479) 通过；
   `66d59583` 的定向宿主 CI [#45141516315](https://github.com/chiimagnus/Bailey/actions/runs/45141516315)
   公式通过，文字和图片的首次阅读位置恢复失败。`f12a358e` 不再在第一次布局成功后清除阅读锚点；
-  最新定向 CI [#45148222528](https://github.com/chiimagnus/Bailey/actions/runs/45148222528) 正在复验。
-- 当前本机完整 `SwiftMarkdownLayoutTests` 15/15，20,000 行混排编辑 GUI 1/1 通过；
+  当时定向 CI 为 [#45148222528](https://github.com/chiimagnus/Bailey/actions/runs/45148222528)，后续结果以上方最新记录为准。
+- 历史记录：当时本机完整 `SwiftMarkdownLayoutTests` 15/15，20,000 行混排编辑 GUI 1/1 通过；
   旧提交 `dd5cad7d` 的全量 CI [#45136578416](https://github.com/chiimagnus/Bailey/actions/runs/45136578416)
-  宿主失败、GUI 尚未结束。F-01 的真实整窗尾部卡顿、热操作和内存判据仍未核销，P2-T9 不通过。
+  宿主失败、当时 GUI 尚未结束。F-01 的整窗尾部卡顿、热操作和内存判据当时尚未核销。
 
 - 续查 F-02 时用原 CPU 样本核对调用链：2,509 条 TextKit 片段枚举样本中，
   2,366 条来自 AppKit 响应 `AXLineForIndex` 时从文首计数，而非 Markdown 解析。

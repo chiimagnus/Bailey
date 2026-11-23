@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T9"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -92,7 +92,7 @@ note = "Primer 五类提示、深浅色和 340/960pt 表格像素；主题即时
 [[tasks]]
 id = "P2-T9"
 title = "长文档性能和无障碍质量验收"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t9"
-commit = ""
-note = "本机长文和真实拼音／保存已通过；最新f12a358e布局宿主15/15、两万行GUI1/1。PR#101已推送，定向菜单GUI CI通过，Markdown锚点的最新宿主CI#45148222528运行中；旧全量CI#45136578416 Host失败。F-01整窗卡顿尾部108.3ms、热操作及内存尚未核销，P2-T9 No-Go；免除15.6实机门槛，最低部署版本不变。"
+commit = "dce36f98"
+note = "本轮功能正确性收尾：文档坐标0743dd15与原生锚点恢复dce36f98；云端CI#45164989969布局15/15、本机相关宿主230通过1SSH跳过、真实GUI5/5、Debug和Release构建验签通过，正式App整包安装但未重启。用户放行108.3ms尾部卡顿；32MiB富Markdown/长时内存/缩放与触控板/SSH三重组合未完全实测并在audit标注延期。"
