@@ -236,6 +236,7 @@ private final class HTMLPreviewScheme: NSObject, WKURLSchemeHandler {
     private var callbacks: [ObjectIdentifier: any WKURLSchemeTask] = [:]
     private var remainingReads = 0
     private var remainingBytes = 0
+    private var remainingRasterPixels = 0
     var enabled = false
     var isLoading: Bool { !pending.isEmpty || !callbacks.isEmpty }
 
@@ -250,6 +251,7 @@ private final class HTMLPreviewScheme: NSObject, WKURLSchemeHandler {
         self.resource = resource
         remainingReads = Self.resourceLimit
         remainingBytes = Self.byteLimit
+        remainingRasterPixels = RasterPreview.pixelLimit
         enabled = true
         return url
     }
@@ -308,7 +310,7 @@ private final class HTMLPreviewScheme: NSObject, WKURLSchemeHandler {
             callbacks[id] = callback
             let limit = min(remainingBytes, asset.byteLimit)
             running[id] = Task { [weak self] in
-                let result: Result<Data, any Error>
+                let result: Result<HTMLPreviewAsset.Payload, any Error>
                 do { result = .success(try await asset.read(from: resource, path: path, limit: limit)) }
                 catch { result = .failure(error) }
                 self?.complete(ObjectIdentifier(callback), at: url, type: asset.contentType, with: result)
@@ -316,14 +318,17 @@ private final class HTMLPreviewScheme: NSObject, WKURLSchemeHandler {
         }
     }
 
-    private func complete(_ id: ObjectIdentifier, at url: URL, type: String, with result: Result<Data, any Error>) {
+    private func complete(
+        _ id: ObjectIdentifier, at url: URL, type: String, with result: Result<HTMLPreviewAsset.Payload, any Error>
+    ) {
         running.removeValue(forKey: id)
         defer { startReads() }
         guard let callback = callbacks.removeValue(forKey: id) else { return }
         switch result {
-        case .success(let data) where data.count <= remainingBytes:
-            remainingBytes -= data.count
-            respond(to: callback, at: url, data: data, type: type)
+        case .success(let asset) where asset.data.count <= remainingBytes && asset.rasterPixels <= remainingRasterPixels:
+            remainingBytes -= asset.data.count
+            remainingRasterPixels -= asset.rasterPixels
+            respond(to: callback, at: url, data: asset.data, type: type)
         case .success:
             callback.didFailWithError(WorkspaceError.tooLarge)
         case .failure(let error):
@@ -350,6 +355,11 @@ private final class HTMLPreviewScheme: NSObject, WKURLSchemeHandler {
 
 private nonisolated enum HTMLPreviewAsset {
     case style, svg, raster(String), font(String, [UInt8])
+
+    struct Payload: Sendable {
+        let data: Data
+        let rasterPixels: Int
+    }
 
     init?(path: String) {
         switch (path as NSString).pathExtension.lowercased() {
@@ -384,9 +394,10 @@ private nonisolated enum HTMLPreviewAsset {
         }
     }
 
-    @concurrent func read(from resource: PreviewResource, path: String, limit: Int) async throws -> Data {
+    @concurrent func read(from resource: PreviewResource, path: String, limit: Int) async throws -> Payload {
         let data = try await resource.read(path: path, maxBytes: limit)
         try Task.checkCancellation()
+        var rasterPixels = 0
         switch self {
         case .style:
             guard let css = String(data: data, encoding: .utf8), !css.utf8.contains(0),
@@ -403,16 +414,15 @@ private nonisolated enum HTMLPreviewAsset {
             }
             let count = CGImageSourceGetCount(source)
             guard (1...32).contains(count) else { throw WorkspaceError.tooLarge }
-            var pixels = RasterPreview.pixelLimit
             for index in 0..<count {
                 try Task.checkCancellation()
                 guard let size = RasterPreview.pixelSize(source, at: index) else { throw WorkspaceError.tooLarge }
-                pixels -= Int(size.width) * Int(size.height)
-                guard pixels >= 0 else { throw WorkspaceError.tooLarge }
+                rasterPixels += Int(size.width) * Int(size.height)
+                guard rasterPixels <= RasterPreview.pixelLimit else { throw WorkspaceError.tooLarge }
             }
         case .font(_, let signature):
             guard data.starts(with: signature) else { throw CocoaError(.fileReadCorruptFile) }
         }
-        return data
+        return Payload(data: data, rasterPixels: rasterPixels)
     }
 }

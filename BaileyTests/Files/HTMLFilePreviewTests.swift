@@ -1,5 +1,7 @@
 import AppKit
+import ImageIO
 import Network
+import UniformTypeIdentifiers
 import WebKit
 import XCTest
 @testable import Bailey
@@ -168,6 +170,77 @@ final class HTMLFilePreviewTests: XCTestCase {
                                                          contentWorld: .defaultClient) as? String
         XCTAssertEqual(padding, "10px", "Media queries must use the actual WKWebView width")
         XCTAssertEqual(try Data(contentsOf: document), original)
+    }
+
+    func testPageBoundsCombinedPixelsOfConcurrentCompressedImages() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = try solidPNG(width: 4_000, height: 4_000)
+        XCTAssertLessThan(image.count, 1 << 20)
+        for index in 1...3 {
+            try image.write(to: root.appendingPathComponent("image-\(index).png"))
+        }
+        try Data("p { color: rgb(15, 42, 70); }".utf8).write(to: root.appendingPathComponent("page.css"))
+        let file = try await open("""
+            <!doctype html><link rel="stylesheet" href="page.css">
+            <p>Text remains visible</p>
+            <img src="image-1.png" width="60" alt="One">
+            <img src="image-2.png" width="60" alt="Two">
+            <img src="image-3.png" width="60" alt="Three">
+            """, in: root)
+        let webView = try await display(file, in: root)
+        let result = try await webView.evaluateJavaScript("""
+            [getComputedStyle(document.querySelector('p')).color,
+             ...Array.from(document.images, img => String(img.naturalWidth)).sort()]
+            """, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(result, ["rgb(15, 42, 70)", "0", "4000", "4000"])
+    }
+
+    func testEmptyExactAndOversizedStylesheetsAlongsideImportCycle() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let limit = 1 << 20
+        let rule = Data("p { color: rgb(21, 31, 41); }".utf8)
+        let exact = rule + Data(repeating: 0x20, count: limit - rule.count)
+        let rejectedRule = Data("p { color: red; }".utf8)
+        let styles: [(String, Data)] = [
+            ("empty", Data()),
+            ("exact", exact),
+            ("over", rejectedRule + Data(repeating: 0x20, count: limit + 1 - rejectedRule.count)),
+            ("first", Data(#"@import "second.css";"#.utf8)),
+            ("second", Data(#"@import "first.css"; p { background: rgb(80, 90, 100); }"#.utf8)),
+            ("not-css", Data("<!doctype html><title>Not a stylesheet</title> {} p { display: none; }".utf8)),
+        ]
+        for (name, bytes) in styles {
+            try bytes.write(to: root.appendingPathComponent(name + ".css"))
+        }
+        let file = try await open("""
+            <!doctype html>
+            <link rel="stylesheet" href="empty.css"><link rel="stylesheet" href="exact.css">
+            <link rel="stylesheet" href="over.css"><link rel="stylesheet" href="first.css">
+            <link rel="stylesheet" href="not-css.css">
+            <p>Preview survives failed resources</p>
+            """, in: root)
+        let webView = try await display(file, in: root)
+        let layout = try await webView.evaluateJavaScript("""
+            const style = getComputedStyle(document.querySelector('p'));
+            [style.color, style.backgroundColor, style.display]
+            """, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(layout, ["rgb(21, 31, 41)", "rgb(80, 90, 100)", "block"])
+    }
+
+    private func solidPNG(width: Int, height: Int) throws -> Data {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(red: 0.1, green: 0.5, blue: 0.8, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let buffer = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(buffer, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return buffer as Data
     }
 
     private func makeDirectory() throws -> URL {
