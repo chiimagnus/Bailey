@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import AVKit
 import Darwin
 import ImageIO
 import Observation
@@ -1149,7 +1150,13 @@ struct FileViewerView: View {
                 }
             case .media(let media):
                 if let player = file.mediaPlayer {
-                    NativePlayerView(player: player, allowsFullScreen: media.kind == .video)
+                    let isAudio = media.kind == .audio
+                    NativePlayerView(player: player, allowsFullScreen: !isAudio,
+                                     controlsStyle: isAudio ? .floating : .inline)
+                        .frame(maxWidth: isAudio ? 520 : .infinity)
+                        .frame(height: isAudio ? 112 : nil)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .id(ObjectIdentifier(player))
                         .onChange(of: isFocused && appearsActive) { _, active in if !active { player.pause() } }
                         .onDisappear { player.pause() }
                 }

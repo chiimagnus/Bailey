@@ -23,7 +23,8 @@ final class NativeMediaFileTests: XCTestCase {
                 return XCTFail("Valid media (\(size) PCM bytes) must not hit the text reader")
             }
             XCTAssertEqual(media.kind, .audio)
-            XCTAssertEqual(try XCTUnwrap(media.duration), baseline.1.seconds, accuracy: 0.001)
+            let displayedDuration = try await media.asset.load(.duration)
+            XCTAssertEqual(displayedDuration.seconds, baseline.1.seconds, accuracy: 0.001)
             XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(file))
             XCTAssertEqual(media.identity.size, Int64(size + 44))
             XCTAssertTrue(tab.mediaPlayer?.currentItem?.asset === media.asset)
@@ -67,7 +68,8 @@ final class NativeMediaFileTests: XCTestCase {
             try await load(tab)
             guard case .media(let media) = tab.content else { return XCTFail("Unreadable sample: \(url.lastPathComponent)") }
             XCTAssertEqual(media.kind, kind)
-            XCTAssertEqual(try XCTUnwrap(media.duration), duration, accuracy: 0.05)
+            let displayedDuration = try await media.asset.load(.duration)
+            XCTAssertEqual(displayedDuration.seconds, duration, accuracy: 0.05)
             XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(url))
             tab.retireContent()
         }

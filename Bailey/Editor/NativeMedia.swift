@@ -10,7 +10,6 @@ nonisolated struct NativeMedia: Sendable {
     let asset: AVURLAsset
     let identity: LocalFileIdentity
     let kind: Kind
-    let duration: Double?
 
     static func candidate(_ pathExtension: String) -> Kind? {
         switch pathExtension.lowercased() {
@@ -29,7 +28,7 @@ nonisolated struct NativeMedia: Sendable {
         ])
         return try await withTaskCancellationHandler {
             do {
-                let (playable, duration, protected) = try await asset.load(.isPlayable, .duration, .hasProtectedContent)
+                let (playable, protected) = try await asset.load(.isPlayable, .hasProtectedContent)
                 guard playable, !protected else { throw Failure.unsupported }
                 let kind: Kind
                 if try await hasDecodableTrack(.video, in: asset) { kind = .video }
@@ -40,9 +39,7 @@ nonisolated struct NativeMedia: Sendable {
                 guard accepted.path == source.path, accepted.identity == source.identity else {
                     throw WorkspaceError.changedExternally
                 }
-                let seconds = duration.seconds
-                return Self(asset: asset, identity: source.identity, kind: kind,
-                            duration: seconds.isFinite && seconds > 0 ? seconds : nil)
+                return Self(asset: asset, identity: source.identity, kind: kind)
             } catch is AVError {
                 try Task.checkCancellation()
                 throw Failure.unsupported
@@ -64,10 +61,11 @@ nonisolated struct NativeMedia: Sendable {
 struct NativePlayerView: NSViewRepresentable {
     let player: AVPlayer
     var allowsFullScreen = false
+    var controlsStyle: AVPlayerViewControlsStyle = .inline
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        view.controlsStyle = .inline
+        view.controlsStyle = controlsStyle
         view.showsFullScreenToggleButton = allowsFullScreen
         view.player = player
         return view
