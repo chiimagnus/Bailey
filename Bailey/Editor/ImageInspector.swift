@@ -123,6 +123,7 @@ class PreviewScrollView: NSScrollView {
     required init?(coder: NSCoder) { nil }
 
     var pixelScale: CGFloat { magnification * backingScale }
+    fileprivate var hasViewportLayout: Bool { viewportSize != .zero }
     private var minimumManualMagnification: CGFloat { 0.1 / backingScale }
 
     override var acceptsFirstResponder: Bool { true }
@@ -340,21 +341,33 @@ private final class RasterScrollView: PreviewScrollView {
     }
 
     private func resetDetail() {
-        detailTask?.cancel()
-        detailTask = nil
+        if let detailTask {
+            detailTask.cancel()
+            self.detailTask = nil
+            Task { [weak self] in
+                guard let self, self.detailTask == nil else { return }
+                self.onDetailFailure?(false)
+            }
+        }
         if canvas.image !== thumbnail { canvas.image = thumbnail }
     }
 
     private func updateDetailDemand() {
-        guard window != nil, let loadOriginal, let thumbnail, canvas.bounds.width > 0,
-              pixelScale > CGFloat(thumbnail.width) / canvas.bounds.width else { return }
+        let size = canvas.bounds.size
+        guard window != nil, hasViewportLayout, let loadOriginal, let thumbnail,
+              size.width * pixelScale > CGFloat(thumbnail.width)
+                || size.height * pixelScale > CGFloat(thumbnail.height) else {
+            if detailTask != nil { resetDetail() }
+            return
+        }
         guard detailTask == nil else { return }
         detailTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            self?.onDetailFailure?(false)
             do {
                 let image = try await loadOriginal()
                 guard !Task.isCancelled else { return }
                 self?.canvas.image = image
-                self?.onDetailFailure?(false)
             } catch is CancellationError {
                 return
             } catch {

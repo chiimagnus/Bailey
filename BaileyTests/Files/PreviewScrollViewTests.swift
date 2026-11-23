@@ -203,6 +203,80 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: renamed), replacement)
     }
 
+    func testRasterDetailIsReleasedBelowThumbnailScaleAndIgnoresLateDecode() async throws {
+        try await checkRasterDetail(size: CGSize(width: 1024, height: 768),
+                                    thumbnailSize: CGSize(width: 512, height: 384))
+    }
+
+    func testOnePixelWideThumbnailStillLoadsOriginalHeight() async throws {
+        try await checkRasterDetail(size: CGSize(width: 1, height: 768),
+                                    thumbnailSize: CGSize(width: 1, height: 384))
+    }
+
+    private func checkRasterDetail(size: CGSize, thumbnailSize: CGSize) async throws {
+        func image(size: CGSize, color: NSColor) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ))
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(origin: .zero, size: size))
+            return try XCTUnwrap(context.makeImage())
+        }
+
+        let thumbnail = try image(size: thumbnailSize, color: .red)
+        var reads = 0
+        var cancelledReads = 0
+        weak var lastDetail: CGImage?
+        var pending: CheckedContinuation<CGImage, any Error>?
+        defer { pending?.resume(throwing: CancellationError()) }
+        let host = NSHostingView(rootView: ImageInspector(
+            image: RasterPreview(poster: thumbnail, pixelSize: size),
+            loadOriginal: {
+                reads += 1
+                if reads == 2 {
+                    let lateImage = try await withCheckedThrowingContinuation { pending = $0 }
+                    if Task.isCancelled { cancelledReads += 1 }
+                    return lateImage
+                }
+                let detail = try image(size: size, color: .green)
+                lastDetail = detail
+                return detail
+            }
+        ))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 170, height: 140),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        try await waitFor { previewScroll(in: host) != nil }
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(previewScroll(in: host))
+        let anchor = CGPoint(x: size.width / 2, y: size.height / 2)
+        XCTAssertLessThan(scroll.pixelScale, 0.5)
+        XCTAssertEqual(reads, 0, "Fit at \(scroll.pixelScale) does not need the original")
+        scroll.actualSize()
+        try await waitFor("Draw the original pixels") { lastDetail != nil && isGreen(scroll) }
+        XCTAssertEqual(reads, 1)
+
+        scroll.setZoom(0.25, at: anchor)
+        try await waitFor("Drop original pixels when the poster can satisfy the viewport") {
+            lastDetail == nil && !isGreen(scroll)
+        }
+        scroll.actualSize()
+        try await waitFor("Request fresh detail after zooming back in") { pending != nil }
+        scroll.setZoom(0.25, at: anchor)
+        pending?.resume(returning: try image(size: size, color: .green))
+        pending = nil
+        try await waitFor("Cancel the detail request that is no longer needed") { cancelledReads == 1 }
+        XCTAssertFalse(isGreen(scroll), "A late decode must not replace the poster")
+
+        scroll.actualSize()
+        try await waitFor("Render the new detail request") { reads == 3 && isGreen(scroll) }
+        XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
+    }
+
     private func residentMiB() -> Double {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
