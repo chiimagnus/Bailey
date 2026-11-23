@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Darwin
 import Foundation
@@ -119,6 +120,14 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let relative = try XCTUnwrap(URL(string: "asset.svg"))
             let picture = try await resource.picture(relative)
             XCTAssertEqual(picture.pointSize?.width, 40)
+            let standalone = FileTab(path: asset, backend: channel, workspaceIdentity: "ssh:\(host)")
+            try await standalone.waitForText()
+            XCTAssertTrue(standalone.showsFilePreview)
+            let standaloneRevision = standalone.textPreviewRequestID
+            let standaloneRaster = try SVGArtwork.render(Data(standalone.text.utf8))
+            let green = try XCTUnwrap(NSBitmapImageRep(cgImage: standaloneRaster.image).colorAt(x: 20, y: 10))
+            XCTAssertGreaterThan(green.greenComponent, green.redComponent)
+            XCTAssertEqual(standaloneRaster.pointSize.width, 40)
             let resolved = try await resource.resolvedFile(relative)
             XCTAssertEqual(resolved, asset)
             do {
@@ -151,6 +160,14 @@ final class MarkdownResourceScopeTests: XCTestCase {
                 _ = try await originalImage()
                 XCTFail("Original-size decoding must not read the local namesake after disconnect")
             } catch RemoteConnectionError.notConnected {}
+            let disconnected = FileTab(path: asset, backend: channel, workspaceIdentity: "ssh:\(host)")
+            do {
+                try await disconnected.waitForText()
+                XCTFail("Opening a remote SVG must not read the local namesake after disconnect")
+            } catch {
+                guard case .unavailable = disconnected.content else { throw error }
+                XCTAssertTrue(disconnected.text.isEmpty)
+            }
             XCTAssertEqual(connection.state, .disconnected)
             tab.autoSaveSuspendedForClose = true
             let draft = "\r\nDraft after disconnect"
@@ -169,6 +186,11 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try await backend.write(path: asset, data: revisedSVG)
             let refreshed = try await resource.picture(relative)
             XCTAssertEqual(refreshed.pointSize?.width, 52, "Recovery must render the revised remote image")
+            standalone.reloadFromDiskIfClean()
+            try await standalone.waitForText()
+            XCTAssertNotEqual(standalone.textPreviewRequestID, standaloneRevision)
+            XCTAssertEqual(try SVGArtwork.render(Data(standalone.text.utf8)).pointSize.width, 52)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: asset)), localTwin)
             await tab.save()
             XCTAssertFalse(tab.isDirty)
             XCTAssertNil(tab.saveError)
