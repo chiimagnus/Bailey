@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import WebKit
 import XCTest
 @testable import Bailey
 
@@ -201,6 +202,82 @@ final class SVGArtworkTests: XCTestCase {
         XCTAssertGreaterThan(near.alphaComponent, 0.04)
         XCTAssertLessThan(near.alphaComponent, 0.6)
         XCTAssertLessThan(far.alphaComponent, 0.02)
+    }
+
+    func testResearchSamplePlacesRealGeometryAndReportsOmittedElements() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_SVG_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_SVG_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let file = URL(fileURLWithPath: root).appending(path: "graphics/复杂科研图.svg")
+        let bytes = try Data(contentsOf: file)
+        let vector = try SVGArtwork.parse(bytes)
+        XCTAssertEqual(vector.image.size, CGSize(width: 1400, height: 620))
+        XCTAssertEqual(vector.omitted, ["pattern", "use"])
+        let raster = try SVGArtwork.render(bytes)
+        XCTAssertEqual(raster.pointSize, vector.image.size)
+        let bitmap = NSBitmapImageRep(cgImage: raster.image)
+        XCTAssertEqual(bitmap.pixelsWide, 2048)
+
+        func pixel(at point: CGPoint) throws -> NSColor {
+            let column = Int((point.x + 80) * CGFloat(bitmap.pixelsWide) / 1400)
+            let row = Int((point.y + 40) * CGFloat(bitmap.pixelsHigh) / 620)
+            return try XCTUnwrap(bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB))
+        }
+
+        let background = try pixel(at: CGPoint(x: -60, y: -20))
+        XCTAssertGreaterThan(background.alphaComponent, 0.98)
+        XCTAssertGreaterThan(background.redComponent, 0.9)
+        let axis = try pixel(at: CGPoint(x: 760, y: 440))
+        XCTAssertLessThan(axis.redComponent, 0.45)
+        XCTAssertGreaterThan(axis.blueComponent, axis.redComponent)
+        let offAxis = try pixel(at: CGPoint(x: 760, y: 446))
+        XCTAssertGreaterThan(offAxis.redComponent, 0.9)
+
+        let samples = [CGPoint(x: 230, y: 135), CGPoint(x: 1000, y: 135)]
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let reference = WKWebView(frame: CGRect(x: 0, y: 0, width: 100, height: 100), configuration: configuration)
+        reference.loadHTMLString("""
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:">
+            <title>SVG pixel reference</title>
+            """, baseURL: nil)
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            reference.title == "SVG pixel reference" && !reference.isLoading
+        }, object: nil)
+        await fulfillment(of: [loaded], timeout: 8)
+        let rawPixels = try await reference.callAsyncJavaScript("""
+            const image = new Image();
+            image.src = 'data:image/svg+xml;base64,' + encoded;
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(image, 0, 0);
+            return coordinates.map(([x, y]) => Array.from(context.getImageData(x, y, 1, 1).data));
+            """, arguments: ["encoded": bytes.base64EncodedString(),
+                              "coordinates": samples.map { [Int($0.x) + 80, Int($0.y) + 40] }],
+            in: nil, contentWorld: .defaultClient)
+        let expected = try XCTUnwrap(rawPixels as? [[Int]])
+        XCTAssertEqual(expected.count, samples.count)
+        for (point, target) in zip(samples, expected) {
+            let rendered = try pixel(at: point)
+            let channels = [rendered.redComponent, rendered.greenComponent, rendered.blueComponent, rendered.alphaComponent]
+            XCTAssertEqual(target.count, channels.count)
+            for (component, value) in zip(channels, target) {
+                XCTAssertEqual(component, Double(value) / 255, accuracy: 0.12,
+                               "Gradient must agree with the isolated native browser reference at \(point)")
+            }
+        }
+        let glyphPixels = try stride(from: 160, to: 255, by: 2).flatMap { column in
+            try stride(from: 1, to: 25, by: 2).map { row in
+                try pixel(at: CGPoint(x: column, y: row))
+            }
+        }
+        XCTAssertGreaterThan(glyphPixels.filter { $0.redComponent < 0.45 }.count, 12,
+                             "The Chinese heading must render dark glyph strokes, not just its background")
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
     }
 
     func testMaskAndRotationKeepTheExpectedHalfTransparent() throws {
