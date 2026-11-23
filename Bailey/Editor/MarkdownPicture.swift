@@ -1,7 +1,5 @@
 import Foundation
-import ImageIO
 import SwiftUI
-import UniformTypeIdentifiers
 
 nonisolated extension PreviewResource {
     @concurrent func picture(_ url: URL) async throws -> MarkdownPicture {
@@ -17,37 +15,29 @@ nonisolated extension PreviewResource {
 }
 
 nonisolated struct MarkdownPicture: Hashable, Sendable {
-    struct Frame: Hashable, Sendable {
-        let image: CGImage
-        let seconds: TimeInterval
-    }
-
     let poster: CGImage
     var pointSize: CGSize? = nil
-    var animation: [Frame] = []
+    var animation: [RasterPreview.GIFFrame] = []
 
     static func decode(_ data: Data) throws -> Self {
         guard let source = RasterPreview.source(data),
               let poster = RasterPreview.decode(source, maximumDimension: 2048)?.poster else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        let count = CGImageSourceGetCount(source)
-        guard CGImageSourceGetType(source) as String? == UTType.gif.identifier,
-              (2...32).contains(count) else { return Self(poster: poster) }
+        let count = RasterPreview.gifFrameCount(source)
+        guard (2...32).contains(count) else { return Self(poster: poster) }
         var pixels = 0
-        var frames: [Frame] = []
+        var frames: [RasterPreview.GIFFrame] = []
         for index in 0..<count {
-            try Task.checkCancellation()
-            guard let frame = RasterPreview.decode(source, index: index, maximumDimension: 1024)?.poster else {
+            let frame: RasterPreview.GIFFrame
+            do {
+                frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 1024)
+            } catch CocoaError.fileReadCorruptFile {
                 return Self(poster: poster)
             }
-            pixels += frame.width * frame.height
+            pixels += frame.image.width * frame.image.height
             guard pixels <= 8_000_000 else { return Self(poster: poster) }
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
-            let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
-            let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double
-                ?? gif?[kCGImagePropertyGIFDelayTime] as? Double ?? 0.1
-            frames.append(Frame(image: frame, seconds: delay.isFinite ? min(max(delay, 0.04), 10) : 0.1))
+            frames.append(frame)
         }
         return Self(poster: poster, animation: frames)
     }

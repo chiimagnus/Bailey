@@ -1,10 +1,16 @@
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 nonisolated struct RasterPreview: Sendable {
     static let pixelLimit = 32_000_000
     let poster: CGImage
     let pixelSize: CGSize
+
+    struct GIFFrame: Hashable, Sendable {
+        let image: CGImage
+        let seconds: TimeInterval
+    }
 
     static func source(_ bytes: Data) -> CGImageSource? {
         CGImageSourceCreateWithData(bytes as CFData, [
@@ -21,6 +27,23 @@ nonisolated struct RasterPreview: Sendable {
         return (5...8).contains(orientation)
             ? CGSize(width: height, height: width)
             : CGSize(width: width, height: height)
+    }
+
+    static func gifFrameCount(_ source: CGImageSource) -> Int {
+        guard CGImageSourceGetType(source) as String? == UTType.gif.identifier else { return 0 }
+        return CGImageSourceGetCount(source)
+    }
+
+    static func gifFrame(_ source: CGImageSource, at index: Int, maximumDimension: Int) throws -> GIFFrame {
+        try Task.checkCancellation()
+        guard let image = decode(source, index: index, maximumDimension: maximumDimension)?.poster else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+        let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double
+            ?? gif?[kCGImagePropertyGIFDelayTime] as? Double ?? 0.1
+        return GIFFrame(image: image, seconds: delay.isFinite ? min(max(delay, 0.04), 10) : 0.1)
     }
 
     static func decode(_ source: CGImageSource, index: Int = 0, maximumDimension: Int) -> Self? {

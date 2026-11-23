@@ -1232,6 +1232,61 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertThrowsError(try MarkdownPicture.decode(Data("not an image".utf8)))
     }
 
+    func testGIFPartialFramesPreserveTransparencyAndHonorBothDisposalModes() throws {
+        let gif = try XCTUnwrap(Data(base64Encoded: """
+            R0lGODlhBgAEAPAAAAAAAP8AACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFDAAAACwAAAAABgAEAAACBYQfcctbACH5BAwWAAAALAMAAQABAAEAgAD/AAAAAAICRAEAIfkECCAAAAAsBAABAAEAAQCAAAD/AAAAAgJEAQAh+QQEKgAAACwFAAEAAQABAID//wAAAAACAkQBADs=
+            """))
+        let picture = try MarkdownPicture.decode(gif)
+        XCTAssertEqual(picture.animation.count, 4)
+        let source = try XCTUnwrap(RasterPreview.source(gif))
+        let expectedPixels = [
+            ["red", "clear", "clear", "clear"],
+            ["red", "green", "clear", "clear"],
+            ["red", "clear", "blue", "clear"],
+            ["red", "clear", "clear", "yellow"],
+        ]
+        for index in [3, 1, 2, 0] {
+            let frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 8)
+            XCTAssertEqual(frame.image.width, 6)
+            XCTAssertEqual(frame.image.height, 4)
+            XCTAssertEqual(frame.seconds, [0.12, 0.22, 0.32, 0.42][index], accuracy: 0.001)
+            let bitmap = NSBitmapImageRep(cgImage: frame.image)
+            let row = try [0, 3, 4, 5].map { column -> String in
+                let color = try XCTUnwrap(bitmap.colorAt(x: column, y: 1)?.usingColorSpace(.sRGB))
+                if color.alphaComponent < 0.01 { return "clear" }
+                switch (color.redComponent > 0.8, color.greenComponent > 0.8, color.blueComponent > 0.8) {
+                case (true, false, false): return "red"
+                case (false, true, false): return "green"
+                case (false, false, true): return "blue"
+                case (true, true, false): return "yellow"
+                default: return "unexpected"
+                }
+            }
+            XCTAssertEqual(row, expectedPixels[index])
+        }
+    }
+
+    func testGIFRealSampleDecodesIndicesPastTheInlineAnimationBudget() throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let url = URL(fileURLWithPath: root).appending(path: "images/动画-34帧.gif")
+        let bytes = try Data(contentsOf: url)
+        let source = try XCTUnwrap(RasterPreview.source(bytes))
+        XCTAssertEqual(RasterPreview.gifFrameCount(source), 34)
+        XCTAssertTrue(try MarkdownPicture.decode(bytes).animation.isEmpty)
+        for (index, inside, outside) in [(33, 200, 35), (0, 35, 200), (32, 170, 35)] {
+            let frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 320)
+            XCTAssertEqual(frame.seconds, 0.12, accuracy: 0.001)
+            XCTAssertEqual(frame.image.width, 320)
+            XCTAssertEqual(frame.image.height, 192)
+            let bitmap = NSBitmapImageRep(cgImage: frame.image)
+            XCTAssertGreaterThan(try XCTUnwrap(bitmap.colorAt(x: inside, y: 90)).alphaComponent, 0.9)
+            XCTAssertLessThan(try XCTUnwrap(bitmap.colorAt(x: outside, y: 90)).alphaComponent, 0.1)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
     func testMediaStageUsesAuthorizedBytesAndRejectsUnboundedFiles() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-audio-" + UUID().uuidString)
