@@ -77,13 +77,27 @@ class NativeCodeTextView: NSTextView {
     }
 
     override func accessibilityLine(for index: Int) -> Int {
-        guard !isWrappingLines, isTruncatingLongLines != nil, !hasFormFeed,
-              type(of: nativeContentManager) == NSTextContentStorage.self,
-              let lineIndex, lineIndex.length == textStorage?.length,
-              index >= 0, index <= lineIndex.length else {
+        guard let lines = unwrappedAccessibilityLines, (0...lines.length).contains(index) else {
             return super.accessibilityLine(for: index)
         }
-        return lineIndex.row(at: index)
+        return lines.row(at: index)
+    }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        guard let lines = unwrappedAccessibilityLines, (0..<lines.lineCount).contains(line) else {
+            return super.accessibilityRange(forLine: line)
+        }
+        let start = lines.offset(atLine: line)
+        return NSRange(location: start, length: lines.offset(atLine: line + 1) - start)
+    }
+
+    private var unwrappedAccessibilityLines: NativeTextLineIndex? {
+        guard !isWrappingLines, isTruncatingLongLines != nil, !hasFormFeed,
+              type(of: nativeContentManager) == NSTextContentStorage.self,
+              let lineIndex, lineIndex.length == textStorage?.length else {
+            return nil
+        }
+        return lineIndex
     }
 
     /// Offscreen file operations cannot rely on the NSTextView responder

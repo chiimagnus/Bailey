@@ -163,6 +163,12 @@ final class NativeEditorLayoutTests: XCTestCase {
                                        reference.accessibilityLine(for: offset),
                                        "UTF-16 offset \(offset), wrapping \(wraps), source \(source.debugDescription)")
                     }
+                    let lastLine = reference.accessibilityLine(for: editor.nativeContentManager.length)
+                    for line in 0...lastLine {
+                        XCTAssertEqual(editor.accessibilityRange(forLine: line),
+                                       reference.accessibilityRange(forLine: line),
+                                       "Line \(line), wrapping \(wraps), source \(source.debugDescription)")
+                    }
                 }
                 check()
                 editor.setSelectedRange(NSRange(location: 0, length: 0))
@@ -172,6 +178,29 @@ final class NativeEditorLayoutTests: XCTestCase {
                 check()
             }
         }
+    }
+
+    func testAccessibilityRangeQueriesDoNotLayOutUnwrappedMarkdownPrefix() throws {
+        let heading = "# 章节 🧭\r\n"
+        let block = heading + "\r\n| 名称 | Value |\r\n| --- | ---: |\r\n| 示例 | 42 |\r\n"
+        let source = String(repeating: block, count: 4_000) + "末尾"
+        let unitsPerBlock = block.utf16.count
+        let (window, _, editor) = mount(source, width: 350)
+        defer { window.close() }
+        let counter = NativeParagraphCounter()
+        editor.nativeContentManager.delegate = counter
+        var samples: [Double] = []
+        for blockIndex in (3_960..<3_990).reversed() {
+            let start = ProcessInfo.processInfo.systemUptime
+            let range = editor.accessibilityRange(forLine: blockIndex * 5)
+            samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+            XCTAssertEqual(range, NSRange(location: blockIndex * unitsPerBlock, length: heading.utf16.count))
+        }
+        samples.sort()
+        let median = (samples[14] + samples[15]) / 2
+        print("BAILEY_AX_RANGE_20000 p50_ms=\(median) p95_ms=\(samples[28]) max_ms=\(samples[29]) paragraphs=\(counter.requested)")
+        XCTAssertEqual(counter.requested, 0, "A range query must not realize offscreen paragraphs")
+        XCTAssertEqual(editor.text, source)
     }
 
     func testCurrentSourceFileKeepsCorrectViewportAndHitTesting() async throws {
