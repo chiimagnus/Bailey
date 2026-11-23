@@ -1,8 +1,73 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
 final class RasterFilePreviewUITests: XCTestCase {
+    func testGIFStopsAdvancingWhileAnotherBaileyWindowIsKey() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = fixture.root.appending(path: "Window Focus.gif")
+        let canvas = try XCTUnwrap(CGContext(
+            data: nil, width: 72, height: 72, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+            file as CFURL, UTType.gif.identifier as CFString, 2, nil
+        ))
+        for red in [true, false] {
+            canvas.setFillColor(red: red ? 1 : 0, green: red ? 0 : 1, blue: 0, alpha: 1)
+            canvas.fill(CGRect(x: 0, y: 0, width: 72, height: 72))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(canvas.makeImage()), [
+                kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: red ? 8 : 24],
+            ] as CFDictionary)
+        }
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let original = try Data(contentsOf: file)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let firstID = app.windows.firstMatch.identifier
+        let first = app.windows.matching(identifier: firstID).firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: first)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let viewer = first.descendants(matching: .any).matching(identifier: "bailey.image.inspector").firstMatch
+        XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        func centerColor() -> NSColor? {
+            guard let bitmap = NSBitmapImageRep(data: viewer.screenshot().pngRepresentation) else { return nil }
+            return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+        }
+        let foregroundRed = try XCTUnwrap(centerColor())
+        XCTAssertGreaterThan(foregroundRed.redComponent - foregroundRed.greenComponent, 0.45)
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let second = app.windows.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 15))
+        let secondID = second.identifier
+        XCTAssertEqual(app.windows.firstMatch.identifier, secondID)
+        let firstBecomesKey = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.windows.firstMatch.identifier != secondID
+        }, object: nil)
+        firstBecomesKey.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [firstBecomesKey], timeout: 9), .completed)
+        XCTAssertTrue(viewer.exists, "The original viewer must remain mounted in its background window")
+
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(second.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(app.windows.firstMatch.identifier, firstID)
+        let resumedColor = try XCTUnwrap(centerColor())
+        XCTAssertEqual(resumedColor.redComponent, foregroundRed.redComponent, accuracy: 0.05,
+                       "The red frame must not have expired in the background")
+        XCTAssertEqual(resumedColor.greenComponent, foregroundRed.greenComponent, accuracy: 0.05)
+        let advances = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            centerColor().map { $0.greenComponent - $0.redComponent > 0.45 } ?? false
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [advances], timeout: 9), .completed)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+    }
+
     func testRealGIFPausesAndResumesThroughTheNativeImageMenu() throws {
         guard let acceptance = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
