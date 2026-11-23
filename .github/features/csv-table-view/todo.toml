@@ -4,18 +4,18 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "原文 UTF-16 字段索引与有界类型路由"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "1c9aefcc8b1ea3dfdb80c686167b64d8226c3a4c"
+note = "编码兼容提交 50fc8b13；184 宿主与真实 Windows Tailscale、正式 Debug 构建及验签通过。索引不是表格界面；P1-T2 和阶段门禁待执行。最低 macOS 15.6 保留编译部署目标，未实机；无 Linux 测试别名。"
 
 [[tasks]]
 id = "P1-T2"
 title = "共用文件展示模式，交付可访问的只读原生表格"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "49a9e09d"
+note = "共享入口 24019b00；排序、筛选、查找和多格复制 49a9e09d；审计修复 98c5e09b、785d1c9a、d9ea3c5。178 宿主、61 审计宿主、5 条 CSV GUI、真 Windows Tailscale、构建验签通过；P1 审计仍列 VoiceOver 和环境缺口。"
 
 [[tasks]]
 id = "P2-T1"

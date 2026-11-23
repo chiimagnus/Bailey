@@ -6,9 +6,9 @@
 
 ## 当前实现与方案
 
-`Project.setMarkdownMode` 已经通过 `DockNode` 管理单标签与并排，
+`Project.setFilePreviewMode` 已经通过 `DockNode` 管理单标签与并排，
 `FileViewerView` 的源码侧仍是唯一的原生 TextKit 可写缓冲。
-`MarkdownFilePreview` 根据 `FileTab.markdownRequestID` 合并快速修改、后台解析并拒绝过期结果；
+`MarkdownFilePreview` 根据 `FileTab.textPreviewRequestID` 合并快速修改、后台解析并拒绝过期结果；
 P2-T1 核验与完善这条链，而非重做 Dock 或擅自引入增量 AST 引擎。
 
 `MarkdownDocument.Block` 保留原始 UTF-16 块区间，`MarkdownBlockIndex` 用于源码和预览之间的双向定位。
@@ -17,7 +17,7 @@ P2-T1 核验与完善这条链，而非重做 Dock 或擅自引入增量 AST 引
 P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例、固定时间延迟或复制全文打补丁。
 
 内容沿用现有职责：`MarkdownDocument` 将 swift-markdown AST 投影成不可变展示节点；
-`MarkdownHTML`／SwiftSoup 只处理静态白名单 HTML，`MarkdownSVG`／SwiftDraw 净化 SVG，
+`MarkdownHTML`／SwiftSoup 只处理静态白名单 HTML，`SVGArtwork`／SwiftDraw 净化 SVG，
 `MarkdownResource` 经当前项目／机器的 backend 读取授权资源；ImageIO 处理静态图片与有界 GIF，
 `MarkdownMermaid`／MermaidKit 离线绘图，AVKit 负责用户主动播放的媒体。
 数学使用 `MarkdownMath` 与 `MarkdownFormulaView` 的公开 SwiftUIMath Canvas API，
@@ -33,9 +33,9 @@ P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例�
 <a id="p2-t1"></a>
 ### P2-T1 后台实时快照、Dock 并排与现有状态保护
 
-- 沿 `FileTab.nativeStorageDidChange` → `markdownRequestID` → `MarkdownFilePreview` → `MarkdownDocument.parse` 验证连续输入的合并、真正非主线程解析、请求取消和文件身份检查。
+- 沿 `FileTab.nativeStorageDidChange` → `textPreviewRequestID` → `MarkdownFilePreview` → `MarkdownDocument.parse` 验证连续输入的合并、真正非主线程解析、请求取消和文件身份检查。
   现有 150 ms 延迟不是增量解析：先量化整篇重解析成本，仅在可复现卡顿时改进，避免堆积缓存与任务。
-- `Project.setMarkdownMode` 与 `DockWorkspaceModel` 的 `.markdownPreview` 已接通；保持当前唯一外层 Dock 和同一 `FileTab`，修复实际发现的状态／布局缺陷，不重建另一个 companion 或复制 Undo。
+- `Project.setFilePreviewMode` 与 `DockWorkspaceModel` 的 `.filePreview` 已接通；保持当前唯一外层 Dock 和同一 `FileTab`，修复实际发现的状态／布局缺陷，不重建另一个 companion 或复制 Undo。
 - 源码/预览各自已有滚动位置不因刷新无故跳顶；精确跨视图映射、方向同步和编辑位置变换交 P2-T5，
   本任务验证中文 IME、Undo、快速重载／关闭、多窗同名文件、失焦自动保存与 500／5,000／20,000 行实时更新。
 

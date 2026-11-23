@@ -9,9 +9,10 @@ CSV 不复用 Markdown 的 GFM 表格解析器，因为二者的字段、引号�
   UTF-8／BOM／UTF-16 与用户指定编码、32 MiB 文本限额、原字节版本检查。
   `TextFileEncoding.prepareSave` 会**重编码整个文本**，但在严格往返编码与
   原始字节相等得到验证后，未编辑的段落／行尾仍可保留原字节。
-  `TextFileEncoding.decode` 当前会检查任意文本的开头两行 `# coding:`，
-  对 CSV 中以 `# coding: GBK` 开头的合法单元格可能误判为 Python 编码声明。
-  在共用 TextFileEncoding 的声明适用规则处验证并修复，而不是创建 CSV 专用解码器；
+  合法 UTF-8 表格的 `# coding:` 首字段是数据，不参与自动选择或显式转换。
+  Git LFS 已有非 UTF-8 CSV 用 `# coding: gbk` 自描述；保留此回退，
+  仅在没有 BOM、显式选择且严格 UTF-8 失败时生效。
+  规则仍由共用 TextFileEncoding 负责，不创建 CSV 专用解码器；
   不要声称 `FileTab` 已提供通用“只替换磁盘上的某一字段” API。
 - 只用一份精简的 RFC 4180 类词法扫描记录字段／物理记录在
   `NSTextStorage` 中的 UTF-16 `NSRange`、转义形式、分隔符和原行终止符。
@@ -19,6 +20,9 @@ CSV 不复用 Markdown 的 GFM 表格解析器，因为二者的字段、引号�
   不引入 `CodableCSV`、Markdown AST、第二套 CSV parser／encoder 或可写单元格模型。
   Parser 结果只是当前文本版本的不可变只读索引，源位置和显示排序次序分离；
   手工切分隔符／列头选项均不改原文，且所有解析结果和 UI 请求须绑定 FileTab 编辑代次。
+  `DelimitedTableIndex` 使用最多 16,384 个 UTF-16 码元识别分隔符，整表索引最多一百万字段；
+  超限保留可辨认记录和源位置，不放宽 FileTab 的 32 MiB 原始字节读取上限。
+  `FileTab.delimitedSnapshot` 使用 Markdown 已有的文本请求代次，并核对原字节能否往返。
 - 系统 AppKit `NSTableView`＋`NSScrollView` 呈现网格，复用原生行虚拟化、键盘及 AX；
   **多格选择／剪贴板和原生范围编辑要实际实现并测试**，不能当作 NSTableView 免费提供。
   十万行与极宽字段的解析／排序／筛选从主 actor 移开，有界缓存可见内容，

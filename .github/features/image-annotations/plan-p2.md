@@ -5,15 +5,14 @@ Markdown 内嵌放大仍使用同一只读画布，不自动获得可写标注�
 
 ## 已有边界与实现
 
-`FileTab.content` 的 `.image` 当前只有 `NSImage` 缩略图；
+`FileTab.content` 的 `.image` 持有栅格缩略图与原像素尺寸；
 `FileTab.refreshDirtyState()` 对非文本强制 `isDirty = false`，`FileTab.save()` 也只写 `.text`。
 因此**不能只加 sidecar JSON 写入函数**：必须在当前标签的脏状态、
 `PaneContent.isDirty / save`、系统 File 菜单 `⌘S`、失焦自动保存、
 `FileTab.beginFileMutation / endFileMutation / invalidateDeletedFile`、
 关闭否决和 Files 移动／重命名保护中接通标注事务。
-`FileTab.loadedContent` 对大图不会保存 `sourceVersion`，必须从已读取的原字节在后台
-计算并持有底图 SHA-256／尺寸／版本，重载时跟随 FileTab 更新，
-不为每次画笔操作重新读取或哈希 256 MiB 的图片。
+标注用 `FileTab.readContent` 已记录的底图尺寸和原字节版本，
+重载时跟随 FileTab 更新，不为每次画笔操作重新读取或哈希 256 MiB 的图片。
 但不应让原有文本保存器序列化图片，更不能引入第二个文件标签或全局图片项目。
 
 标注对象使用原图像素坐标；P1 的唯一图片视口负责绘制、缩放和命中变换。

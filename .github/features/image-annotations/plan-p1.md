@@ -5,28 +5,23 @@
 
 ## 当前代码与方案
 
-- `FileTab.readContent / loadedContent` 经 ImageIO 校验源数据与首帧，
-  `.image(NSImage)` **仅保存最长边 4096px 的缩略图**。
-  现有 `FileViewerView` 已使用 `MarkdownImageInspector`，不是旧的静态 `ScrollView + Image`。
-- `MarkdownResource.picture → MarkdownPicture.decode` 的内嵌图片使用同一
-  `FileTab.imageThumbnail`；内嵌 GIF 当前最多缓存 32 帧、800 万帧像素，超过预算只显示静态图。
-  `MarkdownNativeImage` 弹出的放大窗口也使用 `MarkdownImageInspector`。
-- `MarkdownImageInspector` 目前是 SwiftUI `ScrollView + MagnifyGesture`、固定倍率和底部缩放栏。
-  它没有围绕光标／捏合中心维持锚点，也把缩略图 100% 当作原始像素。
-  **直接替换这一个共用查看表面**：以系统 `NSScrollView` 处理惯性、
-  `setMagnification(_:centeredAt:)` 处理锚定缩放，显示、查看和 Markdown 放大共用它。
-  不为图片、SVG 和嵌入式富内容各实现一个手势坐标系统。
-- 图片缩略图、元信息和有界原像素按需解码仍使用 ImageIO；
-  将 `FileTab.imageThumbnail`／`MarkdownPicture.decode` 需要的公共解码逻辑收敛到同一处，
-  支持文件预览和 Markdown 独立的尺寸／帧数预算，不复制解析器或缓冲。
+- `FileTab.readContent` 在后台通过 `RasterPreview` 取得原始像素尺寸和最长边为 4096px 的缩略图，
+  并记录实际读取字节的 `WorkspaceFileVersion`。标签切换器只用这份缩略图。
+- `MarkdownResource.picture → MarkdownPicture.decode` 使用同一 ImageIO 解码；
+  内嵌 GIF 当前最多缓存 32 帧、800 万帧像素，超过预算只显示静态图。
+- `ImageInspector → PreviewScrollView` 已替换旧 SwiftUI 缩放手势和底栏。
+  文件图片、内嵌 SVG 及 Mermaid 共用原生视口；Markdown 插图打开实际图片标签。
+  独立 SVG 后续接入同一 `NSScrollView`，不新增手势坐标系统。
+- 当前放大时通过 `FileTab` 的后端同版本重读，按需解码**整张**底图并绘制可见区域；
+  并非逐块解码。需继续核销有界区域解码和对应内存预算，不能以可见区域裁剪代替解码验收。
   文件级 32MP 像素及 256MiB 原字节边界不变；超过 3200 万像素的文件继续明确拒绝，
   不能在预算尚未升级前声称能查看它。原文件若高于 4096px，
   100% 必须按真实原图和屏幕 `backingScaleFactor` 显示，不能扩大旧缩略图。
   本机允许按需裁剪／分块解码；SSH 若无随机读能力须基于受控有界数据或临时文件实现，
   严格绑定机器／文件版本并释放，不能使用同名 Mac 文件或无限缓存。
 - 不在每次 SwiftUI 重算中同步读取／解码大图、计算整个 Data 的哈希或重建滚动视图。
-  实测 `loadedContent` 在当前主 actor 提交前的解码／指纹成本，耗时操作移出主 actor，
-  按标签身份和加载代次接收结果。不可让过期图覆盖脏稿或新文件。
+  测量后台读入与前台提交的独立成本，按标签身份和加载代次接收结果。
+  不可让过期图覆盖脏稿或新文件。
   Markdown 内嵌图片仍只负责布局尺寸、alt、来源定位和授权，不能持有第二套查看手势。
 
 ## 任务
@@ -34,16 +29,15 @@
 <a id="p1-t1"></a>
 ### P1-T1 用同一图片视口完成高精度缩放与资源按需解码
 
-- **位置**：`MarkdownImageInspector`、`MarkdownNativeImage`、`MarkdownResource`、
-  `FileViewerView` 的 `.image`、`FileTab.imageThumbnail / loadedContent`，及相关宿主测试。
+- **位置**：`ImageInspector`、`PreviewScrollView`、`RasterPreview`、`MarkdownNativeImage`、
+  `MarkdownResource`、`FileTab.readContent / originalImageRequest` 及相关宿主测试。
 - **实施**：替换现有查看实现，不增加 `ImageViewerView` 平行路径；
   触控板双指平移／捏合、鼠标滚轮与 Shift 横移、⌘＋滚轮光标锚点、
-  拖拽平移及双击 fit／原像素，倍率为 10%～400%，窗口与屏幕倍率变化不跳顶／重新居中。
+  拖拽平移及双击 fit／原像素。手动倍率为 10%～400%，fit 可低于下限以完整显示极端长宽比；
+  窗口与屏幕倍率变化不跳顶／重新居中。
   控件尽量使用原生系统手势，缩放入口放右键／辅助功能动作，不保留永久底部工具栏。
   在当前可见区域按实际像素／Exif／ICC 绘制原图；后台解码与输入版本保护共用已有 ImageIO 路径。
-  当前 `.image(NSImage)` 只装入 4096px 缩略图；图片超过 32 MiB 时读入结果的
-  `sourceVersion` 可能为 nil，`imageFingerprint = data.hashValue` 不能充当可靠原字节版本。
-  后续真实像素读取与标注的底图版本必须从**同一 FileTab 读取与代次**接入，
+  真实像素读取与标注的底图版本必须从**同一 FileTab 读取与代次**接入，
   不能自行打开另一个不受控文件句柄或将哈希值冒充文件版本。
   Markdown 内嵌放大在同一任务接到新表面，立即删去旧 Inspector 缩放状态和废弃手势代码。
 - **验证**：真实触控板双指惯性／捏合、鼠标与⌘／Shift 滚轮、不同锚点与反复缩放、

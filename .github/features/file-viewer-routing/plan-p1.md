@@ -9,13 +9,13 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 
 - 打开：`Project.openFile / openLocalFile`；恢复独立通过 `Project.restoreTab` 创建同一类 `FileTab`。
   本机 Finder 文件与 SSH 项目同路径时仍以本机身份打开。
-- 读取：`FileTab.readContent → loadedContent`；现有 `.text / .image / .loading / .unavailable`。
+- 读取：`FileTab.readContent → LoadedContent`；现有 `.text / .image / .loading / .unavailable`。
   文本的 32 MiB、图片的 256 MiB／3200 万像素／4096px 缩略图及真实格式头检查均已有用途。
   不因出现新后缀而复制读取链或撤销这些限制。
 - 展示：`FileViewerView` 是主入口；`TabContentThumbnail.filePreview` 是有界缩略图入口。
   Markdown 的 `MarkdownFilePreview` 只负责该格式的 AST／阅读交互，不能改造成万能文件渲染器。
 - 编辑与并排：唯一可写正文是 `FileTab.nativeTextStorage`；
-  `Project.setMarkdownMode → DockWorkspaceModel.setMarkdownPreview → DockItem.markdownPreview`
+  `Project.setFilePreviewMode → DockWorkspaceModel.setFilePreview → DockItem.filePreview`
   已建立外层 Dock 双展示，`BaileyApp` 的 File 菜单已有唯一 `⌘⇧V`。
   `WorkspaceWindowModel` 判定前台有效目标；`WorkspaceDockView` 右键判定被右键的标签。
 
@@ -25,10 +25,10 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 | --- | --- |
 | `FileTab`／`SourceTextEditor`／`WorkspaceBackend` | CSV／SVG／HTML 仍是 `.text`，继续共用正文、编码、Undo、读取与条件保存；不增加格式专属可写副本。 |
 | `MarkdownResource`＋`LocalPathScope` | HTML 的 CSS／图片和 SVG 的授权相对资源应共用当前项目／机器的路径解析、范围与实际 IO 校验。HTML 引用链须以**发起请求的 CSS／资源文件**为相对基准，不能都从 HTML 文档目录解析。第二个消费者落地时把公共部分改为中性名称并删除旧同义包装；WebKit 仍独立限制脚本、网络与子请求。 |
-| `FileTab.imageThumbnail`／`MarkdownPicture.decode`／`MarkdownImageInspector` | 图片与 Markdown 插图已有部分共用；完整缩放改造须在同一查看组件和 ImageIO 解码路径完成，独立图片与内嵌图片均接入后删除旧缩略图查看分支。 |
-| `MarkdownSVG.sanitizedXML`／`MarkdownSVG.render` | 共用一次安全解析与 SwiftDraw；Markdown 可用有界栅格，独立 SVG 要在相同净化结果上矢量重绘，不重写第二套 XML 校验／SVG parser。 |
+| `RasterPreview`／`MarkdownPicture.decode`／`ImageInspector` | 文件和 Markdown 共用 ImageIO 解码；文件图片和内嵌图形共用原生缩放视口。继续按图片计划核销原像素、区域解码与内存预算。 |
+| `SVGArtwork.sanitizedXML`／`SVGArtwork.render` | 共用一次安全解析与 SwiftDraw；Markdown 可用有界栅格，独立 SVG 要在相同净化结果上矢量重绘，不重写第二套 XML 校验／SVG parser。 |
 | `MarkdownMedia.asset`／`MarkdownNativePlayer` | 音视频共用 AVAsset 验证，视频与 Markdown 嵌入播放器共用 `AVPlayerView` 适配；独立音频若需自有紧凑控件则直接操纵同一个 AVPlayer，不强加视频 UI。嵌入媒体才需要有界暂存，独立本机文件使用真实 URL，生命周期各归其主。 |
-| `MarkdownViewMode`／`showsMarkdownPreview`／`DockItem.markdownPreview`／`rendersOnlyMarkdown` | 下一种文本预览落地时将**展示模式与 Dock companion** 收敛为文件通用语义，替换所有调用、菜单和测试，删除旧 Markdown 专用状态及分支；Markdown AST、滚动映射和独立的 `MarkdownFilePreview` 仍归 Markdown。 |
+| `FilePreviewMode`／`showsFilePreview`／`DockItem.filePreview`／`rendersOnlyPreview` | 下一种文本预览落地时将**展示模式与 Dock companion** 收敛为文件通用语义，替换所有调用、菜单和测试，删除旧 Markdown 专用状态及分支；Markdown AST、滚动映射和独立的 `MarkdownFilePreview` 仍归 Markdown。 |
 
 **不能强行共用：**完整 HTML 页面需隔离 `WKWebView`；Markdown 的 `MarkdownHTML`
 只处理少量静态片段，不是全 HTML/CSS 引擎。CSV 字段源区间解析也不同于 GFM 表格渲染。
@@ -40,7 +40,7 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 <a id="p1-t1"></a>
 ### P1-T1 核销读取与公共资源边界，移除新格式产生的重复路径
 
-- **位置**：`FileTab.readContent / loadedContent / matches / reloadFromDiskIfClean`、
+- **位置**：`FileTab.readContent / matches / reloadFromDiskIfClean`、
   `MarkdownResource`、`MarkdownFilePreview`、`MarkdownHTMLView`、`Project.openMarkdownLink`、
   `LocalWorkspaceBackend`、`BaileyTests/Files`。
 - **实施**：文本格式仅接入现有 `.text`，不改写编码或保存；图片仍经现有 ImageIO 安全边界。
@@ -50,8 +50,8 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
   在 `readContent` 读取整个二进制之前分流，直接验证有权限的真实本机 URL，SSH 明确拒绝；
   不用 32 MiB 文本读取、整文件内存缓存或回退同名 Mac 路径。
   纯图片更高分辨率查看不可绕过源文件版本和有界解码。
-  目前 `.image(NSImage)` 只存缩略图、`imageFingerprint` 是 `data.hashValue` 而非可靠原字节版本；
-  若图片标注需底图版本，应在 FileTab 原始加载结果中接通可验证的来源版本，而不是把缩略图或 Hashable 哈希当存盘凭据。
+  图片已从 FileTab 首次读取记录原字节版本，放大时同后端重读并核对版本；
+  标注也须用同一版本，不以缩略图身份作为存盘凭据。
   现有 Markdown 资源路径以源文档为基准，HTML 引用链增加 CSS 所在路径时须重用同一范围校验，
   并在最终读取时再次核对实际打开文件；受控 SSH 的 POSIX Shell 能力需实测，不能假定 Windows SSH 支持 `realpath`。
 - **验收**：无扩展名、大小写、混淆后缀、伪造格式头、符号链接／`../`／URL 编码、
@@ -71,13 +71,13 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
   不新增第二个工具栏、第二套 Splitter、保存模型或事件监听。
   `SourceTextEditor.onResignFirstResponder → FileTab.autoSaveOnFocusLoss` 是现有用户失焦保存策略：
   切换渲染器自身不得写盘，但真正离开原生编辑器时仍按当前策略保存。
-  共享化要逐一核对源码／并排／预览、`showsMarkdownPreview` 原有特殊分支，
+  共享化要逐一核对源码／并排／预览、`showsFilePreview` 原有特殊分支，
   不得为“保证预览不保存”额外取消或重复投递失焦保存。
   CSV 默认表格、SVG 默认图形、HTML 默认源码；错误时源码仍可见，
   损坏数据不得凭后缀宣称已成功预览。
   主视图与 `TabContentThumbnail.filePreview` 同时覆盖新增内容，缩略图不再次读取全部文件、
   创建播放器或触发脚本；跨后缀重命名时还要注销不再合法的 Dock companion，
-  禁止 `rendersOnlyMarkdown` 式只读分栏残留空白或旧内容。
+  禁止 `rendersOnlyPreview` 式只读分栏残留空白或旧内容。
   当场删除被新路径替代的旧视图／枚举分支及旧测试断言。
 - **验收**：Files／`⌘O`／Finder／独立 `restoreTab`／跨窗口打开，
   单标签与并排、Dock 拖动／关闭、右键后台标签与 File 菜单、切模式、焦点／IME／Undo／保存，
@@ -87,10 +87,10 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 ## 阶段验收与执行顺序
 
 此计划与**下一种格式的首个接入任务共同执行**，不作为单独“框架项目”先行。
-推荐先完成 [图片 P1](../image-annotations/plan-p1.md) 的共用缩放视口，
-再以 [SVG P1](../svg-source-preview/plan-p1.md) 为第一个非 Markdown 文本预览，
-**在接入 SVG 的同一任务完成路由 P1-T2 通用化及删除旧分支**。
-HTML／CSV 后续直接使用通用模式；音频 P1 首次复用 AVAsset，视频 P1 首次共用 AVPlayerView。
+CSV 的字段索引不依赖图形视口，先以 [CSV P1-T2](../csv-table-view/plan-p1.md#p1-t2)
+接入原生表格，同时完成路由 P1-T2 的通用化及旧分支替换。
+SVG／HTML 后续使用同一模式；SVG 的图形能力仍依赖图片共用视口。
+音频 P1 首次复用 AVAsset，视频 P1 首次共用 AVPlayerView。
 这些是依赖关系而非额外大阶段；已验证的功能可按实际准备情况并行。
 若所选格式尚不需要修改读取或并排路径，记录核验结论，不制造提交。
 
@@ -115,7 +115,7 @@ HTML／CSV 后续直接使用通用模式；音频 P1 首次复用 AVAsset，视
 
 | 编号 | 条件与具体样本 | 最终判据 |
 | --- | --- | --- |
-| R01 环境 | 当前 macOS 27.3／Xcode 27.2／Apple Silicon；兼容基线 macOS 15.6；深浅／自动外观、中文／英文、缩放显示器 1×／2×、鼠标／触控板、减弱动态效果及 VoiceOver（适用时）。 | 同一文件内容、操作与辅助功能不随环境误变；最低系统若无独立设备，保留部署目标与编译证据，标明真实系统未测及已获豁免，不伪称实测。 |
+| R01 环境 | 本轮按用户确认的本机 macOS 27.3／Xcode 27.2／Apple Silicon 验收，不要求 macOS 15.6 实机；保留原部署目标。深浅／自动外观、中文／英文、缩放显示器 1×／2×、鼠标／触控板、减弱动态效果及 VoiceOver 按实际适用性核销。 | 同一文件内容、操作与辅助功能不随环境误变；不把部署目标编译当作旧系统实测。 |
 | R02 入口 | Files 单双击、Finder、⌘O、文件拖入、SSH 项目内打开、冷启动会话恢复与已打开标签复用；激活／后台窗口和两个不同项目。 | 相同项目／机器／规范路径不产生第二个可写正文；Finder 本机文件在 SSH 项目中仍属本机，同字符串不同机器文件绝不串读。 |
 | R03 路径 | ASCII、空格、中文／emoji、组合音调／不同规范形、大小写、单引号、`%/#/?`、255 字节合法文件名、文件夹重命名、相对 `.`／`..`、链接到允许／越界目标、悬空链接。 | 读取和打开的是授权的真实目标；失败不换机器、不泄漏外部字节；任何规范化／解析不改变原路径指向。 |
 | R04 文件类型 | 后缀正确／大写／错误／无后缀、合法头与假后缀、空文件、截断或损坏、二进制 NUL、不可读、FIFO／socket／目录、存取时移除或换成链接。 | 不在类型未验证前走无界读取或执行内容；错误确实留在原目标，可编辑的草稿与旧有效内容按现有约定保护。 |

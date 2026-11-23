@@ -1,6 +1,6 @@
 # SVG 图形预览与实时源码编辑
 
-SVG 是可编辑的 XML 矢量文件，也可能包含活动内容。Bailey 的 Markdown 已用 `MarkdownSVG`／SwiftDraw 净化、解析和栅格展示内嵌 SVG；独立 SVG 必须复用**同一安全解析结果**，再使用与图片共用的原生缩放视口做矢量重绘，不能另写一个 SVG renderer。默认图形打开，仍可回源编辑。
+SVG 是可编辑的 XML 矢量文件，也可能包含活动内容。Bailey 的 Markdown 已用 `SVGArtwork`／SwiftDraw 净化、解析和栅格展示内嵌 SVG；独立 SVG 必须复用**同一安全解析结果**，再使用与图片共用的原生缩放视口做矢量重绘，不能另写一个 SVG renderer。默认图形打开，仍可回源编辑。
 
 ## 用户体验
 
@@ -16,6 +16,6 @@ SVG 是可编辑的 XML 矢量文件，也可能包含活动内容。Bailey 的 
 - 打开 SVG、切换、缩放、复制与关闭后源文件逐字节不变；编辑源码才产生脏状态。
 - 包含中文文字、渐变、mask、clipPath、filter、透明度、非方形 viewBox、大尺寸路径、非法 XML、外部字体／图片和恶意脚本时能显示或明确拒绝，且不能执行未授权资源访问。
 - 真实 Dock 窄宽、原生焦点、窗口切换、重新加载与 Undo／Redo 一致。宿主运行安全测试，Bailey Dev 验证实际交互。
-- HTML 原型仅模拟交互；正式 SVG 共用已存在的 `MarkdownSVG.sanitizedXML` 与 SwiftDraw，尚须验证独立文件的实际矢量精度、原生手势和恶意 XML／外部资源输入边界。
+- HTML 原型仅模拟交互；正式 SVG 共用已存在的 `SVGArtwork.sanitizedXML` 与 SwiftDraw，尚须验证独立文件的实际矢量精度、原生手势和恶意 XML／外部资源输入边界。
 
 [统一交互 HTML · SVG](../prototype.html?format=svg)。

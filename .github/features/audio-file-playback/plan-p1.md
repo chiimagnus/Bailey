@@ -40,7 +40,7 @@
 <a id="p1-t1"></a>
 ### P1-T1 共用音视频实际文件校验与正确读取分支
 
-- **位置**：`FileTab.readContent / loadedContent / matches / reloadFromDiskIfClean`、
+- **位置**：`FileTab.readContent / matches / reloadFromDiskIfClean`、
   `MarkdownMedia`／原生 `AVPlayerView` 适配、`TabSwitcherView` 及宿主测试。
 - **实施**：同步 [文件路由 P1-T1](../file-viewer-routing/plan-p1.md#p1-t1)，
   真实本机音频先验证有权限且属于当前标签的普通文件，再用

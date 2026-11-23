@@ -8,7 +8,7 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
 - `.html/.htm` 按现有 `FileTab.readContent → .text` 获取编码后的原文；
   `SourceTextEditor`／`FileTab.save` 继续是唯一文本、Undo、条件保存和外部冲突所有者。
   不添加 HTML `Content` case、第二份可写 DOM 或新文件标签。
-- `Project.setMarkdownMode → DockWorkspaceModel.setMarkdownPreview` 和 File 菜单 `⌘⇧V`
+- `Project.setFilePreviewMode → DockWorkspaceModel.setFilePreview` 和 File 菜单 `⌘⇧V`
   已有单文件源码／预览／并排语义。**在首个非 Markdown 文本格式接入时**
   依 [文件查看器计划](../file-viewer-routing/plan-p1.md#p1-t2) 把该模式／Dock companion
   从 Markdown 专名改成通用文件预览，更新所有旧调用和测试，立即删除旧分支；
@@ -27,7 +27,7 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
   不能新写一套 HTML 路径清洗或让 SSH 同路径回落到本机。
   CSS、图片与 SVG 的读取预算及 MIME 验证分别执行。
   **完整 HTML 中的 SVG 仍交由已选的 WebKit 页面渲染**，不另起 SwiftDraw 图像转换路径；
-  可复用 `MarkdownSVG` 已确认的危险 URL／主动内容测试样本与授权规则，
+  可复用 `SVGArtwork` 已确认的危险 URL／主动内容测试样本与授权规则，
   但不能直接套用其仅适用于 Markdown 片段的剔除白名单，导致合法页面静默漏图。
 
 ## 静态预览信任边界

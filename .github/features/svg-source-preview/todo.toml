@@ -1,13 +1,13 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "复用 SVG 净化与 SwiftDraw，确认复杂 SVG 能力"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "共享净化 b81bcc1f、原生矢量 b2022516、真实 Windows Tailscale 27ede424、滤镜替换与 100 次挂载 a564658。复杂图与隔离子请求组合仍待核销，详见 audit-p1.md。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "接入共用图形视口和源码／预览／并排命令"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "b2022516 已接入共用视口和三种展示方式，实际 SVG GUI 与 400% Retina 像素通过；真触控板、多屏倍率、SVG 冷恢复及焦点组合仍需验收。"
 
 [[tasks]]
 id = "P2-T1"
