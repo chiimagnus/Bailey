@@ -138,11 +138,11 @@ final class FileTabPersistenceTests: XCTestCase {
             file.autoSaveSuspendedForClose = true
             XCTAssertEqual(file.text, source)
             XCTAssertEqual(file.fileEncoding, encoding)
-            XCTAssertFalse(file.showsMarkdownPreview)
-            file.setMarkdownPreview(true)
-            XCTAssertTrue(file.showsMarkdownPreview)
-            file.setMarkdownPreview(false)
-            file.setMarkdownPreview(true)
+            XCTAssertFalse(file.showsFilePreview)
+            file.setFilePreview(true)
+            XCTAssertTrue(file.showsFilePreview)
+            file.setFilePreview(false)
+            file.setFilePreview(true)
             XCTAssertEqual(try Data(contentsOf: path), originalBytes,
                            "Switching Markdown preview cannot re-encode the original file")
             XCTAssertFalse(file.isDirty)
@@ -159,7 +159,7 @@ final class FileTabPersistenceTests: XCTestCase {
             let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
                                    workspaceIdentity: nil)
             try await reopened.waitForText()
-            XCTAssertFalse(reopened.showsMarkdownPreview,
+            XCTAssertFalse(reopened.showsFilePreview,
                            "Reopening a Markdown file defaults to source mode")
             XCTAssertEqual(reopened.text, edited)
             XCTAssertEqual(reopened.fileEncoding, encoding)
@@ -248,8 +248,8 @@ final class FileTabPersistenceTests: XCTestCase {
         let firstRequest = file.textPreviewRequestID
         let bodyOffset = (file.text as NSString).range(of: "中文").location
         file.markdownReadingOffset = bodyOffset
-        file.setMarkdownPreview(true)
-        XCTAssertTrue(file.showsMarkdownPreview)
+        file.setFilePreview(true)
+        XCTAssertTrue(file.showsFilePreview)
         XCTAssertEqual(file.textPreviewRequestID, firstRequest)
 
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
@@ -265,8 +265,8 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertNotEqual(file.textPreviewRequestID, secondRequest,
                           "A second edit must supersede a pending asynchronous preview parse")
         XCTAssertEqual(file.text, "# Newest\n\n中文🙂 and code.\n")
-        file.setMarkdownPreview(false)
-        file.setMarkdownPreview(true)
+        file.setFilePreview(false)
+        file.setFilePreview(true)
         XCTAssertEqual(file.markdownReadingOffset, bodyOffset,
                        "Switching source/preview cannot reset the stored reading position")
         XCTAssertEqual(file.fileContentRevision, resource)

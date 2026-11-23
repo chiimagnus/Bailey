@@ -137,17 +137,17 @@ final class Project: nonisolated Identifiable {
 
     var focusedContent: PaneContent? { focusedTab?.content }
 
-    func markdownMode(for tab: PaneTab) -> MarkdownViewMode {
-        if dock.group(containing: .markdownPreview(tab.id)) != nil { return .sideBySide }
-        if case .file(let file) = tab.content, file.showsMarkdownPreview { return .preview }
+    func filePreviewMode(for tab: PaneTab) -> FilePreviewMode {
+        if dock.group(containing: .filePreview(tab.id)) != nil { return .sideBySide }
+        if case .file(let file) = tab.content, file.showsFilePreview { return .preview }
         return .source
     }
 
-    func setMarkdownMode(_ mode: MarkdownViewMode, for tab: PaneTab) {
+    func setFilePreviewMode(_ mode: FilePreviewMode, for tab: PaneTab) {
         guard tabs.contains(where: { $0 === tab }), case .file(let file) = tab.content,
-              file.canPreviewMarkdown else { return }
-        file.setMarkdownPreview(mode == .preview)
-        dock.setMarkdownPreview(of: tab.id, visible: mode == .sideBySide)
+              file.canPreviewFile else { return }
+        file.setFilePreview(mode == .preview)
+        dock.setFilePreview(of: tab.id, visible: mode == .sideBySide)
     }
 
     /// Non-terminal tabs retain the session whose directory they were opened from.
@@ -368,7 +368,7 @@ final class Project: nonisolated Identifiable {
                let tab = findFileTab(path: resolved, workspace: sourceWorkspace),
                case let .file(destination) = tab.content {
                 destination.pendingMarkdownFragment = fragment
-                destination.setMarkdownPreview(true)
+                destination.setFilePreview(true)
             }
             return true
         } catch {
@@ -498,9 +498,10 @@ final class Project: nonisolated Identifiable {
             guard case .file(let file) = tab.content,
                   file.workspaceIdentity == workspace,
                   let destination = moved(file.path) else { continue }
+            let previousKind = file.previewKind
             file.updatePath(destination)
-            if !MarkdownDocument.supports(destination) {
-                dock.setMarkdownPreview(of: tab.id, visible: false)
+            if file.previewKind != previousKind {
+                dock.setFilePreview(of: tab.id, visible: false)
             }
         }
         guard workspaceIdentity == workspace else { return }
@@ -757,7 +758,7 @@ final class Project: nonisolated Identifiable {
     func selectPanel(_ item: DockItem) {
         switch item {
         case .tab(let id): selectTab(id)
-        case .projects, .files, .git, .markdownPreview: dock.select(item)
+        case .projects, .files, .git, .filePreview: dock.select(item)
         }
     }
 

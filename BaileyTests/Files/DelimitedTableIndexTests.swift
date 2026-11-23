@@ -4,6 +4,30 @@ import XCTest
 
 @MainActor
 final class DelimitedTableIndexTests: XCTestCase {
+    func testDelimitedFileUsesTheExistingPreviewCompanionAndSourceRoute() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("table.TSV")
+        let bytes = Data("item\tvalue\r\n青🧪\t42\r\n".utf8)
+        try bytes.write(to: path)
+        let project = Project(fallbackName: "Table preview", workspaceConfiguration: .standard)
+        project.openLocalFile(path.path)
+        let tab = try XCTUnwrap(project.tabs.first)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected file tab") }
+        try await file.waitForText()
+        let storage = file.nativeTextStorage
+        XCTAssertEqual(project.filePreviewMode(for: tab), .preview)
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        project.setFilePreviewMode(.source, for: tab)
+        XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertEqual(project.tabs.count, 1)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+    }
+
     func testPhysicalAndLogicalRecordsPreserveUTF16FieldRangesAndTerminators() async throws {
         let text = "\"e\u{301}😀\",,\"a\"\"b\"\r\n\"x\r\ny\rz\nw\",last,\r\r\nend,,!"
         let utf16 = text as NSString

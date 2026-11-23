@@ -405,11 +405,11 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("o", modifiers: .command)
             .disabled(manager?.selectedProject == nil)
 
-            Button(manager?.markdownMenuMode?.title ?? MarkdownViewMode.preview.title) {
-                manager?.toggleMarkdownPreview()
+            Button(manager?.filePreviewMenuMode?.title ?? FilePreviewMode.preview.title) {
+                manager?.toggleFilePreview()
             }
             .keyboardShortcut("v", modifiers: [.command, .shift])
-            .disabled(manager?.markdownMenuMode == nil)
+            .disabled(manager?.filePreviewMenuMode == nil)
 
             Button(String(localized: "Save", table: "Interface")) {
                 manager?.saveSelectedFile()

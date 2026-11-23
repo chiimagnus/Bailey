@@ -4,7 +4,7 @@ import ImageIO
 import Observation
 import SwiftUI
 
-enum MarkdownViewMode: CaseIterable {
+enum FilePreviewMode: CaseIterable {
     case source, preview, sideBySide
 
     var title: String {
@@ -12,6 +12,21 @@ enum MarkdownViewMode: CaseIterable {
         case .source: String(localized: "Show Source", table: "Editor")
         case .preview: String(localized: "Show Preview", table: "Editor")
         case .sideBySide: String(localized: "Show Side by Side", table: "Editor")
+        }
+    }
+}
+
+enum FilePreviewKind: Equatable {
+    case markdown
+    case delimited
+
+    init?(path: String) {
+        if MarkdownDocument.supports(path) {
+            self = .markdown
+        } else if DelimitedTableIndex.Separator.preferred(for: path) != nil {
+            self = .delimited
+        } else {
+            return nil
         }
     }
 }
@@ -217,7 +232,7 @@ final class FileTab: nonisolated Identifiable {
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a file opened locally is never read-only.
     let workspaceIdentity: String?
-    private(set) var showsMarkdownPreview = false
+    private var previewOverride: Bool?
     private var textEditRevision: UInt = 0
     @ObservationIgnored var markdownReadingOffset: Int?
     @ObservationIgnored var markdownReadingViewportY: CGFloat = 0
@@ -237,9 +252,18 @@ final class FileTab: nonisolated Identifiable {
         markdownOutlineRequest = request
     }
 
-    var canPreviewMarkdown: Bool {
+    var previewKind: FilePreviewKind? { FilePreviewKind(path: path) }
+
+    var canPreviewFile: Bool {
         guard case .text = content else { return false }
-        return MarkdownDocument.supports(path)
+        return previewKind != nil
+    }
+
+    var canPreviewMarkdown: Bool { canPreviewFile && previewKind == .markdown }
+
+    var showsFilePreview: Bool {
+        guard let previewKind else { return false }
+        return previewOverride ?? (previewKind == .delimited)
     }
 
     var fileContentRevision: String { "\(id)-\(targetGeneration)-\(reloadRevision)" }
@@ -247,6 +271,7 @@ final class FileTab: nonisolated Identifiable {
 
     struct DelimitedSnapshot {
         let index: DelimitedTableIndex
+        let source: String
         let requestID: String
         let preservesOriginalBytes: Bool
     }
@@ -255,7 +280,8 @@ final class FileTab: nonisolated Identifiable {
         guard case .text = content, savedSourceVersion != nil,
               let preferred = DelimitedTableIndex.Separator.preferred(for: path) else { return nil }
         let request = textPreviewRequestID
-        let index = try await DelimitedTableIndex.parse(text, preferred: preferred, selected: selected)
+        let source = text
+        let index = try await DelimitedTableIndex.parse(source, preferred: preferred, selected: selected)
         guard request == textPreviewRequestID else { return nil }
         let version = savedSourceVersion
         let encoding = fileEncoding
@@ -267,15 +293,15 @@ final class FileTab: nonisolated Identifiable {
         }
         try Task.checkCancellation()
         guard request == textPreviewRequestID else { return nil }
-        return DelimitedSnapshot(index: index, requestID: request,
+        return DelimitedSnapshot(index: index, source: source, requestID: request,
                                  preservesOriginalBytes: preservesOriginal && encoding == fileEncoding
                                     && version == savedSourceVersion)
     }
 
-    func setMarkdownPreview(_ enabled: Bool) {
-        guard MarkdownDocument.supports(path) else { return }
+    func setFilePreview(_ enabled: Bool) {
+        guard previewKind != nil else { return }
         switch content {
-        case .text, .loading: showsMarkdownPreview = enabled
+        case .text, .loading: previewOverride = enabled
         case .image, .unavailable: break
         }
     }
@@ -467,8 +493,9 @@ final class FileTab: nonisolated Identifiable {
         let wasReading = reloadTask != nil
         invalidateReload()
         targetGeneration &+= 1
+        let previousKind = previewKind
         path = newPath
-        if !MarkdownDocument.supports(newPath) { showsMarkdownPreview = false }
+        if previewKind != previousKind { previewOverride = nil }
         editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if wasReading { loadIfNeeded() }
     }
@@ -969,7 +996,7 @@ struct FileViewerView: View {
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
     var markdownDirectory: String?
-    var rendersOnlyMarkdown = false
+    var rendersOnlyPreview = false
     var onMarkdownLink: (URL) async -> Bool = { _ in false }
     var onMarkdownLocateSource: () -> Void = {}
 
@@ -996,24 +1023,28 @@ struct FileViewerView: View {
                     if let error = file.saveError {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
-                    if (file.showsMarkdownPreview || rendersOnlyMarkdown) && file.canPreviewMarkdown {
-                        MarkdownFilePreview(
-                            file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
-                            onOpenLink: onMarkdownLink,
-                            onLocateSource: { offset in
-                                file.pendingMarkdownSource = (
-                                    request: file.textPreviewRequestID, offset: offset, focus: true
-                                )
-                                if rendersOnlyMarkdown { onMarkdownLocateSource() }
-                                else { file.setMarkdownPreview(false) }
-                                if file.editorCoordinator?.locateMarkdownSource(
-                                    atUTF16Offset: offset
-                                ) == true {
-                                    file.pendingMarkdownSource = nil
+                    if (file.showsFilePreview || rendersOnlyPreview), let kind = file.previewKind {
+                        switch kind {
+                        case .markdown:
+                            MarkdownFilePreview(
+                                file: file, directory: markdownDirectory, assetRefresh: assetRefresh,
+                                onOpenLink: onMarkdownLink,
+                                onLocateSource: { offset in
+                                    file.pendingMarkdownSource = (
+                                        request: file.textPreviewRequestID, offset: offset, focus: true
+                                    )
+                                    revealSource()
+                                    if file.editorCoordinator?.locateMarkdownSource(
+                                        atUTF16Offset: offset
+                                    ) == true {
+                                        file.pendingMarkdownSource = nil
+                                    }
                                 }
-                            }
-                        )
-                    } else if !rendersOnlyMarkdown {
+                            )
+                        case .delimited:
+                            CSVTableView(file: file, onFocused: onFocused, onShowSource: revealSource)
+                        }
+                    } else if !rendersOnlyPreview {
                         HStack {
                             Spacer()
                             encodingMenu
@@ -1056,16 +1087,21 @@ struct FileViewerView: View {
         }
         .background(FileWindowReader(reference: windowReference).frame(width: 0, height: 0))
         .onAppear {
-            if rendersOnlyMarkdown { file.loadIfNeeded() }
+            if rendersOnlyPreview { file.loadIfNeeded() }
             else { file.refreshWhenSelected() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
             guard notification.object as? NSWindow === windowReference.window else { return }
-            if !rendersOnlyMarkdown, file.readOnlyReason == nil { file.refreshWhenSelected() }
+            if !rendersOnlyPreview, file.readOnlyReason == nil { file.refreshWhenSelected() }
         }
         .onChange(of: appearsActive) { _, active in
-            if active && (rendersOnlyMarkdown || file.showsMarkdownPreview) { assetRefresh &+= 1 }
+            if active && (rendersOnlyPreview || file.showsFilePreview) { assetRefresh &+= 1 }
         }
+    }
+
+    private func revealSource() {
+        if rendersOnlyPreview { onMarkdownLocateSource() }
+        else { file.setFilePreview(false) }
     }
 
     private var encodingMenu: some View {

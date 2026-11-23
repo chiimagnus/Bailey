@@ -26,13 +26,18 @@ nonisolated struct DelimitedTableIndex: Sendable {
 
         var source: NSRange { NSRange(location: Int(start), length: Int(length)) }
 
-        func value(in text: NSString) -> String {
-            let range = source
-            guard range.length >= 2, text.character(at: range.location) == 34 else {
-                return text.substring(with: range)
+        func value(in text: NSString, limit: Int? = nil) -> String {
+            var range = source
+            let quoted = range.length >= 2 && text.character(at: range.location) == 34
+            if quoted { range = NSRange(location: range.location + 1, length: range.length - 2) }
+            let truncated = limit.map { range.length > $0 } ?? false
+            if truncated, let limit {
+                range.length = limit
+                if (0xDC00...0xDFFF).contains(text.character(at: NSMaxRange(range))) { range.length -= 1 }
             }
-            return text.substring(with: NSRange(location: range.location + 1, length: range.length - 2))
-                .replacingOccurrences(of: "\"\"", with: "\"", options: .literal)
+            var value = text.substring(with: range)
+            if quoted { value = value.replacingOccurrences(of: "\"\"", with: "\"", options: .literal) }
+            return truncated ? value + "…" : value
         }
     }
 
@@ -41,6 +46,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
         let physicalLine: Int
         let lineEndingLength: Int
         fileprivate let fieldIndices: Range<Int>
+        var fieldCount: Int { fieldIndices.count }
     }
 
     enum Problem: Equatable, Sendable {
@@ -62,6 +68,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
     let separator: Separator
     let needsSeparatorChoice: Bool
     let records: [Record]
+    let columnCount: Int
     let issue: Issue?
     private let fields: [Field]
 
@@ -92,7 +99,8 @@ nonisolated struct DelimitedTableIndex: Sendable {
         }
         let scanned = try scan(units, separator: separator)
         return Self(separator: separator, needsSeparatorChoice: needsSeparatorChoice,
-                    records: scanned.records, issue: scanned.issue, fields: scanned.fields)
+                    records: scanned.records, columnCount: scanned.columnCount,
+                    issue: scanned.issue, fields: scanned.fields)
     }
 
     private static func scan<Units: Sequence>(_ units: Units, separator: Separator) throws -> Scanner
@@ -129,6 +137,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
         var records: [Record] = []
         var fields: [Field] = []
         var issue: Issue?
+        var columnCount = 0
         var nextCancellationCheck = 0
         var offset = 0
         var phase = Phase.initial
@@ -178,6 +187,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
             guard finishField() else { return false }
             let end = offset + endingLength
             let indices = recordFirstField..<fields.count
+            columnCount = max(columnCount, indices.count)
             if issue == nil, let first = records.first,
                first.fieldIndices.count != indices.count {
                 issue = Issue(problem: .unevenColumns(expected: first.fieldIndices.count, actual: indices.count),

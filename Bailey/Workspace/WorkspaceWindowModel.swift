@@ -676,7 +676,7 @@ final class WorkspaceWindowModel {
     var canFind: Bool {
         switch selectedProject?.focusedContent {
         case .session, .diff: return true
-        case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsMarkdownPreview
+        case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsFilePreview
         case .browser, .none: return false
         }
     }
@@ -829,22 +829,22 @@ final class WorkspaceWindowModel {
 
     var canSaveSelectedFile: Bool { selectedProject?.focusedContent?.isDirty == true }
 
-    private var activeMarkdownTab: PaneTab? {
+    private var activePreviewTab: PaneTab? {
         guard !isClosed, !isCommandPaletteVisible, !isSSHFolderPickerVisible,
               attachedWindow?.isKeyWindow == true, attachedWindow?.attachedSheet == nil,
               let tab = selectedProject?.focusedTab, case .file(let file) = tab.content,
-              file.canPreviewMarkdown else { return nil }
+              file.canPreviewFile else { return nil }
         return tab
     }
 
-    var markdownMenuMode: MarkdownViewMode? {
-        guard let project = selectedProject, let tab = activeMarkdownTab else { return nil }
-        return project.markdownMode(for: tab) == .source ? .preview : .source
+    var filePreviewMenuMode: FilePreviewMode? {
+        guard let project = selectedProject, let tab = activePreviewTab else { return nil }
+        return project.filePreviewMode(for: tab) == .source ? .preview : .source
     }
 
-    func toggleMarkdownPreview() {
-        guard let project = selectedProject, let tab = activeMarkdownTab, let markdownMenuMode else { return }
-        project.setMarkdownMode(markdownMenuMode, for: tab)
+    func toggleFilePreview() {
+        guard let project = selectedProject, let tab = activePreviewTab, let filePreviewMenuMode else { return }
+        project.setFilePreviewMode(filePreviewMenuMode, for: tab)
     }
 
     /// Saves the focused pane if it holds a file or an editable diff.

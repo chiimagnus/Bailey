@@ -51,7 +51,7 @@ struct SourceTextEditor: NSViewRepresentable {
 
     private var onResignFirstResponder: () -> Void {
         { [weak file] in
-            guard let file, !file.showsMarkdownPreview else { return }
+            guard let file, !file.showsFilePreview else { return }
             file.autoSaveOnFocusLoss()
         }
     }

@@ -204,7 +204,7 @@ extension DockItem {
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .tab: "terminal"
-        case .markdownPreview: "doc.richtext"
+        case .filePreview: "doc.richtext"
         }
     }
 
@@ -214,7 +214,7 @@ extension DockItem {
         case .files: String(localized: "File Manager", table: "Sidebar")
         case .git: String(localized: "Git Manager", table: "Sidebar")
         case .tab(let id): project.tabs.first { $0.id == id }?.displayTitle ?? String(localized: "Tab", table: "Workspace")
-        case .markdownPreview: String(localized: "Preview", table: "Editor")
+        case .filePreview: String(localized: "Preview", table: "Editor")
         }
     }
 }
@@ -435,8 +435,8 @@ struct DockTabGroupView: View {
                     MarkdownOutlineView(file: file) { heading in
                         guard let current = currentMenuTab(id) else { return }
                         file.pendingMarkdownFragment = heading.anchor
-                        if project.markdownMode(for: current) == .source {
-                            project.setMarkdownMode(.preview, for: current)
+                        if project.filePreviewMode(for: current) == .source {
+                            project.setFilePreviewMode(.preview, for: current)
                         }
                         markdownPopover = nil
                     } onDismiss: {
@@ -786,7 +786,7 @@ struct DockTabGroupView: View {
                     manager: manager,
                     destination: (projectID: project.id, groupID: group.id)
                 ))
-        case .tab(let id), .markdownPreview(let id):
+        case .tab(let id), .filePreview(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 PanelContentView(
                     tab: tab,
@@ -799,7 +799,7 @@ struct DockTabGroupView: View {
                     },
                     onNewFileTab: { manager.openFile($0) },
                     markdownDirectory: markdownDirectory(for: tab),
-                    rendersOnlyMarkdown: active == .markdownPreview(id),
+                    rendersOnlyPreview: active == .filePreview(id),
                     onMarkdownLink: { file, url in
                         await project.openMarkdownLink(url, from: file) {
                             manager.selectedProject === project && manager.attachedWindow?.isKeyWindow == true
@@ -859,15 +859,17 @@ struct DockTabGroupView: View {
     private func projectTabMenu(_ tab: PaneTab) -> some View {
         let tabID = tab.id
         if case .file(let file) = tab.content {
-            if file.canPreviewMarkdown {
-                ForEach(MarkdownViewMode.allCases, id: \.self) { mode in
+            if file.canPreviewFile {
+                ForEach(FilePreviewMode.allCases, id: \.self) { mode in
                     Button(mode.title) {
                         if let current = currentMenuTab(tabID) {
-                            project.setMarkdownMode(mode, for: current)
+                            project.setFilePreviewMode(mode, for: current)
                         }
                     }
-                    .disabled(project.markdownMode(for: tab) == mode)
+                    .disabled(project.filePreviewMode(for: tab) == mode)
                 }
+            }
+            if file.canPreviewMarkdown {
                 Toggle(String(localized: "Synchronize Scrolling", table: "Editor"), isOn: Binding(
                     get: { file.markdownScrollSyncEnabled },
                     set: { value in
@@ -882,6 +884,8 @@ struct DockTabGroupView: View {
                 Button(String(localized: "Front Matter…", table: "Editor")) {
                     if currentMenuTab(tabID) != nil { markdownPopover = .metadata(tabID) }
                 }
+                Divider()
+            } else if file.canPreviewFile {
                 Divider()
             }
             Button(String(localized: "Reveal in File Manager", table: "Interface")) {
