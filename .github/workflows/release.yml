@@ -94,6 +94,7 @@ jobs:
         run: |
           gh release create "$RELEASE_TAG" \
             ".build/releases/bailey-${RELEASE_TAG#v}-macos-arm64.zip" \
+            ".build/releases/bailey-${RELEASE_TAG#v}-macos-arm64.dSYM.zip" \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes --latest
       - name: Remove temporary signing credentials
         if: always()

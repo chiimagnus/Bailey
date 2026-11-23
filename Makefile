@@ -14,7 +14,9 @@ SOURCE_PACKAGES := .build/SourcePackages
 APP_BUNDLE = Bailey.app
 APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/$(APP_BUNDLE)
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Bailey.app
+RELEASE_DSYM := $(RELEASE_APP).dSYM
 ARCHIVE := .build/releases/bailey-$(VERSION)-macos-arm64.zip
+DSYM_ARCHIVE := .build/releases/bailey-$(VERSION)-macos-arm64.dSYM.zip
 
 # 按 Package.resolved 固定版本；与 Xcode 的工程、scheme、测试目标共用。
 XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
@@ -63,7 +65,7 @@ help:
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
 		'  make test ONLY_TESTING="BaileyTests/类名1 BaileyTests/类名2"  运行多个 XCTest 类' \
-		'  make package VERSION=X.Y.Z BUILD_NUMBER=N  验证正式签名并制作 ZIP' \
+		'  make package VERSION=X.Y.Z BUILD_NUMBER=N  制作并验证 App 与 dSYM ZIP' \
 		'  make clean                              Xcode 清理构建产物' \
 		'  make doctor                             检查 Xcode 工具链'
 
@@ -73,7 +75,7 @@ doctor:
 	@xcodebuild -version
 
 build:
-	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) build
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(BUILD_FLAGS) build
 	codesign --verify --deep --strict '$(APP)'
 
 build\:dev: DERIVED_DATA = $(DEV_DERIVED_DATA)
@@ -85,7 +87,32 @@ build\:dev:
 	test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' '$(APP)/Contents/Info.plist')" = chiimagnus.bailey.dev
 
 build\:release: CONFIGURATION = Release
+build\:release: BUILD_FLAGS = ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO
 build\:release: build
+	@set -eu; \
+		app='$(RELEASE_APP)'; executable="$$app/Contents/MacOS/bailey"; \
+		fonts="$$app/Contents/Resources/swiftui-math_SwiftUIMath.bundle/Contents/Resources/mathFonts.bundle"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$$app/Contents/Info.plist")" = chiimagnus.bailey; \
+		if xcrun size -m "$$executable" | grep -q '^Segment __LLVM_COV:'; then \
+			echo 'Release 仍包含测试覆盖率数据' >&2; exit 1; \
+		fi; \
+		test -f "$$fonts/latinmodern-math.otf" && test -f "$$fonts/latinmodern-math.plist"; \
+		temp=$$(mktemp -d '.build/.release-sign.XXXXXX'); \
+		trap 'rm -f "$$temp"/cert-*; rmdir "$$temp"' EXIT; \
+		if codesign -dv "$$app" 2>&1 | grep -q '^Signature=adhoc$$'; then \
+			identity=-; \
+		else \
+			codesign -d --extract-certificates="$$temp/cert-" "$$app"; \
+			identity=$$(shasum -a 1 "$$temp/cert-0" | awk '{print toupper($$1)}'); \
+		fi; \
+		find "$$fonts" -type f \( -name '*.otf' -o -name '*.plist' \) \
+			! -name 'latinmodern-math.otf' ! -name 'latinmodern-math.plist' -delete; \
+		rm -f "$$fonts/math_table_to_plist.py"; \
+		xcrun strip -x "$$executable"; \
+		codesign --force --sign "$$identity" $(if $(strip $(SIGNING_KEYCHAIN)),--keychain '$(SIGNING_KEYCHAIN)') \
+			--preserve-metadata=entitlements,requirements,flags,identifier "$$app"; \
+		codesign --verify --deep --strict "$$app"; \
+		printf '已精简并验签 Release：'; du -sh "$$app"
 
 build\:ui: SCHEME = Bailey-UI
 build\:ui: DERIVED_DATA = $(DEV_DERIVED_DATA)
@@ -121,6 +148,7 @@ package:
 	@python3 -c 'import re,sys; v,n,identity,team=sys.argv[1:]; assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",v), "版本必须为 X.Y.Z"; assert re.fullmatch(r"[1-9][0-9]*",n), "构建号无效"; assert re.fullmatch(r"[A-F0-9]{40}",identity), "签名 SHA-1 无效"; assert re.fullmatch(r"[A-Z0-9]{10}",team), "Team ID 无效"' '$(VERSION)' '$(BUILD_NUMBER)' '$(SIGNING_IDENTITY)' '$(SIGNING_TEAM)'
 	@security find-identity -v -p codesigning $(if $(strip $(SIGNING_KEYCHAIN)),'$(SIGNING_KEYCHAIN)') | grep -F '$(SIGNING_IDENTITY) "Apple Development:' >/dev/null || { echo '没有有效的 Apple Development 签名身份' >&2; exit 1; }
 	@test ! -e '$(ARCHIVE)' || { echo '发布包已存在，拒绝覆盖：$(ARCHIVE)' >&2; exit 1; }
+	@test ! -e '$(DSYM_ARCHIVE)' || { echo '符号包已存在，拒绝覆盖：$(DSYM_ARCHIVE)' >&2; exit 1; }
 	@$(MAKE) --no-print-directory 'build:release' SIGNING=release VERSION='$(VERSION)' BUILD_NUMBER='$(BUILD_NUMBER)'
 	@mkdir -p .build/releases
 	@set -eu; temp=$$(mktemp -d .build/releases/.verify.XXXXXX); trap 'rm -rf "$$temp"' EXIT; \
@@ -144,8 +172,14 @@ package:
 			printf '%s\n' "$$signature" | grep -Fx 'TeamIdentifier=$(SIGNING_TEAM)' >/dev/null; \
 			printf '%s\n' "$$signature" | grep '^Authority=Apple Development:' >/dev/null; \
 		done; \
+		uuid=$$(xcrun dwarfdump --uuid "$$temp/unpacked/Bailey.app/Contents/MacOS/bailey" | awk '{print $$2}'); \
+		test -n "$$uuid" && test "$$uuid" = "$$(xcrun dwarfdump --uuid '$(RELEASE_DSYM)' | awk '{print $$2}')"; \
+		ditto -c -k --keepParent '$(RELEASE_DSYM)' "$$temp/symbols.zip"; \
+		ditto -x -k "$$temp/symbols.zip" "$$temp/symbols"; \
+		test "$$uuid" = "$$(xcrun dwarfdump --uuid "$$temp/symbols/Bailey.app.dSYM" | awk '{print $$2}')"; \
 		mv "$$temp/package.zip" '$(ARCHIVE)'; \
-		printf '已验证发布包：%s\n' '$(ARCHIVE)'
+		mv "$$temp/symbols.zip" '$(DSYM_ARCHIVE)'; \
+		printf '已验证发布包：%s\n已验证符号包：%s\n' '$(ARCHIVE)' '$(DSYM_ARCHIVE)'
 
 clean:
 	$(XCODEBUILD) clean

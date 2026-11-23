@@ -43,6 +43,11 @@ App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.
 测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；
 包依赖仍在 `.build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
+`make build:release` 关闭覆盖率插桩、启用未使用代码剔除，
+并在构建后使用 `strip -x` 移除本地符号、仅保留公式渲染实际使用的 Latin Modern 字体。
+精简后使用原构建签名的证书重新签名并严格验签；Debug 和测试包保持原样。
+Xcode 的调试符号不进入 App；`make package` 将对应 dSYM 单独压缩供崩溃分析。
+
 宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；
 `make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给本机阶段验收。
 本机完整 GUI 测试应使用已安装的 **Apple Development 签名**，不要强制 `SIGNING=adhoc`：
@@ -109,6 +114,8 @@ Debug／Release 构建与签名。
 Apple `swift-markdown`（经 `swift-cmark` 使用 cmark-gfm）仅负责解析 Markdown；
 阅读 UI 由 Bailey 自己的 SwiftUI 组件渲染，不使用 Textual、MarkdownView 或 WebKit。
 代码围栏复用现有 Tree-sitter 高亮；公式使用公开的 SwiftUIMath Canvas 排版 API，不使用私有 SPI。
+Release 仅保留当前固定使用的 Latin Modern 数学字体及其数据表，保留原许可；
+其他字体仍在依赖缓存中，不随发布包分发。
 资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
 块 HTML 复用 [本地 SwiftSoup](../Vendor/SwiftSoup/README.md) 的分词和节点原文区间；
 补丁只负责保留并公开文字和实体的字节位置，不替换 HTML 解析规则。

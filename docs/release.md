@@ -35,9 +35,12 @@ make package VERSION=X.Y.Z BUILD_NUMBER=N SIGNING_IDENTITY=证书SHA1 SIGNING_TE
 将参数替换成实际的三段版本、正整数构建号、证书 SHA-1 和 Team；
 需要特定钥匙串时再指定 `SIGNING_KEYCHAIN`。
 
-Makefile 校验版本、凭据和输出路径，构建 Release，通过 `ditto` 生成 ZIP，再解包复验签名、身份、
-证书有效期、版本及 arm64 架构。输出为 `.build/releases/bailey-X.Y.Z-macos-arm64.zip`；
-已有同名包时拒绝覆盖，不在本地打包命令中发布。
+Makefile 校验版本、凭据和输出路径，使用与 `make build:release` 相同的覆盖率关闭、
+符号及字体精简、重签名流程，通过 `ditto` 生成 ZIP，再解包复验签名、身份、
+证书有效期、版本及 arm64 架构。生成两份独立 ZIP：
+`.build/releases/bailey-X.Y.Z-macos-arm64.zip` 包含可直接运行的 `Bailey.app`；
+`bailey-X.Y.Z-macos-arm64.dSYM.zip` 用于崩溃符号化，并验证两者 UUID 一致。
+已有同名包时拒绝覆盖，本地打包不会自动发布。
 
 ## 正式发布
 
@@ -48,7 +51,7 @@ Makefile 校验版本、凭据和输出路径，构建 Release，通过 `ditto` 
 3. [Release workflow](../.github/workflows/release.yml) 仅由 Tag 推送触发，使用 Xcode 27，
    核对标签提交、版本一致性及现有 Releases，拒绝重复或倒退版本，
    然后导入临时签名身份。
-4. 使用 `make package` 构建和复验唯一发布包，创建对应 GitHub Release；
+4. 使用 `make package` 构建并复验 App ZIP 与 dSYM ZIP，作为两个独立附件创建 GitHub Release；
    构建号来自 workflow 运行编号，最后清理临时凭据。
 
 Tag、工程版本、App 版本、Release 标题和 ZIP 文件名保持一致。

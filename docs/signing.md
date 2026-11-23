@@ -23,6 +23,9 @@ security find-identity -v -p codesigning
 `make build` 构建 Debug 并执行 `codesign --verify --deep --strict`。
 `SIGNING=adhoc` 是 Makefile 的临时签名选项，不等于 Apple Development 签名；
 发布不能静默退回临时或未签名产物。
+`make build:release` 在 `strip -x` 和字体精简后读取原签名的证书指纹重新签名，
+保留 entitlements、运行时标志和 Bundle ID，最后重新严格验签。
+指定的发布钥匙串也用于这一重签名步骤。
 
 App 的 Debug／Release 配置当前启用 Hardened Runtime，关闭 App Sandbox，
 entitlements 由 [bailey.entitlements](../Bailey/Resources/bailey.entitlements) 定义。
