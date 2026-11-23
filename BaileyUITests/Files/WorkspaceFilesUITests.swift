@@ -989,8 +989,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         tab.rightClick()
         XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
         XCTAssertFalse(app.menuItems["Copy Absolute Path"].exists)
-        app.menuItems["Copy Path"].click()
-        WorkspaceUITestSupport.assertClipboard(first.path)
+        app.typeKey("c", modifierFlags: [.command, .option])
+        WorkspaceUITestSupport.assertClipboard(first.path,
+            "The tab context key equivalent must copy the right-clicked file")
     }
 
     func testTerminalFocusedRightClickPreservesFilesSelectionAndInput() throws {
