@@ -428,7 +428,7 @@ final class GitPanelVisibilityTests: XCTestCase {
                                 proof.lifetime = .keepAlways
                                 add(proof)
                                 let backdrop = try XCTUnwrap(bitmap.colorAt(
-                                    x: bitmap.pixelsWide - 5, y: bitmap.pixelsHigh / 2
+                                    x: bitmap.pixelsWide - 5, y: 5
                                 )?.usingColorSpace(.sRGB))
                                 if dark {
                                     darkBackground = backdrop
