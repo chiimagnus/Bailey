@@ -86,6 +86,7 @@ class PreviewScrollView: NSScrollView {
     required init?(coder: NSCoder) { nil }
 
     var pixelScale: CGFloat { magnification * backingScale }
+    private var minimumManualMagnification: CGFloat { 0.1 / backingScale }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -107,7 +108,7 @@ class PreviewScrollView: NSScrollView {
         let oldPixelScale = pixelScale
         viewportSize = size
         backingScale = scale
-        minMagnification = 0.1 / scale
+        if !fitting { minMagnification = minimumManualMagnification }
         maxMagnification = 4 / scale
         if fitting {
             fit()
@@ -125,6 +126,7 @@ class PreviewScrollView: NSScrollView {
         guard let size = documentView?.frame.size, size.width > 0, size.height > 0,
               viewportSize.width > 0, viewportSize.height > 0 else { return }
         let scale = min(1 / backingScale, viewportSize.width / size.width, viewportSize.height / size.height)
+        minMagnification = min(minimumManualMagnification, scale)
         magnification = scale
         let bounds = contentView.bounds
         scroll(to: CGPoint(x: (size.width - bounds.width) / 2, y: (size.height - bounds.height) / 2))
@@ -132,15 +134,21 @@ class PreviewScrollView: NSScrollView {
 
     @objc func actualSize() { setZoom(1, at: center) }
     @objc func zoomIn() { setZoom(pixelScale * 1.25, at: center) }
-    @objc func zoomOut() { setZoom(pixelScale / 1.25, at: center) }
+    @objc func zoomOut() {
+        guard magnification > minimumManualMagnification else { return }
+        setZoom(pixelScale / 1.25, at: center)
+    }
 
     func setZoom(_ scale: CGFloat, at anchor: CGPoint) {
         fitting = false
+        minMagnification = minimumManualMagnification
         setMagnification(scale / backingScale, centeredAt: anchor)
     }
 
     override func magnify(with event: NSEvent) {
+        if fitting, magnification < minimumManualMagnification, event.magnification <= 0 { return }
         fitting = false
+        minMagnification = minimumManualMagnification
         super.magnify(with: event)
     }
 
@@ -150,7 +158,7 @@ class PreviewScrollView: NSScrollView {
             return
         }
         let delta = event.scrollingDeltaY / (event.hasPreciseScrollingDeltas ? 70 : 8)
-        guard delta != 0 else { return }
+        guard delta > 0 || (delta < 0 && magnification > minimumManualMagnification) else { return }
         setZoom(pixelScale * exp(delta), at: contentView.convert(event.locationInWindow, from: nil))
     }
 
