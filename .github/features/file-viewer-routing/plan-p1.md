@@ -1,130 +1,95 @@
-# P1｜复用既有 FileTab 分发，按需接入真实渲染器
+# P1｜沿现有文件标签复用多格式预览
 
-Bailey 已有主文件展示入口，不需要预先开发渲染框架。
-**本阶段仅随第一种真正可用的渲染器执行接线**；在渲染器准备好之前，
-不做无用户收益的纯类型重构，也不新建插件系统。
+Markdown 已在 `swift-markdown` 分支接入文件标签、原生编辑器、Dock 并排和 File 菜单。
+本计划不再等待“首个渲染器”，也不单独实施空壳路由；
+**在接入下一种真实格式时，共用已有所有者，并删去被取代的 Markdown 专用分发代码。**
+Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接以此为基线，不能从旧文件查看器路线重做一遍。
 
-## 源码核对与决策
+## 已确认的执行链
 
-文件打开和恢复有两条入口：
+- 打开：`Project.openFile / openLocalFile`；恢复独立通过 `Project.restoreTab` 创建同一类 `FileTab`。
+  本机 Finder 文件与 SSH 项目同路径时仍以本机身份打开。
+- 读取：`FileTab.readContent → loadedContent`；现有 `.text / .image / .loading / .unavailable`。
+  文本的 32 MiB、图片的 256 MiB／3200 万像素／4096px 缩略图及真实格式头检查均已有用途。
+  不因出现新后缀而复制读取链或撤销这些限制。
+- 展示：`FileViewerView` 是主入口；`TabContentThumbnail.filePreview` 是有界缩略图入口。
+  Markdown 的 `MarkdownFilePreview` 只负责该格式的 AST／阅读交互，不能改造成万能文件渲染器。
+- 编辑与并排：唯一可写正文是 `FileTab.nativeTextStorage`；
+  `Project.setMarkdownMode → DockWorkspaceModel.setMarkdownPreview → DockItem.markdownPreview`
+  已建立外层 Dock 双展示，`BaileyApp` 的 File 菜单已有唯一 `⌘⇧V`。
+  `WorkspaceWindowModel` 判定前台有效目标；`WorkspaceDockView` 右键判定被右键的标签。
 
-- Files／`⌘O` 等通过 `Project.openFile`，Finder 本机文件通过 `Project.openLocalFile`；
-  同一项目内按路径和机器身份复用 `FileTab`。
-- 会话恢复使用 `Project.restoreTab → makeContent` **直接创建 `FileTab`**，
-  并非调用 `openFile`。这两条入口最终共享 `FileTab` 的惰性读取。
-  `TabSnapshot.localFile` 缺失时按远端身份恢复，是已有 `SessionStoreTests` 验证的旧快照行为；
-  本计划不修改会话格式，也不误删这段身份兼容。
+## 哪些能力共用，哪些不共用
 
-真实数据流位于 `Bailey/Editor/FileViewerView.swift`：
-`loadIfNeeded / refreshWhenSelected → reloadFromDiskIfClean → readContent → loadedContent → Content`。
-`FileViewerView.body` 已经是主内容单一分发位置；
-`Bailey/UI/Panes/TabSwitcherView.swift` 的 `TabContentThumbnail.filePreview` 还会读取同一 `Content`
-生成轻量缩略图，新增 `Content` 分支时不能漏掉它。
-`PanelContentView` 只交接文件标签，不应增加格式判断。
+| 已有代码 | 后续接入方式 |
+| --- | --- |
+| `FileTab`／`SourceTextEditor`／`WorkspaceBackend` | CSV／SVG／HTML 仍是 `.text`，继续共用正文、编码、Undo、读取与条件保存；不增加格式专属可写副本。 |
+| `MarkdownResource`＋`LocalPathScope` | HTML 的 CSS／图片和 SVG 的授权相对资源应共用当前项目／机器的路径解析、范围与实际 IO 校验；第二种消费者落地时将公共部分改成中性名称，替换所有调用，不保留同义包装。WebKit 另需自己的执行／网络限制。 |
+| `FileTab.imageThumbnail`／`MarkdownPicture.decode`／`MarkdownImageInspector` | 图片与 Markdown 插图已有部分共用；完整缩放改造须在同一查看组件和 ImageIO 解码路径完成，独立图片与内嵌图片均接入后删除旧缩略图查看分支。 |
+| `MarkdownSVG.sanitizedXML`／`MarkdownSVG.render` | 共用一次安全解析与 SwiftDraw；Markdown 可用有界栅格，独立 SVG 要在相同净化结果上矢量重绘，不重写第二套 XML 校验／SVG parser。 |
+| `MarkdownMedia.asset`／`MarkdownNativePlayer` | 音视频共用 AVAsset 验证，视频与 Markdown 嵌入播放器共用 `AVPlayerView` 适配；独立音频若需自有紧凑控件则直接操纵同一个 AVPlayer，不强加视频 UI。嵌入媒体才需要有界暂存，独立本机文件使用真实 URL，生命周期各归其主。 |
+| `MarkdownViewMode`／`showsMarkdownPreview`／`DockItem.markdownPreview`／`rendersOnlyMarkdown` | 下一种文本预览落地时将**展示模式与 Dock companion** 收敛为文件通用语义，替换所有调用、菜单和测试，删除旧 Markdown 专用状态及分支；Markdown AST、滚动映射和独立的 `MarkdownFilePreview` 仍归 Markdown。 |
 
-`imageExtensions` **只有一份集合**。
-`readContent` 用它决定是否走超过 32 MiB 的图片读取路径，
-并检查 `stat`、64 KiB 真实格式头、256 MiB 读取上限；
-`loadedContent` 再用 ImageIO 验证并限制 3200 万像素、4096px 首帧缩略图。
-这是 583e9cba 引入且已有回归的两阶段数据保护，**不是重复或兼容遗留，应保留**。
-`loadedContent` 仍可将小型、有效的“图片后缀文本”交回 TextKit，不应按后缀强制变图片。
-
-`SyntaxHighlighting.language(for:)` 的扩展名表负责源码语法，
-`MaterialFileIcon` 负责图标；它们和**渲染器能力**是不同的事实，不合并。
-`FileTab.Content` 目前仅有 `.text`、`.image`、`.loading`、`.unavailable`：
-这四种结果已经足够支撑现有界面，不能额外建立 `FileKind`、Registry 或预留七种 case。
-
-**实际接入方式：**
-
-- Markdown／CSV／SVG／HTML：继续按已有文本编码和 32 MiB 上限得到 `.text`；
-  真实预览 View 就绪后，才在 `FileViewerView` 的 `.text` 分支根据路径和该格式自己的模式选择展示。
-  源码仍是唯一 `NSTextStorage`，未知／不支持的内容不丢失，仍显示原生源码。
-  **重命名跨后缀**时不能只凭新名称立即隐藏旧编辑器或草稿；
-  先保留当前已加载内容及撤销状态，确认新的有效内容／用户明确切换后才重设展示。
-- 图片：仍是经 ImageIO 确认的 `.image`；图片查看功能真正就绪时，
-  **同一任务直接替换旧的静态图片展示**，不能并存第二条缩放、滚动或渲染路径。
-- 音／视频：二进制不能冒充 `.text`，也不能在当前 32 MiB 文本读取后再决定播放。
-  对应功能实现时，才在 `FileTab` 的真实读取入口使用获授权本机媒体 URL 和 AVFoundation，
-  并同步更新 `Content`、`loadIfNeeded`、`matches`、错误／刷新分支及标签缩略图。
-  SSH 媒体按 [音频](../audio-file-playback/plan-p1.md)／
-  [视频](../video-file-playback/plan-p1.md) 的不支持约定明确拒绝，不退回同名本机路径。
-
-不修改 `Project`、Dock 布局、系统主菜单、标签焦点或会话持久化来实现格式判断。
-`⌘⇧V` 仍由 [Markdown P1-T2](../markdown-live-preview/plan-p1.md#p1-t2) 在系统 File 菜单注册一次；
-`FileViewerView` 不单独监听快捷键。
-格式功能详见 [Markdown](../markdown-live-preview/idea.md)、
-[CSV](../csv-table-view/idea.md)、[SVG](../svg-source-preview/idea.md)、
-[HTML](../html-live-preview/idea.md)、[图片](../image-annotations/idea.md)、
-[音频](../audio-file-playback/idea.md)、[视频](../video-file-playback/idea.md)。
+**不能强行共用：**完整 HTML 页面需隔离 `WKWebView`；Markdown 的 `MarkdownHTML`
+只处理少量静态片段，不是全 HTML/CSS 引擎。CSV 字段源区间解析也不同于 GFM 表格渲染。
+两者复用文件及安全边界，不复用不等价的内容语义。
+源码高亮扩展名表、文件图标和可预览性是三个不同判断，不建立统一 Registry／`FileKind`。
 
 ## 任务
 
 <a id="p1-t1"></a>
-### P1-T1 核销现有读取链路，只修改首个渲染器真正需要的部分
+### P1-T1 核销读取与公共资源边界，移除新格式产生的重复路径
 
-- **位置**：`FileTab.readContent / loadedContent / reloadFromDiskIfClean`，
-  `BaileyTests/Files/FileTabPersistenceTests.swift`；
-  参考 `Project.openFile / openLocalFile / restoreTab` 的真实调用路径。
-- **实施**：以首个已实现的格式 View 为前提，先核对该格式是否仍走现有文本／图片路径。
-  Markdown、CSV、SVG、HTML 仍为 `.text` 时**不要改动读取链路**；
-  若最先接入的是音／视频，才新增受控本机媒体加载，并同步处理
-  首读、刷新、匹配、过期回调、关闭与不可用状态。
-  绝不因为已知七种扩展名就预建 `FileKind`，也不将 `SyntaxHighlighting`／图标的扩展名表合并进读取层。
-  被真实新读取路径取代的分支**在本任务立即删除**，不保留并行路径或“以后再删”的 fallback。
-  `imageExtensions` 两处消费、真实头探测和有界读取已有有效用途，不属于待删旧代码。
-- **验证**：用现有图片大文件、伪装图片、符号链接、32 MiB 文本边界、不可读及二进制回归
-  证明真实文件仍正确打开或拒绝；新增读取类别时核对实际 IO 目标和字节上限，
-  及本机与 SSH 同名路径不串读。
-  若没有必要修改此处生产代码，直接记录“不需改动”的核验结果，
-  **不得为了形成提交而添加转发类型或虚构代码提交**。
+- **位置**：`FileTab.readContent / loadedContent / matches / reloadFromDiskIfClean`、
+  `MarkdownResource`、`MarkdownFilePreview`、`MarkdownHTMLView`、`Project.openMarkdownLink`、
+  `LocalWorkspaceBackend`、`BaileyTests/Files`。
+- **实施**：文本格式仅接入现有 `.text`，不改写编码或保存；图片仍经现有 ImageIO 安全边界。
+  HTML 首次消费外部资源时共用已验证的 `MarkdownResource` 授权与本机／SSH 读取，
+  仅提取确实有第二个调用者的公共部分，立即删除旧命名与重复路径。
+  本机音／视频真正接入时才增加**所需的**媒体读取结果及 `Content` 处理，
+  在 `readContent` 读取整个二进制之前分流，直接验证有权限的真实本机 URL，SSH 明确拒绝；
+  不用 32 MiB 文本读取、整文件内存缓存或回退同名 Mac 路径。
+  纯图片更高分辨率查看不可绕过源文件版本和有界解码。
+- **验收**：无扩展名、大小写、混淆后缀、伪造格式头、符号链接／`../`／URL 编码、
+  非普通文件、权限错误、缺失／损坏、32 MiB 文本及 256 MiB 图片边界；
+  Finder 本机文件、受控 SSH 同名文件、断线／重连、读中改名、刷新失败和关闭后迟到结果。
+  检查真实读入字节、机器、权限、取消和资源释放，不以渲染器实例化代替最终结果。
 
 <a id="p1-t2"></a>
-### P1-T2 接入真实预览，维护唯一主视图与标签缩略图
+### P1-T2 让下一种预览复用同一展示模式、Dock 和系统菜单
 
-- **位置**：`FileViewerView.body` 的 `switch file.content`；
-  新增 `Content` case 时同时核对 `FileTab.loadIfNeeded / matches / reloadFromDiskIfClean`
-  和 `Bailey/UI/Panes/TabSwitcherView.swift` 的 `TabContentThumbnail.filePreview`；
-  `SourceTextEditor`、`PanelContentView` 和菜单仅核验，不为分发创建另一层入口。
-- **实施**：等实际渲染 View 就绪，直接在现有 `.text`／`.image` 分支放置该 View；
-  源码视图继续使用唯一 `FileTab.nativeTextStorage`，保存、撤销与编码仍只走原链路。
-  需要新 `Content` case 时，立即补上标签切换器的**有界缩略图或明示占位**；
-  切换器不得另读整份文件、创建第二个播放器或对 32 MiB 文件全文排版。
-  新图片 View 就绪时删除被替代的 `ScrollView + Image(nsImage:)` 旧展示；
-  文本视图遵守各自的**现有计划默认模式**：Markdown／HTML 默认源码，CSV 默认表格、SVG 默认图形；
-  默认源码的预览必须通过该格式计划中的系统菜单／标签右键实际可达，不能只挂一个用户无法打开的隐藏 View。
-  不把“支持渲染”误写成“所有格式默认预览”，未实现格式仍走 `SourceTextEditor`。
-  不提前改 `PaneTab`、Dock、主菜单或恢复数据格式。
-  此任务同步更新 `docs/features/editor.md`；只有真正改变依赖归属时才更新 `docs/architecture.md`。
-- **验证**：从 Files、系统 `⌘O`、Finder、会话恢复（独立 `restoreTab`）、多窗口／Dock
-  打开并切回，核对实际 View、原生第一响应者、Tab 身份、缩略图、源文字节和 Undo；
-  载入中、失败、断线、重命名、脏稿及关闭后过期任务不能显示错文件或泄漏资源。
-  **旧格式零 UI/UX 变化**；新格式的可见差异由其自身 Feature Plan 验收，
-  不把“渲染器工厂已注册”当作成功。
+- **位置**：`FileViewerView`、`FileTab`、`DockWorkspaceModel`、`Project`、
+  `WorkspaceDockView`、`WorkspaceWindowModel`、`BaileyApp.swift`、
+  `SourceTextEditor`、`PanelContentView`、`TabSwitcherView` 及相关测试。
+- **实施**：从现有 Markdown 源码／预览／并排入口出发，按第二个真实格式的需要
+  **一次性替换**特有的模式与 Dock companion 命名／分发；各格式只拥有自己的渲染内容和附加状态。
+  右键操作命中标签，主菜单操作前台焦点文件，`⌘⇧V` 只注册一次，
+  不新增第二个工具栏、第二套 Splitter、保存模型或事件监听。
+  CSV 默认表格、SVG 默认图形、HTML 默认源码；错误时源码仍可见，
+  损坏数据不得凭后缀宣称已成功预览。
+  主视图与 `TabContentThumbnail.filePreview` 同时覆盖新增内容，缩略图不再次读取全部文件、
+  创建播放器或触发脚本；当场删除被新路径替代的旧视图／枚举分支及旧测试断言。
+- **验收**：Files／`⌘O`／Finder／独立 `restoreTab`／跨窗口打开，
+  单标签与并排、Dock 拖动／关闭、右键后台标签与 File 菜单、切模式、焦点／IME／Undo／保存，
+  跨后缀重命名、可写草稿、外部冲突、权限变化、旧读取乱序以及真实关闭释放。
+  对照 Markdown 和现有图片的实际 GUI，**纯架构复用不得改变其 UI/UX**。
 
-## 阶段验收
+## 阶段验收与执行顺序
 
-**开始条件**：已有某一格式的真实可用渲染 View，且该格式计划明确需要接入现有 `FileTab`。
-如果尚未实现任何新 View，**不单独执行本计划来增加空壳代码**；
-T1 可以记录无需改动的结论，T2 不能以空注册或临时占位宣称完成。
+此计划与**下一种格式的首个接入任务共同执行**，不作为单独“框架项目”先行。
+推荐先完成 [图片 P1](../image-annotations/plan-p1.md) 的共用缩放视口，
+再以 [SVG P1](../svg-source-preview/plan-p1.md) 为第一个非 Markdown 文本预览，
+**在接入 SVG 的同一任务完成路由 P1-T2 通用化及删除旧分支**。
+HTML／CSV 后续直接使用通用模式；音频 P1 首次复用 AVAsset，视频 P1 首次共用 AVPlayerView。
+这些是依赖关系而非额外大阶段；已验证的功能可按实际准备情况并行。
+若所选格式尚不需要修改读取或并排路径，记录核验结论，不制造提交。
 
-- **文件与边界**：旧文本、空文件、`SKILL.md`／`.mdx`、CSV/SVG/HTML 文本、
-  大小写／无后缀／多重后缀及中文／emoji 路径；
-  正常图像、有效图片后缀的纯文本、伪装的大文件、损坏／NUL／非法编码、
-  符号链接、非普通文件、缺失及无权限文件。
-  核对 32 MiB 文本、256 MiB 图片、3200 万像素与 4096px 缩略图仍由原路径限制。
-  新格式还需覆盖该格式计划的完整输入矩阵，不把“路由正确”冒充解码／渲染通过。
-- **身份与时序**：新开与重开、`openLocalFile`、独立 `restoreTab`、
-  同一项目复用、跨窗口 Finder 复用、本机／SSH 同名路径；
-  干净／脏稿刷新、编码保存、外部修改和保存冲突、改名跨后缀、
-  旧读取乱序、断线／重连、视图卸载／重挂载、真实关闭和旧资源释放。
-  核对文件实际字节、原生正文对象、Undo、请求目标与 `TabSwitcherView` 缩略图。
-- **宿主测试**：按触及路径运行
-  `make test:FileTabPersistenceTests,NativeContentIdentityIntegrationTests,NativePaneRetentionIntegrationTests,WorkspaceIdentityTests,SessionStoreTests,FinderDeliveryIntegrationTests`；
-  改动高亮／重命名路径时补 `NativeSyntaxHighlightingTests`，需要源文件及菜单能力时补对应格式测试。
-  功能代码完成后执行 `make build` 和 `make test`，以完整退出状态与结果为准。
-  每个任务当场删除确已替代的旧分支，复查没有新增 `FileKind` 空枚举、镜像正文或双重展示。
-- **真实 GUI 与环境**：只在隔离 Bailey Dev 进行 Files／Finder／Dock／多窗口实际打开和展示回归；
-  新格式的视觉、菜单、焦点、手势等由其 Feature Plan 验收，旧格式零 UI/UX 变化。
-  真实 SSH／Windows 环境和独占图形会话若不可用，分别写清未测的条件、影响和补验方法；
-  没有远端证据不宣称 SSH 行为全面通过，也**不因未涉及远端的纯文本分发要求而虚构 Windows SSH 阻塞**。
-  对照 [测试标准](../../../docs/testing.md#完成标准) 完成检验、文档同步和 `git diff --check`。
+按 `docs/testing.md`，宿主覆盖 `FileTabPersistenceTests`、`MarkdownResourceScopeTests`、
+`NativePaneRetentionIntegrationTests`、`DockWorkspaceTests`、`SessionStoreTests`、
+`FinderDeliveryIntegrationTests` 以及新格式的解析／权限／IO 用例；
+涉及阅读位置与菜单时加 `SwiftMarkdownLayoutTests` 和隔离的 `MarkdownPreviewUITests`／Dock UI。
+完整执行相关 `make test:...`、`make build`、阶段性 `make test` 和必要的隔离 Bailey Dev。
+测试应覆盖 macOS 支持基线、编码和大小极值、错误恢复、真实本机与获授权 SSH、
+多窗口、窄宽 Dock、深浅主题、键盘与手势，以及跨格式、切换、刷新、关闭的交互组合。
+真实 SSH、系统缩放／触控板或特殊运行环境不可用时，逐项记明原因、影响、替代证据与补验方法；
+未跑的组合不能冒称通过。完成后同步 `docs/features/editor.md`，只有所有权改变才改 `docs/architecture.md`。

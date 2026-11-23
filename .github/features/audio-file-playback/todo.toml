@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "媒体类型判定与安全加载"
+title = "共用音视频实际文件校验与正确读取分支"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "原生播放控件与生命周期"
+title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "波形绘制、缩放与定位"
+title = "波形摘要、缩放与连续 seek"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -27,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "终止／恢复／多标签冲突检查"
+title = "隐藏、重新激活与真实资源回收"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""

@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "解析和文件类型路由"
+title = "原文 UTF-16 字段索引与有界类型路由"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "原生表格与视图切换"
+title = "共用文件展示模式，交付可访问的只读原生表格"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "单元格操作共享 TextKit Undo"
+title = "对原文源区间执行原生编辑、复用唯一 Undo"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -27,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "保存与真实外部冲突验收"
+title = "严格往返编码、条件保存和外部冲突"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""

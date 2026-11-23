@@ -1,36 +1,70 @@
-# P1｜在现有 FileTab 中播放视频
+# P1｜复用 Markdown 播放底座的本机视频文件标签
 
-交付视频文件默认渲染与系统播放器控制，不改变 Dock 或 Finder 的文件入口。
+本机视频双击后，在同一个 `FileTab` 显示画面、播放、seek、音量、倍速和全屏。
+采用 Apple AVFoundation＋AVKit，不引入 FFmpeg／VLC、第二个浏览器或工具栏框架。
 
-## 技术决定
+## 当前代码与共用边界
 
-**不新增视频播放器 SPM。** 在 macOS 15.6+ 直接使用 Apple **AVKit 的 AppKit `AVPlayerView`** 与 **AVFoundation 的 `AVPlayer`、`AVPlayerItem`、`AVURLAsset`**。优先使用 AVPlayerView 画面内原生播放／暂停、seek、全屏、音量与系统媒体选项；倍速若无法直接在系统控件中选择，则只在画面内增加最小速率控件并绑定当前 AVPlayer，不复制一整套播放工具栏，也不改藏到右键。
-以 `NSViewRepresentable` 嵌入唯一 FileTab 的显示内容，SwiftUI 重挂载不重新创建播放器或后台解码进程。解码格式以 macOS 当前 AVFoundation 能力为准，不捆绑 FFmpeg、VLC、视频缩略图网络下载或自研字幕引擎。
-只支持有权限的本机媒体 URL；SSH 视频需要后端随机访问和缓存改造，**当前不纳入**，也不使用下载完整视频到内存的兼容路径。
-
-## 方案
-
-沿 `Project.openFile` → `FileTab` → `FileViewerView` 路由视频；原文本／图片内容保留。
-本机媒体以文件 URL 交给 `AVPlayer` / `AVPlayerView`，不通过 `WorkspaceBackend.read(maxBytes:)` 加载全部 bytes。
-播放器由唯一 FileTab 持有，Dock 只是展示；不为一次文件打开创建第二层面板或应用级播放管理器。
+- `MarkdownMedia.asset(at:)` 已包装禁止外部引用的 `AVURLAsset`，
+  `MarkdownNativePlayer` 已将 `AVPlayer` 嵌入原生 `AVPlayerView`。
+  Markdown 内嵌视频通过授权的 `MarkdownResource` 限制读取、点击后最多暂存 64 MiB，
+  播放器由嵌入视图临时持有，离开时释放。
+- **独立本机文件**的 `AVURLAsset` 应直接绑定实际有权限的 `file://`，
+  不经过 Markdown 的暂存／整文件 64 MiB 限制，更不经过 32 MiB 文本读取。
+  共享的是**AVAsset 验证、引用限制、AVPlayerView 控件适配**，
+  不是 Markdown 的暂存任务或内嵌 View 生命周期。
+  第一种独立音视频格式先复用 AVAsset 检查；当本计划实际需要
+  第二处 `AVPlayerView` 时，才将 Markdown 的 `MarkdownNativePlayer` 收敛为中性组件，
+  当场替换旧调用，绝不留下两个同功能的原生视频适配。
+- 当前 `FileTab.Content` 无媒体 case；按候选扩展名在 `readContent` 前分流，
+  再由系统 AVAsset.load 的实际 playable／轨道验证，
+  文件身份、generation、错误、刷新、保存禁用、关闭和 `TabSwitcherView`
+  由现有 `FileTab` 生命周期处理，保持文本／图片原路径不变。
+  SSH 媒体在没有受控随机访问时明确不支持，绝不伪装同名本机视频。
+- `AVPlayer` 由文件标签持有，Dock 只显示且重挂载不重新创建解码任务。
+  **优先原生 `AVPlayerView` 的视频画面内播放、拖动、音量、全屏和轨道控制**；
+  Markdown 目前关闭其全屏按钮，独立视频按显示场景启用，
+  只在系统控制确实缺少倍速入口时补最小控件。
+  不重写一套悬浮控件状态机、遮罩、计时器或重复速度／音量工具栏。
+  非活动标签默认暂停，不启用幽灵后台音频。
 
 ## 任务
 
 <a id="p1-t1"></a>
-### P1-T1 媒体路由与可信资源处理
+### P1-T1 与音频共享的本机媒体检查、路由及版本保护
 
-- **位置**：`FileTab.Content`、`FileTab.readContent`、`FileViewerView`、本机文件类型测试。
-- **实施**：用 `AVURLAsset` 异步查询实际轨道／时长／可播放性，交 `AVPlayerItem`，错误经当前文件标签原生提示；播放仅允许本机获授权文件 URL，远端路径不伪装成 Mac 路径；无效资源也允许关闭标签并释放 item。
-- **验证**：MP4/MOV/M4V、HEVC/H264 等实际系统可解码文件、损坏容器、无音轨、符号链接、文件改名／删除、未知扩展名。
+- **位置**：`FileTab.readContent / matches / reloadFromDiskIfClean`、
+  `MarkdownMedia`／AVPlayerView 适配、`TabSwitcherView` 与宿主测试。
+- **实施**：沿 [文件预览路由](../file-viewer-routing/plan-p1.md#p1-t1) 和
+  [音频共同底座](../audio-file-playback/plan-p1.md#p1-t1) 接入，
+  只增加实际视频读取所需的 `Content` 表示，不能重新实现媒体类型分发和 asset factory。
+  本机 URL 先检查普通文件／路径，再异步确认 AV 轨道可用和真实解码能力；
+  绑定文件目标、加载代次、替换和取消，损坏文件给出可返回／关闭的错误。
+  `TabSwitcherView` 只需轻量占位或有界静态缩略图，不启动第二个播放器。
+- **验证**：MP4／MOV／M4V、实际 H.264／HEVC、无音轨／无画面、
+  系统不支持 codec、错误扩展名／损坏／零字节、极大文件、权限／符号链接、
+  中文路径、同名 SSH 路径、改名删除／替换及并发重载，
+  不读取完整二进制到内存或对正式文件执行写入。
 
 <a id="p1-t2"></a>
-### P1-T2 原生视频区和聚焦控制
+### P1-T2 原生 AVPlayerView 画面内操控与文件生命周期
 
-- **位置**：新增视频播放视图、Dock 的文件标签生命周期及 `docs/features/editor.md`。
-- **实施**：视频画面内必须能直接播放、拖动进度、改变音量、选择倍速和全屏；AVPlayerView 原生能力足够时不重复绘制，缺少倍速入口时只加该最小画面内附件。暂停／指针移动显示控件，播放闲置淡出；定位于实际视频矩形而非整个 Panel 底部，窄屏仍可操作，聚焦快捷键交由 AVKit。
-  一个 `FileTab` 只保留一个 `AVPlayer`；非活动标签默认暂停，关闭时拆除 currentItem、观察者并释放解码资源。
-- **验证**：真实 App 中不经右键直接播放／暂停、拖动 seek、静音／音量、倍速、全屏；右键无重复项。检查暂停／播放闲置／焦点、竖屏／超宽／窄 Dock、视频画幅黑边和控制层遮挡，再覆盖实际音频输出、窗口切换、关闭与双文件状态。
+- **位置**：共用原生 `AVPlayerView` 适配、当前视频 `FileTab` 和 Dock 内容。
+- **实施**：原生播放器直接提供播放／暂停、连续拖动 seek、音量、静音、全屏，
+  并按系统实际能力接入画面内倍速；没有时只补最小可见选择器，
+  不复制原生控件整套功能。画面等比例，在竖屏／超宽画幅的实际内容内安放操作区域，
+  不能以整个 Panel 底边当作视频底边。
+  暂停控件可见，活动时指针／键盘操作可恢复；
+  Space／方向键仅由真聚焦的 AVPlayerView 处理，关闭或离开标签暂停，
+  关闭时清空 item／观察者、取消请求并释放后台解码任务。
+- **验证**：真实视频画面、音频输出、seek、倍速／暂停修改、
+  字幕按钮有无状态、静音与全屏往返、Mac 不同窗口尺寸／屏幕比例／Retina、
+  点击／悬停／焦点／触控板、右键不重复控件；
+  两视频／音视频混合切换、Dock 重挂载、关闭和系统唤醒不漏播放器。
 
 ## 阶段验收
 
-`make build:ui`、受影响宿主测试和隔离 Bailey Dev，检查真实解码而不是“呈现一个视频框”。
+复用音频的文件身份与 AVAsset 宿主测试、Markdown 嵌入视频回归，
+新增 AVPlayerView 与多文件生命周期测试；执行相关 `make test:...`、
+`make build`、阶段 `make test` 及隔离 Bailey Dev 的真实画面／声音／菜单／全屏操作。
+按 `docs/testing.md` 核销权限、环境、设备、异常、容量和跨格式组合。

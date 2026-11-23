@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "可靠缩放／透明背景／真实像素"
+title = "用同一图片视口完成高精度缩放与资源按需解码"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "GIF 与图片入口一致性"
+title = "在共用 ImageIO 解码链完成 GIF 及图片状态恢复"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "画布工具、定位与撤销"
+title = "画布标注、光标命中和标签级撤销"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -27,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "可编辑 sidecar 与扁平导出"
+title = "sidecar 条件保存、关联文件操作与像素导出"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""

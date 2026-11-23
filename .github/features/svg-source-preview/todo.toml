@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "SVG 类型识别与安全内容边界"
+title = "复用 SVG 净化与 SwiftDraw，确认复杂 SVG 能力"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "渲染视图与源码命令"
+title = "接入共用图形视口和源码／预览／并排命令"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "实时并排、错误定位与平滑缩放"
+title = "同步源文字节与矢量图形、保持滚动状态"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -27,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "复制／导出与文件保存闭环"
+title = "SVG 有界复制／导出与源码保存回归"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
