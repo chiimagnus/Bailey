@@ -2,16 +2,35 @@ import CoreGraphics
 import Foundation
 import SwiftDraw
 
-nonisolated enum MarkdownSVG {
+nonisolated enum SVGArtwork {
+    static let byteLimit = 1 << 20
+
+    struct Sanitized {
+        let xml: String
+        let omitted: [String]
+    }
+
+    struct Vector: Sendable {
+        let image: SVG
+        let omitted: [String]
+    }
+
     struct Raster: Sendable {
         let image: CGImage
         let pointSize: CGSize
     }
 
-    static func render(_ data: Data) throws -> Raster {
-        guard let svg = SVG(xml: try sanitizedXML(data)),
+    static func parse(_ data: Data) throws -> Vector {
+        let cleaned = try sanitizedXML(data)
+        guard let svg = SVG(xml: cleaned.xml),
               svg.size.width.isFinite, svg.size.height.isFinite,
               svg.size.width > 0, svg.size.height > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        try Task.checkCancellation()
+        return Vector(image: svg, omitted: cleaned.omitted)
+    }
+
+    static func render(_ data: Data) throws -> Raster {
+        let svg = try parse(data).image
         let scale = min(2, 2048 / max(svg.size.width, svg.size.height))
         let width = max(1, Int(ceil(svg.size.width * scale)))
         let height = max(1, Int(ceil(svg.size.height * scale)))
@@ -26,8 +45,9 @@ nonisolated enum MarkdownSVG {
         return Raster(image: image, pointSize: svg.size)
     }
 
-    static func sanitizedXML(_ data: Data) throws -> String {
-        guard data.count <= 1 << 20 else { throw WorkspaceError.tooLarge }
+    static func sanitizedXML(_ data: Data) throws -> Sanitized {
+        try Task.checkCancellation()
+        guard data.count <= byteLimit else { throw WorkspaceError.tooLarge }
         guard let source = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16),
               !source.localizedCaseInsensitiveContains("<!doctype") else {
             throw CocoaError(.fileReadCorruptFile)
@@ -37,8 +57,9 @@ nonisolated enum MarkdownSVG {
             throw CocoaError(.fileReadCorruptFile)
         }
         var budget = 4_096
-        try clean(root, depth: 0, budget: &budget)
-        return root.xmlString
+        var omitted = Set<String>()
+        try clean(root, depth: 0, budget: &budget, omitted: &omitted)
+        return Sanitized(xml: root.xmlString, omitted: omitted.sorted())
     }
 
     private static let allowed: Set<String> = [
@@ -48,7 +69,9 @@ nonisolated enum MarkdownSVG {
         "feFlood", "feMerge", "feMergeNode", "feColorMatrix", "feDropShadow",
     ]
 
-    private static func clean(_ element: XMLElement, depth: Int, budget: inout Int) throws {
+    private static func clean(
+        _ element: XMLElement, depth: Int, budget: inout Int, omitted: inout Set<String>
+    ) throws {
         try Task.checkCancellation()
         guard depth <= 48, budget > 0 else { throw WorkspaceError.tooLarge }
         budget -= 1
@@ -58,13 +81,15 @@ nonisolated enum MarkdownSVG {
             if name.hasPrefix("on") || name == "href" || name == "base"
                 || name == "style" && value.contains("@")
                 || containsNonlocalURL(value) {
+                omitted.insert("@" + name)
                 attribute.detach()
             }
         }
         for child in element.children ?? [] {
             if let child = child as? XMLElement, let name = child.localName, allowed.contains(name) {
-                try clean(child, depth: depth + 1, budget: &budget)
+                try clean(child, depth: depth + 1, budget: &budget, omitted: &omitted)
             } else if child.kind != .text {
+                if child.kind == .element, let name = child.localName { omitted.insert(name) }
                 child.detach()
             }
         }

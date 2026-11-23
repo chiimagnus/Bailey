@@ -732,10 +732,10 @@ final class SwiftMarkdownNativeTests: XCTestCase {
           <script>alert(1)</script>
         </svg>
         """
-        let image = try MarkdownSVG.render(Data(svg.utf8))
+        let image = try SVGArtwork.render(Data(svg.utf8))
         XCTAssertEqual(image.image.width, 40)
         XCTAssertEqual(image.image.height, 20)
-        XCTAssertThrowsError(try MarkdownSVG.render(Data("<!DOCTYPE svg><svg/>".utf8)))
+        XCTAssertThrowsError(try SVGArtwork.render(Data("<!DOCTYPE svg><svg/>".utf8)))
     }
 
     func testSVGOnlyAllowsLocalFragmentURLsInsideStyledGradientsAndFilters() throws {
@@ -755,7 +755,9 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               <script>alert(1)</script>
             </svg>
             """
-        let cleaned = try MarkdownSVG.sanitizedXML(Data(source.utf8))
+        let sanitized = try SVGArtwork.sanitizedXML(Data(source.utf8))
+        let cleaned = sanitized.xml
+        XCTAssertEqual(sanitized.omitted, ["@fill", "@onclick", "@style", "image", "script"])
         XCTAssertTrue(cleaned.contains("linearGradient"))
         XCTAssertTrue(cleaned.contains("fill:url(#safe)"),
                       "A valid local CSS gradient must survive sanitization")
@@ -766,7 +768,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertFalse(cleaned.contains("file:///"))
         XCTAssertFalse(cleaned.contains("onclick"))
         XCTAssertFalse(cleaned.contains("<script"))
-        let image = try MarkdownSVG.render(Data(source.utf8))
+        let image = try SVGArtwork.render(Data(source.utf8))
         XCTAssertEqual(image.image.width, 48)
         XCTAssertEqual(image.image.height, 24)
         XCTAssertEqual(image.pointSize.width, 24)
@@ -779,12 +781,35 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               <rect width="40" height="12" fill="url(#fade)"/>
             </svg>
             """
-        let raster = NSBitmapImageRep(cgImage: try MarkdownSVG.render(Data(gradient.utf8)).image)
+        let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(Data(gradient.utf8)).image)
         let left = try XCTUnwrap(raster.colorAt(x: 6, y: 12)?.usingColorSpace(.deviceRGB))
         let right = try XCTUnwrap(raster.colorAt(x: 74, y: 12)?.usingColorSpace(.deviceRGB))
         XCTAssertGreaterThan(left.redComponent, right.redComponent + 0.25,
                              "SVG gradients must produce different actual pixel colors")
         XCTAssertGreaterThan(right.blueComponent, left.blueComponent + 0.25)
+    }
+
+    func testSVGReportsOmittedFeaturesAndKeepsClippingWithNegativeViewBox() throws {
+        let text = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="-12 -8 24 16">
+              <defs>
+                <clipPath id="left"><rect x="-12" y="-8" width="12" height="16"/></clipPath>
+                <pattern id="p" width="1" height="1"><circle r="1"/></pattern>
+                <symbol id="other"><rect width="24" height="16"/></symbol>
+              </defs>
+              <rect x="-12" y="-8" width="24" height="16" fill="red" clip-path="url(#left)"/>
+              <use href="#other"/>
+            </svg>
+            """
+        let source = Data(text.utf8)
+        let vector = try SVGArtwork.parse(source)
+        XCTAssertEqual(vector.omitted, ["pattern", "symbol", "use"])
+        let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(source).image)
+        let painted = try XCTUnwrap(raster.colorAt(x: 8, y: 16)?.usingColorSpace(.deviceRGB))
+        let clipped = try XCTUnwrap(raster.colorAt(x: 40, y: 16)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(painted.redComponent, 0.9)
+        XCTAssertGreaterThan(painted.alphaComponent, 0.9)
+        XCTAssertLessThan(clipped.alphaComponent, 0.05)
     }
 
     func testRenderedHeadingTextRangePointsPastMarkdownMarkers() async throws {

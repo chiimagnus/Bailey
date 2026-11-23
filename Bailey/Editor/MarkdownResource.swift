@@ -76,10 +76,10 @@ nonisolated struct MarkdownResource: Sendable {
 
     @concurrent func picture(_ url: URL) async throws -> MarkdownPicture {
         let svg = url.pathExtension.lowercased() == "svg"
-        let data = try await read(url, maxBytes: svg ? 1 << 20 : 16 << 20)
+        let data = try await read(url, maxBytes: svg ? SVGArtwork.byteLimit : 16 << 20)
         try Task.checkCancellation()
         if svg {
-            let raster = try MarkdownSVG.render(data)
+            let raster = try SVGArtwork.render(data)
             return MarkdownPicture(poster: raster.image, pointSize: raster.pointSize)
         }
         return try MarkdownPicture.decode(data)
