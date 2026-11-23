@@ -1152,12 +1152,15 @@ struct FileViewerView: View {
                 if let player = file.mediaPlayer {
                     let isAudio = media.kind == .audio
                     NativePlayerView(player: player, allowsFullScreen: !isAudio,
-                                     controlsStyle: isAudio ? .floating : .inline)
+                                     controlsStyle: isAudio ? .floating : .inline,
+                                     isDockActive: isFocused && appearsActive)
                         .frame(maxWidth: isAudio ? 520 : .infinity)
                         .frame(height: isAudio ? 112 : nil)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .id(ObjectIdentifier(player))
-                        .onChange(of: isFocused && appearsActive) { _, active in if !active { player.pause() } }
+                        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                            player.pause()
+                        }
                         .onDisappear { player.pause() }
                 }
             case .loading:

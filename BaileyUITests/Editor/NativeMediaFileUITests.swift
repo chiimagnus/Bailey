@@ -3,6 +3,90 @@ import XCTest
 
 @MainActor
 final class NativeMediaFileUITests: XCTestCase {
+    func testNativeVideoContinuesPlayingAcrossSystemFullScreen() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let video = fixture.root.appending(path: "Fullscreen.mp4")
+        try FileManager.default.copyItem(
+            at: root.appending(path: ".github/features/video-file-playback/demo-video.mp4"), to: video
+        )
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let windowID = app.windows.firstMatch.identifier
+        let window = app.windows.matching(identifier: windowID).firstMatch
+        open(video, in: window, app: app)
+        let tab = WorkspaceUITestSupport.fileTab(video, in: window)
+        let toggle = window.checkBoxes["play/pause"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        let fullScreen = window.checkBoxes["toggle full screen"]
+        XCTAssertTrue(fullScreen.exists, window.debugDescription)
+        let inlineWidth = window.sliders["timeline"].frame.width
+        let inlineWindow = window.frame
+        let paused = String(describing: toggle.value ?? "")
+        let speed = window.buttons["playback speed"]
+        speed.click()
+        let slow = WorkspaceUITestSupport.menuItem("0.5×", in: speed)
+        XCTAssertTrue(slow.waitForExistence(timeout: 5))
+        slow.click()
+        toggle.click()
+        XCTAssertNotEqual(String(describing: toggle.value ?? ""), paused)
+        fullScreen.click()
+
+        func fullTimeline() -> XCUIElement? {
+            app.sliders.matching(identifier: "timeline").allElementsBoundByIndex.first {
+                $0.frame.width > inlineWidth + 50
+            }
+        }
+        func time(_ slider: XCUIElement) -> Double? {
+            Double(String(describing: slider.value ?? ""))
+        }
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fullTimeline() != nil
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed, app.debugDescription)
+        let enteredAt = try XCTUnwrap(fullTimeline().flatMap(time))
+        let advances = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (fullTimeline().flatMap(time) ?? 0) > enteredAt + 0.15
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [advances], timeout: 2), .completed,
+                       "The native playhead must keep advancing in full screen")
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fullTimeline() == nil && tab.exists && window.sliders["timeline"].exists
+                && window.frame.width == inlineWindow.width
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 8), .completed)
+        XCTAssertTrue(tab.isSelected)
+        let inlineTimeline = window.sliders["timeline"]
+        let returnedAt = try XCTUnwrap(time(inlineTimeline))
+        XCTAssertGreaterThan(returnedAt, enteredAt)
+        let inlineAdvances = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (time(inlineTimeline) ?? 0) > returnedAt + 0.15
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [inlineAdvances], timeout: 3), .completed)
+
+        toggle.click()
+        XCTAssertEqual(String(describing: toggle.value ?? ""), paused)
+        let pausedAt = try XCTUnwrap(time(inlineTimeline))
+        fullScreen.click()
+        let pausedFullScreen = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in fullTimeline() != nil }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [pausedFullScreen], timeout: 5), .completed)
+        let progressesWhilePaused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            abs((fullTimeline().flatMap(time) ?? pausedAt) - pausedAt) > 0.06
+        }, object: nil)
+        progressesWhilePaused.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [progressesWhilePaused], timeout: 1.5), .completed)
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        let pausedExit = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fullTimeline() == nil && tab.isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [pausedExit], timeout: 8), .completed)
+        XCTAssertEqual(String(describing: toggle.value ?? ""), paused)
+    }
+
     func testNativeAudioControlsAndPauseWhenAnotherFileTakesFocus() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

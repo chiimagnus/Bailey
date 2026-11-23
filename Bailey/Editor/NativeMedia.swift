@@ -62,9 +62,23 @@ struct NativePlayerView: NSViewRepresentable {
     let player: AVPlayer
     var allowsFullScreen = false
     var controlsStyle: AVPlayerViewControlsStyle = .inline
+    var isDockActive: Bool?
+
+    final class Presentation: NSObject, AVPlayerViewDelegate {
+        var isDockActive: Bool?
+        private(set) var isFullScreen = false
+
+        func playerViewWillEnterFullScreen(_ playerView: AVPlayerView) { isFullScreen = true }
+
+        func playerViewDidExitFullScreen(_ playerView: AVPlayerView) { isFullScreen = false }
+    }
+
+    func makeCoordinator() -> Presentation { Presentation() }
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
+        view.delegate = context.coordinator
+        context.coordinator.isDockActive = isDockActive
         view.controlsStyle = controlsStyle
         view.showsFullScreenToggleButton = allowsFullScreen
         view.player = player
@@ -73,6 +87,13 @@ struct NativePlayerView: NSViewRepresentable {
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
         if view.player !== player { view.player = player }
-        view.showsFullScreenToggleButton = allowsFullScreen
+        if view.showsFullScreenToggleButton != allowsFullScreen {
+            view.showsFullScreenToggleButton = allowsFullScreen
+        }
+        let presentation = context.coordinator
+        if presentation.isDockActive == true, isDockActive == false, !presentation.isFullScreen {
+            player.pause()
+        }
+        presentation.isDockActive = isDockActive
     }
 }
