@@ -4,6 +4,43 @@ import XCTest
 
 @MainActor
 final class CSVPreviewUITests: XCTestCase {
+    func testSystemFileDeliveryAndColdRestoreDisplayTheSameNativeTable() async throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "Name,Value\r\nFinder sample,17\r\n"
+        let file = try fixture.file("Finder sample.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, project: fixture.root, clipboardIsReadOnly: true
+        )
+        let devID = "chiimagnus.bailey.dev"
+        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: devID)
+        guard applications.count == 1, let owner = applications.first else {
+            return XCTFail("System delivery must have exactly one isolated Bailey Dev recipient")
+        }
+        let bundleURL = try XCTUnwrap(owner.bundleURL)
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.allowsRunningApplicationSubstitution = false
+        configuration.arguments = app.launchArguments
+        configuration.environment = app.launchEnvironment
+        let delivered = try await NSWorkspace.shared.open([file], withApplicationAt: bundleURL, configuration: configuration)
+        XCTAssertEqual(delivered.processIdentifier, owner.processIdentifier)
+        XCTAssertEqual(delivered.bundleIdentifier, devID)
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.staticTexts["17"].waitForExistence(timeout: 15))
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch).exists)
+
+        app.typeKey("q", modifierFlags: .command)
+        let quit = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.state == .notRunning }, object: nil)
+        let quitResult = await XCTWaiter.fulfillment(of: [quit], timeout: 12)
+        XCTAssertEqual(quitResult, .completed)
+        guard app.state == .notRunning else { return XCTFail("The original Dev instance must quit before relaunch") }
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch).waitForExistence(timeout: 15))
+        XCTAssertTrue(table.staticTexts["Finder sample"].waitForExistence(timeout: 10))
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+    }
+
     func testSortingFilteringFindingAndCopyingUseDisplayedCellsWithoutWritingSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "Name,Group,Value\r\nItem 10,equipe,orange\r\nItem 2,Équipe,blue\r\nOther,elsewhere,green\r\n"
