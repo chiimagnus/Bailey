@@ -5,6 +5,7 @@ import Darwin
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import WebKit
 import XCTest
 @testable import Bailey
 
@@ -52,6 +53,23 @@ final class MarkdownResourceScopeTests: XCTestCase {
             }
         }
 
+        func renderHTML(_ file: FileTab, directory: String) async throws -> [String] {
+            let previous = file.htmlPreview?.webView.url
+            await file.showHTMLPreview(request: file.textPreviewRequestID, in: directory)
+            let preview = try XCTUnwrap(file.htmlPreview)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+            while preview.webView.url == nil || preview.webView.url == previous || preview.webView.isLoading {
+                guard !preview.failed else { throw CocoaError(.fileReadCorruptFile) }
+                guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let values = try await preview.webView.evaluateJavaScript("""
+                [document.querySelector('h1').textContent, getComputedStyle(document.querySelector('h1')).color,
+                 String(document.querySelector('img').naturalWidth)]
+                """, contentWorld: .defaultClient)
+            return try XCTUnwrap(values as? [String])
+        }
+
         func assertRemoteMediaIsUnavailable(_ path: String, on channel: SSHWorkspaceBackend) async throws {
             let file = FileTab(path: path, backend: channel, workspaceIdentity: "ssh:\(host)")
             try await load(file)
@@ -82,6 +100,9 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let asset = directory + "/asset.svg"
             let rasterPath = directory + "/wide.png"
             let tablePath = directory + "/measurements.CSV"
+            let htmlPath = directory + "/页面 #100%.html"
+            let stylesPath = directory + "/preview.css"
+            let htmlSVGPath = directory + "/preview.svg"
             let outside = fixture + "/outside.svg"
             let original = Data("\u{feff}# 测试 🧪\r\n\r\n![Scoped asset](asset.svg)\r\n".utf8)
             let svg = Data("""
@@ -105,6 +126,15 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try await backend.write(path: rasterPath, data: rasterBytes)
             let tableBytes = Data("# coding: gbk,样本😀\r\n1,\"多行\r\n数据\"\r\n".utf8)
             try await backend.write(path: tablePath, data: tableBytes)
+            let htmlSource = """
+                <!doctype html><style>h1 { color: black; }</style><link rel="stylesheet" href="preview.css">
+                <h1>Windows 🧪</h1><img src="preview.svg">
+                """
+            let remoteHTML = Data(htmlSource.utf8)
+            let remoteStyle = Data("h1 { color: rgb(1, 50, 90); }".utf8)
+            try await backend.write(path: htmlPath, data: remoteHTML)
+            try await backend.write(path: stylesPath, data: remoteStyle)
+            try await backend.write(path: htmlSVGPath, data: svg)
 
             let connection = RemoteConnection(user: "", host: host, port: 22,
                                               controlSocket: URL(fileURLWithPath: socket), sshPID: 0)
@@ -167,6 +197,23 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try localTwin.write(to: URL(fileURLWithPath: path))
             try localTwin.write(to: URL(fileURLWithPath: asset))
             try localTwin.write(to: URL(fileURLWithPath: rasterPath))
+            let localHTML = Data(htmlSource.replacingOccurrences(of: "Windows", with: "Mac").utf8)
+            let localStyle = Data("h1 { color: rgb(200, 40, 20); }".utf8)
+            let localSVG = Data(String(decoding: svg, as: UTF8.self)
+                .replacingOccurrences(of: "width=\"40\"", with: "width=\"17\"").utf8)
+            try localHTML.write(to: URL(fileURLWithPath: htmlPath))
+            try localStyle.write(to: URL(fileURLWithPath: stylesPath))
+            try localSVG.write(to: URL(fileURLWithPath: htmlSVGPath))
+            let remotePage = FileTab(path: htmlPath, backend: channel, workspaceIdentity: "ssh:\(host)")
+            let localPage = FileTab(path: htmlPath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await remotePage.waitForText()
+            try await localPage.waitForText()
+            let remotePresentation = try await renderHTML(remotePage, directory: directory)
+            let localPresentation = try await renderHTML(localPage, directory: directory)
+            XCTAssertEqual(remotePresentation, ["Windows 🧪", "rgb(1, 50, 90)", "40"])
+            XCTAssertEqual(localPresentation, ["Mac 🧪", "rgb(200, 40, 20)", "17"])
+            let retainedWebView = try XCTUnwrap(remotePage.htmlPreview?.webView)
+            XCTAssertFalse(retainedWebView === localPage.htmlPreview?.webView)
 
             let features = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .deletingLastPathComponent().appending(path: ".github/features")
@@ -225,6 +272,10 @@ final class MarkdownResourceScopeTests: XCTestCase {
                 XCTAssertTrue(disconnected.text.isEmpty)
             }
             XCTAssertEqual(connection.state, .disconnected)
+            remotePage.rebindWorkspace(to: nil)
+            let disconnectedPresentation = try await renderHTML(remotePage, directory: directory)
+            XCTAssertEqual(disconnectedPresentation, ["Windows 🧪", "rgb(0, 0, 0)", "0"])
+            XCTAssertTrue(remotePage.htmlPreview?.webView === retainedWebView)
             tab.autoSaveSuspendedForClose = true
             let draft = "\r\nDraft after disconnect"
             tab.nativeTextStorage.replaceCharacters(in: NSRange(location: tab.text.utf16.count, length: 0),
@@ -246,6 +297,18 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try await standalone.waitForText()
             XCTAssertNotEqual(standalone.textPreviewRequestID, standaloneRevision)
             XCTAssertEqual(try SVGArtwork.render(Data(standalone.text.utf8)).pointSize.width, 52)
+            try await backend.write(path: htmlSVGPath, data: revisedSVG)
+            remotePage.rebindWorkspace(to: channel)
+            let restoredPresentation = try await renderHTML(remotePage, directory: directory)
+            XCTAssertEqual(restoredPresentation, ["Windows 🧪", "rgb(1, 50, 90)", "52"])
+            XCTAssertTrue(remotePage.htmlPreview?.webView === retainedWebView)
+            let retainedHTML = try await backend.read(path: htmlPath, maxBytes: remoteHTML.count)
+            let retainedStyle = try await backend.read(path: stylesPath, maxBytes: remoteStyle.count)
+            XCTAssertEqual(retainedHTML, remoteHTML)
+            XCTAssertEqual(retainedStyle, remoteStyle)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: htmlPath)), localHTML)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: stylesPath)), localStyle)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: htmlSVGPath)), localSVG)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: asset)), localTwin)
             await tab.save()
             XCTAssertFalse(tab.isDirty)
