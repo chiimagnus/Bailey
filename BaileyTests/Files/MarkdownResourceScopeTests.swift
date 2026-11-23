@@ -82,6 +82,33 @@ final class MarkdownResourceScopeTests: XCTestCase {
             XCTAssertTrue(file.text.isEmpty)
         }
 
+        func assertGIF(_ file: FileTab, frameCount: Int) async throws {
+            let request = try XCTUnwrap(file.gifFramesRequest())
+            let frames = try await request()
+            XCTAssertEqual(frames.count, frameCount)
+            let last = try await frames.read(frameCount - 1)
+            XCTAssertEqual(last.image.width, 320)
+            XCTAssertEqual(last.seconds, 0.12, accuracy: 0.001)
+            let bitmap = NSBitmapImageRep(cgImage: last.image)
+            let inside = 27 + (frameCount - 1) * 19 % 236 + 10
+            XCTAssertGreaterThan(try XCTUnwrap(bitmap.colorAt(x: inside, y: 90)).alphaComponent, 0.9)
+            XCTAssertLessThan(try XCTUnwrap(bitmap.colorAt(x: 12, y: 90)).alphaComponent, 0.1)
+            let playback = try XCTUnwrap(file.gifPlayback)
+            let playing = Task { await playback.play { frames } }
+            defer { playing.cancel() }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            var first: CGImage?
+            while !playback.failed {
+                if let current = playback.image {
+                    if let first, current !== first { return }
+                    first = current
+                }
+                guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            XCTFail("Playback failed before presenting successive frames")
+        }
+
         do {
             let prefix = "/tmp/bailey-markdown-"
             let created = try await backend.run(argv: ["mktemp", "-d", prefix + "XXXXXX"],
@@ -99,6 +126,13 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let path = directory + "/Readme.md"
             let asset = directory + "/asset.svg"
             let rasterPath = directory + "/wide.png"
+            let gifPath = directory + "/动画 #100%.gif"
+            let renamedGIF = directory + "/改名后 #100%.gif"
+            let gifSamples = try ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"].map { root in
+                let images = URL(fileURLWithPath: root).appending(path: "images")
+                return (remote: try Data(contentsOf: images.appending(path: "动画-34帧.gif")),
+                        mac: try Data(contentsOf: images.appending(path: "动画-局部帧.gif")))
+            }
             let tablePath = directory + "/measurements.CSV"
             let htmlPath = directory + "/页面 #100%.html"
             let stylesPath = directory + "/preview.css"
@@ -197,6 +231,32 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try localTwin.write(to: URL(fileURLWithPath: path))
             try localTwin.write(to: URL(fileURLWithPath: asset))
             try localTwin.write(to: URL(fileURLWithPath: rasterPath))
+            let remoteGIF: FileTab?
+            let gifBeforeDisconnect: (() async throws -> GIFPlayback.Frames)?
+            if let gifSamples {
+                try await channel.write(path: gifPath, data: gifSamples.remote)
+                try gifSamples.mac.write(to: URL(fileURLWithPath: gifPath))
+                try gifSamples.mac.write(to: URL(fileURLWithPath: renamedGIF))
+                let gif = FileTab(path: gifPath, backend: channel, workspaceIdentity: "ssh:\(host)")
+                let mac = FileTab(path: gifPath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                try await load(gif)
+                try await load(mac)
+                try await assertGIF(gif, frameCount: 34)
+                try await assertGIF(mac, frameCount: 12)
+                let prior = try XCTUnwrap(gif.gifFramesRequest())
+                try await channel.rename(from: gifPath, to: renamedGIF)
+                gif.updatePath(renamedGIF)
+                do {
+                    _ = try await prior()
+                    XCTFail("A request for the old GIF identity survived rename")
+                } catch WorkspaceError.changedExternally {}
+                try await assertGIF(gif, frameCount: 34)
+                remoteGIF = gif
+                gifBeforeDisconnect = try XCTUnwrap(gif.gifFramesRequest())
+            } else {
+                remoteGIF = nil
+                gifBeforeDisconnect = nil
+            }
             let localHTML = Data(htmlSource.replacingOccurrences(of: "Windows", with: "Mac").utf8)
             let localStyle = Data("h1 { color: rgb(200, 40, 20); }".utf8)
             let localSVG = Data(String(decoding: svg, as: UTF8.self)
@@ -252,6 +312,15 @@ final class MarkdownResourceScopeTests: XCTestCase {
             }
 
             try await stopMaster()
+            if let remoteGIF, let gifBeforeDisconnect {
+                do {
+                    _ = try await gifBeforeDisconnect()
+                    XCTFail("A disconnected GIF read must not use the playable Mac namesake")
+                } catch RemoteConnectionError.notConnected {}
+                remoteGIF.rebindWorkspace(to: nil)
+                XCTAssertNil(remoteGIF.gifFramesRequest())
+                XCTAssertNil(remoteGIF.gifPlayback?.image)
+            }
             for sample in mediaFixtures {
                 try await assertRemoteMediaIsUnavailable(sample.path, on: channel)
             }
@@ -288,6 +357,16 @@ final class MarkdownResourceScopeTests: XCTestCase {
 
             let reopened = try await backend.read(path: path, maxBytes: original.count)
             XCTAssertEqual(reopened, original, "Reconnecting before retry must show the original remote bytes")
+            if let remoteGIF, let gifSamples {
+                remoteGIF.rebindWorkspace(to: channel)
+                try await assertGIF(remoteGIF, frameCount: 34)
+                let disk = try await channel.read(path: renamedGIF, maxBytes: gifSamples.remote.count)
+                XCTAssertEqual(disk, gifSamples.remote)
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: gifPath)), gifSamples.mac)
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: renamedGIF)), gifSamples.mac)
+                remoteGIF.retireContent()
+                XCTAssertNil(remoteGIF.gifPlayback)
+            }
             let revisedSVG = Data(String(decoding: svg, as: UTF8.self)
                 .replacingOccurrences(of: "width=\"40\"", with: "width=\"52\"").utf8)
             try await backend.write(path: asset, data: revisedSVG)
