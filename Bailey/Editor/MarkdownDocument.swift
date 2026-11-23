@@ -253,6 +253,7 @@ nonisolated struct MarkdownDocument: Sendable {
         }
 
         var occupiedAnchors = Set<String>()
+        var nextAnchorSuffix: [String: Int] = [:]
         var blocks = try document.children.compactMap { node -> Block? in
             try Task.checkCancellation()
             guard let rendered = project(
@@ -266,12 +267,14 @@ nonisolated struct MarkdownDocument: Sendable {
                     .replacingOccurrences(of: " ", with: "-")
                     .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
                 var candidate = initial
-                var suffix = 0
-                while occupiedAnchors.contains(candidate) {
-                    suffix += 1
-                    candidate = "\(initial)-\(suffix)"
+                if !occupiedAnchors.insert(initial).inserted {
+                    var suffix = nextAnchorSuffix[initial, default: 1]
+                    repeat {
+                        candidate = "\(initial)-\(suffix)"
+                        suffix += 1
+                    } while !occupiedAnchors.insert(candidate).inserted
+                    nextAnchorSuffix[initial] = suffix
                 }
-                occupiedAnchors.insert(candidate)
                 anchor = candidate
             } else {
                 anchor = nil

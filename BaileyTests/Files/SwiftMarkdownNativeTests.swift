@@ -138,6 +138,31 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(outline.allSatisfy { $0.blockIndex < document.blocks.count })
     }
 
+    func testRepeatedHeadingAnchorsPreserveSuffixCollisionsWithoutQuadraticWork() async throws {
+        let headingCount = 6_000
+        let clock = ContinuousClock()
+        let uniqueSource = (0..<headingCount).map { "## Summary \($0)\n\n" }.joined()
+        let uniqueStarted = clock.now
+        let unique = try await MarkdownDocument.parse(uniqueSource)
+        let uniqueElapsed = uniqueStarted.duration(to: clock.now)
+        XCTAssertEqual(unique.headingOutline.count, headingCount)
+
+        let repeatedSource = "# Summary-1\n\n"
+            + String(repeating: "## Summary\n\n", count: headingCount)
+            + "# Summary-2\n\n# Summary-2\n"
+        let repeatedStarted = clock.now
+        let repeated = try await MarkdownDocument.parse(repeatedSource)
+        let repeatedElapsed = repeatedStarted.duration(to: clock.now)
+        let anchors = repeated.headingOutline.map(\.anchor)
+        XCTAssertEqual(anchors.count, headingCount + 3)
+        XCTAssertEqual(Set(anchors).count, anchors.count)
+        XCTAssertEqual(Array(anchors.prefix(4)), ["summary-1", "summary", "summary-2", "summary-3"])
+        XCTAssertEqual(Array(anchors.suffix(3)), ["summary-6000", "summary-2-1", "summary-2-2"])
+        print("MARKDOWN_ANCHORS_6000 unique=\(uniqueElapsed) repeated=\(repeatedElapsed)")
+        XCTAssertLessThan(repeatedElapsed, uniqueElapsed * 8 + .milliseconds(250),
+                          "Repeated text should not make anchor allocation quadratic")
+    }
+
     func testCollapsedHeadingHidesDescendantsAndRestoresNestedCollapse() async throws {
         let source = """
             # Root
