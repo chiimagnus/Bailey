@@ -4,6 +4,84 @@ import XCTest
 
 @MainActor
 final class CSVPreviewUITests: XCTestCase {
+    func testWindowShortcutAndBackgroundTabMenuKeepTheirOwnCSVTargets() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let backgroundSource = "Name,Value\nBackground,17\n"
+        let foregroundSource = "Name,Value\nForeground,38\n"
+        let otherSource = "Name,Value\nOther window,61\n"
+        let backgroundFile = try fixture.file("one/shared.csv", text: backgroundSource)
+        let foregroundFile = try fixture.file("one/visible.csv", text: foregroundSource)
+        let otherFile = try fixture.file("two/shared.csv", text: otherSource)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en",
+                                                    project: backgroundFile.deletingLastPathComponent())
+        let firstID = app.windows.firstMatch.identifier
+        let first = app.windows.matching(identifier: firstID).firstMatch
+        func open(_ file: URL, in window: XCUIElement) {
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+        }
+        func table(in window: XCUIElement) -> XCUIElement {
+            window.descendants(matching: .any).matching(identifier: "bailey.csv.table").firstMatch
+        }
+        let tabMenu = app.menus.containing(.menuItem, identifier: "Close Others").firstMatch
+
+        open(backgroundFile, in: first)
+        let background = WorkspaceUITestSupport.fileTab(backgroundFile, in: first)
+        XCTAssertTrue(background.waitForExistence(timeout: 10))
+        open(foregroundFile, in: first)
+        XCTAssertTrue(table(in: first).staticTexts["Foreground"].waitForExistence(timeout: 10))
+        XCTAssertFalse(background.isSelected)
+        background.rightClick()
+        let showSource = WorkspaceUITestSupport.menuItem("Show Source", in: tabMenu)
+        XCTAssertTrue(showSource.waitForExistence(timeout: 5))
+        showSource.click()
+        XCTAssertTrue(table(in: first).staticTexts["Foreground"].exists)
+        XCTAssertFalse(background.isSelected)
+        background.click()
+        let firstEditor = first.textViews.firstMatch
+        XCTAssertTrue(firstEditor.waitForExistence(timeout: 10))
+        XCTAssertEqual(firstEditor.value as? String, backgroundSource)
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let other = app.windows.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
+        XCTAssertTrue(other.waitForExistence(timeout: 15))
+        try WorkspaceUITestSupport.addFolder(otherFile.deletingLastPathComponent(), to: app, in: other)
+        other.descendants(matching: .any).matching(identifier: "bailey.dock.files").firstMatch.click()
+        open(otherFile, in: other)
+        let secondTable = table(in: other)
+        XCTAssertTrue(secondTable.staticTexts["Other window"].waitForExistence(timeout: 10))
+        secondTable.staticTexts["Other window"].click()
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(secondTable.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(other.textViews.firstMatch.value as? String, otherSource)
+        XCTAssertEqual(firstEditor.value as? String, backgroundSource)
+
+        WorkspaceUITestSupport.fileTab(otherFile, in: other).rightClick()
+        let split = WorkspaceUITestSupport.menuItem("Show Side by Side", in: tabMenu)
+        XCTAssertTrue(split.waitForExistence(timeout: 5))
+        split.click()
+        XCTAssertTrue(secondTable.staticTexts["Other window"].waitForExistence(timeout: 10))
+        let initial = secondTable.frame
+        let edge = try XCTUnwrap(other.otherElements.matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.filter { $0.frame.height > 60 && $0.frame.width < 30 }.min {
+                min(abs($0.frame.midX - initial.minX), abs($0.frame.midX - initial.maxX)) <
+                    min(abs($1.frame.midX - initial.minX), abs($1.frame.midX - initial.maxX))
+            })
+        let divider = edge.frame
+        let start = other.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: divider.midX - other.frame.minX, dy: divider.midY - other.frame.minY)
+        )
+        let direction: CGFloat = divider.midX < initial.midX ? 1 : -1
+        start.click(forDuration: 0.2, thenDragTo: start.withOffset(CGVector(dx: direction * 75, dy: 0)))
+        XCTAssertLessThan(secondTable.frame.width, initial.width - 20)
+        XCTAssertTrue(secondTable.staticTexts["Other window"].exists)
+        XCTAssertEqual(try Data(contentsOf: backgroundFile), Data(backgroundSource.utf8))
+        XCTAssertEqual(try Data(contentsOf: foregroundFile), Data(foregroundSource.utf8))
+        XCTAssertEqual(try Data(contentsOf: otherFile), Data(otherSource.utf8))
+    }
+
     func testSystemFileDeliveryAndColdRestoreDisplayTheSameNativeTable() async throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "Name,Value\r\nFinder sample,17\r\n"
