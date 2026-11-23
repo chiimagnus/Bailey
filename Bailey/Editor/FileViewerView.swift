@@ -150,7 +150,7 @@ final class FileTab: nonisolated Identifiable {
         gifPlayback = nil
         invalidateReload()
         retireMedia()
-        if case .media = content { content = .loading }
+        content = .loading
         retireNativeEditor()
     }
 

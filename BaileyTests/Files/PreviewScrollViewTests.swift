@@ -65,21 +65,98 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
-    private func makeLongGIF() throws -> Data {
+    func testLongGIFDecodeStaysBoundedAndClosingReleasesThePoster() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = root.appending(path: "240 frames.gif")
+        let frameCount = 240
+        let width = 640
+        let height = 480
+        let bytes = try makeLongGIF(width: width, height: height, count: frameCount)
+        try bytes.write(to: fixture)
+        let project = Project(fallbackName: "GIF retention", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+
+        let baseline = residentMiB()
+        var peak = baseline
+        var retained = baseline
+        let started = ContinuousClock.now
+        for cycle in 0..<3 {
+            project.openLocalFile(fixture.path)
+            guard case .file(let file)? = project.selectedTab?.content else {
+                return XCTFail("Project did not open the GIF as a file tab")
+            }
+            file.loadIfNeeded()
+            try await waitFor { file.gifFramesRequest() != nil }
+            let load = try XCTUnwrap(file.gifFramesRequest())
+            let playback = try XCTUnwrap(file.gifPlayback)
+            let firstFrameStart = ContinuousClock.now
+            do {
+                let frames = try await load()
+                XCTAssertEqual(frames.count, frameCount)
+                for index in 0..<frames.count {
+                    let frame = try await frames.read(index)
+                    if index == 0 {
+                        print("GIF_DECODE cycle=\(cycle) first_native_frame=\(firstFrameStart.duration(to: .now))")
+                        XCTAssertFalse(isGreen(NSBitmapImageRep(cgImage: frame.image)))
+                    } else if index == frames.count - 1 {
+                        XCTAssertTrue(isGreen(NSBitmapImageRep(cgImage: frame.image)))
+                    }
+                    XCTAssertEqual(frame.image.width, width)
+                    XCTAssertEqual(frame.image.height, height)
+                    peak = max(peak, residentMiB())
+                }
+            }
+
+            let running = Task { await playback.play(load: load) }
+            defer { running.cancel() }
+            try await waitFor { playback.image != nil }
+            project.closeAll()
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertNil(file.gifPlayback)
+            XCTAssertNil(playback.image)
+            if case .image = file.content { XCTFail("A closed file tab still holds its decoded poster") }
+            await running.value
+            retained = max(retained, residentMiB())
+        }
+
+        print("GIF_DECODE frames=\(frameCount * 3) elapsed=\(started.duration(to: .now)) rss_base_mib=\(baseline) rss_peak_mib=\(peak) rss_after_close_mib=\(retained)")
+        let fullFrameSetMiB = Double(frameCount * width * height * 4) / 1_048_576
+        XCTAssertLessThan(peak - baseline, fullFrameSetMiB / 2, "RSS must stay well below one full set of decoded frames")
+        XCTAssertLessThan(retained - baseline, fullFrameSetMiB / 3, "Closing must not retain the decoded frame set")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [fixture.lastPathComponent])
+        XCTAssertEqual(try Data(contentsOf: fixture), bytes)
+    }
+
+    private func residentMiB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        XCTAssertEqual(result, KERN_SUCCESS)
+        return Double(info.resident_size) / 1_048_576
+    }
+
+    private func makeLongGIF(width: Int = 24, height: Int = 24, count: Int = 34) throws -> Data {
         let canvas = try XCTUnwrap(CGContext(
-            data: nil, width: 24, height: 24, bitsPerComponent: 8, bytesPerRow: 0,
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
         ))
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
         canvas.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
-        canvas.fill(CGRect(x: 0, y: 0, width: 24, height: 24))
+        canvas.fill(rect)
         let red = try XCTUnwrap(canvas.makeImage())
         canvas.setFillColor(red: 0, green: 1, blue: 0, alpha: 1)
-        canvas.fill(CGRect(x: 0, y: 0, width: 24, height: 24))
+        canvas.fill(rect)
         let green = try XCTUnwrap(canvas.makeImage())
         let bytes = NSMutableData()
-        let encoder = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, UTType.gif.identifier as CFString, 34, nil))
-        for index in 0..<34 {
-            let last = index == 33
+        let encoder = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, UTType.gif.identifier as CFString, count, nil))
+        for index in 0..<count {
+            let last = index == count - 1
             CGImageDestinationAddImage(encoder, last ? green : red, [
                 kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: last ? 0.4 : 0.04],
             ] as CFDictionary)
