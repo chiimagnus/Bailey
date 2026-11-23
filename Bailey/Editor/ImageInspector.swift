@@ -8,6 +8,8 @@ struct ImageInspector: View {
     var playback: GIFPlayback? = nil
     var loadAnimation: (() async throws -> GIFPlayback.Frames)? = nil
     var animationRevision = ""
+    var viewportPosition: PreviewScrollView.Position? = nil
+    var onViewportPositionChange: ((PreviewScrollView.Position?) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appearsActive) private var active
     @State private var detailUnavailable = false
@@ -23,6 +25,7 @@ struct ImageInspector: View {
         RasterViewport(image: image, loadOriginal: loadOriginal,
                        animationFrame: playback?.image, paused: loadAnimation == nil ? nil : playback?.paused,
                        toggleAnimation: playback.map { playback in { playback.togglePause() } },
+                       viewportPosition: viewportPosition, onViewportPositionChange: onViewportPositionChange,
                        onDetailFailure: { detailUnavailable = $0 })
             .task(id: demand) {
                 guard demand.playing, let playback, let loadAnimation else { return }
@@ -56,6 +59,8 @@ private struct RasterViewport: NSViewRepresentable {
     let animationFrame: CGImage?
     let paused: Bool?
     let toggleAnimation: (() -> Void)?
+    let viewportPosition: PreviewScrollView.Position?
+    let onViewportPositionChange: ((PreviewScrollView.Position?) -> Void)?
     let onDetailFailure: (Bool) -> Void
 
     func makeNSView(context: Context) -> RasterScrollView {
@@ -65,6 +70,7 @@ private struct RasterViewport: NSViewRepresentable {
     func updateNSView(_ scroll: RasterScrollView, context: Context) {
         scroll.update(image, loadOriginal: loadOriginal, animationFrame: animationFrame,
                       paused: paused, toggleAnimation: toggleAnimation,
+                      viewportPosition: viewportPosition, onViewportPositionChange: onViewportPositionChange,
                       onDetailFailure: onDetailFailure)
     }
 
@@ -74,7 +80,13 @@ private struct RasterViewport: NSViewRepresentable {
 }
 
 class PreviewScrollView: NSScrollView {
+    struct Position {
+        let pixelScale: CGFloat
+        let center: CGPoint
+    }
+
     private var fitting = true
+    private var positionToRestore: Position?
     private var viewportSize = CGSize.zero
     private var backingScale: CGFloat = 1
     private var dragPoint: CGPoint?
@@ -118,6 +130,7 @@ class PreviewScrollView: NSScrollView {
     override func layout() {
         super.layout()
         updateViewport()
+        restorePositionWhenReady()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -144,6 +157,27 @@ class PreviewScrollView: NSScrollView {
 
     private var center: CGPoint {
         CGPoint(x: contentView.bounds.midX, y: contentView.bounds.midY)
+    }
+
+    var position: Position? {
+        positionToRestore ?? (fitting ? nil : Position(pixelScale: pixelScale, center: center))
+    }
+
+    func restorePosition(_ saved: Position?) {
+        positionToRestore = saved
+        if saved == nil {
+            fit()
+        } else {
+            restorePositionWhenReady()
+        }
+    }
+
+    private func restorePositionWhenReady() {
+        guard let saved = positionToRestore, window != nil, viewportSize != .zero else { return }
+        setZoom(saved.pixelScale, at: center)
+        let bounds = contentView.bounds
+        positionToRestore = nil
+        scroll(to: CGPoint(x: saved.center.x - bounds.width / 2, y: saved.center.y - bounds.height / 2))
     }
 
     @objc func fit() {
@@ -239,6 +273,7 @@ private final class RasterScrollView: PreviewScrollView {
     private var onDetailFailure: ((Bool) -> Void)?
     private var detailTask: Task<Void, Never>?
     private var toggleAnimation: (() -> Void)?
+    private var onViewportPositionChange: ((Position?) -> Void)?
     private lazy var animationMenuItem = NSMenuItem(title: "", action: #selector(togglePlayback), keyEquivalent: "")
 
     override init(frame: NSRect) {
@@ -252,17 +287,20 @@ private final class RasterScrollView: PreviewScrollView {
 
     func update(_ image: RasterPreview, loadOriginal: (() async throws -> CGImage)?,
                 animationFrame: CGImage?, paused: Bool?, toggleAnimation: (() -> Void)?,
+                viewportPosition: Position?, onViewportPositionChange: ((Position?) -> Void)?,
                 onDetailFailure: @escaping (Bool) -> Void) {
         self.loadOriginal = loadOriginal
         self.onDetailFailure = onDetailFailure
         self.toggleAnimation = toggleAnimation
         if thumbnail !== image.poster {
+            self.onViewportPositionChange = nil
             resetDetail()
             thumbnail = image.poster
             canvas.image = image.poster
             canvas.setFrameSize(image.pixelSize)
-            fit()
+            restorePosition(viewportPosition)
         }
+        self.onViewportPositionChange = onViewportPositionChange
         if let paused {
             let frame = animationFrame ?? image.poster
             if canvas.image !== frame { canvas.image = frame }
@@ -282,6 +320,7 @@ private final class RasterScrollView: PreviewScrollView {
 
     override func reflectScrolledClipView(_ clip: NSClipView) {
         super.reflectScrolledClipView(clip)
+        if window != nil { onViewportPositionChange?(position) }
         updateDetailDemand()
     }
 
@@ -295,6 +334,7 @@ private final class RasterScrollView: PreviewScrollView {
         loadOriginal = nil
         onDetailFailure = nil
         toggleAnimation = nil
+        onViewportPositionChange = nil
         animationMenuItem.menu?.removeItem(animationMenuItem)
         resetDetail()
     }

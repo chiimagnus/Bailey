@@ -72,6 +72,7 @@ final class FileTab: nonisolated Identifiable {
     private(set) var mediaPlayer: AVPlayer?
     private(set) var htmlPreview: HTMLPreview?
     private(set) var gifPlayback: GIFPlayback?
+    @ObservationIgnored var imageViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
@@ -148,6 +149,7 @@ final class FileTab: nonisolated Identifiable {
         targetGeneration &+= 1
         htmlPreview = nil
         gifPlayback = nil
+        imageViewportPosition = nil
         invalidateReload()
         retireMedia()
         content = .loading
@@ -894,6 +896,7 @@ final class FileTab: nonisolated Identifiable {
                   !self.isDirty, self.readOnlyReason == nil else { return }
             self.retireMedia()
             self.retireNativeEditor()
+            self.imageViewportPosition = nil
             self.content = loaded.content
             self.gifPlayback?.reset()
             if case .image(let image) = loaded.content, image.animationFrameCount > 1 {
@@ -1197,14 +1200,20 @@ struct FileViewerView: View {
                     }
                 }
             case .image(let image):
+                let revision = file.reloadRevision
                 VStack(spacing: 0) {
                     if let error = file.reloadError {
                         errorBar(error)
                     }
                     ImageInspector(image: image, loadOriginal: file.originalImageRequest(),
                                    playback: file.gifPlayback, loadAnimation: file.gifFramesRequest(),
-                                   animationRevision: file.fileContentRevision)
-                        .id(file.reloadRevision)
+                                   animationRevision: file.fileContentRevision,
+                                   viewportPosition: file.imageViewportPosition,
+                                   onViewportPositionChange: { position in
+                        guard case .image = file.content, file.reloadRevision == revision else { return }
+                        file.imageViewportPosition = position
+                    })
+                        .id(revision)
                 }
             case .media(let media):
                 if let player = file.mediaPlayer {

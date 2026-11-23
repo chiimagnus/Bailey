@@ -136,6 +136,73 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture), bytes)
     }
 
+    func testFileImageRemountKeepsItsActualZoomAndPanAtANewWindowSize() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "Position.gif")
+        let bytes = try makeLongGIF(width: 1200, height: 900, count: 1)
+        try bytes.write(to: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 320)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); file.retireContent() }
+        window.orderFront(nil)
+
+        func mount() async throws -> PreviewScrollView {
+            let host = NSHostingView(rootView: FileViewerView(file: file))
+            window.contentView = host
+            try await waitFor { previewScroll(in: host) != nil }
+            host.layoutSubtreeIfNeeded()
+            return try XCTUnwrap(previewScroll(in: host))
+        }
+
+        let first = try await mount()
+        first.setZoom(3, at: CGPoint(x: 600, y: 450))
+        first.contentView.scroll(to: CGPoint(x: 150, y: 210))
+        first.reflectScrolledClipView(first.contentView)
+        let visible = first.contentView.bounds
+        XCTAssertEqual(first.pixelScale, 3, accuracy: 0.001)
+        XCTAssertLessThan(visible.midX, 460)
+        XCTAssertLessThan(visible.midY, 410)
+
+        window.contentView = NSView(frame: frame)
+        XCTAssertNil(first.window)
+        window.setContentSize(NSSize(width: 620, height: 460))
+        let remounted = try await mount()
+        XCTAssertFalse(remounted === first)
+        XCTAssertEqual(remounted.pixelScale, 3, accuracy: 0.001)
+        XCTAssertEqual(remounted.contentView.bounds.midX, visible.midX, accuracy: 2)
+        XCTAssertEqual(remounted.contentView.bounds.midY, visible.midY, accuracy: 2)
+
+        let renamed = root.appending(path: "Renamed.gif")
+        try FileManager.default.moveItem(at: url, to: renamed)
+        file.updatePath(renamed.path)
+        let renamedView = try await mount()
+        XCTAssertEqual(renamedView.pixelScale, 3, accuracy: 0.001)
+        XCTAssertEqual(renamedView.contentView.bounds.midX, visible.midX, accuracy: 2)
+        XCTAssertEqual(renamedView.contentView.bounds.midY, visible.midY, accuracy: 2)
+        XCTAssertEqual(try Data(contentsOf: renamed), bytes)
+
+        renamedView.fit()
+        let fitted = try await mount()
+        XCTAssertLessThan(fitted.pixelScale, 3)
+        XCTAssertEqual(fitted.contentView.bounds.midX, 600, accuracy: 2)
+        XCTAssertEqual(fitted.contentView.bounds.midY, 450, accuracy: 2)
+        fitted.setZoom(3, at: CGPoint(x: 600, y: 450))
+
+        let revision = file.reloadRevision
+        let replacement = try makeLongGIF(width: 300, height: 200, count: 1)
+        try replacement.write(to: renamed, options: .atomic)
+        file.reloadFromDiskIfClean()
+        try await waitFor { file.reloadRevision > revision }
+        let reloaded = try await mount()
+        XCTAssertEqual(reloaded.pixelScale, 1, accuracy: 0.001)
+        XCTAssertEqual(reloaded.documentView?.frame.size, NSSize(width: 300, height: 200))
+        XCTAssertEqual(try Data(contentsOf: renamed), replacement)
+    }
+
     private func residentMiB() -> Double {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)

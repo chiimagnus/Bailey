@@ -1869,6 +1869,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
         let file = fixture.root.appendingPathComponent("Zoom.png")
         try png.write(to: file)
+        let other = try fixture.file("Other.txt", text: "Leave the image tab.")
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
         )
@@ -1906,6 +1907,11 @@ final class MarkdownPreviewUITests: XCTestCase {
         let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
         XCTAssertTrue(actual.waitForExistence(timeout: 5))
         actual.click()
+        waitForMargin(toShowImage: true)
+        WorkspaceUITestSupport.fileRow(other, in: window).doubleClick()
+        XCTAssertTrue(inspector.waitForNonExistence(timeout: 10))
+        WorkspaceUITestSupport.fileTab(file, in: window).click()
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10))
         waitForMargin(toShowImage: true)
         inspector.doubleClick()
         waitForMargin(toShowImage: false)
