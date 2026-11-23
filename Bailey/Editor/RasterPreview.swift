@@ -6,6 +6,7 @@ nonisolated struct RasterPreview: Sendable {
     static let pixelLimit = 32_000_000
     let poster: CGImage
     let pixelSize: CGSize
+    var animationFrameCount: Int = 0
 
     struct GIFFrame: Hashable, Sendable {
         let image: CGImage
@@ -57,6 +58,21 @@ nonisolated struct RasterPreview: Sendable {
         guard let poster = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else {
             return nil
         }
-        return Self(poster: poster, pixelSize: pixelSize)
+        return Self(poster: poster, pixelSize: pixelSize,
+                    animationFrameCount: index == 0 ? gifFrameCount(source) : 0)
+    }
+}
+
+actor GIFFrameSource {
+    private let source: CGImageSource
+    private let maximumDimension: Int
+
+    init(source: sending CGImageSource, maximumDimension: Int) {
+        self.source = source
+        self.maximumDimension = maximumDimension
+    }
+
+    func frame(at index: Int) throws -> RasterPreview.GIFFrame {
+        try RasterPreview.gifFrame(source, at: index, maximumDimension: maximumDimension)
     }
 }

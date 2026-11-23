@@ -5,12 +5,29 @@ struct ImageInspector: View {
     let image: RasterPreview
     var loadOriginal: (() async throws -> CGImage)? = nil
     var showsCloseButton = false
+    var playback: GIFPlayback? = nil
+    var loadAnimation: (() async throws -> GIFPlayback.Frames)? = nil
+    var animationRevision = ""
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appearsActive) private var active
     @State private var detailUnavailable = false
 
+    private struct AnimationDemand: Hashable {
+        let revision: String
+        let playing: Bool
+    }
+
     var body: some View {
+        let demand = AnimationDemand(revision: animationRevision,
+                                     playing: active && playback?.paused == false && loadAnimation != nil)
         RasterViewport(image: image, loadOriginal: loadOriginal,
+                       animationFrame: playback?.image, paused: loadAnimation == nil ? nil : playback?.paused,
+                       toggleAnimation: playback.map { playback in { playback.togglePause() } },
                        onDetailFailure: { detailUnavailable = $0 })
+            .task(id: demand) {
+                guard demand.playing, let playback, let loadAnimation else { return }
+                await playback.play(load: loadAnimation)
+            }
             .overlay(alignment: .topTrailing) {
                 if showsCloseButton {
                     Button(String(localized: "Done", table: "Editor")) { dismiss() }
@@ -20,8 +37,11 @@ struct ImageInspector: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if detailUnavailable {
-                    Label("Could not load original image pixels.", systemImage: "exclamationmark.triangle")
+                if detailUnavailable || playback?.failed == true {
+                    Label(playback?.failed == true
+                          ? String(localized: "Could not play this GIF.", table: "Editor")
+                          : String(localized: "Could not load original image pixels."),
+                          systemImage: "exclamationmark.triangle")
                         .padding(8)
                         .background(.regularMaterial, in: .rect(cornerRadius: 8))
                         .padding(8)
@@ -33,6 +53,9 @@ struct ImageInspector: View {
 private struct RasterViewport: NSViewRepresentable {
     let image: RasterPreview
     let loadOriginal: (() async throws -> CGImage)?
+    let animationFrame: CGImage?
+    let paused: Bool?
+    let toggleAnimation: (() -> Void)?
     let onDetailFailure: (Bool) -> Void
 
     func makeNSView(context: Context) -> RasterScrollView {
@@ -40,7 +63,9 @@ private struct RasterViewport: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: RasterScrollView, context: Context) {
-        scroll.update(image, loadOriginal: loadOriginal, onDetailFailure: onDetailFailure)
+        scroll.update(image, loadOriginal: loadOriginal, animationFrame: animationFrame,
+                      paused: paused, toggleAnimation: toggleAnimation,
+                      onDetailFailure: onDetailFailure)
     }
 
     static func dismantleNSView(_ scroll: RasterScrollView, coordinator: ()) {
@@ -213,6 +238,8 @@ private final class RasterScrollView: PreviewScrollView {
     private var loadOriginal: (() async throws -> CGImage)?
     private var onDetailFailure: ((Bool) -> Void)?
     private var detailTask: Task<Void, Never>?
+    private var toggleAnimation: (() -> Void)?
+    private lazy var animationMenuItem = NSMenuItem(title: "", action: #selector(togglePlayback), keyEquivalent: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -224,9 +251,11 @@ private final class RasterScrollView: PreviewScrollView {
     required init?(coder: NSCoder) { nil }
 
     func update(_ image: RasterPreview, loadOriginal: (() async throws -> CGImage)?,
+                animationFrame: CGImage?, paused: Bool?, toggleAnimation: (() -> Void)?,
                 onDetailFailure: @escaping (Bool) -> Void) {
         self.loadOriginal = loadOriginal
         self.onDetailFailure = onDetailFailure
+        self.toggleAnimation = toggleAnimation
         if thumbnail !== image.poster {
             resetDetail()
             thumbnail = image.poster
@@ -234,8 +263,22 @@ private final class RasterScrollView: PreviewScrollView {
             canvas.setFrameSize(image.pixelSize)
             fit()
         }
+        if let paused {
+            let frame = animationFrame ?? image.poster
+            if canvas.image !== frame { canvas.image = frame }
+            animationMenuItem.title = paused ? String(localized: "Resume Animation", table: "Editor")
+                : String(localized: "Pause Animation", table: "Editor")
+            if animationMenuItem.menu == nil {
+                animationMenuItem.target = self
+                menu?.addItem(animationMenuItem)
+            }
+        } else if animationMenuItem.menu != nil {
+            menu?.removeItem(animationMenuItem)
+        }
         updateDetailDemand()
     }
+
+    @objc private func togglePlayback() { toggleAnimation?() }
 
     override func reflectScrolledClipView(_ clip: NSClipView) {
         super.reflectScrolledClipView(clip)

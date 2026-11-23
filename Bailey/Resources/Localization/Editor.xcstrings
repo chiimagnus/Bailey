@@ -391,6 +391,36 @@
         }
       }
     },
+    "Pause Animation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停动画"
+          }
+        }
+      }
+    },
+    "Resume Animation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续动画"
+          }
+        }
+      }
+    },
+    "Could not play this GIF." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法播放此 GIF。"
+          }
+        }
+      }
+    },
     "Zoom out" : {
       "localizations" : {
         "zh-Hans" : {

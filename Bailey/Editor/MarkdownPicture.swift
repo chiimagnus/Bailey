@@ -42,16 +42,6 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
         return Self(poster: poster, animation: frames)
     }
 
-    func image(at time: TimeInterval) -> CGImage {
-        guard !animation.isEmpty else { return poster }
-        let total = animation.reduce(0) { $0 + $1.seconds }
-        var elapsed = time.truncatingRemainder(dividingBy: total)
-        for frame in animation {
-            if elapsed < frame.seconds { return frame.image }
-            elapsed -= frame.seconds
-        }
-        return poster
-    }
 }
 
 
@@ -63,7 +53,6 @@ struct MarkdownNativeImage: View {
     var width: CGFloat? = nil
     var height: CGFloat? = nil
     @Environment(\.openURL) private var openURL
-    @Environment(\.appearsActive) private var active
     @State private var inspecting = false
 
     var body: some View {
@@ -100,10 +89,10 @@ struct MarkdownNativeImage: View {
         if picture.animation.isEmpty {
             raster(picture.poster, pointSize: picture.pointSize)
         } else {
-            TimelineView(.animation(minimumInterval: 0.04, paused: !active)) { context in
-                raster(picture.image(at: context.date.timeIntervalSinceReferenceDate),
-                       pointSize: picture.pointSize)
+            MarkdownAnimatedImage(frames: picture.animation, poster: picture.poster) { image in
+                raster(image, pointSize: picture.pointSize)
             }
+            .id(ObjectIdentifier(picture.poster))
         }
     }
 
@@ -122,6 +111,24 @@ struct MarkdownNativeImage: View {
                 .aspectRatio(targetW / targetH, contentMode: .fit)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MarkdownAnimatedImage<Content: View>: View {
+    let frames: [RasterPreview.GIFFrame]
+    let poster: CGImage
+    @ViewBuilder let content: (CGImage) -> Content
+    @State private var playback = GIFPlayback()
+    @Environment(\.appearsActive) private var active
+
+    var body: some View {
+        content(playback.image ?? frames.first?.image ?? poster)
+            .task(id: active) {
+                guard active else { return }
+                await playback.play {
+                    GIFPlayback.Frames(count: frames.count) { [frames] index in frames[index] }
+                }
+            }
     }
 }
 

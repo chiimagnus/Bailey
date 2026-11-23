@@ -71,6 +71,7 @@ final class FileTab: nonisolated Identifiable {
     private(set) var content: Content
     private(set) var mediaPlayer: AVPlayer?
     private(set) var htmlPreview: HTMLPreview?
+    private(set) var gifPlayback: GIFPlayback?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
@@ -146,6 +147,7 @@ final class FileTab: nonisolated Identifiable {
         isRetired = true
         targetGeneration &+= 1
         htmlPreview = nil
+        gifPlayback = nil
         invalidateReload()
         retireMedia()
         if case .media = content { content = .loading }
@@ -238,7 +240,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var isRetired = false
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
-    @ObservationIgnored private var originalImageTask: Task<CGImage, Error>?
+    @ObservationIgnored private var originalImageTask: (id: UUID, cancel: () -> Void)?
     @ObservationIgnored private var refreshPending = false
     /// A previously requested read must resume after reconnect; restored tabs
     /// that no consumer has touched must remain lazy.
@@ -246,7 +248,10 @@ final class FileTab: nonisolated Identifiable {
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
     private var targetGeneration: UInt = 0 {
-        didSet { htmlPreview?.invalidate() }
+        didSet {
+            htmlPreview?.invalidate()
+            gifPlayback?.reset()
+        }
     }
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
     @ObservationIgnored private var saveLatestRequested = false
@@ -890,6 +895,12 @@ final class FileTab: nonisolated Identifiable {
             self.retireMedia()
             self.retireNativeEditor()
             self.content = loaded.content
+            self.gifPlayback?.reset()
+            if case .image(let image) = loaded.content, image.animationFrameCount > 1 {
+                self.gifPlayback = GIFPlayback()
+            } else {
+                self.gifPlayback = nil
+            }
             if case .media(let media) = loaded.content {
                 self.mediaPlayer = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
             }
@@ -928,25 +939,49 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func originalImageRequest() -> (() async throws -> CGImage)? {
-        guard case .image(let preview) = content, readOnlyReason == nil, let version = savedSourceVersion,
+        guard case .image(let preview) = content, preview.animationFrameCount < 2,
               preview.poster.width < Int(preview.pixelSize.width) ||
                 preview.poster.height < Int(preview.pixelSize.height) else { return nil }
+        let size = preview.pixelSize
+        return imageRequest { source in
+            guard let image = RasterPreview.decode(source, maximumDimension: Int(max(size.width, size.height))),
+                  image.poster.width == Int(size.width), image.poster.height == Int(size.height) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return image.poster
+        }
+    }
+
+    func gifFramesRequest() -> (() async throws -> GIFPlayback.Frames)? {
+        guard case .image(let preview) = content, preview.animationFrameCount > 1 else { return nil }
+        let count = preview.animationFrameCount
+        let maximumDimension = Int(max(preview.pixelSize.width, preview.pixelSize.height))
+        return imageRequest { source in
+            let frames = GIFFrameSource(source: source, maximumDimension: maximumDimension)
+            return GIFPlayback.Frames(count: count) { index in try await frames.frame(at: index) }
+        }
+    }
+
+    private func imageRequest<Output: Sendable>(
+        _ decode: @escaping @Sendable (sending CGImageSource) throws -> Output
+    ) -> (() async throws -> Output)? {
+        guard readOnlyReason == nil, let version = savedSourceVersion else { return nil }
         let backend = self.backend
         let path = self.path
         let target = targetGeneration
         let revision = reloadRevision
-        let size = preview.pixelSize
         return { [weak self] in
             guard self?.targetGeneration == target, self?.reloadRevision == revision,
                   self?.savedSourceVersion == version else { throw WorkspaceError.changedExternally }
             try Task.checkCancellation()
+            let id = UUID()
             let task = Task {
-                try await Self.readOriginalImage(path, backend: backend, version: version, size: size)
+                try await Self.readOriginalImage(path, backend: backend, version: version, decode: decode)
             }
             self?.originalImageTask?.cancel()
-            self?.originalImageTask = task
+            self?.originalImageTask = (id, { task.cancel() })
             defer {
-                if self?.originalImageTask == task { self?.originalImageTask = nil }
+                if self?.originalImageTask?.id == id { self?.originalImageTask = nil }
             }
             let image = try await withTaskCancellationHandler {
                 try await task.value
@@ -960,19 +995,18 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
-    @concurrent private static func readOriginalImage(
-        _ path: String, backend: WorkspaceBackend, version: WorkspaceFileVersion, size: CGSize
-    ) async throws -> CGImage {
+    @concurrent private static func readOriginalImage<Output: Sendable>(
+        _ path: String, backend: WorkspaceBackend, version: WorkspaceFileVersion,
+        decode: @Sendable (sending CGImageSource) throws -> Output
+    ) async throws -> Output {
         let bytes = try await backend.read(path: path, maxBytes: version.byteCount)
         try Task.checkCancellation()
         guard version.matches(bytes) else { throw WorkspaceError.changedExternally }
         try Task.checkCancellation()
-        guard let source = RasterPreview.source(bytes),
-              let preview = RasterPreview.decode(source, maximumDimension: Int(max(size.width, size.height))),
-              preview.poster.width == Int(size.width), preview.poster.height == Int(size.height) else {
+        guard let source = RasterPreview.source(bytes) else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        return preview.poster
+        return try decode(source)
     }
 
     @concurrent private static func readContent(
@@ -1166,7 +1200,9 @@ struct FileViewerView: View {
                     if let error = file.reloadError {
                         errorBar(error)
                     }
-                    ImageInspector(image: image, loadOriginal: file.originalImageRequest())
+                    ImageInspector(image: image, loadOriginal: file.originalImageRequest(),
+                                   playback: file.gifPlayback, loadAnimation: file.gifFramesRequest(),
+                                   animationRevision: file.fileContentRevision)
                         .id(file.reloadRevision)
                 }
             case .media(let media):

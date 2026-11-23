@@ -1211,10 +1211,6 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(picture.animation.count, 2)
         XCTAssertEqual(picture.animation[0].seconds, 0.2, accuracy: 0.01)
         XCTAssertEqual(picture.animation[1].seconds, 0.6, accuracy: 0.01)
-        XCTAssertEqual(picture.image(at: 0), picture.animation[0].image)
-        XCTAssertEqual(picture.image(at: 0.3), picture.animation[1].image)
-        XCTAssertEqual(picture.image(at: 0.85), picture.animation[0].image,
-                       "Animations must loop rather than freeze on the last frame")
 
         let overBudget = try MarkdownPicture.decode(animatedGIF(
             frameCount: 33, at: root.appending(path: "oversized-animation.gif")
