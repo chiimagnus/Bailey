@@ -375,6 +375,66 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertNil(noCaptions)
     }
 
+    func testNativeReferenceMoviesAreRejectedInFilesAndMarkdownAndCanRecover() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let workspace = directory.appending(path: "Project")
+        let sibling = directory.appending(path: "Project copy")
+        for folder in [workspace, sibling] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features")
+        let fixtures: [(URL, URL, NativeMedia.Kind, AVMediaType)] = [
+            (repository.appending(path: "video-file-playback/demo-video.mp4"), sibling, .video, .video),
+            (repository.appending(path: "audio-file-playback/demo-audio.m4a"), workspace, .audio, .audio),
+        ]
+        let resource = PreviewResource(path: workspace.appending(path: "Preview.md").path,
+                                       directory: workspace.path, backend: LocalWorkspaceBackend.shared)
+        for (index, fixture) in fixtures.enumerated() {
+            let (original, folder, kind, trackType) = fixture
+            let source = folder.appending(path: original.lastPathComponent)
+            let bytes = try Data(contentsOf: original)
+            try bytes.write(to: source)
+            let reference = workspace.appending(path: "引用 \(index).mov")
+            let movie = AVMovie(url: source)
+            try movie.writeHeader(to: reference, fileType: .mov, options: .truncateDestinationToMovieHeaderOnly)
+            let header = try Data(contentsOf: reference)
+            XCTAssertGreaterThan(header.count, 0)
+            XCTAssertLessThan(header.count, bytes.count / 4)
+            let sample = AVURLAsset(url: reference)
+            let referenceTracks = try await sample.loadTracks(withMediaType: trackType)
+            let selfContained = try await XCTUnwrap(referenceTracks.first).load(.isSelfContained)
+            XCTAssertFalse(selfContained, "The native fixture must actually depend on another file")
+
+            let tab = FileTab(path: reference.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            guard case .unavailable = tab.content else { return XCTFail("An external reference must not enter AVPlayer") }
+            XCTAssertNil(tab.mediaPlayer)
+            XCTAssertTrue(tab.text.isEmpty)
+            var relative = URLComponents()
+            relative.path = reference.lastPathComponent
+            let staged = try await MarkdownMedia.stage(try XCTUnwrap(relative.url), from: resource)
+            defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+            XCTAssertEqual(try Data(contentsOf: staged), header)
+            do {
+                _ = try await NativeMedia.open(staged.path)
+                XCTFail("An authorized Markdown reference file must not grant access to other media")
+            } catch NativeMedia.Failure.unsupported {}
+            XCTAssertEqual(try Data(contentsOf: reference), header)
+
+            try bytes.write(to: reference, options: .atomic)
+            tab.reloadFromDiskIfClean()
+            try await waitUntil { tab.mediaPlayer != nil }
+            guard case .media(let accepted) = tab.content else { return XCTFail("Replacing the header with real media must recover") }
+            XCTAssertEqual(accepted.kind, kind)
+            XCTAssertTrue(tab.mediaPlayer?.currentItem?.asset === accepted.asset)
+            XCTAssertEqual(try Data(contentsOf: reference), bytes)
+            XCTAssertEqual(try Data(contentsOf: source), bytes)
+        }
+    }
+
     func testMediaRejectsCorruptMissingUnopenedAndRemoteFilesWithoutReadingTheirNamesakes() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
