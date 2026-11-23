@@ -135,6 +135,7 @@ struct MarkdownPreview: View {
                 }
                 .onChange(of: collapsedHeadings) { _, _ in
                     sourceCoordinates.clearSelection()
+                    sourceCoordinates.pendingSource = nil
                     guard let pendingReveal,
                           document.collapsedAncestors(
                             of: pendingReveal.index, collapsed: collapsedHeadings
@@ -144,6 +145,7 @@ struct MarkdownPreview: View {
                            rows: renderRows)
                 }
                 .onChange(of: revision, initial: true) { _, _ in
+                    sourceCoordinates.pendingSource = nil
                     guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
                     scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
                            viewportY: restoredViewportY, rows: rows)
@@ -256,18 +258,20 @@ struct MarkdownPreview: View {
                         rows: [RenderRow]) {
         guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
         if let sourceOffset {
+            // Keep the requested anchor through subsequent text and image re-layout.
+            // Only a new navigation target or explicit user scrolling supersedes it.
+            sourceCoordinates.pendingSource = (sourceOffset, viewportY)
             if sourceCoordinates.scroll(to: sourceOffset, atViewportY: viewportY) {
-                sourceCoordinates.pendingSource = nil
                 onReadingSourceAnchor(sourceOffset, viewportY)
                 return
             }
-            sourceCoordinates.pendingSource = (sourceOffset, viewportY)
             if sourceCoordinates.hits.contains(where: {
                 $0.viewportFrame(forSourceOffset: sourceOffset) != nil
             }) || sourceCoordinates.embeddedHits.contains(where: {
                 NSLocationInRange(sourceOffset, $0.source)
             }) { return }
         }
+        if sourceOffset == nil { sourceCoordinates.pendingSource = nil }
         jumpPosition.scrollTo(id: row.start, anchor: .top)
         onReadingPosition(block)
     }
@@ -413,9 +417,7 @@ private final class MarkdownReaderCoordinates {
 
     func scrollPending() {
         guard let pendingSource else { return }
-        if scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY) {
-            self.pendingSource = nil
-        }
+        _ = scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY)
     }
 
     func firstVisibleSource() -> (offset: Int, viewportY: CGFloat)? {
