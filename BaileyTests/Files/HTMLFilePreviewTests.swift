@@ -78,6 +78,42 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
+    func testExactHTMLDocumentLimitRendersItsTailAndOverflowStaysUnavailable() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let limit = 32 << 20
+        let prefix = Data("<!doctype html>\n<!--\n".utf8)
+        let tail = Data("-->\n<h1>末尾 🧪 &amp; intact</h1>\n".utf8)
+        let line = Data(repeating: 0x20, count: 4095) + Data([0x0a])
+        var bytes = Data(capacity: limit + 1)
+        bytes.append(prefix)
+        while bytes.count + line.count + tail.count <= limit { bytes.append(line) }
+        bytes.append(Data(repeating: 0x20, count: limit - bytes.count - tail.count))
+        bytes.append(tail)
+        let exactURL = root.appendingPathComponent("exact.html")
+        try bytes.write(to: exactURL)
+        let exact = FileTab(path: exactURL.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await exact.waitForText()
+        XCTAssertEqual(exact.text.utf8.count, limit)
+        let webView = try await display(exact, in: root)
+        let heading = try await webView.evaluateJavaScript("document.querySelector('h1').textContent",
+                                                         contentWorld: .defaultClient) as? String
+        XCTAssertEqual(heading, "末尾 🧪 & intact")
+        XCTAssertEqual(try Data(contentsOf: exactURL), bytes)
+
+        let overURL = root.appendingPathComponent("over.html")
+        bytes.append(0x20)
+        try bytes.write(to: overURL)
+        let over = FileTab(path: overURL.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        over.loadIfNeeded()
+        try await waitUntil { if case .loading = over.content { return false }; return true }
+        guard case .unavailable(let reason) = over.content else { return XCTFail("Expected the capacity placeholder") }
+        XCTAssertEqual(reason, String(localized: "File is too large to open", table: "Workspace"))
+        await over.showHTMLPreview(request: over.textPreviewRequestID, in: root.path)
+        XCTAssertNil(over.htmlPreview)
+        XCTAssertEqual(try Data(contentsOf: overURL), bytes)
+    }
+
     func testNestedCSSAndImagesUseEachStylesheetsOwnDirectory() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
