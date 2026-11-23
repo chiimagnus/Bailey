@@ -8,6 +8,11 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewUITests: XCTestCase {
+    private func markdownHeading(_ anchor: String, in preview: XCUIElement) -> XCUIElement {
+        preview.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.\(anchor)").firstMatch
+    }
+
     func testGitHubAlertsShowFiveNativeTitlesAndPreserveQuotedContent() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let titles = ["Note", "Tip", "Important", "Warning", "Caution"]
@@ -382,7 +387,7 @@ final class MarkdownPreviewUITests: XCTestCase {
                       "Relative links must reuse the real authorized destination FileTab")
         XCTAssertTrue(preview.waitForExistence(timeout: 20),
                       "A target link with a heading fragment must open native Markdown preview")
-        let heading = preview.staticTexts["章节 中文"].firstMatch
+        let heading = markdownHeading("章节-中文", in: preview)
         XCTAssertTrue(heading.waitForExistence(timeout: 20))
         XCTAssertGreaterThan(heading.frame.intersection(window.frame).height, 1,
                              "The cross-file heading fragment must scroll its target into view")
@@ -420,7 +425,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         let valid = preview.links["Jump Chinese"]
         XCTAssertTrue(valid.waitForExistence(timeout: 10))
         valid.click()
-        let destination = preview.staticTexts["章节 中文"].firstMatch
+        let destination = markdownHeading("章节-中文", in: preview)
         XCTAssertTrue(destination.waitForExistence(timeout: 15),
                       "Percent-encoded Unicode fragment must resolve to its decoded heading")
         let visibleRect = destination.frame.intersection(window.frame)
@@ -469,7 +474,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(link.waitForExistence(timeout: 15), preview.debugDescription)
         link.click()
 
-        let heading = preview.staticTexts["Detail Section"].firstMatch
+        let heading = markdownHeading("detail-section", in: preview)
         XCTAssertTrue(heading.waitForExistence(timeout: 15), preview.debugDescription)
         XCTAssertTrue(preview.frame.intersects(heading.frame),
                       "Anchor navigation must scroll the destination into the visible viewport")
@@ -490,7 +495,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertEqual(NSCursor.currentSystem?.hotSpot, NSCursor.pointingHand.hotSpot,
                        "A link revealed after scrolling must use the hand cursor")
         back.click()
-        let start = preview.staticTexts["Navigation"].firstMatch
+        let start = markdownHeading("navigation", in: preview)
         XCTAssertTrue(start.waitForExistence(timeout: 10))
         XCTAssertTrue(preview.frame.intersects(start.frame),
                       "In-document navigation must restore the heading at the top")
@@ -1726,7 +1731,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         sideBySide.click()
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
-        let destination = preview.staticTexts["Destination"].firstMatch
+        let destination = markdownHeading("destination", in: preview)
         XCTAssertTrue(destination.waitForExistence(timeout: 10))
         destination.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).doubleClick()
         XCTAssertTrue(preview.exists,
@@ -1754,7 +1759,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
-        let destination = preview.staticTexts["Destination"].firstMatch
+        let destination = markdownHeading("destination", in: preview)
         XCTAssertTrue(destination.waitForExistence(timeout: 10))
         destination.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).doubleClick()
         XCTAssertTrue(preview.waitForNonExistence(timeout: 10),
@@ -1946,7 +1951,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
-        let heading = preview.staticTexts["Folded"].firstMatch
+        let heading = markdownHeading("folded", in: preview)
         XCTAssertTrue(heading.waitForExistence(timeout: 10))
         heading.hover()
         let toggle = preview.buttons["bailey.markdown.fold.folded"]
