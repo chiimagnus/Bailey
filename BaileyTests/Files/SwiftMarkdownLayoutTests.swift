@@ -5,6 +5,14 @@ import XCTest
 
 @MainActor
 final class SwiftMarkdownLayoutTests: XCTestCase {
+    private func visibleRenderingWindow(width: CGFloat, height: CGFloat) throws -> NSWindow {
+        let screen = try XCTUnwrap(NSScreen.main?.visibleFrame,
+                                   "SwiftUI glyph layout requires a visible display")
+        return NSWindow(contentRect: NSRect(x: screen.minX + 24, y: screen.minY + 24,
+                                            width: width, height: height),
+                        styleMask: [.titled], backing: .buffered, defer: false)
+    }
+
     func testPreviewScrollAlignsActualTextKitLineEvenWhenAlreadyVisible() async throws {
         let source = (0..<90).map { "Line \($0) 中文 👩‍🚀" }.joined(separator: "\n")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).md")
@@ -88,8 +96,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                             synchronizedSourceOffset: synced)
         }
 
-        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 200),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+        let window = try visibleRenderingWindow(width: 320, height: 200)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: view(synced: nil))
         host.sizingOptions = []
@@ -140,8 +147,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                             synchronizedSourceOffset: synced)
         }
 
-        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 200),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+        let window = try visibleRenderingWindow(width: 320, height: 200)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: view(synced: nil))
         host.sizingOptions = []
@@ -189,8 +195,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                             onLocateSource: { _ in })
         }
 
-        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 320, height: 200),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+        let window = try visibleRenderingWindow(width: 320, height: 200)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: view(sourceOffset: nil))
         host.sizingOptions = []
