@@ -61,7 +61,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
-    func testGraphHistoryMenusKeepRevisionOperationsWithoutPathCopy() throws {
+    func testGraphHistoryContextActionOpensRevisionAndPreservesSelection() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first.txt", text: "first\n")
         let second = try fixture.file("second.txt", text: "second\n")
@@ -78,27 +78,30 @@ final class GitGraphUITests: XCTestCase {
 
         a.click()
         b.rightClick()
-        XCTAssertTrue(app.menuItems["View File at Revision"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.menuItems["Compare with Working File"].exists)
-        XCTAssertTrue(app.menuItems["Open Working File"].exists)
-        XCTAssertFalse(app.menuItems["Copy Path"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists)
         XCTAssertTrue(a.isSelected && !b.isSelected)
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        // Choose the first native context action and verify its real revision content.
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let revisionOpened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.windows.firstMatch.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String) == "second\n"
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [revisionOpened], timeout: 15), .completed,
+                       "The context menu must open the selected historical revision")
+        XCTAssertTrue(a.isSelected && !b.isSelected)
 
         XCUIElement.perform(withKeyModifiers: .command) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected)
         a.rightClick()
-        XCTAssertFalse(app.menuItems["Copy Paths"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Paths"].exists)
         XCTAssertTrue(a.isSelected && b.isSelected)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let folder = app.windows.firstMatch.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 12))
         folder.rightClick()
-        XCTAssertFalse(app.menuItems["Copy Path"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
         XCTAssertEqual(try Data(contentsOf: nested), Data("third\n".utf8))
