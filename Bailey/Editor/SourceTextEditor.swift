@@ -80,7 +80,7 @@ struct SourceTextEditor: NSViewRepresentable {
         context.coordinator.wasFocused = isFocused
         if let pending = file.pendingMarkdownSource {
             file.pendingMarkdownSource = nil
-            if pending.request == file.markdownRequestID,
+            if pending.request == file.textPreviewRequestID,
                let restorable = scrollView as? RestorableScrollView {
                 restorable.restoreOnFirstLayout = { [weak textView] in
                     guard let textView else { return }
@@ -335,7 +335,7 @@ struct SourceTextEditor: NSViewRepresentable {
         func refreshMarkdownViewport() {
             guard let file, file.canPreviewMarkdown, file.markdownScrollSyncEnabled,
                   let mapping = file.markdownSourceIndex,
-                  mapping.request == file.markdownRequestID,
+                  mapping.request == file.textPreviewRequestID,
                   let scrollView, scrollView.window != nil,
                   let editor = scrollView.documentView as? NativeCodeTextView else { return }
             guard let layout = editor.textLayoutManager,

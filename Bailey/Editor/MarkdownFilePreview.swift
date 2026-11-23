@@ -11,8 +11,8 @@ struct MarkdownFilePreview: View {
     @State private var failed = false
 
     var body: some View {
-        let request = file.markdownRequestID
-        let target = file.markdownResourceID
+        let request = file.textPreviewRequestID
+        let target = file.fileContentRevision
         Group {
             if let parsed, parsed.target == target {
                 MarkdownPreview(
@@ -20,13 +20,13 @@ struct MarkdownFilePreview: View {
                     resource: file.markdownResource(in: directory), assetRefresh: assetRefresh,
                     collapsedHeadings: file.markdownCollapsedHeadings,
                     onToggleHeading: { heading in
-                        guard parsed.request == file.markdownRequestID else { return }
+                        guard parsed.request == file.textPreviewRequestID else { return }
                         if !file.markdownCollapsedHeadings.insert(heading).inserted {
                             file.markdownCollapsedHeadings.remove(heading)
                         }
                     },
                     onRevealHeading: { heading in
-                        guard parsed.request == file.markdownRequestID else { return }
+                        guard parsed.request == file.textPreviewRequestID else { return }
                         file.markdownCollapsedHeadings.remove(heading)
                     },
                     restoredBlock: parsed.request == request
@@ -43,7 +43,7 @@ struct MarkdownFilePreview: View {
                         ? file.markdownSourceOffset : nil,
                     restoredViewportY: file.markdownReadingViewportY,
                     onReadingPosition: { block in
-                        guard parsed.request == file.markdownRequestID,
+                        guard parsed.request == file.textPreviewRequestID,
                               parsed.document.blocks.indices.contains(block),
                               let source = parsed.document.blocks[block].sourceRange else { return }
                         file.markdownReadingOffset = source.location
@@ -55,7 +55,7 @@ struct MarkdownFilePreview: View {
                         followReader(offset: source.location, request: parsed.request)
                     },
                     onReadingSourceAnchor: { offset, viewportY in
-                        guard parsed.request == file.markdownRequestID else { return }
+                        guard parsed.request == file.textPreviewRequestID else { return }
                         file.markdownReadingOffset = offset
                         file.markdownReadingViewportY = viewportY
                     },
@@ -63,11 +63,11 @@ struct MarkdownFilePreview: View {
                         followReader(offset: offset, request: parsed.request)
                     },
                     onLocateSource: { offset in
-                        guard parsed.request == file.markdownRequestID else { return }
+                        guard parsed.request == file.textPreviewRequestID else { return }
                         onLocateSource(offset)
                     },
                     openLink: { url in
-                        guard file.markdownRequestID == parsed.request else { return false }
+                        guard file.textPreviewRequestID == parsed.request else { return false }
                         return await onOpenLink(url)
                     },
                     navigation: parsed.request == request
@@ -89,7 +89,7 @@ struct MarkdownFilePreview: View {
                 if parsed?.target == target { try await Task.sleep(for: .milliseconds(150)) }
                 guard let source = file?.text else { return }
                 let document = try await MarkdownDocument.parse(source)
-                guard !Task.isCancelled, request == file?.markdownRequestID else { return }
+                guard !Task.isCancelled, request == file?.textPreviewRequestID else { return }
                 file?.markdownSourceIndex = (request: request, index: MarkdownBlockIndex(document))
                 file?.installMarkdownOutline(document.headingOutline, request: request)
                 if file?.markdownReadingOffset == nil {
@@ -97,7 +97,7 @@ struct MarkdownFilePreview: View {
                 }
                 parsed = (document, request, target)
             } catch {
-                guard !Task.isCancelled, request == file?.markdownRequestID else { return }
+                guard !Task.isCancelled, request == file?.textPreviewRequestID else { return }
                 parsed = nil
                 failed = true
             }
@@ -106,7 +106,7 @@ struct MarkdownFilePreview: View {
 
     private func followReader(offset: Int, request: String) {
         guard file.markdownScrollSyncEnabled,
-              request == file.markdownRequestID else { return }
+              request == file.textPreviewRequestID else { return }
         file.pendingMarkdownSource = (request: request, offset: offset, focus: false)
         if file.editorCoordinator?.showMarkdownSource(atUTF16Offset: offset) == true {
             file.pendingMarkdownSource = nil
@@ -125,7 +125,7 @@ struct MarkdownOutlineView: View {
     @FocusState private var focused: Bool
 
     private var headings: [MarkdownDocument.OutlineHeading] {
-        file.markdownOutlineRequest == file.markdownRequestID ? file.markdownHeadingOutline : []
+        file.markdownOutlineRequest == file.textPreviewRequestID ? file.markdownHeadingOutline : []
     }
 
     var body: some View {
@@ -197,14 +197,14 @@ struct MarkdownOutlineView: View {
         }
         .padding(14)
         .frame(width: 320, height: 410)
-        .task(id: file.markdownRequestID) {
-            let request = file.markdownRequestID
+        .task(id: file.textPreviewRequestID) {
+            let request = file.textPreviewRequestID
             failed = false
             loading = file.markdownOutlineRequest != request
             if loading {
                 do {
                     let document = try await MarkdownDocument.parse(file.text)
-                    guard !Task.isCancelled, request == file.markdownRequestID else { return }
+                    guard !Task.isCancelled, request == file.textPreviewRequestID else { return }
                     file.installMarkdownOutline(document.headingOutline, request: request)
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -252,10 +252,10 @@ struct MarkdownMetadataView: View {
             .padding()
         }
         .frame(width: 300, height: 220)
-        .task(id: file.markdownRequestID) {
-            let request = file.markdownRequestID
+        .task(id: file.textPreviewRequestID) {
+            let request = file.textPreviewRequestID
             let result = await MarkdownDocument.metadata(file.text)
-            guard !Task.isCancelled, request == file.markdownRequestID else { return }
+            guard !Task.isCancelled, request == file.textPreviewRequestID else { return }
             metadata = result
         }
     }

@@ -185,9 +185,9 @@ final class FileTabPersistenceTests: XCTestCase {
                              workspaceIdentity: nil)
         try await first.waitForText()
         try await second.waitForText()
-        XCTAssertNotEqual(first.markdownResourceID, second.markdownResourceID,
+        XCTAssertNotEqual(first.fileContentRevision, second.fileContentRevision,
                           "Two different files may have identical revisions but must not share a preview target")
-        XCTAssertNotEqual(first.markdownRequestID, second.markdownRequestID,
+        XCTAssertNotEqual(first.textPreviewRequestID, second.textPreviewRequestID,
                           "SwiftUI .task(id:) must reparse after a different FileTab becomes visible")
         XCTAssertEqual(first.text, "# First\n")
         XCTAssertEqual(second.text, "# Second\n")
@@ -209,10 +209,10 @@ final class FileTabPersistenceTests: XCTestCase {
                                workspaceIdentity: nil)
             try await file.waitForText()
             file.autoSaveSuspendedForClose = true
-            let oldRequest = file.markdownRequestID
+            let oldRequest = file.textPreviewRequestID
             file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
                                                     with: "After")
-            XCTAssertNotEqual(file.markdownRequestID, oldRequest)
+            XCTAssertNotEqual(file.textPreviewRequestID, oldRequest)
             let document = try await MarkdownDocument.parse(file.text)
             XCTAssertEqual(document.blocks.count, count + 1,
                            "The newest source must retain every long-document block")
@@ -244,32 +244,32 @@ final class FileTabPersistenceTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         XCTAssertTrue(file.canPreviewMarkdown)
-        let resource = file.markdownResourceID
-        let firstRequest = file.markdownRequestID
+        let resource = file.fileContentRevision
+        let firstRequest = file.textPreviewRequestID
         let bodyOffset = (file.text as NSString).range(of: "中文").location
         file.markdownReadingOffset = bodyOffset
         file.setMarkdownPreview(true)
         XCTAssertTrue(file.showsMarkdownPreview)
-        XCTAssertEqual(file.markdownRequestID, firstRequest)
+        XCTAssertEqual(file.textPreviewRequestID, firstRequest)
 
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
                                                 with: "After")
-        let secondRequest = file.markdownRequestID
+        let secondRequest = file.textPreviewRequestID
         XCTAssertNotEqual(secondRequest, firstRequest)
-        XCTAssertEqual(file.markdownResourceID, resource,
+        XCTAssertEqual(file.fileContentRevision, resource,
                        "Ordinary typing must not invalidate the file's resource identity")
         XCTAssertEqual(file.text, "# After\n\n中文🙂 and code.\n")
         XCTAssertEqual(file.markdownReadingOffset, bodyOffset - 1)
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 5),
                                                 with: "Newest")
-        XCTAssertNotEqual(file.markdownRequestID, secondRequest,
+        XCTAssertNotEqual(file.textPreviewRequestID, secondRequest,
                           "A second edit must supersede a pending asynchronous preview parse")
         XCTAssertEqual(file.text, "# Newest\n\n中文🙂 and code.\n")
         file.setMarkdownPreview(false)
         file.setMarkdownPreview(true)
         XCTAssertEqual(file.markdownReadingOffset, bodyOffset,
                        "Switching source/preview cannot reset the stored reading position")
-        XCTAssertEqual(file.markdownResourceID, resource)
+        XCTAssertEqual(file.fileContentRevision, resource)
         XCTAssertTrue(file.isDirty)
         XCTAssertEqual(try Data(contentsOf: path), original,
                        "Live preview and unsaved edits must not write the original file")

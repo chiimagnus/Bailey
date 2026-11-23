@@ -110,6 +110,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func retireContent() {
+        targetGeneration &+= 1
         invalidateReload()
         retireNativeEditor()
     }
@@ -159,7 +160,7 @@ final class FileTab: nonisolated Identifiable {
                 $0.moved(by: edited, delta: delta)
             })
         }
-        markdownEditRevision &+= 1
+        textEditRevision &+= 1
         markdownSourceOffset = nil
         preparedLineWidths = nil
         pendingStorageChange = true
@@ -217,7 +218,7 @@ final class FileTab: nonisolated Identifiable {
     /// machines is two tabs, and a file opened locally is never read-only.
     let workspaceIdentity: String?
     private(set) var showsMarkdownPreview = false
-    private var markdownEditRevision: UInt = 0
+    private var textEditRevision: UInt = 0
     @ObservationIgnored var markdownReadingOffset: Int?
     @ObservationIgnored var markdownReadingViewportY: CGFloat = 0
     var markdownScrollSyncEnabled = true
@@ -230,7 +231,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored var markdownOutlineRequest: String?
 
     func installMarkdownOutline(_ headings: [MarkdownDocument.OutlineHeading], request: String) {
-        guard request == markdownRequestID else { return }
+        guard request == textPreviewRequestID else { return }
         markdownCollapsedHeadings.formIntersection(Set(headings.map(\.identity)))
         markdownHeadingOutline = headings
         markdownOutlineRequest = request
@@ -241,8 +242,35 @@ final class FileTab: nonisolated Identifiable {
         return MarkdownDocument.supports(path)
     }
 
-    var markdownResourceID: String { "\(id)-\(targetGeneration)-\(reloadRevision)" }
-    var markdownRequestID: String { "\(markdownResourceID)-\(markdownEditRevision)" }
+    var fileContentRevision: String { "\(id)-\(targetGeneration)-\(reloadRevision)" }
+    var textPreviewRequestID: String { "\(fileContentRevision)-\(textEditRevision)" }
+
+    struct DelimitedSnapshot {
+        let index: DelimitedTableIndex
+        let requestID: String
+        let preservesOriginalBytes: Bool
+    }
+
+    func delimitedSnapshot(using selected: DelimitedTableIndex.Separator? = nil) async throws -> DelimitedSnapshot? {
+        guard case .text = content, savedSourceVersion != nil,
+              let preferred = DelimitedTableIndex.Separator.preferred(for: path) else { return nil }
+        let request = textPreviewRequestID
+        let index = try await DelimitedTableIndex.parse(text, preferred: preferred, selected: selected)
+        guard request == textPreviewRequestID else { return nil }
+        let version = savedSourceVersion
+        let encoding = fileEncoding
+        let preservesOriginal: Bool
+        if let version, index.issue == nil, !index.needsSeparatorChoice {
+            preservesOriginal = await encoding.preserves(version, for: savedText)
+        } else {
+            preservesOriginal = false
+        }
+        try Task.checkCancellation()
+        guard request == textPreviewRequestID else { return nil }
+        return DelimitedSnapshot(index: index, requestID: request,
+                                 preservesOriginalBytes: preservesOriginal && encoding == fileEncoding
+                                    && version == savedSourceVersion)
+    }
 
     func setMarkdownPreview(_ enabled: Bool) {
         guard MarkdownDocument.supports(path) else { return }
@@ -974,7 +1002,7 @@ struct FileViewerView: View {
                             onOpenLink: onMarkdownLink,
                             onLocateSource: { offset in
                                 file.pendingMarkdownSource = (
-                                    request: file.markdownRequestID, offset: offset, focus: true
+                                    request: file.textPreviewRequestID, offset: offset, focus: true
                                 )
                                 if rendersOnlyMarkdown { onMarkdownLocateSource() }
                                 else { file.setMarkdownPreview(false) }

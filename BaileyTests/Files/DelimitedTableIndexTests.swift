@@ -1,0 +1,213 @@
+import Foundation
+import XCTest
+@testable import Bailey
+
+@MainActor
+final class DelimitedTableIndexTests: XCTestCase {
+    func testPhysicalAndLogicalRecordsPreserveUTF16FieldRangesAndTerminators() async throws {
+        let text = "\"e\u{301}😀\",,\"a\"\"b\"\r\n\"x\r\ny\rz\nw\",last,\r\r\nend,,!"
+        let utf16 = text as NSString
+        let index = try await DelimitedTableIndex.parse(text, preferred: .comma)
+        let expected = [
+            ["\"e\u{301}😀\"", "", "\"a\"\"b\""],
+            ["\"x\r\ny\rz\nw\"", "last", ""],
+            [""],
+            ["end", "", "!"],
+        ]
+        XCTAssertEqual(index.records.map(\.physicalLine), [1, 2, 6, 7])
+        XCTAssertEqual(index.records.map(\.lineEndingLength), [2, 1, 2, 0])
+        XCTAssertEqual(index.issue, .init(problem: .unevenColumns(expected: 3, actual: 1), line: 6, column: 1))
+        var recordStart = 0
+        for (record, row) in zip(index.records, expected) {
+            XCTAssertEqual(record.source.location, recordStart)
+            var fieldStart = recordStart
+            for (field, literal) in zip(index.fields(in: record), row) {
+                XCTAssertEqual(field.source, NSRange(location: fieldStart, length: literal.utf16.count))
+                XCTAssertEqual(utf16.substring(with: field.source), literal)
+                fieldStart += literal.utf16.count + 1
+            }
+            XCTAssertEqual(index.fields(in: record).count, row.count)
+            recordStart = NSMaxRange(record.source)
+        }
+        XCTAssertEqual(recordStart, utf16.length)
+        XCTAssertEqual(index.fields(in: index.records[0]).map { $0.value(in: utf16) }, ["e\u{301}😀", "", "a\"b"])
+        XCTAssertEqual(index.fields(in: index.records[1]).first?.value(in: utf16), "x\r\ny\rz\nw")
+    }
+
+    func testDelimiterDetectionDoesNotCountQuotedDelimitersAndExposesAmbiguity() async throws {
+        for (text, expected) in [
+            ("\"x\t;y\",z\r\n\"a\t;b\",c", DelimitedTableIndex.Separator.comma),
+            ("\"x\t,y\";z\n\"a\t,b\";c", .semicolon),
+            ("\"x;,y\"\tz\n\"a;,b\"\tc", .tab),
+        ] {
+            let index = try await DelimitedTableIndex.parse(text, preferred: .comma)
+            XCTAssertEqual(index.separator, expected)
+            XCTAssertFalse(index.needsSeparatorChoice)
+            XCTAssertEqual(index.records.count, 2)
+            XCTAssertNil(index.issue)
+        }
+        let source = "a,b;c\n=1,+2;@4"
+        let automatic = try await DelimitedTableIndex.parse(source, preferred: .tab)
+        XCTAssertTrue(automatic.needsSeparatorChoice)
+        let selected = try await DelimitedTableIndex.parse(source, preferred: .tab, selected: .semicolon)
+        XCTAssertFalse(selected.needsSeparatorChoice)
+        XCTAssertEqual(selected.fields(in: selected.records[1]).map { $0.value(in: source as NSString) },
+                       ["=1,+2", "@4"])
+        let longFirstField = "\"" + String(repeating: "a", count: 16_384) + "\";second"
+        let bounded = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma)
+        XCTAssertTrue(bounded.needsSeparatorChoice, "Do not guess outside the sample")
+        let corrected = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma, selected: .semicolon)
+        XCTAssertEqual(corrected.fields(in: corrected.records[0]).count, 2)
+        XCTAssertNil(corrected.issue)
+    }
+
+    func testEmptyTrailingQuotedAndInvalidFieldsHaveDistinctRangesAndIssues() async throws {
+        for (text, values) in [
+            ("", []),
+            (",", [["", ""]]),
+            ("\n", [[""]]),
+            ("\"\"\r", [[""]]),
+            ("\"\"\"\"", [["\""]]),
+            ("\"a\"\"\u{301}\"", [["a\"\u{301}"]]),
+            ("a\u{2028}b,\u{2029}\n", [["a\u{2028}b", "\u{2029}"]]),
+        ] {
+            let index = try await DelimitedTableIndex.parse(text, preferred: .comma)
+            XCTAssertNil(index.issue)
+            XCTAssertEqual(index.records.map { record in
+                index.fields(in: record).map { $0.value(in: text as NSString) }
+            }, values)
+        }
+        for (text, issue) in [
+            ("abc,\"x\r\ny", DelimitedTableIndex.Issue(problem: .unclosedQuote, line: 2, column: 2)),
+            ("a,b\nx\"y,z", .init(problem: .unexpectedQuote, line: 2, column: 2)),
+            ("\"a\"b,x", .init(problem: .textAfterQuote, line: 1, column: 4)),
+            ("a,b\r\nx,\0", .init(problem: .nul, line: 2, column: 3)),
+        ] {
+            let index = try await DelimitedTableIndex.parse(text, preferred: .comma, selected: .comma)
+            XCTAssertEqual(index.issue, issue)
+            XCTAssertEqual(index.records.count, text.hasPrefix("a,b") ? 1 : 0)
+        }
+    }
+
+    func testCapacityBoundsAndCancellation() async throws {
+        let text = String(repeating: "模型,😀,\r\n", count: 100_000)
+        let index = try await DelimitedTableIndex.parse(text, preferred: .comma)
+        XCTAssertNil(index.issue)
+        XCTAssertEqual(index.records.count, 100_000)
+        let last = try XCTUnwrap(index.records.last)
+        XCTAssertEqual(index.fields(in: last).map { $0.value(in: text as NSString) }, ["模型", "😀", ""])
+        XCTAssertEqual(NSMaxRange(last.source), text.utf16.count)
+        let wide = try await DelimitedTableIndex.parse(String(repeating: "field,", count: 2_500), preferred: .comma)
+        XCTAssertEqual(wide.fields(in: try XCTUnwrap(wide.records.first)).count, 2_501)
+        let tooManyFields = try await DelimitedTableIndex.parse(
+            String(repeating: ",", count: 1_000_000), preferred: .comma
+        )
+        XCTAssertEqual(tooManyFields.issue?.problem, .fieldLimit)
+        let length = 32 << 20
+        let atLimit = String(repeating: "x", count: length)
+        let accepted = try await DelimitedTableIndex.parse(atLimit, preferred: .comma, selected: .comma)
+        let record = try XCTUnwrap(accepted.records.first)
+        XCTAssertEqual(accepted.fields(in: record).first?.source, NSRange(location: 0, length: length))
+        let exceeded = try await DelimitedTableIndex.parse(atLimit + "x", preferred: .comma, selected: .comma)
+        XCTAssertEqual(exceeded.issue, .init(problem: .sourceLimit, line: 1, column: length + 1))
+        let canceled = Task { try await DelimitedTableIndex.parse(atLimit, preferred: .comma) }
+        canceled.cancel()
+        do {
+            _ = try await canceled.value
+            XCTFail("A canceled scan must not return an index")
+        } catch is CancellationError {}
+    }
+
+    func testFileSnapshotTracksNativeEditsAndRetainsOriginalEncodedBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for (encoding, value) in [
+            (TextFileEncoding.utf8, "模型😀"),
+            (.utf8BOM, "e\u{301}😀"),
+            (.utf16LEBOM, "模型😀"),
+            (.utf16BEBOM, "模型😀"),
+            (.gbk, "模型"),
+            (.gb18030, "模型"),
+            (.shiftJIS, "日本語"),
+            (.latin1, "é"),
+        ] {
+            let path = directory.appendingPathComponent(UUID().uuidString + ".TSV")
+            let original = "name\tvalue\r\n\(value)\t1"
+            let bytes = try XCTUnwrap(encoding.encoded(original))
+            try bytes.write(to: path)
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.reopen(using: encoding)
+            try await file.waitForText()
+            let loaded = try await file.delimitedSnapshot()
+            let first = try XCTUnwrap(loaded)
+            XCTAssertTrue(first.preservesOriginalBytes, encoding.name)
+            XCTAssertEqual(first.index.separator, .tab)
+            let record = first.index.records[1]
+            let field = try XCTUnwrap(first.index.fields(in: record).first)
+            XCTAssertEqual((file.nativeTextStorage.string as NSString).substring(with: field.source), value)
+            file.nativeTextStorage.replaceCharacters(in: field.source, with: "changed")
+            XCTAssertNotEqual(file.textPreviewRequestID, first.requestID)
+            let edited = try await file.delimitedSnapshot()
+            let next = try XCTUnwrap(edited)
+            XCTAssertTrue(next.preservesOriginalBytes)
+            XCTAssertEqual(next.index.fields(in: next.index.records[1]).first?.source.length, 7)
+            XCTAssertEqual(try Data(contentsOf: path), bytes, "Indexing and editing in memory must not publish bytes")
+        }
+    }
+
+    func testInFlightSnapshotCannotPublishAcrossRename() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("open.csv")
+        let renamed = directory.appendingPathComponent("open.txt")
+        let bytes = Data(String(repeating: "part,😀\r\n", count: 100_000).utf8)
+        try bytes.write(to: source)
+        let file = FileTab(path: source.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let scan = Task {
+            signal.yield(())
+            signal.finish()
+            return try await file.delimitedSnapshot()
+        }
+        for await _ in started { break }
+        try FileManager.default.moveItem(at: source, to: renamed)
+        file.updatePath(renamed.path)
+        let stale = try await scan.value
+        XCTAssertNil(stale)
+        let wrongFormat = try await file.delimitedSnapshot()
+        XCTAssertNil(wrongFormat)
+        XCTAssertEqual(try Data(contentsOf: renamed), bytes)
+    }
+
+    func testInFlightSnapshotCannotPublishAfterProjectClosesFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("close.csv")
+        let bytes = Data(String(repeating: "part,😀\r\n", count: 100_000).utf8)
+        try bytes.write(to: source)
+        let project = Project(fallbackName: "CSV close", workspaceConfiguration: .standard)
+        project.openLocalFile(source.path)
+        guard let selected = project.tabs.first, case .file(let file) = selected.content else {
+            return XCTFail("Opening a file must create the real project tab")
+        }
+        try await file.waitForText()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let scan = Task {
+            signal.yield(())
+            signal.finish()
+            return try await file.delimitedSnapshot()
+        }
+        for await _ in started { break }
+        project.closeContent(selected.content)
+        XCTAssertTrue(project.tabs.isEmpty)
+        let stale = try await scan.value
+        XCTAssertNil(stale?.requestID)
+        let closed = try await file.delimitedSnapshot()
+        XCTAssertNil(closed?.requestID)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+    }
+}

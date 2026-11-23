@@ -266,7 +266,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
 
         let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await file.waitForText()
-        file.markdownSourceIndex = (file.markdownRequestID, MarkdownBlockIndex(
+        file.markdownSourceIndex = (file.textPreviewRequestID, MarkdownBlockIndex(
             try await MarkdownDocument.parse(source)
         ))
         let host = NSHostingView(rootView: SourceTextEditor(
@@ -336,7 +336,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         for wraps in [false, true] {
             let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
             try await file.waitForText()
-            file.markdownSourceIndex = (file.markdownRequestID, MarkdownBlockIndex(document))
+            file.markdownSourceIndex = (file.textPreviewRequestID, MarkdownBlockIndex(document))
             let host = NSHostingView(rootView: SourceTextEditor(
                 file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
                 palette: .theme(dark: false), wrapLines: wraps, isFocused: false

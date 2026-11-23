@@ -353,11 +353,11 @@ final class Project: nonisolated Identifiable {
         // project directory has the same spelling on two different machines.
         let resourceDirectory = file.workspaceIdentity == workspaceIdentity ? directory : nil
         let resource = file.markdownResource(in: resourceDirectory)
-        let target = file.markdownRequestID
+        let target = file.textPreviewRequestID
         let sourceWorkspace = file.workspaceIdentity
         do {
             let resolved = try await resource.resolvedFile(url)
-            guard !Task.isCancelled, isCurrent(), file.markdownRequestID == target,
+            guard !Task.isCancelled, isCurrent(), file.textPreviewRequestID == target,
                   directory == customDirectory, file.workspaceIdentity == sourceWorkspace,
                   (sourceWorkspace == nil || sourceWorkspace == workspaceIdentity),
                   tabs.contains(where: { $0.content.id == file.id }) else { return false }

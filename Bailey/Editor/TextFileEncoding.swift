@@ -97,11 +97,17 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
     @concurrent static func prepareSave(
         _ text: String, as chosen: TextFileEncoding, path: String, checkDeclaration: Bool
     ) async -> Result<EncodedSave, SaveEncodingFailure> {
-        if checkDeclaration, !isDelimitedText(path), contradictsDeclaration(text, chosen: chosen) {
+        if checkDeclaration, DelimitedTableIndex.Separator.preferred(for: path) == nil,
+           contradictsDeclaration(text, chosen: chosen) {
             return .failure(.contradictsDeclaration)
         }
         guard let bytes = chosen.encoded(text) else { return .failure(.cannotRoundTrip) }
         return .success(EncodedSave(bytes: bytes, version: WorkspaceFileVersion(data: bytes)))
+    }
+
+    @concurrent func preserves(_ version: WorkspaceFileVersion, for text: String) async -> Bool {
+        guard let bytes = encoded(text), !Task.isCancelled else { return false }
+        return version.matches(bytes)
     }
 
     func decoded(_ bytes: Data) -> String? {
@@ -198,13 +204,6 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         let encoding: TextFileEncoding
     }
 
-    private static func isDelimitedText(_ path: String) -> Bool {
-        switch (path as NSString).pathExtension.lowercased() {
-        case "csv", "tsv": true
-        default: false
-        }
-    }
-
     static func decode(
         _ bytes: Data, path: String, backend: WorkspaceBackend, override: TextFileEncoding? = nil
     ) async -> Result<Document, DecodeFailure> {
@@ -218,7 +217,7 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         } else if let bom {
             chosen = bom
         } else if let cookie {
-            if isDelimitedText(path) {
+            if DelimitedTableIndex.Separator.preferred(for: path) != nil {
                 guard !bytes.contains(0) else { return .failure(.binary) }
                 if let text = utf8.decoded(bytes) {
                     return .success(Document(text: text, encoding: .utf8))

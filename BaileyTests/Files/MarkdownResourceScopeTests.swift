@@ -58,6 +58,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let path = directory + "/Readme.md"
             let asset = directory + "/asset.svg"
             let rasterPath = directory + "/wide.png"
+            let tablePath = directory + "/measurements.CSV"
             let outside = fixture + "/outside.svg"
             let original = Data("\u{feff}# 测试 🧪\r\n\r\n![Scoped asset](asset.svg)\r\n".utf8)
             let svg = Data("""
@@ -79,6 +80,8 @@ final class MarkdownResourceScopeTests: XCTestCase {
             XCTAssertTrue(CGImageDestinationFinalize(png))
             let rasterBytes = pngData as Data
             try await backend.write(path: rasterPath, data: rasterBytes)
+            let tableBytes = Data("# coding: gbk,样本😀\r\n1,\"多行\r\n数据\"\r\n".utf8)
+            try await backend.write(path: tablePath, data: tableBytes)
 
             let connection = RemoteConnection(user: "", host: host, port: 22,
                                               controlSocket: URL(fileURLWithPath: socket), sshPID: 0)
@@ -89,6 +92,14 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let document = try await MarkdownDocument.parse(tab.text)
             XCTAssertEqual(document.headingOutline.first?.title, "测试 🧪")
             let resource = tab.markdownResource(in: directory)
+            let table = FileTab(path: tablePath, backend: channel, workspaceIdentity: "ssh:\(host)")
+            try await table.waitForText()
+            let tableSnapshot = try await table.delimitedSnapshot()
+            let tableIndex = try XCTUnwrap(tableSnapshot?.index)
+            XCTAssertEqual(table.fileEncoding, .utf8)
+            XCTAssertTrue(tableSnapshot?.preservesOriginalBytes == true)
+            XCTAssertEqual(tableIndex.fields(in: tableIndex.records[1]).last?.value(in: table.text as NSString),
+                           "多行\r\n数据")
             let rasterURL = try XCTUnwrap(URL(string: "wide.png"))
             let rasterTab = FileTab(path: rasterPath, backend: channel, workspaceIdentity: "ssh:\(host)")
             rasterTab.loadIfNeeded()
@@ -166,6 +177,8 @@ final class MarkdownResourceScopeTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), localTwin)
             let unchangedRaster = try await backend.read(path: rasterPath, maxBytes: rasterBytes.count)
             XCTAssertEqual(unchangedRaster, rasterBytes)
+            let unchangedTable = try await backend.read(path: tablePath, maxBytes: tableBytes.count)
+            XCTAssertEqual(unchangedTable, tableBytes)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: rasterPath)), localTwin)
         } catch {
             await cleanup()
@@ -277,7 +290,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
         }
         try await source.waitForText()
         source.autoSaveSuspendedForClose = true
-        let previousRequest = source.markdownRequestID
+        let previousRequest = source.textPreviewRequestID
         var identityChecks = 0
 
         let opened = await project.openMarkdownLink(try XCTUnwrap(URL(string: "Guide.md")),
@@ -292,7 +305,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             return true
         }
         XCTAssertEqual(identityChecks, 2, "The link must recheck its source after authorization")
-        XCTAssertNotEqual(source.markdownRequestID, previousRequest)
+        XCTAssertNotEqual(source.textPreviewRequestID, previousRequest)
         XCTAssertFalse(opened, "An old link must not open after its source content changes")
         XCTAssertEqual(project.tabs.count, 1, "A stale async result cannot create a destination tab")
         XCTAssertTrue(source.isDirty)
