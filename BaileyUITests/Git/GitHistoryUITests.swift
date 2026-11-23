@@ -118,7 +118,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertNotEqual(rootHash, headHash)
         XCTAssertEqual(try fixture.git(["show", ":history.txt"]), Data(current.utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         let historicalRow = historicalFileRow(file, fixture: fixture, window: window)
@@ -168,7 +168,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertNotEqual(rootHash, headHash)
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(old, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(old, fixture: fixture, window: window)
@@ -216,7 +216,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["cat-file", "-s", "HEAD:large.txt"]),
                        Data("\(largeBytes.count)\n".utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(binary, commit: "E2E fixture history", fixture: fixture, app: app)
         // This XCTest Runner cannot enumerate native context-menu items.
@@ -254,7 +254,7 @@ final class GitHistoryUITests: XCTestCase {
                          "commit", "-qam", "Second revision"])
         let headHash = try revision(in: fixture)
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(file, fixture: fixture, window: window)
@@ -313,7 +313,7 @@ final class GitHistoryUITests: XCTestCase {
         try local.write(to: file, atomically: true, encoding: .utf8)
         XCTAssertEqual(try fixture.git(["show", ":history.txt"]), Data(current.utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         // Keep both sections present. historicalFileRow uses the history-only
@@ -353,20 +353,17 @@ final class GitHistoryUITests: XCTestCase {
                        "Historical reset must not touch other tracked files")
     }
 
-    private enum HistoricalMenuAction: Int {
-        case viewRevision = 1
-        case compareWorktree = 2
-        case openWorkingFile = 3
-        case resetFile = 4
+    private enum HistoricalMenuAction: String {
+        case viewRevision = "v"
+        case compareWorktree = "c"
+        case openWorkingFile = "o"
+        case resetFile = "r"
     }
 
     private func activateHistoricalMenu(_ action: HistoricalMenuAction, in app: XCUIApplication) {
-        // Native context-menu items are visually present but omitted by this
-        // XCTest Runner's AX snapshot. First Down selects the first action;
-        // callers verify the resulting view or Git bytes.
-        for _ in 0..<action.rawValue {
-            app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
-        }
+        // XCTest may omit native popup items from its AX tree. macOS menu
+        // type-to-select finds a unique title regardless of the hovered row.
+        app.typeKey(action.rawValue, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
     }
 
