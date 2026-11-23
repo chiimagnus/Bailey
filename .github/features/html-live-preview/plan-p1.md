@@ -19,11 +19,16 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
   **但不复用具有完整网页权限的 `BrowserTab`**，也不让 WebKit 取得第二份编辑权。
 - `MarkdownResource.relativePath/read` 已有 `LocalPathScope`、本机及 SSH 的受控相对路径读取。
   HTML 的 CSS／图片／SVG 等从同一文件身份、项目、机器和获授权目录出发，
-  复用这一条真实路径解析和 IO 范围；当第二位消费者落地，
+  复用这一条真实路径解析和 IO 范围。`MarkdownResource.relativePath(for:)` 当前始终相对源文档，
+  但 CSS 中的 `url(...)` 和 `@import` 必须相对**当前 CSS 文件**计算；应在共用解析入口
+  显式传入请求发起者路径并重新检查目录范围，不能让子资源借用 HTML 的 base。
+  当第二位消费者落地，
   将公共代码转为中性资源职责，替换 Markdown 的旧调用并删除同义包装，
   不能新写一套 HTML 路径清洗或让 SSH 同路径回落到本机。
-  CSS／SVG／图片自身的读取预算与内容验证仍分别执行；SVG 净化可复用 `MarkdownSVG`，
-  但网页 SVG 的完整 CSS 能力不能以 Markdown 的栅格显示冒充。
+  CSS、图片与 SVG 的读取预算及 MIME 验证分别执行。
+  **完整 HTML 中的 SVG 仍交由已选的 WebKit 页面渲染**，不另起 SwiftDraw 图像转换路径；
+  可复用 `MarkdownSVG` 已确认的危险 URL／主动内容测试样本与授权规则，
+  但不能直接套用其仅适用于 Markdown 片段的剔除白名单，导致合法页面静默漏图。
 
 ## 静态预览信任边界
 
@@ -33,7 +38,9 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
 不能把“禁用 JS”或 `WKNavigationDelegate` 仅拦截顶层点击当作子资源隔离：
 CSS `@import`、`url(...)`、`srcset`、外部字体、预加载与 SVG 引用都会请求资源。
 用**一个受控自定义资源 scheme** 和 `WKURLSchemeHandler` 为页面及可读的静态资源返回
-经项目／机器／路径校验的数据；请求和取消均绑定文件身份／代次，
+经项目／机器／路径校验的数据；HTML `<base>` 不得扩展授权，
+WebKit 自定义 scheme 的返回 MIME、CSP、失败与 `stop` 回调必须按真实 WebKit 行为验证。
+请求和取消均绑定文件身份／代次，
 禁止任何未经允许的 scheme，并在真实 WKWebView 中观察没有外部网络和文件读取。
 WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都要有独立的失败测试。
 
@@ -48,6 +55,8 @@ WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都�
   受控 scheme 按文件当前原文／授权目录加载页面及 CSS／图像等静态资源，
   应用真实的 CSP 和请求限额、导航／表单／新窗口拒绝。
   不把文本交给 BrowserTab，也不用 SwiftSoup 全页序列化替换原始结构。
+  从第一版就让实际 `WKWebView` 及资源请求由所属 `FileTab` 持有，
+  不能先放 SwiftUI `@State` 并在 P2 才迁移：源码／预览切换不应创建新的 WebKit 进程。
   共享资源权限归属完成后，当场删除旧 Markdown 专名和潜在的重复访问路径。
 - **验证**：合法 HTML/CSS 及相对图片／SVG、层叠／媒体查询／HTML 空白语义、
   本机与 SSH 同名文件、Finder 项目外文件、URL 转义／`../`／符号链接、
@@ -80,3 +89,23 @@ WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都�
 和新增 HTML 专项及 `make build`／阶段 `make test`。
 按 `docs/testing.md` 逐项核销权限、极端文件、窗口、取消、恢复及适用组合；
 未执行的 Mac／SSH GUI 条件明确标注，不能以组件测试替代。
+
+### HTML 专项验收矩阵（P1）
+
+共同文件、身份、容量、窗口与生命周期按[共享条件 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)执行；
+以下每组均须准备完整的真实 HTML／CSS 夹具，通过**实际 `WKWebView` 子资源结果和本地测试监听器**判定，
+不能仅检查 `WKWebViewConfiguration`、导航回调是否调用。
+
+| 编号 | 输入和交叉条件 | 必须观察到的结果 |
+| --- | --- | --- |
+| H01 文档 | HTML5、`<style>`／内联 style、媒体查询、flex／grid、中文／emoji、HTML 实体、无效闭合标签、空页、UTF-8 BOM／UTF-16／用户指定编码、32 MiB 边界。 | 实际布局、文字、CSS 和错误提示符合 WebKit 静态解析；取自 FileTab **解码后的同一版本**，源文件字节不变，不能重新拿 WebKit 猜另一份编码。 |
+| H02 引用链 | `page.html → styles/main.css → ../images/a.png`、CSS `@import` 多级目录、`url(...)`、中文／百分号编码文件名、相对图片／字体／SVG、资源不存在及被移走。 | 每一级以请求者自身路径解析，经同一个 root／机器授权；合法资源能真实加载，丢失只影响该资源且错误可读。 |
+| H03 主动内容 | 内联及外链 `<script>`、事件属性、`javascript:`、`iframe/srcdoc`、`object/embed`、`contenteditable`、`form`、提交、`target=_blank`、下载、`meta refresh` 和 `<base>`。 | 没有脚本执行、表单提交、新窗口、重导航或越权写入；页面内控件不能把编辑器键盘／主菜单误接管，浏览器能力仍由用户显式触发。 |
+| H04 子请求 | 本地测试 HTTP 监听器＋HTTPS 远链、CSS `@import/url/image-set`、`@font-face`、`srcset`、`link preload/prefetch`、SVG 的外链／`foreignObject`、`file:`／`data:`／`blob:`。 | 对被禁目标**没有 HTTP 连接或授权外资源读取**；拒绝的 CSS/图片仍有可见结果，CSP 和 scheme handler 不能互相代替。 |
+| H05 范围及 MIME | 同路径 Mac／SSH、Finder 项目外文件、`../`／符号链接逃逸、带 `#/?/%` 的请求、非普通文件、HTML 装成 CSS／SVG、非法 Content-Type／MIME 嗅探。 | 受控 scheme 只按当前请求授权读取，拒绝超范围或类型混淆，不能通过 URL base 或重定向扩权；错机绝不回落本机。 |
+| H06 资源预算 | 空 CSS、巨大／压缩比异常图片、单资源超限、多子资源同时请求、嵌套 CSS 循环、缓慢后端与突发取消。 | 各资源和并发加载的峰值有界；WebKit stop 与后端请求同源取消，失败不产生半成品、泄漏或无限重试。预算应根据已用 IO／解码器和实测确定，不盲加固定总量级。 |
+| H07 WebKit 生命周期 | 首次预览、源码→预览→并排→源码、改项目／关标签、快速重新打开、资源尚未完成时退出、WebContent 进程异常退出。 | 同一 FileTab 的有效 WebView 与数据存储不因 SwiftUI 重绘反复新建；真关闭解绑 delegate、scheme 请求与资源；需要恢复时仍不执行脚本。 |
+| H08 文件与 UI | `⌘⇧V`、右键背景标签、真实焦点和 IME、选择复制文字、系统 Find／VoiceOver、不同 Dock 宽度、亮暗／1×2×。 | 单一 FileTab／Undo、同一原文、正确目标与 AX；预览刷新本身不会触发 FileTab 保存或新增临时 HTML。 |
+
+按 H02×H05、H03×H04、H04×H06、H06×H07 和 H01×H08 扩展组合；
+CSS／SVG 子请求安全只以隔离的本机监听和临时文件作证，禁止为验收实际请求外部恶意地址。
