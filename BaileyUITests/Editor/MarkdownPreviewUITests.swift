@@ -926,7 +926,9 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(prose.waitForExistence(timeout: 10), preview.debugDescription)
         NSPasteboard.general.clearContents()
         XCTAssertTrue(NSPasteboard.general.setString("Bailey selection test", forType: .string))
-        prose.doubleClick()
+        let start = prose.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.25))
+        let end = prose.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.25))
+        start.click(forDuration: 0.15, thenDragTo: end)
         app.typeKey("c", modifierFlags: .command)
         let copied = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         XCTAssertNotEqual(copied, "Bailey selection test", "Markdown selection must reach the native clipboard")
@@ -1149,8 +1151,9 @@ final class MarkdownPreviewUITests: XCTestCase {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
         XCTAssertEqual(picture.frame.width, 40, accuracy: 2,
                        "Retina SVG rasterization must not double the declared CSS display width")
-        XCTAssertEqual(CGFloat(bitmap.pixelsWide) / picture.frame.width, 2, accuracy: 0.2,
-                       "The SVG must still use sharp two-pixel-per-point Retina rasterization")
+        XCTAssertEqual(CGFloat(bitmap.pixelsWide) / picture.frame.width,
+                       try XCTUnwrap(NSScreen.main).backingScaleFactor, accuracy: 0.2,
+                       "The SVG must render at the actual display backing scale without blurring")
     }
 
     func testAnimatedGIFChangesVisibleFramesAndSourceBytesStayUntouched() throws {
@@ -2371,7 +2374,7 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
         sideBySide.click()
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let first = preview.staticTexts["Section 0"].firstMatch
+        let first = markdownHeading("section-0", in: preview)
         XCTAssertTrue(first.waitForExistence(timeout: 15))
         XCTAssertGreaterThan(first.frame.intersection(preview.frame).height, 1)
 
