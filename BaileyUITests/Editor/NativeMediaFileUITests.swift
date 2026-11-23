@@ -210,6 +210,105 @@ final class NativeMediaFileUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: video), original)
     }
 
+    func testRealEmbeddedSubtitlesUseTheNativeVideoMenu() throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = URL(fileURLWithPath: root).appending(path: "media/视频-内置字幕.mp4")
+        let bytes = try Data(contentsOf: original)
+        let video = fixture.root.appending(path: "Captioned.mp4")
+        try bytes.write(to: video)
+        let noCaptions = fixture.root.appending(path: "Plain.mov")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: root).appending(path: "media/视频-ProRes.mov"),
+                                         to: noCaptions)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        open(video, in: window, app: app)
+        let play = window.checkBoxes["play/pause"]
+        let timeline = window.sliders["timeline"]
+        XCTAssertTrue(play.waitForExistence(timeout: 10))
+        XCTAssertTrue(timeline.waitForExistence(timeout: 10))
+        let paused = String(describing: play.value ?? "")
+        timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.56, dy: 0.5)).click()
+        let sought = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let position = Double(String(describing: timeline.value ?? "")) else { return false }
+            return (5.5...8).contains(position)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [sought], timeout: 5), .completed)
+        let frameTime = try XCTUnwrap(Double(String(describing: timeline.value ?? "")))
+        let subtitles = window.buttons["show legible media selection menu"]
+        XCTAssertTrue(subtitles.waitForExistence(timeout: 5), window.debugDescription)
+        func setCaptions(_ title: String) {
+            subtitles.click()
+            let option = WorkspaceUITestSupport.menuItem(title, in: subtitles)
+            XCTAssertTrue(option.waitForExistence(timeout: 5))
+            option.click()
+        }
+        func framePixels() -> [NSColor] {
+            guard let bitmap = NSBitmapImageRep(data: window.screenshot().pngRepresentation) else { return [] }
+            return stride(from: bitmap.pixelsWide * 40 / 100, to: bitmap.pixelsWide * 64 / 100, by: 4).flatMap { column in
+                stride(from: bitmap.pixelsHigh * 60 / 100, to: bitmap.pixelsHigh * 86 / 100, by: 4).compactMap { row in
+                    bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB)
+                }
+            }
+        }
+        setCaptions("Off")
+        let withoutText = framePixels()
+        XCTAssertGreaterThan(withoutText.count, 1_000)
+        let language = WorkspaceUITestSupport.menuItem("Language", in: subtitles)
+        let chinese = WorkspaceUITestSupport.menuItem("Chinese", in: language)
+        func showLanguages() {
+            subtitles.click()
+            XCTAssertTrue(language.waitForExistence(timeout: 5), subtitles.debugDescription)
+            language.hover()
+            let revealed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                chinese.exists && chinese.isHittable
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed, language.debugDescription)
+        }
+        showLanguages()
+        chinese.click()
+        setCaptions("On")
+        func changedPixels() -> Int? {
+            let current = framePixels()
+            guard current.count == withoutText.count else { return nil }
+            return zip(withoutText, current).filter { old, new in
+                max(abs(old.redComponent - new.redComponent), abs(old.greenComponent - new.greenComponent),
+                    abs(old.blueComponent - new.blueComponent)) > 0.2
+            }.count
+        }
+        let rendered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (changedPixels() ?? 0) > 15
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 8), .completed)
+        XCTAssertEqual(String(describing: play.value ?? ""), paused)
+        XCTAssertEqual(try XCTUnwrap(Double(String(describing: timeline.value ?? ""))), frameTime, accuracy: 0.04)
+        setCaptions("Off")
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (changedPixels() ?? .max) < 10
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 8), .completed)
+
+        open(noCaptions, in: window, app: app)
+        let plainTab = WorkspaceUITestSupport.fileTab(noCaptions, in: window)
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            plainTab.exists && plainTab.isSelected && (window.staticTexts["duration"].value as? String) == "00:04"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        XCTAssertTrue(play.waitForExistence(timeout: 10))
+        if subtitles.exists, subtitles.isEnabled, subtitles.isHittable {
+            subtitles.click()
+            XCTAssertFalse(language.exists, subtitles.debugDescription)
+            app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        }
+        XCTAssertEqual(try Data(contentsOf: video), bytes)
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+
     private func open(_ file: URL, in window: XCUIElement, app: XCUIApplication) {
         app.activate()
         let row = WorkspaceUITestSupport.fileRow(file, in: window)

@@ -7,6 +7,19 @@ import XCTest
 
 @MainActor
 final class NativeMediaFileTests: XCTestCase {
+    @MainActor private final class CaptionProbe: NSObject, AVPlayerItemLegibleOutputPushDelegate {
+        private(set) var received: [(String, CMTime)] = []
+
+        nonisolated func legibleOutput(
+            _ output: AVPlayerItemLegibleOutput, didOutputAttributedStrings strings: [NSAttributedString],
+            nativeSampleBuffers: [Any], forItemTime itemTime: CMTime
+        ) {
+            let caption = strings.map(\.string).joined(separator: "\n")
+            guard !caption.isEmpty else { return }
+            MainActor.assumeIsolated { received.append((caption, itemTime)) }
+        }
+    }
+
     func testFileTabAcceptsRealWAVBeforeTheTextReadLimit() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -316,6 +329,50 @@ final class NativeMediaFileTests: XCTestCase {
             let actual = try await Self.checksum(url)
             XCTAssertEqual(actual, checksum)
         }
+    }
+
+    func testEmbeddedSubtitleSelectionEmitsTheActualChineseCue() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let directory = URL(fileURLWithPath: root).appending(path: "media")
+        let url = directory.appending(path: "视频-内置字幕.mp4")
+        let original = try Data(contentsOf: url)
+        let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { tab.retireContent() }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("Cannot open the captioned movie") }
+        XCTAssertEqual(media.kind, .video)
+        let offered = try await media.asset.loadMediaSelectionGroup(for: .legible)
+        let group = try XCTUnwrap(offered)
+        XCTAssertTrue(group.allowsEmptySelection)
+        let chinese = try XCTUnwrap(group.options.first { $0.locale?.language.languageCode?.identifier == "zh" })
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        let output = AVPlayerItemLegibleOutput(mediaSubtypesForNativeRepresentation: [])
+        let probe = CaptionProbe()
+        output.setDelegate(probe, queue: .main)
+        item.add(output)
+        player.isMuted = true
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        item.select(chinese, in: group)
+        XCTAssertEqual(item.currentMediaSelection.selectedMediaOption(in: group), chinese)
+        let moved = await player.seek(to: CMTime(value: 48, timescale: 10), toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(moved)
+        player.play()
+        try await waitUntil { probe.received.contains { $0.0 == "第三段：seek / 时间定位" } }
+        let cue = try XCTUnwrap(probe.received.first { $0.0 == "第三段：seek / 时间定位" })
+        XCTAssertEqual(cue.1.seconds, 5, accuracy: 0.07)
+        player.pause()
+        item.select(nil, in: group)
+        XCTAssertNil(item.currentMediaSelection.selectedMediaOption(in: group))
+        XCTAssertEqual(try Data(contentsOf: url), original)
+
+        let plain = AVURLAsset(url: directory.appending(path: "视频-ProRes.mov"))
+        let noCaptions = try await plain.loadMediaSelectionGroup(for: .legible)
+        XCTAssertNil(noCaptions)
     }
 
     func testMediaRejectsCorruptMissingUnopenedAndRemoteFilesWithoutReadingTheirNamesakes() async throws {
