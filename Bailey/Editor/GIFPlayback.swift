@@ -15,6 +15,7 @@ final class GIFPlayback {
     @ObservationIgnored private var runID: UInt = 0
     @ObservationIgnored private var deadline: ContinuousClock.Instant?
     @ObservationIgnored private var remaining: Duration?
+    @ObservationIgnored private var advanceTask: Task<Void, Never>?
     private let clock = ContinuousClock()
 
     func togglePause() {
@@ -31,12 +32,24 @@ final class GIFPlayback {
         failed = false
     }
 
-    func play(load: () async throws -> Frames) async {
+    func play(load: @escaping () async throws -> Frames) async {
+        guard !Task.isCancelled else { return }
         suspend()
         let run = runID
-        defer { if run == runID { suspend() } }
         failed = false
+        let task = Task { await advance(load: load, run: run) }
+        advanceTask = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if run == runID { suspend() }
+    }
+
+    private func advance(load: () async throws -> Frames, run: UInt) async {
         do {
+            try Task.checkCancellation()
             let frames = try await load()
             guard frames.count > 1, run == runID, !Task.isCancelled else { return }
             var frame = try await frames.read(index)
@@ -62,6 +75,8 @@ final class GIFPlayback {
 
     private func suspend() {
         runID &+= 1
+        advanceTask?.cancel()
+        advanceTask = nil
         if let deadline {
             remaining = max(.zero, clock.now.duration(to: deadline))
             self.deadline = nil

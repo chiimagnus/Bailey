@@ -1262,6 +1262,94 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         }
     }
 
+    func testGIFKeepsEncodedLongPauseAndRateLimitsZeroAndShortFrames() throws {
+        let bytes = try gifDelayFixture()
+        let source = try XCTUnwrap(RasterPreview.source(bytes))
+        XCTAssertEqual(RasterPreview.gifFrameCount(source), 3)
+        for (index, seconds) in [12.5, 0.04, 0.04].enumerated() {
+            let frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 8)
+            XCTAssertEqual(frame.seconds, seconds, accuracy: 0.0001)
+        }
+        let inline = try MarkdownPicture.decode(bytes)
+        XCTAssertEqual(inline.animation.map(\.seconds), [12.5, 0.04, 0.04])
+    }
+
+    func testGIFTruncatedFrameNeverPublishesPartialPixels() throws {
+        let bytes = try gifDelayFixture()
+        let source = try XCTUnwrap(RasterPreview.source(Data(bytes.dropLast(4))))
+        XCTAssertEqual(try RasterPreview.gifFrame(source, at: 1, maximumDimension: 8).image.width, 4)
+        XCTAssertThrowsError(try RasterPreview.gifFrame(source, at: 2, maximumDimension: 8))
+    }
+
+    func testGIFResetCancelsLongHoldAndItsSuspendedPrefetch() async throws {
+        let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
+        let initial = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8)
+        let playback = GIFPlayback()
+        let decoding = expectation(description: "First frame is holding while the next frame decodes")
+        let cancelled = expectation(description: "Reset cancels prefetched frame")
+        let stopped = expectation(description: "Reset releases the playback task")
+        let task = Task {
+            await playback.play {
+                GIFPlayback.Frames(count: 3) { index in
+                    if index == 0 { return initial }
+                    decoding.fulfill()
+                    do {
+                        try await Task.sleep(for: .seconds(20))
+                    } catch is CancellationError {
+                        cancelled.fulfill()
+                    }
+                    return initial
+                }
+            }
+            stopped.fulfill()
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [decoding], timeout: 2)
+        XCTAssertTrue(playback.image === initial.image)
+        playback.reset()
+        await fulfillment(of: [cancelled, stopped], timeout: 1)
+        XCTAssertNil(playback.image)
+        XCTAssertFalse(playback.failed)
+    }
+
+    func testCancelledGIFRestartDoesNotInterruptTheCurrentPlayback() async throws {
+        let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
+        let red = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8).image
+        let green = try RasterPreview.gifFrame(source, at: 1, maximumDimension: 8).image
+        let playback = GIFPlayback()
+        let prefetch = expectation(description: "Active playback reaches its first frame")
+        let active = Task {
+            await playback.play {
+                GIFPlayback.Frames(count: 2) { index in
+                    if index == 0 { return RasterPreview.GIFFrame(image: red, seconds: 0.6) }
+                    prefetch.fulfill()
+                    return RasterPreview.GIFFrame(image: green, seconds: 10)
+                }
+            }
+        }
+        defer { active.cancel() }
+        await fulfillment(of: [prefetch], timeout: 2)
+        XCTAssertTrue(playback.image === red)
+        let stale = Task {
+            await playback.play {
+                XCTFail("A cancelled mount cannot start a new read")
+                throw CancellationError()
+            }
+        }
+        stale.cancel()
+        await stale.value
+        let advances = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in playback.image === green }, object: nil
+        )
+        await fulfillment(of: [advances], timeout: 2)
+    }
+
+    private func gifDelayFixture() throws -> Data {
+        try XCTUnwrap(Data(base64Encoded: """
+            R0lGODlhBAAEAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQA4gQAACwAAAAABAAEAAACBISPCQUAIfkEAAAAAAAsAAAAAAQABACAAP8AAAAAAgSEjwkFACH5BAABAAAALAAAAAAEAAQAgAAA/wAAAAIEhI8JBQA7
+            """))
+    }
+
     func testGIFRealSampleDecodesIndicesPastTheInlineAnimationBudget() throws {
         guard let root = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")

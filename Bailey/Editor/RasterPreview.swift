@@ -44,7 +44,7 @@ nonisolated struct RasterPreview: Sendable {
         let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
         let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double
             ?? gif?[kCGImagePropertyGIFDelayTime] as? Double ?? 0.1
-        return GIFFrame(image: image, seconds: delay.isFinite ? min(max(delay, 0.04), 10) : 0.1)
+        return GIFFrame(image: image, seconds: delay.isFinite ? max(delay, 0.04) : 0.1)
     }
 
     static func decode(_ source: CGImageSource, index: Int = 0, maximumDimension: Int) -> Self? {
