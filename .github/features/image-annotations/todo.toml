@@ -7,15 +7,15 @@ title = "用同一图片视口完成高精度缩放与资源按需解码"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "已验证原生视口、后台整图详情及版本校验（93c29eab、1bd6f296、81a665aa；Windows Tailscale 实机、184 项相关宿主回归、2 项视口宿主与 3 项复跑 GUI、正式 Debug 验签通过）。待补区域解码、真实物理手势及 1× 显示、容量边界和长会话性能；未通过阶段门禁。"
+note = "93c29eab、1bd6f296、81a665aa 共用原生视口、后台原图与版本校验（Windows Tailscale 已实测）；249a4efb 保留倍率和中心，核销换尺寸重挂载、改名、换图与 Fit。141 项宿主、macOS 27.3 隔离 Bailey Dev 的 PNG、GIF、Mermaid、SVG 共 5 项 E2E、Debug 验签通过。仍待真正区域解码、实际物理手势／1× 显示、容量极值和长会话。"
 
 [[tasks]]
 id = "P1-T2"
 title = "在共用 ImageIO 解码链完成 GIF 及图片状态恢复"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "已核销原生局部帧、长帧和取消（4aa31080、eaddbc72、44dd0b49）、真 Windows SSH 改名断线重连（82a79a52）、双窗口失活与恢复（e5ad40a9）、关闭释放（fcf0d744、57e7be6b）、损坏中间帧和内嵌像素限额（c2a6db40）。147 项相关宿主、2 项真实隔离 GUI、Debug 验签通过。三轮共 720 帧解码 RSS 增量峰值约 5.3 MiB；仍待真实长时间播放的 CPU／内存曲线及 I06×I08 扩展组合。"
 
 [[tasks]]
 id = "P2-T1"

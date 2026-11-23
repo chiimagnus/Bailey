@@ -7,7 +7,7 @@ title = "复用 SVG 净化与 SwiftDraw，确认复杂 SVG 能力"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "共享净化 b81bcc1f、原生矢量 b2022516、真实 Windows Tailscale 27ede424、滤镜替换与 100 次挂载 a564658。复杂图与隔离子请求组合仍待核销，详见 audit-p1.md。"
+note = "共享净化 b81bcc1f、原生矢量 b2022516、真实 Windows Tailscale 27ede424、滤镜替换与 100 次挂载 a564658c。df54f7ad 核销真实科研 SVG 轴线、中文、渐变及省略项（独立 WebKit 仅作像素参考）；ad4fea90 核销 1 MiB±1 宿主与完整 GUI 的像素、超限提示及原文。8 宿主、3 SVG GUI 全通过；仍待隔离子请求、深度／取消关键组合和 SVG 画质矩阵。"
 
 [[tasks]]
 id = "P1-T2"

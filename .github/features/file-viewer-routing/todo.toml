@@ -7,7 +7,7 @@ title = "核销读取与公共资源边界，移除新格式产生的重复路�
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "媒体真实分流 cdf773a3，同名不同内容的 Windows Tailscale 身份测试 ddf88857；HTML 公共资源权限仍待落地。"
+note = "cdf773a3、ddf88857 原生媒体分流与真 Windows 隔离；5ac0c145、5297ea42 HTML 与 Markdown 共用资源读入、真 Windows 同路径及断线重连。c7f2eb4a、a85ed10f 核销超 256 MiB 音频／视频的真实定位、源文件校验和及 100 次开闭。142 宿主与 Debug 验签通过。其余容量、取消、权限与跨格式矩阵依各分计划。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,4 +15,4 @@ title = "让下一种预览复用同一展示模式、Dock 和系统菜单"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = "49a9e09d451a8702ad60b93d909ce1cafb1884c4"
-note = "CSV 作为第二种文本预览；共享路由提交 24019b00，配套原生表格和前台查找验收同 CSV P1-T2。P1-T1 的 HTML／媒体边界仍待落地。"
+note = "CSV 作为第二种文本预览；共享路由提交 24019b00，配套原生表格和前台查找验收同 CSV P1-T2。"

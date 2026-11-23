@@ -5,7 +5,7 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
 
 ## 当前实现与技术决定
 
-- `MarkdownResource.picture` 及 `MarkdownHTMLImage.svgPicture` 已调用
+- `PreviewResource.picture` 及 `MarkdownHTMLImage.svgPicture` 已调用
   `SVGArtwork.render`；它通过 `SVGArtwork.sanitizedXML → SwiftDraw.SVG`
   净化与解析 SVG，再在 Core Graphics 位图中渲染。
   白名单、禁外链／脚本／DOCTYPE、深度 48、节点 4096、输入 1 MiB 是**目前真实安全边界**。
@@ -40,11 +40,10 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
   也不能将 XML 解析后的归一化文本写回原文件。
   在 SVG 语法无效或目前不支持的高级功能下保持源码、清楚提示，
   不以 WebKit、外网或不安全的 SVG 内联资源作暗中 fallback。
-  当前净化白名单会**静默移除** `pattern`、`use`、`symbol`、内嵌 `image` 等节点，
-  仅展示 SVG 不足以知道原图缺了什么；应由现有净化遍历同步报告实际剔除的特性，
-  让独立文件预览能明确提示，不再对 SVG 做第二遍诊断解析。
-  若决定支持，沿**现有**净化器谨慎补全并同步 Markdown 安全回归，
-  不另设一套宽松的独立 SVG 规则。
+  现有净化遍历返回实际移除的 `pattern`、`use`、`symbol`、内嵌 `image` 等节点，
+  独立文件显示省略提示，不再对 SVG 做第二遍诊断解析。
+  若扩展支持，先确认引用展开后的图形数量与绘制成本仍受控，
+  再沿**现有**净化器补全并同步 Markdown 安全回归，不另设独立 SVG 规则。
   确认 `clipPath`、mask、filter、pattern、渐变、文字／字体和大路径在 SwiftDraw 中的真实表现；
   SwiftDraw `SVGView` 对滤镜采用异步填充的 Canvas 缓存，
   首帧可能尚未应用滤镜：验证应比较最终滤镜收敛后的可见像素，

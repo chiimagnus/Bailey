@@ -17,14 +17,11 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
   不能负责完整 HTML 文档、CSS 级联、媒体查询或页面布局。
   全页 HTML 预览使用独立隔离的 `WKWebView`（macOS 系统 WebKit），
   **但不复用具有完整网页权限的 `BrowserTab`**，也不让 WebKit 取得第二份编辑权。
-- `MarkdownResource.relativePath/read` 已有 `LocalPathScope`、本机及 SSH 的受控相对路径读取。
-  HTML 的 CSS／图片／SVG 等从同一文件身份、项目、机器和获授权目录出发，
-  复用这一条真实路径解析和 IO 范围。`MarkdownResource.relativePath(for:)` 当前始终相对源文档，
-  但 CSS 中的 `url(...)` 和 `@import` 必须相对**当前 CSS 文件**计算；应在共用解析入口
-  显式传入请求发起者路径并重新检查目录范围，不能让子资源借用 HTML 的 base。
-  当第二位消费者落地，
-  将公共代码转为中性资源职责，替换 Markdown 的旧调用并删除同义包装，
-  不能新写一套 HTML 路径清洗或让 SSH 同路径回落到本机。
+- `PreviewResource` 是从 Markdown 提取并替换了旧入口的共用权限读取：
+  本机与 SSH 都使用文件所属项目／连接及授权目录。
+  CSS 中的 `url(...)` 和 `@import` 由 WebKit 相对**当前 CSS 文件的受控 URL**计算；
+  handler 将结果交给 Markdown 共用的范围校验，不自行解析 CSS、不回到 HTML 文档目录，
+  也不让 SSH 的同路径回落到本机。
   CSS、图片与 SVG 的读取预算及 MIME 验证分别执行。
   **完整 HTML 中的 SVG 仍交由已选的 WebKit 页面渲染**，不另起 SwiftDraw 图像转换路径；
   可复用 `SVGArtwork` 已确认的危险 URL／主动内容测试样本与授权规则，
@@ -33,7 +30,8 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
 ## 静态预览信任边界
 
 `WKWebViewConfiguration` 使用非持久化数据存储，禁用页面 JavaScript，
-对页面和子资源实施强制 CSP；不允许自发导航、脚本、表单、iframe、
+用 WebKit 内容规则阻断预连接等外部请求，并对页面和子资源实施强制 CSP；
+不允许自发导航、脚本、表单、iframe、
 弹窗、下载、网络、`file://`、任意 `data:`／`blob:` URL 或未授权相对路径。
 不能把“禁用 JS”或 `WKNavigationDelegate` 仅拦截顶层点击当作子资源隔离：
 CSS `@import`、`url(...)`、`srcset`、外部字体、预加载与 SVG 引用都会请求资源。
@@ -49,8 +47,8 @@ WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都�
 <a id="p1-t1"></a>
 ### P1-T1 建立一条安全 HTML 静态渲染与共用资源链
 
-- **位置**：`FileViewerView` `.text` 分支、现有 `MarkdownResource`／`LocalWorkspaceBackend`，
-  新增最小 WKWebView 文件预览及 WKScheme 请求测试。
+- **位置**：`FileViewerView` `.text` 分支、`PreviewResource`／`LocalWorkspaceBackend`、
+  `HTMLFilePreview` 和真实 WebKit 宿主测试。
 - **实施**：按当前 TextKit 文本快照显示 HTML／CSS，禁用 JS 且不在磁盘写 HTML；
   受控 scheme 按文件当前原文／授权目录加载页面及 CSS／图像等静态资源，
   应用真实的 CSP 和请求限额、导航／表单／新窗口拒绝。

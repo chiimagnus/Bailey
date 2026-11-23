@@ -7,7 +7,7 @@
 
 - `NativeMedia.open` 共用禁止外部引用的 `AVURLAsset` 及实际轨道检查，
   `NativePlayerView` 将文件和 Markdown 的 `AVPlayer` 嵌入同一种原生 `AVPlayerView`。
-  Markdown 内嵌视频通过授权的 `MarkdownResource` 限制读取、点击后最多暂存 64 MiB，
+  Markdown 内嵌视频通过授权的 `PreviewResource` 限制读取、点击后最多暂存 64 MiB，
   播放器由嵌入视图临时持有，离开时释放。
 - **独立本机文件**的 `AVURLAsset` 应直接绑定实际有权限的 `file://`，
   不经过 Markdown 的暂存／整文件 64 MiB 限制，更不经过 32 MiB 文本读取。

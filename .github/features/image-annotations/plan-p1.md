@@ -7,11 +7,15 @@
 
 - `FileTab.readContent` 在后台通过 `RasterPreview` 取得原始像素尺寸和最长边为 4096px 的缩略图，
   并记录实际读取字节的 `WorkspaceFileVersion`。标签切换器只用这份缩略图。
-- `MarkdownResource.picture → MarkdownPicture.decode` 使用同一 ImageIO 解码；
-  内嵌 GIF 当前最多缓存 32 帧、800 万帧像素，超过预算只显示静态图。
+- `PreviewResource.picture → MarkdownPicture.decode` 使用同一 ImageIO 解码；
+  `RasterPreview.gifFrame` 提供按索引解码和时长校验，局部帧与处置方式由 ImageIO 合成，
+  不另写 GIF 合成器。内嵌 GIF 仍最多缓存 32 帧、800 万帧像素，超过预算只显示静态图。
+- 独立 GIF 由图片标签保留播放位置，视口显示时走 `FileTab` 的同版本后端读取，
+  `GIFFrameSource` 按需解码，`GIFPlayback` 与 Markdown 共用时钟，只预取下一帧。
+  两处共用缺失图像数据块检查，保留可读首帧；不另做帧解码或像素合成。
 - `ImageInspector → PreviewScrollView` 已替换旧 SwiftUI 缩放手势和底栏。
-  文件图片、内嵌 SVG 及 Mermaid 共用原生视口；Markdown 插图打开实际图片标签。
-  独立 SVG 后续接入同一 `NSScrollView`，不新增手势坐标系统。
+  文件图片、独立 SVG、内嵌 SVG 及 Mermaid 共用原生视口；Markdown 插图打开实际图片标签。
+  文件图片的倍率和中心点归现有标签，重挂载后按新视口边界恢复；换帧不改查看位置。
 - 当前放大时通过 `FileTab` 的后端同版本重读，按需解码**整张**底图并绘制可见区域；
   并非逐块解码。需继续核销有界区域解码和对应内存预算，不能以可见区域裁剪代替解码验收。
   文件级 32MP 像素及 256MiB 原字节边界不变；超过 3200 万像素的文件继续明确拒绝，
@@ -30,7 +34,7 @@
 ### P1-T1 用同一图片视口完成高精度缩放与资源按需解码
 
 - **位置**：`ImageInspector`、`PreviewScrollView`、`RasterPreview`、`MarkdownNativeImage`、
-  `MarkdownResource`、`FileTab.readContent / originalImageRequest` 及相关宿主测试。
+  `PreviewResource`、`FileTab.readContent / originalImageRequest` 及相关宿主测试。
 - **实施**：替换现有查看实现，不增加 `ImageViewerView` 平行路径；
   触控板双指平移／捏合、鼠标滚轮与 Shift 横移、⌘＋滚轮光标锚点、
   拖拽平移及双击 fit／原像素。手动倍率为 10%～400%，fit 可低于下限以完整显示极端长宽比；
@@ -49,7 +53,8 @@
 <a id="p1-t2"></a>
 ### P1-T2 在共用 ImageIO 解码链完成 GIF 及图片状态恢复
 
-- **位置**：`MarkdownPicture.decode / image(at:)`、图片查看表面、`FileTab` 生命周期。
+- **位置**：`MarkdownPicture.decode`、`GIFPlayback`、`GIFFrameSource`、
+  图片查看表面和 `FileTab` 生命周期。
 - **实施**：在相同 ImageIO 帧索引上有界缓存当前与邻近帧、正确处理帧时长，
   同时正确处理 GIF 局部帧、透明混合、disposal／restore，而不是把每一帧当整图独立呈现。
   长动画不能因为现有内嵌 32 帧预算就伪装成“完整播放”。

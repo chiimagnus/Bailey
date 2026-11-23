@@ -1,21 +1,21 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "建立一条安全 HTML 静态渲染与共用资源链"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "5ac0c145 原生 WebKit 与构建；5297ea42 真实 Windows SSH。e43e8c5a 核销整页图片和 CSS 容量；824dc93f 慢读取消与回收；db850a1b 嵌套字体和越界链接；1c94d1a3 32 MiB 文档边界，98 项相关宿主通过。仍需其余主动内容／权限组合及真实 WebContent 异常退役。"
 
 [[tasks]]
 id = "P1-T2"
 title = "复用已有 File 菜单、标签右键及 Dock 预览"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "5ac0c145 已复用 File 菜单与 Dock；f7feb109 两项隔离 GUI 通过，覆盖双窗口、后台右键、前台快捷键、并排切换及原文字节。尚需补导航失败恢复及辅助功能组合。"
 
 [[tasks]]
 id = "P2-T1"

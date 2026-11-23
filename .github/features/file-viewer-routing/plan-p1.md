@@ -24,7 +24,7 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 | 已有代码 | 后续接入方式 |
 | --- | --- |
 | `FileTab`／`SourceTextEditor`／`WorkspaceBackend` | CSV／SVG／HTML 仍是 `.text`，继续共用正文、编码、Undo、读取与条件保存；不增加格式专属可写副本。 |
-| `MarkdownResource`＋`LocalPathScope` | HTML 的 CSS／图片和 SVG 的授权相对资源应共用当前项目／机器的路径解析、范围与实际 IO 校验。HTML 引用链须以**发起请求的 CSS／资源文件**为相对基准，不能都从 HTML 文档目录解析。第二个消费者落地时把公共部分改为中性名称并删除旧同义包装；WebKit 仍独立限制脚本、网络与子请求。 |
+| `PreviewResource`＋`LocalPathScope` | HTML 的 CSS／图片和 SVG 的授权相对资源应共用当前项目／机器的路径解析、范围与实际 IO 校验。HTML 引用链须以**发起请求的 CSS／资源文件**为相对基准，不能都从 HTML 文档目录解析。WebKit 仍独立限制脚本、网络与子请求。 |
 | `RasterPreview`／`MarkdownPicture.decode`／`ImageInspector` | 文件和 Markdown 共用 ImageIO 解码；文件图片和内嵌图形共用原生缩放视口。继续按图片计划核销原像素、区域解码与内存预算。 |
 | `SVGArtwork.sanitizedXML`／`SVGArtwork.render` | 共用一次安全解析与 SwiftDraw；Markdown 可用有界栅格，独立 SVG 要在相同净化结果上矢量重绘，不重写第二套 XML 校验／SVG parser。 |
 | `NativeMedia.open`／`NativePlayerView` | 音视频共用 AVAsset 验证及 `AVPlayerView` 适配，包含独立音频和 Markdown 嵌入播放器。原生样式按场景选择，不重做播放工具条。嵌入媒体才需要有界暂存，独立本机文件使用真实 URL，生命周期各归其主。 |
@@ -41,10 +41,10 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 ### P1-T1 核销读取与公共资源边界，移除新格式产生的重复路径
 
 - **位置**：`FileTab.readContent / matches / reloadFromDiskIfClean`、
-  `MarkdownResource`、`MarkdownFilePreview`、`MarkdownHTMLView`、`Project.openMarkdownLink`、
+  `PreviewResource`、`MarkdownFilePreview`、`MarkdownHTMLView`、`Project.openMarkdownLink`、
   `LocalWorkspaceBackend`、`BaileyTests/Files`。
 - **实施**：文本格式仅接入现有 `.text`，不改写编码或保存；图片仍经现有 ImageIO 安全边界。
-  HTML 首次消费外部资源时共用已验证的 `MarkdownResource` 授权与本机／SSH 读取，
+  HTML 首次消费外部资源时共用已验证的 `PreviewResource` 授权与本机／SSH 读取，
   仅提取确实有第二个调用者的公共部分，立即删除旧命名与重复路径。
   本机音／视频真正接入时才增加**所需的**媒体读取结果及 `Content` 处理，
   在 `readContent` 读取整个二进制之前分流，直接验证有权限的真实本机 URL，SSH 明确拒绝；

@@ -9,7 +9,7 @@
   `MarkdownMedia.stage → NativeMedia.open → AVPlayer → NativePlayerView`。
   独立音视频实际共用 `NativeMedia` 的普通文件、外部引用与轨道校验，以及同一原生 `AVPlayerView`。
   音频只约束播放器的显示尺寸，优先保留系统的布局、焦点、键盘和无障碍行为。
-- Markdown 嵌入资源须通过 `MarkdownResource` 授权并在**用户点击后**
+- Markdown 嵌入资源须通过 `PreviewResource` 授权并在**用户点击后**
   将最多 64 MiB 的资源暂存到受控临时目录，播放器由内嵌 View 暂时持有，卸载清理。
   **独立本机媒体不用这条暂存路径**：经当前 `FileTab` 真实本机身份／文件检查后，
   `AVURLAsset` 直接读取原始 `file://`；播放不经过 `WorkspaceBackend.read(maxBytes:)`
