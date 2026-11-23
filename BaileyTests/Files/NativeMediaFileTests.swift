@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Darwin
 import Foundation
 import XCTest
@@ -111,6 +112,138 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
+    func testRealAudioFormatsSeekAndDecodeAudibleSamplesWithoutChangingTheSource() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let directory = URL(fileURLWithPath: root).appending(path: "media")
+        let formats: [(String, AudioFormatID)] = [
+            ("mp3", kAudioFormatMPEGLayer3), ("m4a", kAudioFormatMPEG4AAC),
+            ("wav", kAudioFormatLinearPCM), ("aiff", kAudioFormatLinearPCM), ("caf", kAudioFormatLinearPCM),
+        ]
+        for (suffix, format) in formats {
+            let url = directory.appending(path: "音频-定位.\(suffix)")
+            let original = try Data(contentsOf: url)
+            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            guard case .media(let media) = tab.content else { return XCTFail("Cannot open \(url.lastPathComponent)") }
+            XCTAssertEqual(media.kind, .audio)
+            XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(url))
+            let duration = try await media.asset.load(.duration)
+            XCTAssertEqual(duration.seconds, 12, accuracy: 0.05)
+            let tracks = try await media.asset.loadTracks(withMediaType: .audio)
+            XCTAssertEqual(tracks.count, 1)
+            let track = try XCTUnwrap(tracks.first)
+            let formats = try await track.load(.formatDescriptions)
+            let description = try XCTUnwrap(formats.first.flatMap(CMAudioFormatDescriptionGetStreamBasicDescription))
+            XCTAssertEqual(description.pointee.mFormatID, format)
+            XCTAssertEqual(description.pointee.mChannelsPerFrame, 2)
+
+            let player = try XCTUnwrap(tab.mediaPlayer)
+            let item = try XCTUnwrap(player.currentItem)
+            XCTAssertTrue(item.asset === media.asset)
+            try await waitUntil { item.status != .unknown }
+            XCTAssertEqual(item.status, .readyToPlay)
+            let target = CMTime(value: 7, timescale: 1)
+            let moved = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(moved)
+            XCTAssertEqual(player.currentTime().seconds, 7, accuracy: 0.02)
+            XCTAssertEqual(player.rate, 0)
+
+            let reader = try AVAssetReader(asset: media.asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+            reader.add(output)
+            reader.timeRange = CMTimeRange(start: target, duration: CMTime(value: 1, timescale: 4))
+            XCTAssertTrue(reader.startReading(), String(describing: reader.error))
+            let samples = try XCTUnwrap(output.copyNextSampleBuffer())
+            XCTAssertGreaterThan(samples.numSamples, 0)
+            let block = try XCTUnwrap(samples.dataBuffer)
+            var decoded = Data(count: CMBlockBufferGetDataLength(block))
+            let copied = try decoded.withUnsafeMutableBytes { bytes in
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: bytes.count,
+                                           destination: try XCTUnwrap(bytes.baseAddress))
+            }
+            XCTAssertEqual(copied, kCMBlockBufferNoErr)
+            XCTAssertTrue(decoded.contains { $0 != 0 }, "The real seek target must contain decoded audio")
+            reader.cancelReading()
+            XCTAssertEqual(try Data(contentsOf: url), original)
+        }
+    }
+
+    func testLargeNativeMovieSeeksIntoTheFinalSegmentWithoutStagingOrEditing() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = URL(fileURLWithPath: root).appending(path: "media/视频-ProRes.mov")
+        let source = AVURLAsset(url: sample)
+        let duration = try await source.load(.duration)
+        XCTAssertEqual(duration.seconds, 4, accuracy: 0.001)
+        let clip = CMTimeRange(start: .zero, duration: duration)
+        let repeats: Int32 = 128
+        let composition = AVMutableComposition()
+        for index in 0..<repeats {
+            try await composition.insertTimeRange(clip, of: source, at: CMTimeMultiply(duration, multiplier: index))
+        }
+        let url = directory.appending(path: "长视频 — ProRes.MOV")
+        let export = try XCTUnwrap(AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough))
+        try await export.export(to: url, as: .mov)
+        let size = try XCTUnwrap(url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        XCTAssertGreaterThan(size, 256 << 20)
+        let original = try await Self.checksum(url)
+        var before = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
+        let start = ContinuousClock.now
+
+        let project = Project(fallbackName: "Large movie", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        project.openLocalFile(url.path)
+        guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file tab") }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("The movie must bypass the text limit") }
+        XCTAssertEqual(media.kind, .video)
+        XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(url))
+        XCTAssertEqual(media.identity.size, Int64(size))
+        let actualDuration = try await media.asset.load(.duration)
+        XCTAssertEqual(actualDuration.seconds, 512, accuracy: 0.05)
+        XCTAssertTrue(tab.text.isEmpty)
+        XCTAssertFalse(tab.isDirty)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        let target = CMTime(value: 510, timescale: 1)
+        let moved = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(moved)
+        XCTAssertEqual(player.currentTime().seconds, target.seconds, accuracy: 0.07)
+        let generator = AVAssetImageGenerator(asset: media.asset)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let image = try await generator.image(at: target)
+        let expected = try await AVAssetImageGenerator(asset: source).image(at: CMTime(value: 2, timescale: 1))
+        XCTAssertEqual(image.actualTime.seconds, target.seconds, accuracy: 0.07)
+        XCTAssertEqual(image.image.width, 640)
+        XCTAssertEqual(image.image.height, 480)
+        let pixels = try XCTUnwrap(image.image.dataProvider?.data) as Data
+        let expectedPixels = try XCTUnwrap(expected.image.dataProvider?.data) as Data
+        XCTAssertEqual(pixels, expectedPixels)
+        var after = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &after), 0)
+        print("MEDIA_LARGE bytes=\(size) seek_seconds=\(image.actualTime.seconds) elapsed=\(start.duration(to: .now)) maxrss_before=\(before.ru_maxrss) maxrss_after=\(after.ru_maxrss)")
+        XCTAssertLessThan(after.ru_maxrss - before.ru_maxrss, size / 2)
+
+        project.closeAll()
+        XCTAssertNil(player.currentItem)
+        XCTAssertNil(tab.mediaPlayer)
+        let checksum = try await Self.checksum(url)
+        XCTAssertEqual(checksum, original)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [url.lastPathComponent])
+    }
+
     func testMediaRejectsCorruptMissingUnopenedAndRemoteFilesWithoutReadingTheirNamesakes() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -216,6 +349,17 @@ final class NativeMediaFileTests: XCTestCase {
         let path = try XCTUnwrap(realpath(url.path, nil))
         defer { free(path) }
         return String(cString: path)
+    }
+
+    @concurrent private static func checksum(_ url: URL) async throws -> SHA256.Digest {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let bytes = try handle.read(upToCount: 1 << 20), !bytes.isEmpty {
+            try Task.checkCancellation()
+            digest.update(data: bytes)
+        }
+        return digest.finalize()
     }
 
     private static func createWAV(_ file: URL, payloadBytes: Int) throws {
