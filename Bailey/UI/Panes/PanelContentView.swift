@@ -12,7 +12,7 @@ struct PanelContentView: View {
     var markdownDirectory: String?
     var rendersOnlyPreview = false
     var onMarkdownLink: (FileTab, URL) async -> Bool = { _, _ in false }
-    var onMarkdownLocateSource: () -> Void = {}
+    var onRevealFileSource: () -> Void = {}
     var onExternalFilesDropped: ([NSItemProvider]) -> Bool = { _ in false }
 
     var body: some View {
@@ -39,7 +39,7 @@ struct PanelContentView: View {
                     markdownDirectory: markdownDirectory,
                     rendersOnlyPreview: rendersOnlyPreview,
                     onMarkdownLink: { url in await onMarkdownLink(file, url) },
-                    onMarkdownLocateSource: onMarkdownLocateSource
+                    onRevealFileSource: onRevealFileSource
                 )
                 .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
             case .browser(let browser):

@@ -805,7 +805,7 @@ struct DockTabGroupView: View {
                             manager.selectedProject === project && manager.attachedWindow?.isKeyWindow == true
                         }
                     },
-                    onMarkdownLocateSource: {
+                    onRevealFileSource: {
                         guard manager.selectedProject === project,
                               project.tabs.contains(where: { $0 === tab }) else { return }
                         project.dock.select(.tab(id))

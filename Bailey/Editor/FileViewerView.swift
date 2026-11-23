@@ -26,12 +26,15 @@ enum FilePreviewMode: CaseIterable {
 enum FilePreviewKind: Equatable {
     case markdown
     case delimited
+    case svg
 
     init?(path: String) {
         if MarkdownDocument.supports(path) {
             self = .markdown
         } else if DelimitedTableIndex.Separator.preferred(for: path) != nil {
             self = .delimited
+        } else if (path as NSString).pathExtension.lowercased() == "svg" {
+            self = .svg
         } else {
             return nil
         }
@@ -271,7 +274,11 @@ final class FileTab: nonisolated Identifiable {
 
     var showsFilePreview: Bool {
         guard let previewKind else { return false }
-        return previewOverride ?? (previewKind == .delimited)
+        if let previewOverride { return previewOverride }
+        switch previewKind {
+        case .markdown: return false
+        case .delimited, .svg: return true
+        }
     }
 
     var fileContentRevision: String { "\(id)-\(targetGeneration)-\(reloadRevision)" }
@@ -1006,7 +1013,7 @@ struct FileViewerView: View {
     var markdownDirectory: String?
     var rendersOnlyPreview = false
     var onMarkdownLink: (URL) async -> Bool = { _ in false }
-    var onMarkdownLocateSource: () -> Void = {}
+    var onRevealFileSource: () -> Void = {}
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
@@ -1052,6 +1059,8 @@ struct FileViewerView: View {
                         case .delimited:
                             CSVTableView(file: file, canFocus: canFocus, onFocused: onFocused,
                                          onShowSource: revealSource)
+                        case .svg:
+                            SVGFilePreview(file: file, onFocused: onFocused, onShowSource: revealSource)
                         }
                     } else if !rendersOnlyPreview {
                         HStack {
@@ -1109,7 +1118,7 @@ struct FileViewerView: View {
     }
 
     private func revealSource() {
-        if rendersOnlyPreview { onMarkdownLocateSource() }
+        if rendersOnlyPreview { onRevealFileSource() }
         else { file.setFilePreview(false) }
     }
 

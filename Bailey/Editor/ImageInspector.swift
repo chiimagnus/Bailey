@@ -273,7 +273,15 @@ private final class RasterScrollView: PreviewScrollView {
     }
 }
 
-private final class RasterPreviewCanvas: NSView {
+class PreviewCanvasView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+
+    override func mouseDown(with event: NSEvent) { enclosingScrollView?.mouseDown(with: event) }
+    override func mouseDragged(with event: NSEvent) { enclosingScrollView?.mouseDragged(with: event) }
+    override func mouseUp(with event: NSEvent) { enclosingScrollView?.mouseUp(with: event) }
+}
+
+private final class RasterPreviewCanvas: PreviewCanvasView {
     var image: CGImage? { didSet { needsDisplay = true } }
     private let checker = NSColor(patternImage: NSImage(size: CGSize(width: 16, height: 16), flipped: false) { rect in
         NSColor.windowBackgroundColor.setFill()
@@ -292,8 +300,4 @@ private final class RasterPreviewCanvas: NSView {
         context.interpolationQuality = .high
         context.draw(image, in: bounds)
     }
-
-    override func mouseDown(with event: NSEvent) { enclosingScrollView?.mouseDown(with: event) }
-    override func mouseDragged(with event: NSEvent) { enclosingScrollView?.mouseDragged(with: event) }
-    override func mouseUp(with event: NSEvent) { enclosingScrollView?.mouseUp(with: event) }
 }

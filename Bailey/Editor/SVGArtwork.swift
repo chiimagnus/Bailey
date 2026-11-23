@@ -52,7 +52,7 @@ nonisolated enum SVGArtwork {
               !source.localizedCaseInsensitiveContains("<!doctype") else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        let xml = try XMLDocument(xmlString: source, options: [.nodeLoadExternalEntitiesNever])
+        let xml = try XMLDocument(xmlString: utf8XML(source), options: [.nodeLoadExternalEntitiesNever])
         guard let root = xml.rootElement(), root.localName == "svg" else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -60,6 +60,17 @@ nonisolated enum SVGArtwork {
         var omitted = Set<String>()
         try clean(root, depth: 0, budget: &budget, omitted: &omitted)
         return Sanitized(xml: root.xmlString, omitted: omitted.sorted())
+    }
+
+    private static func utf8XML(_ source: String) -> String {
+        guard source.hasPrefix("<?xml"),
+              let separator = source.utf8.dropFirst(5).first, [9, 10, 13, 32].contains(separator),
+              let end = source.range(of: "?>")?.upperBound else { return source }
+        let declaration = source[..<end].replacingOccurrences(
+            of: #"\bencoding\s*=\s*(?:"[A-Za-z][A-Za-z0-9._-]*"|'[A-Za-z][A-Za-z0-9._-]*')"#,
+            with: #"encoding="UTF-8""#, options: .regularExpression
+        )
+        return declaration + source[end...]
     }
 
     private static let allowed: Set<String> = [

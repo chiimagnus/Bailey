@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "SVG preview omits: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SVG 预览省略了：%@"
+          }
+        }
+      }
+    },
+    "SVG is too large to preview. You can still edit the source." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SVG 太大，无法预览。你仍可编辑源码。"
+          }
+        }
+      }
+    },
+    "Could not display this SVG." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法显示此 SVG。"
+          }
+        }
+      }
+    },
     "Show Table" : {
       "localizations" : {
         "zh-Hans" : {
