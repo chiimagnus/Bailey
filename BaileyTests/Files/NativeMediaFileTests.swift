@@ -75,6 +75,42 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
+    func testFileTabDecodesFramesFromNativeHEVCProResAndM4VExports() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sample = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+        let source = AVURLAsset(url: sample)
+        let exports: [(name: String, preset: String, type: AVFileType, codec: FourCharCode)] = [
+            ("节选-HEVC.mp4", AVAssetExportPresetHEVCHighestQuality, .mp4, kCMVideoCodecType_HEVC),
+            ("节选-ProRes.MOV", AVAssetExportPresetAppleProRes422LPCM, .mov, kCMVideoCodecType_AppleProRes422),
+            ("节选-H264.m4v", AVAssetExportPresetPassthrough, .m4v, kCMVideoCodecType_H264),
+        ]
+        for export in exports {
+            let destination = directory.appending(path: export.name)
+            let session = try XCTUnwrap(AVAssetExportSession(asset: source, presetName: export.preset))
+            session.timeRange = CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 1))
+            try await session.export(to: destination, as: export.type)
+            let original = try Data(contentsOf: destination)
+            let tab = FileTab(path: destination.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await load(tab)
+            guard case .media(let media) = tab.content else { return XCTFail("Cannot load \(export.name)") }
+            XCTAssertEqual(media.kind, .video)
+            XCTAssertTrue(tab.mediaPlayer?.currentItem?.asset === media.asset)
+            let tracks = try await media.asset.loadTracks(withMediaType: .video)
+            let descriptions = try await XCTUnwrap(tracks.first).load(.formatDescriptions)
+            XCTAssertTrue(descriptions.contains { CMFormatDescriptionGetMediaSubType($0) == export.codec })
+            let generator = AVAssetImageGenerator(asset: media.asset)
+            let output = try await generator.image(at: CMTime(value: 1, timescale: 2))
+            XCTAssertGreaterThan(output.image.width, 100)
+            XCTAssertGreaterThan(output.image.height, 100)
+            XCTAssertTrue(output.actualTime.isNumeric)
+            tab.retireContent()
+            XCTAssertEqual(try Data(contentsOf: destination), original)
+        }
+    }
+
     func testMediaRejectsCorruptMissingUnopenedAndRemoteFilesWithoutReadingTheirNamesakes() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
