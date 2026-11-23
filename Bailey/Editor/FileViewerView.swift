@@ -91,6 +91,8 @@ final class FileTab: nonisolated Identifiable {
     /// A true close or accepted replacement releases the old native document,
     /// independently of any cached SwiftUI/AppKit view lifetime.
     func retireNativeEditor() {
+        originalImageTask?.cancel()
+        originalImageTask = nil
         if let nativeEditObserver {
             NotificationCenter.default.removeObserver(nativeEditObserver)
             self.nativeEditObserver = nil
@@ -105,6 +107,11 @@ final class FileTab: nonisolated Identifiable {
         savedSourceVersion = nil
         pendingStorageChange = false
         nativeCodeUnitDelta = [:]
+    }
+
+    func retireContent() {
+        invalidateReload()
+        retireNativeEditor()
     }
 
     private func installNativeDocument(_ text: String) {
@@ -184,6 +191,7 @@ final class FileTab: nonisolated Identifiable {
 
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var originalImageTask: Task<CGImage, Error>?
     @ObservationIgnored private var refreshPending = false
     /// A previously requested read must resume after reconnect; restored tabs
     /// that no consumer has touched must remain lazy.
@@ -773,6 +781,8 @@ final class FileTab: nonisolated Identifiable {
         reloadTask?.cancel()
         reloadTask = nil
         reloadGeneration &+= 1
+        originalImageTask?.cancel()
+        originalImageTask = nil
     }
 
     private func matches(_ loaded: LoadedContent) -> Bool {
@@ -786,6 +796,54 @@ final class FileTab: nonisolated Identifiable {
         default:
             return false
         }
+    }
+
+    func originalImageRequest() -> (() async throws -> CGImage)? {
+        guard case .image(let preview) = content, readOnlyReason == nil, let version = savedSourceVersion,
+              preview.poster.width < Int(preview.pixelSize.width) ||
+                preview.poster.height < Int(preview.pixelSize.height) else { return nil }
+        let backend = self.backend
+        let path = self.path
+        let target = targetGeneration
+        let revision = reloadRevision
+        let size = preview.pixelSize
+        return { [weak self] in
+            guard self?.targetGeneration == target, self?.reloadRevision == revision,
+                  self?.savedSourceVersion == version else { throw WorkspaceError.changedExternally }
+            try Task.checkCancellation()
+            let task = Task {
+                try await Self.readOriginalImage(path, backend: backend, version: version, size: size)
+            }
+            self?.originalImageTask?.cancel()
+            self?.originalImageTask = task
+            defer {
+                if self?.originalImageTask == task { self?.originalImageTask = nil }
+            }
+            let image = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            try Task.checkCancellation()
+            guard let self, self.targetGeneration == target, self.reloadRevision == revision,
+                  self.savedSourceVersion == version else { throw WorkspaceError.changedExternally }
+            return image
+        }
+    }
+
+    @concurrent private static func readOriginalImage(
+        _ path: String, backend: WorkspaceBackend, version: WorkspaceFileVersion, size: CGSize
+    ) async throws -> CGImage {
+        let bytes = try await backend.read(path: path, maxBytes: version.byteCount)
+        try Task.checkCancellation()
+        guard version.matches(bytes) else { throw WorkspaceError.changedExternally }
+        try Task.checkCancellation()
+        guard let source = RasterPreview.source(bytes),
+              let preview = RasterPreview.decode(source, maximumDimension: Int(max(size.width, size.height))),
+              preview.poster.width == Int(size.width), preview.poster.height == Int(size.height) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return preview.poster
     }
 
     @concurrent private static func readContent(
@@ -952,7 +1010,7 @@ struct FileViewerView: View {
                     if let error = file.reloadError {
                         errorBar(error)
                     }
-                    MarkdownImageInspector(image: NSImage(cgImage: image.poster, size: .zero))
+                    ImageInspector(image: image, loadOriginal: file.originalImageRequest())
                         .id(file.reloadRevision)
                 }
             case .loading:

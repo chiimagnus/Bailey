@@ -1,5 +1,8 @@
+import CoreGraphics
 import Darwin
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
@@ -54,6 +57,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let directory = fixture + "/Project"
             let path = directory + "/Readme.md"
             let asset = directory + "/asset.svg"
+            let rasterPath = directory + "/wide.png"
             let outside = fixture + "/outside.svg"
             let original = Data("\u{feff}# 测试 🧪\r\n\r\n![Scoped asset](asset.svg)\r\n".utf8)
             let svg = Data("""
@@ -65,6 +69,16 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try await backend.write(path: path, data: original)
             try await backend.write(path: asset, data: svg)
             try await backend.write(path: outside, data: svg)
+            let canvas = try XCTUnwrap(CGContext(
+                data: nil, width: 5000, height: 20, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ))
+            let pngData = NSMutableData()
+            let png = try XCTUnwrap(CGImageDestinationCreateWithData(pngData, UTType.png.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(png, try XCTUnwrap(canvas.makeImage()), nil)
+            XCTAssertTrue(CGImageDestinationFinalize(png))
+            let rasterBytes = pngData as Data
+            try await backend.write(path: rasterPath, data: rasterBytes)
 
             let connection = RemoteConnection(user: "", host: host, port: 22,
                                               controlSocket: URL(fileURLWithPath: socket), sshPID: 0)
@@ -75,6 +89,22 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let document = try await MarkdownDocument.parse(tab.text)
             XCTAssertEqual(document.headingOutline.first?.title, "测试 🧪")
             let resource = tab.markdownResource(in: directory)
+            let rasterURL = try XCTUnwrap(URL(string: "wide.png"))
+            let rasterTab = FileTab(path: rasterPath, backend: channel, workspaceIdentity: "ssh:\(host)")
+            rasterTab.loadIfNeeded()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+            while case .loading = rasterTab.content {
+                guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            guard case .image(let raster) = rasterTab.content else { throw CocoaError(.fileReadCorruptFile) }
+            XCTAssertEqual(raster.poster.width, 4096)
+            let embedded = try await resource.picture(rasterURL)
+            XCTAssertEqual(embedded.poster.width, 2048)
+            let originalImage = try XCTUnwrap(rasterTab.originalImageRequest())
+            let originalRaster = try await originalImage()
+            XCTAssertEqual(originalRaster.width, 5000)
+            XCTAssertEqual(originalRaster.height, 20)
             let relative = try XCTUnwrap(URL(string: "asset.svg"))
             let picture = try await resource.picture(relative)
             XCTAssertEqual(picture.pointSize?.width, 40)
@@ -99,11 +129,16 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let localTwin = Data("local twin must not be read or overwritten".utf8)
             try localTwin.write(to: URL(fileURLWithPath: path))
             try localTwin.write(to: URL(fileURLWithPath: asset))
+            try localTwin.write(to: URL(fileURLWithPath: rasterPath))
 
             try await stopMaster()
             do {
                 _ = try await resource.read(relative, maxBytes: 1024)
                 XCTFail("A real disconnected channel must not read the same path on the Mac")
+            } catch RemoteConnectionError.notConnected {}
+            do {
+                _ = try await originalImage()
+                XCTFail("Original-size decoding must not read the local namesake after disconnect")
             } catch RemoteConnectionError.notConnected {}
             XCTAssertEqual(connection.state, .disconnected)
             tab.autoSaveSuspendedForClose = true
@@ -129,6 +164,9 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let updated = try await backend.read(path: path, maxBytes: original.count + draft.utf8.count)
             XCTAssertEqual(updated, original + Data(draft.utf8), "Retry saves only the remote BOM/CRLF Markdown")
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), localTwin)
+            let unchangedRaster = try await backend.read(path: rasterPath, maxBytes: rasterBytes.count)
+            XCTAssertEqual(unchangedRaster, rasterBytes)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: rasterPath)), localTwin)
         } catch {
             await cleanup()
             throw error

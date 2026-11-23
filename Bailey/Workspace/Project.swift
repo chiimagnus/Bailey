@@ -313,7 +313,7 @@ final class Project: nonisolated Identifiable {
     func terminateAll() {
         for tab in tabs {
             switch tab.content {
-            case .file(let file): file.retireNativeEditor()
+            case .file(let file): file.retireContent()
             case .diff(let diff): diff.retireNativeSurface()
             case .session, .browser: break
             }
@@ -874,7 +874,7 @@ final class Project: nonisolated Identifiable {
         case .browser(let browser): browser.onSnapshotChange = nil
         case .file(let file):
             file.onSnapshotChange = nil
-            file.retireNativeEditor()
+            file.retireContent()
         case .diff(let diff):
             diff.onSnapshotChange = nil
             diff.retireNativeSurface()

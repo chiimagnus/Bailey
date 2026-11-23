@@ -873,7 +873,61 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(image.pixelSize, CGSize(width: 5000, height: 2500))
         XCTAssertLessThanOrEqual(image.poster.width, 4096)
         XCTAssertLessThanOrEqual(image.poster.height, 4096)
+        let request = try XCTUnwrap(file.originalImageRequest())
+        let original = try await request()
+        XCTAssertEqual(original.width, 5000)
+        XCTAssertEqual(original.height, 2500)
         XCTAssertEqual(try Data(contentsOf: path), imageBytes)
+
+        var changed = imageBytes
+        changed[changed.count - 1] ^= 1
+        try changed.write(to: path)
+        do {
+            _ = try await request()
+            XCTFail("A detail request must not render bytes other than the accepted original")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), changed)
+    }
+
+    func testOriginalImageReadCannotPublishAfterRenameDisconnectOrClose() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 4300, pixelsHigh: 8,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let path = "/fixture/detail.png"
+        let actions: [(FileTab) -> Void] = [
+            { $0.updatePath("/fixture/renamed.png") },
+            { $0.rebindWorkspace(to: nil) },
+            { $0.retireContent() },
+        ]
+        for action in actions {
+            let backend = EditorWorkspaceFixture(path: path, contents: bytes)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "fixture-remote")
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .image = file.content { return true }; return false }
+            let request = try XCTUnwrap(file.originalImageRequest())
+            await backend.pauseOneRead()
+            let pending = Task { try await request() }
+            try await waitForFileTabState { await backend.pendingReadCount == 1 }
+            let originalPath = await backend.readingPath
+            XCTAssertEqual(originalPath, path)
+            action(file)
+            await backend.finishRead(with: bytes)
+            do {
+                _ = try await pending.value
+                XCTFail("Canceled image decoding must not deliver pixels")
+            } catch is CancellationError {}
+            do {
+                _ = try await request()
+                XCTFail("A stale request must not start new reads")
+            } catch WorkspaceError.changedExternally {}
+            let reads = await backend.readCount
+            let onDisk = await backend.data(at: path)
+            XCTAssertEqual(reads, 2)
+            XCTAssertEqual(onDisk, bytes)
+        }
     }
 
     func testInvalidUTF8AndImageFallbackRespectTextCapacity() async throws {

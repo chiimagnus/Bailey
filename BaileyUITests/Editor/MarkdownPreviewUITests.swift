@@ -1859,12 +1859,14 @@ final class MarkdownPreviewUITests: XCTestCase {
 
     func testNativeImageViewerZoomFitAndActualSizePreservesOriginalPNG() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 960, pixelsHigh: 680,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 5200, height: 2000, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
         ))
-        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 5200, height: 2000))
+        let image = try XCTUnwrap(context.makeImage())
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
         let file = fixture.root.appendingPathComponent("Zoom.png")
         try png.write(to: file)
         let app = try WorkspaceUITestSupport.launch(
@@ -1874,17 +1876,39 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         app.activate()
         row.doubleClick()
-        let actual = app.buttons["bailey.image.actual"]
-        XCTAssertTrue(actual.waitForExistence(timeout: 15),
-                      "The native image file tab must expose zoom controls")
-        let level = app.staticTexts["bailey.image.zoom-level"]
+        let inspector = WorkspaceUITestSupport.element("bailey.image.inspector", in: app)
+        XCTAssertTrue(inspector.waitForExistence(timeout: 15))
+        let window = app.windows.firstMatch
+        let margins = inspector.frame.height - inspector.frame.width * 2000 / 5200
+        XCTAssertGreaterThan(margins, 30, "The fixture must have vertical margins in Fit")
+        let sampleY = margins / (4 * inspector.frame.height)
+        func showsImage(_ bitmap: NSBitmapImageRep, at fraction: CGFloat) -> Bool {
+            let windowFrame = window.frame
+            let frame = inspector.frame
+            let column = Int((frame.midX - windowFrame.minX) * CGFloat(bitmap.pixelsWide) / windowFrame.width)
+            let row = Int((frame.minY + fraction * frame.height - windowFrame.minY)
+                          * CGFloat(bitmap.pixelsHigh) / windowFrame.height)
+            guard (0..<bitmap.pixelsWide).contains(column), (0..<bitmap.pixelsHigh).contains(row),
+                  let color = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) else { return false }
+            return color.redComponent > 0.6 && color.redComponent > 2 * max(color.greenComponent, color.blueComponent)
+        }
+        func waitForMargin(toShowImage visible: Bool) {
+            let rendered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let bitmap = NSBitmapImageRep(data: window.screenshot().pngRepresentation) else { return false }
+                return showsImage(bitmap, at: 0.5) && showsImage(bitmap, at: sampleY) == visible
+            }, object: nil)
+            let result = XCTWaiter.wait(for: [rendered], timeout: 8)
+            if result != .completed { add(XCTAttachment(screenshot: window.screenshot())) }
+            XCTAssertEqual(result, .completed, "Expected the former Fit margin to show image: \(visible)")
+        }
+        waitForMargin(toShowImage: false)
+        inspector.rightClick()
+        let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
+        XCTAssertTrue(actual.waitForExistence(timeout: 5))
         actual.click()
-        XCTAssertEqual(level.label, "100%")
-        app.buttons["bailey.image.zoom-in"].click()
-        XCTAssertEqual(level.label, "125%")
-        let fit = app.buttons["bailey.image.fit"]
-        fit.click()
-        XCTAssertNotEqual(level.label, "125%", "Fit must restore the viewport-dependent scale")
+        waitForMargin(toShowImage: true)
+        inspector.doubleClick()
+        waitForMargin(toShowImage: false)
         XCTAssertEqual(try Data(contentsOf: file), png)
     }
 
@@ -1914,8 +1938,12 @@ final class MarkdownPreviewUITests: XCTestCase {
         diagram.click()
         let close = app.buttons["bailey.image.close"]
         XCTAssertTrue(close.waitForExistence(timeout: 10))
-        app.buttons["bailey.image.actual"].click()
-        XCTAssertEqual(app.staticTexts["bailey.image.zoom-level"].label, "100%")
+        let inspector = WorkspaceUITestSupport.element("bailey.image.inspector", in: app)
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10))
+        inspector.rightClick()
+        let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
+        XCTAssertTrue(actual.waitForExistence(timeout: 5))
+        actual.click()
         let inspectorScreenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         inspectorScreenshot.name = "Native Mermaid image inspector at actual size"
         inspectorScreenshot.lifetime = .keepAlways
