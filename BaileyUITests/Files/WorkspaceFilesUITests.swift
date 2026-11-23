@@ -1719,6 +1719,15 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         folder.click()
         app.typeKey("c", modifierFlags: .command)
+        let copiedFolder = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (NSPasteboard.general.readObjects(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+            ) as? [URL])?.contains(where: {
+                $0.standardizedFileURL.path == nested.deletingLastPathComponent().standardizedFileURL.path
+            }) == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copiedFolder], timeout: 5), .completed,
+                       "Copy must publish the real selected folder URL before Paste")
         app.typeKey("v", modifierFlags: .command)
         let folderCopy = fixture.root.appendingPathComponent("folder copy/leaf.txt")
         let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

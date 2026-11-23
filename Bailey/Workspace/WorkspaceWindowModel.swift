@@ -1126,6 +1126,12 @@ final class WorkspaceWindowModel {
         let trustedCut = record?.cut == true && record?.paths == paths
             && record.map { application.trustedFileClipboard($0, pasteboard: pasteboard) } == true
         let moving = explicitMove || trustedCut
+        let requestedDirectory = URL(fileURLWithPath: directory, isDirectory: true)
+            .standardizedFileURL.path
+        // Pasting a copied folder onto itself duplicates it beside the source;
+        // other destinations retain the explicitly selected folder.
+        let destination = !moving && paths.contains(requestedDirectory)
+            ? (requestedDirectory as NSString).deletingLastPathComponent : directory
         let clipboardVersion = pasteboard.changeCount
         var sourceIdentities: [String: LocalFileIdentity] = [:]
         if moving {
@@ -1143,7 +1149,7 @@ final class WorkspaceWindowModel {
                     return nil
                 }
                 let result = await project.fileTree.importFromFinder(
-                    urls, into: directory, move: moving,
+                    urls, into: destination, move: moving,
                     expectedIdentities: moving ? expectedIdentities : nil,
                     isCurrentTarget: {
                         self.selectedProjectID == project.id && project.matchesPanelTarget(target)
