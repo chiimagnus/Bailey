@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreGraphics
 import Darwin
 import Foundation
@@ -40,6 +41,27 @@ final class MarkdownResourceScopeTests: XCTestCase {
             }
             do { try await stopMaster() }
             catch { XCTFail("Could not stop the test-owned SSH master: \(error)") }
+        }
+
+        func load(_ file: FileTab) async throws {
+            file.loadIfNeeded()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+            while case .loading = file.content {
+                guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        func assertRemoteMediaIsUnavailable(_ path: String, on channel: SSHWorkspaceBackend) async throws {
+            let file = FileTab(path: path, backend: channel, workspaceIdentity: "ssh:\(host)")
+            try await load(file)
+            guard case .unavailable(let reason) = file.content else {
+                return XCTFail("The SSH media must not load the Mac namesake: \(path)")
+            }
+            XCTAssertEqual(reason, String(localized: "Media playback is only available for files on this Mac.",
+                                          table: "Editor"))
+            XCTAssertNil(file.mediaPlayer)
+            XCTAssertTrue(file.text.isEmpty)
         }
 
         do {
@@ -103,12 +125,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
                            "多行\r\n数据")
             let rasterURL = try XCTUnwrap(URL(string: "wide.png"))
             let rasterTab = FileTab(path: rasterPath, backend: channel, workspaceIdentity: "ssh:\(host)")
-            rasterTab.loadIfNeeded()
-            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
-            while case .loading = rasterTab.content {
-                guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
-                try await Task.sleep(for: .milliseconds(20))
-            }
+            try await load(rasterTab)
             guard case .image(let raster) = rasterTab.content else { throw CocoaError(.fileReadCorruptFile) }
             XCTAssertEqual(raster.poster.width, 4096)
             let embedded = try await resource.picture(rasterURL)
@@ -151,7 +168,46 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try localTwin.write(to: URL(fileURLWithPath: asset))
             try localTwin.write(to: URL(fileURLWithPath: rasterPath))
 
+            let features = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appending(path: ".github/features")
+            let sampleAudio = try Data(contentsOf: features.appending(path: "audio-file-playback/demo-audio.m4a"))
+            let sampleVideo = try Data(contentsOf: features.appending(path: "video-file-playback/demo-video.mp4"))
+            let tone = URL(fileURLWithPath: directory + "/generated.m4a")
+            do {
+                let writer = try AVAudioFile(forWriting: tone, settings: [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
+                ])
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: writer.processingFormat, frameCapacity: 44_100))
+                buffer.frameLength = 44_100
+                try XCTUnwrap(buffer.floatChannelData?.pointee).initialize(repeating: 0, count: 44_100)
+                try writer.write(from: buffer)
+            }
+            let mediaFixtures: [(path: String, kind: NativeMedia.Kind, mac: Data, remote: Data)] = try [
+                (directory + "/sample.m4a", .audio, Data(contentsOf: tone), sampleAudio),
+                (directory + "/sample.mp4", .video, sampleVideo, sampleAudio),
+            ]
+            for sample in mediaFixtures {
+                XCTAssertNotEqual(sample.mac, sample.remote)
+                try await backend.write(path: sample.path, data: sample.remote)
+                try sample.mac.write(to: URL(fileURLWithPath: sample.path))
+                let remoteBytes = try await channel.read(path: sample.path, maxBytes: sample.remote.count)
+                XCTAssertEqual(remoteBytes, sample.remote)
+                let local = FileTab(path: sample.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                try await load(local)
+                guard case .media(let media) = local.content else {
+                    XCTFail("The Mac media namesake must be playable")
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                XCTAssertEqual(media.kind, sample.kind)
+                XCTAssertNotNil(local.mediaPlayer?.currentItem)
+                try await assertRemoteMediaIsUnavailable(sample.path, on: channel)
+                local.retireContent()
+            }
+
             try await stopMaster()
+            for sample in mediaFixtures {
+                try await assertRemoteMediaIsUnavailable(sample.path, on: channel)
+            }
             do {
                 _ = try await resource.read(relative, maxBytes: 1024)
                 XCTFail("A real disconnected channel must not read the same path on the Mac")
@@ -202,6 +258,12 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let unchangedTable = try await backend.read(path: tablePath, maxBytes: tableBytes.count)
             XCTAssertEqual(unchangedTable, tableBytes)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: rasterPath)), localTwin)
+            for sample in mediaFixtures {
+                let remoteBytes = try await backend.read(path: sample.path, maxBytes: sample.remote.count)
+                XCTAssertEqual(remoteBytes, sample.remote)
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: sample.path)), sample.mac)
+                try await assertRemoteMediaIsUnavailable(sample.path, on: channel)
+            }
         } catch {
             await cleanup()
             throw error
