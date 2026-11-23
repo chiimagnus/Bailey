@@ -59,23 +59,40 @@ final class HTMLFilePreviewTests: XCTestCase {
     }
 
     func testHTMLDefaultsToSourceWithoutChangingTheDecodedFile() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("源稿.HTM")
-        let source = "<!doctype html><p>中文 🧪 &amp; CSS</p>\r\n"
-        let bytes = Data([0xff, 0xfe]) + (try XCTUnwrap(source.data(using: .utf16LittleEndian)))
-        try bytes.write(to: url)
-        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
-        try await file.waitForText()
-        XCTAssertTrue(file.canPreviewFile)
-        XCTAssertFalse(file.showsFilePreview)
-        XCTAssertEqual(file.text, source)
-        let webView = try await display(file, in: directory)
-        let rendered = try await webView.evaluateJavaScript("document.querySelector('p').textContent",
-                                                            contentWorld: .defaultClient) as? String
-        XCTAssertEqual(rendered, "中文 🧪 & CSS")
-        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        let fixtures: [(encoding: TextFileEncoding, explicit: Bool, literal: String, expected: [String])] = [
+            (.utf16LEBOM, false, "中文 🧪", ["中文 🧪 & CSS", "补全标签"]),
+            (.utf8BOM, false, "中文 🧪", ["中文 🧪 & CSS", "补全标签"]),
+            (.gbk, true, "中文", ["中文 & CSS", "补全标签"]),
+            (.utf8, false, "", [])
+        ]
+        for fixture in fixtures {
+            let url = directory.appendingPathComponent("源稿-\(fixture.encoding.name).HTM")
+            let source = fixture.literal.isEmpty ? "" : """
+                <!doctype html><meta charset="windows-1252">
+                <ul><li>\(fixture.literal) &amp; CSS<li>补全标签</ul>\r
+                """
+            let bytes = try XCTUnwrap(fixture.encoding.encoded(source))
+            try bytes.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            if fixture.explicit { file.reopen(using: fixture.encoding) }
+            try await file.waitForText()
+            XCTAssertTrue(file.canPreviewFile)
+            XCTAssertFalse(file.showsFilePreview)
+            XCTAssertEqual(file.text, source)
+            XCTAssertEqual(file.fileEncoding, fixture.encoding)
+            let webView = try await display(file, in: directory)
+            let rendered = try await webView.evaluateJavaScript(
+                "Array.from(document.querySelectorAll('li'), item => item.textContent)", contentWorld: .defaultClient
+            ) as? [String]
+            let charset = try await webView.evaluateJavaScript("document.characterSet", contentWorld: .defaultClient)
+                as? String
+            XCTAssertEqual(rendered, fixture.expected, fixture.encoding.name)
+            XCTAssertEqual(charset, "UTF-8")
+            XCTAssertFalse(file.isDirty)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
     }
 
     func testExactHTMLDocumentLimitRendersItsTailAndOverflowStaysUnavailable() async throws {
