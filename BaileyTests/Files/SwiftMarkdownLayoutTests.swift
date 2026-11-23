@@ -13,6 +13,18 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
                         styleMask: [.titled], backing: .buffered, defer: false)
     }
 
+    private func readerGeometry(_ scroll: NSScrollView, host: NSView, window: NSWindow) -> String {
+        func bridgeCount(_ view: NSView) -> Int {
+            let own = String(describing: type(of: view)).contains("MarkdownReaderClipView") ? 1 : 0
+            return own + view.subviews.reduce(0) { $0 + bridgeCount($1) }
+        }
+        return "clip=\(scroll.contentView.bounds), document=\(scroll.documentView?.frame ?? .zero), "
+            + "host=\(host.bounds), visible=\(window.isVisible), key=\(window.isKeyWindow), "
+            + "scale=\(window.screen?.backingScaleFactor ?? 0), "
+            + "scrollStyle=\(scroll.scrollerStyle.rawValue), preferred=\(NSScroller.preferredScrollerStyle.rawValue), "
+            + "bridges=\(bridgeCount(host))"
+    }
+
     func testPreviewScrollAlignsActualTextKitLineEvenWhenAlreadyVisible() async throws {
         let source = (0..<90).map { "Line \($0) 中文 👩‍🚀" }.joined(separator: "\n")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).md")
@@ -93,7 +105,11 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         func view(synced: Int?) -> MarkdownPreview {
             MarkdownPreview(document: document, revision: "image-same", resource: resource, assetRefresh: 0,
                             restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
-                            synchronizedSourceOffset: synced)
+                            synchronizedSourceOffset: synced,
+                            onReadingPosition: { print("MARKDOWN_EVENT image fallback=\($0)") },
+                            onReadingSourceAnchor: { offset, viewport in
+                                print("MARKDOWN_EVENT image aligned=\(offset) viewport=\(viewport)")
+                            })
         }
 
         let window = try visibleRenderingWindow(width: 320, height: 200)
@@ -115,8 +131,11 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let initial = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             scroll.contentView.bounds.minY > 100
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [initial], timeout: 6), .completed,
-                       "First loaded image must restore to its real viewport, not paragraph top")
+        await fulfillment(of: [initial], timeout: 6)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 100,
+                             "First loaded image must restore to its real viewport, not paragraph top. "
+                                 + readerGeometry(scroll, host: host, window: window))
+        print("MARKDOWN_LAYOUT_DIAG image " + readerGeometry(scroll, host: host, window: window))
         let originalY = scroll.contentView.bounds.minY
 
         host.rootView = view(synced: second)
@@ -124,8 +143,9 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             scroll.contentView.bounds.minY > originalY + 150
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 6), .completed,
-                       "Second image in same paragraph needs its own source-mapped viewport")
+        await fulfillment(of: [moved], timeout: 6)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, originalY + 150,
+                             "Second image in same paragraph needs its own source-mapped viewport")
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), source)
     }
 
@@ -144,7 +164,11 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         func view(synced: Int?) -> MarkdownPreview {
             MarkdownPreview(document: document, revision: "same", resource: resource, assetRefresh: 0,
                             restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
-                            synchronizedSourceOffset: synced)
+                            synchronizedSourceOffset: synced,
+                            onReadingPosition: { print("MARKDOWN_EVENT formula fallback=\($0)") },
+                            onReadingSourceAnchor: { offset, viewport in
+                                print("MARKDOWN_EVENT formula aligned=\(offset) viewport=\(viewport)")
+                            })
         }
 
         let window = try visibleRenderingWindow(width: 320, height: 200)
@@ -166,8 +190,11 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let firstPosition = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             scroll.contentView.bounds.minY > 100
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [firstPosition], timeout: 5), .completed,
-                       "Canvas formula must restore its actual position, not the paragraph top")
+        await fulfillment(of: [firstPosition], timeout: 5)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 100,
+                             "Canvas formula must restore its actual position, not the paragraph top. "
+                                 + readerGeometry(scroll, host: host, window: window))
+        print("MARKDOWN_LAYOUT_DIAG formula " + readerGeometry(scroll, host: host, window: window))
         let firstY = scroll.contentView.bounds.minY
 
         host.rootView = view(synced: second)
@@ -175,8 +202,9 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let secondPosition = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             scroll.contentView.bounds.minY > firstY + 140
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [secondPosition], timeout: 5), .completed,
-                       "Source offset for another formula in the same AST block must shift the reader")
+        await fulfillment(of: [secondPosition], timeout: 5)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, firstY + 140,
+                             "Source offset for another formula in the same AST block must shift the reader")
     }
 
     func testReaderRestoresAndTracksExactGlyphWithinOneLongParagraph() async throws {
@@ -192,6 +220,10 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             MarkdownPreview(document: parsed, revision: "same", resource: resource, assetRefresh: 0,
                             restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
                             synchronizedSourceOffset: sourceOffset,
+                            onReadingPosition: { print("MARKDOWN_EVENT glyph fallback=\($0)") },
+                            onReadingSourceAnchor: { offset, viewport in
+                                print("MARKDOWN_EVENT glyph aligned=\(offset) viewport=\(viewport)")
+                            },
                             onLocateSource: { _ in })
         }
 
@@ -214,8 +246,11 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             scroll.contentView.bounds.minY > 75
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 4), .completed,
-                       "Restoration must reach the glyph inside the first paragraph")
+        await fulfillment(of: [restored], timeout: 4)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 75,
+                             "Restoration must reach the glyph inside the first paragraph. "
+                                 + readerGeometry(scroll, host: host, window: window))
+        print("MARKDOWN_LAYOUT_DIAG glyph " + readerGeometry(scroll, host: host, window: window))
         let initialY = scroll.contentView.bounds.minY
 
         host.rootView = view(sourceOffset: second)
@@ -223,8 +258,9 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             scroll.contentView.bounds.minY > initialY + 75
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 4), .completed,
-                       "Source offsets changing inside the same block must move the reader viewport")
+        await fulfillment(of: [advanced], timeout: 4)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, initialY + 75,
+                             "Source offsets changing inside the same block must move the reader viewport")
     }
 
     func testMarkdownSourceReportsDifferentUTF16OffsetsInsideOneWrappedParagraph() async throws {

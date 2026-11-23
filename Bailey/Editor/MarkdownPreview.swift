@@ -85,6 +85,7 @@ struct MarkdownPreview: View {
                     .frame(maxWidth: 890, alignment: .leading)
                     .padding(geometry.size.width < 768 ? 15 : 45)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .coordinateSpace(name: "bailey.markdown.content")
                     .modifier(MarkdownLinkCursor())
                 }
                 .scrollPosition($jumpPosition)
@@ -145,6 +146,7 @@ struct MarkdownPreview: View {
                            rows: renderRows)
                 }
                 .onChange(of: revision, initial: true) { _, _ in
+                    print("MARKDOWN_TRACE revision initial block=\(String(describing: restoredBlock ?? sourceBlock)) scrolling=\(readerIsScrolling) linked=\(sourceCoordinates.scrollView != nil) hits=\(sourceCoordinates.hits.count)")
                     sourceCoordinates.pendingSource = nil
                     guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
                     scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
@@ -257,6 +259,7 @@ struct MarkdownPreview: View {
     private func scroll(to block: Int, sourceOffset: Int? = nil, viewportY: CGFloat = 0,
                         rows: [RenderRow]) {
         guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
+        print("MARKDOWN_TRACE scroll block=\(block) offset=\(String(describing: sourceOffset)) linked=\(sourceCoordinates.scrollView != nil) hits=\(sourceCoordinates.hits.count) embedded=\(sourceCoordinates.embeddedHits.count)")
         if let sourceOffset {
             // Keep the requested anchor through subsequent text and image re-layout.
             // Only a new navigation target or explicit user scrolling supersedes it.
@@ -417,7 +420,9 @@ private final class MarkdownReaderCoordinates {
 
     func scrollPending() {
         guard let pendingSource else { return }
-        _ = scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY)
+        print("MARKDOWN_TRACE pending linked=\(scrollView != nil) hits=\(hits.count) embedded=\(embeddedHits.count) offset=\(pendingSource.offset) viewY=\(String(describing: scrollView?.contentView.bounds.minY))")
+        let aligned = scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY)
+        print("MARKDOWN_TRACE pendingResult=\(aligned) viewY=\(String(describing: scrollView?.contentView.bounds.minY))")
     }
 
     func firstVisibleSource() -> (offset: Int, viewportY: CGFloat)? {
@@ -444,12 +449,12 @@ private final class MarkdownReaderCoordinates {
     @discardableResult
     func scroll(to offset: Int, atViewportY viewportY: CGFloat) -> Bool {
         for hit in hits where NSLocationInRange(offset, hit.mark.source) {
-            if let frame = hit.viewportFrame(forSourceOffset: offset) {
+            if let frame = hit.documentFrame(forSourceOffset: offset) {
                 return align(frame, atViewportY: viewportY)
             }
         }
         for hit in embeddedHits where NSLocationInRange(offset, hit.source) {
-            return align(hit.viewportFrame, atViewportY: viewportY)
+            return align(hit.documentFrame, atViewportY: viewportY)
         }
         return false
     }
@@ -459,7 +464,7 @@ private final class MarkdownReaderCoordinates {
               frame.width > 0, frame.height > 0 else { return false }
         let clip = scrollView.contentView
         let maximumY = max(0, document.frame.height - clip.bounds.height)
-        let target = min(max(0, clip.bounds.minY + frame.minY - viewportY), maximumY)
+        let target = min(max(0, frame.minY - viewportY), maximumY)
         if abs(clip.bounds.minY - target) > 1 {
             clip.scroll(to: NSPoint(x: clip.bounds.minX, y: target))
             scrollView.reflectScrolledClipView(clip)
@@ -618,6 +623,7 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
         detachSelectionGesture()
         coordinates.attachedBridge = self
         coordinates.scrollView = scrollView
+        print("MARKDOWN_TRACE attach scroll=\(scrollView.contentView.bounds) pending=\(String(describing: coordinates.pendingSource))")
         selectionGesture.delegate = self
         scrollView.contentView.addGestureRecognizer(selectionGesture)
         scrollView.contentView.addGestureRecognizer(sourceClickGesture)
@@ -732,6 +738,7 @@ private struct MarkdownGlyphHit: Equatable {
     let first: Text.Layout.CharacterIndex
     let run: Text.Layout.Run
     let viewportOrigin: CGPoint
+    let documentOrigin: CGPoint
     let isLink: Bool
     let displayedLineStart: Int
 
@@ -797,6 +804,13 @@ private struct MarkdownGlyphHit: Equatable {
         return nil
     }
 
+    func documentFrame(forSourceOffset target: Int) -> CGRect? {
+        viewportFrame(forSourceOffset: target)?.offsetBy(
+            dx: documentOrigin.x - viewportOrigin.x,
+            dy: documentOrigin.y - viewportOrigin.y
+        )
+    }
+
     func sourceOffset(atViewportPoint point: CGPoint) -> Int? {
         guard !isLink, viewportFrame.contains(point) else { return nil }
         for glyph in run {
@@ -827,8 +841,11 @@ private struct MarkdownGlyphMapping: ViewModifier {
                         let mapped = layouts.flatMap { entry in
                             let origin = geometry[entry.origin]
                             let viewportFrame = geometry.frame(in: .named("bailey.markdown.reader"))
+                            let documentFrame = geometry.frame(in: .named("bailey.markdown.content"))
                             let viewportOrigin = CGPoint(x: origin.x + viewportFrame.minX,
                                                          y: origin.y + viewportFrame.minY)
+                            let documentOrigin = CGPoint(x: origin.x + documentFrame.minX,
+                                                         y: origin.y + documentFrame.minY)
                             var firstIndices: [NSRange: Text.Layout.CharacterIndex] = [:]
                             let lines = entry.layout.map { line in
                                 line.compactMap { run -> (Text.Layout.Run, MarkdownSourceGlyph)? in
@@ -856,6 +873,7 @@ private struct MarkdownGlyphMapping: ViewModifier {
                                     return MarkdownGlyphHit(
                                         mark: mark, first: first, run: run,
                                         viewportOrigin: viewportOrigin,
+                                        documentOrigin: documentOrigin,
                                         isLink: run[MarkdownLinkGlyph.self] != nil,
                                         displayedLineStart: isCode ? mark.displayedLineStarts[lineIndex] : 0
                                     )

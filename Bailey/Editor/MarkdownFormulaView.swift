@@ -15,6 +15,7 @@ extension EnvironmentValues {
 struct MarkdownEmbeddedSourceHit: Equatable {
     let source: NSRange
     let viewportFrame: CGRect
+    let documentFrame: CGRect
 }
 
 struct MarkdownEmbeddedSourceHitPreference: PreferenceKey {
@@ -36,7 +37,8 @@ struct MarkdownEmbeddedSourceMapping: ViewModifier {
                         key: MarkdownEmbeddedSourceHitPreference.self,
                         value: [MarkdownEmbeddedSourceHit(
                             source: source,
-                            viewportFrame: geometry.frame(in: .named("bailey.markdown.reader"))
+                            viewportFrame: geometry.frame(in: .named("bailey.markdown.reader")),
+                            documentFrame: geometry.frame(in: .named("bailey.markdown.content"))
                         )]
                     )
                 }
