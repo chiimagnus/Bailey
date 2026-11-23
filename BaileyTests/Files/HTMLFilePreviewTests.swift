@@ -123,6 +123,47 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(image, true)
     }
 
+    func testNestedStylesheetLoadsScopedFontWithoutUsingOutsideLink() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("Project")
+        let styles = project.appendingPathComponent("styles/nested")
+        let fonts = project.appendingPathComponent("fonts")
+        try FileManager.default.createDirectory(at: styles, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fonts, withIntermediateDirectories: false)
+        let systemFont = URL(fileURLWithPath: "/System/Library/Fonts/Supplemental/Courier New.ttf")
+        let outside = root.appendingPathComponent("Outside.ttf")
+        try FileManager.default.copyItem(at: systemFont, to: outside)
+        try FileManager.default.copyItem(at: systemFont, to: fonts.appendingPathComponent("Fixture Font.ttf"))
+        try FileManager.default.createSymbolicLink(at: fonts.appendingPathComponent("Denied.ttf"),
+                                                    withDestinationURL: outside)
+        try Data(#"@import "nested/fonts.css";"#.utf8)
+            .write(to: styles.deletingLastPathComponent().appendingPathComponent("base.css"))
+        try Data("""
+            @font-face { font-family: FixtureFont; src: url("../../fonts/Fixture%20Font.ttf"); }
+            @font-face { font-family: DeniedFont; src: url("../../fonts/Denied.ttf"); }
+            span { font: 20px system-ui; }
+            #fixture { font-family: FixtureFont, system-ui; }
+            #denied { font-family: DeniedFont, system-ui; }
+            """.utf8).write(to: styles.appendingPathComponent("fonts.css"))
+        let file = try await open("""
+            <!doctype html><link rel="stylesheet" href="styles/base.css">
+            <span id="fixture">iiiiiiii</span><span id="denied">iiiiiiii</span><span id="fallback">iiiiiiii</span>
+            """, in: project)
+        let webView = try await display(file, in: project)
+        let result = try await webView.callAsyncJavaScript("""
+            const [fixture, denied] = await Promise.allSettled([
+                document.fonts.load('20px FixtureFont'),
+                document.fonts.load('20px DeniedFont')
+            ]);
+            const width = id => document.getElementById(id).getBoundingClientRect().width;
+            return [fixture.status, fixture.value?.[0]?.status ?? '', denied.status,
+                    String(width('fixture') > width('fallback') + 20),
+                    String(width('denied') === width('fallback'))];
+            """, arguments: [:], in: nil, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(result, ["fulfilled", "loaded", "rejected", "true", "true"])
+    }
+
     func testActiveContentAndExternalRequestsStayInTheStaticPreview() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
