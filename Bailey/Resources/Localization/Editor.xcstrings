@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "This media file is damaged or uses an unsupported format." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此媒体文件已损坏，或使用了不支持的格式。"
+          }
+        }
+      }
+    },
+    "The media file changed while opening. Reopen the file to try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "媒体文件在打开期间发生了变化。请重新打开。"
+          }
+        }
+      }
+    },
+    "Media playback is only available for files on this Mac." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只能播放这台 Mac 上的媒体文件。"
+          }
+        }
+      }
+    },
     "SVG preview omits: %@" : {
       "localizations" : {
         "zh-Hans" : {

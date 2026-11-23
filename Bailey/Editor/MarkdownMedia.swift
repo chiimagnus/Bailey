@@ -1,19 +1,10 @@
 import AVFoundation
-import AVKit
 import Foundation
 import SwiftUI
 
 nonisolated enum MarkdownMedia {
-    static func video(for url: URL) -> Bool? {
-        switch url.pathExtension.lowercased() {
-        case "mp4", "mov", "m4v": true
-        case "mp3", "m4a", "aac", "wav", "aif", "aiff", "caf", "flac": false
-        default: nil
-        }
-    }
-
     @concurrent static func stage(_ url: URL, from resource: MarkdownResource) async throws -> URL {
-        guard video(for: url) != nil else { throw CocoaError(.fileReadUnsupportedScheme) }
+        guard NativeMedia.candidate(url.pathExtension) != nil else { throw CocoaError(.fileReadUnsupportedScheme) }
         let bytes = try await resource.read(url, maxBytes: 64 << 20)
         try Task.checkCancellation()
         let folder = FileManager.default.temporaryDirectory.appending(path: "Bailey-Markdown-" + UUID().uuidString)
@@ -28,12 +19,6 @@ nonisolated enum MarkdownMedia {
             try? FileManager.default.removeItem(at: folder)
             throw error
         }
-    }
-
-    static func asset(at localFile: URL) -> AVURLAsset {
-        AVURLAsset(url: localFile, options: [
-            AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue,
-        ])
     }
 }
 
@@ -52,7 +37,7 @@ struct MarkdownMediaView: View {
         VStack(alignment: .leading, spacing: 6) {
             if let player {
                 VStack {
-                    MarkdownNativePlayer(player: player)
+                    NativePlayerView(player: player)
                         .frame(height: video ? 220 : 46)
                 }
                 .accessibilityElement(children: .contain)
@@ -76,11 +61,10 @@ struct MarkdownMediaView: View {
             do {
                 let localFile = try await MarkdownMedia.stage(url, from: resource)
                 temporary = localFile
-                let asset = MarkdownMedia.asset(at: localFile)
-                guard try await asset.load(.isPlayable) else { throw CocoaError(.fileReadCorruptFile) }
+                let media = try await NativeMedia.open(localFile.path)
                 try Task.checkCancellation()
                 stagedFile = localFile
-                player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+                player = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
                 failed = false
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at: temporary.deletingLastPathComponent()) }
@@ -97,18 +81,4 @@ struct MarkdownMediaView: View {
             stagedFile = nil
         }
     }
-}
-
-private struct MarkdownNativePlayer: NSViewRepresentable {
-    let player: AVPlayer
-
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.controlsStyle = .inline
-        view.showsFullScreenToggleButton = false
-        view.player = player
-        return view
-    }
-
-    func updateNSView(_ view: AVPlayerView, context: Context) { view.player = player }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Darwin
 import ImageIO
 import Observation
@@ -57,12 +58,14 @@ final class FileTab: nonisolated Identifiable {
     nonisolated enum Content: Sendable {
         case text
         case image(RasterPreview)
+        case media(NativeMedia)
         case unavailable(String)
         /// Waiting for a consumer to request the first read.
         case loading
     }
 
     private(set) var content: Content
+    private(set) var mediaPlayer: AVPlayer?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
@@ -135,9 +138,19 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func retireContent() {
+        isRetired = true
         targetGeneration &+= 1
         invalidateReload()
+        retireMedia()
+        if case .media = content { content = .loading }
         retireNativeEditor()
+    }
+
+    private func retireMedia() {
+        mediaPlayer?.pause()
+        mediaPlayer?.currentItem?.cancelPendingSeeks()
+        mediaPlayer?.replaceCurrentItem(with: nil)
+        mediaPlayer = nil
     }
 
     private func installNativeDocument(_ text: String) {
@@ -216,6 +229,7 @@ final class FileTab: nonisolated Identifiable {
     ]
 
     @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var isRetired = false
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var originalImageTask: Task<CGImage, Error>?
     @ObservationIgnored private var refreshPending = false
@@ -264,6 +278,8 @@ final class FileTab: nonisolated Identifiable {
     }
 
     var previewKind: FilePreviewKind? { FilePreviewKind(path: path) }
+
+    var isMediaFile: Bool { NativeMedia.candidate((path as NSString).pathExtension) != nil }
 
     var canPreviewFile: Bool {
         guard case .text = content else { return false }
@@ -317,7 +333,7 @@ final class FileTab: nonisolated Identifiable {
         guard previewKind != nil else { return }
         switch content {
         case .text, .loading: previewOverride = enabled
-        case .image, .unavailable: break
+        case .image, .media, .unavailable: break
         }
     }
 
@@ -338,6 +354,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func reopen(using encoding: TextFileEncoding?) {
+        guard !isMediaFile else { return }
         guard !isDirty, !isSaving, !fileMutationHeld else {
             saveError = String(localized: "Save or discard edits before changing encoding.", table: "Editor")
             return
@@ -395,7 +412,7 @@ final class FileTab: nonisolated Identifiable {
         guard reloadTask == nil else { return }
         switch content {
         case .loading, .unavailable: reloadFromDiskIfClean()
-        case .text, .image: break
+        case .text, .image, .media: break
         }
     }
 
@@ -506,13 +523,22 @@ final class FileTab: nonisolated Identifiable {
     func updatePath(_ newPath: String) {
         guard newPath != path else { return }
         let wasReading = reloadTask != nil
+        let wasMedia = isMediaFile
         invalidateReload()
         targetGeneration &+= 1
         let previousKind = previewKind
         path = newPath
         if previewKind != previousKind { previewOverride = nil }
         editorCoordinator?.updateSyntaxHighlighting(for: newPath)
-        if wasReading { loadIfNeeded() }
+        if hasReadDemand, !isDirty, wasMedia || isMediaFile {
+            if case .media = content {
+                retireMedia()
+                content = .loading
+            }
+            reloadFromDiskIfClean()
+        } else if wasReading {
+            loadIfNeeded()
+        }
     }
 
     /// A changed UTF-16 frequency proves the bytes differ. Equal frequencies
@@ -601,7 +627,12 @@ final class FileTab: nonisolated Identifiable {
         deletedFromWorkspace = true
         targetGeneration &+= 1
         invalidateReload()
-        readOnlyReason = String(localized: "This file was deleted. Copy your edits before closing.", table: "Editor")
+        let reason = String(localized: "This file was deleted. Copy your edits before closing.", table: "Editor")
+        readOnlyReason = reason
+        if case .media = content {
+            retireMedia()
+            content = .unavailable(reason)
+        }
     }
 
     /// One owned writer drains requests. Repeated ordinary saves only request
@@ -741,13 +772,15 @@ final class FileTab: nonisolated Identifiable {
         // While the file's machine is unreachable a read can only fail, and
         // replacing the content with "Could not read file" would throw away
         // what the user was looking at. The banner already says why.
-        guard readOnlyReason == nil, !isDirty else { return }
+        guard !isRetired, readOnlyReason == nil, !isDirty else { return }
         hasReadDemand = true
         refreshPending = false
         reloadTask?.cancel()
         reloadGeneration &+= 1
         let generation = reloadGeneration
         let expectedPath = path
+        let isLocal = workspaceIdentity == nil
+        let currentMedia: NativeMedia? = if case .media(let media) = content { media } else { nil }
 
         let backend = self.backend
         reloadTask = Task { [weak self] in
@@ -763,7 +796,8 @@ final class FileTab: nonisolated Identifiable {
             let loaded: LoadedContent
             do {
                 loaded = try await Self.readContent(
-                    path: expectedPath, backend: backend, override: self?.preferredEncoding
+                    path: expectedPath, backend: backend, override: self?.preferredEncoding,
+                    isLocal: isLocal, currentMedia: currentMedia
                 )
             } catch {
                 let missingOrOversized: Bool
@@ -780,7 +814,7 @@ final class FileTab: nonisolated Identifiable {
                             table: "Editor"
                         )
                         return
-                    case .loading, .unavailable: break
+                    case .loading, .media, .unavailable: break
                     }
                 }
                 let reason: String
@@ -807,7 +841,7 @@ final class FileTab: nonisolated Identifiable {
                 case .text, .image:
                     self.reloadError = reason
                     return
-                case .loading, .unavailable:
+                case .loading, .media, .unavailable:
                     break
                 }
             }
@@ -834,8 +868,12 @@ final class FileTab: nonisolated Identifiable {
             }
             guard !Task.isCancelled, self.reloadGeneration == generation,
                   !self.isDirty, self.readOnlyReason == nil else { return }
+            self.retireMedia()
             self.retireNativeEditor()
             self.content = loaded.content
+            if case .media(let media) = loaded.content {
+                self.mediaPlayer = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
+            }
             if let encoding = loaded.encoding { self.fileEncoding = encoding }
             self.installNativeDocument(loaded.text)
             self.preparedLineWidths = prepared
@@ -861,6 +899,8 @@ final class FileTab: nonisolated Identifiable {
             return fileEncoding == loaded.encoding && TextFileEncoding.hasIdenticalCodeUnits(savedText, loaded.text)
         case (.image, .image):
             return savedSourceVersion == loaded.sourceVersion
+        case (.media(let current), .media(let new)):
+            return current.asset === new.asset
         case (.unavailable(let current), .unavailable(let new)):
             return current == new
         default:
@@ -917,12 +957,29 @@ final class FileTab: nonisolated Identifiable {
     }
 
     @concurrent private static func readContent(
-        path: String, backend: WorkspaceBackend, override: TextFileEncoding?
+        path: String, backend: WorkspaceBackend, override: TextFileEncoding?,
+        isLocal: Bool, currentMedia: NativeMedia?
     ) async throws -> LoadedContent {
         guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
-        let isImage = imageExtensions.contains((path as NSString).pathExtension.lowercased())
+        let suffix = (path as NSString).pathExtension.lowercased()
+        if NativeMedia.candidate(suffix) != nil {
+            let content: Content
+            if isLocal, backend is LocalWorkspaceBackend {
+                do {
+                    content = .media(try await NativeMedia.open(path, reusing: currentMedia))
+                } catch NativeMedia.Failure.unsupported {
+                    content = .unavailable(String(localized: "This media file is damaged or uses an unsupported format.", table: "Editor"))
+                } catch WorkspaceError.changedExternally {
+                    content = .unavailable(String(localized: "The media file changed while opening. Reopen the file to try again.", table: "Editor"))
+                }
+            } else {
+                content = .unavailable(String(localized: "Media playback is only available for files on this Mac.", table: "Editor"))
+            }
+            return LoadedContent(content: content, text: "", encoding: nil, decodingFailed: false, sourceVersion: nil)
+        }
+        let isImage = imageExtensions.contains(suffix)
         var limit = maxTextBytes
         if isImage, let info = try await backend.stat(path: path), info.size > maxTextBytes {
             guard (info.isRegular || info.isSymlink), info.size <= maxImageBytes else {
@@ -1090,6 +1147,12 @@ struct FileViewerView: View {
                     ImageInspector(image: image, loadOriginal: file.originalImageRequest())
                         .id(file.reloadRevision)
                 }
+            case .media(let media):
+                if let player = file.mediaPlayer {
+                    NativePlayerView(player: player, allowsFullScreen: media.kind == .video)
+                        .onChange(of: isFocused && appearsActive) { _, active in if !active { player.pause() } }
+                        .onDisappear { player.pause() }
+                }
             case .loading:
                 Color.clear
             case .unavailable(let reason):
@@ -1098,7 +1161,7 @@ struct FileViewerView: View {
                     Text(reason)
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
-                    encodingMenu
+                    if !file.isMediaFile { encodingMenu }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

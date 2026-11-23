@@ -59,15 +59,18 @@ nonisolated struct LocalFileIdentity: Equatable, Sendable {
     static func read(_ path: String) -> Self? {
         var info = Darwin.stat()
         guard lstat(path, &info) == 0 else { return nil }
-        return Self(
-            device: UInt64(truncatingIfNeeded: info.st_dev),
-            inode: UInt64(truncatingIfNeeded: info.st_ino),
-            mode: UInt16(info.st_mode), size: Int64(info.st_size),
-            modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
-            modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec),
-            changedSeconds: Int64(info.st_ctimespec.tv_sec),
-            changedNanoseconds: Int64(info.st_ctimespec.tv_nsec)
-        )
+        return Self(info)
+    }
+
+    fileprivate init(_ info: Darwin.stat) {
+        device = UInt64(truncatingIfNeeded: info.st_dev)
+        inode = UInt64(truncatingIfNeeded: info.st_ino)
+        mode = UInt16(info.st_mode)
+        size = Int64(info.st_size)
+        modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
+        modifiedNanoseconds = Int64(info.st_mtimespec.tv_nsec)
+        changedSeconds = Int64(info.st_ctimespec.tv_sec)
+        changedNanoseconds = Int64(info.st_ctimespec.tv_nsec)
     }
 }
 
@@ -144,9 +147,16 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         return String(cString: resolved)
     }
 
-    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {
+    static func readableFile(at path: String) throws -> (path: String, identity: LocalFileIdentity) {
         try Task.checkCancellation()
-        guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
+        let handle = try openForReading(path)
+        defer { try? handle.close() }
+        let info = try regularFileStat(handle)
+        return (try pathOfOpenFile(handle), LocalFileIdentity(info))
+    }
+
+    private static func openForReading(_ path: String) throws -> FileHandle {
+        guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
         // Nonblocking open is necessary *before* fstat: a FIFO must never wait
@@ -157,20 +167,20 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             if code == ENOENT || code == ENOTDIR { throw WorkspaceError.notFound }
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
         }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? handle.close() }
-        if let root {
-            var resolved = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-            guard fcntl(fd, F_GETPATH, &resolved) != -1,
-                  LocalPathScope.contains(
-                      String(decoding: resolved.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self),
-                      in: root
-                  ) else {
-                throw CocoaError(.fileReadNoPermission)
-            }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    private static func pathOfOpenFile(_ handle: FileHandle) throws -> String {
+        var resolved = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(handle.fileDescriptor, F_GETPATH, &resolved) != -1 else {
+            throw CocoaError(.fileReadNoPermission)
         }
+        return String(decoding: resolved.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    private static func regularFileStat(_ handle: FileHandle) throws -> Darwin.stat {
         var info = Darwin.stat()
-        guard fstat(fd, &info) == 0 else {
+        guard fstat(handle.fileDescriptor, &info) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
         guard (info.st_mode & S_IFMT) == S_IFREG else {
@@ -179,6 +189,20 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         guard info.st_size >= 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
         }
+        return info
+    }
+
+    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {
+        try Task.checkCancellation()
+        guard maxBytes >= 0, maxBytes < .max else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        let handle = try openForReading(path)
+        defer { try? handle.close() }
+        if let root, try !LocalPathScope.contains(pathOfOpenFile(handle), in: root) {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        let info = try regularFileStat(handle)
         let length = UInt64(info.st_size)
         guard length <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
 
@@ -193,14 +217,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         // A changed length invalidates the read; never return a partial or
         // mixed-length file as if it were the accepted full document.
-        guard fstat(fd, &info) == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-        }
-        guard info.st_size >= 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
-        }
-        guard UInt64(info.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
-        guard UInt64(info.st_size) == length else {
+        let after = try regularFileStat(handle)
+        guard UInt64(after.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        guard UInt64(after.st_size) == length else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EBUSY))
         }
         return data

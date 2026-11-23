@@ -1258,8 +1258,8 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         )[.posixPermissions] as? Int)
         XCTAssertEqual(permissions & 0o077, 0,
                        "The staged file must reside in a private directory")
-        let playable = try await MarkdownMedia.asset(at: staged).load(.isPlayable)
-        XCTAssertTrue(playable)
+        let playable = try await NativeMedia.open(staged.path)
+        XCTAssertEqual(playable.kind, .audio)
 
         let tooBig = root.appending(path: "oversized.wav")
         XCTAssertTrue(FileManager.default.createFile(atPath: tooBig.path, contents: nil))

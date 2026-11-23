@@ -689,6 +689,8 @@ private struct TabContentThumbnail: View {
                 .resizable()
                 .scaledToFit()
                 .padding(5)
+        case .media:
+            MaterialFileIconView(path: file.path, size: 24, opacity: 0.82)
         case .loading:
             Color.clear
         case .unavailable(let reason):
