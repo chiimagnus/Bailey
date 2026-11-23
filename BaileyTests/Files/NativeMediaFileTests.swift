@@ -244,6 +244,80 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [url.lastPathComponent])
     }
 
+    func testRepeatedPlaybackAndProjectCloseReleaseNativePlayersAcrossMediaKinds() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let directory = URL(fileURLWithPath: root)
+        let samples: [(URL, NativeMedia.Kind)] = [
+            (directory.appending(path: "边界测试/257MiB静音.wav"), .audio),
+            (directory.appending(path: "media/音频-定位.mp3"), .audio),
+            (directory.appending(path: "media/视频-ProRes.mov"), .video),
+        ]
+        let size = try XCTUnwrap(samples[0].0.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        XCTAssertGreaterThan(size, 256 << 20)
+        var original: [SHA256.Digest] = []
+        for (url, _) in samples { original.append(try await Self.checksum(url)) }
+        let project = Project(fallbackName: "Repeated native media", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        let formerPlayers = NSHashTable<AVPlayer>.weakObjects()
+        var before = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
+        let start = ContinuousClock.now
+        let initialResident = Self.residentMiB()
+        var residentCurve: [Double] = []
+
+        for index in 0..<100 {
+            let (url, kind) = samples[index % samples.count]
+            project.openLocalFile(url.path)
+            guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing media tab \(index)") }
+            try await load(tab)
+            guard case .media(let media) = tab.content else { return XCTFail("Unreadable media on cycle \(index)") }
+            XCTAssertEqual(media.kind, kind)
+            XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(url))
+            let player = try XCTUnwrap(tab.mediaPlayer)
+            let item = try XCTUnwrap(player.currentItem)
+            XCTAssertTrue(item.asset === media.asset)
+            XCTAssertFalse(formerPlayers.contains(player))
+            formerPlayers.add(player)
+            player.isMuted = true
+            try await waitUntil { item.status != .unknown }
+            XCTAssertEqual(item.status, .readyToPlay)
+
+            let duration = try await media.asset.load(.duration)
+            if index % samples.count == 0 { XCTAssertEqual(duration.seconds, 1403.562667, accuracy: 0.001) }
+            let target = CMTime(seconds: duration.seconds - 1, preferredTimescale: 600)
+            let moved = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(moved)
+            XCTAssertEqual(player.currentTime().seconds, target.seconds, accuracy: 0.07)
+            player.play()
+            try await waitUntil { player.currentTime().seconds > target.seconds + 0.025 }
+            player.pause()
+            XCTAssertEqual(player.rate, 0)
+
+            if index.isMultiple(of: 2) { player.play() }
+            project.closeAll()
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertNil(tab.mediaPlayer)
+            XCTAssertNil(player.currentItem)
+            XCTAssertEqual(player.rate, 0)
+            if (index + 1).isMultiple(of: 10) { residentCurve.append(Self.residentMiB()) }
+        }
+
+        try await waitUntil { formerPlayers.allObjects.isEmpty }
+        var after = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &after), 0)
+        func cpuSeconds(_ usage: rusage) -> Double {
+            Double(usage.ru_utime.tv_sec) + Double(usage.ru_stime.tv_sec)
+                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+        }
+        print("MEDIA_REOPEN cycles=100 elapsed=\(start.duration(to: .now)) cpu_seconds=\(cpuSeconds(after) - cpuSeconds(before)) maxrss_before=\(before.ru_maxrss) maxrss_after=\(after.ru_maxrss) resident_mib_initial=\(initialResident) resident_mib_every_10=\(residentCurve) resident_mib_after_release=\(Self.residentMiB()) remaining_players=\(formerPlayers.allObjects.count)")
+        for ((url, _), checksum) in zip(samples, original) {
+            let actual = try await Self.checksum(url)
+            XCTAssertEqual(actual, checksum)
+        }
+    }
+
     func testMediaRejectsCorruptMissingUnopenedAndRemoteFilesWithoutReadingTheirNamesakes() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -360,6 +434,18 @@ final class NativeMediaFileTests: XCTestCase {
             digest.update(data: bytes)
         }
         return digest.finalize()
+    }
+
+    private static func residentMiB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        XCTAssertEqual(result, KERN_SUCCESS)
+        return Double(info.resident_size) / 1_048_576
     }
 
     private static func createWAV(_ file: URL, payloadBytes: Int) throws {
