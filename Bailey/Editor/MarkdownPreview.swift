@@ -129,7 +129,11 @@ struct MarkdownPreview: View {
                     readerIsScrolling = isUserScroll
                 }
                 .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
-                    if readerIsScrolling { reportReaderScroll(position) }
+                    if readerIsScrolling {
+                        reportReaderScroll(position)
+                    } else {
+                        sourceCoordinates.scrollPending()
+                    }
                 }
                 .onChange(of: position) { _, position in
                     if readerIsScrolling { reportReaderScroll(position) }
@@ -146,7 +150,6 @@ struct MarkdownPreview: View {
                            rows: renderRows)
                 }
                 .onChange(of: revision, initial: true) { _, _ in
-                    print("MARKDOWN_TRACE revision initial block=\(String(describing: restoredBlock ?? sourceBlock)) scrolling=\(readerIsScrolling) linked=\(sourceCoordinates.scrollView != nil) hits=\(sourceCoordinates.hits.count)")
                     sourceCoordinates.pendingSource = nil
                     guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
                     scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
@@ -259,7 +262,6 @@ struct MarkdownPreview: View {
     private func scroll(to block: Int, sourceOffset: Int? = nil, viewportY: CGFloat = 0,
                         rows: [RenderRow]) {
         guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
-        print("MARKDOWN_TRACE scroll block=\(block) offset=\(String(describing: sourceOffset)) linked=\(sourceCoordinates.scrollView != nil) hits=\(sourceCoordinates.hits.count) embedded=\(sourceCoordinates.embeddedHits.count)")
         if let sourceOffset {
             // Keep the requested anchor through subsequent text and image re-layout.
             // Only a new navigation target or explicit user scrolling supersedes it.
@@ -420,9 +422,7 @@ private final class MarkdownReaderCoordinates {
 
     func scrollPending() {
         guard let pendingSource else { return }
-        print("MARKDOWN_TRACE pending linked=\(scrollView != nil) hits=\(hits.count) embedded=\(embeddedHits.count) offset=\(pendingSource.offset) viewY=\(String(describing: scrollView?.contentView.bounds.minY))")
-        let aligned = scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY)
-        print("MARKDOWN_TRACE pendingResult=\(aligned) viewY=\(String(describing: scrollView?.contentView.bounds.minY))")
+        _ = scroll(to: pendingSource.offset, atViewportY: pendingSource.viewportY)
     }
 
     func firstVisibleSource() -> (offset: Int, viewportY: CGFloat)? {
@@ -520,6 +520,8 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
     private var selectionAnchorOffset: Int?
     private var selectionCaretOffset: Int?
     private var keyboardMonitor: Any?
+    private weak var observedClipView: NSClipView?
+    private var hasScheduledAnchorRestore = false
     private var previewHasInputFocus = false
     private lazy var selectionGesture = NSPanGestureRecognizer(target: self, action: #selector(selectText(_:)))
     private lazy var sourceClickGesture: NSClickGestureRecognizer = {
@@ -623,9 +625,15 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
         detachSelectionGesture()
         coordinates.attachedBridge = self
         coordinates.scrollView = scrollView
-        print("MARKDOWN_TRACE attach scroll=\(scrollView.contentView.bounds) pending=\(String(describing: coordinates.pendingSource))")
+        let clip = scrollView.contentView
+        clip.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(clipBoundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification, object: clip
+        )
+        observedClipView = clip
         selectionGesture.delegate = self
-        scrollView.contentView.addGestureRecognizer(selectionGesture)
+        clip.addGestureRecognizer(selectionGesture)
         scrollView.contentView.addGestureRecognizer(sourceClickGesture)
         if keyboardMonitor == nil {
             keyboardMonitor = NSEvent.addLocalMonitorForEvents(
@@ -636,6 +644,18 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
             }
         }
         coordinates.scrollPending()
+    }
+
+    @objc private func clipBoundsChanged(_ notification: Notification) {
+        guard coordinates?.pendingSource != nil, !hasScheduledAnchorRestore else { return }
+        hasScheduledAnchorRestore = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hasScheduledAnchorRestore = false
+            guard self.window != nil, let coordinates = self.coordinates,
+                  coordinates.scrollView?.contentView === self.observedClipView else { return }
+            coordinates.scrollPending()
+        }
     }
 
     private func routeReaderSelection(_ event: NSEvent) -> NSEvent? {
@@ -690,6 +710,12 @@ private final class MarkdownReaderClipView: NSView, NSGestureRecognizerDelegate 
     }
 
     func detachSelectionGesture() {
+        if let observedClipView {
+            NotificationCenter.default.removeObserver(
+                self, name: NSView.boundsDidChangeNotification, object: observedClipView
+            )
+        }
+        observedClipView = nil
         selectionGesture.view?.removeGestureRecognizer(selectionGesture)
         sourceClickGesture.view?.removeGestureRecognizer(sourceClickGesture)
     }

@@ -105,11 +105,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         func view(synced: Int?) -> MarkdownPreview {
             MarkdownPreview(document: document, revision: "image-same", resource: resource, assetRefresh: 0,
                             restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
-                            synchronizedSourceOffset: synced,
-                            onReadingPosition: { print("MARKDOWN_EVENT image fallback=\($0)") },
-                            onReadingSourceAnchor: { offset, viewport in
-                                print("MARKDOWN_EVENT image aligned=\(offset) viewport=\(viewport)")
-                            })
+                            synchronizedSourceOffset: synced)
         }
 
         let window = try visibleRenderingWindow(width: 320, height: 200)
@@ -135,7 +131,6 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 100,
                              "First loaded image must restore to its real viewport, not paragraph top. "
                                  + readerGeometry(scroll, host: host, window: window))
-        print("MARKDOWN_LAYOUT_DIAG image " + readerGeometry(scroll, host: host, window: window))
         let originalY = scroll.contentView.bounds.minY
 
         host.rootView = view(synced: second)
@@ -164,11 +159,7 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         func view(synced: Int?) -> MarkdownPreview {
             MarkdownPreview(document: document, revision: "same", resource: resource, assetRefresh: 0,
                             restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
-                            synchronizedSourceOffset: synced,
-                            onReadingPosition: { print("MARKDOWN_EVENT formula fallback=\($0)") },
-                            onReadingSourceAnchor: { offset, viewport in
-                                print("MARKDOWN_EVENT formula aligned=\(offset) viewport=\(viewport)")
-                            })
+                            synchronizedSourceOffset: synced)
         }
 
         let window = try visibleRenderingWindow(width: 320, height: 200)
@@ -194,7 +185,6 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 100,
                              "Canvas formula must restore its actual position, not the paragraph top. "
                                  + readerGeometry(scroll, host: host, window: window))
-        print("MARKDOWN_LAYOUT_DIAG formula " + readerGeometry(scroll, host: host, window: window))
         let firstY = scroll.contentView.bounds.minY
 
         host.rootView = view(synced: second)
@@ -220,10 +210,6 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             MarkdownPreview(document: parsed, revision: "same", resource: resource, assetRefresh: 0,
                             restoredBlock: 0, sourceBlock: 0, restoredSourceOffset: first,
                             synchronizedSourceOffset: sourceOffset,
-                            onReadingPosition: { print("MARKDOWN_EVENT glyph fallback=\($0)") },
-                            onReadingSourceAnchor: { offset, viewport in
-                                print("MARKDOWN_EVENT glyph aligned=\(offset) viewport=\(viewport)")
-                            },
                             onLocateSource: { _ in })
         }
 
@@ -250,8 +236,17 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 75,
                              "Restoration must reach the glyph inside the first paragraph. "
                                  + readerGeometry(scroll, host: host, window: window))
-        print("MARKDOWN_LAYOUT_DIAG glyph " + readerGeometry(scroll, host: host, window: window))
         let initialY = scroll.contentView.bounds.minY
+
+        // Native relayout can reset the clip without a user scroll gesture.
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let recovered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            scroll.contentView.bounds.minY > 75
+        }, object: nil)
+        await fulfillment(of: [recovered], timeout: 4)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 75,
+                             "A native clip reset must not discard the pending source anchor")
 
         host.rootView = view(sourceOffset: second)
         host.layoutSubtreeIfNeeded()
