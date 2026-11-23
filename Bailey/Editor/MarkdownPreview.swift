@@ -24,6 +24,7 @@ struct MarkdownPreview: View {
     var navigation: Binding<String?> = .constant(nil)
 
     @State private var position: Int?
+    @State private var jumpPosition = ScrollPosition(idType: Int.self)
     @State private var linkToOpen: URL?
     @State private var failedLink = false
     @State private var readerIsScrolling = false
@@ -38,20 +39,19 @@ struct MarkdownPreview: View {
         let palette = MarkdownReaderColors.theme(dark: colorScheme == .dark)
         GeometryReader { geometry in
             ZStack(alignment: .top) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 16) {
-                            if let warning = document.warning {
-                                Label(warning, systemImage: "exclamationmark.triangle")
-                                    .foregroundStyle(.secondary)
-                            }
-                            ForEach(rows, id: \.start) { row in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if let warning = document.warning {
+                            Label(warning, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(rows, id: \.start) { row in
+                            VStack(alignment: .leading, spacing: 0) {
                                 if row.end - row.start > 1 {
                                     paragraphRun(row.start..<row.end)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .pointerStyle(.horizontalText)
                                         .modifier(MarkdownGlyphMapping())
-                                        .id(row.start)
                                 } else {
                                     MarkdownNativeBlockView(block: document.blocks[row.start].content,
                                                             resource: resource, assetRefresh: assetRefresh,
@@ -63,131 +63,131 @@ struct MarkdownPreview: View {
                                                                 .map { collapsedHeadings.contains($0) } ?? false,
                                                             onToggleHeading: onToggleHeading)
                                         .modifier(MarkdownGlyphMapping())
-                                        .id(row.start)
                                 }
                             }
                         }
-                        .scrollTargetLayout()
-                        .background {
-                            MarkdownReaderClipBridge(
-                                coordinates: sourceCoordinates, document: document,
-                                detailsState: detailsState,
-                                collapsedHeadings: collapsedHeadings,
-                                onSelectionChanged: { selectedSource = $0 },
-                                onLocateSource: onLocateSource
-                            )
-                            .frame(width: 0, height: 0)
+                    }
+                    .scrollTargetLayout()
+                    .background {
+                        MarkdownReaderClipBridge(
+                            coordinates: sourceCoordinates, document: document,
+                            detailsState: detailsState,
+                            collapsedHeadings: collapsedHeadings,
+                            onSelectionChanged: { selectedSource = $0 },
+                            onLocateSource: onLocateSource
+                        )
+                        .frame(width: 0, height: 0)
+                    }
+                    .font(.system(size: 16))
+                    .lineSpacing(4)
+                    .foregroundStyle(Color(nsColor: palette.foregroundNSColor))
+                    .tint(Color(nsColor: palette.accentNSColor))
+                    .frame(maxWidth: 890, alignment: .leading)
+                    .padding(geometry.size.width < 768 ? 15 : 45)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .modifier(MarkdownLinkCursor())
+                }
+                .scrollPosition($jumpPosition)
+                .accessibilityIdentifier("bailey.markdown.preview")
+                .coordinateSpace(name: "bailey.markdown.reader")
+                .environment(detailsState)
+                .overlay {
+                    Canvas { context, size in
+                        guard let selectedSource else { return }
+                        let background = Color(nsColor: palette.selectionBackgroundNSColor)
+                        let foreground = Color(nsColor: palette.selectionForegroundNSColor)
+                        let viewport = CGRect(origin: .zero, size: size)
+                        for hit in sourceCoordinates.hits where hit.viewportFrame.intersects(viewport) {
+                            hit.drawSelection(selectedSource, in: context,
+                                              background: background, foreground: foreground)
                         }
-                        .font(.system(size: 16))
-                        .lineSpacing(4)
-                        .foregroundStyle(Color(nsColor: palette.foregroundNSColor))
-                        .tint(Color(nsColor: palette.accentNSColor))
-                        .frame(maxWidth: 890, alignment: .leading)
-                        .padding(geometry.size.width < 768 ? 15 : 45)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .modifier(MarkdownLinkCursor())
                     }
-                    .accessibilityIdentifier("bailey.markdown.preview")
-                    .coordinateSpace(name: "bailey.markdown.reader")
-                    .environment(detailsState)
-                    .overlay {
-                        Canvas { context, size in
-                            guard let selectedSource else { return }
-                            let background = Color(nsColor: palette.selectionBackgroundNSColor)
-                            let foreground = Color(nsColor: palette.selectionForegroundNSColor)
-                            let viewport = CGRect(origin: .zero, size: size)
-                            for hit in sourceCoordinates.hits where hit.viewportFrame.intersects(viewport) {
-                                hit.drawSelection(selectedSource, in: context,
-                                                  background: background, foreground: foreground)
-                            }
-                        }
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+                .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.1) { visible in
+                    position = visible.min()
+                }
+                .onPreferenceChange(MarkdownGlyphHitPreference.self) { hits in
+                    sourceCoordinates.hits = hits
+                    if !readerIsScrolling { sourceCoordinates.scrollPending() }
+                }
+                .onPreferenceChange(MarkdownEmbeddedSourceHitPreference.self) { hits in
+                    sourceCoordinates.embeddedHits = hits
+                    if !readerIsScrolling { sourceCoordinates.scrollPending() }
+                }
+                .onScrollPhaseChange { _, phase in
+                    let isUserScroll = phase == .interacting || phase == .decelerating
+                    if readerIsScrolling && !isUserScroll {
+                        reportReaderScroll(position)
                     }
-                    .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.1) { visible in
-                        position = visible.min()
+                    if isUserScroll && !readerIsScrolling {
+                        sourceCoordinates.pendingSource = nil
+                        sourceCoordinates.lastReportedOffset = nil
                     }
-                    .onPreferenceChange(MarkdownGlyphHitPreference.self) { hits in
-                        sourceCoordinates.hits = hits
-                        if !readerIsScrolling { sourceCoordinates.scrollPending() }
+                    readerIsScrolling = isUserScroll
+                }
+                .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
+                    if readerIsScrolling { reportReaderScroll(position) }
+                }
+                .onChange(of: position) { _, position in
+                    if readerIsScrolling { reportReaderScroll(position) }
+                }
+                .onChange(of: collapsedHeadings) { _, _ in
+                    sourceCoordinates.clearSelection()
+                    guard let pendingReveal,
+                          document.collapsedAncestors(
+                            of: pendingReveal.index, collapsed: collapsedHeadings
+                          ).isEmpty else { return }
+                    self.pendingReveal = nil
+                    scroll(to: pendingReveal.index, sourceOffset: pendingReveal.sourceOffset,
+                           rows: renderRows)
+                }
+                .onChange(of: revision, initial: true) { _, _ in
+                    guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
+                    scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
+                           viewportY: restoredViewportY, rows: rows)
+                }
+                .onChange(of: synchronizedSourceOffset) { _, offset in
+                    guard !readerIsScrolling, let offset, let block = sourceBlock else { return }
+                    scroll(to: block, sourceOffset: offset, rows: rows)
+                }
+                .onChange(of: sourceBlock) { _, block in
+                    guard !readerIsScrolling, synchronizedSourceOffset == nil,
+                          let block else { return }
+                    scroll(to: block, rows: rows)
+                }
+                .task(id: navigation.wrappedValue) {
+                    guard let fragment = navigation.wrappedValue else { return }
+                    if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                        revealAndScroll(to: index, rows: rows)
+                        failedLink = false
+                    } else {
+                        failedLink = true
                     }
-                    .onPreferenceChange(MarkdownEmbeddedSourceHitPreference.self) { hits in
-                        sourceCoordinates.embeddedHits = hits
-                        if !readerIsScrolling { sourceCoordinates.scrollPending() }
-                    }
-                    .onScrollPhaseChange { _, phase in
-                        let isUserScroll = phase == .interacting || phase == .decelerating
-                        if readerIsScrolling && !isUserScroll {
-                            reportReaderScroll(position)
-                        }
-                        if isUserScroll && !readerIsScrolling {
-                            sourceCoordinates.pendingSource = nil
-                            sourceCoordinates.lastReportedOffset = nil
-                        }
-                        readerIsScrolling = isUserScroll
-                    }
-                    .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
-                        if readerIsScrolling { reportReaderScroll(position) }
-                    }
-                    .onChange(of: position) { _, position in
-                        if readerIsScrolling { reportReaderScroll(position) }
-                    }
-                    .onChange(of: collapsedHeadings) { _, _ in
-                        sourceCoordinates.clearSelection()
-                        guard let pendingReveal,
-                              document.collapsedAncestors(
-                                of: pendingReveal.index, collapsed: collapsedHeadings
-                              ).isEmpty else { return }
-                        self.pendingReveal = nil
-                        scroll(to: pendingReveal.index, sourceOffset: pendingReveal.sourceOffset,
-                               rows: renderRows, proxy: proxy)
-                    }
-                    .onChange(of: revision, initial: true) { _, _ in
-                        guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
-                        scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
-                               viewportY: restoredViewportY, rows: rows, proxy: proxy)
-                    }
-                    .onChange(of: synchronizedSourceOffset) { _, offset in
-                        guard !readerIsScrolling, let offset, let block = sourceBlock else { return }
-                        scroll(to: block, sourceOffset: offset, rows: rows, proxy: proxy)
-                    }
-                    .onChange(of: sourceBlock) { _, block in
-                        guard !readerIsScrolling, synchronizedSourceOffset == nil,
-                              let block else { return }
-                        scroll(to: block, rows: rows, proxy: proxy)
-                    }
-                    .task(id: navigation.wrappedValue) {
-                        guard let fragment = navigation.wrappedValue else { return }
-                        if let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                            revealAndScroll(to: index, rows: rows, proxy: proxy)
+                    navigation.wrappedValue = nil
+                }
+                .environment(\.openURL, OpenURLAction { url in
+                    if url.absoluteString.hasPrefix("#") {
+                        let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment
+                        if let fragment, fragment.hasPrefix("bailey-return:"),
+                           let offset = Int(fragment.dropFirst("bailey-return:".count)),
+                           let index = MarkdownBlockIndex(document).block(atUTF16Offset: offset) {
+                            revealAndScroll(to: index, sourceOffset: offset,
+                                            rows: rows)
+                            failedLink = false
+                        } else if let fragment,
+                                  let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
+                            revealAndScroll(to: index, rows: rows)
                             failedLink = false
                         } else {
                             failedLink = true
                         }
-                        navigation.wrappedValue = nil
+                    } else {
+                        linkToOpen = url
                     }
-                    .environment(\.openURL, OpenURLAction { url in
-                        if url.absoluteString.hasPrefix("#") {
-                            let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment
-                            if let fragment, fragment.hasPrefix("bailey-return:"),
-                               let offset = Int(fragment.dropFirst("bailey-return:".count)),
-                               let index = MarkdownBlockIndex(document).block(atUTF16Offset: offset) {
-                                revealAndScroll(to: index, sourceOffset: offset,
-                                                rows: rows, proxy: proxy)
-                                failedLink = false
-                            } else if let fragment,
-                                      let index = document.blocks.firstIndex(where: { $0.anchor == fragment }) {
-                                revealAndScroll(to: index, rows: rows, proxy: proxy)
-                                failedLink = false
-                            } else {
-                                failedLink = true
-                            }
-                        } else {
-                            linkToOpen = url
-                        }
-                        return .handled
-                    })
-                }
+                    return .handled
+                })
                 if failedLink {
                     Label("Could not open this link.", systemImage: "exclamationmark.triangle")
                         .font(.callout)
@@ -226,13 +226,13 @@ struct MarkdownPreview: View {
     }
 
     private func revealAndScroll(to index: Int, sourceOffset: Int? = nil,
-                                 rows: [RenderRow], proxy: ScrollViewProxy) {
+                                 rows: [RenderRow]) {
         var hidden = document.collapsedAncestors(of: index, collapsed: collapsedHeadings)
         if let heading = headingIdentity(at: index), collapsedHeadings.contains(heading) {
             hidden.append(heading)
         }
         if hidden.isEmpty {
-            scroll(to: index, sourceOffset: sourceOffset, rows: rows, proxy: proxy)
+            scroll(to: index, sourceOffset: sourceOffset, rows: rows)
         } else {
             pendingReveal = (index, sourceOffset)
             for heading in hidden { onRevealHeading(heading) }
@@ -253,7 +253,7 @@ struct MarkdownPreview: View {
     }
 
     private func scroll(to block: Int, sourceOffset: Int? = nil, viewportY: CGFloat = 0,
-                        rows: [RenderRow], proxy: ScrollViewProxy) {
+                        rows: [RenderRow]) {
         guard let row = rows.first(where: { $0.start <= block && block < $0.end }) else { return }
         if let sourceOffset {
             if sourceCoordinates.scroll(to: sourceOffset, atViewportY: viewportY) {
@@ -268,7 +268,7 @@ struct MarkdownPreview: View {
                 NSLocationInRange(sourceOffset, $0.source)
             }) { return }
         }
-        proxy.scrollTo(row.start, anchor: .top)
+        jumpPosition.scrollTo(id: row.start, anchor: .top)
         onReadingPosition(block)
     }
 

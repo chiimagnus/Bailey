@@ -952,11 +952,18 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             }
             XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1000)
             let scrollStart = clock.now
-            let bottom = max(0, content.frame.height - scroll.contentView.bounds.height)
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            let endHeading = try XCTUnwrap(document.headingOutline.last)
+            host.rootView = MarkdownPreview(document: document, revision: "0",
+                                            resource: resource, assetRefresh: 0,
+                                            sourceBlock: endHeading.blockIndex,
+                                            synchronizedSourceOffset: endHeading.identity.offset)
+                .environment(\.colorScheme, .dark)
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+            let atEnd = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                scroll.contentView.bounds.minY > content.frame.height - 2 * scroll.contentView.bounds.height
+            }, object: nil)
+            await fulfillment(of: [atEnd], timeout: 5)
             let scrolling = scrollStart.duration(to: clock.now)
             XCTAssertGreaterThan(scroll.contentView.bounds.maxY,
                                  content.frame.height - scroll.contentView.bounds.height,

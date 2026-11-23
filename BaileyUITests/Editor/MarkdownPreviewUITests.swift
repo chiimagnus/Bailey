@@ -1581,13 +1581,14 @@ final class MarkdownPreviewUITests: XCTestCase {
         XCTAssertTrue(syncMenu.waitForExistence(timeout: 10))
         syncMenu.click()
 
-        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let preview = window.scrollViews.matching(identifier: "bailey.markdown.preview").firstMatch
         let link = preview.links["Jump to destination"]
         XCTAssertTrue(link.waitForExistence(timeout: 15))
         link.click()
-        let destination = preview.staticTexts["Reading destination"].firstMatch
+        let destination = window.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.reading-destination").firstMatch
         func destinationIsVisible() -> Bool {
-            guard destination.exists else { return false }
+            guard destination.exists, destination.label == "Reading destination" else { return false }
             return destination.frame.intersection(preview.frame).height > 1
         }
         let located = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -2074,15 +2075,19 @@ final class MarkdownPreviewUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
         )
-        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         app.activate()
         row.doubleClick()
-        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
-        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let heading = preview.staticTexts["Last chapter"].firstMatch
+        let preview = window.scrollViews.matching(identifier: "bailey.markdown.preview").firstMatch
+        let heading = window.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.last-chapter").firstMatch
         XCTAssertTrue(heading.waitForExistence(timeout: 10))
+        XCTAssertEqual(heading.label, "Last chapter")
+        XCTAssertGreaterThan(heading.frame.intersection(preview.frame).height, 1)
         heading.hover()
         let fold = preview.buttons["bailey.markdown.fold.last-chapter"]
         XCTAssertTrue(fold.waitForExistence(timeout: 10))
@@ -2169,16 +2174,20 @@ final class MarkdownPreviewUITests: XCTestCase {
             """
         let file = try fixture.file("FoldLink.md", text: source)
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
-        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         app.activate()
         row.doubleClick()
-        XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
-        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let preview = window.scrollViews.matching(identifier: "bailey.markdown.preview").firstMatch
         XCTAssertTrue(preview.waitForExistence(timeout: 15))
-        let parent = preview.staticTexts["Parent"].firstMatch
+        let parent = window.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.parent").firstMatch
         XCTAssertTrue(parent.waitForExistence(timeout: 10))
+        XCTAssertEqual(parent.label, "Parent")
+        XCTAssertGreaterThan(parent.frame.intersection(preview.frame).height, 1)
         parent.hover()
         let fold = preview.buttons["bailey.markdown.fold.parent"]
         XCTAssertTrue(fold.waitForExistence(timeout: 10))
@@ -2297,9 +2306,12 @@ final class MarkdownPreviewUITests: XCTestCase {
         let sideBySide = app.menuItems["Show Side by Side"]
         XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
         sideBySide.click()
-        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let first = preview.staticTexts["Section 0"].firstMatch
+        let preview = window.scrollViews.matching(identifier: "bailey.markdown.preview").firstMatch
+        let first = window.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.section-0").firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 15))
+        XCTAssertEqual(first.label, "Section 0")
+        XCTAssertGreaterThan(first.frame.intersection(preview.frame).height, 1)
         let sourceScroll = window.scrollViews.containing(.textView, identifier: nil).firstMatch
         XCTAssertTrue(sourceScroll.waitForExistence(timeout: 10))
         let bar = try XCTUnwrap(sourceScroll.scrollBars.allElementsBoundByIndex.first {
