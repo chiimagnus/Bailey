@@ -121,6 +121,59 @@ final class NativeEditorLayoutTests: XCTestCase {
         }
     }
 
+    func testAccessibilityLineQueriesDoNotLayOutUnwrappedMarkdownPrefix() throws {
+        let block = "# 章节 🧭\r\n\r\n| 名称 | Value |\r\n| --- | ---: |\r\n| 示例 | 42 |\r\n"
+        let source = String(repeating: block, count: 4_000) + "末尾"
+        let unitsPerBlock = block.utf16.count
+        let (window, _, editor) = mount(source, width: 350)
+        defer { window.close() }
+        let counter = NativeParagraphCounter()
+        editor.nativeContentManager.delegate = counter
+        var samples: [Double] = []
+        for blockIndex in (3_960..<3_990).reversed() {
+            let start = ProcessInfo.processInfo.systemUptime
+            let row = editor.accessibilityLine(for: blockIndex * unitsPerBlock + 1)
+            samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+            XCTAssertEqual(row, blockIndex * 5)
+        }
+        samples.sort()
+        let median = (samples[14] + samples[15]) / 2
+        print("BAILEY_AX_LINE_20000 p50_ms=\(median) p95_ms=\(samples[28]) max_ms=\(samples[29]) paragraphs=\(counter.requested)")
+        XCTAssertEqual(counter.requested, 0, "A line query must not realize offscreen paragraphs")
+        XCTAssertEqual(editor.text, source)
+    }
+
+    func testAccessibilityLineQueriesMatchAppKitAcrossEditsAndWrapping() throws {
+        let cases = ["", "single 👩‍🚀", "🧭\n一\n\n末尾\n", "ab\r\ncd\r\nef",
+                     "a\rb\u{0085}c\u{2028}d\u{2029}e", "a\u{000B}b\tc\nd", "a\u{000C}b\nc",
+                     String(repeating: "混排 👩‍🚀abc ", count: 30)]
+        for wraps in [false, true] {
+            for source in cases {
+                let (window, _, editor) = mount(source, width: 120, wraps: wraps)
+                defer { window.close() }
+                let reference = NSTextView(usingTextLayoutManager: true)
+                reference.font = editor.font
+                reference.textContainerInset = editor.textContainerInset
+                reference.textContainer?.size = editor.textContainer?.size ?? .zero
+                reference.textContainer?.lineBreakMode = editor.textContainer?.lineBreakMode ?? .byWordWrapping
+                func check() {
+                    reference.textStorage?.setAttributedString(editor.attributedText)
+                    for offset in 0...editor.nativeContentManager.length {
+                        XCTAssertEqual(editor.accessibilityLine(for: offset),
+                                       reference.accessibilityLine(for: offset),
+                                       "UTF-16 offset \(offset), wrapping \(wraps), source \(source.debugDescription)")
+                    }
+                }
+                check()
+                editor.setSelectedRange(NSRange(location: 0, length: 0))
+                editor.insertText("Z\u{000C}\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+                check()
+                editor.undoManager?.undo()
+                check()
+            }
+        }
+    }
+
     func testCurrentSourceFileKeepsCorrectViewportAndHitTesting() async throws {
         let sourceFile = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
