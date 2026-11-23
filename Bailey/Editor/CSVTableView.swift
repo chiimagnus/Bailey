@@ -11,6 +11,18 @@ final class DelimitedTableControls {
     var findFocus = 0
     var findStep = 0
     @ObservationIgnored var selectedValue = ""
+    @ObservationIgnored private var displayedSeparator: DelimitedTableIndex.Separator?
+
+    func accept(_ index: DelimitedTableIndex) {
+        let next: DelimitedTablePresentation.Configuration
+        if let displayedSeparator, displayedSeparator != index.separator {
+            next = .init(header: configuration.header)
+        } else {
+            next = configuration.restricted(to: min(index.columnCount, DelimitedGrid.maximumColumns))
+        }
+        displayedSeparator = index.separator
+        if next != configuration { configuration = next }
+    }
 
     func perform(_ action: FindAction) {
         switch action {
@@ -71,6 +83,7 @@ struct CSVTableView: View {
                 do {
                     guard let result = try await file.delimitedSnapshot(using: parse.separator),
                           !Task.isCancelled, parse.source == file.textPreviewRequestID else { return }
+                    controls.accept(result.index)
                     parsed = (parse, result)
                 } catch is CancellationError {
                     return
@@ -186,9 +199,9 @@ struct CSVTableView: View {
                 Text(verbatim: "\(matches)").monospacedDigit().foregroundStyle(.secondary)
                     .accessibilityIdentifier("bailey.csv.match-count")
                 Button { controls.perform(.previous) } label: { Image(systemName: "chevron.up") }
-                    .accessibilityLabel(Text("Previous Match", tableName: "Terminal"))
+                    .accessibilityLabel(Text("Previous match", tableName: "Terminal"))
                 Button { controls.perform(.next) } label: { Image(systemName: "chevron.down") }
-                    .accessibilityLabel(Text("Next Match", tableName: "Terminal"))
+                    .accessibilityLabel(Text("Next match", tableName: "Terminal"))
                 Button { controls.perform(.hide) } label: { Image(systemName: "xmark") }
                     .accessibilityLabel(Text("Close"))
             }
@@ -293,6 +306,7 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     func detach() {
         copyTask?.cancel()
         copyTask = nil
+        table.clearSelection()
         snapshot = nil
         presentation = nil
         source = ""

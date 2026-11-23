@@ -10,6 +10,12 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         var header = true
         var filters: [Int: String] = [:]
         var sort: [Sort] = []
+
+        func restricted(to columnCount: Int) -> Self {
+            Self(header: header,
+                 filters: filters.filter { (0..<columnCount).contains($0.key) },
+                 sort: sort.filter { (0..<columnCount).contains($0.column) })
+        }
     }
 
     struct Cell: Hashable, Sendable {
@@ -53,6 +59,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     @concurrent static func evaluate(
         source: String, index: DelimitedTableIndex, configuration: Configuration
     ) async throws -> Self {
+        let configuration = configuration.restricted(to: index.columnCount)
         let text = source as NSString
         let start = configuration.header && !index.records.isEmpty ? 1 : 0
         var rows: [Int] = []

@@ -1,10 +1,74 @@
 import AppKit
+import Darwin
 import Foundation
 import XCTest
 @testable import Bailey
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
+    func testProjectionDoesNotFilterRowsUsingColumnsAbsentFromTheNewIndex() async throws {
+        let source = "Name;Value\nItem;42\nOther;2"
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .semicolon)
+        let stale = DelimitedTablePresentation.Configuration(
+            filters: [2: "unavailable"], sort: [.init(column: 2, ascending: true)]
+        )
+        let result = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: stale)
+        XCTAssertEqual(result.rows, [1, 2])
+    }
+
+    func testAcceptedColumnLayoutClearsOnlySettingsForDifferentFields() async throws {
+        let controls = DelimitedTableControls()
+        let original = try await DelimitedTableIndex.parse("A,B,C\n1,2,3", preferred: .comma)
+        controls.accept(original)
+        controls.configuration.filters = [0: "1", 2: "3"]
+        controls.configuration.sort = [.init(column: 2, ascending: true)]
+        let narrower = try await DelimitedTableIndex.parse("A,B\n1,2", preferred: .comma)
+        controls.accept(narrower)
+        XCTAssertEqual(controls.configuration.filters, [0: "1"])
+        XCTAssertTrue(controls.configuration.sort.isEmpty)
+        controls.configuration.header = false
+        let different = try await DelimitedTableIndex.parse("A;B\n1;2", preferred: .comma)
+        controls.accept(different)
+        XCTAssertTrue(controls.configuration.filters.isEmpty)
+        XCTAssertFalse(controls.configuration.header)
+    }
+
+    func testRepeatedNativeTableMountsClearRowsAndSelectionInBothAppearances() async throws {
+        let text = "Name,Value\nApple,1\nBanana,2\n"
+        let index = try await DelimitedTableIndex.parse(text, preferred: .comma)
+        let presentation = try await DelimitedTablePresentation.evaluate(
+            source: text, index: index, configuration: .init()
+        )
+        let viewport = CGRect(x: 0, y: 0, width: 460, height: 280)
+        let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var before = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
+        let started = ContinuousClock.now
+        for serial in 0..<100 {
+            try autoreleasepool {
+                window.appearance = NSAppearance(named: serial.isMultiple(of: 2) ? .aqua : .darkAqua)
+                let grid = DelimitedGrid()
+                window.contentView = grid
+                grid.install(.init(index: index, source: text, requestID: String(serial), preservesOriginalBytes: true),
+                             presentation: presentation)
+                grid.layoutSubtreeIfNeeded()
+                grid.table.select(.init(row: 1, column: 1), reveal: true)
+                let cell = try XCTUnwrap(grid.table.view(atColumn: 1, row: 1, makeIfNecessary: true) as? NSTextField)
+                XCTAssertEqual(cell.stringValue, "2")
+                XCTAssertTrue(cell.isAccessibilitySelected())
+                grid.detach()
+                XCTAssertEqual(grid.table.numberOfRows, 0)
+                XCTAssertTrue(grid.table.selection.blocks.isEmpty)
+                window.contentView = nil
+            }
+        }
+        var after = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &after), 0)
+        print("CSV_TABLE_MOUNTS count=100 elapsed=\(started.duration(to: .now)) maxrss_before=\(before.ru_maxrss) maxrss_after=\(after.ru_maxrss)")
+    }
+
     func testNativeGridVirtualizesTallAndWideTablesAndCanReachTheirLastCells() async throws {
         let viewport = CGRect(x: 0, y: 0, width: 480, height: 330)
         let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)
