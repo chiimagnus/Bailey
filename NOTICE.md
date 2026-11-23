@@ -31,6 +31,13 @@ Bailey 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参�
 | Nerd Fonts 资源 | [LICENSE-nerd-fonts.txt](Bailey/Resources/Fonts/LICENSE-nerd-fonts.txt) |
 | Ghostty 及 Swift 包依赖 | [Package.resolved](Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) 记录来源和解析提交；许可证随各依赖源码维护 |
 | TSX 本地解析器 | 来源、固定修订和更新边界见 [development.md](docs/development.md#语法解析与-diff) |
+| Apple `swift-markdown` | [上游代码](https://github.com/swiftlang/swift-markdown)、[Apache-2.0 原文](Bailey/Resources/Licenses/LICENSE-swift-markdown.txt)；版本固定见 `Package.resolved` |
+| `swift-cmark`（cmark-gfm 解析器） | [上游代码](https://github.com/swiftlang/swift-cmark)、[BSD/MIT 等许可证原文](Bailey/Resources/Licenses/LICENSE-swift-cmark.txt)；版本固定见 `Package.resolved` |
+| Markdown HTML 解析 | [SwiftSoup 及本地补丁](Vendor/SwiftSoup/README.md)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftsoup.txt) |
+| YAML Front Matter | [Yams](https://github.com/jpsim/Yams)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-yams.txt) |
+| SVG 原生绘制 | [SwiftDraw](https://github.com/swhitty/SwiftDraw)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftdraw.txt) |
+| Mermaid 原生图表 | [MermaidKit](https://github.com/2389-research/MermaidKit)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-mermaidkit.txt) |
+| Markdown 原生数学排版 | [SwiftUIMath](https://github.com/gonzalezreal/swiftui-math)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftui-math.txt)；版本固定见 `Package.resolved` |
 
 升级依赖或重新生成资源时，保留原有许可证与版权文本；自有文档整理不翻译、覆盖或删减这些原文。
 补丁的行为与验证由 [development.md](docs/development.md#依赖与本地补丁) 维护。

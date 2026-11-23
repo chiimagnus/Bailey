@@ -115,6 +115,164 @@ private func waitForFileTabState(_ condition: () async -> Bool) async throws {
 final class FileTabPersistenceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testMarkdownPreviewPreservesBOMCRLFAndDefaultSourceMode() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-markdown-encoding-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        for (name, encoding) in [
+            ("UTF8-BOM", TextFileEncoding.utf8BOM),
+            ("UTF16LE-BOM", TextFileEncoding.utf16LEBOM)
+        ] {
+            let path = folder.appendingPathComponent("\(name).md")
+            let source = "# 标题 中文\r\n\r\nOriginal paragraph🙂.\r\n"
+            let originalBytes = try XCTUnwrap(encoding.encoded(source))
+            try originalBytes.write(to: path)
+
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            XCTAssertEqual(file.text, source)
+            XCTAssertEqual(file.fileEncoding, encoding)
+            XCTAssertFalse(file.showsMarkdownPreview)
+            file.setMarkdownPreview(true)
+            XCTAssertTrue(file.showsMarkdownPreview)
+            file.setMarkdownPreview(false)
+            file.setMarkdownPreview(true)
+            XCTAssertEqual(try Data(contentsOf: path), originalBytes,
+                           "Switching Markdown preview cannot re-encode the original file")
+            XCTAssertFalse(file.isDirty)
+
+            let edited = source + "\r\nNew unsaved paragraph.\r\n"
+            file.text = edited
+            XCTAssertTrue(file.isDirty)
+            XCTAssertEqual(try Data(contentsOf: path), originalBytes)
+            await file.save()
+            XCTAssertNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: path), try XCTUnwrap(encoding.encoded(edited)),
+                           "The existing save path must retain BOM, UTF encoding and CRLF")
+
+            let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                                   workspaceIdentity: nil)
+            try await reopened.waitForText()
+            XCTAssertFalse(reopened.showsMarkdownPreview,
+                           "Reopening a Markdown file defaults to source mode")
+            XCTAssertEqual(reopened.text, edited)
+            XCTAssertEqual(reopened.fileEncoding, encoding)
+        }
+    }
+
+    func testDistinctMarkdownTabsCannotShareAStalePreviewRequestIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-markdown-identities-\(UUID().uuidString)")
+        let a = root.appendingPathComponent("A/README.md")
+        let b = root.appendingPathComponent("B/README.md")
+        try FileManager.default.createDirectory(at: a.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("# First\n".utf8).write(to: a)
+        try Data("# Second\n".utf8).write(to: b)
+
+        let first = FileTab(path: a.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        let second = FileTab(path: b.path, backend: LocalWorkspaceBackend.shared,
+                             workspaceIdentity: nil)
+        try await first.waitForText()
+        try await second.waitForText()
+        XCTAssertNotEqual(first.markdownResourceID, second.markdownResourceID,
+                          "Two different files may have identical revisions but must not share a preview target")
+        XCTAssertNotEqual(first.markdownRequestID, second.markdownRequestID,
+                          "SwiftUI .task(id:) must reparse after a different FileTab becomes visible")
+        XCTAssertEqual(first.text, "# First\n")
+        XCTAssertEqual(second.text, "# Second\n")
+    }
+
+    func testMarkdownLiveEditsParseComplete500To20000LineDocumentsWithoutSaving() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-markdown-load-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        for count in [500, 5_000, 20_000] {
+            let url = folder.appendingPathComponent("Document-\(count).md")
+            let original = "# Before\n\n" + (0..<count).map { index in
+                "Paragraph \(index): 中文🙂 **strong** [link](guide.md)"
+            }.joined(separator: "\n\n")
+            try Data(original.utf8).write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                               workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            let oldRequest = file.markdownRequestID
+            file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
+                                                    with: "After")
+            XCTAssertNotEqual(file.markdownRequestID, oldRequest)
+            let document = try await MarkdownDocument.parse(file.text)
+            XCTAssertEqual(document.blocks.count, count + 1,
+                           "The newest source must retain every long-document block")
+            guard case let .heading(_, heading) = document.blocks.first?.content else {
+                return XCTFail("Edited document heading missing for \(count) lines")
+            }
+            XCTAssertTrue(heading.contains {
+                if case .text("After", _) = $0 { return true }
+                return false
+            })
+            guard case .paragraph = document.blocks.last?.content else {
+                return XCTFail("Final paragraph disappeared after live Markdown edit")
+            }
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
+            XCTAssertTrue(file.isDirty)
+        }
+    }
+
+    func testMarkdownLiveRevisionPreservesOneSourceAndReadingPosition() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-markdown-live-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("Live.md")
+        let original = Data("# Before\n\n中文🙂 and code.\n".utf8)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        XCTAssertTrue(file.canPreviewMarkdown)
+        let resource = file.markdownResourceID
+        let firstRequest = file.markdownRequestID
+        let bodyOffset = (file.text as NSString).range(of: "中文").location
+        file.markdownReadingOffset = bodyOffset
+        file.setMarkdownPreview(true)
+        XCTAssertTrue(file.showsMarkdownPreview)
+        XCTAssertEqual(file.markdownRequestID, firstRequest)
+
+        file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
+                                                with: "After")
+        let secondRequest = file.markdownRequestID
+        XCTAssertNotEqual(secondRequest, firstRequest)
+        XCTAssertEqual(file.markdownResourceID, resource,
+                       "Ordinary typing must not invalidate the file's resource identity")
+        XCTAssertEqual(file.text, "# After\n\n中文🙂 and code.\n")
+        XCTAssertEqual(file.markdownReadingOffset, bodyOffset - 1)
+        file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 5),
+                                                with: "Newest")
+        XCTAssertNotEqual(file.markdownRequestID, secondRequest,
+                          "A second edit must supersede a pending asynchronous preview parse")
+        XCTAssertEqual(file.text, "# Newest\n\n中文🙂 and code.\n")
+        file.setMarkdownPreview(false)
+        file.setMarkdownPreview(true)
+        XCTAssertEqual(file.markdownReadingOffset, bodyOffset,
+                       "Switching source/preview cannot reset the stored reading position")
+        XCTAssertEqual(file.markdownResourceID, resource)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), original,
+                       "Live preview and unsaved edits must not write the original file")
+    }
+
     func testSaveRefusesExternalSameSizeSameMtimeRewriteAndKeepsDraft() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

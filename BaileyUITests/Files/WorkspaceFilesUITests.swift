@@ -37,7 +37,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(header.waitForExistence(timeout: 8))
         header.click()
         XCTAssertTrue(app.menuItems["Hide Excluded Files"].waitForExistence(timeout: 8))
-        app.menuItems["Hide Excluded Files"].click()
+        // The header popup and File main menu share a title; activate the header menu itself.
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         let hidden = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: excluded
         )
@@ -987,8 +989,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         tab.rightClick()
         XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
         XCTAssertFalse(app.menuItems["Copy Absolute Path"].exists)
-        app.menuItems["Copy Path"].click()
-        WorkspaceUITestSupport.assertClipboard(first.path)
+        app.typeKey("c", modifierFlags: [.command, .option])
+        WorkspaceUITestSupport.assertClipboard(first.path,
+            "The tab context key equivalent must copy the right-clicked file")
     }
 
     func testTerminalFocusedRightClickPreservesFilesSelectionAndInput() throws {
@@ -1310,6 +1313,118 @@ final class WorkspaceFilesUITests: XCTestCase {
                        Data("b original\n".utf8))
     }
 
+    func testAuthorizedSSHMarkdownPreviewOpensOnlyScopedNativeAssets() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace }) else {
+            throw XCTSkip("Markdown GUI requires an explicitly authorized SSH test host")
+        }
+        let root = "/tmp/bailey-md-ui-" + UUID().uuidString.lowercased()
+        let project = root + "/Project"
+        let markdown = project + "/Readme.md"
+        let asset = project + "/badge.svg"
+        _ = try runSSH(host: host, command: "mkdir -- '\(root)'")
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host, command:
+                "rm -r -- '\(root)' && test ! -e '\(root)' && printf cleaned"), "cleaned")
+        }
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"35\"><rect width=\"80\" height=\"35\" fill=\"#0969da\"/></svg>"
+        let sections = (0..<40).map { index in
+            "printf '%s\\r\\n' '## Section \(index)' '' 'Paragraph with Unicode 中文 🛰️.' ''"
+        }.joined(separator: "\n")
+        _ = try runSSH(host: host, command: """
+            set -e
+            mkdir -- '\(project)'
+            {
+                printf '%s\\r\\n' '# Remote Markdown' '' '![Scoped badge](badge.svg)' '' '![Outside badge](../outside.svg)' ''
+                \(sections)
+                printf '%s\\r\\n' '## Destination'
+            } > '\(markdown)'
+            printf '%s' '\(svg)' > '\(asset)'
+            cp -- '\(asset)' '\(root)/outside.svg'
+            """)
+        let original = try runSSH(host: host, command: "sha256sum -- '\(markdown)'")
+        let fixture = try WorkspaceUITestFixture(in: self)
+        try fixture.includeAuthorizedSSHHost(host)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        addSSHFolder(project, host: host, in: app)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        let entry = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: markdown), in: window)
+        XCTAssertTrue(entry.waitForExistence(timeout: 40))
+        entry.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 25))
+        let source = try XCTUnwrap(editor.value as? String)
+        XCTAssertTrue(source.contains("Paragraph with Unicode 中文 🛰️."))
+        let tab = WorkspaceUITestSupport.fileTab(URL(fileURLWithPath: markdown), in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        tab.rightClick()
+        let sideBySide = app.menuItems["Show Side by Side"]
+        XCTAssertTrue(sideBySide.waitForExistence(timeout: 10))
+        sideBySide.click()
+        let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
+        let badge = preview.buttons["Scoped badge"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 25), "The real SSH image must decode")
+        XCTAssertFalse(preview.buttons["Outside badge"].exists)
+
+        let first = preview.staticTexts["Remote Markdown"]
+        XCTAssertGreaterThan(first.frame.intersection(preview.frame).height, 1)
+        let sourceScroll = window.scrollViews.containing(.textView, identifier: nil).firstMatch
+        let bar = try XCTUnwrap(sourceScroll.scrollBars.allElementsBoundByIndex.first {
+            $0.frame.height > $0.frame.width
+        })
+        func fraction() -> Double { Double(String(describing: bar.value ?? "")) ?? -1 }
+        func visibleHeading() -> XCUIElement? {
+            let viewport = preview.frame
+            return preview.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+                                                               "bailey.markdown.heading.section-"))
+                .allElementsBoundByIndex.first { text in
+                    let frame = text.frame
+                    return frame.width > 0 && frame.height > 0 && viewport.contains(frame)
+                }
+        }
+        for _ in 0..<5 { editor.swipeUp() }
+        let atSection = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fraction() > 0.04 && (!first.exists || first.frame.intersection(preview.frame).height < 1)
+                && visibleHeading() != nil
+        }, object: nil)
+        guard XCTWaiter.wait(for: [atSection], timeout: 10) == .completed else {
+            return XCTFail("Scrolling the remote TextKit buffer did not expose the corresponding preview heading")
+        }
+        let destination = try XCTUnwrap(visibleHeading())
+        let title = destination.label
+        XCTAssertTrue(source.contains("## " + title))
+        destination.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).doubleClick()
+        app.typeKey("x", modifierFlags: [])
+        let range = try XCTUnwrap(source.range(of: "## " + title + "\r\n"))
+        let expected = source.replacingCharacters(in: range, with: "## x" + title + "\r\n")
+        let edited = try XCTUnwrap(editor.value as? String)
+        let editOffset = zip(source.utf16, edited.utf16).prefix(while: ==).count
+        XCTAssertTrue(edited == expected,
+                      "Double-click must locate \(title): edited UTF-16 offset \(editOffset), expected \((expected as NSString).range(of: "x" + title).location)")
+        XCTAssertTrue(preview.exists)
+        editor.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, source)
+        for _ in 0..<10 { preview.swipeDown() }
+        let atStart = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fraction() >= 0 && fraction() < 0.04
+                && badge.exists && badge.frame.intersection(preview.frame).height > 1
+        }, object: nil)
+        guard XCTWaiter.wait(for: [atStart], timeout: 10) == .completed else {
+            return XCTFail("Scrolling the real remote preview back to the start did not move TextKit")
+        }
+        badge.click()
+        let imageTab = WorkspaceUITestSupport.fileTab(URL(fileURLWithPath: asset), in: window)
+        XCTAssertTrue(imageTab.waitForExistence(timeout: 25),
+                      "Click opens the authorized SVG in a remote file tab")
+        XCTAssertEqual(try runSSH(host: host, command: "sha256sum -- '\(markdown)'"), original)
+    }
+
     func testAuthorizedSSHRemoteBulkDeleteRequiresNativeConfirmation() throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
               !host.isEmpty, !host.hasPrefix("-"),
@@ -1604,6 +1719,15 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         folder.click()
         app.typeKey("c", modifierFlags: .command)
+        let copiedFolder = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (NSPasteboard.general.readObjects(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+            ) as? [URL])?.contains(where: {
+                $0.standardizedFileURL.path == nested.deletingLastPathComponent().standardizedFileURL.path
+            }) == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copiedFolder], timeout: 5), .completed,
+                       "Copy must publish the real selected folder URL before Paste")
         app.typeKey("v", modifierFlags: .command)
         let folderCopy = fixture.root.appendingPathComponent("folder copy/leaf.txt")
         let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

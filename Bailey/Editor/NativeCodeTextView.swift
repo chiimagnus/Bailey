@@ -76,6 +76,30 @@ class NativeCodeTextView: NSTextView {
         super.setAccessibilitySelectedText(accessibilitySelectedText)
     }
 
+    override func accessibilityLine(for index: Int) -> Int {
+        guard let lines = unwrappedAccessibilityLines, (0...lines.length).contains(index) else {
+            return super.accessibilityLine(for: index)
+        }
+        return lines.row(at: index)
+    }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        guard let lines = unwrappedAccessibilityLines, (0..<lines.lineCount).contains(line) else {
+            return super.accessibilityRange(forLine: line)
+        }
+        let start = lines.offset(atLine: line)
+        return NSRange(location: start, length: lines.offset(atLine: line + 1) - start)
+    }
+
+    private var unwrappedAccessibilityLines: NativeTextLineIndex? {
+        guard !isWrappingLines, isTruncatingLongLines != nil, !hasFormFeed,
+              type(of: nativeContentManager) == NSTextContentStorage.self,
+              let lineIndex, lineIndex.length == textStorage?.length else {
+            return nil
+        }
+        return lineIndex
+    }
+
     /// Offscreen file operations cannot rely on the NSTextView responder
     /// chain to record undo. Treat direct NSTextStorage edits as the same
     /// document transaction as interactive typing.
@@ -172,6 +196,7 @@ class NativeCodeTextView: NSTextView {
     var highlightSelectedLine = false
     private(set) var gutterView: NativeLineNumberGutter?
     private var lineIndex: NativeTextLineIndex?
+    private var hasFormFeed = false
     private var measuredLineWidths: NativeMeasuredLineWidths?
 
     func installPreparedLineWidths(_ prepared: NativeMeasuredLineWidths.Prepared,
@@ -410,6 +435,11 @@ class NativeCodeTextView: NSTextView {
         layout.textContainer = container
         super.init(frame: CGRect(x: 0, y: 0, width: 1000, height: 0), textContainer: container)
         isRichText = false
+        // Code must retain the exact characters typed, including HTML attributes.
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+        isAutomaticTextReplacementEnabled = false
+        isAutomaticSpellingCorrectionEnabled = false
         allowsUndo = true
         isVerticallyResizable = true
         isHorizontallyResizable = false
@@ -638,6 +668,7 @@ class NativeCodeTextView: NSTextView {
 
     private func resetDocumentIndex(_ document: String) {
         lineIndex = NativeTextLineIndex(document as NSString)
+        hasFormFeed = document.utf8.contains(0x0C)
         measuredLineWidths = nil
     }
 
@@ -793,6 +824,11 @@ class NativeCodeTextView: NSTextView {
             }
         }
         let currentText = storage.string as NSString
+        if hasFormFeed {
+            hasFormFeed = currentText.range(of: "\u{000C}", options: .literal).location != NSNotFound
+        } else {
+            hasFormFeed = replacement.utf8.contains(0x0C)
+        }
         let previousParagraphCount = lineIndex?.lineCount
         let previousNativeOnlySeparators = lineIndex?.hasNativeOnlySeparators
         syntaxCoordinator?.willChangeContent(in: previousRange)

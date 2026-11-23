@@ -1,73 +1,59 @@
-# P1｜安全 Markdown 预览、Front Matter 与 File 菜单
+# P1｜用 swift-markdown 建立原生预览
 
-交付在同一文件标签安全排版 Markdown／GFM（`.md`／`.markdown`／`.mdx`），正确识别 `SKILL.md` 元数据，并由系统 File 菜单双向切换。
+交付一条可在 Bailey 真正打开的 Markdown 阅读路径：同一 `FileTab` 的源码／预览切换，原生 CommonMark/GFM、YAML 元数据和受控图片。
+**解析使用 [swift-markdown 0.9.0](https://github.com/swiftlang/swift-markdown/tree/0.9.0)，渲染由 Bailey 的 SwiftUI 组件实现；不使用 Textual、MarkdownView 或 WebKit。**
 
-## 技术决定
+## 方案
 
-- **扩展名选择：**`.mdx` 与 `.md` 同一源码／预览路径；Swift Foundation `AttributedString(markdown:)` 已在隔离运行中保留 `import`、`<Chart series={values} />`、`{score + 1}` 和组件标签的可读文字，无 JS 运行时。但这是普通 Markdown 解析而非 MDX 兼容承诺；后续必须检查 preview 实际不丢内容、内容不执行、关闭保存无损。
-- **SPM：**[Textual 0.5.0](https://github.com/gonzalezreal/textual) 作为 SwiftUI 原生 Markdown 排版，使用其 Foundation `AttributedString` 解析能力；不同时引入 `swift-markdown` 充当第二个普通 Markdown 解析器。
-  Textual 自带代码高亮、表格和通过 `SwiftUIMath` 支持的数学排版；它的 `CodeBlockStyle` 提供语言标记，但没有公开源代码字符串，**不能据此认定 Mermaid 和复杂内联 HTML 已能直接嵌入**。
-- **SPM：**[Yams 6.2.2](https://github.com/jpsim/Yams) 解析 YAML Front Matter；[SwiftSoup 2.14.4](https://github.com/scinfu/SwiftSoup) 解析、净化**受支持的静态 HTML 片段**，不用 WebKit 渲染 Markdown。
-  SwiftSoup 的默认 allowlist 可能允许远程 URL；必须自建仅准许受控相对资源的列表，且真实读取仍通过后端权限验证。
-  **Textual 的默认 `imageAttachmentLoader` 会使用 URLSession 下载图片**，不可照搬；必须通过 `.textual.imageAttachmentLoader(customLoader)` 注入自定义 `AttachmentLoader`，只准经 `WorkspaceBackend` 授权的当前项目内静态资源，禁用外网与不受控 `file:`，并用 `.environment(\.openURL, OpenURLAction { … })` 拦截链接点击。
-- **需要验证的边界：**先用真实 `SKILL.md`、GFM、嵌套 HTML、代码围栏测试 Textual 的结构信息与自定义附件。
-  若无法保留 Mermaid／原始 HTML／脚注所需节点和源码区间，再评估仅为 AST 增加 [swift-markdown](https://github.com/swiftlang/swift-markdown)，而非先上两套解析器或写正则拼装完整 Markdown。
-  **判定方式：**从真实 `SKILL.md` 获取 Front Matter、`mermaid` 完整围栏、HTML/音视频节点和原文位置，证明能渲染为原生 View；缺任一关键结构即切换到 AST 方案，不把其丢失伪装成普通文本。
-- **离屏解析已验证：**Textual 的默认 `StructuredText(markdown:)` 在主 actor 解析；隔离基准中 500／5,000／20,000 行约需 11／119／502 ms，不能每次击键都同步解析。
-  已验证 `Task.detached` 后台执行 `AttributedString(markdown:, including: \.textual)`，把不可变结果交给轻量自定义 `@MainActor MarkupParser`，再由 `StructuredText(versionKey, parser: preparedParser)` 渲染。生产版须按文件身份／代次取消过期解析；这里仅实测解析，不冒充 SwiftUI 完整布局性能。
-- **已经验证：**上述三个 SPM 在 Swift 6.4.2、Xcode 27.2 下联合解析/编译通过；未接入 Bailey，也未通过真实 GUI 与负载验收。最低 macOS 15.6 不提高。
-  真正引入 Bailey Xcode 工程时按 [开发依赖规范](../../../docs/development.md#依赖与本地补丁) 更新 Package.resolved 和第三方许可／NOTICE，不能将此隔离探针误认为已正式安装。
+`Project.openFile` → `FileTab.nativeTextStorage` → `FileViewerView` 是唯一文件与编辑链路。
+阅读器只消费源文档快照，不拥有第二份可编辑文本、Undo 或保存状态。
+`swift-markdown` 用 cmark-gfm 生成 AST，必须直接读取节点类型与子节点；绝不把 Markdown 转成 HTML 再渲染，也不使用 Foundation `AttributedString(markdown:)` 作为第二套普通 Markdown 解析器。
 
-## 方案与真实入口
+Markdown AST 的 `Document` 未公开声明 `Sendable`；跨 actor 时在解析任务中投影成最少必要的不可变、`Sendable` 显示节点（保留行号、标题、代码围栏语言、表格单元和链接目标），不要把不安全的 AST 引用放入 UI 状态。
+普通内联内容用 SwiftUI `Text` 组合相邻片段；块级使用 SwiftUI 原生布局。长文档先异步解析、按块懒加载；实际跨块选区效果必须在 GUI 中证明，不能把 `.textSelection(.enabled)` 当作证明。
+不再复制 Textual 的富文本、附件、布局引擎。
 
-现有 `Project.openFile` → `FileTab`（`Bailey/Editor/FileViewerView.swift`）→ `FileViewerView` 管理文件读取、唯一原生 `NSTextStorage`、保存及重载。
-解析 HTML 不得引入第二份可写源文件；Markdown 生成的是只读显示快照。
-Textual 排版只读显示结果；Front Matter 必须先在文首提取，不交给正文渲染器。
-结构缺失时执行上述有界 AST 兼容性实验，**禁止**通过简单正则模拟完整 CommonMark、HTML 或 JSX。
-Front Matter 用无执行能力的 YAML 数据解析器，作为文档头部元数据，而不是普通段落或可执行配置。
-权限检查必须延伸到图片和媒体资源的实际解码请求，不能只验证文本 URL。
+Front Matter 仅限文件开头（可带 BOM）由 Yams 解析；元数据和正文分离，源码字节不变。
+相对资源只允许由现有 `MarkdownResource` 经 `WorkspaceBackend` 与 `LocalPathScope` 访问当前项目／机器；
+原生 SVG、图片和 HTML 沿当前 `swift-markdown` 分支的实现演进，不恢复旧 Textual 渲染路径。
 
-全局 `⌘⇧V` 只由 `Bailey/App/BaileyApp.swift` 的 `CommandMenu("File")` 注册；
-右键菜单如需同一组合键，使用原生局部绑定，不在 View／Editor 另建全局监听。
-沿用现有 Save 的 `WorkspaceWindowModel.selectedProject?.focusedContent` 和前台主窗口校验；
-`WorkspaceDockView.projectTabMenu` 的显式右键视图选择只作用被右键的文件标签，不推断它是当前输入焦点。
-主菜单动作的可用性、标题和目标由当前有效文件显示模式决定；
-右键菜单只操作本次命中的文件标签，不改变主菜单命令目标。
+真实位置：`Bailey/Editor/FileViewerView.swift`、`Bailey/Workspace/Project.swift`、
+`Bailey/Editor/SourceTextEditor.swift`、`Bailey/App/BaileyApp.swift`、
+`Bailey/UI/WorkspaceDockView.swift`、`Bailey/Workspace/WorkspaceWindowModel.swift`、
+`Bailey/Workspace/LocalWorkspaceBackend.swift`；这些入口的职责以当前源码为准。
 
 ## 任务
 
 <a id="p1-t1"></a>
-### P1-T1 Markdown／GFM、Front Matter 与安全静态资源
+### P1-T1 原生 CommonMark/GFM、元数据与安全图片
 
-- **位置**：`FileTab` 原生正文读取、`FileViewerView` 新增只读渲染、既有 `WorkspaceBackend` 资源读取和 `BaileyTests/Files`。
-- **实施**：`.md`／`.markdown`／`.mdx` 一律路由到本 Markdown 阅读器；CommonMark/GFM、标题锚点、表格、任务清单、围栏代码和安全内联 HTML；
-  仅在 BOM 后文首检测配对 `---` 的 YAML Front Matter，保留全部原文字节，允许文件标签右键查看解析出的元数据。
-  相对 PNG／SVG 等通过 Textual **自定义 `AttachmentLoader`** 按当前文件实际项目、机器和获准目录定位；绝不使用它的默认网络图片 loader；外部链接由原生 `OpenURLAction` 拦截并显式交给 Browser，不直接系统打开，失败以局部替代文本展示。
-- **验证**：后台解析与主 actor 应用结果分离；测量 2,000～20,000 行及现有 32 MiB 文本边界的解析、布局和主线程卡顿（上述 502 ms 是纯解析基准，非 GUI 指标）；
-  `.mdx` 混排 GFM、Front Matter、`import`／`export`、JSX 组件及花括号表达式在预览中仍可读但不执行；以真实渲染和解析器输出交叉核验，而非“能编译”；`SKILL.md` 多行 YAML 值、注释、空值、自定义 YAML 标签、未闭合／非头部横线；
-  GFM 的表格、任务清单、删除线、自动链接、代码围栏的完整源片段/语言信息、Unicode、HTML 节点是否可映射原生 View；
-  SVG/PNG 丢失、转义路径、权限、文件更名、SSH 与同名本地文件；恶意标签及完全离线验证。
-  用 URLSession 拦截／无网络环境确认 Markdown 资源、emoji attachment 与普通链接**都不会借 Textual 默认 loader 向外发请求**。
-  若 Textual 不支持必要结构，记录失败输入及追加 AST 库的直接理由，再开展实现；不能把富媒体需求降级为普通代码块而宣称完成。
+- 新增 `Bailey/Editor/MarkdownDocument.swift` 作为 swift-markdown AST → 展示快照的唯一转换入口；建立 `MarkdownPreview.swift` 的 SwiftUI 标题、锚点、段落、强调、链接、列表、任务项、引用、表格、代码围栏与分割线。
+- 接入 `swift-markdown` 和必要的 Yams，静态图片通过 ImageIO／CoreGraphics 解码；相对文件以及 SVG 的受控加载复用旧分支有证据的 `MarkdownResource`／`MarkdownSVG`，删去 Textual AttachmentLoader 路径。
+- `SKILL.md` 文首 YAML、BOM、空值、未闭合、非文首横线能正确区分；`.mdx` 中 import/JSX/表达式只显示文字，不执行也不丢失。
+- 在 `BaileyTests/Files` 添加基于真实文件和 AST 的行为测试；覆盖 GFM 原始语义、围栏原文及语言、内联／块 HTML 的不执行语义、Unicode、表格边界与解析失败无损回退。
+- 完成判据：可显示真实文档、没有 WKWebView、文件不存在／越界／外链／SSH 同名本地路径都不能绕过 backend，未保存源码及字节保持不变。
 
 <a id="p1-t2"></a>
-### P1-T2 统一 File 菜单快捷键和动态置灰
+### P1-T2 同一标签切换源码／预览与 File 菜单
 
-- **位置**：`BaileyApp.swift` 的 File `CommandMenu`、`WorkspaceWindowModel` 当前活动文件路由、`WorkspaceDockView.projectTabMenu`、`FileTab` 的单份显示状态和 `docs/features/editor.md`。
-- **实施**：在 Open File 与 Save 间常驻一个命令：
-  `Button(当前是源码 ? "显示预览" : "显示源码")`、
-  `.keyboardShortcut("v", modifiers: [.command, .shift])`、
-  `.disabled(!canToggleSourcePreview)`。
-  源码→预览；预览→源码；并排→源码；CSV 则对应表格／源码。
-  文件标签右键「源码／预览／并排」按需使用原生局部 `.keyboardShortcut`，不重复注册全局按键。
-  格式支持、内容可用性及是否为当前真实活动 Dock 文件共同决定启用状态；
-  工具栏／终端／Browser／普通代码及失去窗口焦点时系统菜单项置灰。
-  只读允许切换；预览出错仍允许返回源码。
-- **验证**：实际 File 菜单在支持／不支持格式、两窗、多个 Dock、后台右键标签、查找／设置焦点、关闭／重载及错误渲染时动态正确；
-  单次按键只执行一次、无响铃、菜单项不消失、不触发别的窗口；屏幕阅读器可识别禁用状态。
+- `FileTab` 只增加独立于源码缓冲的阅读显示状态；`FileViewerView` 挂载只读预览，保留现有 TextKit 源码编辑器和编辑状态。
+- `BaileyApp.swift` File 菜单统一注册 `⌘⇧V`；`WorkspaceWindowModel` 按前台有效 Dock 焦点路由，`WorkspaceDockView.projectTabMenu` 的右键目标独立。
+- 正确处理 `.md/.markdown/.mdx`、只读、后台标签、多窗口、无效预览及其他非预览类型；菜单动态置灰，不注册第二套按键监听。旧的 Dock、保存／Undo 和编辑器路径不替换。
+- 完成判据：实际隔离 Bailey Dev 中往返切换无新标签、无自动保存，原生编辑器恢复原始选区与焦点；现有相关宿主及 UI 测试通过。
 
-## 阶段验收
+<a id="p1-t3"></a>
+### P1-T3 GitHub Markdown 视觉与指针交互
 
-首轮实施前先完成 Textual 的真实 `SKILL.md`／`.mdx` 普通 Markdown 语义／代码围栏／HTML 节点边界测试，确认所需 AST 数据可用；
-再运行 `make build:ui`、宿主格式识别／权限／菜单路由测试和隔离 Bailey Dev 完整菜单／编辑 GUI 测试。
-编辑和打开预览前后，文件原始字节与所有 TextKit Undo 仍一致。
+- 对照 [Primer Markdown 样式](https://github.com/primer/css/tree/main/src/markdown) 调整 `MarkdownPreview`／`MarkdownHTMLContent` 的字号、行高、标题／引用、列表、表格、代码片段及响应式内边距；复用当前 `MarkdownGitHubColors`，不复制 CSS 引擎。此任务只负责基础视觉，复杂嵌套与 GFM Alerts 见 P2-T8。
+- 链接保留 AST 嵌套强调语义；原生系统链接处理真正的文字范围，图片、HTML 交互和标题锚点仅在可点击区域使用 `.pointerStyle(.link)`。正文不要整段显示手形指针。
+- 代码围栏使用 GitHub 风格悬停复制控件；键盘和 VoiceOver 仍可发现操作。错误资源、超长代码、内联图片混排和深浅主题真实复验。
+- 宿主核验嵌套链接与完整源码；隔离 Bailey Dev 以真实 README／`SKILL.md` 和复杂混排文档验证点击跳转、指针形状、Hover／焦点、截图、窄 Dock、选择复制及样式回归。
+  简短专项用例只定位缺陷；跨结构连续选择归 P2-T6，跨环境极端覆盖按 P2 共同验收执行。
+
+## P1 验收
+
+- **语义**：CommonMark／GFM 规范样例、Front Matter／MDX、嵌套引用／列表／表格、代码围栏、链接、题注与超长行；未支持语义不得无声丢失。
+- **安全**：真实受控项目目录、符号链接逃逸、`../`、百分号编码、`file:`／`http:`／`https:`、SSH 断线和同路径不同机器；观测实际资源读取与网络请求。
+- **体验**：双窗口、多 Dock、窄布局、原生键盘、深浅主题、VoiceOver、跨段落拖选/复制与标题跳转。选区跨块是否成立需真实 GUI 记录，不以组件构造代替。
+- **性能**：500／5,000／20,000 行和已有 32 MiB 文件边界，分别量化解析、首屏、滚动、内存、输入时主 actor 停顿；不把纯 AST 基准冒充渲染性能。
+- **命令**：按 `AGENTS.md` 由根 `Makefile` 执行隔离 `build:dev`、所需 `BaileyTests`、`build:ui` 和必要的 `BaileyUITests`。真实 GUI 验收使用独立 Bailey Dev，绝不替换正式 App。

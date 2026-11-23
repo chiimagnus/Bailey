@@ -1059,11 +1059,17 @@ final class WorkspaceDockUITests: XCTestCase {
                           "The inactive tab must visibly become the native context target")
         XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "left.txt",
+        let copiedContextPath = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            NSPasteboard.general.string(forType: .string) == "left.txt"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copiedContextPath], timeout: 5), .completed,
                        "The File menu must use the right-clicked inactive tab, not the active one")
         XCTAssertTrue(a.exists && b.isSelected)
         app.typeKey("c", modifierFlags: [.command, .option, .shift])
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "right.txt",
+        let copiedActivePath = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            NSPasteboard.general.string(forType: .string) == "right.txt"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copiedActivePath], timeout: 5), .completed,
                        "After context copy, the File menu must return to the active tab")
         a.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
         app.typeKey("w", modifierFlags: .command)

@@ -58,6 +58,48 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
                        "Completed cut must preserve plain-text paths but remove stale transfer metadata")
     }
 
+    func testPastingCopiedFolderOntoItselfDuplicatesBesideSource() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = folder.appendingPathComponent("leaf.txt")
+        let other = root.appendingPathComponent("other.txt")
+        let bytes = Data("directory contents 中文\n".utf8)
+        try bytes.write(to: original)
+        try Data("other contents\n".utf8).write(to: other)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+
+        manager.performFileTreeCommand(.copy([folder.path], cut: false),
+                                       in: project, target: target, pasteboard: pasteboard)
+        XCTAssertEqual(FileTreeClipboard.localURLs(from: pasteboard).map(\.path), [folder.path])
+        manager.performFileTreeCommand(.paste(into: folder.path),
+                                       in: project, target: target, pasteboard: pasteboard)
+        let sibling = root.appendingPathComponent("folder copy/leaf.txt")
+        try await wait { FileManager.default.fileExists(atPath: sibling.path) }
+        XCTAssertEqual(try Data(contentsOf: sibling), bytes)
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: folder.appendingPathComponent("folder copy").path
+        ), "Copying a folder onto itself must not recursively place it inside itself")
+
+        manager.performFileTreeCommand(.copy([other.path], cut: false),
+                                       in: project, target: target, pasteboard: pasteboard)
+        manager.performFileTreeCommand(.paste(into: folder.path),
+                                       in: project, target: target, pasteboard: pasteboard)
+        let inside = folder.appendingPathComponent("other.txt")
+        try await wait { FileManager.default.fileExists(atPath: inside.path) }
+        XCTAssertEqual(try Data(contentsOf: inside), Data("other contents\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: other), Data("other contents\n".utf8))
+    }
+
     func testLocalClipboardCopiesAndMovesAcrossProjectsAndWindows() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let firstRoot = base.appendingPathComponent("Project A")

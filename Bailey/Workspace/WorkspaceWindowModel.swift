@@ -462,7 +462,7 @@ final class WorkspaceWindowModel {
             file = active
             returningToFiles = nil
         } else if project.dock.activeGroup?.selected == .files,
-                  case .tab(let id)? = previous,
+                  let id = previous?.contentTabID,
                   case .file(let active)? = project.tabs.first(where: { $0.id == id })?.content {
             file = active
             returningToFiles = id
@@ -663,6 +663,7 @@ final class WorkspaceWindowModel {
     /// pane rather than the first responder, so ⌘F and ⌘G keep working while
     /// the find bar's own field holds keyboard focus.
     func performFindAction(_ action: FindAction) {
+        guard canFind else { return }
         switch selectedProject?.focusedContent {
         case .session(let session): session.find.perform(action)
         case .file(let file): file.performFindAction(action)
@@ -674,14 +675,15 @@ final class WorkspaceWindowModel {
     /// Find uses the active pane's existing native text or terminal surface.
     var canFind: Bool {
         switch selectedProject?.focusedContent {
-        case .session, .file, .diff: return true
+        case .session, .diff: return true
+        case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsMarkdownPreview
         case .browser, .none: return false
         }
     }
 
     var canReplace: Bool {
         switch selectedProject?.focusedContent {
-        case .file: return true
+        case .file: return canFind
         case .diff(let diff): return diff.isEditing && diff.isEditableNow
         case .session, .browser, .none: return false
         }
@@ -826,6 +828,24 @@ final class WorkspaceWindowModel {
     }
 
     var canSaveSelectedFile: Bool { selectedProject?.focusedContent?.isDirty == true }
+
+    private var activeMarkdownTab: PaneTab? {
+        guard !isClosed, !isCommandPaletteVisible, !isSSHFolderPickerVisible,
+              attachedWindow?.isKeyWindow == true, attachedWindow?.attachedSheet == nil,
+              let tab = selectedProject?.focusedTab, case .file(let file) = tab.content,
+              file.canPreviewMarkdown else { return nil }
+        return tab
+    }
+
+    var markdownMenuMode: MarkdownViewMode? {
+        guard let project = selectedProject, let tab = activeMarkdownTab else { return nil }
+        return project.markdownMode(for: tab) == .source ? .preview : .source
+    }
+
+    func toggleMarkdownPreview() {
+        guard let project = selectedProject, let tab = activeMarkdownTab, let markdownMenuMode else { return }
+        project.setMarkdownMode(markdownMenuMode, for: tab)
+    }
 
     /// Saves the focused pane if it holds a file or an editable diff.
     func saveSelectedFile() {
@@ -1106,6 +1126,12 @@ final class WorkspaceWindowModel {
         let trustedCut = record?.cut == true && record?.paths == paths
             && record.map { application.trustedFileClipboard($0, pasteboard: pasteboard) } == true
         let moving = explicitMove || trustedCut
+        let requestedDirectory = URL(fileURLWithPath: directory, isDirectory: true)
+            .standardizedFileURL.path
+        // Pasting a copied folder onto itself duplicates it beside the source;
+        // other destinations retain the explicitly selected folder.
+        let destination = !moving && paths.contains(requestedDirectory)
+            ? (requestedDirectory as NSString).deletingLastPathComponent : directory
         let clipboardVersion = pasteboard.changeCount
         var sourceIdentities: [String: LocalFileIdentity] = [:]
         if moving {
@@ -1123,7 +1149,7 @@ final class WorkspaceWindowModel {
                     return nil
                 }
                 let result = await project.fileTree.importFromFinder(
-                    urls, into: directory, move: moving,
+                    urls, into: destination, move: moving,
                     expectedIdentities: moving ? expectedIdentities : nil,
                     isCurrentTarget: {
                         self.selectedProjectID == project.id && project.matchesPanelTarget(target)

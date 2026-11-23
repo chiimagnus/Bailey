@@ -4,47 +4,95 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "渲染 CommonMark／GFM 与相对图片"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "9d8fa6f9"
+note = "swift-markdown AST/GFM/YAML/相对资源及原生图片；Host 39/39，布局500/5000/20000通过"
 
 [[tasks]]
 id = "P1-T2"
 title = "单标签预览、源码切换"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "9d8fa6f9"
+note = "同一 FileTab、File 菜单快捷键与 Dock companion，GUI 18用例覆盖（1外部Tinycast弹窗中断）"
 
 [[tasks]]
 id = "P2-T1"
 title = "合并实时渲染与位置保持"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "fc2e6191"
+note = "原生 TextKit 唯一源，解析任务按 FileTab UUID+重载+编辑代次区分，取消旧结果；make build:dev、Host 122/122、编辑器/窗口 Host 78/78、Markdown GUI 25/25 及 500/5000/20000 段落专项通过。真实中文 IME 与授权 SSH GUI 交 P2 最终跨环境验收。"
 
 [[tasks]]
 id = "P2-T2"
 title = "保存／恢复及原生行为验收"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "dfd7720b"
+note = "正式 build 与签名通过；Markdown GUI 28/28，相关 Host 通过；全量 Host 一次 runner 提前退出（NativeDiff 性能项），单项重跑通过；真机 VoiceOver/授权 SSH GUI 纳入最终跨环境验收。"
 
 [[tasks]]
 id = "P2-T3"
 title = "静态图片 SVG HTML 和音视频嵌入"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = ""
+commit = "67d65462"
+note = "正式 build 与 codesign 通过；Markdown Host 43/43、完整 GUI 31/31；SVG 渐变过滤和 Retina 点宽度、GIF 动画/预算、PNG JPEG HEIC WebP、音视频 seek/暂停/释放已真实验收。授权 SSH GUI 和 VoiceOver 留 P2-T9 跨环境。"
 
 [[tasks]]
 id = "P2-T4"
 title = "Mermaid 数学公式与脚注安全排版"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
+commit = "58e941d1"
+note = "基础公式与 Mermaid 已随 9ddc6f33 接入，本提交完成边界修复；build:dev 成功，Host 58/58、公式 GUI 4/4，Mermaid 四类型可实际渲染，非法回调被拒绝。实机 VoiceOver 声音与复杂富媒体压力留 P2-T9。"
+
+[[tasks]]
+id = "P1-T3"
+title = "复刻 GitHub Markdown 排版与链接交互"
+status = "completed"
+plan = "plan-p1.md#p1-t3"
+commit = "9ddc6f33"
+note = "GitHub Primer typography+colors, tracked native link cursor, heading anchor, code copy, 340pt tables; Host 54/54, Markdown GUI 23/23, math GUI isolated 2/2; combined math run had clipboard/window isolation failures"
+
+[[tasks]]
+id = "P2-T5"
+title = "精确源码映射与双向滚动定位"
+status = "completed"
+plan = "plan-p2.md#p2-t5"
+commit = "396fb5b7"
+note = "块 HTML 实体和重复文字精确回源、同段公式/图片与 Unicode/CRLF 测试；收口修复滚动后的视口坐标。Windows Tailscale 实机并排滚动、精确撤销与原字节校验和通过。"
+
+[[tasks]]
+id = "P2-T6"
+title = "跨结构连续选区与语义复制"
+status = "completed"
+plan = "plan-p2.md#p2-t6"
+commit = "b9eac1a7"
+note = "语义复制覆盖 12/13 段落、表格代码、HTML、折叠、Unicode，真实 GUI 的主题切换、选区像素和剪贴板成立；非零滚动拖选及 Shift 扩选精确。实际 VoiceOver 读出正文与任务状态，Canvas 不重复出现在 AX；折叠/展开可激活。"
+
+[[tasks]]
+id = "P2-T7"
+title = "标题大纲折叠与富内容阅读操作"
+status = "completed"
+plan = "plan-p2.md#p2-t7"
+commit = "9011638b"
+note = "大纲层级/重名标题、章节折叠及编辑 Undo 原文区间跟随、可见选区复制、脚注全局区域与往返、图片/内嵌SVG/Mermaid缩放；最新正式 build+签名、关联 Host 147/147、真实 GUI 12/12 通过；完整 Host 1231项0失败/21项隔离磁盘和SSH环境跳过。授权SSH实机、VoiceOver与性能压力组合纳入P2-T9验收。"
+
+[[tasks]]
+id = "P2-T8"
+title = "GitHub 复杂排版与 Alerts"
+status = "completed"
+plan = "plan-p2.md#p2-t8"
+commit = "52aba325"
+note = "Primer 五类提示、深浅色和 340/960pt 表格像素；主题即时重绘；引用任务由失败复现到修复，真实 GUI 换行、嵌套及只读任务通过；实际 VoiceOver 读出任务状态，表头在原生 AX 公开。"
+
+[[tasks]]
+id = "P2-T9"
+title = "长文档性能和无障碍质量验收"
+status = "completed"
+plan = "plan-p2.md#p2-t9"
+commit = "dce36f98"
+note = "本轮功能正确性收尾：文档坐标0743dd15与原生锚点恢复dce36f98；云端CI#45164989969布局15/15、本机相关宿主230通过1SSH跳过、真实GUI5/5、Debug和Release构建验签通过，正式App整包安装但未重启。用户放行108.3ms尾部卡顿；32MiB富Markdown/长时内存/缩放与触控板/SSH三重组合未完全实测并在audit标注延期。"

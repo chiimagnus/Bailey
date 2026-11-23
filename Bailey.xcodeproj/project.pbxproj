@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BC1000000000000000000043 /* MermaidRender in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000042 /* MermaidRender */; };
+		BC1000000000000000000033 /* SwiftDraw in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000032 /* SwiftDraw */; };
+		BC1000000000000000000013 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000012 /* Yams */; };
+		BC1000000000000000000023 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000022 /* SwiftSoup */; };
 		AA40000000000000000000B4 /* .zshenv in Copy Files */ = {isa = PBXBuildFile; fileRef = AA40000000000000000000B6 /* .zshenv */; };
 		AA10000000000000000000B2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B1 /* GhosttyTerminal */; };
 		AA10000000000000000000B4 /* GhosttyTheme in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B3 /* GhosttyTheme */; };
@@ -14,6 +18,8 @@
 		AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */ = {isa = PBXBuildFile; productRef = AA30000000000000000000A1 /* TreeSitterTSX */; };
 		AA60000000000000000000A2 /* FuzzyMatch in Frameworks */ = {isa = PBXBuildFile; productRef = AA60000000000000000000A1 /* FuzzyMatch */; };
 		AA70000000000000000000A2 /* Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA70000000000000000000A1 /* Neon */; };
+		BC1000000000000000000053 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000052 /* Markdown */; };
+		BC1000000000000000000063 /* SwiftUIMath in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000062 /* SwiftUIMath */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +70,12 @@
 				AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */,
 				AA60000000000000000000A2 /* FuzzyMatch in Frameworks */,
 				AA70000000000000000000A2 /* Neon in Frameworks */,
+				BC1000000000000000000013 /* Yams in Frameworks */,
+				BC1000000000000000000023 /* SwiftSoup in Frameworks */,
+				BC1000000000000000000033 /* SwiftDraw in Frameworks */,
+				BC1000000000000000000053 /* Markdown in Frameworks */,
+				BC1000000000000000000063 /* SwiftUIMath in Frameworks */,
+				BC1000000000000000000043 /* MermaidRender in Frameworks */,
 			);
 		};
 		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
@@ -139,6 +151,12 @@
 				AA30000000000000000000A1 /* TreeSitterTSX */,
 				AA60000000000000000000A1 /* FuzzyMatch */,
 				AA70000000000000000000A1 /* Neon */,
+				BC1000000000000000000012 /* Yams */,
+				BC1000000000000000000022 /* SwiftSoup */,
+				BC1000000000000000000032 /* SwiftDraw */,
+				BC1000000000000000000052 /* Markdown */,
+				BC1000000000000000000062 /* SwiftUIMath */,
+				BC1000000000000000000042 /* MermaidRender */,
 			);
 			productName = Bailey;
 			productReference = FF3FDD73300B6A7400112486 /* Bailey.app */;
@@ -203,6 +221,12 @@
 				AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */,
 				BB80000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/BaileyGrammars" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
+				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
+				BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */,
+				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
+				BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */,
+				BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */,
+				BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FF3FDD74300B6A7400112486 /* Products */;
@@ -505,9 +529,37 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/BaileyGrammars;
 		};
+		BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/SwiftSoup;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/2389-research/MermaidKit";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.2;
+			};
+		};
+		BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swhitty/SwiftDraw";
+			requirement = {
+				kind = exactVersion;
+				version = 0.30.0;
+			};
+		};
+		BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jpsim/Yams";
+			requirement = {
+				kind = exactVersion;
+				version = 6.2.2;
+			};
+		};
 		AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/egoist-labs/libghostty-spm";
@@ -524,9 +576,39 @@
 				minimumVersion = 1.3.2;
 			};
 		};
+		BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-markdown.git";
+			requirement = { kind = exactVersion; version = 0.9.0; };
+		};
+		BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swiftui-math.git";
+			requirement = { kind = exactVersion; version = 0.1.0; };
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		BC1000000000000000000042 /* MermaidRender */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */;
+			productName = MermaidRender;
+		};
+		BC1000000000000000000032 /* SwiftDraw */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */;
+			productName = SwiftDraw;
+		};
+		BC1000000000000000000012 /* Yams */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */;
+			productName = Yams;
+		};
+		BC1000000000000000000022 /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */;
+			productName = SwiftSoup;
+		};
 		AA10000000000000000000B1 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
@@ -554,6 +636,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */;
 			productName = FuzzyMatch;
+		};
+		BC1000000000000000000052 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
+		};
+		BC1000000000000000000062 /* SwiftUIMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */;
+			productName = SwiftUIMath;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

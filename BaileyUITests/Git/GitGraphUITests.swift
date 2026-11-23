@@ -32,10 +32,15 @@ final class GitGraphUITests: XCTestCase {
                       "Deleted file must coexist with the new folder at the same Git path")
         XCTAssertTrue(addedFirst.waitForExistence(timeout: 12))
         XCTAssertTrue(addedSecond.waitForExistence(timeout: 12))
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("No working path", forType: .string))
         deleted.rightClick()
-        XCTAssertFalse(app.menuItems["Copy Path"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists,
-                       "Deleted history files do not have filesystem path menus")
+        app.typeKey("c", modifierFlags: [.command, .option])
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        XCTAssertEqual(pasteboard.string(forType: .string), "No working path",
+                       "A deleted historical file must not copy a nonexistent working-tree path")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         folder.click()
         XCTAssertTrue(addedFirst.waitForNonExistence(timeout: 12))
@@ -59,9 +64,11 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: first), Data("new first body\n".utf8))
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+        XCTAssertEqual(pasteboard.string(forType: .string), "No working path",
+                       "Native menu actions must not copy a deleted history path later")
     }
 
-    func testGraphHistoryMenusKeepRevisionOperationsWithoutPathCopy() throws {
+    func testGraphHistoryContextActionOpensRevisionAndPreservesSelection() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first.txt", text: "first\n")
         let second = try fixture.file("second.txt", text: "second\n")
@@ -78,27 +85,30 @@ final class GitGraphUITests: XCTestCase {
 
         a.click()
         b.rightClick()
-        XCTAssertTrue(app.menuItems["View File at Revision"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.menuItems["Compare with Working File"].exists)
-        XCTAssertTrue(app.menuItems["Open Working File"].exists)
-        XCTAssertFalse(app.menuItems["Copy Path"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists)
         XCTAssertTrue(a.isSelected && !b.isSelected)
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        // Choose the first native context action and verify its real revision content.
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let revisionOpened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.windows.firstMatch.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String) == "second\n"
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [revisionOpened], timeout: 15), .completed,
+                       "The context menu must open the selected historical revision")
+        XCTAssertTrue(a.isSelected && !b.isSelected)
 
         XCUIElement.perform(withKeyModifiers: .command) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected)
         a.rightClick()
-        XCTAssertFalse(app.menuItems["Copy Paths"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Paths"].exists)
         XCTAssertTrue(a.isSelected && b.isSelected)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let folder = app.windows.firstMatch.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 12))
         folder.rightClick()
-        XCTAssertFalse(app.menuItems["Copy Path"].exists)
-        XCTAssertFalse(app.menuItems["Copy Relative Path"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
         XCTAssertEqual(try Data(contentsOf: nested), Data("third\n".utf8))
@@ -1107,11 +1117,15 @@ final class GitGraphUITests: XCTestCase {
             .click(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(
                 dx: window.frame.width - 150, dy: window.frame.height / 2)))
         XCTAssertTrue(node.isHittable, "A dirty worktree with a very long Branch must remain accessible in a 150pt panel")
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("No worktree path", forType: .string))
         node.rightClick()
         let unsafe = app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Checkout Commit…", "检出提交…"])).firstMatch
-        XCTAssertFalse(app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["Copy Path", "复制路径"])).firstMatch.exists)
+        app.typeKey("c", modifierFlags: [.command, .option])
+        XCTAssertEqual(pasteboard.string(forType: .string), "No worktree path",
+                       "The worktree graph node must not copy a filesystem path")
         XCTAssertFalse(unsafe.exists,
                        "A dirty worktree state must not become a synthetic commit action")
         XCTAssertFalse(app.menuItems.matching(NSPredicate(
@@ -1132,6 +1146,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
         XCTAssertEqual(try Data(contentsOf: linkedFile),
                        Data("changed in linked worktree\n".utf8))
+        XCTAssertEqual(pasteboard.string(forType: .string), "No worktree path")
     }
 
     func testRealGraphHistoryLoadsNextPageOnlyAfterScrollingToBottom() throws {

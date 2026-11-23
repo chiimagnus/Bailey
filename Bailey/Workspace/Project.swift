@@ -61,7 +61,7 @@ final class Project: nonisolated Identifiable {
         dock = DockWorkspaceModel(configuration: workspaceConfiguration)
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
         dock.onDeactivate = { [weak self] item in
-            guard case .tab(let id) = item else { return }
+            guard let id = item.contentTabID else { return }
             self?.tabs.first { $0.id == id }?.content.autoSaveOnFocusLoss()
         }
         hostConnectionObservation = NotificationCenter.default
@@ -130,9 +130,24 @@ final class Project: nonisolated Identifiable {
         recentTabIDs = selectedTabID.map { [$0] } ?? []
     }
 
-    var focusedContent: PaneContent? {
-        guard case .tab(let id)? = dock.activeGroup?.selected else { return nil }
-        return tabs.first { $0.id == id }?.content
+    var focusedTab: PaneTab? {
+        guard let id = dock.activeGroup?.selected?.contentTabID else { return nil }
+        return tabs.first { $0.id == id }
+    }
+
+    var focusedContent: PaneContent? { focusedTab?.content }
+
+    func markdownMode(for tab: PaneTab) -> MarkdownViewMode {
+        if dock.group(containing: .markdownPreview(tab.id)) != nil { return .sideBySide }
+        if case .file(let file) = tab.content, file.showsMarkdownPreview { return .preview }
+        return .source
+    }
+
+    func setMarkdownMode(_ mode: MarkdownViewMode, for tab: PaneTab) {
+        guard tabs.contains(where: { $0 === tab }), case .file(let file) = tab.content,
+              file.canPreviewMarkdown else { return }
+        file.setMarkdownPreview(mode == .preview)
+        dock.setMarkdownPreview(of: tab.id, visible: mode == .sideBySide)
     }
 
     /// Non-terminal tabs retain the session whose directory they were opened from.
@@ -323,6 +338,44 @@ final class Project: nonisolated Identifiable {
         openFile(path, backend: LocalWorkspaceBackend.shared, workspace: nil, inGroup: groupID)
     }
 
+    func openMarkdownLink(_ url: URL, from file: FileTab, isCurrent: () -> Bool) async -> Bool {
+        guard isCurrent(), file.canPreviewMarkdown, tabs.contains(where: { $0.content.id == file.id }) else {
+            return false
+        }
+        if let scheme = url.scheme?.lowercased() {
+            guard scheme == "http" || scheme == "https", url.host != nil else { return false }
+            newBrowserTab(initialURL: url.absoluteString, initialFocus: .webContent)
+            return true
+        }
+        guard file.workspaceIdentity == nil || file.workspaceIdentity == workspaceIdentity else { return false }
+        let directory = customDirectory
+        // A Finder file in an SSH project remains on the Mac even when the
+        // project directory has the same spelling on two different machines.
+        let resourceDirectory = file.workspaceIdentity == workspaceIdentity ? directory : nil
+        let resource = file.markdownResource(in: resourceDirectory)
+        let target = file.markdownRequestID
+        let sourceWorkspace = file.workspaceIdentity
+        do {
+            let resolved = try await resource.resolvedFile(url)
+            guard !Task.isCancelled, isCurrent(), file.markdownRequestID == target,
+                  directory == customDirectory, file.workspaceIdentity == sourceWorkspace,
+                  (sourceWorkspace == nil || sourceWorkspace == workspaceIdentity),
+                  tabs.contains(where: { $0.content.id == file.id }) else { return false }
+            openFile(resolved, backend: resource.backend, workspace: sourceWorkspace,
+                     inGroup: dock.activeGroupID)
+            if let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment,
+               !fragment.isEmpty, MarkdownDocument.supports(resolved),
+               let tab = findFileTab(path: resolved, workspace: sourceWorkspace),
+               case let .file(destination) = tab.content {
+                destination.pendingMarkdownFragment = fragment
+                destination.setMarkdownPreview(true)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func openFile(
         _ path: String, backend: WorkspaceBackend, workspace: String?,
         editorState: EditorState? = nil, inGroup groupID: UUID? = nil,
@@ -446,6 +499,9 @@ final class Project: nonisolated Identifiable {
                   file.workspaceIdentity == workspace,
                   let destination = moved(file.path) else { continue }
             file.updatePath(destination)
+            if !MarkdownDocument.supports(destination) {
+                dock.setMarkdownPreview(of: tab.id, visible: false)
+            }
         }
         guard workspaceIdentity == workspace else { return }
         if let pinnedFile, let updated = moved(pinnedFile) {
@@ -701,7 +757,7 @@ final class Project: nonisolated Identifiable {
     func selectPanel(_ item: DockItem) {
         switch item {
         case .tab(let id): selectTab(id)
-        case .projects, .files, .git: dock.select(item)
+        case .projects, .files, .git, .markdownPreview: dock.select(item)
         }
     }
 
@@ -712,7 +768,7 @@ final class Project: nonisolated Identifiable {
     private func shiftPanel(by offset: Int) {
         let ids = dock.tabOrder
         guard !ids.isEmpty else { return }
-        guard case .tab(let selectedID)? = dock.activeGroup?.selected,
+        guard let selectedID = dock.activeGroup?.selected?.contentTabID,
               let current = ids.firstIndex(of: selectedID) else {
             selectTab(offset > 0 ? ids[0] : ids[ids.count - 1])
             return

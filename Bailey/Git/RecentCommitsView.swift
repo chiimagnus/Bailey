@@ -1299,6 +1299,9 @@ struct RecentCommitsView: View {
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
         .accessibilityLabel(stash.selector)
+        .accessibilityAddTraits(
+            selection.ids.contains(commitRowID(commit)) ? .isSelected : []
+        )
         .background {
             contextTarget(for: commitRowID(commit))
         }

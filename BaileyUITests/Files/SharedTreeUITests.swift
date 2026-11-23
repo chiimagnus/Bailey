@@ -551,12 +551,15 @@ final class SharedTreeUITests: XCTestCase {
             .matching(identifier: "bailey.tree.folder.component.0").firstMatch
         XCTAssertTrue(component.waitForExistence(timeout: 10))
         component.rightClick()
-        let relative = app.menuItems["Copy Relative Path"]
-        XCTAssertTrue(relative.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.menuItems["Copy Relative Path"].waitForExistence(timeout: 8))
         XCTAssertFalse(app.menuItems["Unfold Directory"].exists)
         XCTAssertFalse(app.menuItems["Fold Directory"].exists)
-        relative.click()
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a1")
+        app.typeKey("c", modifierFlags: [.command, .option, .shift])
+        let copiedSegment = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            NSPasteboard.general.string(forType: .string) == "a1"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copiedSegment], timeout: 5), .completed,
+                       "The compact folder menu must copy the targeted component, not the full chain")
         XCTAssertTrue(folder("a1 / b1 / c1").waitForExistence(timeout: 12))
         XCTAssertTrue(leaf.exists)
     }

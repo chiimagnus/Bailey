@@ -49,6 +49,13 @@ struct SourceTextEditor: NSViewRepresentable {
     var canFocus: () -> Bool = { true }
     var onFocused: () -> Void = {}
 
+    private var onResignFirstResponder: () -> Void {
+        { [weak file] in
+            guard let file, !file.showsMarkdownPreview else { return }
+            file.autoSaveOnFocusLoss()
+        }
+    }
+
     func makeCoordinator() -> Coordinator {
         if let coordinator = file.editorCoordinator,
            coordinator.revision == file.reloadRevision {
@@ -61,14 +68,34 @@ struct SourceTextEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let scrollView = context.coordinator.scrollView ?? makeScrollView(coordinator: context.coordinator)
-        if let textView = scrollView.documentView as? FocusReportingTextView {
+        let textView = scrollView.documentView as? FocusReportingTextView
+        textView?.onBecomeFirstResponder = nil
+        textView?.onResignFirstResponder = nil
+        let container = SourceEditorContainer(scrollView: scrollView)
+        if let textView {
             textView.onBecomeFirstResponder = onFocused
-            textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
+            textView.onResignFirstResponder = onResignFirstResponder
             apply(to: textView, scrollView: scrollView)
         }
         context.coordinator.wasFocused = isFocused
+        if let pending = file.pendingMarkdownSource {
+            file.pendingMarkdownSource = nil
+            if pending.request == file.markdownRequestID,
+               let restorable = scrollView as? RestorableScrollView {
+                restorable.restoreOnFirstLayout = { [weak textView] in
+                    guard let textView else { return }
+                    let offset = min(pending.offset, textView.textStorage?.length ?? 0)
+                    if pending.focus {
+                        textView.textSelection = NSRange(location: offset, length: 0)
+                    }
+                    textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+                    if pending.focus, let window = textView.window, window.isKeyWindow {
+                        window.makeFirstResponder(textView)
+                    }
+                }
+            }
+        }
         file.editorView = scrollView
-        let container = SourceEditorContainer(scrollView: scrollView)
         container.focusOnAttach = isFocused
         container.canFocus = canFocus
         return container
@@ -83,8 +110,6 @@ struct SourceTextEditor: NSViewRepresentable {
             }
             file.preparedLineWidths = nil
         }
-        textView.onBecomeFirstResponder = onFocused
-        textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
         scrollView.wantsLayer = true
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -178,9 +203,7 @@ struct SourceTextEditor: NSViewRepresentable {
         container.focusOnAttach = isFocused
         guard let textView = scrollView.documentView as? NativeCodeTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
-        (textView as? FocusReportingTextView)?.onResignFirstResponder = {
-            [weak file] in file?.autoSaveOnFocusLoss()
-        }
+        (textView as? FocusReportingTextView)?.onResignFirstResponder = onResignFirstResponder
         apply(to: textView, scrollView: scrollView)
         // Take focus on the unfocused→focused edge (keyboard navigation moving
         // focus here), never on every render.
@@ -198,9 +221,9 @@ struct SourceTextEditor: NSViewRepresentable {
     static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
         guard let container = container as? SourceEditorContainer,
               container.scrollView.superview === container else { return }
-        container.scrollView.removeFromSuperview()
         (container.scrollView.documentView as? FocusReportingTextView)?.onBecomeFirstResponder = nil
         (container.scrollView.documentView as? FocusReportingTextView)?.onResignFirstResponder = nil
+        container.scrollView.removeFromSuperview()
         if coordinator.file?.editorView === container.scrollView {
             coordinator.file?.editorView = nil
         }
@@ -271,6 +294,81 @@ struct SourceTextEditor: NSViewRepresentable {
             revision = file.reloadRevision
         }
 
+        @discardableResult
+        func showMarkdownSource(atUTF16Offset offset: Int) -> Bool {
+            guard let file, file.editorCoordinator === self,
+                  file.markdownScrollSyncEnabled,
+                  let scrollView, scrollView.window != nil,
+                  let editor = scrollView.documentView as? NativeCodeTextView,
+                  offset >= 0, offset <= file.nativeTextStorage.length else { return false }
+            editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            guard let layout = editor.textLayoutManager,
+                  let storage = editor.textContentStorage,
+                  let position = storage.location(storage.documentRange.location, offsetBy: offset),
+                  let fragment = layout.textLayoutFragment(for: position) else { return true }
+            let relative = storage.offset(from: fragment.rangeInElement.location, to: position)
+            guard let line = fragment.textLineFragments.first(where: {
+                relative >= $0.characterRange.location
+                    && relative < NSMaxRange($0.characterRange)
+            }) ?? fragment.textLineFragments.last else { return true }
+            let y = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY
+                + editor.textContainerOrigin.y
+            let clip = scrollView.contentView
+            let maximumY = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(max(0, y), maximumY)))
+            scrollView.reflectScrolledClipView(clip)
+            return true
+        }
+
+        @discardableResult
+        func locateMarkdownSource(atUTF16Offset offset: Int) -> Bool {
+            guard let file, file.editorCoordinator === self,
+                  let scrollView, let window = scrollView.window,
+                  let editor = scrollView.documentView as? NativeCodeTextView,
+                  offset >= 0, offset <= file.nativeTextStorage.length else { return false }
+            editor.textSelection = NSRange(location: offset, length: 0)
+            editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            if window.isKeyWindow { window.makeFirstResponder(editor) }
+            return true
+        }
+
+        func refreshMarkdownViewport() {
+            guard let file, file.canPreviewMarkdown, file.markdownScrollSyncEnabled,
+                  let mapping = file.markdownSourceIndex,
+                  mapping.request == file.markdownRequestID,
+                  let scrollView, scrollView.window != nil,
+                  let editor = scrollView.documentView as? NativeCodeTextView else { return }
+            guard let layout = editor.textLayoutManager,
+                  let content = editor.textContentStorage else { return }
+            let controller = layout.textViewportLayoutController
+            controller.layoutViewport()
+            guard let viewport = controller.viewportRange else { return }
+            let visibleY = scrollView.contentView.bounds.minY - editor.textContainerOrigin.y
+            var firstVisible: Int?
+            layout.enumerateTextLayoutFragments(in: viewport) { fragment in
+                let lines = fragment.textLineFragments
+                var lower = 0
+                var upper = lines.count
+                while lower < upper {
+                    let middle = lower + (upper - lower) / 2
+                    let bottom = fragment.layoutFragmentFrame.minY
+                        + lines[middle].typographicBounds.maxY
+                    if bottom <= visibleY { lower = middle + 1 }
+                    else { upper = middle }
+                }
+                guard lower < lines.count else { return true }
+                firstVisible = content.offset(from: content.documentRange.location,
+                                              to: fragment.rangeInElement.location)
+                    + lines[lower].characterRange.location
+                return false
+            }
+            guard let offset = firstVisible, offset >= 0,
+                  offset <= file.nativeTextStorage.length,
+                  mapping.index.block(atUTF16Offset: offset) != nil,
+                  offset != file.markdownSourceOffset else { return }
+            file.markdownSourceOffset = offset
+        }
+
         func attach(textView: NativeCodeTextView, scrollView: NSScrollView) {
             self.textView = textView
             self.scrollView = scrollView
@@ -299,6 +397,7 @@ struct SourceTextEditor: NSViewRepresentable {
                     editor?.syntaxCoordinator?.updateViewportRange(
                         editor?.textLayoutManager?.textViewportLayoutController.viewportRange
                     )
+                    self.refreshMarkdownViewport()
                 }
             }
         }
@@ -462,7 +561,12 @@ final class FocusReportingTextView: NativeCodeTextView {
 /// pass — before the first paint — so a restored file opens already scrolled to
 /// its saved position instead of visibly jumping there afterward.
 private final class RestorableScrollView: NSScrollView {
-    var restoreOnFirstLayout: (() -> Void)?
+    var restoreOnFirstLayout: (() -> Void)? {
+        didSet {
+            // A requested source position supersedes an origin saved before unmount.
+            if restoreOnFirstLayout != nil { reparentedOffset = nil }
+        }
+    }
     private var lastViewportSize: NSSize = .zero
     private var geometryUpdateScheduled = false
     private var reparentedOffset: NSPoint?

@@ -118,7 +118,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertNotEqual(rootHash, headHash)
         XCTAssertEqual(try fixture.git(["show", ":history.txt"]), Data(current.utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         let historicalRow = historicalFileRow(file, fixture: fixture, window: window)
@@ -130,6 +130,11 @@ final class GitHistoryUITests: XCTestCase {
                       "Previewing the Git historical Diff must keep Git Graph active")
         openHistoricalMenu(file, fixture: fixture, window: window)
         activateHistoricalMenu(.viewRevision, in: app)
+        let revisionTabs = window.buttons.matching(NSPredicate(
+            format: "label == %@", "history.txt (\(rootHash.prefix(7)))"
+        ))
+        XCTAssertTrue(revisionTabs.firstMatch.waitForExistence(timeout: 15),
+                      "View Revision must open the immutable revision, not Worktree comparison")
 
         let native = window.textViews.firstMatch
         XCTAssertTrue(native.waitForExistence(timeout: 15))
@@ -163,11 +168,16 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertNotEqual(rootHash, headHash)
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(old, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(old, fixture: fixture, window: window)
         activateHistoricalMenu(.compareWorktree, in: app)
+        let comparisonTabs = window.buttons.matching(NSPredicate(
+            format: "label == %@", "original.txt (\(rootHash.prefix(7))) ↔ Worktree"
+        ))
+        XCTAssertTrue(comparisonTabs.firstMatch.waitForExistence(timeout: 15),
+                      "Compare must open the historical-versus-worktree Diff tab")
         let comparison = window.textViews.firstMatch
         XCTAssertTrue(comparison.waitForExistence(timeout: 15))
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -206,7 +216,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["cat-file", "-s", "HEAD:large.txt"]),
                        Data("\(largeBytes.count)\n".utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(binary, commit: "E2E fixture history", fixture: fixture, app: app)
         // This XCTest Runner cannot enumerate native context-menu items.
@@ -244,7 +254,7 @@ final class GitHistoryUITests: XCTestCase {
                          "commit", "-qam", "Second revision"])
         let headHash = try revision(in: fixture)
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(file, fixture: fixture, window: window)
@@ -303,7 +313,7 @@ final class GitHistoryUITests: XCTestCase {
         try local.write(to: file, atomically: true, encoding: .utf8)
         XCTAssertEqual(try fixture.git(["show", ":history.txt"]), Data(current.utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         // Keep both sections present. historicalFileRow uses the history-only
@@ -343,20 +353,17 @@ final class GitHistoryUITests: XCTestCase {
                        "Historical reset must not touch other tracked files")
     }
 
-    private enum HistoricalMenuAction: Int {
-        case viewRevision = 2
-        case compareWorktree = 3
-        case openWorkingFile = 4
-        case resetFile = 5
+    private enum HistoricalMenuAction: String {
+        case viewRevision = "v"
+        case compareWorktree = "c"
+        case openWorkingFile = "o"
+        case resetFile = "r"
     }
 
     private func activateHistoricalMenu(_ action: HistoricalMenuAction, in app: XCUIApplication) {
-        // Native context-menu items are visually present but omitted by this
-        // XCTest Runner's AX snapshot. Keyboard navigation exercises the
-        // actual NSMenu; callers verify the resulting view or Git bytes.
-        for _ in 0..<action.rawValue {
-            app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
-        }
+        // XCTest may omit native popup items from its AX tree. macOS menu
+        // type-to-select finds a unique title regardless of the hovered row.
+        app.typeKey(action.rawValue, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
     }
 
