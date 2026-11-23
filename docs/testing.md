@@ -80,7 +80,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 无匹配方法直接失败，不再把 0 项 XCTest 当作通过。`make test:ui` 单独执行整个 UI Test Target，
 不混入本机日常宿主测试。
 `make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与
-`build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
+`.build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
 `WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；
 隔离测试抑制 SwiftUI 自动首窗；`Commands` 先登记开窗动作，AppKit 确认应用激活后
 才请求唯一首窗，避免过早调用 `openWindow` 导致无窗口；测试夹具不得超时补发快捷键。
@@ -234,10 +234,10 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 ## 隔离环境
 
 同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，
-编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `build/.bailey-dev-test.lock` 原子互斥；
+编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `.build/.bailey-dev-test.lock` 原子互斥；
 已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。
 若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，
-再用 `rmdir build/.bailey-dev-test.lock` 清理。
+再用 `rmdir .build/.bailey-dev-test.lock` 清理。
 其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。
 `automationmodetool` 在 GUI 测试结束后可能显示 Automation Mode 已关闭；
 **不要仅凭状态就判定无法测试**，
@@ -254,7 +254,7 @@ Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；
 需要单独检查原生界面时使用相同签名的 Debug 包：
 
 ```sh
-open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --args --isolated-ui-test
+open -n -a "$PWD/.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --args --isolated-ui-test
 ```
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
@@ -314,7 +314,7 @@ Finder 拖进运行中 Bailey 时，
 
 Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式 `chiimagnus.bailey`。
 对测试版发送文件时，必须显式使用
-`open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`；
+`open -n -a "$PWD/.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`；
 不能只传 `--isolated-ui-test` 或混用 `--args`（可能丢失系统文件事件）。
 随后核对接收 PID 的 Bundle ID 为 `chiimagnus.bailey.dev`，并检查窗口数、目标文件内容和原始 SHA-256。
 Dev 的 `LSHandlerRank=None` 不竞逐 Finder 默认文件处理程序；

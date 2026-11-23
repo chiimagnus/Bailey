@@ -7,7 +7,7 @@
 
 正式 Bailey 的 Debug 和 Release 保持 `Bailey.app`／`chiimagnus.bailey`，可执行文件名为 `bailey`。
 `make build:dev` 和 XCTest 使用另一 Bundle ID `chiimagnus.bailey.dev`，
-构建在 `build/DerivedData-Dev/`，不作为发布包。工程使用 Apple Development 手动签名，
+构建在 `.build/DerivedData-Dev/`，不作为发布包。工程使用 Apple Development 手动签名，
 当前 Team ID 为 `RDQHYSDFFG`；开发版可用 `SIGNING=adhoc`，发布仍需所有者获授权的有效证书，
 不共享维护者私钥。
 

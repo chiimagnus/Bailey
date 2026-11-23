@@ -74,7 +74,7 @@ AppKit 激活后通过 SwiftUI 开窗动作请求首窗，剩余窗口由 Bailey
 刻意测试跨进程恢复时，两次启动传入同一有效 UUID。
 Makefile 的 XCTest 和 `Bailey-UI` 测试已固定使用 `chiimagnus.bailey.dev`，并与正式 Bailey 分开配置、
 历史和 Bundle ID。
-测试 Launch Services 文档事件须显式指定 `build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
+测试 Launch Services 文档事件须显式指定 `.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
 并保持同一 `BAILEY_UI_TEST_RUN_ID`；使用 `open` 注入文档时不要混用 `--args`，避免丢失系统文件事件。
 **Bundle ID 只隔离应用和持久数据，不隔离鼠标、键盘或当前 macOS 图形会话。** 完整边界见
 [testing.md](../testing.md#测试目录与入口)。

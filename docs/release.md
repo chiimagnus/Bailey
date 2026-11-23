@@ -36,7 +36,7 @@ make package VERSION=X.Y.Z BUILD_NUMBER=N SIGNING_IDENTITY=证书SHA1 SIGNING_TE
 需要特定钥匙串时再指定 `SIGNING_KEYCHAIN`。
 
 Makefile 校验版本、凭据和输出路径，构建 Release，通过 `ditto` 生成 ZIP，再解包复验签名、身份、
-证书有效期、版本及 arm64 架构。输出为 `build/releases/bailey-X.Y.Z-macos-arm64.zip`；
+证书有效期、版本及 arm64 架构。输出为 `.build/releases/bailey-X.Y.Z-macos-arm64.zip`；
 已有同名包时拒绝覆盖，不在本地打包命令中发布。
 
 ## 正式发布
