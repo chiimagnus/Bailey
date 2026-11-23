@@ -12,6 +12,52 @@ final class HTMLFilePreviewTests: XCTestCase {
         var count = 0
     }
 
+    private actor SuspendedAssetRunner: RemoteCommandRunner {
+        let source: String
+        private var started = 0
+        private var active = 0
+        private var cancelled = 0
+        private var peak = 0
+        private var stalled = true
+
+        init(source: String) { self.source = source }
+
+        var counts: (started: Int, active: Int, cancelled: Int, peak: Int) {
+            (started, active, cancelled, peak)
+        }
+
+        func resumeReads() { stalled = false }
+
+        func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+            -> (status: Int32, stdout: Data, stderr: Data) {
+            guard argv.first?.contains("bailey-preview") == true else {
+                return (0, Data(source.utf8), Data())
+            }
+            if stalled {
+                started += 1
+                active += 1
+                peak = max(peak, active)
+                defer { active -= 1 }
+                do {
+                    try await Task.sleep(for: .seconds(20))
+                    throw WorkspaceError.timedOut
+                } catch is CancellationError {
+                    cancelled += 1
+                    return (0, svg(width: 17), Data())
+                }
+            }
+            return (0, svg(width: 34), Data())
+        }
+
+        private func svg(width: Int) -> Data {
+            Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" width="\(width)" height="12">
+                  <rect width="\(width)" height="12" fill="blue"/>
+                </svg>
+                """.utf8)
+        }
+    }
+
     func testHTMLDefaultsToSourceWithoutChangingTheDecodedFile() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -229,6 +275,59 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(layout, ["rgb(21, 31, 41)", "rgb(80, 90, 100)", "block"])
     }
 
+    func testSlowAssetBurstCancelsOnDetachAndCloseThenReopensWithNewBytes() async throws {
+        let images = (1...12).map { "<img src='image-\($0).svg'>" }.joined()
+        let runner = SuspendedAssetRunner(source: "<!doctype html><title>Preview</title>" + images)
+        let backend = SSHWorkspaceBackend(runner: runner)
+        let path = "/fixture/index.html"
+        let directory = "/fixture"
+        let project = Project(fallbackName: "Preview lifecycle", workspaceConfiguration: .standard)
+        defer { project.terminateAll() }
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        let tab = PaneTab(content: .file(file))
+        project.tabs = [tab]
+        try await file.waitForText()
+        await file.showHTMLPreview(request: file.textPreviewRequestID, in: directory)
+        try await waitUntil { await runner.counts.active == 4 }
+        weak var oldPreview = file.htmlPreview
+        weak var oldWebView = file.htmlPreview?.webView
+        XCTAssertNotNil(oldWebView)
+
+        file.htmlPreview?.suspend()
+        try await waitUntil {
+            let counts = await runner.counts
+            return counts.cancelled == 4 && counts.active == 0
+        }
+        let suspended = await runner.counts
+        XCTAssertEqual(suspended.started, 4)
+        XCTAssertEqual(suspended.peak, 4)
+
+        await file.showHTMLPreview(request: file.textPreviewRequestID, in: directory)
+        XCTAssertTrue(file.htmlPreview === oldPreview)
+        XCTAssertTrue(file.htmlPreview?.webView === oldWebView)
+        try await waitUntil { await runner.counts.active == 4 }
+        project.close(tab)
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(file.htmlPreview)
+        try await waitUntil {
+            let counts = await runner.counts
+            return counts.cancelled == 8 && counts.active == 0
+        }
+        try await waitUntil { oldPreview == nil && oldWebView == nil }
+        let closed = await runner.counts
+        XCTAssertEqual(closed.started, 8, "Queued reads must not start during close")
+
+        await runner.resumeReads()
+        let reopened = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        project.tabs = [PaneTab(content: .file(reopened))]
+        try await reopened.waitForText()
+        let webView = try await display(reopened, in: URL(fileURLWithPath: directory))
+        let widths = try await webView.evaluateJavaScript(
+            "Array.from(document.images, img => img.naturalWidth)", contentWorld: .defaultClient
+        ) as? [Int]
+        XCTAssertEqual(widths, Array(repeating: 34, count: 12))
+    }
+
     private func solidPNG(width: Int, height: Int) throws -> Data {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -273,9 +372,9 @@ final class HTMLFilePreviewTests: XCTestCase {
         return preview.webView
     }
 
-    private func waitUntil(_ ready: () -> Bool) async throws {
+    private func waitUntil(_ ready: () async -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(8))
-        while !ready() {
+        while !(await ready()) {
             guard ContinuousClock.now < deadline else { throw WorkspaceError.timedOut }
             try await Task.sleep(for: .milliseconds(20))
         }
