@@ -1117,11 +1117,15 @@ final class GitGraphUITests: XCTestCase {
             .click(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(
                 dx: window.frame.width - 150, dy: window.frame.height / 2)))
         XCTAssertTrue(node.isHittable, "A dirty worktree with a very long Branch must remain accessible in a 150pt panel")
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("No worktree path", forType: .string))
         node.rightClick()
         let unsafe = app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Checkout Commit…", "检出提交…"])).firstMatch
-        XCTAssertFalse(app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["Copy Path", "复制路径"])).firstMatch.exists)
+        app.typeKey("c", modifierFlags: [.command, .option])
+        XCTAssertEqual(pasteboard.string(forType: .string), "No worktree path",
+                       "The worktree graph node must not copy a filesystem path")
         XCTAssertFalse(unsafe.exists,
                        "A dirty worktree state must not become a synthetic commit action")
         XCTAssertFalse(app.menuItems.matching(NSPredicate(
@@ -1142,6 +1146,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
         XCTAssertEqual(try Data(contentsOf: linkedFile),
                        Data("changed in linked worktree\n".utf8))
+        XCTAssertEqual(pasteboard.string(forType: .string), "No worktree path")
     }
 
     func testRealGraphHistoryLoadsNextPageOnlyAfterScrollingToBottom() throws {
