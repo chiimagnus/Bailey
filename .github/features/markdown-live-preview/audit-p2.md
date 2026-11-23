@@ -74,6 +74,21 @@
 
 ## 验证与未覆盖
 
+- 2026-11-23 全量 CI [#45102596345](https://github.com/chiimagnus/Bailey/actions/runs/45102596345)
+  在旧提交 `751ebf49` 上运行：宿主 1,246 项、5 失败、22 跳过；GUI 331 项、
+  36 个用例失败、9 跳过。定向 CI [#45113933622](https://github.com/chiimagnus/Bailey/actions/runs/45113933622)
+  复现了 Markdown 段内字形／公式／图片位置恢复与 Git 主题采样失败，SSH 进度超时用例单独通过。
+  两项运行均在旧提交，不代表当前 PR。
+- PR [#101](https://github.com/chiimagnus/Bailey/pull/101) 已推送至 `f12a358e`。
+  菜单／Git／Files 定向 GUI CI [#45139516620](https://github.com/chiimagnus/Bailey/actions/runs/45139516620)
+  与 [#45141511479](https://github.com/chiimagnus/Bailey/actions/runs/45141511479) 通过；
+  `66d59583` 的定向宿主 CI [#45141516315](https://github.com/chiimagnus/Bailey/actions/runs/45141516315)
+  公式通过，文字和图片的首次阅读位置恢复失败。`f12a358e` 不再在第一次布局成功后清除阅读锚点；
+  最新定向 CI [#45148222528](https://github.com/chiimagnus/Bailey/actions/runs/45148222528) 正在复验。
+- 当前本机完整 `SwiftMarkdownLayoutTests` 15/15，20,000 行混排编辑 GUI 1/1 通过；
+  旧提交 `dd5cad7d` 的全量 CI [#45136578416](https://github.com/chiimagnus/Bailey/actions/runs/45136578416)
+  宿主失败、GUI 尚未结束。F-01 的真实整窗尾部卡顿、热操作和内存判据仍未核销，P2-T9 不通过。
+
 - 续查 F-02 时用原 CPU 样本核对调用链：2,509 条 TextKit 片段枚举样本中，
   2,366 条来自 AppKit 响应 `AXLineForIndex` 时从文首计数，而非 Markdown 解析。
   修复前，宿主两万行首次末段查询约 711 ms，30 次共请求 19,842 个原生段落；
