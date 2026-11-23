@@ -3,6 +3,11 @@ import XCTest
 
 @MainActor
 final class MarkdownSelectionBoundaryUITests: XCTestCase {
+    private func heading(_ anchor: String, in preview: XCUIElement) -> XCUIElement {
+        preview.descendants(matching: .any)
+            .matching(identifier: "bailey.markdown.heading.\(anchor)").firstMatch
+    }
+
     func testMarkdownSelectionAndCanvasUseTheTerminalTheme() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file(".config/bailey-dev/config.toml", text: """
@@ -166,7 +171,7 @@ final class MarkdownSelectionBoundaryUITests: XCTestCase {
                       && copied.contains("FINAL_TAIL_VISIBLE"),
                       "Select All must include every visible block despite out-of-order footnotes: \(copied)")
 
-        let heading = preview.staticTexts["Footnote selection"].firstMatch
+        let heading = heading("footnote-selection", in: preview)
         XCTAssertTrue(heading.waitForExistence(timeout: 10))
         heading.click()
         app.typeKey("a", modifierFlags: .command)
@@ -206,7 +211,7 @@ final class MarkdownSelectionBoundaryUITests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let heading = preview.staticTexts["Fold"].firstMatch
+        let heading = heading("fold", in: preview)
         XCTAssertTrue(heading.waitForExistence(timeout: 10))
         heading.hover()
         let fold = preview.buttons["bailey.markdown.fold.fold"]
@@ -400,7 +405,7 @@ final class MarkdownSelectionBoundaryUITests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.textViews.firstMatch.waitForExistence(timeout: 10))
         app.typeKey("v", modifierFlags: [.command, .shift])
         let preview = WorkspaceUITestSupport.element("bailey.markdown.preview", in: app)
-        let first = preview.staticTexts["Starting Heading"].firstMatch
+        let first = heading("starting-heading", in: preview)
         let last = preview.staticTexts.matching(
             NSPredicate(format: "value CONTAINS %@", "Closing destination")
         ).firstMatch
