@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T2"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -12,10 +12,10 @@ note = "共享净化 b81bcc1f、原生矢量 b2022516、真 Windows 27ede424、�
 [[tasks]]
 id = "P1-T2"
 title = "接入共用图形视口和源码／预览／并排命令"
-status = "in_progress"
+status = "blocked"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "已有 b2022516 共用视口与三种模式、400% Retina 及 139ab5e9 七格式挂载；继续核对原生 SVG 标签重挂载、改名及位置恢复。 325ed5a6：修复共用图形视口位置，双 SVG、源码切换、重挂载、窗口尺寸、同类型改名与真实替换通过；21 项 SVG／图片定点宿主全部通过；F-04 Resolved。 aa26f533：双窗口八个真实磁盘文件标签冷恢复、默认模式、并排临时性、懒加载及标签复用；SessionStoreTests 11 项全过。完整 App 冷启动仍待 GUI 验收。"
+note = "已有 b2022516 共用视口与三种模式、400% Retina 及 139ab5e9 七格式挂载；继续核对原生 SVG 标签重挂载、改名及位置恢复。 325ed5a6：修复共用图形视口位置，双 SVG、源码切换、重挂载、窗口尺寸、同类型改名与真实替换通过；21 项 SVG／图片定点宿主全部通过；F-04 Resolved。 aa26f533：双窗口八个真实磁盘文件标签冷恢复、默认模式、并排临时性、懒加载及标签复用；SessionStoreTests 11 项全过。完整 App 冷启动仍待 GUI 验收。 阻塞：实际 1× 屏、物理触控板惯性与捏合、VoiceOver、完整 App 多窗口冷启动和获授权 Linux SSH；已有原生视口、2× GUI、宿主冷恢复及 Windows SSH 证据不替代这些验收。"
 
 [[tasks]]
 id = "P2-T1"

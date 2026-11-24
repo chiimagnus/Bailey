@@ -1,21 +1,21 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
 title = "建立一条安全 HTML 静态渲染与共用资源链"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = "5ac0c145 原生 WebKit；5297ea42 真实 Windows SSH；e43e8c5a 整页图片/CSS 预算；824dc93f 慢读取消；db850a1b 嵌套字体／越界链接；1c94d1a3 32 MiB 边界；38794efd 真 WebContent 退出、慢读取消、原生恢复和退役；d527ed2d BOM／显式 GBK／空页；fdf6c973 本机项目外文件、类型错配和资源移走。16 项资源回归含 Downloads 与 Windows SSH；71 项生命周期宿主及正式签名构建通过。继续核销其余 H03/H04/H05 与共享条件。 0e479782 核销同一图片在独立文件、Markdown、HTML 三窗口引用的真实版本刷新、窗口归属、源码字节及独立释放；HTML 12 项含 Downloads/test 真实样本无跳过通过，相关 172 项（165 通过、7 环境项跳过）、Debug 构建及严格验签通过。 20e7a3f6 实际 WebKit 快照证明 SVG 子资源隔离、DTD 拒绝、TCP 零连接／正对照及原字节；HTML 13 项含真实样本通过。 04e4f9d3：原生生成 PNG 与真实透明渐变 PNG 的 IEND 缺失、IDAT 截断、CRC 损坏在 FileTab、Markdown、HTML 三入口复现并拒绝；正常字节原子替换恢复。Red 13 断言，Green 162 通过、3 个长会话条件跳过、0 失败。 46426dd8：真实 WebKit 的 readonly 未阻止复选/单选激活；统一禁用非文本表单控件，保留文本只读复制，表单提交与导航仍零外连。Red 1 失败，Green 18 通过、1 个未设远端环境变量的用例跳过。"
+commit = "e5b9f939"
+note = "5ac0c145 原生 WebKit；5297ea42 真实 Windows SSH；e43e8c5a 整页图片/CSS 预算；824dc93f 慢读取消；db850a1b 嵌套字体／越界链接；1c94d1a3 32 MiB 边界；38794efd 真 WebContent 退出、慢读取消、原生恢复和退役；d527ed2d BOM／显式 GBK／空页；fdf6c973 本机项目外文件、类型错配和资源移走。16 项资源回归含 Downloads 与 Windows SSH；71 项生命周期宿主及正式签名构建通过。继续核销其余 H03/H04/H05 与共享条件。 0e479782 核销同一图片在独立文件、Markdown、HTML 三窗口引用的真实版本刷新、窗口归属、源码字节及独立释放；HTML 12 项含 Downloads/test 真实样本无跳过通过，相关 172 项（165 通过、7 环境项跳过）、Debug 构建及严格验签通过。 20e7a3f6 实际 WebKit 快照证明 SVG 子资源隔离、DTD 拒绝、TCP 零连接／正对照及原字节；HTML 13 项含真实样本通过。 04e4f9d3：原生生成 PNG 与真实透明渐变 PNG 的 IEND 缺失、IDAT 截断、CRC 损坏在 FileTab、Markdown、HTML 三入口复现并拒绝；正常字节原子替换恢复。Red 13 断言，Green 162 通过、3 个长会话条件跳过、0 失败。 46426dd8：真实 WebKit 的 readonly 未阻止复选/单选激活；统一禁用非文本表单控件，保留文本只读复制，表单提交与导航仍零外连。Red 1 失败，Green 18 通过、1 个未设远端环境变量的用例跳过。 e5b9f939：H03/H04/H05 真实 WebKit 组合验证通过：srcdoc、object/embed、javascript、下载、Blob、外部字体、image-set、HTTP/HTTPS 均不联网、不导航、不执行脚本；编码中文/#/?/% 文件正常加载，query、FIFO、越界符号链接和 HTML 伪 CSS 拒绝；源码原字节不变。 本轮 H01–H07 专项 14 项 HTML 实际 WebKit 及 5 项共享资源全部通过，包含真实 Windows SSH、主动内容实际隔离、资源取消、WebContent 退役与恢复。完整 App H08 和无授权 Linux SSH 留在阶段门禁，不把任务完成当作 P1 Go。"
 
 [[tasks]]
 id = "P1-T2"
 title = "复用已有 File 菜单、标签右键及 Dock 预览"
-status = "in_progress"
+status = "blocked"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "5ac0c145 共用 File 菜单与 Dock；f7feb109 及本轮两项隔离 GUI 验证双窗口、后台右键、前台快捷键、并排及原字节；b9a8a571 补源码原生查找与预览真实复制；38794efd 覆盖真实 WebContent 异常退出后的宿主恢复。VoiceOver、实际 1× 和其它 H08 组合仍待核销。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
+note = "5ac0c145 共用 File 菜单与 Dock；f7feb109 及本轮两项隔离 GUI 验证双窗口、后台右键、前台快捷键、并排及原字节；b9a8a571 补源码原生查找与预览真实复制；38794efd 覆盖真实 WebContent 异常退出后的宿主恢复。VoiceOver、实际 1× 和其它 H08 组合仍待核销。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。 阻塞：1× 屏、VoiceOver、实际触控板／减弱动态效果组合、完整 App 多窗口长会话和获授权 Linux SSH。真实 WebKit、原生菜单／Dock、2× GUI 与 14 项 HTML 宿主已通过。"
 
 [[tasks]]
 id = "P2-T1"

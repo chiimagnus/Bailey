@@ -90,4 +90,5 @@
 - aa26f533：双窗口快照持久化后重新创建应用所有者，核对 SVG、CSV、HTML、Markdown 各自默认模式、临时 companion 移除、懒读取及标签复用，原字节不变。SessionStoreTests 11 项全部通过。
 - 实体 1× 屏、触控板惯性／捏合、VoiceOver 和完整 App 的 SVG 多窗口冷恢复未验；实际 Retina 像素与共享 PNG
   缩放证明当前绘制路径，不证明物理设备行为。Windows Tailscale 已有宿主结果；没有获授权的 Linux 别名，不能替代 Linux E2E。
-
+- 最终 e4267d71：共享 330 项受影响回归全过（含 JPEG 边界补测），NativePaneRetentionIntegration 28 项全部通过；SVG 专项既有真实样本证据仍保留。共享执行记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。

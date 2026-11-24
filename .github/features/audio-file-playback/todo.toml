@@ -1,21 +1,21 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
 title = "共用音视频实际文件校验与正确读取分支"
-status = "in_progress"
+status = "blocked"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 Windows SSH；c7f2eb4a、afe963cc 核销真实 MP3／AAC（含裸 VBR）／WAV／AIFF／CAF／FLAC 和 24 位单声道、32 位六声道的时长与定位；a85ed10f 核销 257 MiB WAV 及 100 次开闭，32ea1864 核销引用型音轨拒绝及替换恢复。145 项宿主及 Debug 严格验签通过；仍待合法 DRM 样本及其余容量和并发组合。 e292869e 保留完整轨道索引的无样本 M4A 复现错误建 player，修复后独立文件及 Markdown 暂存均拒绝，原子替换后实际 readyToPlay；有效 WAV 先封口后验证 8000 样本；定点两项、原生媒体组及正式构建签名通过。 f9b124ca：保留完整轨道索引、全部媒体样本置零的 M4A/MP4，真实 AVAsset 仍报告可播；共享路径改为首个实际解码音频缓冲/视频帧。截断与置零均拒绝，原子替换恢复，Markdown 暂存同样验证。Red 6 失败、Green 76 通过无跳过；329 MB 视频 510s 定位及真实七格式百次切换通过。"
+note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 Windows SSH；c7f2eb4a、afe963cc 核销真实 MP3／AAC（含裸 VBR）／WAV／AIFF／CAF／FLAC 和 24 位单声道、32 位六声道的时长与定位；a85ed10f 核销 257 MiB WAV 及 100 次开闭，32ea1864 核销引用型音轨拒绝及替换恢复。145 项宿主及 Debug 严格验签通过；仍待合法 DRM 样本及其余容量和并发组合。 e292869e 保留完整轨道索引的无样本 M4A 复现错误建 player，修复后独立文件及 Markdown 暂存均拒绝，原子替换后实际 readyToPlay；有效 WAV 先封口后验证 8000 样本；定点两项、原生媒体组及正式构建签名通过。 f9b124ca：保留完整轨道索引、全部媒体样本置零的 M4A/MP4，真实 AVAsset 仍报告可播；共享路径改为首个实际解码音频缓冲/视频帧。截断与置零均拒绝，原子替换恢复，Markdown 暂存同样验证。Red 6 失败、Green 76 通过无跳过；329 MB 视频 510s 定位及真实七格式百次切换通过。 fd055633：未知 codec、损坏有轨容器、64 MiB 精确暂存两侧、正常替换恢复；17 项原生媒体专项通过。 fd055633 原生无样本及损坏媒体拒绝、64 MiB 两侧嵌入上限；bc97976c 1,382,400,044 字节四小时 WAV 首中末真实 PCM 与校验和、约 21.6 MiB RSS 增量；e4267d71 真加载中改名及关闭各十次通过。待合法 DRM 样本及未覆盖环境。 阻塞：合法 DRM 样本及未覆盖的授权 Linux SSH；实际 WAV／AAC／MP3／FLAC 等格式、4 小时真实时间轴、损坏／未知 codec／容量／并发与 Windows SSH 均有通过证据。"
 
 [[tasks]]
 id = "P1-T2"
 title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
-status = "in_progress"
+status = "blocked"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "919d2c41 原生 AVKit 控件；隔离 GUI 复验播放、定位、调速、音量、静音、切标签暂停和回到原标签。a85ed10f 核销实际 257 MiB WAV／MP3／ProRes 的 100 次交替播放与项目关闭，RSS 曲线稳定且无活跃播放器残留。设备输出／切换、睡眠、VoiceOver 与其他会话组合还未核销。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
+note = "919d2c41 原生 AVKit 控件；隔离 GUI 复验播放、定位、调速、音量、静音、切标签暂停和回到原标签。a85ed10f 核销实际 257 MiB WAV／MP3／ProRes 的 100 次交替播放与项目关闭，RSS 曲线稳定且无活跃播放器残留。设备输出／切换、睡眠、VoiceOver 与其他会话组合还未核销。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。 d5698ca3：真实宿主 AX 按钮、Markdown 暂存与独立媒体同源但各自 player；关闭及暂停隔离、私有目录和原字节通过。原生计时、媒体与 28 项生命周期均在后续 291 项回归通过。 d5698ca3/8c6b63b1 两所有者实际 AX 加载、seek、暂停、关闭独立，暂存清理；百次交替开闭和长音频真实定位已核销。尚需物理声音输出／切换、睡眠、VoiceOver 和完整 App 长会话。 阻塞：物理声音输出及设备切换、真实系统睡眠、VoiceOver 和完整 App 多窗口长会话；已有真实 AVPlayer、宿主 AX 与部分隔离 GUI 证据。"
 
 [[tasks]]
 id = "P2-T1"

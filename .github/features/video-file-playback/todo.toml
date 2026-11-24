@@ -1,21 +1,21 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
 title = "与音频共享的本机媒体检查、路由及版本保护"
-status = "in_progress"
+status = "blocked"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "cdf773a3 共用读取、ddf88857 真 Windows 隔离、7452b16d 核销 HEVC／ProRes／M4V。c7f2eb4a 核销逾 256 MiB ProRes 的末段像素，a85ed10f 核销 100 次交替开闭，32ea1864 核销原生引用容器、跨项目依赖拒绝、Markdown 和同路径替换恢复。145 宿主及 Debug 验签通过；仍待受保护／不完整容器、其余画幅和并发关键组合。 e292869e 保留完整轨道索引的无样本 MP4 复现错误建 player，修复后两入口拒绝、替换恢复；329018738 字节 ProRes 在 510s 定位和百次开闭回归通过，正式 Debug 验签。 f9b124ca：保留完整轨道索引、全部媒体样本置零的 M4A/MP4，真实 AVAsset 仍报告可播；共享路径改为首个实际解码音频缓冲/视频帧。截断与置零均拒绝，原子替换恢复，Markdown 暂存同样验证。Red 6 失败、Green 76 通过无跳过；329 MB 视频 510s 定位及真实七格式百次切换通过。"
+note = "cdf773a3 共用读取、ddf88857 真 Windows 隔离、7452b16d 核销 HEVC／ProRes／M4V。c7f2eb4a 核销逾 256 MiB ProRes 的末段像素，a85ed10f 核销 100 次交替开闭，32ea1864 核销原生引用容器、跨项目依赖拒绝、Markdown 和同路径替换恢复。145 宿主及 Debug 验签通过；仍待受保护／不完整容器、其余画幅和并发关键组合。 e292869e 保留完整轨道索引的无样本 MP4 复现错误建 player，修复后两入口拒绝、替换恢复；329018738 字节 ProRes 在 510s 定位和百次开闭回归通过，正式 Debug 验签。 f9b124ca：保留完整轨道索引、全部媒体样本置零的 M4A/MP4，真实 AVAsset 仍报告可播；共享路径改为首个实际解码音频缓冲/视频帧。截断与置零均拒绝，原子替换恢复，Markdown 暂存同样验证。Red 6 失败、Green 76 通过无跳过；329 MB 视频 510s 定位及真实七格式百次切换通过。 fd055633：实际 MP4 192 个 H.264 样本置零而音频原样，Red 独立及嵌入错误降级，Green 两入口拒绝和正常替换恢复；未知 codec、暂存边界与 329 MB 真视频 seek 通过。审计 F-01 已 Resolved。 fd055633 实际全部视频样本损坏而音轨有效的双入口 Red→Green；bc97976c 7200 秒实际 H.264 输出、跨时段原生 seek、像素及源字节；e4267d71 真加载中改名及关闭各十次通过。待合法 DRM 样本及未覆盖环境。 阻塞：合法受保护视频样本及未覆盖的授权 Linux SSH；真实样本格式、损坏轨道、超大文件、两小时真实时间轴及加载竞态已核销。"
 
 [[tasks]]
 id = "P1-T2"
 title = "原生 AVPlayerView 画面内操控与文件生命周期"
-status = "in_progress"
+status = "blocked"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "c0b414a4 核销系统全屏往返和失焦；02d2af1b 核销原生字幕与实际中文提示；f2a17092 按真实轨道约束原生控件，横屏／旋转竖屏×三种窗格尺寸、隔离 GUI 的画面内时间轴和字幕开／关像素通过。146 项宿主（含真 Windows SSH）、5 项相关 GUI 路径（字幕单独复跑）、Debug 严格验签通过；剩余实际多屏、其它画幅、设备切换和 VoiceOver。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
+note = "c0b414a4 核销系统全屏往返和失焦；02d2af1b 核销原生字幕与实际中文提示；f2a17092 按真实轨道约束原生控件，横屏／旋转竖屏×三种窗格尺寸、隔离 GUI 的画面内时间轴和字幕开／关像素通过。146 项宿主（含真 Windows SSH）、5 项相关 GUI 路径（字幕单独复跑）、Debug 严格验签通过；剩余实际多屏、其它画幅、设备切换和 VoiceOver。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。 fd055633：六类画幅×三种窗格实际几何、4K 10-bit PQ BT.2020 真实样本、双音轨通过；d5698ca3：Markdown 和独立播放器实际 AX 加载、seek／暂停／关闭互不影响。291 项补跑全过；宿主不冒充完整 App VoiceOver、实际 HDR 显示及有声输出。 六画幅×三窗格及实际 4K HEVC Main10 解码、HDR 元数据、字幕和双音轨；d5698ca3/8c6b63b1 独立及嵌入播放器 AX 与生命周期。尚需真实 HDR/外接屏、设备切换、睡眠、VoiceOver 和完整 App 长会话。 阻塞：实体 1×／外接 HDR 屏／多屏、设备切换、睡眠、VoiceOver 与完整 App 多窗口长会话；当前真实画幅／HDR 解码／字幕／生命周期及部分隔离 GUI 通过，不冒充物理呈现。"
 
 [[tasks]]
 id = "P2-T1"

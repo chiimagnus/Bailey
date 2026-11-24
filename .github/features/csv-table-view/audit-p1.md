@@ -91,4 +91,5 @@
   不能证明 1× 下的字形和分隔线可见性；有相应设备时复跑同一 GUI。
 - 没有发现获授权的 Linux SSH 测试别名；真实 Windows Tailscale 和本机路径已测，
   不能代替 POSIX 远端同名文件、断线／重连的完整 App 操作；补验需 Linux 测试环境。
-
+- 最终 e4267d71：共享读取、文件归属、原生生命周期与 330 项受影响宿主回归全过（含 JPEG 边界补测）；此前 CSV 专项及隔离 GUI 证据不变。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
