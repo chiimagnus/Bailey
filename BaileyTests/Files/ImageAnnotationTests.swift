@@ -5,6 +5,34 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
+/// Drops the response only after the real remote command has succeeded.
+private actor AnnotationAcknowledgementRunner: RemoteCommandRunner {
+    let base: SSHHostCommandRunner
+    private var dropNextPublication = false
+
+    init(host: String, socket: String) { base = SSHHostCommandRunner(host: host, socket: socket) }
+
+    func loseNextAcknowledgement() { dropNextPublication = true }
+
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data) {
+        let result = try await base.run(argv, stdin: stdin, timeout: timeout)
+        if dropNextPublication, stdin != nil, result.status == 0,
+           argv.first?.contains(#"cat > "$stage/item""#) == true {
+            dropNextPublication = false
+            return (255, Data(), Data("SSH publication acknowledgement lost".utf8))
+        }
+        return result
+    }
+
+    func runLimited(_ argv: [String], stdin: Data?, timeout: TimeInterval,
+                    stdoutLimit: Int, stderrLimit: Int) async throws
+        -> (status: Int32, stdout: Data, stderr: Data) {
+        try await base.runLimited(argv, stdin: stdin, timeout: timeout,
+                                  stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
+    }
+}
+
 @MainActor
 final class ImageAnnotationTests: XCTestCase {
     private func makeRoot() throws -> URL {
@@ -253,6 +281,35 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(document.state, draft)
     }
 
+    func testClippedPreviewAndExportPreserveStrokesExtendingBeyondShapeBounds() async throws {
+        let source = try image(png())
+        let bounds = CGRect(x: 0, y: 0, width: source.width, height: source.height)
+        let poster = RasterDetail.Patch(image: source, rect: bounds)
+        let crop = CGRect(x: 60, y: 20, width: 20, height: 40)
+        let options = ImageAnnotationDrawing.Options(width: 20, height: 40)
+        for kind in [ImageAnnotationLayer.Kind.rectangle, .ellipse] {
+            let state = ImageAnnotationState(layers: [
+                .init(kind: kind, start: CGPoint(x: 40, y: 25),
+                      end: CGPoint(x: 59, y: 55), color: .red, strokeWidth: 8)
+            ], crop: crop)
+            let whole = try await ImageAnnotationDrawing.preview(
+                state, poster: poster, detail: nil, region: bounds, scale: 1)
+            let partial = try await ImageAnnotationDrawing.preview(
+                state, poster: poster, detail: nil, region: crop, scale: 1)
+            let exported = try await ImageAnnotationDrawing.export(state, source: .whole(source), options: options)
+            let output = try image(exported)
+            let expected = try pixel(whole.image, x: 60, y: 40)
+            XCTAssertGreaterThan(expected.redComponent - expected.greenComponent, 0.5)
+            for image in [partial.image, output] {
+                let actual = try pixel(image, x: 0, y: 20)
+                XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.02, "\(kind)")
+                XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.02, "\(kind)")
+                XCTAssertEqual(actual.blueComponent, expected.blueComponent, accuracy: 0.02, "\(kind)")
+                XCTAssertEqual(actual.alphaComponent, expected.alphaComponent, accuracy: 0.02, "\(kind)")
+            }
+        }
+    }
+
     func testConcurrentFilteredExportsKeepTheirOwnPixelsAndColorSpace() async throws {
         let source = try image(png())
         let size = CGSize(width: source.width, height: source.height)
@@ -394,7 +451,8 @@ final class ImageAnnotationTests: XCTestCase {
             throw XCTSkip("Requires the authorized isolated Windows SSH host")
         }
         let socket = "/tmp/bailey-annotation-" + UUID().uuidString.prefix(8) + ".sock"
-        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
+        let runner = AnnotationAcknowledgementRunner(host: host, socket: socket)
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 25)
         let created = try await backend.run(argv: ["mktemp", "-d", "/tmp/bailey-annotation-XXXXXX"],
             cwd: nil, env: nil, stdin: nil, timeout: 25)
         XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
@@ -464,8 +522,37 @@ final class ImageAnnotationTests: XCTestCase {
             let restored = await ImageAnnotationSidecar.load(image: path, backend: backend, version: version, size: size)
             guard case .existing(let state, _) = restored else { throw WorkspaceError.notFound }
             XCTAssertEqual(state, replacedPair.0 ? first.state : second.state)
+            // A lost reply is not a rejected publication. Prove both the
+            // initial create and a later update against the real remote bytes.
+            let recoveryName = "acknowledgement.png"
+            let recoveryPath = root + "/" + recoveryName
+            let recoveryTarget = ImageAnnotationSidecar.path(for: recoveryPath)
+            try await backend.write(path: recoveryPath, data: original)
+            await runner.loseNextAcknowledgement()
+            try await ImageAnnotationSidecar.publish(a, image: recoveryPath, backend: backend,
+                                                    version: version, previous: nil)
+            let createdBytes = try await backend.read(path: recoveryTarget, maxBytes: a.count)
+            XCTAssertEqual(createdBytes, a)
+            do {
+                try await ImageAnnotationSidecar.publish(a, image: recoveryPath, backend: backend,
+                                                        version: version, previous: nil)
+                XCTFail("A definite already-exists response must remain a rejection, even for identical bytes")
+            } catch let error as CocoaError where error.code == .fileWriteFileExists {}
+            await runner.loseNextAcknowledgement()
+            try await ImageAnnotationSidecar.publish(b, image: recoveryPath, backend: backend,
+                                                    version: version, previous: WorkspaceFileVersion(data: a))
+            let updatedBytes = try await backend.read(path: recoveryTarget, maxBytes: b.count)
+            XCTAssertEqual(updatedBytes, b)
+            do {
+                try await ImageAnnotationSidecar.publish(b, image: recoveryPath, backend: backend,
+                                                        version: version, previous: WorkspaceFileVersion(data: a))
+                XCTFail("A definite changed-version response must remain a rejection")
+            } catch WorkspaceError.changedExternally {}
+            let recoverySource = try await backend.read(path: recoveryPath, maxBytes: original.count)
+            XCTAssertEqual(recoverySource, original)
             let remaining = try await backend.list(directory: root)
-            XCTAssertEqual(Set(remaining.map(\.name)), [name, name + ImageAnnotationSidecar.suffix])
+            XCTAssertEqual(Set(remaining.map(\.name)), [name, name + ImageAnnotationSidecar.suffix,
+                recoveryName, recoveryName + ImageAnnotationSidecar.suffix])
             let remoteSource = try await backend.read(path: path, maxBytes: original.count)
             XCTAssertEqual(remoteSource, original)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), local)

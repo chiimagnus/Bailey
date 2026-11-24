@@ -242,7 +242,6 @@ nonisolated enum ImageAnnotationDrawing {
         let filters = state.hasFilters ? filterContext : nil
         for layer in state.layers {
             try Task.checkCancellation()
-            guard layer.hitBounds.intersects(region) else { continue }
             if !layer.kind.filtersPixels {
                 drawVector(layer, in: context)
                 continue

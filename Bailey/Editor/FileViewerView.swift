@@ -82,6 +82,13 @@ final class FileTab: nonisolated Identifiable {
     private(set) var gifPlayback: GIFPlayback?
     private(set) var svgPreview: SVGPreviewSnapshot?
     private(set) var imageAnnotations: ImageAnnotationDocument?
+    /// A publication may have reached the same machine even if its response
+    /// or connection was lost. Keep the attempted snapshot until read-back.
+    private struct AnnotationPublication {
+        let state: ImageAnnotationState
+        let version: WorkspaceFileVersion
+    }
+    @ObservationIgnored private var pendingAnnotationPublication: AnnotationPublication?
     private(set) var annotationError: String?
     @ObservationIgnored var graphicViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
@@ -858,7 +865,7 @@ final class FileTab: nonisolated Identifiable {
                 if !dirty { nativeCodeUnitDelta = [:] }
             }
         } else if case .image = content {
-            dirty = imageAnnotations?.isDirty == true
+            dirty = imageAnnotations?.isDirty == true || pendingAnnotationPublication != nil
         } else {
             dirty = false
         }
@@ -969,6 +976,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func retireImageAnnotations() {
+        pendingAnnotationPublication = nil
         imageAnnotations?.permitsMutation = { false }
         imageAnnotations?.onChange = nil
         imageAnnotations?.undoManager.removeAllActions()
@@ -1005,26 +1013,51 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func writeCurrentAnnotations() async {
-        guard let document = imageAnnotations, document.isDirty else { return }
+        guard let document = imageAnnotations, isDirty else { return }
         guard !isRetired, readOnlyReason == nil, reloadError == nil,
               let version = savedSourceVersion else {
             saveError = readOnlyReason ?? String(localized: "The original image is unavailable.", table: "Editor")
             return
         }
-        let snapshot = document.state
-        let previous = document.sidecarVersion
         let target = backend
         let savedPath = path
         let generation = targetGeneration
         invalidateReload()
         do {
+            if let pending = pendingAnnotationPublication {
+                let confirmed = try await ImageAnnotationSidecar.confirmsPublication(
+                    image: savedPath, backend: target, version: version, written: pending.version)
+                guard generation == targetGeneration, imageAnnotations === document,
+                      path == savedPath, readOnlyReason == nil else { return }
+                pendingAnnotationPublication = nil
+                if confirmed {
+                    document.markSaved(pending.state, version: pending.version)
+                } else {
+                    refreshDirtyState()
+                }
+                saveError = nil
+            }
+            guard document.isDirty else { return }
+            let snapshot = document.state
+            let previous = document.sidecarVersion
             let bytes = try await ImageAnnotationSidecar.encode(snapshot, version: version, size: document.size)
             guard generation == targetGeneration, imageAnnotations === document, path == savedPath,
                   readOnlyReason == nil else { throw WorkspaceError.changedExternally }
-            try await ImageAnnotationSidecar.publish(bytes, image: savedPath, backend: target,
-                                                     version: version, previous: previous)
+            let written = WorkspaceFileVersion(data: bytes)
+            pendingAnnotationPublication = AnnotationPublication(state: snapshot, version: written)
+            do {
+                try await ImageAnnotationSidecar.publish(bytes, image: savedPath, backend: target,
+                                                         version: version, previous: previous)
+            } catch {
+                if imageAnnotations === document, !ImageAnnotationSidecar.publicationUncertain(error) {
+                    pendingAnnotationPublication = nil
+                    refreshDirtyState()
+                }
+                throw error
+            }
             guard generation == targetGeneration, imageAnnotations === document, path == savedPath else { return }
-            document.markSaved(snapshot, version: WorkspaceFileVersion(data: bytes))
+            pendingAnnotationPublication = nil
+            document.markSaved(snapshot, version: written)
             saveError = nil
         } catch {
             guard generation == targetGeneration, imageAnnotations === document else { return }

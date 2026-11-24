@@ -81,41 +81,96 @@ nonisolated enum ImageAnnotationSidecar {
         guard version.matches(bytes) else { throw WorkspaceError.changedExternally }
     }
 
+    /// Only uncertain transport outcomes permit reconciliation, never a
+    /// definitive version conflict, occupied destination or cancellation.
+    static func publicationUncertain(_ error: Error) -> Bool {
+        switch error {
+        case WorkspaceError.timedOut, RemoteConnectionError.notConnected:
+            return true
+        case let failure as RemoteCommandFailure:
+            return failure.status == 255 || failure.status == -2
+        case RemoteConnectionError.commandFailed(let status, _):
+            return status == 255 || status == -2
+        default:
+            return false
+        }
+    }
+
+    @concurrent static func confirmsPublication(image: String, backend: WorkspaceBackend,
+                                                version: WorkspaceFileVersion,
+                                                written: WorkspaceFileVersion) async throws -> Bool {
+        let target = path(for: image)
+        guard let info = try await backend.stat(path: target), info.isRegular,
+              !info.isSymlink, info.size == written.byteCount else { return false }
+        let bytes: Data
+        do {
+            bytes = try await backend.read(path: target, maxBytes: written.byteCount)
+        } catch WorkspaceError.notFound {
+            return false
+        } catch WorkspaceError.tooLarge {
+            return false
+        }
+        try Task.checkCancellation()
+        guard written.matches(bytes) else { return false }
+        try await verifySource(image, backend: backend, version: version)
+        return true
+    }
+
     @concurrent static func publish(_ data: Data, image: String, backend: WorkspaceBackend,
                                     version: WorkspaceFileVersion, previous: WorkspaceFileVersion?) async throws {
         let target = path(for: image)
         try await verifySource(image, backend: backend, version: version)
         try Task.checkCancellation()
-        if let previous {
-            guard let info = try await backend.stat(path: target), info.isRegular, !info.isSymlink else {
-                throw WorkspaceError.changedExternally
-            }
-            try await backend.write(path: target, data: data, ifUnchanged: previous)
-        } else if let local = backend as? LocalWorkspaceBackend {
-            try await local.writeNewFile(path: target, data: data)
-        } else if let remote = backend as? SSHWorkspaceBackend {
-            try await remote.writeNewFile(path: target, data: data)
-        } else {
-            // The backend's exclusive copy is the publication boundary.
-            // A random private sibling owns the only temporary bytes.
-            let parent = (target as NSString).deletingLastPathComponent
-            let stage = (parent as NSString).appendingPathComponent(".bailey-annotations-" + UUID().uuidString)
-            try await backend.createDirectory(path: stage)
-            do {
-                let item = (stage as NSString).appendingPathComponent("item")
-                try await backend.write(path: item, data: data)
-                try await verifySource(image, backend: backend, version: version)
-                try Task.checkCancellation()
-                try await backend.copy(from: item, to: target)
-            } catch {
-                // Cleanup uses the same machine; it must never delete the destination.
+        do {
+            if let previous {
+                guard let info = try await backend.stat(path: target), info.isRegular, !info.isSymlink else {
+                    throw WorkspaceError.changedExternally
+                }
+                try await backend.write(path: target, data: data, ifUnchanged: previous)
+            } else if let local = backend as? LocalWorkspaceBackend {
+                try await local.writeNewFile(path: target, data: data)
+            } else if let remote = backend as? SSHWorkspaceBackend {
+                try await remote.writeNewFile(path: target, data: data)
+            } else {
+                // The backend's exclusive copy is the publication boundary.
+                // A random private sibling owns the only temporary bytes.
+                let parent = (target as NSString).deletingLastPathComponent
+                let stage = (parent as NSString).appendingPathComponent(".bailey-annotations-" + UUID().uuidString)
+                try await backend.createDirectory(path: stage)
+                do {
+                    let item = (stage as NSString).appendingPathComponent("item")
+                    try await backend.write(path: item, data: data)
+                    try await verifySource(image, backend: backend, version: version)
+                    try Task.checkCancellation()
+                    try await backend.copy(from: item, to: target)
+                } catch {
+                    // Cleanup uses the same machine; it must never delete the destination.
+                    _ = await Task.detached { try? await backend.delete(paths: [stage]) }.value
+                    throw error
+                }
                 _ = await Task.detached { try? await backend.delete(paths: [stage]) }.value
-                throw error
             }
-            _ = await Task.detached { try? await backend.delete(paths: [stage]) }.value
+            // A different source must not make this revision look saved.
+            try await verifySource(image, backend: backend, version: version)
+        } catch {
+            guard publicationUncertain(error) else { throw error }
+            let publicationError = error
+            // Read back the exact attempted bytes; never retry a mutation
+            // whose result is unknown. A failed read leaves it unresolved.
+            let confirmed: Bool
+            do {
+                confirmed = try await confirmsPublication(
+                    image: image, backend: backend, version: version,
+                    written: WorkspaceFileVersion(data: data))
+            } catch WorkspaceError.changedExternally {
+                throw WorkspaceError.changedExternally
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw publicationError
+            }
+            guard confirmed else { throw publicationError }
         }
-        // A different source must not make this revision look saved.
-        try await verifySource(image, backend: backend, version: version)
     }
 
     /// Two separate directory entries cannot be moved/deleted atomically.

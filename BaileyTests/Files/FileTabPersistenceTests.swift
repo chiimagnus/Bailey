@@ -43,18 +43,20 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         if let data { continuation.resume(returning: data) }
         else { continuation.resume(throwing: Rejection.simulated) }
     }
-    func finishWrite(failing: Bool = false) {
+    func finishWrite(failing: Bool = false, transportTimedOut: Bool = false) {
         guard let pending = writing else { return }
         writing = nil
         writingPath = nil
         if failing {
-            pending.finish.resume(throwing: Rejection.simulated)
+            if transportTimedOut { pending.finish.resume(throwing: WorkspaceError.timedOut) }
+            else { pending.finish.resume(throwing: Rejection.simulated) }
         } else if let expected = pending.expected,
                   !(files[pending.path].map(expected.matches) ?? false) {
             pending.finish.resume(throwing: WorkspaceError.changedExternally)
         } else {
             files[pending.path] = pending.data
-            pending.finish.resume()
+            if transportTimedOut { pending.finish.resume(throwing: WorkspaceError.timedOut) }
+            else { pending.finish.resume() }
         }
     }
     func data(at path: String) -> Data? { files[path] }
@@ -2360,8 +2362,9 @@ final class FileTabPersistenceTests: XCTestCase {
         document.commitGesture(from: CGPoint(x: 40, y: 40), to: CGPoint(x: 70, y: 70))
         let second = document.state
         file.autoSaveOnFocusLoss()
-        await backend.finishWrite()
+        await backend.finishWrite(transportTimedOut: true)
         try await waitForFileTabState { document.savedState == first && file.isSaving }
+        XCTAssertNil(file.saveError, "Lost acknowledgement must reconcile the actual published revision")
         XCTAssertTrue(file.isDirty)
         let persistedFirst = await backend.data(at: sidecar)
         XCTAssertEqual(try ImageAnnotationSidecar.decode(try XCTUnwrap(persistedFirst),
@@ -2376,7 +2379,7 @@ final class FileTabPersistenceTests: XCTestCase {
         let unsaved = document.state
         file.autoSaveOnFocusLoss()
         try await waitForFileTabState { await backend.writingPath == sidecar }
-        await backend.finishWrite(failing: true)
+        await backend.finishWrite(failing: true, transportTimedOut: true)
         try await waitForFileTabState { !file.isSaving }
         XCTAssertTrue(file.isDirty)
         XCTAssertNotNil(file.saveError)
@@ -2386,6 +2389,77 @@ final class FileTabPersistenceTests: XCTestCase {
         let untouched = await backend.data(at: path)
         XCTAssertEqual(retained, persistedSecond)
         XCTAssertEqual(untouched, original)
+
+        // Disconnect after a successful publication and make read-back over
+        // the old channel fail too. Reconnect to the same machine and preserve
+        // the newer edits while accepting only the exact published snapshot.
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        await backend.pauseOneRead()
+        file.rebindWorkspace(to: nil)
+        await backend.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { await backend.readingPath == sidecar }
+        let remotePublished = await backend.data(at: sidecar)
+        await backend.finishRead()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        let live = EditorWorkspaceFixture(path: path, contents: original, reportsRegularFiles: true)
+        await live.replace(path: sidecar, with: try XCTUnwrap(remotePublished))
+        file.rebindWorkspace(to: live)
+        XCTAssertTrue(file.isDirty)
+        document.commitGesture(from: CGPoint(x: 75, y: 70), to: CGPoint(x: 110, y: 95))
+        let later = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        XCTAssertEqual(document.savedState, unsaved)
+        XCTAssertTrue(file.isDirty)
+        await live.finishWrite()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertEqual(document.savedState, later)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let storedLater = await live.data(at: sidecar)
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(try XCTUnwrap(storedLater),
+                                                        version: version, size: size), later)
+
+        // Undoing an in-flight draft to the old baseline cannot make the
+        // document clean while publication is unresolved.
+        document.commitGesture(from: CGPoint(x: 2, y: 2), to: CGPoint(x: 12, y: 12))
+        let inFlight = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        document.undoManager.undo()
+        XCTAssertEqual(document.state, later)
+        XCTAssertTrue(file.isDirty)
+        await live.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertEqual(document.savedState, inFlight)
+        XCTAssertTrue(file.isDirty)
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        await live.finishWrite()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertEqual(document.savedState, later)
+        XCTAssertFalse(file.isDirty)
+
+        // The transport can also disappear after publication while another
+        // writer replaces the original image. Exact sidecar read-back alone
+        // must not mark an annotation for the obsolete source as saved.
+        document.commitGesture(from: CGPoint(x: 80, y: 10), to: CGPoint(x: 110, y: 35))
+        let finalDraft = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        await live.pauseOneRead()
+        await live.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { await live.readingPath == sidecar }
+        let published = await live.data(at: sidecar)
+        await live.replace(path: path, with: Data(repeating: 0xA5, count: original.count))
+        await live.finishRead(with: published)
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(document.savedState, later)
+        XCTAssertEqual(document.state, finalDraft)
     }
 
     func testFocusTriggeredSaveSerializesConcurrentEditsAndKeepsFailures() async throws {
