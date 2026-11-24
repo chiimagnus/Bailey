@@ -343,6 +343,139 @@ final class HTMLFilePreviewTests: XCTestCase {
         try await waitUntil { probe.count == 1 }
     }
 
+    func testSharedSVGSubresourcesCannotReachOutsideFileOrNetwork() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: false)
+        let outside = root.appendingPathComponent("private.png")
+        let sentinel = try solidPNG(width: 48, height: 24, red: 1, green: 0, blue: 0)
+        try sentinel.write(to: outside)
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters)
+        let probe = ConnectionProbe()
+        listener.newConnectionHandler = { connection in
+            Task { @MainActor in
+                probe.count += 1
+                connection.cancel()
+            }
+        }
+        listener.start(queue: .main)
+        defer { listener.cancel() }
+        try await waitUntil { listener.port != nil }
+        let endpoint = "http://127.0.0.1:\(try XCTUnwrap(listener.port).rawValue)"
+        let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+                 xmlns:xi="http://www.w3.org/2001/XInclude" width="48" height="24">
+              <rect width="48" height="24" fill="#00cc00" onload="fetch('\(endpoint)/event')"/>
+              <image width="48" height="24" href="\(endpoint)/image"/>
+              <image width="48" height="24" xlink:href="\(outside.absoluteString)"/>
+              <image width="48" height="24" href="../private.png"/>
+              <xi:include href="\(endpoint)/include"/>
+              <foreignObject width="48" height="24"><img xmlns="http://www.w3.org/1999/xhtml" src="\(endpoint)/foreign"/></foreignObject>
+              <style>@import url('\(endpoint)/style');</style>
+              <script>fetch('\(endpoint)/script')</script>
+            </svg>
+            """
+        let bytes = Data(source.utf8)
+        let svgURL = project.appendingPathComponent("shared.svg")
+        try bytes.write(to: svgURL)
+        let entity = Data("<!DOCTYPE svg [<!ENTITY external SYSTEM '\(endpoint)/entity'>]><svg xmlns='http://www.w3.org/2000/svg' width='48' height='24'><text>&external;</text></svg>".utf8)
+        try entity.write(to: project.appendingPathComponent("entity.svg"))
+        XCTAssertThrowsError(try SVGArtwork.parse(entity))
+        let vector = try SVGArtwork.parse(bytes)
+        XCTAssertEqual(vector.image.size, CGSize(width: 48, height: 24))
+        XCTAssertEqual(Set(vector.omitted), ["@onload", "image", "include", "foreignObject", "style", "script"])
+        let markdownResource = PreviewResource(path: project.appendingPathComponent("README.md").path,
+                                               directory: project.path, backend: LocalWorkspaceBackend.shared)
+        let markdown = try await markdownResource.picture(XCTUnwrap(URL(string: "shared.svg")))
+        let markdownPixels = NSBitmapImageRep(cgImage: markdown.poster)
+        func isGreen(_ color: NSColor?) -> Bool {
+            guard let color = color?.usingColorSpace(.sRGB) else { return false }
+            return color.greenComponent > 0.65 && color.greenComponent - max(color.redComponent, color.blueComponent) > 0.3 && color.alphaComponent > 0.95
+        }
+        XCTAssertTrue(isGreen(markdownPixels.colorAt(x: 48, y: 24)))
+
+        let svg = FileTab(path: svgURL.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await svg.waitForText()
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); svg.retireContent() }
+        let host = NSHostingView(rootView: FileViewerView(file: svg, resourceDirectory: project.path))
+        window.contentView = host
+        window.orderFront(nil)
+        func canvas(in view: NSView) -> SVGPreviewScrollView? {
+            (view as? SVGPreviewScrollView) ?? view.subviews.lazy.compactMap { canvas(in: $0) }.first
+        }
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            return canvas(in: host)?.documentView?.subviews.first?.frame.size == vector.image.size
+        }
+        let native = try XCTUnwrap(canvas(in: host))
+        let document = try XCTUnwrap(native.documentView)
+        native.setZoom(4, at: CGPoint(x: 24, y: 12))
+        native.layoutSubtreeIfNeeded()
+        func nativeCenterIsGreen() -> Bool {
+            window.displayIfNeeded()
+            guard let pixels = native.bitmapImageRepForCachingDisplay(in: native.bounds) else { return false }
+            native.cacheDisplay(in: native.bounds, to: pixels)
+            let center = document.convert(CGPoint(x: 24, y: 12), to: native)
+            let column = Int(center.x * CGFloat(pixels.pixelsWide) / native.bounds.width)
+            let row = Int(center.y * CGFloat(pixels.pixelsHigh) / native.bounds.height)
+            guard (0..<pixels.pixelsWide).contains(column), (0..<pixels.pixelsHigh).contains(row) else { return false }
+            return isGreen(pixels.colorAt(x: column, y: row))
+        }
+        do { try await waitUntil { nativeCenterIsGreen() } }
+        catch {
+            if let bitmap = native.bitmapImageRepForCachingDisplay(in: native.bounds) {
+                native.cacheDisplay(in: native.bounds, to: bitmap)
+                let attachment = XCTAttachment(image: NSImage(size: native.bounds.size, flipped: false) { _ in bitmap.draw(in: native.bounds); return true })
+                attachment.name = "Native SVG canvas"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                print("SVG geometry: \(native.bounds), \(document.frame), \(native.contentView.bounds), \(document.convert(CGPoint(x: 24, y: 12), to: native)), \(bitmap.pixelsWide)x\(bitmap.pixelsHigh)")
+            }
+            XCTFail("The native SVG canvas did not paint the expected green center: \(error)")
+        }
+
+        let page = try await open("<img id='safe' src='shared.svg'><img id='entity' src='entity.svg'>", in: project)
+        let webView = try await display(page, in: project)
+        let widths = try await webView.evaluateJavaScript(
+            "Array.from(document.images, img => img.naturalWidth)", contentWorld: .defaultClient
+        ) as? [Int]
+        XCTAssertEqual(widths, [48, 0])
+        // A custom-scheme image can taint a JavaScript canvas; inspect the actual native snapshot instead.
+        let bounds = try await webView.evaluateJavaScript("""
+            const r = document.getElementById('safe').getBoundingClientRect(); [r.x, r.y, r.width, r.height];
+            """, contentWorld: .defaultClient) as? [Double]
+        let rect = try XCTUnwrap(bounds)
+        XCTAssertEqual(rect.count, 4)
+        guard rect.count == 4 else { return }
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3])
+        let imageData: Data = try await withCheckedThrowingContinuation { continuation in
+            webView.takeSnapshot(with: configuration) { snapshot, error in
+                if let data = snapshot?.tiffRepresentation { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile)) }
+            }
+        }
+        let pixels = try XCTUnwrap(NSBitmapImageRep(data: imageData))
+        XCTAssertTrue(isGreen(pixels.colorAt(x: pixels.pixelsWide / 2, y: pixels.pixelsHigh / 2)))
+        let quiet = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in probe.count > 0 }, object: nil)
+        quiet.isInverted = true
+        await fulfillment(of: [quiet], timeout: 1)
+        XCTAssertEqual(probe.count, 0)
+        let control = NWConnection(host: "127.0.0.1", port: try XCTUnwrap(listener.port), using: .tcp)
+        control.start(queue: .main)
+        defer { control.cancel() }
+        try await waitUntil { probe.count == 1 }
+        XCTAssertEqual(try Data(contentsOf: svgURL), bytes)
+        XCTAssertEqual(try Data(contentsOf: outside), sentinel)
+        XCTAssertFalse(svg.isDirty)
+    }
+
     func testComprehensiveAcceptanceDocumentWithRealStylesAndImages() async throws {
         guard let path = ProcessInfo.processInfo.environment["BAILEY_HTML_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_HTML_ACCEPTANCE_ROOT to the comprehensive sample directory")
