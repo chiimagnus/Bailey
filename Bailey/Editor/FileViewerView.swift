@@ -70,10 +70,10 @@ final class FileTab: nonisolated Identifiable {
 
     private(set) var content: Content
     private(set) var mediaPlayer: AVPlayer?
-    private(set) var htmlPreview: HTMLPreview? {
     private(set) var mediaEnvironmentRevision: UInt = 0
     private(set) var mediaSleeping = false
     @ObservationIgnored private var mediaEnvironmentObservation: NativeMediaEnvironmentObservation?
+    private(set) var htmlPreview: HTMLPreview? {
         didSet {
             if let oldValue, oldValue !== htmlPreview { oldValue.retire() }
         }
@@ -167,10 +167,6 @@ final class FileTab: nonisolated Identifiable {
         retireNativeEditor()
     }
 
-    private func retireMedia() {
-        mediaPlayer?.pause()
-        mediaPlayer?.currentItem?.cancelPendingSeeks()
-        mediaPlayer?.replaceCurrentItem(with: nil)
     func deactivate() {
         mediaPlayer?.pause()
         autoSaveOnFocusLoss()
@@ -201,12 +197,16 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
-        mediaPlayer = nil
+    private func retireMedia() {
         mediaEnvironmentObservation?.invalidate()
         mediaEnvironmentObservation = nil
         mediaSleeping = false
         mediaEnvironmentRevision &+= 1
         if case .media(let media) = content { media.asset.cancelLoading() }
+        mediaPlayer?.pause()
+        mediaPlayer?.currentItem?.cancelPendingSeeks()
+        mediaPlayer?.replaceCurrentItem(with: nil)
+        mediaPlayer = nil
     }
 
     private func installNativeDocument(_ text: String) {
@@ -1067,6 +1067,17 @@ final class FileTab: nonisolated Identifiable {
                     }
                 }
             }
+            // Reject a known replaced source before loading or decoding the
+            // new asset, not after that potentially slow validation finishes.
+            var reusableMedia = currentMedia
+            if let currentMedia, !(await NativeMedia.stillIdentifies(expectedPath, media: currentMedia)) {
+                guard !Task.isCancelled, let self, self.reloadGeneration == generation,
+                      !self.isDirty, self.readOnlyReason == nil else { return }
+                self.retireMedia()
+                self.content = .loading
+                self.reloadRevision &+= 1
+                reusableMedia = nil
+            }
             let loaded: LoadedContent
             do {
                 loaded = try await Self.readContent(
@@ -1179,17 +1190,6 @@ final class FileTab: nonisolated Identifiable {
         case (.text, .text):
             return fileEncoding == loaded.encoding && TextFileEncoding.hasIdenticalCodeUnits(savedText, loaded.text)
         case (.image, .image):
-            // Reject a known replaced source before loading or decoding the
-            // new asset, not after that potentially slow validation finishes.
-            var reusableMedia = currentMedia
-            if let currentMedia, !(await NativeMedia.stillIdentifies(expectedPath, media: currentMedia)) {
-                guard !Task.isCancelled, let self, self.reloadGeneration == generation,
-                      !self.isDirty, self.readOnlyReason == nil else { return }
-                self.retireMedia()
-                self.content = .loading
-                self.reloadRevision &+= 1
-                reusableMedia = nil
-            }
             return savedSourceVersion == loaded.sourceVersion
         case (.media(let current), .media(let new)):
             return current.asset === new.asset
