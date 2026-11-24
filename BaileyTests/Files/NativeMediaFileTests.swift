@@ -1229,6 +1229,69 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertNil(tab.mediaPlayer)
     }
 
+    func testRapidMediaRenameAndReopenCannotPublishAnObsoleteAsset() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features")
+        let video = try Data(contentsOf: fixtures.appending(path: "video-file-playback/demo-video.mp4"))
+        let audio = try Data(contentsOf: fixtures.appending(path: "audio-file-playback/demo-audio.m4a"))
+        let project = Project(fallbackName: "Media initial-load races", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        var loadingRenames = 0
+        var loadingCloses = 0
+        for index in 0..<10 {
+            let original = directory.appending(path: "original-\(index).mp4")
+            let moved = directory.appending(path: "renamed-\(index).mp4")
+            try video.write(to: original)
+            project.openLocalFile(original.path)
+            guard case .file(let initial)? = project.focusedContent else { return XCTFail("Missing initial file tab") }
+            initial.loadIfNeeded()
+            await Task.yield()
+            if case .loading = initial.content { loadingRenames += 1 }
+            let obsoletePlayer = initial.mediaPlayer
+            try FileManager.default.moveItem(at: original, to: moved)
+            try audio.write(to: original)
+            project.updateFilePaths(from: original.path, to: moved.path, workspace: nil)
+            XCTAssertNil(obsoletePlayer?.currentItem)
+            try await load(initial)
+            guard case .media(let renamed) = initial.content else { return XCTFail("Renamed video must load") }
+            XCTAssertEqual(renamed.kind, .video)
+            XCTAssertEqual(renamed.asset.url.path, try Self.canonicalPath(moved))
+            let renamedPlayer = try XCTUnwrap(initial.mediaPlayer)
+            project.closeContent(.file(initial))
+            XCTAssertNil(renamedPlayer.currentItem)
+
+            project.openLocalFile(original.path)
+            guard case .file(let pending)? = project.focusedContent else { return XCTFail("Missing replaced file tab") }
+            pending.loadIfNeeded()
+            await Task.yield()
+            if case .loading = pending.content { loadingCloses += 1 }
+            let pendingPlayer = pending.mediaPlayer
+            project.closeContent(.file(pending))
+            XCTAssertNil(pendingPlayer?.currentItem)
+            project.openLocalFile(original.path)
+            guard case .file(let reopened)? = project.focusedContent else { return XCTFail("Missing reopened file tab") }
+            XCTAssertFalse(reopened === pending)
+            try await load(reopened)
+            guard case .media(let current) = reopened.content else { return XCTFail("Replaced audio must load") }
+            XCTAssertEqual(current.kind, .audio)
+            XCTAssertEqual(current.asset.url.path, try Self.canonicalPath(original))
+            XCTAssertNil(initial.mediaPlayer)
+            XCTAssertNil(pending.mediaPlayer)
+            let reopenedPlayer = try XCTUnwrap(reopened.mediaPlayer)
+            XCTAssertTrue(reopenedPlayer.currentItem?.asset === current.asset)
+            project.closeAll()
+            XCTAssertNil(reopenedPlayer.currentItem)
+            XCTAssertEqual(try Data(contentsOf: moved), video)
+            XCTAssertEqual(try Data(contentsOf: original), audio)
+        }
+        XCTAssertGreaterThan(loadingRenames, 0, "Exercise a real rename before the initial load returns")
+        XCTAssertGreaterThan(loadingCloses, 0, "Exercise a real close before the initial load returns")
+        print("MEDIA_RACE cycles=10 loading_renames=\(loadingRenames) loading_closes=\(loadingCloses)")
+    }
+
     private func load(_ tab: FileTab) async throws {
         tab.loadIfNeeded()
         try await waitUntil {
