@@ -53,6 +53,106 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
+    func testFourHourPCMRecordingSeeksToActualEndSamplesWithoutWholeFileLoading() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "四小时录音.wav")
+        let seconds = 4 * 60 * 60
+        let sampleRate = 48_000
+        let bytesPerSecond = sampleRate * 2
+        let payloadBytes = seconds * bytesPerSecond
+        try Self.createWAV(url, payloadBytes: payloadBytes)
+        // A real PCM timeline: silent sparse regions and different tone markers at
+        // the beginning, midpoint and end. No fake duration or padded container.
+        let markers = [(0, 440.0), (seconds / 2, 660.0), (seconds - 1, 880.0)]
+        let tones: [(Int, Data)] = markers.map { offset, frequency in
+            var pcm = Data(capacity: bytesPerSecond)
+            for frame in 0..<sampleRate {
+                var sample = Int16(12_000 * sin(2 * .pi * frequency * Double(frame) / Double(sampleRate))).littleEndian
+                withUnsafeBytes(of: &sample) { pcm.append(contentsOf: $0) }
+            }
+            return (offset, pcm)
+        }
+        do {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            for (offset, pcm) in tones {
+                try handle.seek(toOffset: UInt64(44 + offset * bytesPerSecond))
+                try handle.write(contentsOf: pcm)
+            }
+        }
+        let original = try await Self.checksum(url)
+        let size = try XCTUnwrap(url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        XCTAssertEqual(size, payloadBytes + 44)
+        let residentBefore = Self.residentMiB()
+        var before = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
+        let start = ContinuousClock.now
+        let project = Project(fallbackName: "Four hour recording", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        project.openLocalFile(url.path)
+        guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file tab") }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("Long PCM must bypass text and staging limits") }
+        XCTAssertEqual(media.kind, .audio)
+        XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(url))
+        XCTAssertEqual(media.identity.size, Int64(size))
+        XCTAssertTrue(tab.text.isEmpty)
+        XCTAssertFalse(tab.isDirty)
+        let duration = try await media.asset.load(.duration)
+        XCTAssertEqual(duration.seconds, Double(seconds), accuracy: 0.001)
+        let tracks = try await media.asset.loadTracks(withMediaType: .audio)
+        let track = try XCTUnwrap(tracks.first)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        player.isMuted = true
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        for (offset, expected) in tones {
+            let target = CMTime(value: Int64(offset), timescale: 1)
+            let moved = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(moved)
+            XCTAssertEqual(player.currentTime().seconds, Double(offset), accuracy: 0.02)
+            let reader = try AVAssetReader(asset: media.asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+            ])
+            reader.add(output)
+            reader.timeRange = CMTimeRange(start: target, duration: CMTime(value: 1, timescale: 1))
+            XCTAssertTrue(reader.startReading(), String(describing: reader.error))
+            var decoded = Data()
+            while let sample = output.copyNextSampleBuffer() {
+                let buffer = try XCTUnwrap(sample.dataBuffer)
+                var pcm = Data(count: CMBlockBufferGetDataLength(buffer))
+                let copied = pcm.withUnsafeMutableBytes { bytes in
+                    CMBlockBufferCopyDataBytes(buffer, atOffset: 0, dataLength: bytes.count,
+                                               destination: bytes.baseAddress!)
+                }
+                XCTAssertEqual(copied, kCMBlockBufferNoErr)
+                decoded.append(pcm)
+            }
+            XCTAssertEqual(reader.status, .completed)
+            XCTAssertEqual(decoded, expected, "Decoded PCM must match the actual marker at \(offset)s")
+        }
+        player.play()
+        try await waitUntil { player.currentTime().seconds > Double(seconds - 1) + 0.025 }
+        player.pause()
+        var after = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &after), 0)
+        let residentAfter = Self.residentMiB()
+        print("MEDIA_FOUR_HOURS bytes=\(size) duration=\(duration.seconds) elapsed=\(start.duration(to: .now)) maxrss_delta=\(after.ru_maxrss - before.ru_maxrss) resident_mib=\(residentBefore)->\(residentAfter)")
+        XCTAssertLessThan(after.ru_maxrss - before.ru_maxrss, size / 2)
+        project.closeAll()
+        XCTAssertNil(player.currentItem)
+        XCTAssertNil(tab.mediaPlayer)
+        let checksum = try await Self.checksum(url)
+        XCTAssertEqual(checksum, original)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [url.lastPathComponent])
+    }
+
     func testDamagedMediaWithIntactMetadataIsRejectedAndCanRecover() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -563,6 +663,119 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [url.lastPathComponent])
     }
 
+    func testTwoHourVideoSeeksToRealEncodedFramesWithoutStaging() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let shortURL = directory.appending(path: "source.mov")
+        try await createVideoFixture(shortURL, size: CGSize(width: 96, height: 64), frameCount: 300)
+        let source = AVURLAsset(url: shortURL)
+        let segmentDuration = try await source.load(.duration)
+        XCTAssertEqual(segmentDuration.seconds, 30, accuracy: 0.11)
+        let composition = AVMutableComposition()
+        let segmentCount: Int32 = 240
+        for index in 0..<segmentCount {
+            try await composition.insertTimeRange(
+                CMTimeRange(start: .zero, duration: segmentDuration),
+                of: source, at: CMTimeMultiply(segmentDuration, multiplier: index)
+            )
+        }
+        let url = directory.appending(path: "两小时视频.mp4")
+        let export = try XCTUnwrap(AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough))
+        try await export.export(to: url, as: .mp4)
+        let size = try XCTUnwrap(url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        let original = try await Self.checksum(url)
+        let start = ContinuousClock.now
+        let project = Project(fallbackName: "Long video", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        project.openLocalFile(url.path)
+        guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file tab") }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("Expected playable long video") }
+        XCTAssertEqual(media.kind, .video)
+        XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(url))
+        XCTAssertEqual(media.identity.size, Int64(size))
+        let duration = try await media.asset.load(.duration)
+        XCTAssertEqual(duration.seconds, segmentDuration.seconds * Double(segmentCount), accuracy: 0.11)
+        XCTAssertGreaterThan(duration.seconds, 7_150)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        let generator = AVAssetImageGenerator(asset: media.asset)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        // Passthrough must retain the encoded video; independently opening the
+        // exported container is the pixel reference for AVPlayer's asset.
+        func firstEncodedSample(_ asset: AVAsset) async throws -> Data {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            let track = try XCTUnwrap(tracks.first)
+            let reader = try AVAssetReader(asset: asset)
+            defer { reader.cancelReading() }
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            reader.add(output)
+            XCTAssertTrue(reader.startReading(), String(describing: reader.error))
+            while let sample = output.copyNextSampleBuffer() {
+                guard let buffer = sample.dataBuffer else { continue }
+                let length = CMBlockBufferGetDataLength(buffer)
+                guard length > 0 else { continue }
+                var bytes = Data(count: length)
+                let status = bytes.withUnsafeMutableBytes {
+                    CMBlockBufferCopyDataBytes(buffer, atOffset: 0, dataLength: length, destination: $0.baseAddress!)
+                }
+                XCTAssertEqual(status, kCMBlockBufferNoErr)
+                return bytes
+            }
+            throw WorkspaceError.notFound
+        }
+        let referenceAsset = AVURLAsset(url: url)
+        let originalSample = try await firstEncodedSample(source)
+        let exportedSample = try await firstEncodedSample(referenceAsset)
+        XCTAssertEqual(originalSample, exportedSample)
+        let referenceGenerator = AVAssetImageGenerator(asset: referenceAsset)
+        referenceGenerator.requestedTimeToleranceBefore = .zero
+        referenceGenerator.requestedTimeToleranceAfter = .zero
+        let reference = try await referenceGenerator.image(at: CMTime(value: 2, timescale: 1))
+        func displayPixels(_ image: CGImage) throws -> Data {
+            let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            var bytes = Data(count: image.width * image.height * 4)
+            try bytes.withUnsafeMutableBytes { buffer in
+                let context = try XCTUnwrap(CGContext(
+                    data: buffer.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4, space: space,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
+            return bytes
+        }
+        let expectedPixels = try displayPixels(reference.image)
+        for index in [Int32(0), segmentCount / 2, segmentCount - 1, 0] {
+            let target = CMTimeAdd(CMTimeMultiply(segmentDuration, multiplier: index), CMTime(value: 2, timescale: 1))
+            let moved = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(moved)
+            XCTAssertEqual(player.currentTime().seconds, target.seconds, accuracy: 0.11)
+            let frame = try await generator.image(at: target)
+            XCTAssertEqual(frame.actualTime.seconds, target.seconds, accuracy: 0.11)
+            XCTAssertEqual(frame.image.width, 96)
+            XCTAssertEqual(frame.image.height, 64)
+            let pixels = try displayPixels(frame.image)
+            XCTAssertEqual(pixels, expectedPixels)
+        }
+        print("MEDIA_TWO_HOURS bytes=\(size) duration=\(duration.seconds) elapsed=\(start.duration(to: .now))")
+        XCTAssertFalse(tab.isDirty)
+        XCTAssertTrue(tab.text.isEmpty)
+        project.closeAll()
+        XCTAssertNil(tab.mediaPlayer)
+        XCTAssertNil(player.currentItem)
+        let checksum = try await Self.checksum(url)
+        XCTAssertEqual(checksum, original)
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)),
+                       Set([shortURL.lastPathComponent, url.lastPathComponent]))
+    }
+
     func testRepeatedPlaybackAndProjectCloseReleaseNativePlayersAcrossMediaKinds() async throws {
         guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
@@ -1062,7 +1275,7 @@ final class NativeMediaFileTests: XCTestCase {
     }
 
     private func createVideoFixture(_ url: URL, size: CGSize, pixelAspect: CGSize = CGSize(width: 1, height: 1),
-                                    aperture: CGSize? = nil, hdr: Bool = false) async throws {
+                                    aperture: CGSize? = nil, hdr: Bool = false, frameCount: Int = 3) async throws {
         let width = Int(size.width), height = Int(size.height)
         var settings: [String: Any] = [
             AVVideoCodecKey: hdr ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
@@ -1120,7 +1333,7 @@ final class NativeMediaFileTests: XCTestCase {
                 }
             }
         }
-        for index in 0..<3 {
+        for index in 0..<frameCount {
             try await waitUntil { input.isReadyForMoreMediaData || writer.status != .writing }
             guard writer.status == .writing, adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 10)) else {
                 throw writer.error ?? CocoaError(.fileWriteUnknown)
