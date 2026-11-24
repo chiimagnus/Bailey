@@ -33,13 +33,17 @@ nonisolated struct NativeMedia: Sendable {
                 guard playable, !protected else { throw Failure.unsupported }
                 let kind: Kind
                 let videoAspectRatio: CGFloat?
-                if let track = try await decodableTrack(.video, in: asset) {
+                let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                if !videoTracks.isEmpty {
+                    guard let track = try await decodableTrack(videoTracks, type: .video, in: asset) else {
+                        throw Failure.unsupported
+                    }
                     kind = .video
                     let (size, transform) = try await track.load(.naturalSize, .preferredTransform)
                     let displayed = CGRect(origin: .zero, size: size).applying(transform).size
                     let ratio = displayed.width / displayed.height
                     videoAspectRatio = ratio.isFinite && ratio > 0 ? ratio : nil
-                } else if try await decodableTrack(.audio, in: asset) != nil {
+                } else if try await decodableTrack(asset.loadTracks(withMediaType: .audio), type: .audio, in: asset) != nil {
                     kind = .audio
                     videoAspectRatio = nil
                 } else {
@@ -60,8 +64,8 @@ nonisolated struct NativeMedia: Sendable {
         }
     }
 
-    private static func decodableTrack(_ type: AVMediaType, in asset: AVURLAsset) async throws -> AVAssetTrack? {
-        for track in try await asset.loadTracks(withMediaType: type) {
+    private static func decodableTrack(_ tracks: [AVAssetTrack], type: AVMediaType, in asset: AVURLAsset) async throws -> AVAssetTrack? {
+        for track in tracks {
             try Task.checkCancellation()
             if try await track.load(.isDecodable, .isSelfContained) == (true, true),
                try hasDecodedSample(track, type: type, in: asset) { return track }

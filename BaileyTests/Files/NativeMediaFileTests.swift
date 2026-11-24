@@ -2,9 +2,11 @@ import AppKit
 import AVFoundation
 import AVKit
 import CryptoKit
+import CoreVideo
 import Darwin
 import Foundation
 import SwiftUI
+import VideoToolbox
 import XCTest
 @testable import Bailey
 
@@ -129,6 +131,226 @@ final class NativeMediaFileTests: XCTestCase {
                 XCTAssertEqual(try Data(contentsOf: recovered), original)
                 XCTAssertEqual(try Data(contentsOf: url), original)
             }
+        }
+    }
+
+    func testUndecodableVideoWithIntactAudioDoesNotMasqueradeAsAnAudioFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+        let original = try Data(contentsOf: fixture)
+        let source = AVURLAsset(url: fixture)
+        let tracks = try await source.loadTracks(withMediaType: .video)
+        let video = try XCTUnwrap(tracks.first)
+        let reader = try AVAssetReader(asset: source)
+        let output = AVAssetReaderTrackOutput(track: video, outputSettings: nil)
+        XCTAssertTrue(reader.canAdd(output))
+        reader.add(output)
+        XCTAssertTrue(reader.startReading(), String(describing: reader.error))
+        var damaged = original
+        var sampleCount = 0
+        while let sample = output.copyNextSampleBuffer() {
+            guard let buffer = sample.dataBuffer else { continue }
+            let count = CMBlockBufferGetDataLength(buffer)
+            guard count > 0 else { continue }
+            var packet = Data(count: count)
+            let status = packet.withUnsafeMutableBytes { bytes in
+                CMBlockBufferCopyDataBytes(buffer, atOffset: 0, dataLength: count,
+                                           destination: bytes.baseAddress!)
+            }
+            XCTAssertEqual(status, kCMBlockBufferNoErr)
+            let range = try XCTUnwrap(original.range(of: packet))
+            XCTAssertNil(original.range(of: packet, in: range.upperBound..<original.endIndex),
+                         "The fixture must identify actual video samples unambiguously")
+            damaged.replaceSubrange(range, with: Data(repeating: 0, count: count))
+            sampleCount += 1
+        }
+        XCTAssertEqual(reader.status, .completed)
+        XCTAssertGreaterThan(sampleCount, 10)
+        XCTAssertEqual(damaged.count, original.count)
+        let url = directory.appendingPathComponent("Corrupt video with valid audio.mp4")
+        try damaged.write(to: url)
+
+        let corrupt = AVURLAsset(url: url)
+        let playable = try await corrupt.load(.isPlayable)
+        XCTAssertTrue(playable, "Valid audio and track metadata must still satisfy the metadata-only check")
+        for type in [AVMediaType.video, .audio] {
+            let candidates = try await corrupt.loadTracks(withMediaType: type)
+            let track = try XCTUnwrap(candidates.first)
+            let decodable = try await track.load(.isDecodable)
+            XCTAssertTrue(decodable, "Codec metadata is valid even when all video payloads are damaged")
+            let decoder = try AVAssetReader(asset: corrupt)
+            let decoded = AVAssetReaderTrackOutput(track: track, outputSettings: type == .video
+                ? [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                : [AVFormatIDKey: kAudioFormatLinearPCM])
+            XCTAssertTrue(decoder.canAdd(decoded))
+            decoder.add(decoded)
+            XCTAssertTrue(decoder.startReading(), String(describing: decoder.error))
+            defer { decoder.cancelReading() }
+            var found = false
+            while let sample = decoded.copyNextSampleBuffer() {
+                guard sample.numSamples > 0 else { continue }
+                if type == .video, sample.imageBuffer != nil { found = true; break }
+                if type == .audio, let data = sample.dataBuffer, CMBlockBufferGetDataLength(data) > 0 {
+                    found = true
+                    break
+                }
+            }
+            XCTAssertEqual(found, type == .audio)
+        }
+
+        let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { tab.retireContent() }
+        try await load(tab)
+        if case .unavailable = tab.content {} else {
+            XCTFail("A container with an existing but undecodable video track is not an audio-only file")
+        }
+        XCTAssertNil(tab.mediaPlayer)
+        let resource = PreviewResource(path: directory.appendingPathComponent("Media.md").path,
+                                       directory: directory.path, backend: LocalWorkspaceBackend.shared)
+        var components = URLComponents()
+        components.path = url.lastPathComponent
+        let staged = try await MarkdownMedia.stage(try XCTUnwrap(components.url), from: resource)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        do {
+            _ = try await NativeMedia.open(staged.path)
+            XCTFail("The shared Markdown AVAsset validator must reject the damaged video")
+        } catch NativeMedia.Failure.unsupported {}
+        XCTAssertEqual(try Data(contentsOf: staged), damaged)
+        XCTAssertEqual(try Data(contentsOf: url), damaged)
+        try original.write(to: url, options: .atomic)
+        tab.reloadFromDiskIfClean()
+        try await waitUntil {
+            if case .media(let media) = tab.content { return media.kind == .video }
+            return false
+        }
+        XCTAssertNotNil(tab.mediaPlayer)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        XCTAssertEqual(try Data(contentsOf: fixture), original)
+    }
+
+    func testMarkdownMediaStagesExactByteBoundaryButStandaloneCanOpenBeyondIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features/audio-file-playback/demo-audio.m4a")
+        let original = try Data(contentsOf: fixture)
+        let resource = PreviewResource(path: directory.appendingPathComponent("Media.md").path,
+                                       directory: directory.path, backend: LocalWorkspaceBackend.shared)
+        let limit = 64 << 20
+        for size in [limit - 1, limit, limit + 1] {
+            let source = directory.appendingPathComponent("boundary-\(size).m4a")
+            // A real ISO media free box extends a playable M4A to the exact
+            // byte boundary without corrupting the track index or samples.
+            try original.write(to: source)
+            let handle = try FileHandle(forWritingTo: source)
+            try handle.seekToEnd()
+            var length = UInt32(size - original.count).bigEndian
+            let header = withUnsafeBytes(of: &length) { Data($0) } + Data("free".utf8)
+            try handle.write(contentsOf: header)
+            try handle.truncate(atOffset: UInt64(size))
+            try handle.close()
+            let before = try await Self.checksum(source)
+            let tab = FileTab(path: source.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            guard case .media(let media) = tab.content else {
+                return XCTFail("A valid independent M4A must remain playable at \(size) bytes")
+            }
+            XCTAssertEqual(media.kind, .audio)
+            XCTAssertEqual(media.identity.size, Int64(size))
+            XCTAssertEqual(media.asset.url.path, try Self.canonicalPath(source))
+            let reference = try XCTUnwrap(URL(string: source.lastPathComponent))
+            if size <= limit {
+                let staged = try await MarkdownMedia.stage(reference, from: resource)
+                defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+                XCTAssertNotEqual(staged.path, source.path)
+                let stagedChecksum = try await Self.checksum(staged)
+                XCTAssertEqual(stagedChecksum, before)
+                let embedded = try await NativeMedia.open(staged.path)
+                XCTAssertEqual(embedded.kind, .audio)
+                XCTAssertEqual(embedded.identity.size, Int64(size))
+            } else {
+                do {
+                    _ = try await MarkdownMedia.stage(reference, from: resource)
+                    XCTFail("Markdown may not stage a file larger than its exact 64 MiB limit")
+                } catch WorkspaceError.tooLarge {}
+            }
+            let after = try await Self.checksum(source)
+            XCTAssertEqual(after, before)
+        }
+    }
+
+    func testUnsupportedNativeCodecsKeepRealTrackMetadataButNeverPublishAPlayer() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features/audio-file-playback/demo-audio.m4a")
+        let video = directory.appending(path: "Original.mov")
+        try await createVideoFixture(video, size: CGSize(width: 240, height: 240))
+        for (source, type, codec) in [(audio, AVMediaType.audio, "mp4a"), (video, .video, "avc1")] {
+            let original = try Data(contentsOf: source)
+            let marker = try XCTUnwrap(original.range(of: Data("stsd".utf8)))
+            let entry = marker.upperBound + 8
+            // Retain the complete container, sample table, track metadata and
+            // compressed payload. Change only the one sample description type.
+            XCTAssertGreaterThanOrEqual(marker.lowerBound, 4)
+            let boxSize = Int(original[marker.lowerBound - 4..<marker.lowerBound].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) })
+            let entryCount = original[entry - 4..<entry].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            XCTAssertEqual(entryCount, 1)
+            let entrySize = Int(original[entry..<entry + 4].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) })
+            XCTAssertGreaterThanOrEqual(entrySize, 8)
+            XCTAssertLessThanOrEqual(entry + entrySize, marker.lowerBound - 4 + boxSize)
+            let codecRange = (entry + 4)..<(entry + 8)
+            XCTAssertEqual(Data(original[codecRange]), Data(codec.utf8))
+            var unsupported = original
+            unsupported.replaceSubrange(codecRange, with: Data("zzzz".utf8))
+            let url = directory.appendingPathComponent("Unsupported." + source.pathExtension)
+            try unsupported.write(to: url)
+            let reference = AVURLAsset(url: url)
+            let tracks = try await reference.loadTracks(withMediaType: type)
+            let track = try XCTUnwrap(tracks.first)
+            let descriptions = try await track.load(.formatDescriptions)
+            XCTAssertEqual(CMFormatDescriptionGetMediaSubType(try XCTUnwrap(descriptions.first)), 0x7a7a7a7a)
+            let (playable, protected) = try await reference.load(.isPlayable, .hasProtectedContent)
+            let (decodable, contained) = try await track.load(.isDecodable, .isSelfContained)
+            XCTAssertFalse(playable)
+            XCTAssertFalse(protected)
+            XCTAssertFalse(decodable)
+            XCTAssertTrue(contained)
+            let duration = try await reference.load(.duration)
+            XCTAssertGreaterThan(duration.seconds, 0)
+            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            guard case .unavailable = tab.content else { return XCTFail("Unsupported codec must not create a player") }
+            XCTAssertNil(tab.mediaPlayer)
+            XCTAssertTrue(tab.text.isEmpty)
+            let resource = PreviewResource(path: directory.appendingPathComponent("Preview.md").path,
+                                           directory: directory.path, backend: LocalWorkspaceBackend.shared)
+            let staged = try await MarkdownMedia.stage(try XCTUnwrap(URL(string: url.lastPathComponent)), from: resource)
+            defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+            XCTAssertEqual(try Data(contentsOf: staged), unsupported)
+            do {
+                _ = try await NativeMedia.open(staged.path)
+                XCTFail("Markdown must use the same actual codec validation")
+            } catch NativeMedia.Failure.unsupported {}
+            XCTAssertEqual(try Data(contentsOf: url), unsupported)
+
+            try original.write(to: url, options: .atomic)
+            XCTAssertEqual(chmod(url.path, 0o400), 0)
+            defer { _ = chmod(url.path, 0o600) }
+            tab.reloadFromDiskIfClean()
+            try await waitUntil { tab.mediaPlayer != nil }
+            let item = try XCTUnwrap(tab.mediaPlayer?.currentItem)
+            try await waitUntil { item.status != .unknown }
+            XCTAssertEqual(item.status, .readyToPlay)
+            XCTAssertEqual(try Data(contentsOf: url), original)
+            XCTAssertEqual(try Data(contentsOf: source), original)
         }
     }
 
@@ -542,9 +764,35 @@ final class NativeMediaFileTests: XCTestCase {
         func playerView(in view: NSView) -> AVPlayerView? {
             (view as? AVPlayerView) ?? view.subviews.lazy.compactMap { playerView(in: $0) }.first
         }
+        let variants: [(name: String, coded: CGSize, displayed: CGSize, pixelAspect: CGSize, aperture: CGSize?)] = [
+            ("Square", CGSize(width: 240, height: 240), CGSize(width: 240, height: 240), CGSize(width: 1, height: 1), nil),
+            ("Wide", CGSize(width: 420, height: 180), CGSize(width: 420, height: 180), CGSize(width: 1, height: 1), nil),
+            ("Anamorphic", CGSize(width: 360, height: 240), CGSize(width: 480, height: 240), CGSize(width: 4, height: 3), nil),
+            ("Clean aperture", CGSize(width: 360, height: 240), CGSize(width: 320, height: 180), CGSize(width: 1, height: 1), CGSize(width: 320, height: 180)),
+        ]
+        var sources = [(landscape, naturalSize.width / naturalSize.height),
+                       (portrait, naturalSize.height / naturalSize.width)]
+        for variant in variants {
+            let url = directory.appending(path: "\(variant.name).mov")
+            try await createVideoFixture(url, size: variant.coded, pixelAspect: variant.pixelAspect, aperture: variant.aperture)
+            let fixture = AVURLAsset(url: url)
+            let fixtureTracks = try await fixture.loadTracks(withMediaType: .video)
+            let track = try XCTUnwrap(fixtureTracks.first)
+            let formats = try await track.load(.formatDescriptions)
+            let format = try XCTUnwrap(formats.first)
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+            XCTAssertEqual(Int(dimensions.width), Int(variant.coded.width))
+            XCTAssertEqual(Int(dimensions.height), Int(variant.coded.height))
+            let presentation = CMVideoFormatDescriptionGetPresentationDimensions(format, usePixelAspectRatio: true, useCleanAperture: true)
+            XCTAssertEqual(presentation, variant.displayed)
+            let frame = try await AVAssetImageGenerator(asset: fixture).image(at: .zero)
+            XCTAssertEqual(frame.image.width, Int(variant.displayed.width))
+            XCTAssertEqual(frame.image.height, Int(variant.displayed.height))
+            sources.append((url, variant.displayed.width / variant.displayed.height))
+        }
         let panelSizes = [CGSize(width: 800, height: 440), CGSize(width: 460, height: 680), CGSize(width: 240, height: 440)]
-        for (url, ratio) in [(landscape, naturalSize.width / naturalSize.height),
-                             (portrait, naturalSize.height / naturalSize.width)] {
+        for (url, ratio) in sources {
+            let original = try Data(contentsOf: url)
             let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
             try await load(tab)
             let player = try XCTUnwrap(tab.mediaPlayer)
@@ -576,7 +824,111 @@ final class NativeMediaFileTests: XCTestCase {
                 XCTAssertEqual(native.videoBounds.midX, native.bounds.midX, accuracy: 1)
                 XCTAssertEqual(native.videoBounds.midY, native.bounds.midY, accuracy: 1)
             }
+            XCTAssertEqual(try Data(contentsOf: url), original)
         }
+    }
+
+    func testNativePlayerAcceptsReal4KTenBitHDRAndRetainsTheEncodedSignal() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "HDR-PQ.mov")
+        try await createVideoFixture(url, size: CGSize(width: 3840, height: 2160), hdr: true)
+        let original = try Data(contentsOf: url)
+        let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { tab.retireContent() }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("Cannot load native HDR video") }
+        XCTAssertEqual(media.kind, .video)
+        XCTAssertEqual(try XCTUnwrap(media.videoAspectRatio), 16.0 / 9, accuracy: 0.001)
+        let tracks = try await media.asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let descriptions = try await track.load(.formatDescriptions)
+        let format = try XCTUnwrap(descriptions.first)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(format), kCMVideoCodecType_HEVC)
+        XCTAssertEqual(CMVideoFormatDescriptionGetDimensions(format).width, 3840)
+        XCTAssertEqual(CMVideoFormatDescriptionGetDimensions(format).height, 2160)
+        let metadata = try XCTUnwrap(CMFormatDescriptionGetExtensions(format) as? [String: Any])
+        XCTAssertEqual(metadata["BitsPerComponent"] as? Int, 10)
+        XCTAssertEqual(metadata[kCVImageBufferColorPrimariesKey as String] as? String, kCVImageBufferColorPrimaries_ITU_R_2020 as String)
+        XCTAssertEqual(metadata[kCVImageBufferTransferFunctionKey as String] as? String, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
+        XCTAssertEqual(metadata[kCVImageBufferYCbCrMatrixKey as String] as? String, kCVImageBufferYCbCrMatrix_ITU_R_2020 as String)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        let moved = await player.seek(to: CMTime(value: 1, timescale: 10), toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(moved)
+        XCTAssertEqual(player.currentTime().seconds, 0.1, accuracy: 0.02)
+        let reader = try AVAssetReader(asset: media.asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+        ])
+        XCTAssertTrue(reader.canAdd(output))
+        reader.add(output)
+        XCTAssertTrue(reader.startReading(), String(describing: reader.error))
+        defer { reader.cancelReading() }
+        let sample = try XCTUnwrap(output.copyNextSampleBuffer())
+        let buffer = try XCTUnwrap(sample.imageBuffer)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(buffer), kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+        XCTAssertEqual(CVPixelBufferGetWidth(buffer), 3840)
+        XCTAssertEqual(CVPixelBufferGetHeight(buffer), 2160)
+        XCTAssertEqual(CVPixelBufferLockBaseAddress(buffer, .readOnly), kCVReturnSuccess)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let base = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(buffer, 0)).assumingMemoryBound(to: UInt16.self)
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0) / 2
+        XCTAssertEqual(Double(base[1080 * stride + 960] >> 6), 384, accuracy: 30)
+        XCTAssertEqual(Double(base[1080 * stride + 2880] >> 6), 704, accuracy: 30)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    func testVideoWithTwoActualAudioTracksKeepsBothTracksAndSourceBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+        let asset = AVURLAsset(url: source)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let video = try XCTUnwrap(videoTracks.first)
+        let audio = try XCTUnwrap(audioTracks.first)
+        let composition = AVMutableComposition()
+        let targetVideo = try XCTUnwrap(composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid))
+        let duration = CMTime(value: 1, timescale: 1)
+        try targetVideo.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: video, at: .zero)
+        for second in [0, 2] {
+            let targetAudio = try XCTUnwrap(composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid))
+            try targetAudio.insertTimeRange(CMTimeRange(start: CMTime(value: Int64(second), timescale: 1), duration: duration), of: audio, at: .zero)
+        }
+        let url = directory.appending(path: "双音轨.mov")
+        let exporter = try XCTUnwrap(AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough))
+        try await exporter.export(to: url, as: .mov)
+        let original = try Data(contentsOf: url)
+        let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { tab.retireContent() }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("Cannot open dual audio video") }
+        XCTAssertEqual(media.kind, .video)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        let tracks = try await media.asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(tracks.count, 2)
+        XCTAssertEqual(Set(tracks.map(\.trackID)).count, 2)
+        for track in tracks {
+            let reader = try AVAssetReader(asset: media.asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+            XCTAssertTrue(reader.canAdd(output))
+            reader.add(output)
+            XCTAssertTrue(reader.startReading(), String(describing: reader.error))
+            defer { reader.cancelReading() }
+            let sample = try XCTUnwrap(output.copyNextSampleBuffer())
+            XCTAssertGreaterThan(sample.numSamples, 0)
+            XCTAssertGreaterThan(CMBlockBufferGetDataLength(try XCTUnwrap(sample.dataBuffer)), 0)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), original)
     }
 
     func testMediaRejectsCorruptMissingUnopenedAndRemoteFilesWithoutReadingTheirNamesakes() async throws {
@@ -707,6 +1059,76 @@ final class NativeMediaFileTests: XCTestCase {
         }
         XCTAssertEqual(result, KERN_SUCCESS)
         return Double(info.resident_size) / 1_048_576
+    }
+
+    private func createVideoFixture(_ url: URL, size: CGSize, pixelAspect: CGSize = CGSize(width: 1, height: 1),
+                                    aperture: CGSize? = nil, hdr: Bool = false) async throws {
+        let width = Int(size.width), height = Int(size.height)
+        var settings: [String: Any] = [
+            AVVideoCodecKey: hdr ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
+            AVVideoWidthKey: width, AVVideoHeightKey: height,
+            AVVideoPixelAspectRatioKey: [AVVideoPixelAspectRatioHorizontalSpacingKey: Int(pixelAspect.width),
+                                         AVVideoPixelAspectRatioVerticalSpacingKey: Int(pixelAspect.height)],
+        ]
+        if let aperture {
+            settings[AVVideoCleanApertureKey] = [AVVideoCleanApertureWidthKey: Int(aperture.width),
+                                                 AVVideoCleanApertureHeightKey: Int(aperture.height),
+                                                 AVVideoCleanApertureHorizontalOffsetKey: 0, AVVideoCleanApertureVerticalOffsetKey: 0]
+        }
+        if hdr {
+            settings[AVVideoColorPropertiesKey] = [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_2020,
+                                                   AVVideoTransferFunctionKey: AVVideoTransferFunction_SMPTE_ST_2084_PQ,
+                                                   AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_2020]
+            settings[AVVideoCompressionPropertiesKey] = [AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel]
+        }
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        let pixelFormat = hdr ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_32BGRA
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+            kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+        ])
+        XCTAssertTrue(writer.canAdd(input))
+        writer.add(input)
+        guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        defer { if writer.status == .writing { writer.cancelWriting() } }
+        writer.startSession(atSourceTime: .zero)
+        let pool = try XCTUnwrap(adaptor.pixelBufferPool)
+        var created: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &created), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(created)
+        do {
+            XCTAssertEqual(CVPixelBufferLockBaseAddress(buffer, []), kCVReturnSuccess)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+            if hdr {
+                for plane in 0..<2 {
+                    let base = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(buffer, plane)).assumingMemoryBound(to: UInt16.self)
+                    let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, plane) / 2
+                    for y in 0..<CVPixelBufferGetHeightOfPlane(buffer, plane) {
+                        for x in 0..<stride { base[y * stride + x] = UInt16(plane == 0 ? (x < stride / 2 ? 384 : 704) : 512) << 6 }
+                    }
+                }
+                CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)
+                CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, .shouldPropagate)
+                CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_2020, .shouldPropagate)
+            } else {
+                let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(buffer)).assumingMemoryBound(to: UInt32.self)
+                let stride = CVPixelBufferGetBytesPerRow(buffer) / 4
+                for y in 0..<height {
+                    for x in 0..<width { base[y * stride + x] = x < width / 2 ? 0xffd02020 : 0xff20d020 }
+                }
+            }
+        }
+        for index in 0..<3 {
+            try await waitUntil { input.isReadyForMoreMediaData || writer.status != .writing }
+            guard writer.status == .writing, adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 10)) else {
+                throw writer.error ?? CocoaError(.fileWriteUnknown)
+            }
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        XCTAssertEqual(writer.status, .completed, String(describing: writer.error))
     }
 
     private static func createWAV(_ file: URL, payloadBytes: Int) throws {
