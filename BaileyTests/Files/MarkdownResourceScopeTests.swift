@@ -94,7 +94,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             XCTAssertGreaterThan(try XCTUnwrap(bitmap.colorAt(x: inside, y: 90)).alphaComponent, 0.9)
             XCTAssertLessThan(try XCTUnwrap(bitmap.colorAt(x: 12, y: 90)).alphaComponent, 0.1)
             let playback = try XCTUnwrap(file.gifPlayback)
-            let playing = Task { await playback.play { frames } }
+            let playing = Task { await playback.play(automaticallyPlays: true) { frames } }
             defer { playing.cancel() }
             let deadline = ContinuousClock.now.advanced(by: .seconds(3))
             var first: CGImage?

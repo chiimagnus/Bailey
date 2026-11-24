@@ -1363,7 +1363,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         await fulfillment(of: [loaded], timeout: 5)
         let request = try XCTUnwrap(file.gifFramesRequest())
         let playback = try XCTUnwrap(file.gifPlayback)
-        let running = Task { await playback.play(load: request) }
+        let running = Task { await playback.play(automaticallyPlays: true, load: request) }
         defer { running.cancel() }
         let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             playback.failed || playback.image != nil
@@ -1376,6 +1376,47 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
+    func testGIFPlaybackDefaultsToTheSystemAnimationPreferenceAndRespectsManualControl() async throws {
+        let playback = GIFPlayback()
+        XCTAssertFalse(playback.isPaused(automaticallyPlays: true))
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: false))
+        await playback.play(automaticallyPlays: false) {
+            XCTFail("A disabled automatic animation must not request frame data")
+            throw CocoaError(.fileReadUnknown)
+        }
+        XCTAssertNil(playback.image)
+        XCTAssertFalse(playback.failed)
+
+        playback.togglePause(automaticallyPlays: false)
+        XCTAssertFalse(playback.isPaused(automaticallyPlays: false),
+                       "Explicit Resume must work even when automatic playback is disabled")
+        let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
+        let frame = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8)
+        let prefetched = expectation(description: "Explicit playback prefetches a real GIF frame")
+        let stopped = expectation(description: "Explicit pause cancels the running task")
+        let task = Task {
+            await playback.play(automaticallyPlays: false) {
+                GIFPlayback.Frames(count: 3) { index in
+                    if index != 0 { prefetched.fulfill() }
+                    return frame
+                }
+            }
+            stopped.fulfill()
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [prefetched], timeout: 2)
+        XCTAssertTrue(playback.image === frame.image)
+        playback.togglePause(automaticallyPlays: false)
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: false))
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: true))
+        await fulfillment(of: [stopped], timeout: 2)
+        XCTAssertTrue(playback.image === frame.image, "Pausing preserves the displayed frame")
+        playback.reset()
+        XCTAssertNil(playback.image)
+        XCTAssertFalse(playback.isPaused(automaticallyPlays: true))
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: false))
+    }
+
     func testGIFResetCancelsLongHoldAndItsSuspendedPrefetch() async throws {
         let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
         let initial = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8)
@@ -1384,7 +1425,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         let cancelled = expectation(description: "Reset cancels prefetched frame")
         let stopped = expectation(description: "Reset releases the playback task")
         let task = Task {
-            await playback.play {
+            await playback.play(automaticallyPlays: true) {
                 GIFPlayback.Frames(count: 3) { index in
                     if index == 0 { return initial }
                     decoding.fulfill()
@@ -1414,7 +1455,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         let playback = GIFPlayback()
         let prefetch = expectation(description: "Active playback reaches its first frame")
         let active = Task {
-            await playback.play {
+            await playback.play(automaticallyPlays: true) {
                 GIFPlayback.Frames(count: 2) { index in
                     if index == 0 { return RasterPreview.GIFFrame(image: red, seconds: 0.6) }
                     prefetch.fulfill()
@@ -1426,7 +1467,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         await fulfillment(of: [prefetch], timeout: 2)
         XCTAssertTrue(playback.image === red)
         let stale = Task {
-            await playback.play {
+            await playback.play(automaticallyPlays: true) {
                 XCTFail("A cancelled mount cannot start a new read")
                 throw CancellationError()
             }

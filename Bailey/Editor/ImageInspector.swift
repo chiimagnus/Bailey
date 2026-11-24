@@ -12,6 +12,7 @@ struct ImageInspector: View {
     var onViewportPositionChange: ((PreviewScrollView.Position?) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appearsActive) private var active
+    @Environment(\.accessibilityPlayAnimatedImages) private var automaticallyPlays
     @State private var detailUnavailable = false
 
     private struct AnimationDemand: Hashable {
@@ -20,17 +21,20 @@ struct ImageInspector: View {
     }
 
     var body: some View {
+        let paused = playback?.isPaused(automaticallyPlays: automaticallyPlays)
         let demand = AnimationDemand(revision: resourceRevision,
-                                     playing: active && playback?.paused == false && loadAnimation != nil)
+                                     playing: active && paused == false && loadAnimation != nil)
         RasterViewport(image: image, loadOriginal: loadOriginal,
-                       animationFrame: playback?.image, paused: loadAnimation == nil ? nil : playback?.paused,
-                       toggleAnimation: playback.map { playback in { playback.togglePause() } },
+                       animationFrame: playback?.image, paused: loadAnimation == nil ? nil : paused,
+                       toggleAnimation: playback.map { playback in
+                           { playback.togglePause(automaticallyPlays: automaticallyPlays) }
+                       },
                        resourceRevision: resourceRevision, viewportPosition: viewportPosition,
                        onViewportPositionChange: onViewportPositionChange,
                        onDetailFailure: { detailUnavailable = $0 })
             .task(id: demand) {
                 guard demand.playing, let playback, let loadAnimation else { return }
-                await playback.play(load: loadAnimation)
+                await playback.play(automaticallyPlays: automaticallyPlays, load: loadAnimation)
             }
             .overlay(alignment: .topTrailing) {
                 if showsCloseButton {

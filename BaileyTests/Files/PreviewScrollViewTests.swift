@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import ImageIO
 import SwiftUI
@@ -94,8 +95,7 @@ final class PreviewScrollViewTests: XCTestCase {
         let host = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
         window.contentView = host
         window.orderFront(nil)
-        try await waitFor { previewScroll(in: host) != nil }
-        let scroll = try XCTUnwrap(previewScroll(in: host))
+        let scroll = try await startGIF(in: host, file: file)
         let pauseTitle = String(localized: "Pause Animation", table: "Editor")
         let resumeTitle = String(localized: "Resume Animation", table: "Editor")
         let item = try XCTUnwrap(scroll.menu?.item(withTitle: pauseTitle))
@@ -153,6 +153,69 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertFalse(accessibleResume(), "A retired animation action must not resume a closed file")
     }
 
+    func testInlineGIFFollowsTheSystemAnimationPreferenceAndPausesWhenInactive() async throws {
+        let picture = try MarkdownPicture.decode(makeLongGIF(count: 2))
+        XCTAssertEqual(picture.animation.count, 2)
+        let bounds = NSRect(x: 0, y: 0, width: 96, height: 96)
+        func view(active: Bool) -> some View {
+            MarkdownNativeImage(picture: picture, alt: "Two frame GIF", url: nil, width: 96, height: 96)
+                .frame(width: bounds.width, height: bounds.height)
+                .environment(\.appearsActive, active)
+        }
+        let window = NSWindow(contentRect: bounds.offsetBy(dx: -2000, dy: -2000),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: view(active: false))
+        host.sizingOptions = []
+        let container = NSView(frame: bounds)
+        host.frame = bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        window.setContentSize(bounds.size)
+        window.orderFront(nil)
+
+        func centerColor() -> NSColor? {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+        }
+        func red() -> Bool {
+            guard let color = centerColor() else { return false }
+            return color.alphaComponent > 0.9 && color.redComponent > 0.7
+                && color.redComponent - color.greenComponent > 0.35
+                && color.redComponent - color.blueComponent > 0.35
+        }
+        func green() -> Bool {
+            guard let color = centerColor() else { return false }
+            return color.alphaComponent > 0.9 && color.greenComponent > 0.7
+                && color.greenComponent - color.redComponent > 0.35
+                && color.greenComponent - color.blueComponent > 0.35
+        }
+        XCTAssertEqual(host.bounds.width, bounds.width, accuracy: 1)
+        XCTAssertEqual(host.bounds.height, bounds.height, accuracy: 1)
+        try await waitFor("Inactive Markdown GIF displays its first actual frame") { red() }
+        host.rootView = view(active: true)
+        if AccessibilitySettings.animatedImagesEnabled {
+            try await waitFor("System permits animation of the inline GIF") { green() }
+            host.rootView = view(active: false)
+            for _ in 0..<8 {
+                try await Task.sleep(for: .milliseconds(75))
+                XCTAssertTrue(green(), "Inactive inline animation must keep its current pixels")
+            }
+            host.rootView = view(active: true)
+            try await waitFor("Inline GIF resumes after becoming active") { red() }
+        } else {
+            for _ in 0..<8 {
+                try await Task.sleep(for: .milliseconds(75))
+                XCTAssertTrue(red(), "System disables automatic animation")
+            }
+        }
+    }
+
     func testSustainedRealGIFPlaybackRetiresItsNativeFrames() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
@@ -183,11 +246,8 @@ final class PreviewScrollViewTests: XCTestCase {
             let firstHost = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
             window.contentView = firstHost
             window.orderFront(nil)
-            try await waitFor("Play the fixture in the native file surface") {
-                previewScroll(in: firstHost) != nil && file.gifPlayback?.image != nil
-            }
+            let firstScroll = try await startGIF(in: firstHost, file: file)
             let firstPixels = started.duration(to: .now)
-            let firstScroll = try XCTUnwrap(previewScroll(in: firstHost))
             let playback = try XCTUnwrap(file.gifPlayback)
             firstScroll.zoomIn()
             let scale = firstScroll.pixelScale
@@ -249,7 +309,7 @@ final class PreviewScrollViewTests: XCTestCase {
                 }
                 try await Task.sleep(for: .milliseconds(650))
                 XCTAssertTrue(file.gifPlayback === playback)
-                XCTAssertTrue(playback.paused)
+                XCTAssertTrue(playback.isPaused(automaticallyPlays: true))
                 XCTAssertTrue(playback.image === pausedFrame)
             }
             let nextScroll = try XCTUnwrap(previewScroll(in: replacement))
@@ -366,7 +426,7 @@ final class PreviewScrollViewTests: XCTestCase {
                 }
             }
 
-            let running = Task { await playback.play(load: load) }
+            let running = Task { await playback.play(automaticallyPlays: true, load: load) }
             defer { running.cancel() }
             try await waitFor { playback.image != nil }
             project.closeAll()
@@ -1224,6 +1284,25 @@ final class PreviewScrollViewTests: XCTestCase {
         }
         XCTAssertTrue(CGImageDestinationFinalize(encoder))
         return bytes as Data
+    }
+
+    private func startGIF(in host: NSView, file: FileTab) async throws -> PreviewScrollView {
+        let automaticallyPlays = AccessibilitySettings.animatedImagesEnabled
+        let pauseTitle = String(localized: "Pause Animation", table: "Editor")
+        let resumeTitle = String(localized: "Resume Animation", table: "Editor")
+        try await waitFor("Native GIF menu reflects the system animation preference") {
+            previewScroll(in: host)?.menu?.item(withTitle: automaticallyPlays ? pauseTitle : resumeTitle) != nil
+        }
+        let scroll = try XCTUnwrap(previewScroll(in: host))
+        if !automaticallyPlays {
+            XCTAssertNil(file.gifPlayback?.image, "Disabled automatic playback keeps the poster")
+            let resume = try XCTUnwrap(scroll.menu?.item(withTitle: resumeTitle))
+            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(resume.action), to: resume.target, from: resume))
+        }
+        try await waitFor("Native GIF starts playing actual frames") {
+            scroll.menu?.item(withTitle: pauseTitle) != nil && file.gifPlayback?.image != nil
+        }
+        return scroll
     }
 
     private func previewScroll(in view: NSView) -> PreviewScrollView? {

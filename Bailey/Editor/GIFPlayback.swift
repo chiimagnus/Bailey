@@ -9,7 +9,7 @@ final class GIFPlayback {
     }
 
     private(set) var image: CGImage?
-    private(set) var paused = false
+    private var pauseOverride: Bool?
     private(set) var failed = false
     @ObservationIgnored private var index = 0
     @ObservationIgnored private var runID: UInt = 0
@@ -18,8 +18,13 @@ final class GIFPlayback {
     @ObservationIgnored private var advanceTask: Task<Void, Never>?
     private let clock = ContinuousClock()
 
-    func togglePause() {
-        paused.toggle()
+    func isPaused(automaticallyPlays: Bool) -> Bool {
+        pauseOverride ?? !automaticallyPlays
+    }
+
+    func togglePause(automaticallyPlays: Bool) {
+        let paused = !isPaused(automaticallyPlays: automaticallyPlays)
+        pauseOverride = paused
         if paused { suspend() }
     }
 
@@ -28,13 +33,14 @@ final class GIFPlayback {
         remaining = nil
         index = 0
         image = nil
-        paused = false
+        pauseOverride = nil
         failed = false
     }
 
-    func play(load: @escaping () async throws -> Frames) async {
+    func play(automaticallyPlays: Bool, load: @escaping () async throws -> Frames) async {
         guard !Task.isCancelled else { return }
         suspend()
+        guard !isPaused(automaticallyPlays: automaticallyPlays) else { return }
         let run = runID
         failed = false
         let task = Task { await advance(load: load, run: run) }

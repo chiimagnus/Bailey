@@ -120,12 +120,14 @@ private struct MarkdownAnimatedImage<Content: View>: View {
     @ViewBuilder let content: (CGImage) -> Content
     @State private var playback = GIFPlayback()
     @Environment(\.appearsActive) private var active
+    @Environment(\.accessibilityPlayAnimatedImages) private var automaticallyPlays
 
     var body: some View {
+        let playing = active && !playback.isPaused(automaticallyPlays: automaticallyPlays)
         content(playback.image ?? frames.first?.image ?? poster)
-            .task(id: active) {
-                guard active else { return }
-                await playback.play {
+            .task(id: playing) {
+                guard playing else { return }
+                await playback.play(automaticallyPlays: automaticallyPlays) {
                     GIFPlayback.Frames(count: frames.count) { [frames] index in frames[index] }
                 }
             }

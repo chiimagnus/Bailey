@@ -1169,10 +1169,10 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 }
                 if index == 4, step == 4 {
                     let playback = try XCTUnwrap(file.gifPlayback)
-                    playback.togglePause()
-                    XCTAssertTrue(playback.paused)
+                    playback.togglePause(automaticallyPlays: true)
+                    XCTAssertTrue(playback.isPaused(automaticallyPlays: true))
                 } else if index == 4 {
-                    XCTAssertEqual(file.gifPlayback?.paused, true)
+                    XCTAssertEqual(file.gifPlayback?.isPaused(automaticallyPlays: true), true)
                 }
                 if index >= 5 {
                     let player = try XCTUnwrap(file.mediaPlayer)
