@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -205,6 +207,120 @@ final class DelimitedTableIndexTests: XCTestCase {
             XCTAssertEqual(next.index.fields(in: next.index.records[1]).first?.source.length, 7)
             XCTAssertEqual(try Data(contentsOf: path), bytes, "Indexing and editing in memory must not publish bytes")
         }
+    }
+
+    func testGridMutationsShareTheMountedSourceUndoAndPreserveBytes() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "Name,Group,Value\r\nItem 10,g,\"old\"\r\nItem 2,g,old\nOther,h,\"literal\""
+        let expected = "Name,Group,Value\r\nItem 10,g,\"new\"\"value\"\r\nItem 2,g,\"青🧪,\nline\"\nOther,h,\"literal\""
+        let encoding = TextFileEncoding.utf8BOM
+        let bytes = try XCTUnwrap(encoding.encoded(original))
+        try bytes.write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        file.reopen(using: encoding)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let storage = file.nativeTextStorage
+        let undo = file.documentUndoManager
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(loaded)
+        XCTAssertNil(file.editorView, "Grid editing must not construct a hidden editor")
+        let displayed = try await DelimitedTablePresentation.evaluate(
+            source: snapshot.source, index: snapshot.index,
+            configuration: .init(filters: [1: "g"], sort: [.init(column: 0, ascending: true)])
+        )
+        XCTAssertEqual(displayed.rows, [2, 1])
+        try await file.editDelimited(.cells([
+            .init(row: displayed.rows[0], column: 2): "青🧪,\nline",
+            .init(row: displayed.rows[1], column: 2): "new\"value",
+        ]), using: snapshot)
+        XCTAssertEqual(file.text, expected)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertNil(file.editorView)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        undo.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        undo.redo()
+        XCTAssertEqual(file.text, expected)
+        XCTAssertTrue(file.isDirty)
+
+        file.setFilePreview(false)
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderBack(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? NativeCodeTextView)
+        XCTAssertTrue(editor.undoManager === undo)
+        editor.insertText("Title", replacementRange: NSRange(location: 0, length: 4))
+        editor.breakUndoCoalescing()
+        let sourceEdited = "Title" + String(expected.dropFirst(4))
+        XCTAssertEqual(file.text, sourceEdited)
+        let fresh = try await file.delimitedSnapshot(using: .comma)
+        try await file.editDelimited(.deleteRows([1, 2]), using: try XCTUnwrap(fresh))
+        XCTAssertEqual(file.text, "Title,Group,Value\r\nOther,h,\"literal\"")
+        undo.undo()
+        XCTAssertEqual(file.text, sourceEdited, "Contiguous deletions undo in physical record order")
+        undo.undo()
+        XCTAssertEqual(file.text, expected)
+        undo.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        undo.redo()
+        XCTAssertEqual(file.text, expected)
+        undo.redo()
+        XCTAssertEqual(file.text, sourceEdited)
+        undo.redo()
+        XCTAssertEqual(file.text, "Title,Group,Value\r\nOther,h,\"literal\"")
+        undo.undo()
+        undo.undo()
+        XCTAssertEqual(file.text, expected)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), encoding.encoded(expected))
+        XCTAssertFalse(file.isDirty)
+        do {
+            try await file.editDelimited(.cells([.init(row: 1, column: 2): "stale"]), using: snapshot)
+            XCTFail("An outdated projection must not write to a changed document")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(file.text, expected)
+    }
+
+    func testGridRejectsUnrepresentableEditsAndUndoRestoresInsertedRows() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "Name,Value\r\nCafé,1"
+        let bytes = try XCTUnwrap(TextFileEncoding.latin1.encoded(original))
+        try bytes.write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        file.reopen(using: .latin1)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(loaded)
+        do {
+            try await file.editDelimited(.cells([.init(row: 1, column: 0): "😀",
+                                                 .init(row: 1, column: 1): "new"]), using: snapshot)
+            XCTFail("The entire transaction must be refused if its encoding cannot round-trip")
+        } catch DelimitedTableMutation.Failure.cannotEncode {}
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        try await file.editDelimited(.insertRows(before: 2, count: 2), using: snapshot)
+        XCTAssertEqual(file.text, original + "\r\n,\r\n,")
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, original + "\r\n,\r\n,")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.latin1.encoded(file.text))
     }
 
     func testInFlightSnapshotCannotPublishAcrossRename() async throws {

@@ -81,6 +81,7 @@ final class FileTab: nonisolated Identifiable {
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
     @ObservationIgnored private(set) var nativeContentStorage = NSTextContentStorage()
+    @ObservationIgnored let documentUndoManager = UndoManager()
     @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int]? = [:]
     @ObservationIgnored private var nativeEditObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var pendingStorageChange = false
@@ -141,6 +142,7 @@ final class FileTab: nonisolated Identifiable {
         editorView = nil
         preparedLineWidths = nil
         coordinator?.retireObsoleteDocument()
+        documentUndoManager.removeAllActions()
         nativeTextStorage.setAttributedString(NSAttributedString(string: ""))
         savedText = ""
         savedSourceVersion = nil
@@ -326,6 +328,8 @@ final class FileTab: nonisolated Identifiable {
         let source: String
         let requestID: String
         let preservesOriginalBytes: Bool
+        let encoding: TextFileEncoding
+        let version: WorkspaceFileVersion?
     }
 
     func delimitedSnapshot(using selected: DelimitedTableIndex.Separator? = nil) async throws -> DelimitedSnapshot? {
@@ -347,7 +351,75 @@ final class FileTab: nonisolated Identifiable {
         guard request == textPreviewRequestID else { return nil }
         return DelimitedSnapshot(index: index, source: source, requestID: request,
                                  preservesOriginalBytes: preservesOriginal && encoding == fileEncoding
-                                    && version == savedSourceVersion)
+                                    && version == savedSourceVersion, encoding: encoding, version: version)
+    }
+
+    func canEditDelimited(_ snapshot: DelimitedSnapshot) -> Bool {
+        !isRetired && canPreviewFile && previewKind == .delimited &&
+            readOnlyReason == nil && reloadError == nil && !fileMutationHeld &&
+            snapshot.preservesOriginalBytes && snapshot.requestID == textPreviewRequestID &&
+            snapshot.encoding == fileEncoding && snapshot.version == savedSourceVersion
+    }
+
+    /// Prepare and check encoding away from the main actor, then commit one
+    /// transaction to the very same NSTextStorage and UndoManager as typing.
+    func editDelimited(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot) async throws {
+        guard canEditDelimited(snapshot) else { throw WorkspaceError.changedExternally }
+        let replacements = try await DelimitedTableMutation.prepare(
+            change, source: snapshot.source, index: snapshot.index, encoding: snapshot.encoding
+        )
+        try Task.checkCancellation()
+        guard canEditDelimited(snapshot) else { throw WorkspaceError.changedExternally }
+        guard !replacements.isEmpty else { return }
+        if let editor = editorCoordinator?.scrollView?.documentView as? NativeCodeTextView {
+            guard !editor.hasMarkedText() else { throw WorkspaceError.changedExternally }
+            editor.breakUndoCoalescing()
+        }
+        while documentUndoManager.groupingLevel > 0 {
+            documentUndoManager.endUndoGrouping()
+        }
+        documentUndoManager.beginUndoGrouping()
+        let applied = applyDocumentReplacements(replacements)
+        documentUndoManager.endUndoGrouping()
+        guard applied else { throw WorkspaceError.changedExternally }
+    }
+
+    @discardableResult
+    private func applyDocumentReplacements(_ replacements: [DelimitedTableMutation.Replacement]) -> Bool {
+        let storage = nativeTextStorage
+        // Validate every original range before making any change.
+        guard replacements.allSatisfy({ edit in
+            NSMaxRange(edit.range) <= storage.length &&
+                storage.attributedSubstring(from: edit.range).string.utf16.elementsEqual(edit.old.utf16)
+        }) else { return false }
+
+        // Compute inverse ranges in the final document, so Undo and Redo
+        // also apply all replacements in descending order.
+        var shift = 0
+        let undo = replacements.reversed().map { edit in
+            let inverse = DelimitedTableMutation.Replacement(
+                range: NSRange(location: edit.range.location + shift, length: edit.new.utf16.count),
+                old: edit.new, new: edit.old
+            )
+            shift += edit.new.utf16.count - edit.range.length
+            return inverse
+        }.reversed()
+
+        storage.beginEditing()
+        for edit in replacements {
+            storage.replaceCharacters(in: edit.range, with: edit.new)
+        }
+        storage.endEditing()
+        let inverse = Array(undo)
+        documentUndoManager.registerUndo(withTarget: storage) { [weak self] target in
+            MainActor.assumeIsolated {
+                guard let self, self.nativeTextStorage === target, !self.isRetired else { return }
+                self.applyDocumentReplacements(inverse)
+            }
+        }
+        nativeTextChangedWithoutReplacement()
+        refreshDirtyState()
+        return true
     }
 
     func setFilePreview(_ enabled: Bool) {

@@ -103,7 +103,8 @@ struct SourceTextEditor: NSViewRepresentable {
 
     private func makeScrollView(coordinator: Coordinator) -> NSScrollView {
         let scrollView = RestorableScrollView()
-        let textView = FocusReportingTextView(contentStorage: file.nativeContentStorage)
+        let textView = FocusReportingTextView(contentStorage: file.nativeContentStorage,
+                                              undoManager: file.documentUndoManager)
         if let snapshot = file.preparedLineWidths {
             if !wrapLines, snapshot.font.isEqual(font) {
                 _ = textView.installPreparedLineWidths(snapshot.widths, font: font)

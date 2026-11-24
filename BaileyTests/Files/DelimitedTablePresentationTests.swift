@@ -6,6 +6,92 @@ import XCTest
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
+    func testNativeGridEditingAndPasteUsePhysicalRecordsAndOneUndoStack() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "Name,Group,Value\r\nItem 10,g,\"old\"\r\nItem 2,g,old\r\nOther,h,unchanged"
+        let bytes = Data(original.utf8)
+        try bytes.write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let controls = file.delimitedTable
+        controls.configuration.sort = [.init(column: 0, ascending: true)]
+        controls.configuration.filters = [1: "g"]
+        let grid = DelimitedGrid()
+        grid.controls = controls
+        grid.file = file
+        grid.table.file = file
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 350),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = grid
+        window.orderBack(nil)
+        defer { grid.detach(); window.close() }
+
+        func refresh() async throws {
+            let result = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(result)
+            let projection = try await DelimitedTablePresentation.evaluate(
+                source: snapshot.source, index: snapshot.index, configuration: controls.configuration
+            )
+            grid.install(snapshot, presentation: projection)
+            grid.layoutSubtreeIfNeeded()
+        }
+        func waitUntil(_ condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while !condition(), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(condition())
+        }
+        try await refresh()
+        XCTAssertTrue(grid.table.undoManager === file.documentUndoManager)
+        XCTAssertEqual(grid.table.numberOfRows, 2)
+        let cell = DelimitedTablePresentation.Cell(row: 0, column: 1)
+        grid.table.select(cell, reveal: true)
+        grid.paste("g\t\"青🧪\nline\"\r\ng\t\"a\"\"b\"")
+        try await waitUntil { file.text.contains("青🧪") }
+        let expected = "Name,Group,Value\r\nItem 10,g,\"a\"\"b\"\r\nItem 2,g,\"青🧪\nline\"\r\nOther,h,unchanged"
+        XCTAssertEqual(file.text, expected)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        try await refresh()
+        XCTAssertEqual(grid.table.selection.caret, cell)
+        // An invalid clipboard cannot change a subset of the destination.
+        grid.paste("x\ty\nragged")
+        try await waitUntil { controls.editError != nil }
+        XCTAssertEqual(file.text, expected)
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, expected)
+        try await refresh()
+        grid.table.select(.init(row: 0, column: 2), reveal: true)
+        grid.table.onEdit(.init(row: 0, column: 2))
+        let field = try XCTUnwrap(grid.table.view(atColumn: 2, row: 0, makeIfNecessary: true) as? NSTextField)
+        XCTAssertTrue(field.isEditable)
+        XCTAssertEqual(field.stringValue, "青🧪\nline")
+        let fieldEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        fieldEditor.insertText("discarded draft", replacementRange: NSRange(location: 0, length: fieldEditor.string.utf16.count))
+        fieldEditor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertEqual(file.text, expected)
+        XCTAssertFalse(field.isEditable)
+        grid.table.onEdit(.init(row: 0, column: 2))
+        let nextEditor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        nextEditor.insertText("edited,field", replacementRange: NSRange(location: 0, length: nextEditor.string.utf16.count))
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        try await waitUntil { file.text.contains("\"edited,field\"") }
+        XCTAssertEqual(file.text, expected.replacingOccurrences(of: "\"青🧪\nline\"", with: "\"edited,field\""))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, expected)
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.editorView)
+    }
+
     func testProjectionDoesNotFilterRowsUsingColumnsAbsentFromTheNewIndex() async throws {
         let source = "Name;Value\nItem;42\nOther;2"
         let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .semicolon)
@@ -51,7 +137,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
                 window.appearance = NSAppearance(named: serial.isMultiple(of: 2) ? .aqua : .darkAqua)
                 let grid = DelimitedGrid()
                 window.contentView = grid
-                grid.install(.init(index: index, source: text, requestID: String(serial), preservesOriginalBytes: true),
+                grid.install(.init(index: index, source: text, requestID: String(serial), preservesOriginalBytes: true, encoding: .utf8, version: nil),
                              presentation: presentation)
                 grid.layoutSubtreeIfNeeded()
                 grid.table.select(.init(row: 1, column: 1), reveal: true)
@@ -87,7 +173,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: source, index: index, configuration: .init()
             )
-            grid.install(.init(index: index, source: source, requestID: expected, preservesOriginalBytes: true),
+            grid.install(.init(index: index, source: source, requestID: expected, preservesOriginalBytes: true, encoding: .utf8, version: nil),
                          presentation: presentation)
             grid.layoutSubtreeIfNeeded()
             grid.table.select(.init(row: row, column: column), reveal: true)
