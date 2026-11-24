@@ -135,6 +135,92 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(application.windowCount, 1)
     }
 
+    func testTwoWindowRestoreKeepsPreviewFilesLazyAndReusesTheirOwnTabs() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let savedWindows = SessionStore.load()
+        let savedHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(savedWindows)
+            TerminalHistoryStore.save(savedHistories)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let samples: [(String, String, FilePreviewMode)] = [
+            ("plot.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\"><rect width=\"20\" height=\"20\"/></svg>", .preview),
+            ("values.csv", "name,value\na,2\n", .preview),
+            ("page.html", "<!doctype html><title>Fixture</title><p>HTML</p>", .source),
+            ("notes.md", "# Fixture\n\nMarkdown\n", .source),
+        ]
+        let application = WorkspaceApplication()
+        var directories: [URL] = []
+        var originalIDs = Set<UUID>()
+        var originals: [URL: Data] = [:]
+        var oldWindows: [WorkspaceWindowModel] = []
+        defer { oldWindows.forEach { $0.windowClosed() } }
+        for windowIndex in 0..<2 {
+            let directory = root.appendingPathComponent("window-\(windowIndex)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            directories.append(directory)
+            let manager = application.makeWindow()
+            oldWindows.append(manager)
+            manager.addLocalFolders([directory])
+            let project = try XCTUnwrap(manager.selectedProject)
+            for (name, source, _) in samples {
+                let url = directory.appendingPathComponent(name)
+                let bytes = Data((source + "\n").utf8)
+                try bytes.write(to: url)
+                originals[url] = bytes
+                project.openFile(url.path)
+                let tab = try XCTUnwrap(project.selectedTab)
+                originalIDs.insert(tab.id)
+                guard case .file(let file) = tab.content else { return XCTFail("Expected file") }
+                try await file.waitForText()
+                project.setFilePreviewMode(.sideBySide, for: tab)
+                XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+            }
+            XCTAssertEqual(project.tabs.count, samples.count)
+        }
+        application.saveForRelaunch()
+        let snapshots = SessionStore.load()
+        XCTAssertEqual(snapshots.count, 2)
+        oldWindows.forEach { $0.windowClosed() }
+        oldWindows.removeAll()
+        // Closing the first live window updates the store; restore the exact
+        // two-window snapshot captured by the relaunch action above.
+        SessionStore.save(snapshots)
+        let restoredApplication = WorkspaceApplication(loadSavedState: true)
+        var restoredWindows: [WorkspaceWindowModel] = []
+        defer { restoredWindows.forEach { $0.windowClosed() } }
+        for directory in directories {
+            let manager = restoredApplication.makeWindow()
+            restoredWindows.append(manager)
+            let project = try XCTUnwrap(manager.selectedProject)
+            XCTAssertEqual(project.customDirectory, directory.path)
+            XCTAssertEqual(project.tabs.count, samples.count)
+            for (name, _, expectedMode) in samples {
+                let path = directory.appendingPathComponent(name)
+                let tab = try XCTUnwrap(project.tabs.first { tab in
+                    if case .file(let file) = tab.content { return file.path == path.path }
+                    return false
+                })
+                guard case .file(let file) = tab.content else { return XCTFail("Expected restored file") }
+                XCTAssertFalse(originalIDs.contains(tab.id))
+                guard case .loading = file.content else { return XCTFail("Restore must keep file IO lazy") }
+                XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+                XCTAssertEqual(project.filePreviewMode(for: tab), expectedMode)
+                project.openFile(path.path)
+                XCTAssertTrue(project.selectedTab === tab)
+                XCTAssertEqual(project.tabs.count, samples.count)
+                try await file.waitForText()
+                XCTAssertEqual(project.filePreviewMode(for: tab), expectedMode)
+                XCTAssertEqual(try Data(contentsOf: path), originals[path])
+                XCTAssertFalse(file.isDirty)
+            }
+        }
+        XCTAssertEqual(restoredApplication.windowCount, 2)
+    }
+
     func testSnapshotRoundTripAndInvalidReferences() throws {
         typealias Project = SessionSnapshot.ProjectSnapshot
         let contents: [Project.ContentSnapshot] = [
