@@ -886,12 +886,18 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         window.orderFront(nil)
         let pid = ProcessInfo.processInfo.processIdentifier
 
-        for (tag, fixture, ext) in [
-            ("audio", "audio-file-playback/demo-audio.m4a", "m4a"),
-            ("video", "video-file-playback/demo-video.mp4", "mp4"),
-        ] {
-            let source = folder.appendingPathComponent("shared." + ext)
-            let bytes = try Data(contentsOf: fixtures.appendingPathComponent(fixture))
+        var sources = [
+            ("audio", fixtures.appendingPathComponent("audio-file-playback/demo-audio.m4a")),
+            ("video", fixtures.appendingPathComponent("video-file-playback/demo-video.mp4")),
+        ]
+        if let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] {
+            let samples = URL(fileURLWithPath: root).appendingPathComponent("media")
+            sources.append(("audio", samples.appendingPathComponent("音频-定位.wav")))
+            sources.append(("video", samples.appendingPathComponent("视频-内置字幕.mp4")))
+        }
+        for (tag, fixture) in sources {
+            let source = folder.appendingPathComponent("shared." + fixture.pathExtension)
+            let bytes = try Data(contentsOf: fixture)
             try bytes.write(to: source)
             let document = folder.appendingPathComponent("Media.md")
             let markdown = Data("# Media\n\n<\(tag) controls src=\"\(source.lastPathComponent)\"></\(tag)>\n".utf8)
