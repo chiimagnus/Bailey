@@ -339,6 +339,28 @@ final class SVGArtworkTests: XCTestCase {
             CGPoint(x: 230, y: 135), CGPoint(x: 1000, y: 135),
             CGPoint(x: 346, y: 280), CGPoint(x: 580, y: 138), CGPoint(x: 855, y: 214),
         ]
+        let expected = try await referencePixels(bytes, coordinates: samples.map { [Int($0.x) + 80, Int($0.y) + 40] })
+        XCTAssertEqual(expected.count, samples.count)
+        for (point, target) in zip(samples, expected) {
+            let rendered = try pixel(at: point)
+            let channels = [rendered.redComponent, rendered.greenComponent, rendered.blueComponent, rendered.alphaComponent]
+            XCTAssertEqual(target.count, channels.count)
+            for (component, value) in zip(channels, target) {
+                XCTAssertEqual(component, Double(value) / 255, accuracy: 0.12,
+                               "Gradients and reused markers must agree with the native reference at \(point)")
+            }
+        }
+        let glyphPixels = try stride(from: 160, to: 255, by: 2).flatMap { column in
+            try stride(from: 1, to: 25, by: 2).map { row in
+                try pixel(at: CGPoint(x: column, y: row))
+            }
+        }
+        XCTAssertGreaterThan(glyphPixels.filter { $0.redComponent < 0.45 }.count, 12,
+                             "The Chinese heading must render dark glyph strokes, not just its background")
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+    }
+
+    private func referencePixels(_ bytes: Data, coordinates: [[Int]]) async throws -> [[Int]] {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
@@ -361,28 +383,65 @@ final class SVGArtworkTests: XCTestCase {
             const context = canvas.getContext('2d');
             context.drawImage(image, 0, 0);
             return coordinates.map(([x, y]) => Array.from(context.getImageData(x, y, 1, 1).data));
-            """, arguments: ["encoded": bytes.base64EncodedString(),
-                              "coordinates": samples.map { [Int($0.x) + 80, Int($0.y) + 40] }],
+            """, arguments: ["encoded": bytes.base64EncodedString(), "coordinates": coordinates],
             in: nil, contentWorld: .defaultClient)
-        let expected = try XCTUnwrap(rawPixels as? [[Int]])
-        XCTAssertEqual(expected.count, samples.count)
-        for (point, target) in zip(samples, expected) {
-            let rendered = try pixel(at: point)
-            let channels = [rendered.redComponent, rendered.greenComponent, rendered.blueComponent, rendered.alphaComponent]
-            XCTAssertEqual(target.count, channels.count)
-            for (component, value) in zip(channels, target) {
-                XCTAssertEqual(component, Double(value) / 255, accuracy: 0.12,
-                               "Gradients and reused markers must agree with the native reference at \(point)")
+        return try XCTUnwrap(rawPixels as? [[Int]])
+    }
+
+    func testDropShadowFontAndExtremeClippedPathMatchIndependentReference() async throws {
+        // A long, valid path with coordinates far beyond the viewport must not
+        // expand the backing surface. Compare the actual visible result.
+        let segments = (0..<4_000).map { index in
+            "L\(10 + index % 70) \(index.isMultiple(of: 2) ? 70 : 74)"
+        }.joined(separator: " ")
+        let bytes = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="128" height="100" viewBox="-16 -8 128 100">
+              <defs>
+                <filter id="shadow" filterUnits="userSpaceOnUse" x="0" y="0" width="90" height="50">
+                  <feDropShadow dx="20" dy="4" stdDeviation="1" flood-color="#0040ff" flood-opacity="0.75"/>
+                </filter>
+                <clipPath id="plot"><rect x="0" y="50" width="90" height="30"/></clipPath>
+              </defs>
+              <rect x="10" y="10" width="20" height="20" fill="#ff0000" filter="url(#shadow)"/>
+              <g clip-path="url(#plot)" fill="none">
+                <path d="M-1000000 55 L1000000 55" stroke="#00aa22" stroke-width="5"/>
+                <path d="M10 70 \(segments)" stroke="#d02070" stroke-width="1"/>
+              </g>
+              <text x="60" y="37" font-family="Helvetica" font-size="22" fill="#000000">HI</text>
+            </svg>
+            """.utf8)
+        let vector = try SVGArtwork.parse(bytes)
+        XCTAssertTrue(vector.omitted.isEmpty)
+        let raster = try SVGArtwork.render(bytes)
+        let bitmap = NSBitmapImageRep(cgImage: raster.image)
+        XCTAssertEqual(bitmap.pixelsWide, 256)
+        XCTAssertEqual(bitmap.pixelsHigh, 200)
+        let geometry: [[Int]] = [[15, 18], [40, 22], [56, 22], [45, 55], [-4, 55], [95, 55]]
+        let text = (60..<85).flatMap { x in (15..<40).map { y in [x, y] } }
+        let coordinates = geometry + text
+        let reference = try await referencePixels(bytes, coordinates: coordinates.map { [$0[0] + 16, $0[1] + 8] })
+        XCTAssertEqual(reference.count, coordinates.count)
+        func pixel(_ point: [Int]) throws -> NSColor {
+            try XCTUnwrap(bitmap.colorAt(x: (point[0] + 16) * 2 + 1, y: (point[1] + 8) * 2 + 1)?.usingColorSpace(.sRGB))
+        }
+        XCTAssertGreaterThan(reference[1][3], 150, "The reference must actually contain the projected shadow")
+        XCTAssertGreaterThan(reference[3][1], 130, "The extreme line must actually enter the clip")
+        for (point, expected) in zip(geometry, reference) {
+            let actual = try pixel(point)
+            XCTAssertEqual(actual.alphaComponent, Double(expected[3]) / 255, accuracy: 0.12, "alpha at \(point)")
+            if expected[3] > 100 {
+                for (value, channel) in zip([actual.redComponent, actual.greenComponent, actual.blueComponent], expected) {
+                    XCTAssertEqual(value, Double(channel) / 255, accuracy: 0.12, "color at \(point)")
+                }
             }
         }
-        let glyphPixels = try stride(from: 160, to: 255, by: 2).flatMap { column in
-            try stride(from: 1, to: 25, by: 2).map { row in
-                try pixel(at: CGPoint(x: column, y: row))
-            }
-        }
-        XCTAssertGreaterThan(glyphPixels.filter { $0.redComponent < 0.45 }.count, 12,
-                             "The Chinese heading must render dark glyph strokes, not just its background")
-        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        let glyphs = try text.filter { try pixel($0).alphaComponent > 0.65 }
+        let referenceGlyphs = zip(text, reference.dropFirst(geometry.count)).filter { $0.1[3] > 165 }.map { $0.0 }
+        XCTAssertGreaterThan(referenceGlyphs.count, 30)
+        XCTAssertGreaterThan(glyphs.count, 30)
+        XCTAssertEqual(Double(glyphs.count), Double(referenceGlyphs.count), accuracy: Double(referenceGlyphs.count) * 0.35)
+        XCTAssertEqual(try XCTUnwrap(glyphs.map { $0[0] }.min()), try XCTUnwrap(referenceGlyphs.map { $0[0] }.min()), accuracy: 3)
+        XCTAssertEqual(try XCTUnwrap(glyphs.map { $0[1] }.min()), try XCTUnwrap(referenceGlyphs.map { $0[1] }.min()), accuracy: 3)
     }
 
     func testMaskAndRotationKeepTheExpectedHalfTransparent() throws {
