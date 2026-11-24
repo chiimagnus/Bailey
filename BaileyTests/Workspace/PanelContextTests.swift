@@ -27,14 +27,16 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
         pausedRename = nil
         awaitingRename = false
     }
+    private var listedFilename: String {
+        name == "old-channel" ? "old.txt" : name == "new-channel" ? "new.txt" : "tracked.txt"
+    }
     func list(directory: String) async throws -> [WorkspaceEntry] {
         if pauseNextList {
             pauseNextList = false
             awaitingList = true
             await withCheckedContinuation { pausedList = $0 }
         }
-        let filename = name == "old-channel" ? "old.txt" : name == "new-channel" ? "new.txt" : "tracked.txt"
-        return [WorkspaceEntry(name: filename, isDirectory: false, isSymlink: false)]
+        return [WorkspaceEntry(name: listedFilename, isDirectory: false, isSymlink: false)]
     }
     func stat(path: String) async throws -> WorkspaceStat? {
         if path.hasSuffix("stale.txt") {
@@ -42,8 +44,11 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
             try await Task.sleep(for: .milliseconds(100))
             return nil
         }
-        if path.hasSuffix("created.txt") || path.hasSuffix("moved.txt") { return nil }
-        return WorkspaceStat(isRegular: !path.hasSuffix("/root"), isDirectory: path.hasSuffix("/root"), isSymlink: false, size: 0, mtime: .distantPast)
+        // Only the entries exposed by this fixture exist. Unknown sibling
+        // paths (including annotation sidecars) must report absence.
+        let isDirectory = path.hasSuffix("/root")
+        guard isDirectory || (path as NSString).lastPathComponent == listedFilename else { return nil }
+        return WorkspaceStat(isRegular: !isDirectory, isDirectory: isDirectory, isSymlink: false, size: 0, mtime: .distantPast)
     }
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func read(path: String, maxBytes: Int) async throws -> Data { Data() }
