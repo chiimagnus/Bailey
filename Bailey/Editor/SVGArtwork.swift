@@ -1,6 +1,8 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import SwiftDraw
+import UniformTypeIdentifiers
 
 nonisolated enum SVGArtwork {
     static let byteLimit = 1 << 20
@@ -37,15 +39,75 @@ nonisolated enum SVGArtwork {
         let scale = min(2, 2048 / max(svg.size.width, svg.size.height))
         let width = max(1, Int(ceil(svg.size.width * scale)))
         let height = max(1, Int(ceil(svg.size.height * scale)))
+        let image = try rasterize(svg, width: width, height: height,
+                                  space: CGColorSpaceCreateDeviceRGB(), background: .transparent)
+        return Raster(image: image, pointSize: svg.size)
+    }
+
+    struct PNGOptions: Sendable {
+        static let maximumDimension = 32_768
+        static let maximumPixels = 8_000_000
+
+        enum ColorSpace: String, CaseIterable, Sendable {
+            case sRGB, displayP3
+        }
+
+        enum Background: String, CaseIterable, Sendable {
+            case transparent, white, black
+        }
+
+        let width: Int
+        let height: Int
+        var colorSpace: ColorSpace = .sRGB
+        var background: Background = .transparent
+
+        var isValid: Bool {
+            (1...Self.maximumDimension).contains(width) &&
+                (1...Self.maximumDimension).contains(height) && width <= Self.maximumPixels / height
+        }
+    }
+
+    @concurrent static func png(_ vector: Vector, options: PNGOptions) async throws -> Data {
+        try Task.checkCancellation()
+        guard options.isValid else { throw WorkspaceError.tooLarge }
+        let name = options.colorSpace == .sRGB ? CGColorSpace.sRGB : CGColorSpace.displayP3
+        guard let space = CGColorSpace(name: name) else { throw CocoaError(.fileWriteUnknown) }
+        let image = try rasterize(vector.image, width: options.width, height: options.height,
+                                  space: space, background: options.background, aspectFit: true)
+        try Task.checkCancellation()
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
+        else { throw CocoaError(.fileWriteUnknown) }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+        try Task.checkCancellation()
+        return data as Data
+    }
+
+    private static func rasterize(_ svg: SVG, width: Int, height: Int, space: CGColorSpace,
+                                  background: PNGOptions.Background, aspectFit: Bool = false) throws -> CGImage {
         guard let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw CocoaError(.fileReadCorruptFile) }
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        if background != .transparent {
+            let component: CGFloat = background == .white ? 1 : 0
+            context.setFillColor(red: component, green: component, blue: component, alpha: 1)
+            context.fill(bounds)
+        }
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
-        context.draw(svg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        if aspectFit {
+            let scale = min(CGFloat(width) / svg.size.width, CGFloat(height) / svg.size.height)
+            let size = CGSize(width: svg.size.width * scale, height: svg.size.height * scale)
+            context.draw(svg, in: CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                                         width: size.width, height: size.height))
+        } else {
+            context.draw(svg, in: bounds)
+        }
         guard let image = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
-        return Raster(image: image, pointSize: svg.size)
+        return image
     }
 
     static func sanitizedXML(_ data: Data) throws -> Sanitized {

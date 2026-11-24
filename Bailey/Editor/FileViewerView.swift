@@ -470,6 +470,35 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
+    func svgOutputDrawing(request: String) -> SVGArtwork.Vector? {
+        guard !isRetired, canPreviewFile, previewKind == .svg, reloadError == nil,
+              readOnlyReason == nil, request == textPreviewRequestID,
+              let drawing = svgPreview?.drawing, drawing.request == request else { return nil }
+        return drawing.artwork
+    }
+
+    private func svgPNG(request: String, options: SVGArtwork.PNGOptions) async throws -> Data {
+        guard let artwork = svgOutputDrawing(request: request) else { throw WorkspaceError.changedExternally }
+        let png = try await SVGArtwork.png(artwork, options: options)
+        try Task.checkCancellation()
+        guard svgOutputDrawing(request: request) != nil else { throw WorkspaceError.changedExternally }
+        return png
+    }
+
+    func copySVGPNG(request: String, options: SVGArtwork.PNGOptions, to pasteboard: NSPasteboard = .general) async throws {
+        let png = try await svgPNG(request: request, options: options)
+        pasteboard.clearContents()
+        guard pasteboard.setData(png, forType: .png) else { throw CocoaError(.fileWriteUnknown) }
+    }
+
+    func exportSVGPNG(request: String, options: SVGArtwork.PNGOptions, to destination: URL) async throws {
+        guard destination.isFileURL, destination.pathExtension.lowercased() == "png" else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        let png = try await svgPNG(request: request, options: options)
+        try await LocalWorkspaceBackend.shared.writeNewFile(path: destination.path, data: png)
+    }
+
     func showHTMLPreview(request: String, in directory: String?) async {
         guard !Task.isCancelled, !isRetired, canPreviewFile, previewKind == .html,
               request == textPreviewRequestID else { return }

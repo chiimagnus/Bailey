@@ -249,11 +249,19 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     /// atomic rename, not a universal compare-and-rename against outside writers.
     @concurrent func write(path: String, data: Data,
                            ifUnchanged version: WorkspaceFileVersion) async throws {
+        try Self.writeStaged(path: path, data: data, ifUnchanged: version)
+    }
+
+    @concurrent func writeNewFile(path: String, data: Data) async throws {
+        try Self.writeStaged(path: path, data: data, ifUnchanged: nil)
+    }
+
+    private static func writeStaged(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion?) throws {
         try Task.checkCancellation()
         guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
-        _ = try Self.verifyCurrentVersion(path: path, expected: version)
+        if let version { _ = try Self.verifyCurrentVersion(path: path, expected: version) }
         // Fixed sibling name: a valid 255-byte filename must not overflow NAME_MAX.
         let parent = (path as NSString).deletingLastPathComponent
         var template = Array((parent + "/.bailey-save.XXXXXXXX").utf8CString)
@@ -268,8 +276,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         let item = stage + "/item"
         try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
         _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
-        let originalMode = try Self.verifyCurrentVersion(path: path, expected: version)
-        if let originalMode {
+        if let version, let originalMode = try Self.verifyCurrentVersion(path: path, expected: version) {
             guard chmod(item, mode_t(originalMode)) == 0 else {
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
@@ -278,8 +285,11 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try stagedHandle.synchronize()
         try stagedHandle.close()
         try Task.checkCancellation()
-        let status = item.withCString { from in
-            path.withCString { to in Darwin.rename(from, to) }
+        let status: Int32
+        if version != nil {
+            status = item.withCString { from in path.withCString { to in Darwin.rename(from, to) } }
+        } else {
+            status = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: path))
         }
         guard status == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))

@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import ImageIO
 import WebKit
 import XCTest
 @testable import Bailey
@@ -22,6 +23,198 @@ final class SVGArtworkTests: XCTestCase {
           <rect x="16" y="16" width="16" height="16" fill="red" filter="url(#soft)"/>
         </svg>
         """
+
+    func testPNGOutputHasExactDimensionsAlphaAndColorProfileWithinBudget() async throws {
+        let source = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
+              <rect width="2" height="2" fill="#ff0000" opacity="0.5"/>
+            </svg>
+            """.utf8)
+        let vector = try SVGArtwork.parse(source)
+        for (width, height, background, space) in [
+            (1, 1, SVGArtwork.PNGOptions.Background.transparent, SVGArtwork.PNGOptions.ColorSpace.sRGB),
+            (80, 40, .transparent, .displayP3), (40, 80, .white, .sRGB),
+            (32_768, 1, .black, .displayP3), (4_000, 2_000, .transparent, .sRGB),
+        ] {
+            let png = try await SVGArtwork.png(vector, options: .init(width: width, height: height,
+                                                                       colorSpace: space, background: background))
+            let imageSource = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(imageSource, 0, nil))
+            XCTAssertEqual(image.width, width)
+            XCTAssertEqual(image.height, height)
+            let profile = try XCTUnwrap(image.colorSpace?.copyICCData())
+            XCTAssertGreaterThan(CFDataGetLength(profile), 0)
+            if space == .displayP3 {
+                let expected = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3)?.copyICCData())
+                XCTAssertEqual(profile as Data, expected as Data)
+            }
+            if width == 80 {
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                let red = try XCTUnwrap(bitmap.colorAt(x: 20, y: 20)?.usingColorSpace(.sRGB))
+                let empty = try XCTUnwrap(bitmap.colorAt(x: 60, y: 20)?.usingColorSpace(.sRGB))
+                XCTAssertEqual(red.alphaComponent, 0.5, accuracy: 0.02)
+                XCTAssertGreaterThan(red.redComponent - red.greenComponent, 0.6)
+                XCTAssertEqual(empty.alphaComponent, 0, accuracy: 0.01)
+            } else if width == 40 {
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                let empty = try XCTUnwrap(bitmap.colorAt(x: 20, y: 4)?.usingColorSpace(.sRGB))
+                XCTAssertEqual(empty.alphaComponent, 1, accuracy: 0.01)
+                XCTAssertEqual(empty.redComponent, 1, accuracy: 0.01)
+                XCTAssertEqual(empty.greenComponent, 1, accuracy: 0.01)
+                XCTAssertEqual(empty.blueComponent, 1, accuracy: 0.01)
+            }
+        }
+        for (width, height) in [(0, 1), (-1, 1), (32_769, 1), (4_001, 2_000), (Int.max, Int.max)] {
+            do {
+                _ = try await SVGArtwork.png(vector, options: .init(width: width, height: height))
+                XCTFail("Invalid dimensions must not allocate a bitmap")
+            } catch WorkspaceError.tooLarge {}
+        }
+        let blur = try SVGArtwork.parse(Data(Self.blur.utf8))
+        let png = try await SVGArtwork.png(blur, options: .init(width: 192, height: 192))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
+        let softEdge = try XCTUnwrap(bitmap.colorAt(x: 58, y: 96)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(softEdge.alphaComponent * (softEdge.redComponent - softEdge.greenComponent), 0.04)
+    }
+
+    func testPNGOutputUsesCurrentDraftAndDoesNotReplaceDestinationsOrSource() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Artwork.svg")
+        let original = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+              <rect width="16" height="16" fill="red"/>
+            </svg>
+            """
+        let initialBytes = Data(original.utf8)
+        try initialBytes.write(to: source)
+        let file = FileTab(path: source.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let first = file.textPreviewRequestID
+        await file.showSVGPreview(request: first)
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let options = SVGArtwork.PNGOptions(width: 32, height: 32)
+        try await file.copySVGPNG(request: first, options: options, to: pasteboard)
+        let red = try XCTUnwrap(pasteboard.data(forType: .png))
+        let redBitmap = try XCTUnwrap(NSBitmapImageRep(data: red))
+        XCTAssertGreaterThan(try XCTUnwrap(redBitmap.colorAt(x: 16, y: 16)?.usingColorSpace(.sRGB)).redComponent, 0.9)
+
+        file.text = original.replacingOccurrences(of: "red", with: "blue")
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        let staleTarget = root.appending(path: "stale.png")
+        do {
+            try await file.exportSVGPNG(request: first, options: options, to: staleTarget)
+            XCTFail("An old drawing must not be exported as the current draft")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleTarget.path))
+        let current = file.textPreviewRequestID
+        await file.showSVGPreview(request: current)
+        try await file.copySVGPNG(request: current, options: options, to: pasteboard)
+        let blue = try XCTUnwrap(pasteboard.data(forType: .png))
+        let blueBitmap = try XCTUnwrap(NSBitmapImageRep(data: blue))
+        XCTAssertGreaterThan(try XCTUnwrap(blueBitmap.colorAt(x: 16, y: 16)?.usingColorSpace(.sRGB)).blueComponent, 0.9)
+        XCTAssertNotEqual(red, blue)
+        let target = root.appending(path: "Artwork.png")
+        try await file.exportSVGPNG(request: current, options: options, to: target)
+        XCTAssertEqual(try Data(contentsOf: target), blue)
+        let link = root.appending(path: "link.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
+        let dangling = root.appending(path: "missing.png")
+        try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: root.appending(path: "missing-target"))
+        let folder = root.appending(path: "folder.png")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        for occupied in [target, link, dangling, folder] {
+            do {
+                try await file.exportSVGPNG(request: current, options: .init(width: 16, height: 16), to: occupied)
+                XCTFail("Export must never overwrite an existing destination: \(occupied.lastPathComponent)")
+            } catch {}
+        }
+        XCTAssertEqual(try Data(contentsOf: target), blue)
+        XCTAssertNoThrow(try FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+        XCTAssertNoThrow(try FileManager.default.destinationOfSymbolicLink(atPath: dangling.path))
+        let denied = root.appending(path: "missing-dir/output.png")
+        do {
+            try await file.exportSVGPNG(request: current, options: options, to: denied)
+            XCTFail("Missing destination parent must be reported")
+        } catch {}
+        let readonly = root.appending(path: "readonly")
+        try FileManager.default.createDirectory(at: readonly, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: readonly.path)
+        do {
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: readonly.path) }
+            do {
+                try await file.exportSVGPNG(request: current, options: options, to: readonly.appending(path: "output.png"))
+                XCTFail("A read-only destination must reject export")
+            } catch {}
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: readonly.path), [])
+        }
+        try FileManager.default.removeItem(at: readonly)
+        let cancelledTarget = root.appending(path: "cancelled.png")
+        let cancelled = Task { try await file.exportSVGPNG(request: current, options: options, to: cancelledTarget) }
+        cancelled.cancel()
+        do { try await cancelled.value; XCTFail("Cancelled export must not publish") }
+        catch is CancellationError {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelledTarget.path))
+        XCTAssertEqual(try Data(contentsOf: source), initialBytes)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: root.path)),
+                       Set(["Artwork.svg", "Artwork.png", "link.png", "missing.png", "folder.png"]))
+        file.text = "<svg>"
+        await file.showSVGPreview(request: file.textPreviewRequestID)
+        do {
+            try await file.copySVGPNG(request: file.textPreviewRequestID, options: options, to: pasteboard)
+            XCTFail("An invalid draft must not publish the retained last valid drawing")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(pasteboard.data(forType: .png), blue)
+        XCTAssertEqual(try Data(contentsOf: source), initialBytes)
+        // An explicit source save still uses the existing TextKit conditional
+        // write, and reopening produces the same output from the new bytes.
+        file.text = original.replacingOccurrences(of: "red", with: "blue")
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: source), Data(file.text.utf8))
+        XCTAssertEqual(try Data(contentsOf: target), blue)
+        let reopened = FileTab(path: source.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { reopened.retireContent() }
+        try await reopened.waitForText()
+        await reopened.showSVGPreview(request: reopened.textPreviewRequestID)
+        try await reopened.copySVGPNG(request: reopened.textPreviewRequestID, options: options, to: pasteboard)
+        XCTAssertEqual(pasteboard.data(forType: .png), blue)
+
+    }
+
+    func testExclusiveOutputPublicationAllowsExactlyOneConcurrentWriter() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appending(path: "output.png")
+        let first = Data(repeating: 0x11, count: 512 * 1024)
+        let second = Data(repeating: 0x22, count: 512 * 1024)
+        func publish(_ data: Data) async -> Bool {
+            do {
+                try await LocalWorkspaceBackend.shared.writeNewFile(path: target.path, data: data)
+                return true
+            } catch {
+                let failure = error as NSError
+                XCTAssertEqual(failure.domain, NSPOSIXErrorDomain)
+                XCTAssertEqual(failure.code, Int(EEXIST))
+                return false
+            }
+        }
+        async let left = publish(first)
+        async let right = publish(second)
+        let (leftWon, rightWon) = await (left, right)
+        XCTAssertNotEqual(leftWon, rightWon)
+        XCTAssertEqual(try Data(contentsOf: target), leftWon ? first : second)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["output.png"])
+    }
 
     func testNativeCanvasSettlesTheCurrentSVGFilterWithoutReusingOldPixels() async throws {
         let svg = try SVGArtwork.parse(Data(Self.blur.utf8)).image

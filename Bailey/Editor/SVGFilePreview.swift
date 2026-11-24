@@ -1,6 +1,8 @@
 import AppKit
+import Observation
 import SwiftDraw
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SVGPreviewSnapshot {
     struct Drawing {
@@ -37,7 +39,7 @@ struct SVGFilePreview: View {
                         let names = drawing.artwork.omitted.prefix(8).joined(separator: ", ")
                         notice(String(localized: "SVG preview omits: \(names)", table: "Editor"))
                     }
-                    NativeSVGViewport(svg: drawing.artwork.image, request: drawing.request,
+                    NativeSVGViewport(file: file, svg: drawing.artwork.image, request: drawing.request,
                                       viewportPosition: file.graphicViewportPosition,
                                       onViewportPositionChange: { position in
                         guard file.previewKind == .svg, case .text = file.content,
@@ -84,6 +86,7 @@ struct SVGFilePreview: View {
 }
 
 private struct NativeSVGViewport: NSViewRepresentable {
+    let file: FileTab
     let svg: SVG
     let request: String
     let viewportPosition: PreviewScrollView.Position?
@@ -96,6 +99,7 @@ private struct NativeSVGViewport: NSViewRepresentable {
         scroll.onFocused = onFocused
         scroll.install(svg, request: request, position: viewportPosition,
                        onPositionChange: onViewportPositionChange)
+        scroll.setOutputTarget(file, request: file.svgOutputDrawing(request: request) == nil ? nil : request)
     }
 
     static func dismantleNSView(_ scroll: SVGPreviewScrollView, coordinator: ()) { scroll.clear() }
@@ -119,11 +123,75 @@ private struct NativeSVGDrawing: View {
     }
 }
 
+@Observable
+private final class SVGPNGSettings {
+    var width: String
+    var height: String
+    var colorSpace: SVGArtwork.PNGOptions.ColorSpace = .sRGB
+    var background: SVGArtwork.PNGOptions.Background = .transparent
+
+    init(size: CGSize) {
+        width = String(max(1, Int(size.width.rounded(.down))))
+        height = String(max(1, Int(size.height.rounded(.down))))
+    }
+
+    var options: SVGArtwork.PNGOptions? {
+        guard let width = Int(width), let height = Int(height) else { return nil }
+        let result = SVGArtwork.PNGOptions(width: width, height: height, colorSpace: colorSpace, background: background)
+        return result.isValid ? result : nil
+    }
+}
+
+private struct SVGPNGOptionsView: View {
+    @Bindable var settings: SVGPNGSettings
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Grid(alignment: .leading) {
+                GridRow {
+                    Text("Pixel width", tableName: "Editor")
+                    TextField(String(localized: "Pixel width", table: "Editor"), text: $settings.width).labelsHidden()
+                }
+                GridRow {
+                    Text("Pixel height", tableName: "Editor")
+                    TextField(String(localized: "Pixel height", table: "Editor"), text: $settings.height).labelsHidden()
+                }
+                GridRow {
+                    Text("Color space", tableName: "Editor")
+                    Picker(String(localized: "Color space", table: "Editor"), selection: $settings.colorSpace) {
+                        Text("sRGB").tag(SVGArtwork.PNGOptions.ColorSpace.sRGB)
+                        Text("Display P3").tag(SVGArtwork.PNGOptions.ColorSpace.displayP3)
+                    }.labelsHidden()
+                }
+                GridRow {
+                    Text("Background", tableName: "Editor")
+                    Picker(String(localized: "Background", table: "Editor"), selection: $settings.background) {
+                        Text("Transparent", tableName: "Editor").tag(SVGArtwork.PNGOptions.Background.transparent)
+                        Text("White", tableName: "Editor").tag(SVGArtwork.PNGOptions.Background.white)
+                        Text("Black", tableName: "Editor").tag(SVGArtwork.PNGOptions.Background.black)
+                    }.labelsHidden()
+                }
+            }
+            Text("SVG export preserves aspect ratio. Maximum 8 million pixels.", tableName: "Editor")
+                .font(.caption).foregroundStyle(.secondary)
+            if settings.options == nil {
+                Text("Invalid PNG dimensions.", tableName: "Editor").font(.caption).foregroundStyle(.red)
+            }
+        }
+        .padding(8)
+        .frame(width: 320, alignment: .leading)
+    }
+}
+
 final class SVGPreviewScrollView: PreviewScrollView {
     private let canvas = PreviewCanvasView()
     private var request: String?
     private var content: NSHostingView<NativeSVGDrawing>?
     var onFocused: () -> Void = {}
+    private weak var outputFile: FileTab?
+    private var outputRequest: String?
+    private var outputTask: Task<Void, Never>?
+    private weak var outputSheet: NSWindow?
 
     init() {
         super.init(frame: .zero)
@@ -156,7 +224,93 @@ final class SVGPreviewScrollView: PreviewScrollView {
         onViewportPositionChange = onPositionChange
     }
 
+    func setOutputTarget(_ file: FileTab?, request: String?) {
+        guard outputFile !== file || outputRequest != request else { return }
+        outputTask?.cancel()
+        outputTask = nil
+        if let sheet = outputSheet { sheet.sheetParent?.endSheet(sheet, returnCode: .cancel) }
+        outputSheet = nil
+        outputFile = file
+        outputRequest = request
+        let actions = [#selector(copyPNG), #selector(exportPNG)]
+        if let menu {
+            for item in menu.items where item.action.map(actions.contains) == true { menu.removeItem(item) }
+            if request != nil, file != nil {
+                menu.addItem(withTitle: String(localized: "Copy PNG…", table: "Editor"),
+                             action: #selector(copyPNG), keyEquivalent: "").target = self
+                menu.addItem(withTitle: String(localized: "Export PNG…", table: "Editor"),
+                             action: #selector(exportPNG), keyEquivalent: "").target = self
+            }
+        }
+    }
+
+    @objc private func copyPNG() { presentOutput(exporting: false) }
+    @objc private func exportPNG() { presentOutput(exporting: true) }
+
+    private func presentOutput(exporting: Bool) {
+        guard outputTask == nil, outputSheet == nil, let window, let file = outputFile,
+              let request = outputRequest, let artwork = file.svgOutputDrawing(request: request) else { return }
+        let settings = SVGPNGSettings(size: artwork.image.size)
+        let accessory = NSHostingView(rootView: SVGPNGOptionsView(settings: settings))
+        accessory.frame.size = accessory.fittingSize
+        if exporting {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.png]
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = ((file.path as NSString).lastPathComponent as NSString).deletingPathExtension + ".png"
+            panel.message = String(localized: "Export PNG to a new local file. Existing files are not replaced.", table: "Editor")
+            panel.accessoryView = accessory
+            outputSheet = panel
+            panel.beginSheetModal(for: window) { [weak self, weak file] response in
+                guard let self, let file, self.outputRequest == request, self.outputFile === file else { return }
+                self.outputSheet = nil
+                guard response == .OK, let destination = panel.url else { return }
+                self.runOutput(file, request: request, settings: settings, destination: destination)
+            }
+        } else {
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Copy PNG…", table: "Editor")
+            alert.accessoryView = accessory
+            alert.addButton(withTitle: String(localized: "Copy", table: "Editor"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Editor"))
+            outputSheet = alert.window
+            alert.beginSheetModal(for: window) { [weak self, weak file] response in
+                guard let self, let file, self.outputRequest == request, self.outputFile === file else { return }
+                self.outputSheet = nil
+                guard response == .alertFirstButtonReturn else { return }
+                self.runOutput(file, request: request, settings: settings, destination: nil)
+            }
+        }
+    }
+
+    private func runOutput(_ file: FileTab, request: String, settings: SVGPNGSettings, destination: URL?) {
+        guard let options = settings.options else {
+            showOutputError(String(localized: "Invalid PNG dimensions.", table: "Editor"))
+            return
+        }
+        outputTask = Task { @MainActor [weak self] in
+            do {
+                if let destination { try await file.exportSVGPNG(request: request, options: options, to: destination) }
+                else { try await file.copySVGPNG(request: request, options: options) }
+            } catch {
+                if !Task.isCancelled, self?.outputRequest == request {
+                    self?.showOutputError(error.localizedDescription)
+                }
+            }
+            if !Task.isCancelled, self?.outputRequest == request { self?.outputTask = nil }
+        }
+    }
+
+    private func showOutputError(_ message: String) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Could not output PNG.", table: "Editor")
+        alert.informativeText = message
+        alert.beginSheetModal(for: window) { _ in }
+    }
+
     func clear() {
+        setOutputTarget(nil, request: nil)
         onViewportPositionChange = nil
         content?.removeFromSuperview()
         content = nil

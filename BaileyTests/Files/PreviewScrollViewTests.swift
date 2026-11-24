@@ -1668,7 +1668,12 @@ final class PreviewScrollViewTests: XCTestCase {
             let fit = String(localized: "Fit", table: "Editor")
             let zoomIn = String(localized: "Zoom in", table: "Editor")
             let zoomOut = String(localized: "Zoom out", table: "Editor")
-            XCTAssertEqual(actions.map(\.name), [fit, "100%", zoomIn, zoomOut])
+            var expectedActions = [fit, "100%", zoomIn, zoomOut]
+            if name.hasSuffix(".svg") {
+                expectedActions += [String(localized: "Copy PNG…", table: "Editor"),
+                                    String(localized: "Export PNG…", table: "Editor")]
+            }
+            XCTAssertEqual(actions.map(\.name), expectedActions)
             XCTAssertEqual(actions.map(\.name), view.menu?.items.map(\.title))
             func perform(_ name: String) throws {
                 let action = try XCTUnwrap(actions.first { $0.name == name })
