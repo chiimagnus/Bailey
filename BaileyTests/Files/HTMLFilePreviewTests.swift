@@ -476,6 +476,96 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertFalse(svg.isDirty)
     }
 
+    func testIncompleteAndCorruptPNGsAreRejectedByAllPreviewEntries() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var fixtures = [try solidPNG(width: 81, height: 43)]
+        if let samples = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] {
+            let sample = URL(fileURLWithPath: samples).appending(path: "images/透明与渐变.png")
+            fixtures.append(try Data(contentsOf: sample))
+        }
+        let resource = PreviewResource(path: root.appending(path: "README.md").path,
+                                       directory: root.path, backend: LocalWorkspaceBackend.shared)
+        var names: [String] = []
+        var expected: [Int] = []
+        var damaged: [(FileTab, URL, Data, Int)] = []
+        defer { for (tab, _, _, _) in damaged { tab.retireContent() } }
+        for (index, bytes) in fixtures.enumerated() {
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(bytes as CFData, nil))
+            let dimensions = try XCTUnwrap(RasterPreview.pixelSize(source, at: 0))
+            let width = Int(dimensions.width)
+            XCTAssertEqual(bytes.suffix(8), Data([0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]))
+            let idat = try XCTUnwrap(bytes.range(of: Data("IDAT".utf8)))
+            let length = bytes[(idat.lowerBound - 4)..<idat.lowerBound].reduce(0) { ($0 << 8) | Int($1) }
+            let crc = idat.upperBound + length
+            XCTAssertLessThan(crc + 3, bytes.count)
+            var changedCRC = bytes
+            changedCRC[crc] ^= 1
+            let variants: [(String, Data, Bool)] = [
+                ("complete", bytes, true),
+                ("missing-end", Data(bytes.dropLast(12)), false),
+                ("truncated-data", Data(bytes.prefix(idat.upperBound + length / 2)), false),
+                ("bad-crc", changedCRC, false)
+            ]
+            for (kind, data, valid) in variants {
+                let name = "\(index)-\(kind).png"
+                let url = root.appending(path: name)
+                try data.write(to: url)
+                names.append(name)
+                expected.append(valid ? width : 0)
+                let reference = try XCTUnwrap(URL(string: name))
+                let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                tab.loadIfNeeded()
+                try await waitUntil { if case .loading = tab.content { return false }; return true }
+                if valid {
+                    defer { tab.retireContent() }
+                    guard case .image(let preview) = tab.content else { return XCTFail("Valid PNG must open") }
+                    XCTAssertEqual(preview.poster.width, width)
+                    let picture = try await resource.picture(reference)
+                    XCTAssertEqual(picture.poster.width, width)
+                } else {
+                    damaged.append((tab, url, bytes, width))
+                    if case .unavailable = tab.content {} else { XCTFail("\(name) published an invalid image") }
+                    XCTAssertNil(tab.originalImageRequest())
+                    do {
+                        _ = try await resource.picture(reference)
+                        XCTFail("Markdown accepted \(name)")
+                    } catch CocoaError.fileReadCorruptFile {}
+                }
+                XCTAssertFalse(tab.isDirty)
+                XCTAssertEqual(try Data(contentsOf: url), data)
+            }
+        }
+        let html = names.map { "<img src='\($0)'>" }.joined()
+        let page = try await open(html, in: root)
+        defer { page.retireContent() }
+        let view = try await display(page, in: root)
+        let widths = try await view.evaluateJavaScript("Array.from(document.images, img => img.naturalWidth)",
+                                                       contentWorld: .defaultClient) as? [Int]
+        XCTAssertEqual(widths, expected)
+        for (tab, url, bytes, width) in damaged {
+            try bytes.write(to: url, options: .atomic)
+            tab.reloadFromDiskIfClean()
+            try await waitUntil { if case .image = tab.content { return true }; return false }
+            guard case .image(let preview) = tab.content else { return XCTFail("Repaired PNG must reopen") }
+            XCTAssertEqual(preview.poster.width, width)
+            let picture = try await resource.picture(XCTUnwrap(URL(string: url.lastPathComponent)))
+            XCTAssertEqual(picture.poster.width, width)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
+        // A fresh static page must request the repaired source bytes, not reuse the earlier error.
+        let repaired = try await open(html, in: root)
+        defer { repaired.retireContent() }
+        let repairedView = try await display(repaired, in: root)
+        let repairedWidths = try await repairedView.evaluateJavaScript("Array.from(document.images, img => img.naturalWidth)",
+                                                                       contentWorld: .defaultClient) as? [Int]
+        XCTAssertEqual(repairedWidths, fixtures.flatMap { bytes in
+            let source = CGImageSourceCreateWithData(bytes as CFData, nil)!
+            return Array(repeating: Int(RasterPreview.pixelSize(source, at: 0)!.width), count: 4)
+        })
+        XCTAssertEqual(try Data(contentsOf: root.appending(path: "preview.html")), Data(html.utf8))
+    }
+
     func testComprehensiveAcceptanceDocumentWithRealStylesAndImages() async throws {
         guard let path = ProcessInfo.processInfo.environment["BAILEY_HTML_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_HTML_ACCEPTANCE_ROOT to the comprehensive sample directory")

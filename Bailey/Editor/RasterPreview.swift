@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import zlib
 
 nonisolated struct RasterPreview: Sendable {
     static let pixelLimit = 32_000_000
@@ -23,7 +24,34 @@ nonisolated struct RasterPreview: Sendable {
         if type == UTType.jpeg.identifier, !hasPrimaryJPEGEnd(bytes) {
             throw CocoaError(.fileReadCorruptFile)
         }
+        if type == UTType.png.identifier, try !hasCompletePNGChunks(bytes) {
+            throw CocoaError(.fileReadCorruptFile)
+        }
         return source
+    }
+
+    // ImageIO accepts incomplete PNGs and can silently display damaged pixels.
+    // Check the actual chunk boundaries and CRCs before handing off to ImageIO or WebKit.
+    private static func hasCompletePNGChunks(_ data: Data) throws -> Bool {
+        try data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress, bytes.count >= 8,
+                  bytes.loadUnaligned(as: UInt64.self).bigEndian == 0x89504e470d0a1a0a else { return false }
+            var offset = 8
+            var hasImageData = false
+            while bytes.count - offset >= 12 {
+                try Task.checkCancellation()
+                let length = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self).bigEndian)
+                guard length <= Int(Int32.max), length <= bytes.count - offset - 12 else { return false }
+                let type = bytes.loadUnaligned(fromByteOffset: offset + 4, as: UInt32.self).bigEndian
+                let checksum = bytes.loadUnaligned(fromByteOffset: offset + 8 + length, as: UInt32.self).bigEndian
+                guard crc32(0, base.advanced(by: offset + 4).assumingMemoryBound(to: UInt8.self),
+                            UInt32(length + 4)) == UInt(checksum) else { return false }
+                if type == 0x49444154 { hasImageData = true } // IDAT
+                if type == 0x49454e44 { return length == 0 && hasImageData } // IEND
+                offset += length + 12
+            }
+            return false
+        }
     }
 
     private static func hasPrimaryJPEGEnd(_ data: Data) -> Bool {
