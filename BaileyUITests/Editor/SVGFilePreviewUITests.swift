@@ -81,6 +81,36 @@ final class SVGFilePreviewUITests: XCTestCase {
         }
     }
 
+    func testCompressedSVGShowsAnActionableMessageAndDoesNotEnterPreview() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let bytes = try XCTUnwrap(Data(base64Encoded:
+            "H4sIAAAAAAAAAxXMQQ6DMAwF0atY/wDYhF0VZ8FNqpImkdJSgYU5fmE9TxP3o9D56d9dUc1+D2Z3H3wa1q1wEBG+BOho2ef1VAgJBaFRkOKWX0beFquKIKCaW6mmuCK9W+8Ky88OTvGepD+3uwqDbAAAAA=="
+        ))
+        let compressed = fixture.root.appending(path: "Diagram.SVGZ")
+        try bytes.write(to: compressed)
+        let xml = #"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10" fill="teal"/></svg>"#
+        let original = try fixture.file("Diagram.svg", text: xml)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(compressed, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let message = window.staticTexts["Compressed SVG is not supported. Open an uncompressed SVG file."]
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        XCTAssertTrue(message.exists)
+        XCTAssertFalse(preview.exists)
+        XCTAssertFalse(window.textViews.firstMatch.exists)
+        WorkspaceUITestSupport.fileRow(original, in: window).doubleClick()
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        XCTAssertEqual(try Data(contentsOf: compressed), bytes)
+        XCTAssertEqual(try Data(contentsOf: original), Data(xml.utf8))
+    }
+
     func testSVGPreviewByteBudgetKeepsTheOverLimitDocumentAvailableAsSource() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

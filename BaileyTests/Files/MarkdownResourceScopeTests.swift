@@ -125,6 +125,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let directory = fixture + "/Project"
             let path = directory + "/Readme.md"
             let asset = directory + "/asset.svg"
+            let sameSVGPath = directory + "/same.svg"
             let rasterPath = directory + "/wide.png"
             let regionalPath = directory + "/regions.jpg"
             let gifPath = directory + "/动画 #100%.gif"
@@ -231,6 +232,22 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try localTwin.write(to: URL(fileURLWithPath: path))
             try localTwin.write(to: URL(fileURLWithPath: asset))
             try localTwin.write(to: URL(fileURLWithPath: rasterPath))
+            let compressedSVG = try SVGArtworkTests.compressedSVGBytes()
+            try await channel.write(path: sameSVGPath, data: compressedSVG)
+            try svg.write(to: URL(fileURLWithPath: sameSVGPath))
+            let compressedRemoteTab = FileTab(path: sameSVGPath, backend: channel, workspaceIdentity: "ssh:\(host)")
+            let uncompressedMacTab = FileTab(path: sameSVGPath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await load(compressedRemoteTab)
+            if case .unavailable(let reason) = compressedRemoteTab.content {
+                XCTAssertEqual(reason, String(localized: "Compressed SVG is not supported. Open an uncompressed SVG file.",
+                                               table: "Workspace"))
+            } else {
+                XCTFail("The SSH compressed SVG must not show the Mac namesake")
+            }
+            XCTAssertFalse(compressedRemoteTab.canPreviewFile)
+            try await uncompressedMacTab.waitForText()
+            XCTAssertTrue(uncompressedMacTab.canPreviewFile)
+            XCTAssertEqual(try SVGArtwork.render(Data(uncompressedMacTab.text.utf8)).pointSize.width, 40)
             func jpeg(red: CGFloat, green: CGFloat) throws -> Data {
                 canvas.setFillColor(red: red, green: green, blue: 0.07, alpha: 1)
                 canvas.fill(CGRect(x: 0, y: 0, width: 5000, height: 20))
@@ -447,6 +464,9 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let unchangedTable = try await backend.read(path: tablePath, maxBytes: tableBytes.count)
             XCTAssertEqual(unchangedTable, tableBytes)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: rasterPath)), localTwin)
+            let retainedCompressedSVG = try await backend.read(path: sameSVGPath, maxBytes: compressedSVG.count)
+            XCTAssertEqual(retainedCompressedSVG, compressedSVG)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: sameSVGPath)), svg)
             for sample in mediaFixtures {
                 let remoteBytes = try await backend.read(path: sample.path, maxBytes: sample.remote.count)
                 XCTAssertEqual(remoteBytes, sample.remote)

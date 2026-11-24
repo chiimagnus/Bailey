@@ -6,6 +6,12 @@ import XCTest
 
 @MainActor
 final class SVGArtworkTests: XCTestCase {
+    static func compressedSVGBytes() throws -> Data {
+        try XCTUnwrap(Data(base64Encoded:
+            "H4sIAAAAAAAAAxXMQQ6DMAwF0atY/wDYhF0VZ8FNqpImkdJSgYU5fmE9TxP3o9D56d9dUc1+D2Z3H3wa1q1wEBG+BOho2ef1VAgJBaFRkOKWX0beFquKIKCaW6mmuCK9W+8Ky88OTvGepD+3uwqDbAAAAA=="
+        ))
+    }
+
     private static let blur = """
         <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48">
           <defs>

@@ -1057,6 +1057,13 @@ final class FileTab: nonisolated Identifiable {
         }
         let data = try await backend.read(path: path, maxBytes: limit)
         try Task.checkCancellation()
+        if (suffix == "svg" || suffix == "svgz"), data.starts(with: [0x1f, 0x8b, 0x08]) {
+            return LoadedContent(
+                content: .unavailable(String(localized: "Compressed SVG is not supported. Open an uncompressed SVG file.",
+                                             table: "Workspace")),
+                text: "", encoding: nil, decodingFailed: false, sourceVersion: nil
+            )
+        }
         if isImage {
             do {
                 if let source = try RasterPreview.source(data) {

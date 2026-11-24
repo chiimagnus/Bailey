@@ -923,6 +923,38 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
+    func testCompressedSVGIsReportedWithoutMisclassifyingText() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gzip = try SVGArtworkTests.compressedSVGBytes()
+        for suffix in ["svgz", "SVGZ", "svg"] {
+            let url = root.appending(path: "compressed.\(suffix)")
+            try gzip.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if case .unavailable(let reason) = file.content {
+                XCTAssertEqual(reason, String(localized: "Compressed SVG is not supported. Open an uncompressed SVG file.",
+                                               table: "Workspace"))
+            } else {
+                XCTFail("The compressed bytes must not enter the text or vector preview")
+            }
+            XCTAssertFalse(file.canPreviewFile)
+            XCTAssertTrue(file.text.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: url), gzip)
+        }
+
+        let url = root.appending(path: "plain.SVGZ")
+        let source = "Plain text with an SVGZ suffix.\n"
+        try Data(source.utf8).write(to: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, source)
+        XCTAssertFalse(file.canPreviewFile)
+        XCTAssertEqual(try Data(contentsOf: url), Data(source.utf8))
+    }
+
     func testFileAndMarkdownImagePreviewsRespectEXIFOrientation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

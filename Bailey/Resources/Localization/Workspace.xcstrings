@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Compressed SVG is not supported. Open an uncompressed SVG file." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不支持压缩 SVG。请打开未压缩的 SVG 文件。"
+          }
+        }
+      }
+    },
     "Unknown text encoding. Choose an encoding to reopen." : {
       "localizations" : {
         "zh-Hans" : {
