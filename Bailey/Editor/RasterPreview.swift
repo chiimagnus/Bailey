@@ -97,7 +97,10 @@ nonisolated struct RasterPreview: Sendable {
     }
 
     static func pixelSize(_ source: CGImageSource, at index: Int) -> CGSize? {
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        pixelSize(CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any])
+    }
+
+    private static func pixelSize(_ properties: [CFString: Any]?) -> CGSize? {
         let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
         let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 0
         guard width > 0, height > 0, width <= pixelLimit / height else { return nil }
@@ -155,18 +158,61 @@ nonisolated struct RasterPreview: Sendable {
     }
 
     static func decode(_ source: CGImageSource, index: Int = 0, maximumDimension: Int) -> Self? {
-        guard let pixelSize = pixelSize(source, at: index) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
-        ]
-        guard let poster = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else {
-            return nil
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        guard let pixelSize = pixelSize(properties) else { return nil }
+        let orientation = CGImagePropertyOrientation(rawValue: properties?[kCGImagePropertyOrientation] as? UInt32 ?? 1) ?? .up
+        let frameCount = gifFrameCount(source)
+        let poster: CGImage
+        if frameCount == 0, max(pixelSize.width, pixelSize.height) <= CGFloat(maximumDimension) {
+            // At native size, keep the decoded source (including indexed color)
+            // rather than ask ImageIO to manufacture a color-converted thumbnail.
+            guard let raw = CGImageSourceCreateImageAtIndex(source, index, [
+                kCGImageSourceShouldCache: true,
+                kCGImageSourceShouldCacheImmediately: true,
+            ] as CFDictionary), let oriented = orientPixels(raw, exif: orientation) else { return nil }
+            poster = oriented
+        } else {
+            let dpiWidth = properties?[kCGImagePropertyDPIWidth] as? Double ?? 72
+            let dpiHeight = properties?[kCGImagePropertyDPIHeight] as? Double ?? 72
+            // ImageIO's thumbnail transform also applies the print aspect ratio.
+            // Use its native EXIF transform only when that cannot distort pixels.
+            let needsPixelOrientation = dpiWidth != dpiHeight
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: !needsPixelOrientation,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
+            ]
+            guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else { return nil }
+            if needsPixelOrientation {
+                guard let oriented = orientPixels(decoded, exif: orientation) else { return nil }
+                poster = oriented
+            } else {
+                poster = decoded
+            }
         }
         return Self(poster: poster, pixelSize: pixelSize,
-                    animationFrameCount: index == 0 ? gifFrameCount(source) : 0)
+                    animationFrameCount: index == 0 ? frameCount : 0)
+    }
+
+    private static func orientPixels(_ image: CGImage, exif: CGImagePropertyOrientation) -> CGImage? {
+        guard exif != .up else { return image }
+        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let transform = CIImage(cgImage: image).orientationTransform(for: exif)
+        let bounds = rect.applying(transform)
+        guard let originalSpace = image.colorSpace else { return nil }
+        let space = originalSpace.model == .indexed ? originalSpace.baseColorSpace ?? originalSpace : originalSpace
+        let hasAlpha = [.first, .last, .premultipliedFirst, .premultipliedLast].contains(image.alphaInfo)
+        let alpha: CGImageAlphaInfo = hasAlpha ? .premultipliedLast : space.model == .rgb ? .noneSkipLast : .none
+        let bitmapInfo = CGBitmapInfo(rawValue: alpha.rawValue).union(image.bitmapInfo.intersection(.floatComponents))
+        guard let context = CGContext(data: nil, width: Int(bounds.width), height: Int(bounds.height),
+                                      bitsPerComponent: max(8, image.bitsPerComponent), bytesPerRow: 0,
+                                      space: space, bitmapInfo: bitmapInfo.rawValue) else { return nil }
+        context.interpolationQuality = .none
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        context.concatenate(transform)
+        context.draw(image, in: rect)
+        return context.makeImage()
     }
 
     static func original(_ source: CGImageSource, size: CGSize) throws -> RasterDetail {

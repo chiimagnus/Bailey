@@ -595,6 +595,99 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
     }
 
+    func testRasterPixelGeometryIgnoresPrintDPIAcrossColorFormatsAndEXIFOrientations() async throws {
+        let gray = try XCTUnwrap(CGColorSpace(name: CGColorSpace.genericGrayGamma2_2))
+        let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+        let width = 64, height = 32
+        var fixtures: [(String, CGImage)] = []
+        for (space, depth, alpha) in [(gray, 8, CGImageAlphaInfo.none), (gray, 16, .none),
+                                      (p3, 8, .premultipliedLast), (p3, 16, .premultipliedLast)] {
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+                bitsPerComponent: depth, bytesPerRow: 0, space: space, bitmapInfo: alpha.rawValue))
+            for y in 0..<2 {
+                for x in 0..<2 {
+                    let value = CGFloat(1 + x + 2 * y) / 5
+                    let components = space.model == .monochrome ? [value, 1] : [value, 1 - value, 0.35, value]
+                    context.setFillColor(try XCTUnwrap(CGColor(colorSpace: space, components: components)))
+                    context.fill(CGRect(x: x * width / 2, y: y * height / 2, width: width / 2, height: height / 2))
+                }
+            }
+            fixtures.append(("\(space.model.rawValue)-\(depth)", try XCTUnwrap(context.makeImage())))
+        }
+        let palette: [UInt8] = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]
+        let indexed = try XCTUnwrap(CGColorSpace(indexedBaseSpace: p3, last: 3, colorTable: palette))
+        let indices = Data((0..<(width * height)).map { UInt8(($0 % width) / (width / 2) + 2 * (($0 / width) / (height / 2))) })
+        let provider = try XCTUnwrap(CGDataProvider(data: indices as CFData))
+        fixtures.append(("indexed", try XCTUnwrap(CGImage(width: width, height: height,
+            bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width, space: indexed,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent))))
+
+        for (label, raw) in fixtures {
+            for format in [UTType.png, .tiff] {
+                for orientation in 1...8 {
+                    let data = NSMutableData()
+                    let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, format.identifier as CFString, 1, nil))
+                    CGImageDestinationAddImage(destination, raw, [
+                        kCGImagePropertyDPIWidth: 300, kCGImagePropertyDPIHeight: 144,
+                        kCGImagePropertyOrientation: orientation,
+                    ] as CFDictionary)
+                    XCTAssertTrue(CGImageDestinationFinalize(destination))
+                    let source = try XCTUnwrap(RasterPreview.source(data as Data))
+                    let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+                    XCTAssertEqual(properties[kCGImagePropertyOrientation] as? Int, orientation)
+                    XCTAssertNotEqual(properties[kCGImagePropertyDPIWidth] as? Double, properties[kCGImagePropertyDPIHeight] as? Double)
+                    let decodedRaw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+                    XCTAssertEqual(decodedRaw.bitsPerComponent, raw.bitsPerComponent)
+                    if label == "indexed" { XCTAssertEqual(decodedRaw.colorSpace?.model, .indexed) }
+                    let size = orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+                    let name = "\(label) \(format) EXIF \(orientation)"
+                    let preview = try XCTUnwrap(RasterPreview.decode(source, maximumDimension: 16), name)
+                    XCTAssertEqual(preview.pixelSize, size, name)
+                    XCTAssertEqual(CGSize(width: preview.poster.width, height: preview.poster.height),
+                                   orientation >= 5 ? CGSize(width: 8, height: 16) : CGSize(width: 16, height: 8), name)
+                    let detail = try RasterPreview.original(source, size: size)
+                    let patch = try await detail.render(CGRect(origin: .zero, size: size))
+                    XCTAssertEqual(patch.rect.size, size, name)
+                    XCTAssertEqual(CGSize(width: patch.image.width, height: patch.image.height), size, name)
+                    XCTAssertEqual(patch.image.bitsPerComponent, raw.bitsPerComponent, name)
+                    // Compare actual rendered colors in one output space. AppKit's
+                    // direct indexed-image bitmap conversion can reinterpret its ICC palette.
+                    func displayBitmap(_ image: CGImage) throws -> NSBitmapImageRep {
+                        let context = try XCTUnwrap(CGContext(data: nil, width: image.width, height: image.height,
+                            bitsPerComponent: 16, bytesPerRow: 0, space: p3,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                        context.interpolationQuality = .none
+                        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+                        return NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+                    }
+                    let reference = try displayBitmap(decodedRaw)
+                    let actual = try displayBitmap(patch.image)
+                    for (x, y) in [(4, 4), (Int(size.width) - 5, 4), (4, Int(size.height) - 5),
+                                   (Int(size.width) - 5, Int(size.height) - 5)] {
+                        let expectedCoordinate: (Int, Int)
+                        switch orientation {
+                        case 2: expectedCoordinate = (width - 1 - x, y)
+                        case 3: expectedCoordinate = (width - 1 - x, height - 1 - y)
+                        case 4: expectedCoordinate = (x, height - 1 - y)
+                        case 5: expectedCoordinate = (y, x)
+                        case 6: expectedCoordinate = (y, height - 1 - x)
+                        case 7: expectedCoordinate = (width - 1 - y, height - 1 - x)
+                        case 8: expectedCoordinate = (width - 1 - y, x)
+                        default: expectedCoordinate = (x, y)
+                        }
+                        let expected = try XCTUnwrap(reference.colorAt(x: expectedCoordinate.0, y: expectedCoordinate.1)?.usingColorSpace(.displayP3), name)
+                        let pixel = try XCTUnwrap(actual.colorAt(x: x, y: y)?.usingColorSpace(.displayP3), name)
+                        XCTAssertEqual(pixel.redComponent, expected.redComponent, accuracy: 0.025, name)
+                        XCTAssertEqual(pixel.greenComponent, expected.greenComponent, accuracy: 0.025, name)
+                        XCTAssertEqual(pixel.blueComponent, expected.blueComponent, accuracy: 0.025, name)
+                        XCTAssertEqual(pixel.alphaComponent, expected.alphaComponent, accuracy: 0.01, name)
+                    }
+                }
+            }
+        }
+    }
+
     func testRegionalRasterPreservesEXIFMirroringAndDisplayP3AtClippedEdges() async throws {
         let size = CGSize(width: 600, height: 300)
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
