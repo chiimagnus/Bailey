@@ -214,6 +214,35 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
+    func testConcurrentFilteredExportsKeepTheirOwnPixelsAndColorSpace() async throws {
+        let source = try image(png())
+        let size = CGSize(width: source.width, height: source.height)
+        let red = ImageAnnotationDocument(size: size)
+        add(.blur, to: red, from: CGPoint(x: 4, y: 4), to: CGPoint(x: 76, y: 116))
+        add(.rectangle, to: red, from: CGPoint(x: 12, y: 20), to: CGPoint(x: 60, y: 90))
+        let blue = ImageAnnotationDocument(size: size)
+        blue.color = .blue
+        add(.pixelate, to: blue, from: CGPoint(x: 4, y: 4), to: CGPoint(x: 76, y: 116))
+        add(.rectangle, to: blue, from: CGPoint(x: 12, y: 20), to: CGPoint(x: 60, y: 90))
+        let first = red.state, second = blue.state
+        let a = ImageAnnotationDrawing.Options(width: source.width, height: source.height, background: .white)
+        let b = ImageAnnotationDrawing.Options(width: source.width, height: source.height, colorSpace: .displayP3, background: .black)
+        for _ in 0..<12 {
+            async let left = ImageAnnotationDrawing.export(first, source: .whole(source), options: a)
+            async let right = ImageAnnotationDrawing.export(second, source: .whole(source), options: b)
+            let (leftBytes, rightBytes) = try await (left, right)
+            let leftImage = try image(leftBytes), rightImage = try image(rightBytes)
+            let redStroke = try pixel(leftImage, x: 12, y: 50)
+            let blueStroke = try pixel(rightImage, x: 12, y: 50)
+            XCTAssertGreaterThan(redStroke.redComponent - redStroke.blueComponent, 0.4)
+            XCTAssertGreaterThan(blueStroke.blueComponent - blueStroke.redComponent, 0.4)
+            XCTAssertGreaterThan(try pixel(leftImage, x: 150, y: 50).redComponent, 0.95)
+            XCTAssertLessThan(try pixel(rightImage, x: 150, y: 50).redComponent, 0.05)
+            XCTAssertEqual(rightImage.colorSpace?.copyICCData() as Data?,
+                           CGColorSpace(name: CGColorSpace.displayP3)?.copyICCData() as Data?)
+        }
+    }
+
     func testFiltersChangeActualPixelsAndRespectLayerOrder() async throws {
         let source = try image(png())
         let region = CGRect(x: 0, y: 0, width: source.width, height: source.height)

@@ -6,6 +6,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 nonisolated enum ImageAnnotationDrawing {
+    private static let filterContext = CIContext(options: [.cacheIntermediates: false])
+
     enum Format: String, CaseIterable, Sendable {
         case png, jpeg
         var type: UTType { self == .png ? .png : .jpeg }
@@ -237,7 +239,7 @@ nonisolated enum ImageAnnotationDrawing {
         } else {
             context.draw(poster.image, in: poster.rect)
         }
-        let filters = state.hasFilters ? CIContext(options: [.cacheIntermediates: false]) : nil
+        let filters = state.hasFilters ? filterContext : nil
         for layer in state.layers {
             try Task.checkCancellation()
             guard layer.hitBounds.intersects(region) else { continue }
