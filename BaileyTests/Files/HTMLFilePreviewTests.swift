@@ -200,9 +200,17 @@ final class HTMLFilePreviewTests: XCTestCase {
         try Data(jpeg.dropLast(2)).write(to: external.appendingPathComponent("cut.jpg"))
         try Data("\u{feff}p { color: rgb(12, 34, 56); }".utf8)
             .write(to: external.appendingPathComponent("right.css"))
+        try Data("<!doctype html><style>p { color: red !important; }</style>".utf8)
+            .write(to: external.appendingPathComponent("wrong.css"))
+        try png.write(to: external.appendingPathComponent("encoded #?%中文.png"))
+        try FileManager.default.createSymbolicLink(at: external.appendingPathComponent("escaped.svg"),
+                                                    withDestinationURL: project.appendingPathComponent("project.svg"))
+        let fifo = external.appendingPathComponent("pipe.png")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
         let file = try await open("""
             <!doctype html>
             <link rel="stylesheet" href="right.css">
+            <link rel="stylesheet" href="wrong.css">
             <p>Page stays available</p>
             <img src="own.svg" alt="own image">
             <img src="../project/project.svg" alt="another workspace">
@@ -212,6 +220,10 @@ final class HTMLFilePreviewTests: XCTestCase {
             <img src="wrong.jpg" alt="wrong raster type">
             <img src="right.jpg" alt="complete JPEG">
             <img src="cut.jpg" alt="truncated JPEG">
+            <img src="encoded%20%23%3F%25%E4%B8%AD%E6%96%87.png" alt="encoded filename">
+            <img src="right.png?probe=1" alt="query not a filename">
+            <img src="escaped.svg" alt="outside symlink">
+            <img src="pipe.png" alt="nonregular file">
             """, in: external)
         let original = try Data(contentsOf: URL(fileURLWithPath: file.path))
         let webView = try await display(file, in: project)
@@ -221,14 +233,14 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(color, "rgb(12, 34, 56)")
         let imageWidths = "Array.from(document.images, img => img.naturalWidth)"
         let initial = try await webView.evaluateJavaScript(imageWidths, contentWorld: .defaultClient) as? [Int]
-        XCTAssertEqual(initial, [31, 0, 0, 0, 11, 0, 11, 0])
+        XCTAssertEqual(initial, [31, 0, 0, 0, 11, 0, 11, 0, 11, 0, 0, 0])
 
         try FileManager.default.moveItem(at: ownImage, to: project.appendingPathComponent("own.svg"))
         let reopened = FileTab(path: file.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await reopened.waitForText()
         let nextView = try await display(reopened, in: project)
         let afterMove = try await nextView.evaluateJavaScript(imageWidths, contentWorld: .defaultClient) as? [Int]
-        XCTAssertEqual(afterMove, [0, 0, 0, 0, 11, 0, 11, 0])
+        XCTAssertEqual(afterMove, [0, 0, 0, 0, 11, 0, 11, 0, 11, 0, 0, 0])
         let status = try await nextView.evaluateJavaScript("""
             [document.querySelector('p').textContent, document.images[0].alt]
             """, contentWorld: .defaultClient) as? [String]
@@ -304,14 +316,26 @@ final class HTMLFilePreviewTests: XCTestCase {
             <link rel="prefetch" href="\(endpoint)/prefetch">
             <link rel="preload" as="image" href="\(endpoint)/preload">
             <script src="\(endpoint)/script"></script>
-            <style>@import "\(endpoint)/css"; body { background-image: url("\(endpoint)/css-image"); }</style>
+            <style>
+                @import "\(endpoint)/css";
+                @font-face { font-family: BlockedNetworkFont; src: url("\(endpoint)/font.ttf"); }
+                body { background-image: url("\(endpoint)/css-image"); }
+                #network-style { width: 30px; height: 30px;
+                    font-family: BlockedNetworkFont;
+                    background-image: image-set(url("\(endpoint)/image-set") 1x, url("\(endpoint)/image-set-2x") 2x); }
+            </style>
             <h1 id="status" contenteditable="true">static</h1>
             <script>document.querySelector('#status').textContent = 'script ran';</script>
             <img src="\(endpoint)/img" onerror="document.querySelector('#status').textContent = 'event ran';">
             <img srcset="\(endpoint)/srcset 1x" alt="network">
             <img src="\(outside.absoluteString)" alt="file">
             <img src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='9'%20height='9'/%3E">
+            <img src="https://127.0.0.1:\(try XCTUnwrap(listener.port).rawValue)/tls-image" alt="TLS">
+            <p id="network-style">Network font and image-set</p>
             <iframe src="\(endpoint)/frame"></iframe>
+            <iframe id="inline-frame" srcdoc="<p id='inline-sentinel'>Nested document</p><img src='\(endpoint)/srcdoc'>"></iframe>
+            <object data="\(endpoint)/object" type="text/html"></object>
+            <embed src="\(endpoint)/embed" type="text/html">
             <form action="\(endpoint)/form">
                 <input value="static"><textarea>copyable</textarea>
                 <label for="checked">Check</label><input id="checked" type="checkbox">
@@ -322,7 +346,10 @@ final class HTMLFilePreviewTests: XCTestCase {
             </form>
             <a id="new-window" target="_blank" href="\(endpoint)/new-window">New window</a>
             <a id="navigate" href="\(endpoint)/navigate">Open remote URL</a>
+            <a id="javascript" href="javascript:document.querySelector('#status').textContent='link ran'">Script URL</a>
+            <a id="download" href="\(endpoint)/download" download="preview-probe.txt">Download</a>
             """, in: root)
+        let original = try Data(contentsOf: URL(fileURLWithPath: file.path))
         let webView = try await display(file, in: root)
         let url = try XCTUnwrap(webView.url)
         let state = try await webView.evaluateJavaScript("""
@@ -343,17 +370,38 @@ final class HTMLFilePreviewTests: XCTestCase {
         let widths = try await webView.evaluateJavaScript(
             "Array.from(document.images, img => img.naturalWidth)", contentWorld: .defaultClient
         ) as? [Int]
-        XCTAssertEqual(widths, [0, 0, 0, 0])
+        XCTAssertEqual(widths, [0, 0, 0, 0, 0])
+        let subresources = try await webView.callAsyncJavaScript("""
+            const font = await Promise.allSettled([document.fonts.load('12px BlockedNetworkFont')]);
+            const blob = URL.createObjectURL(new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"/>'], {type: 'image/svg+xml'}));
+            try {
+                const img = document.createElement('img');
+                img.src = blob;
+                document.body.append(img);
+                const decoded = await Promise.allSettled([img.decode()]);
+                return [font[0].status, decoded[0].status, String(img.naturalWidth),
+                        String(document.querySelector('#inline-frame').contentDocument?.querySelector('#inline-sentinel') != null)];
+            } finally {
+                URL.revokeObjectURL(blob);
+            }
+            """, arguments: [:], in: nil, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(subresources, ["rejected", "rejected", "0", "false"])
         _ = try await webView.evaluateJavaScript("""
             document.querySelector('form').requestSubmit();
             document.querySelector('#new-window').click();
             document.querySelector('#navigate').click();
+            document.querySelector('#javascript').click();
+            document.querySelector('#download').click();
             """, contentWorld: .defaultClient)
         let quiet = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in probe.count > 0 }, object: nil)
         quiet.isInverted = true
         await fulfillment(of: [quiet], timeout: 1)
         XCTAssertEqual(probe.count, 0)
         XCTAssertEqual(webView.url, url)
+        let status = try await webView.evaluateJavaScript("document.querySelector('#status').textContent", contentWorld: .defaultClient) as? String
+        XCTAssertEqual(status, "static")
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: file.path)), original)
+        XCTAssertFalse(file.isDirty)
         let positiveControl = NWConnection(host: "127.0.0.1", port: try XCTUnwrap(listener.port), using: .tcp)
         positiveControl.start(queue: .main)
         defer { positiveControl.cancel() }
