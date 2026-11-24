@@ -312,7 +312,14 @@ final class HTMLFilePreviewTests: XCTestCase {
             <img src="\(outside.absoluteString)" alt="file">
             <img src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='9'%20height='9'/%3E">
             <iframe src="\(endpoint)/frame"></iframe>
-            <form action="\(endpoint)/form"><input value="static"><button>Submit</button></form>
+            <form action="\(endpoint)/form">
+                <input value="static"><textarea>copyable</textarea>
+                <label for="checked">Check</label><input id="checked" type="checkbox">
+                <input id="radio" type="radio"><input id="slider" type="range">
+                <input id="color" type="color"><input id="file" type="file">
+                <select id="select"><option>First</option><option>Second</option></select>
+                <button id="reset" type="reset">Reset</button><button id="submit">Submit</button>
+            </form>
             <a id="new-window" target="_blank" href="\(endpoint)/new-window">New window</a>
             <a id="navigate" href="\(endpoint)/navigate">Open remote URL</a>
             """, in: root)
@@ -323,6 +330,16 @@ final class HTMLFilePreviewTests: XCTestCase {
              String(document.querySelector('input').readOnly), document.baseURI]
             """, contentWorld: .defaultClient) as? [String]
         XCTAssertEqual(state, ["static", "false", "true", url.absoluteString])
+        let controls = try await webView.evaluateJavaScript("""
+            document.querySelector('label').click();
+            document.querySelector('#radio').click();
+            [String(document.querySelector('#checked').checked),
+             String(document.querySelector('#radio').checked),
+             String(document.querySelector('textarea').readOnly),
+             ...Array.from(document.querySelectorAll('#checked, #radio, #slider, #color, #file, #select, #reset, #submit'),
+                           node => String(node.disabled))]
+            """, contentWorld: .defaultClient) as? [String]
+        XCTAssertEqual(controls, ["false", "false", "true"] + Array(repeating: "true", count: 8))
         let widths = try await webView.evaluateJavaScript(
             "Array.from(document.images, img => img.naturalWidth)", contentWorld: .defaultClient
         ) as? [Int]

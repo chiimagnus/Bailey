@@ -129,7 +129,14 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         configuration.userContentController.addUserScript(WKUserScript(
             source: """
             document.querySelectorAll('[contenteditable]').forEach(node => node.removeAttribute('contenteditable'));
-            document.querySelectorAll('input, textarea').forEach(node => node.readOnly = true);
+            const textTypes = new Set(['text', 'search', 'url', 'tel', 'email', 'password', 'number']);
+            document.querySelectorAll('input, textarea, select, button').forEach(node => {
+                if (node.tagName === 'TEXTAREA' || (node.tagName === 'INPUT' && textTypes.has(node.type))) {
+                    node.readOnly = true;
+                } else {
+                    node.disabled = true;
+                }
+            });
             """,
             injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient
         ))
