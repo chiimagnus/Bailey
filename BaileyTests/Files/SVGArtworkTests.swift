@@ -199,6 +199,45 @@ final class SVGArtworkTests: XCTestCase {
         }
     }
 
+    func testRealSVGFilesKeepSourceAtTextLimitAndRefuseBeyondIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("Large.svg")
+        let xml = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"16\"/>".utf8)
+        for delta in [-1, 0, 1] {
+            let size = (32 << 20) + delta
+            var bytes = xml
+            bytes.append(Data(repeating: 0x20, count: size - bytes.count))
+            try bytes.write(to: path, options: .atomic)
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            if delta <= 0 {
+                try await file.waitForText()
+                XCTAssertTrue(file.canPreviewFile)
+                XCTAssertTrue(file.showsFilePreview)
+                XCTAssertEqual(Data(file.text.utf8), bytes)
+                XCTAssertThrowsError(try SVGArtwork.parse(Data(file.text.utf8))) { error in
+                    guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected SVG preview budget: \(error)") }
+                }
+                file.setFilePreview(false)
+                XCTAssertFalse(file.showsFilePreview)
+                XCTAssertFalse(file.isDirty)
+                XCTAssertEqual(file.nativeTextStorage.length, size)
+            } else {
+                do {
+                    try await file.waitForText()
+                    XCTFail("A source file above 32 MiB must not enter the editor")
+                } catch {
+                    guard case .unavailable = file.content else { return XCTFail("Expected unavailable file: \(error)") }
+                    XCTAssertFalse(file.canPreviewFile)
+                    XCTAssertTrue(file.text.isEmpty)
+                }
+            }
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+        }
+    }
+
     func testSharedSVGByteDepthAndNodeLimitsKeepExactBoundaries() throws {
         let start = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"16\">"
         let end = "</svg>"
