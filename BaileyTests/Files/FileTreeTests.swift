@@ -2540,7 +2540,7 @@ final class FileTreeTests: XCTestCase {
     private func mountedClipboardTestVolume() throws -> URL {
         let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let marker = project.appendingPathComponent("build/.file-clipboard-test-volume")
+        let marker = project.appendingPathComponent(".build/.file-clipboard-test-volume")
         guard let mount = try? String(contentsOf: marker, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines),
               (mount.hasPrefix("/private/tmp/bailey-clipboard-vol.") ||
