@@ -1279,6 +1279,81 @@ final class PreviewScrollViewTests: XCTestCase {
         withExtendedLifetime(window) {}
     }
 
+    func testMountedRasterAndSVGAccessibilityZoomActionsUseTheSameViewport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let svg = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900">
+              <rect width="1200" height="900" fill="blue"/>
+              <circle cx="300" cy="350" r="80" fill="white"/>
+            </svg>
+            """.utf8)
+        let raster = try makeLongGIF(width: 1200, height: 900, count: 1)
+        let viewport = CGRect(x: -2000, y: -2000, width: 400, height: 320)
+        let window = NSWindow(contentRect: viewport, styleMask: [.titled, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.orderBack(nil)
+        for (name, bytes, identifier) in [
+            ("Raster.gif", raster, "bailey.image.inspector"),
+            ("Vector.svg", svg, "bailey.svg.preview"),
+        ] {
+            let url = directory.appending(path: name)
+            try bytes.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            func mount() async throws -> PreviewScrollView {
+                let host = NSHostingView(rootView: FileViewerView(file: file))
+                window.contentView = host
+                try await waitFor("Mount the actual graphic viewport") {
+                    host.layoutSubtreeIfNeeded()
+                    return previewScroll(in: host)?.documentView?.frame.size == CGSize(width: 1200, height: 900)
+                }
+                host.layoutSubtreeIfNeeded()
+                return try XCTUnwrap(previewScroll(in: host))
+            }
+            let view = try await mount()
+            XCTAssertEqual(view.accessibilityIdentifier(), identifier)
+            let actions = try XCTUnwrap(view.accessibilityCustomActions())
+            let fit = String(localized: "Fit", table: "Editor")
+            let zoomIn = String(localized: "Zoom in", table: "Editor")
+            let zoomOut = String(localized: "Zoom out", table: "Editor")
+            XCTAssertEqual(actions.map(\.name), [fit, "100%", zoomIn, zoomOut])
+            XCTAssertEqual(actions.map(\.name), view.menu?.items.map(\.title))
+            func perform(_ name: String) throws {
+                let action = try XCTUnwrap(actions.first { $0.name == name })
+                let handler = try XCTUnwrap(action.handler)
+                XCTAssertTrue(handler(), name)
+            }
+            let fitted = view.pixelScale
+            XCTAssertLessThan(fitted, 1)
+            try perform("100%")
+            XCTAssertEqual(view.pixelScale, 1, accuracy: 0.001)
+            try perform(zoomIn)
+            XCTAssertEqual(view.pixelScale, 1.25, accuracy: 0.001)
+            try perform(zoomOut)
+            XCTAssertEqual(view.pixelScale, 1, accuracy: 0.001)
+            try perform(fit)
+            XCTAssertEqual(view.pixelScale, fitted, accuracy: 0.001)
+            XCTAssertNil(file.graphicViewportPosition)
+            try perform("100%")
+            try perform(zoomIn)
+            let position = try XCTUnwrap(file.graphicViewportPosition)
+            XCTAssertEqual(position.pixelScale, 1.25, accuracy: 0.001)
+            window.contentView = NSView()
+            let remounted = try await mount()
+            XCTAssertFalse(remounted === view)
+            XCTAssertEqual(remounted.pixelScale, 1.25, accuracy: 0.001)
+            XCTAssertEqual(remounted.contentView.bounds.midX, position.center.x, accuracy: 2)
+            XCTAssertEqual(remounted.contentView.bounds.midY, position.center.y, accuracy: 2)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+            file.retireContent()
+            window.contentView = NSView()
+        }
+    }
+
     func testNativeZoomKeepsItsAnchorAndUsesBackingPixels() {
         let viewport = CGRect(x: 0, y: 0, width: 480, height: 360)
         let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)
