@@ -292,6 +292,77 @@ final class DelimitedTableIndexTests: XCTestCase {
         XCTAssertEqual(file.text, expected)
     }
 
+    func testHundredLargeGridEditsAndUndoPreserveOriginalCodeUnits() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("large.csv")
+        let wide = String(repeating: "宽😀a", count: 1024)
+        let prefix = "Name,Value\r\n" + (0..<99_999).map {
+            "row-\($0),value-\($0)" + ($0.isMultiple(of: 2) ? "\r\n" : "\n")
+        }.joined()
+        let original = prefix + "\(wide),last-000\r\n"
+        let bytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+        try bytes.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        file.reopen(using: .utf8BOM)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let storage = file.nativeTextStorage
+        let undo = file.documentUndoManager
+        let clock = ContinuousClock()
+        let started = clock.now
+        var snapshotTimes: [Duration] = []
+        var editTimes: [Duration] = []
+        var undoTimes: [Duration] = []
+        var redoTimes: [Duration] = []
+        for iteration in 1...100 {
+            // Repeated mode switching must not reconstruct the document.
+            file.setFilePreview(false)
+            file.setFilePreview(true)
+            let snapshotStart = clock.now
+            let result = try await file.delimitedSnapshot(using: .comma)
+            snapshotTimes.append(snapshotStart.duration(to: clock.now))
+            let snapshot = try XCTUnwrap(result)
+            XCTAssertEqual(snapshot.index.records.count, 100_001)
+            let value = String(format: "last-%03d", iteration)
+            let editStart = clock.now
+            try await file.editDelimited(.cells([.init(row: 100_000, column: 1): value]), using: snapshot)
+            editTimes.append(editStart.duration(to: clock.now))
+            XCTAssertTrue(file.isDirty)
+            XCTAssertTrue(file.nativeTextStorage === storage)
+            XCTAssertNil(file.editorView, "Grid editing must not mount a hidden source editor")
+        }
+        let final = prefix + "\(wide),last-100\r\n"
+        XCTAssertTrue(TextFileEncoding.hasIdenticalCodeUnits(file.text, final))
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        for _ in 0..<100 {
+            XCTAssertTrue(undo.canUndo)
+            let start = clock.now
+            undo.undo()
+            undoTimes.append(start.duration(to: clock.now))
+        }
+        XCTAssertTrue(TextFileEncoding.hasIdenticalCodeUnits(file.text, original))
+        XCTAssertFalse(file.isDirty)
+        for _ in 0..<100 {
+            XCTAssertTrue(undo.canRedo)
+            let start = clock.now
+            undo.redo()
+            redoTimes.append(start.duration(to: clock.now))
+        }
+        XCTAssertTrue(TextFileEncoding.hasIdenticalCodeUnits(file.text, final))
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.utf8BOM.encoded(final))
+        XCTAssertFalse(file.isDirty)
+        let reopen = try await file.delimitedSnapshot(using: .comma)
+        XCTAssertEqual(reopen?.index.records.count, 100_001)
+        func p95(_ times: [Duration]) -> Duration { times.sorted()[94] }
+        print("CSV_EDIT_SESSION edits=100 records=100001 elapsed=\(started.duration(to: clock.now)) snapshot_p95=\(p95(snapshotTimes)) edit_p95=\(p95(editTimes)) undo_main_p95=\(p95(undoTimes)) redo_main_p95=\(p95(redoTimes))")
+    }
+
     func testGridRejectsUnrepresentableEditsAndUndoRestoresInsertedRows() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         let original = "Name,Value\r\nCafé,1"
