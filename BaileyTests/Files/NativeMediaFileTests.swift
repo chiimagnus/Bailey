@@ -936,6 +936,92 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
+    func testRapidVideoSeeksDisplayTheFinalDecodedFrameAtFixedAndVariableRates() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for variable in [false, true] {
+            let url = root.appending(path: variable ? "variable.mov" : "fixed.mov")
+            try await createVideoFixture(url, size: CGSize(width: 96, height: 64), frameCount: 60,
+                                         alternatingFrames: true, variableTiming: variable)
+            let original = try await Self.checksum(url)
+            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            guard case .media(let media) = tab.content else { return XCTFail("Cannot open seek fixture") }
+            let player = try XCTUnwrap(tab.mediaPlayer)
+            let item = try XCTUnwrap(player.currentItem)
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            ])
+            item.add(output)
+            defer { item.remove(output) }
+            player.isMuted = true
+            try await waitUntil { item.status != .unknown }
+            XCTAssertEqual(item.status, .readyToPlay)
+            let duration = try await media.asset.load(.duration).seconds
+            XCTAssertGreaterThan(duration, 5)
+            let tracks = try await media.asset.loadTracks(withMediaType: .video)
+            let track = try XCTUnwrap(tracks.first)
+            let reader = try AVAssetReader(asset: media.asset)
+            let samples = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+            reader.add(samples)
+            XCTAssertTrue(reader.startReading())
+            var timestamps: [Double] = []
+            while let sample = samples.copyNextSampleBuffer() {
+                // Some readers return an empty end-marker with an invalid PTS.
+                guard sample.numSamples > 0 else { continue }
+                XCTAssertTrue(sample.presentationTimeStamp.isNumeric)
+                if sample.presentationTimeStamp.isNumeric {
+                    timestamps.append(sample.presentationTimeStamp.seconds)
+                }
+            }
+            XCTAssertEqual(reader.status, .completed, String(describing: reader.error))
+            timestamps.sort()
+            let differences = Set(zip(timestamps, timestamps.dropFirst()).map { Int((($1 - $0) * 1000).rounded()) })
+            XCTAssertEqual(timestamps.count, 60)
+            XCTAssertEqual(differences.count, variable ? 2 : 1)
+            for (target, expectRed) in [(0.5, true), (duration - 0.9, false), (0.5, true)] {
+                player.pause()
+                // Enqueue conflicting forward/backward seeks before any completion is observed.
+                for second in [duration - 0.5, 0.2, duration / 2, 0.1, duration - 1] {
+                    player.seek(to: CMTime(seconds: second, preferredTimescale: 600),
+                                toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { _ in })
+                }
+                let time = CMTime(seconds: target, preferredTimescale: 600)
+                let finished = await player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                XCTAssertTrue(finished)
+                XCTAssertEqual(player.currentTime().seconds, target, accuracy: 0.12)
+                // Inspect a frame decoded by the actual player, not an independent image generator.
+                var decoded: CVPixelBuffer?
+                var displayed = CMTime.invalid
+                player.playImmediately(atRate: 0.5)
+                try await waitUntil {
+                    let now = player.currentTime()
+                    guard let buffer = output.copyPixelBuffer(forItemTime: now, itemTimeForDisplay: &displayed) else { return false }
+                    decoded = buffer
+                    return true
+                }
+                player.pause()
+                let frame = try XCTUnwrap(decoded)
+                XCTAssertTrue(displayed.isNumeric)
+                XCTAssertGreaterThanOrEqual(displayed.seconds, target - 0.16)
+                XCTAssertLessThan(displayed.seconds, target + 0.7)
+                XCTAssertEqual(CVPixelBufferLockBaseAddress(frame, .readOnly), kCVReturnSuccess)
+                defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
+                let pixel = try XCTUnwrap(CVPixelBufferGetBaseAddress(frame)).assumingMemoryBound(to: UInt8.self)
+                let offset = 32 * CVPixelBufferGetBytesPerRow(frame) + 24 * 4
+                let red = Int(pixel[offset + 2]), green = Int(pixel[offset + 1])
+                XCTAssertGreaterThan(expectRed ? red - green : green - red, 80)
+                XCTAssertTrue(player.currentItem === item)
+                XCTAssertEqual(player.rate, 0)
+            }
+            let actual = try await Self.checksum(url)
+            XCTAssertEqual(actual, original)
+            XCTAssertFalse(tab.isDirty)
+        }
+    }
+
     func testEmbeddedSubtitleSelectionEmitsTheActualChineseCue() async throws {
         guard let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_MEDIA_ACCEPTANCE_ROOT to the comprehensive sample directory")
@@ -1424,7 +1510,8 @@ final class NativeMediaFileTests: XCTestCase {
     }
 
     private func createVideoFixture(_ url: URL, size: CGSize, pixelAspect: CGSize = CGSize(width: 1, height: 1),
-                                    aperture: CGSize? = nil, hdr: Bool = false, frameCount: Int = 3) async throws {
+                                    aperture: CGSize? = nil, hdr: Bool = false, frameCount: Int = 3,
+                                    alternatingFrames: Bool = false, variableTiming: Bool = false) async throws {
         let width = Int(size.width), height = Int(size.height)
         var settings: [String: Any] = [
             AVVideoCodecKey: hdr ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
@@ -1482,9 +1569,31 @@ final class NativeMediaFileTests: XCTestCase {
                 }
             }
         }
+        let alternate: CVPixelBuffer?
+        if alternatingFrames {
+            precondition(!hdr)
+            var second: CVPixelBuffer?
+            XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &second), kCVReturnSuccess)
+            let other = try XCTUnwrap(second)
+            XCTAssertEqual(CVPixelBufferLockBaseAddress(other, []), kCVReturnSuccess)
+            do {
+                defer { CVPixelBufferUnlockBaseAddress(other, []) }
+                let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(other)).assumingMemoryBound(to: UInt32.self)
+                let stride = CVPixelBufferGetBytesPerRow(other) / 4
+                for y in 0..<height {
+                    for x in 0..<width { base[y * stride + x] = x < width / 2 ? 0xff20d020 : 0xffd02020 }
+                }
+            }
+            alternate = other
+        } else {
+            alternate = nil
+        }
         for index in 0..<frameCount {
             try await waitUntil { input.isReadyForMoreMediaData || writer.status != .writing }
-            guard writer.status == .writing, adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 10)) else {
+            let presentation = variableTiming ? CMTime(value: Int64(index * 9 + (index / 3) * 6), timescale: 100)
+                : CMTime(value: Int64(index), timescale: 10)
+            let frame = index >= frameCount / 2 ? (alternate ?? buffer) : buffer
+            guard writer.status == .writing, adaptor.append(frame, withPresentationTime: presentation) else {
                 throw writer.error ?? CocoaError(.fileWriteUnknown)
             }
         }
