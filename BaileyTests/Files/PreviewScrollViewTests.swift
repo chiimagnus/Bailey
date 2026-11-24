@@ -214,17 +214,7 @@ final class PreviewScrollViewTests: XCTestCase {
     }
 
     private func checkRasterDetail(size: CGSize, thumbnailSize: CGSize) async throws {
-        func image(size: CGSize, color: NSColor) throws -> CGImage {
-            let context = try XCTUnwrap(CGContext(
-                data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-            ))
-            context.setFillColor(color.cgColor)
-            context.fill(CGRect(origin: .zero, size: size))
-            return try XCTUnwrap(context.makeImage())
-        }
-
-        let thumbnail = try image(size: thumbnailSize, color: .red)
+        let thumbnail = try solidRaster(size: thumbnailSize, color: .red)
         var reads = 0
         var cancelledReads = 0
         weak var lastDetail: CGImage?
@@ -237,11 +227,11 @@ final class PreviewScrollViewTests: XCTestCase {
                 if reads == 2 {
                     let lateImage = try await withCheckedThrowingContinuation { pending = $0 }
                     if Task.isCancelled { cancelledReads += 1 }
-                    return lateImage
+                    return .whole(lateImage)
                 }
-                let detail = try image(size: size, color: .green)
+                let detail = try self.solidRaster(size: size, color: .green)
                 lastDetail = detail
-                return detail
+                return .whole(detail)
             }
         ))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 170, height: 140),
@@ -267,7 +257,7 @@ final class PreviewScrollViewTests: XCTestCase {
         scroll.actualSize()
         try await waitFor("Request fresh detail after zooming back in") { pending != nil }
         scroll.setZoom(0.25, at: anchor)
-        pending?.resume(returning: try image(size: size, color: .green))
+        pending?.resume(returning: try solidRaster(size: size, color: .green))
         pending = nil
         try await waitFor("Cancel the detail request that is no longer needed") { cancelledReads == 1 }
         XCTAssertFalse(isGreen(scroll), "A late decode must not replace the poster")
@@ -277,7 +267,192 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
     }
 
+    func testRegionalRasterPreservesEXIFMirroringAndDisplayP3AtClippedEdges() async throws {
+        let size = CGSize(width: 600, height: 300)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+            space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        let colors: [(CGRect, [CGFloat])] = [
+            (CGRect(origin: .zero, size: size), [0.9, 0.1, 0.15, 1.0]),
+            (CGRect(x: 0, y: 100, width: 310, height: 200), [0.1, 0.8, 0.2, 1.0]),
+            (CGRect(x: 310, y: 175, width: 290, height: 125), [0.06, 0.09, 0.9, 1.0]),
+        ]
+        for (rect, components) in colors {
+            context.setFillColor(try XCTUnwrap(CGColor(colorSpace: space, components: components)))
+            context.fill(rect)
+        }
+        let raw = try XCTUnwrap(context.makeImage())
+        for format in [UTType.jpeg, .heic] {
+            for orientation in 1...8 {
+                let bytes = NSMutableData()
+                let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                    bytes, format.identifier as CFString, 1, nil
+                ))
+                CGImageDestinationAddImage(destination, raw, [
+                    kCGImagePropertyOrientation: orientation,
+                    kCGImageDestinationLossyCompressionQuality: 1.0,
+                ] as CFDictionary)
+                XCTAssertTrue(CGImageDestinationFinalize(destination))
+                let source = try XCTUnwrap(RasterPreview.source(bytes as Data))
+                let reference = try XCTUnwrap(RasterPreview.decode(source, maximumDimension: 600))
+                let detail = try RasterPreview.original(source, size: reference.pixelSize)
+                guard case .region = detail else {
+                    return XCTFail("Expected regional ImageIO for \(format) EXIF \(orientation)")
+                }
+                let request = CGRect(x: detail.bounds.width - 39, y: -8, width: 57, height: 76)
+                let patch = try await detail.render(request)
+                XCTAssertEqual(patch.rect, request.intersection(detail.bounds))
+                XCTAssertEqual(patch.image.width, 39)
+                XCTAssertEqual(patch.image.height, 68)
+                let expected = try XCTUnwrap(reference.poster.cropping(to: CGRect(
+                    x: patch.rect.minX, y: detail.bounds.height - patch.rect.maxY,
+                    width: patch.rect.width, height: patch.rect.height
+                )))
+                let actualBitmap = NSBitmapImageRep(cgImage: patch.image)
+                let referenceBitmap = NSBitmapImageRep(cgImage: expected)
+                for sample in [CGPoint(x: 2, y: 2), CGPoint(x: 22, y: 59), CGPoint(x: 37, y: 65)] {
+                    let actualPixel = try XCTUnwrap(actualBitmap.colorAt(x: Int(sample.x), y: Int(sample.y))?
+                        .usingColorSpace(.displayP3))
+                    let expectedPixel = try XCTUnwrap(referenceBitmap.colorAt(x: Int(sample.x), y: Int(sample.y))?
+                        .usingColorSpace(.displayP3))
+                    let description = "\(format) EXIF \(orientation) at \(sample)"
+                    XCTAssertEqual(actualPixel.redComponent, expectedPixel.redComponent, accuracy: 0.025, description)
+                    XCTAssertEqual(actualPixel.greenComponent, expectedPixel.greenComponent, accuracy: 0.025, description)
+                    XCTAssertEqual(actualPixel.blueComponent, expectedPixel.blueComponent, accuracy: 0.025, description)
+                }
+            }
+        }
+    }
+
+    func testNativeViewportReplacesRegionalPixelsWhenPannedWithoutReadingAgain() async throws {
+        let size = CGSize(width: 1800, height: 240)
+        let thumbnail = try solidRaster(size: CGSize(width: 900, height: 120), color: .red)
+        let jpeg = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            jpeg, UTType.jpeg.identifier as CFString, 1, nil
+        ))
+        CGImageDestinationAddImage(destination, try solidRaster(size: size, color: .green), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let source = try XCTUnwrap(RasterPreview.source(jpeg as Data))
+        let detail = try RasterPreview.original(source, size: size)
+        var reads = 0
+        let host = NSHostingView(rootView: ImageInspector(
+            image: RasterPreview(poster: thumbnail, pixelSize: size),
+            loadOriginal: { reads += 1; return detail }
+        ))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 170, height: 140),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        try await waitFor { previewScroll(in: host) != nil }
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(previewScroll(in: host))
+        func green(at column: Int) -> Bool {
+            renderedBitmap(scroll, region: CGRect(x: column, y: 120, width: 1, height: 1)).map(isGreen) == true
+        }
+        func pan(to column: CGFloat) {
+            let frame = scroll.contentView.bounds
+            let target = CGRect(x: column - frame.width / 2, y: frame.minY,
+                                width: frame.width, height: frame.height)
+            scroll.contentView.scroll(to: scroll.contentView.constrainBoundsRect(target).origin)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        scroll.actualSize()
+        try await waitFor { green(at: 900) }
+        XCTAssertFalse(green(at: 20))
+        XCTAssertFalse(green(at: 1700))
+        pan(to: 20)
+        try await waitFor { green(at: 20) && !green(at: 900) }
+        for column in [900.0, 20, 900, 20, 1700] { pan(to: column) }
+        try await waitFor { green(at: 1700) && !green(at: 20) && !green(at: 900) }
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
+        scroll.fit()
+        try await waitFor { !green(at: 1700) }
+    }
+
+    func testCMYKJPEGUsesTheBoundedWholeDecodeWithoutLosingColor() async throws {
+        let size = CGSize(width: 120, height: 60)
+        let colorSpace = CGColorSpaceCreateDeviceCMYK()
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+            space: colorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ))
+        context.setFillColor(try XCTUnwrap(CGColor(colorSpace: colorSpace, components: [1, 0, 0, 0])))
+        context.fill(CGRect(origin: .zero, size: size))
+        let jpeg = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            jpeg, UTType.jpeg.identifier as CFString, 1, nil
+        ))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let source = try XCTUnwrap(RasterPreview.source(jpeg as Data))
+        let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(raw.colorSpace?.model, .cmyk)
+        let detail = try RasterPreview.original(source, size: size)
+        guard case .whole = detail else { return XCTFail("The RGB region path must not reinterpret CMYK pixels") }
+        let patch = try await detail.render(CGRect(x: 30, y: 20, width: 20, height: 20))
+        XCTAssertEqual(patch.rect.size, size)
+        let color = try XCTUnwrap(NSBitmapImageRep(cgImage: patch.image).colorAt(x: 5, y: 5)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(color.greenComponent - color.redComponent, 0.4)
+        XCTAssertGreaterThan(color.blueComponent - color.redComponent, 0.4)
+    }
+
+    func testRealLargeJPEGRegionalPixelsDoNotKeepAFullRaster() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let url = URL(fileURLWithPath: root).appending(path: "images/超清大图-6000x4000.jpg")
+        let bytes = try Data(contentsOf: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        file.loadIfNeeded()
+        try await waitFor { if case .loading = file.content { return false }; return true }
+        let request = try XCTUnwrap(file.originalImageRequest())
+        let baseline = rasterMemory()
+        let detail = try await request()
+        XCTAssertEqual(detail.bounds.size, CGSize(width: 6000, height: 4000))
+        var last: RasterDetail.Patch?
+        for rect in [CGRect(x: 384, y: 64, width: 256, height: 256),
+                     CGRect(x: 2899, y: 1903, width: 256, height: 256),
+                     CGRect(x: 5744, y: 3744, width: 256, height: 256)] {
+            let patch = try await detail.render(rect)
+            XCTAssertEqual(patch.rect, rect)
+            XCTAssertEqual(patch.image.width, 256)
+            XCTAssertEqual(patch.image.height, 256)
+            let bitmap = NSBitmapImageRep(cgImage: patch.image)
+            let pixel = try XCTUnwrap(bitmap.colorAt(x: 127, y: 191)?.usingColorSpace(.sRGB))
+            XCTAssertGreaterThan(pixel.redComponent + pixel.greenComponent + pixel.blueComponent, 0.1)
+            last = patch
+        }
+        withExtendedLifetime(last) {
+            let after = rasterMemory()
+            print("Regional JPEG resident/peak MiB: \(baseline) → \(after)")
+            XCTAssertLessThan(after.resident - baseline.resident, 48)
+            XCTAssertLessThanOrEqual(after.peak, max(baseline.peak, baseline.resident + 48))
+        }
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
+    private func solidRaster(size: CGSize, color: NSColor) throws -> CGImage {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(origin: .zero, size: size))
+        return try XCTUnwrap(context.makeImage())
+    }
+
     private func residentMiB() -> Double {
+        rasterMemory().resident
+    }
+
+    private func rasterMemory() -> (resident: Double, peak: Double) {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
         let result = withUnsafeMutablePointer(to: &info) { pointer in
@@ -286,7 +461,7 @@ final class PreviewScrollViewTests: XCTestCase {
             }
         }
         XCTAssertEqual(result, KERN_SUCCESS)
-        return Double(info.resident_size) / 1_048_576
+        return (Double(info.resident_size) / 1_048_576, Double(info.resident_size_max) / 1_048_576)
     }
 
     private func makeLongGIF(width: Int = 24, height: Int = 24, count: Int = 34) throws -> Data {
@@ -321,16 +496,18 @@ final class PreviewScrollViewTests: XCTestCase {
         renderedBitmap(scroll).map { isGreen($0) } ?? false
     }
 
-    private func renderedBitmap(_ scroll: PreviewScrollView) -> NSBitmapImageRep? {
-        guard let canvas = scroll.documentView,
-              let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(canvas.bounds.width),
-                                            pixelsHigh: Int(canvas.bounds.height), bitsPerSample: 8,
+    private func renderedBitmap(_ scroll: PreviewScrollView, region: CGRect? = nil) -> NSBitmapImageRep? {
+        guard let canvas = scroll.documentView else { return nil }
+        let rect = region ?? canvas.bounds
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(rect.width),
+                                            pixelsHigh: Int(rect.height), bitsPerSample: 8,
                                             samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                             bytesPerRow: 0, bitsPerPixel: 0),
               let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
-        canvas.draw(canvas.bounds)
+        context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
+        canvas.draw(rect)
         NSGraphicsContext.restoreGraphicsState()
         return bitmap
     }

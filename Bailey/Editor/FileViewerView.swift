@@ -945,18 +945,12 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
-    func originalImageRequest() -> (() async throws -> CGImage)? {
+    func originalImageRequest() -> (() async throws -> RasterDetail)? {
         guard case .image(let preview) = content, preview.animationFrameCount < 2,
               preview.poster.width < Int(preview.pixelSize.width) ||
                 preview.poster.height < Int(preview.pixelSize.height) else { return nil }
         let size = preview.pixelSize
-        return imageRequest { _, source in
-            guard let image = RasterPreview.decode(source, maximumDimension: Int(max(size.width, size.height))),
-                  image.poster.width == Int(size.width), image.poster.height == Int(size.height) else {
-                throw CocoaError(.fileReadCorruptFile)
-            }
-            return image.poster
-        }
+        return imageRequest { _, source in try RasterPreview.original(source, size: size) }
     }
 
     func gifFramesRequest() -> (() async throws -> GIFPlayback.Frames)? {

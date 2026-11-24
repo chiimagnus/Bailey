@@ -126,6 +126,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let path = directory + "/Readme.md"
             let asset = directory + "/asset.svg"
             let rasterPath = directory + "/wide.png"
+            let regionalPath = directory + "/regions.jpg"
             let gifPath = directory + "/动画 #100%.gif"
             let renamedGIF = directory + "/改名后 #100%.gif"
             let gifSamples = try ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"].map { root in
@@ -196,8 +197,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             XCTAssertEqual(embedded.poster.width, 2048)
             let originalImage = try XCTUnwrap(rasterTab.originalImageRequest())
             let originalRaster = try await originalImage()
-            XCTAssertEqual(originalRaster.width, 5000)
-            XCTAssertEqual(originalRaster.height, 20)
+            XCTAssertEqual(originalRaster.bounds.size, CGSize(width: 5000, height: 20))
             let relative = try XCTUnwrap(URL(string: "asset.svg"))
             let picture = try await resource.picture(relative)
             XCTAssertEqual(picture.pointSize?.width, 40)
@@ -231,6 +231,40 @@ final class MarkdownResourceScopeTests: XCTestCase {
             try localTwin.write(to: URL(fileURLWithPath: path))
             try localTwin.write(to: URL(fileURLWithPath: asset))
             try localTwin.write(to: URL(fileURLWithPath: rasterPath))
+            func jpeg(red: CGFloat, green: CGFloat) throws -> Data {
+                canvas.setFillColor(red: red, green: green, blue: 0.07, alpha: 1)
+                canvas.fill(CGRect(x: 0, y: 0, width: 5000, height: 20))
+                let data = NSMutableData()
+                let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                    data, UTType.jpeg.identifier as CFString, 1, nil
+                ))
+                CGImageDestinationAddImage(destination, try XCTUnwrap(canvas.makeImage()), nil)
+                XCTAssertTrue(CGImageDestinationFinalize(destination))
+                return data as Data
+            }
+            let remoteJPEG = try jpeg(red: 0.05, green: 0.9)
+            let localJPEG = try jpeg(red: 0.9, green: 0.05)
+            try await channel.write(path: regionalPath, data: remoteJPEG)
+            try localJPEG.write(to: URL(fileURLWithPath: regionalPath))
+            let remoteImage = FileTab(path: regionalPath, backend: channel, workspaceIdentity: "ssh:\(host)")
+            let localImage = FileTab(path: regionalPath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await load(remoteImage)
+            try await load(localImage)
+            let regionalRead = try XCTUnwrap(remoteImage.originalImageRequest())
+            let localRead = try XCTUnwrap(localImage.originalImageRequest())
+            func redMinusGreen(_ read: () async throws -> RasterDetail) async throws -> CGFloat {
+                let detail = try await read()
+                let rect = CGRect(x: 4700, y: 2, width: 32, height: 8)
+                let patch = try await detail.render(rect)
+                XCTAssertEqual(patch.rect, rect)
+                let bitmap = NSBitmapImageRep(cgImage: patch.image)
+                let color = try XCTUnwrap(bitmap.colorAt(x: 3, y: 5)?.usingColorSpace(.sRGB))
+                return color.redComponent - color.greenComponent
+            }
+            let remoteColor = try await redMinusGreen(regionalRead)
+            let localColor = try await redMinusGreen(localRead)
+            XCTAssertLessThan(remoteColor, -0.6)
+            XCTAssertGreaterThan(localColor, 0.6)
             let remoteGIF: FileTab?
             let gifBeforeDisconnect: (() async throws -> GIFPlayback.Frames)?
             if let gifSamples {
@@ -332,6 +366,12 @@ final class MarkdownResourceScopeTests: XCTestCase {
                 _ = try await originalImage()
                 XCTFail("Original-size decoding must not read the local namesake after disconnect")
             } catch RemoteConnectionError.notConnected {}
+            do {
+                _ = try await regionalRead()
+                XCTFail("A disconnected regional read must not use Mac pixels")
+            } catch RemoteConnectionError.notConnected {}
+            remoteImage.rebindWorkspace(to: nil)
+            XCTAssertNil(remoteImage.originalImageRequest())
             let disconnected = FileTab(path: asset, backend: channel, workspaceIdentity: "ssh:\(host)")
             do {
                 try await disconnected.waitForText()
@@ -357,6 +397,13 @@ final class MarkdownResourceScopeTests: XCTestCase {
 
             let reopened = try await backend.read(path: path, maxBytes: original.count)
             XCTAssertEqual(reopened, original, "Reconnecting before retry must show the original remote bytes")
+            remoteImage.rebindWorkspace(to: channel)
+            let restoredRead = try XCTUnwrap(remoteImage.originalImageRequest())
+            let restoredColor = try await redMinusGreen(restoredRead)
+            XCTAssertEqual(restoredColor, remoteColor, accuracy: 0.01)
+            let remoteImageBytes = try await channel.read(path: regionalPath, maxBytes: remoteJPEG.count)
+            XCTAssertEqual(remoteImageBytes, remoteJPEG)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: regionalPath)), localJPEG)
             if let remoteGIF, let gifSamples {
                 remoteGIF.rebindWorkspace(to: channel)
                 try await assertGIF(remoteGIF, frameCount: 34)

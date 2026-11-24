@@ -5,6 +5,74 @@ import XCTest
 
 @MainActor
 final class RasterFilePreviewUITests: XCTestCase {
+    func testJPEGAtActualSizeKeepsFinePixelsAndPansToBothSides() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = fixture.root.appending(path: "Regional detail.jpeg")
+        let width = 5600
+        let height = 500
+        let canvas = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        canvas.setFillColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1)
+        canvas.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+        canvas.setFillColor(red: 0.07, green: 0.25, blue: 0.9, alpha: 1)
+        canvas.fill(CGRect(x: width / 2, y: 0, width: width / 2, height: height))
+        canvas.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        for column in stride(from: 0, to: width, by: 4) {
+            canvas.fill(CGRect(x: column, y: 0, width: 2, height: height))
+        }
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(file as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(canvas.makeImage()),
+                                  [kCGImageDestinationLossyCompressionQuality: 1] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let before = try Data(contentsOf: file)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let viewer = WorkspaceUITestSupport.element("bailey.image.inspector", in: app)
+        XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        viewer.rightClick()
+        let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
+        XCTAssertTrue(actual.waitForExistence(timeout: 5))
+        actual.click()
+        let left = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.16, dy: 0.5))
+        let right = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.84, dy: 0.5))
+
+        func expectPixels(blue: Bool) {
+            let pixels = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let bitmap = NSBitmapImageRep(data: viewer.screenshot().pngRepresentation) else { return false }
+                let middle = bitmap.pixelsWide / 2
+                let row = bitmap.pixelsHigh / 2
+                guard middle > 90 else { return false }
+                var bright = 0
+                var wanted = 0
+                var other = 0
+                for column in (middle - 80)..<(middle + 80) {
+                    guard let pixel = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) else { continue }
+                    if min(pixel.redComponent, pixel.greenComponent, pixel.blueComponent) > 0.78 { bright += 1 }
+                    let difference = pixel.blueComponent - pixel.redComponent
+                    if blue ? difference > 0.4 : difference < -0.4 { wanted += 1 }
+                    if blue ? difference < -0.4 : difference > 0.4 { other += 1 }
+                }
+                return bright > 18 && wanted > 18 && other == 0
+            }, object: nil)
+            let result = XCTWaiter.wait(for: [pixels], timeout: 8)
+            if result != .completed { add(XCTAttachment(screenshot: viewer.screenshot())) }
+            XCTAssertEqual(result, .completed, "Expected fine \(blue ? "blue" : "red") stripes after native pan")
+        }
+
+        right.click(forDuration: 0.2, thenDragTo: left)
+        expectPixels(blue: true)
+        left.click(forDuration: 0.2, thenDragTo: right)
+        left.click(forDuration: 0.2, thenDragTo: right)
+        expectPixels(blue: false)
+        XCTAssertEqual(try Data(contentsOf: file), before)
+    }
+
     func testGIFStopsAdvancingWhileAnotherBaileyWindowIsKey() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

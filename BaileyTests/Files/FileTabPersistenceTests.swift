@@ -875,8 +875,10 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertLessThanOrEqual(image.poster.height, 4096)
         let request = try XCTUnwrap(file.originalImageRequest())
         let original = try await request()
-        XCTAssertEqual(original.width, 5000)
-        XCTAssertEqual(original.height, 2500)
+        guard case .whole = original else { return XCTFail("PNG still uses the bounded full ImageIO decode") }
+        let pixels = try await original.render(CGRect(x: 1000, y: 1000, width: 120, height: 120))
+        XCTAssertEqual(pixels.image.width, 5000)
+        XCTAssertEqual(pixels.image.height, 2500)
         XCTAssertEqual(try Data(contentsOf: path), imageBytes)
 
         var changed = imageBytes

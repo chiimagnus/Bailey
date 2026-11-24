@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ImageInspector: View {
     let image: RasterPreview
-    var loadOriginal: (() async throws -> CGImage)? = nil
+    var loadOriginal: (() async throws -> RasterDetail)? = nil
     var showsCloseButton = false
     var playback: GIFPlayback? = nil
     var loadAnimation: (() async throws -> GIFPlayback.Frames)? = nil
@@ -56,7 +56,7 @@ struct ImageInspector: View {
 
 private struct RasterViewport: NSViewRepresentable {
     let image: RasterPreview
-    let loadOriginal: (() async throws -> CGImage)?
+    let loadOriginal: (() async throws -> RasterDetail)?
     let animationFrame: CGImage?
     let paused: Bool?
     let toggleAnimation: (() -> Void)?
@@ -273,9 +273,11 @@ private final class CenteredPreviewClipView: NSClipView {
 private final class RasterScrollView: PreviewScrollView {
     private let canvas = RasterPreviewCanvas()
     private var thumbnail: CGImage?
-    private var loadOriginal: (() async throws -> CGImage)?
+    private var loadOriginal: (() async throws -> RasterDetail)?
     private var onDetailFailure: ((Bool) -> Void)?
     private var detailTask: Task<Void, Never>?
+    private var detail: RasterDetail?
+    private var detailFailed = false
     private var resourceRevision = ""
     private var toggleAnimation: (() -> Void)?
     private var onViewportPositionChange: ((Position?) -> Void)?
@@ -290,7 +292,7 @@ private final class RasterScrollView: PreviewScrollView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    func update(_ image: RasterPreview, loadOriginal: (() async throws -> CGImage)?,
+    func update(_ image: RasterPreview, loadOriginal: (() async throws -> RasterDetail)?,
                 animationFrame: CGImage?, paused: Bool?, toggleAnimation: (() -> Void)?,
                 resourceRevision: String, viewportPosition: Position?, onViewportPositionChange: ((Position?) -> Void)?,
                 onDetailFailure: @escaping (Bool) -> Void) {
@@ -306,7 +308,7 @@ private final class RasterScrollView: PreviewScrollView {
             canvas.image = image.poster
             canvas.setFrameSize(image.pixelSize)
             restorePosition(viewportPosition)
-        } else if changedResource, detailTask != nil {
+        } else if changedResource {
             resetDetail()
         }
         self.onViewportPositionChange = onViewportPositionChange
@@ -335,7 +337,10 @@ private final class RasterScrollView: PreviewScrollView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { resetDetail() }
+        if window == nil {
+            resetDetail()
+            if canvas.image !== thumbnail { canvas.image = thumbnail }
+        }
     }
 
     func retire() {
@@ -346,41 +351,64 @@ private final class RasterScrollView: PreviewScrollView {
         onViewportPositionChange = nil
         animationMenuItem.menu?.removeItem(animationMenuItem)
         resetDetail()
+        canvas.image = nil
     }
 
     private func resetDetail() {
-        if let detailTask {
-            detailTask.cancel()
-            self.detailTask = nil
+        detailTask?.cancel()
+        detailTask = nil
+        detail = nil
+        if canvas.patch != nil { canvas.patch = nil }
+        if detailFailed {
+            detailFailed = false
             Task { [weak self] in
-                guard let self, self.detailTask == nil else { return }
-                self.onDetailFailure?(false)
+                guard let self else { return }
+                self.onDetailFailure?(self.detailFailed)
             }
         }
-        if canvas.image !== thumbnail { canvas.image = thumbnail }
+    }
+
+    private var visibleImageRect: CGRect {
+        documentVisibleRect.intersection(canvas.bounds)
     }
 
     private func updateDetailDemand() {
         let size = canvas.bounds.size
-        guard window != nil, hasViewportLayout, let loadOriginal, let thumbnail,
+        let visible = visibleImageRect
+        guard window != nil, hasViewportLayout, !visible.isEmpty, let loadOriginal, let thumbnail,
               size.width * pixelScale > CGFloat(thumbnail.width)
                 || size.height * pixelScale > CGFloat(thumbnail.height) else {
-            if detailTask != nil { resetDetail() }
+            if detailTask != nil || detail != nil || detailFailed { resetDetail() }
             return
         }
-        guard detailTask == nil else { return }
+        guard detailTask == nil, !detailFailed,
+              canvas.patch?.rect.contains(visible) != true else { return }
         detailTask = Task { [weak self] in
             guard !Task.isCancelled else { return }
-            self?.onDetailFailure?(false)
             do {
-                let image = try await loadOriginal()
-                guard !Task.isCancelled else { return }
-                self?.canvas.image = image
+                let detail = if let existing = self?.detail { existing } else { try await loadOriginal() }
+                guard !Task.isCancelled, let visible = self?.visibleImageRect else { return }
+                guard !visible.isEmpty else {
+                    self?.detailTask = nil
+                    return
+                }
+                self?.detail = detail
+                let requested = visible.insetBy(dx: -visible.width / 4, dy: -visible.height / 4)
+                let patch = try await detail.render(requested)
+                guard !Task.isCancelled, let self else { return }
+                self.detailTask = nil
+                let current = self.visibleImageRect
+                if self.canvas.patch?.rect.contains(current) != true, patch.rect.intersects(current) {
+                    self.canvas.patch = patch
+                }
+                self.updateDetailDemand()
             } catch is CancellationError {
                 if !Task.isCancelled { self?.detailTask = nil }
             } catch {
-                guard !Task.isCancelled else { return }
-                self?.onDetailFailure?(true)
+                guard !Task.isCancelled, let self else { return }
+                self.detailTask = nil
+                self.detailFailed = true
+                self.onDetailFailure?(true)
             }
         }
     }
@@ -396,6 +424,12 @@ class PreviewCanvasView: NSView {
 
 private final class RasterPreviewCanvas: PreviewCanvasView {
     var image: CGImage? { didSet { needsDisplay = true } }
+    var patch: RasterDetail.Patch? {
+        didSet {
+            if let oldValue { setNeedsDisplay(oldValue.rect) }
+            if let patch { setNeedsDisplay(patch.rect) }
+        }
+    }
     private let checker = NSColor(patternImage: NSImage(size: CGSize(width: 16, height: 16), flipped: false) { rect in
         NSColor.windowBackgroundColor.setFill()
         rect.fill()
@@ -411,6 +445,17 @@ private final class RasterPreviewCanvas: PreviewCanvasView {
         checker.setFill()
         dirtyRect.fill()
         context.interpolationQuality = .high
-        context.draw(image, in: bounds)
+        if let patch {
+            if patch.rect != bounds {
+                context.saveGState()
+                context.addRects([bounds, patch.rect])
+                context.clip(using: .evenOdd)
+                context.draw(image, in: bounds)
+                context.restoreGState()
+            }
+            context.draw(patch.image, in: patch.rect)
+        } else {
+            context.draw(image, in: bounds)
+        }
     }
 }
