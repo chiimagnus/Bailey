@@ -547,10 +547,17 @@ final class FileTreeModel {
                 Task { @MainActor [weak self] in
                     guard let self, self.localWatcherToken == token,
                           self.localFileEventsEnabled, self.rootPath == root else { return }
-                    await self.rebuild(refresh: true)
+                    await self.reconcileLocalFileEvents()
                 }
             }
         }
+    }
+
+    private func reconcileLocalFileEvents() async {
+        let epoch = treeEpoch
+        let revision = contentRevision
+        await rebuild(refresh: true)
+        if treeEpoch == epoch, contentRevision == revision { contentRevision &+= 1 }
     }
 
     private func queueLocalFileEvents(_ events: [GitFileEventWatcher.Event]) {
@@ -586,10 +593,7 @@ final class FileTreeModel {
             return LocalPathScope.physicalPath(rootPath) != localWatchMappings[rootPath]
         }
         if rootLinkChanged || events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
-            let epoch = treeEpoch
-            let revision = contentRevision
-            await rebuild(refresh: true)
-            if treeEpoch == epoch, contentRevision == revision { contentRevision &+= 1 }
+            await reconcileLocalFileEvents()
             return
         }
 

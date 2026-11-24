@@ -891,6 +891,14 @@ final class FileTreeTests: XCTestCase {
     }
 
     func testNativeLinkedWorktreeGitIndexOutsideProjectInvalidatesQuickOpen() async throws {
+        try await assertLinkedWorktreeIndexInvalidation(changeBeforeSubscription: false)
+    }
+
+    func testLinkedWorktreeIndexChangeBeforeSubscriptionInvalidatesQuickOpen() async throws {
+        try await assertLinkedWorktreeIndexInvalidation(changeBeforeSubscription: true)
+    }
+
+    private func assertLinkedWorktreeIndexInvalidation(changeBeforeSubscription: Bool) async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let repository = base.appendingPathComponent("repository")
         let linked = base.appendingPathComponent("linked")
@@ -917,17 +925,40 @@ final class FileTreeTests: XCTestCase {
         XCTAssertFalse(LocalPathScope.contains(gitDirectory, in: linked.path),
                        "A linked worktree stores its index outside the visible project")
         let owner = UUID()
+        if !changeBeforeSubscription { tree.setLocalFileIndexGitDirectory(gitDirectory) }
         tree.setLocalFileEventsEnabled(true, member: owner)
-        tree.setLocalFileIndexGitDirectory(gitDirectory)
         defer {
-            tree.setLocalFileIndexGitDirectory(nil)
             tree.setLocalFileEventsEnabled(false, member: owner)
+            tree.setLocalFileIndexGitDirectory(nil)
         }
         let revision = tree.contentRevision
-        XCTAssertEqual(GitCommandExecution.run(["add", "-f", "untracked.tmp"], in: linked.path).status, 0)
-        try await waitForCondition("Real worktree index changes must reach the single Files watcher") {
+        let rows = tree.items
+        if changeBeforeSubscription {
+            // An independent observer proves the actual external index event
+            // was delivered before the Files stream subscribed to that path.
+            let indexEvent = expectation(description: "External Git index event delivered")
+            let physical = LocalPathScope.physicalPath(gitDirectory)
+            let observer = try XCTUnwrap(GitFileEventWatcher(paths: [physical], onEvents: { events in
+                if events.contains(where: { $0.path == physical + "/index" || $0.path == physical }) {
+                    indexEvent.fulfill()
+                }
+            }))
+            defer { withExtendedLifetime(observer) {} }
+            XCTAssertEqual(GitCommandExecution.run(["add", "-f", "untracked.tmp"], in: linked.path).status, 0)
+            await fulfillment(of: [indexEvent], timeout: 3)
+            XCTAssertTrue(ProjectFileIndex.load(in: linked.path).contains { $0.absolutePath == ignored.path })
+            XCTAssertEqual(tree.contentRevision, revision,
+                           "The checkout-only stream must not have observed the external Git index")
+            tree.setLocalFileIndexGitDirectory(gitDirectory)
+        } else {
+            XCTAssertEqual(GitCommandExecution.run(["add", "-f", "untracked.tmp"], in: linked.path).status, 0)
+        }
+        try await waitForCondition(changeBeforeSubscription
+            ? "Replacing the watcher must reconcile missed external index changes"
+            : "Real worktree index changes must reach the single Files watcher") {
             tree.contentRevision > revision
         }
+        XCTAssertEqual(tree.items, rows, "Staging a file must not change the Files rows")
         XCTAssertTrue(ProjectFileIndex.load(in: linked.path).contains { $0.absolutePath == ignored.path },
                       "An ignored file staged in a linked worktree must appear in ⌘P")
     }
