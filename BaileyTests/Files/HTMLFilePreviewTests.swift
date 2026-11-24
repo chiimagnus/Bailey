@@ -59,6 +59,161 @@ final class HTMLFilePreviewTests: XCTestCase {
         }
     }
 
+    func testFindMenuTargetsReadOnlyHTMLPreviewRatherThanItsSource() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("find.html")
+        let needle = "真实查找 & WebKit 🧪"
+        let source = """
+            <!doctype html><div style="height:1000px"></div>
+            <p id="first">真实查找 &amp; WebKit 🧪</p><div style="height:1000px"></div>
+            <p id="second">真实查找 &amp; WebKit 🧪</p>
+            <span data-source-only="not-rendered-attribute">Visible text</span>
+            """
+        try Data(source.utf8).write(to: path)
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(path.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let tab = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected HTML file") }
+        try await file.waitForText()
+        XCTAssertTrue(manager.canFind)
+        XCTAssertTrue(manager.canReplace)
+        project.setFilePreviewMode(.preview, for: tab)
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 500, height: 320),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file, canFocus: { false },
+                                                                  resourceDirectory: root.path)))
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderBack(nil)
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            guard let preview = file.htmlPreview else { return false }
+            return preview.webView.window === window && preview.webView.url != nil && !preview.webView.isLoading
+        }
+        let preview = try XCTUnwrap(file.htmlPreview)
+        let webView = preview.webView
+        XCTAssertFalse(preview.failed)
+        XCTAssertFalse(webView.isEditable)
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        manager.performFindAction(.show)
+        XCTAssertTrue(preview.showsFind)
+        func findField(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable, !field.isHiddenOrHasHiddenAncestor { return field }
+            return view.subviews.lazy.compactMap { findField(in: $0) }.first
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for width in [180.0, 500.0] {
+                window.setContentSize(.init(width: width, height: 320))
+                try await waitUntil {
+                    host.layoutSubtreeIfNeeded()
+                    return findField(in: host) != nil && abs(host.bounds.width - width) < 1
+                }
+                let field = try XCTUnwrap(findField(in: host))
+                let frame = host.convert(field.bounds, from: field)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                XCTAssertLessThanOrEqual(frame.maxX, host.bounds.maxX)
+                XCTAssertGreaterThan(frame.width, 20)
+            }
+        }
+        func selectedElement() async -> String? {
+            try? await webView.evaluateJavaScript(
+                "window.getSelection().anchorNode?.parentElement?.id ?? ''", contentWorld: .defaultClient
+            ) as? String
+        }
+        preview.findQuery = needle
+        try await waitUntil { await selectedElement() == "first" && preview.findMatchFound == true }
+        let firstY = try await webView.evaluateJavaScript("window.scrollY", contentWorld: .defaultClient) as? Double
+        XCTAssertGreaterThan(try XCTUnwrap(firstY), 0)
+        manager.performFindAction(.next)
+        try await waitUntil { await selectedElement() == "second" }
+        manager.performFindAction(.previous)
+        try await waitUntil { await selectedElement() == "first" }
+        preview.findQuery = "not-rendered-attribute"
+        try await waitUntil { preview.findMatchFound == false }
+        preview.findQuery = "superseded query"
+        preview.findQuery = needle
+        try await waitUntil { preview.findMatchFound == true }
+        _ = try await webView.evaluateJavaScript(
+            "window.getSelection().selectAllChildren(document.getElementById('second'))",
+            contentWorld: .defaultClient
+        )
+        preview.findQuery = ""
+        manager.performFindAction(.useSelection)
+        try await waitUntil { preview.findQuery == needle && preview.findMatchFound == true }
+        manager.performFindAction(.useSelection)
+        try await waitUntil { preview.findQuery == needle && preview.findMatchFound == true }
+        manager.performFindAction(.replace)
+        XCTAssertFalse(webView.isEditable)
+        XCTAssertFalse(file.isDirty)
+        manager.performFindAction(.hide)
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            return !preview.showsFind && findField(in: host) == nil
+        }
+
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        host.rootView = AnyView(HStack(spacing: 0) {
+            FileViewerView(file: file, canFocus: { false }, resourceDirectory: root.path)
+            FileViewerView(file: file, canFocus: { false }, resourceDirectory: root.path, rendersOnlyPreview: true)
+        })
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            return preview.webView.window === window && file.textView?.window === window
+        }
+        project.selectPanel(.tab(tab.id))
+        XCTAssertTrue(manager.canFind)
+        XCTAssertTrue(manager.canReplace)
+        let sourceScroll = try XCTUnwrap(file.textView?.enclosingScrollView)
+        manager.performFindAction(.show)
+        try await waitUntil { sourceScroll.isFindBarVisible }
+        XCTAssertFalse(preview.showsFind, "Source Find cannot open the companion's search bar")
+        project.selectPanel(.filePreview(tab.id))
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        manager.performFindAction(.show)
+        XCTAssertTrue(preview.showsFind)
+        XCTAssertTrue(file.htmlPreview?.webView === webView)
+        XCTAssertEqual(try Data(contentsOf: path), Data(source.utf8))
+
+        let otherRoot = root.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: false)
+        let otherPath = otherRoot.appendingPathComponent(path.lastPathComponent)
+        let otherSource = "<p>Independent window</p>"
+        try Data(otherSource.utf8).write(to: otherPath)
+        let otherManager = application.makeWindow()
+        defer { otherManager.windowClosed() }
+        otherManager.addLocalFolders([otherRoot])
+        otherManager.openFile(otherPath.path)
+        let otherProject = try XCTUnwrap(otherManager.selectedProject)
+        let otherTab = try XCTUnwrap(otherProject.selectedTab)
+        guard case .file(let otherFile) = otherTab.content else { return XCTFail("Expected second HTML file") }
+        try await otherFile.waitForText()
+        otherProject.setFilePreviewMode(.preview, for: otherTab)
+        _ = try await display(otherFile, in: otherRoot)
+        let otherPreview = try XCTUnwrap(otherFile.htmlPreview)
+        otherManager.performFindAction(.show)
+        otherPreview.findQuery = "Independent window"
+        try await waitUntil { otherPreview.findMatchFound == true }
+        XCTAssertEqual(preview.findQuery, needle)
+        manager.performFindAction(.hide)
+        XCTAssertTrue(otherPreview.showsFind)
+        XCTAssertEqual(otherPreview.findQuery, "Independent window")
+        XCTAssertEqual(try Data(contentsOf: otherPath), Data(otherSource.utf8))
+        project.close(tab)
+        XCTAssertNil(file.htmlPreview)
+        preview.performFindAction(.show)
+        XCTAssertFalse(preview.showsFind, "Retired previews cannot resume searching")
+    }
+
     func testHTMLDefaultsToSourceWithoutChangingTheDecodedFile() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

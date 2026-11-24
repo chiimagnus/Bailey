@@ -14,7 +14,7 @@ enum ToolPanel {
 
 /// One Find menu command, routed from the menu bar to whichever find
 /// implementation the focused pane owns: Ghostty's own search in a terminal,
-/// `NSTextFinder`'s find bar in a file editor.
+/// `NSTextFinder` in a file editor, or the focused read-only preview.
 enum FindAction {
     case show
     case replace
@@ -668,6 +668,10 @@ final class WorkspaceWindowModel {
             focusedDelimitedTable.perform(action)
             return
         }
+        if let focusedHTMLPreview {
+            focusedHTMLPreview.performFindAction(action)
+            return
+        }
         switch selectedProject?.focusedContent {
         case .session(let session): session.find.perform(action)
         case .file(let file): file.performFindAction(action)
@@ -676,9 +680,9 @@ final class WorkspaceWindowModel {
         }
     }
 
-    /// Find uses the active pane's existing native text or terminal surface.
+    /// Find uses the active pane's text, terminal or read-only preview surface.
     var canFind: Bool {
-        if focusedDelimitedTable != nil { return true }
+        if focusedDelimitedTable != nil || focusedHTMLPreview != nil { return true }
         switch selectedProject?.focusedContent {
         case .session, .diff: return true
         case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsFilePreview
@@ -688,18 +692,29 @@ final class WorkspaceWindowModel {
 
     var canReplace: Bool {
         switch selectedProject?.focusedContent {
-        case .file: return canFind && focusedDelimitedTable == nil
+        case .file: return canFind && focusedDelimitedTable == nil && focusedHTMLPreview == nil
         case .diff(let diff): return diff.isEditing && diff.isEditableNow
         case .session, .browser, .none: return false
         }
     }
 
-    private var focusedDelimitedTable: DelimitedTableControls? {
+    private var focusedPreviewFile: FileTab? {
         guard let project = selectedProject, let tab = project.focusedTab,
-              case .file(let file) = tab.content, file.previewKind == .delimited, file.canPreviewFile,
+              case .file(let file) = tab.content, file.canPreviewFile,
               let item = project.dock.activeGroup?.selected,
               item == .filePreview(tab.id) || (item == .tab(tab.id) && file.showsFilePreview) else { return nil }
+        return file
+    }
+
+    private var focusedDelimitedTable: DelimitedTableControls? {
+        guard let file = focusedPreviewFile, file.previewKind == .delimited else { return nil }
         return file.delimitedTable
+    }
+
+    private var focusedHTMLPreview: HTMLPreview? {
+        guard let file = focusedPreviewFile, file.previewKind == .html,
+              let preview = file.htmlPreview, !preview.failed else { return nil }
+        return preview
     }
 
     func closeActivePanelOrWindow() {

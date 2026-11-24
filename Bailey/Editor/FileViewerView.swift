@@ -1213,7 +1213,7 @@ struct FileViewerView: View {
                         case .svg:
                             SVGFilePreview(file: file, onFocused: onFocused, onShowSource: revealSource)
                         case .html:
-                            HTMLFilePreview(file: file, directory: resourceDirectory,
+                            HTMLFilePreview(file: file, directory: resourceDirectory, canFocus: canFocus,
                                             onFocused: onFocused, onShowSource: revealSource)
                         }
                     } else if !rendersOnlyPreview {

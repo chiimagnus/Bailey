@@ -7,6 +7,7 @@ import WebKit
 struct HTMLFilePreview: View {
     let file: FileTab
     let directory: String?
+    let canFocus: () -> Bool
     let onFocused: () -> Void
     let onShowSource: () -> Void
 
@@ -23,7 +24,12 @@ struct HTMLFilePreview: View {
                         Button(String(localized: "Show Source", table: "Editor"), action: onShowSource)
                     }
                 } else {
-                    HTMLPreviewMount(preview: preview, onFocused: onFocused)
+                    VStack(spacing: 0) {
+                        if preview.showsFind {
+                            HTMLPreviewFindBar(preview: preview, canFocus: canFocus, onFocused: onFocused)
+                        }
+                        HTMLPreviewMount(preview: preview, onFocused: onFocused)
+                    }
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -31,6 +37,66 @@ struct HTMLFilePreview: View {
         }
         .task(id: [request, scope.directory ?? "", String(file.previewAssetRevision)]) {
             await file.showHTMLPreview(request: request, in: directory)
+        }
+    }
+}
+
+private struct HTMLPreviewFindBar: View {
+    @Bindable var preview: HTMLPreview
+    let canFocus: () -> Bool
+    let onFocused: () -> Void
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField(String(localized: "Find", table: "Terminal"), text: $preview.findQuery)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("bailey.html.find")
+                .focused($fieldFocused)
+                .onKeyPress(keys: [.return], phases: .down) { press in
+                    preview.performFindAction(press.modifiers.contains(.shift) ? .previous : .next)
+                    return .handled
+                }
+                .frame(minWidth: 0, maxWidth: .infinity)
+            if preview.findMatchFound == false {
+                Image(systemName: "exclamationmark.circle")
+                    .foregroundStyle(.secondary)
+                    .help(String(localized: "No matches", table: "Interface"))
+                    .accessibilityLabel(Text("No matches", tableName: "Interface"))
+            }
+            Button { preview.performFindAction(.previous) } label: { Image(systemName: "chevron.up") }
+                .accessibilityLabel(Text("Previous match", tableName: "Terminal"))
+                .disabled(preview.findQuery.isEmpty)
+            Button { preview.performFindAction(.next) } label: { Image(systemName: "chevron.down") }
+                .accessibilityLabel(Text("Next match", tableName: "Terminal"))
+                .disabled(preview.findQuery.isEmpty)
+            Button { preview.performFindAction(.hide) } label: { Image(systemName: "xmark") }
+                .accessibilityLabel(Text("Close"))
+        }
+        .buttonStyle(.borderless)
+        .padding(6)
+        .background(.regularMaterial)
+        .onKeyPress(.escape) { preview.performFindAction(.hide); return .handled }
+        .onAppear { focusField() }
+        .onChange(of: preview.findFocusRequest) { focusField() }
+        .onChange(of: fieldFocused) { if fieldFocused { onFocused() } }
+        .onDisappear {
+            DispatchQueue.main.async {
+                guard !preview.showsFind, canFocus(), NSApp.isActive,
+                      let window = preview.webView.window, window.isKeyWindow else { return }
+                window.makeFirstResponder(preview.webView)
+            }
+        }
+    }
+
+    private func focusField() {
+        DispatchQueue.main.async {
+            guard preview.showsFind, canFocus() else { return }
+            fieldFocused = true
+            DispatchQueue.main.async {
+                guard fieldFocused, preview.showsFind, canFocus() else { return }
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            }
         }
     }
 }
@@ -70,6 +136,7 @@ private struct HTMLPreviewMount: NSViewRepresentable {
 
 final class HTMLPreviewWebView: WKWebView {
     var onFocused: (() -> Void)?
+    override var isEditable: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
         onFocused?()
@@ -100,6 +167,24 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
 
     let webView: HTMLPreviewWebView
     private(set) var failed = false
+    private(set) var showsFind = false
+    private(set) var findFocusRequest = 0
+    private(set) var findMatchFound: Bool?
+    var findQuery = "" {
+        didSet {
+            guard findQuery != oldValue else { return }
+            invalidateFind()
+            if showsFind, !findQuery.isEmpty { enqueueFind(.match(findQuery, backwards: false)) }
+        }
+    }
+
+    private enum FindRequest {
+        case match(String, backwards: Bool)
+        case selection
+    }
+
+    @ObservationIgnored private var findGeneration: UInt = 0
+    @ObservationIgnored private var findTask: Task<Void, Never>?
     @ObservationIgnored private let handler = HTMLPreviewScheme()
     @ObservationIgnored private var revision: Revision?
     @ObservationIgnored private var navigation: WKNavigation?
@@ -193,18 +278,84 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         return Data(text.utf8)
     }
 
+    func performFindAction(_ action: FindAction) {
+        guard !failed, webView.window != nil, webView.navigationDelegate === self else { return }
+        switch action {
+        case .show:
+            if !showsFind {
+                showsFind = true
+                if !findQuery.isEmpty { enqueueFind(.match(findQuery, backwards: false)) }
+            }
+            findFocusRequest &+= 1
+        case .hide:
+            showsFind = false
+            invalidateFind()
+        case .next, .previous:
+            guard !findQuery.isEmpty else { performFindAction(.show); return }
+            showsFind = true
+            enqueueFind(.match(findQuery, backwards: action == .previous))
+        case .useSelection:
+            invalidateFind()
+            enqueueFind(.selection)
+        case .replace:
+            break
+        }
+    }
+
+    /// WebKit changes its own page selection while finding. Serialize its
+    /// operations, and discard superseded queries and retired page results.
+    private func enqueueFind(_ request: FindRequest) {
+        let previous = findTask
+        let generation = findGeneration
+        findTask = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, findGeneration == generation,
+                  !failed, webView.window != nil, webView.navigationDelegate === self else { return }
+            switch request {
+            case .match(let query, let backwards):
+                let configuration = WKFindConfiguration()
+                configuration.backwards = backwards
+                configuration.wraps = true
+                let found = try? await webView.find(query, configuration: configuration).matchFound
+                guard !Task.isCancelled, findGeneration == generation else { return }
+                findMatchFound = found
+            case .selection:
+                let selected = try? await webView.evaluateJavaScript(
+                    "window.getSelection()?.toString() ?? ''", contentWorld: .defaultClient
+                ) as? String
+                guard !Task.isCancelled, findGeneration == generation,
+                      let selected, !selected.isEmpty else { return }
+                let wasPresented = showsFind
+                showsFind = true
+                if findQuery == selected { findMatchFound = true }
+                else { findQuery = selected }
+                if !wasPresented { findFocusRequest &+= 1 }
+            }
+        }
+    }
+
+    private func invalidateFind() {
+        findGeneration &+= 1
+        findTask?.cancel()
+        findMatchFound = nil
+    }
+
     func suspend() {
+        showsFind = false
+        invalidateFind()
         if webView.isLoading || handler.isLoading { invalidate() }
         handler.enabled = false
     }
 
     func retire() {
+        showsFind = false
         webView.navigationDelegate = nil
         webView.onFocused = nil
         invalidate()
     }
 
     func invalidate() {
+        invalidateFind()
         attempt &+= 1
         revision = nil
         navigation = nil
@@ -244,8 +395,9 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish code: WKNavigation!) {
-        guard let navigation, code === navigation, let scroll = scrollToRestore,
-              let url = handler.documentURL else { return }
+        guard let navigation, code === navigation else { return }
+        if showsFind, !findQuery.isEmpty { enqueueFind(.match(findQuery, backwards: false)) }
+        guard let scroll = scrollToRestore, let url = handler.documentURL else { return }
         scrollToRestore = nil
         webView.callAsyncJavaScript(
             "if (location.href === expected) window.scrollTo({left, top, behavior: 'instant'});",
