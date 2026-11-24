@@ -759,6 +759,150 @@ final class FileTabPersistenceTests: XCTestCase {
         }
     }
 
+    func testNativePNGsAtTheExactRasterPixelBudget() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bounds = [
+            (width: 1, height: 1, pixels: 1, allowed: true),
+            (width: 4_095, height: 1, pixels: 4_095, allowed: true),
+            (width: 4_096, height: 1, pixels: 4_096, allowed: true),
+            (width: 4_097, height: 1, pixels: 4_097, allowed: true),
+            (width: 1, height: 4_097, pixels: 4_097, allowed: true),
+            (width: 73_903, height: 433, pixels: 31_999_999, allowed: true),
+            (width: 8_000, height: 4_000, pixels: 32_000_000, allowed: true),
+            (width: 57_041, height: 561, pixels: 32_000_001, allowed: false),
+        ]
+        for fixture in bounds {
+            let bytes: Data = try autoreleasepool {
+                let canvas = try XCTUnwrap(CGContext(
+                    data: nil, width: fixture.width, height: fixture.height, bitsPerComponent: 8, bytesPerRow: 0,
+                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+                ))
+                canvas.setFillColor(gray: 0.4, alpha: 1)
+                canvas.fill(CGRect(x: 0, y: 0, width: fixture.width, height: fixture.height))
+                let buffer = NSMutableData()
+                let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                    buffer, UTType.png.identifier as CFString, 1, nil
+                ))
+                CGImageDestinationAddImage(destination, try XCTUnwrap(canvas.makeImage()), nil)
+                XCTAssertTrue(CGImageDestinationFinalize(destination))
+                let source = try XCTUnwrap(CGImageSourceCreateWithData(buffer, nil))
+                let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+                XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, fixture.width)
+                XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, fixture.height)
+                XCTAssertEqual(fixture.width * fixture.height, fixture.pixels)
+                let control = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 128,
+                ] as CFDictionary)
+                XCTAssertNotNil(control, "Even the over-budget input is a valid native PNG")
+                return buffer as Data
+            }
+            let path = root.appending(path: "\(fixture.width)x\(fixture.height).png")
+            try bytes.write(to: path)
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if fixture.allowed {
+                let size = CGSize(width: fixture.width, height: fixture.height)
+                guard case .image(let preview) = file.content else {
+                    return XCTFail("Native PNG with \(fixture.pixels) pixels must open")
+                }
+                XCTAssertEqual(preview.pixelSize, size)
+                let longest = max(fixture.width, fixture.height)
+                XCTAssertEqual(max(preview.poster.width, preview.poster.height), min(4_096, longest))
+                let inspected: CGImage
+                if longest > 4_096 {
+                    let request = try XCTUnwrap(file.originalImageRequest())
+                    let detail = try await request()
+                    let region = try await detail.render(CGRect(x: 0, y: 0, width: 20, height: 20))
+                    XCTAssertEqual(region.rect.size, size)
+                    XCTAssertEqual(region.image.width, fixture.width)
+                    XCTAssertEqual(region.image.height, fixture.height)
+                    inspected = region.image
+                } else {
+                    XCTAssertNil(file.originalImageRequest())
+                    inspected = preview.poster
+                }
+                let crop = try XCTUnwrap(inspected.cropping(to: CGRect(x: 0, y: 0, width: 1, height: 1)))
+                let probe = try XCTUnwrap(NSBitmapImageRep(cgImage: crop).colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB))
+                XCTAssertGreaterThan(probe.redComponent, 0.1)
+                XCTAssertLessThan(probe.redComponent, 0.8)
+                let inline = try MarkdownPicture.decode(bytes).poster
+                XCTAssertEqual(max(inline.width, inline.height), min(2_048, longest))
+            } else {
+                if case .unavailable(let reason) = file.content {
+                    XCTAssertEqual(reason, String(localized: "Image is too large or invalid", table: "Workspace"))
+                } else {
+                    XCTFail("Over-budget PNG must not publish decoded pixels")
+                }
+                XCTAssertNil(file.originalImageRequest())
+                XCTAssertThrowsError(try MarkdownPicture.decode(bytes))
+            }
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            file.retireContent()
+        }
+    }
+
+    func testRealJPEGAtTheExactImageFileByteBudgets() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
+              let fixture = environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_LONG_SESSION=1 and BAILEY_IMAGE_ACCEPTANCE_ROOT")
+        }
+        let original = URL(fileURLWithPath: fixture).appending(path: "images/超清大图-6000x4000.jpg")
+        let bytes = try Data(contentsOf: original)
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let textBudget = 32 << 20
+        let imageBudget = 256 << 20
+        let endMarker = Data([0x5a])
+        for byteCount in [textBudget - 1, textBudget, textBudget + 1, imageBudget - 1, imageBudget, imageBudget + 1] {
+            let path = root.appending(path: "\(byteCount).jpg")
+            try bytes.write(to: path)
+            do {
+                let writer = try FileHandle(forWritingTo: path)
+                try writer.truncate(atOffset: UInt64(byteCount))
+                try writer.seek(toOffset: UInt64(byteCount - 1))
+                try writer.write(contentsOf: endMarker)
+                try writer.close()
+            }
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if byteCount <= imageBudget {
+                guard case .image(let preview) = file.content else {
+                    return XCTFail("A native JPEG of \(byteCount) bytes must open")
+                }
+                XCTAssertEqual(preview.pixelSize, CGSize(width: 6000, height: 4000))
+                XCTAssertEqual(preview.poster.width, 4_096)
+                if byteCount == textBudget || byteCount == imageBudget {
+                    let request = try XCTUnwrap(file.originalImageRequest())
+                    let detail = try await request()
+                    let patch = try await detail.render(CGRect(x: 200, y: 200, width: 64, height: 64))
+                    XCTAssertEqual(patch.image.width, 64)
+                    XCTAssertEqual(patch.image.height, 64)
+                    let pixel = try XCTUnwrap(NSBitmapImageRep(cgImage: patch.image).colorAt(x: 10, y: 10))
+                    XCTAssertEqual(pixel.alphaComponent, 1, accuracy: 0.01)
+                }
+            } else {
+                if case .unavailable = file.content {} else { XCTFail("The +1 byte file must not become previewable") }
+                XCTAssertNil(file.originalImageRequest())
+            }
+            file.retireContent()
+            XCTAssertEqual(try path.resourceValues(forKeys: [.fileSizeKey]).fileSize, byteCount)
+            let reader = try FileHandle(forReadingFrom: path)
+            XCTAssertEqual(try reader.read(upToCount: bytes.count), bytes)
+            try reader.seek(toOffset: UInt64(byteCount - 1))
+            XCTAssertEqual(try reader.read(upToCount: 1), endMarker)
+            try reader.close()
+            try FileManager.default.removeItem(at: path)
+        }
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+
     func testOversizedFakeImageCannotBypassTextCapacity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
