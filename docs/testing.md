@@ -204,7 +204,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`（字号／宽度／车道数矩阵）、`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests`、`GitPanelVisibilityTests`（真实 Dock、离屏刷新、连续 Commit／Amend、48 组布局极值、1,026 项 Changes × 20 分支交叉压力、原生 AX／AppKit 鼠标命中）；`GitGraphUITests`、`GitGraphGeometryUITests` 验证完整 App 的真实点击、像素、菜单与 Dock 尺寸；拓扑测试同时测量长历史冷计算／重复输入复用，验证 HEAD／Ref 更新后缓存失效，不把单次 Debug 耗时作为永久性能承诺 |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff、Browser 和原生内容保留 | `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeDiffTabTests`、`NativeContentIdentityIntegrationTests`、`DiffEngineTests` |
-| 图片原像素、区域平移、容量和关闭回收 | `FileTabPersistenceTests`（实际像素／字节边界）、`PreviewScrollViewTests`（颜色、区域像素和对象释放）、`RasterFilePreviewUITests`（真实 App 手势）；用 `BAILEY_IMAGE_LONG_SESSION=1` 与 `BAILEY_IMAGE_ACCEPTANCE_ROOT` 启用真实样本的字节上限、100 次开闭和 90＋30 秒 GIF 播放／暂停重挂载，记录首次像素、CPU 和分组 RSS |
+| 图片原像素、区域平移、容量和关闭回收 | `FileTabPersistenceTests`（实际像素／字节边界）、`PreviewScrollViewTests`（颜色、区域像素和对象释放）、`RasterFilePreviewUITests`（真实 App 手势）；用 `BAILEY_IMAGE_LONG_SESSION=1` 与 `BAILEY_IMAGE_ACCEPTANCE_ROOT` 启用真实样本的字节上限、100 次开闭和 90＋30 秒 GIF 播放／暂停重挂载，记录首次像素、CPU 和分组 RSS；图片标注另对真实 6000×4000 底图执行 300 次滤镜、开闭与退役，记录 RSS、内核 physical footprint 及各所有者释放 |
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`NativeSyntaxHighlightingTests` |
 | 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`NativeSyntaxHighlightingTests` |
 | 原生组合输入、结束标记与最终替换 | `NativeEditorCompositionTests` |
@@ -469,6 +469,9 @@ iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文
 再用 `vmmap` 区分 `Malloc Large/Small (empty)` 驻留页与实际物理占用，
 用 `heap` 区分活跃分配与分配器碎片；不能把空闲驻留页当成仍存活的完整正文，
 也不能仅凭 `leaks` 为零就忽略仍可达对象。
+原生 ImageIO／Core Image 的可回收驻留页也可能显著抬高 RSS；
+重复图片会话同时记录 `TASK_VM_INFO.phys_footprint`、峰值 RSS 和关闭后的弱引用，
+区分进程实际记账内存与框架的可回收驻留页，不能仅凭任一指标认定没有泄漏。
 
 在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。
 Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、

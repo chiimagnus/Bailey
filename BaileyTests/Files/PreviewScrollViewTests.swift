@@ -1270,7 +1270,7 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
-    func testHundredFilteredAnnotationSessionsRetireDecodedPixels() async throws {
+    func testLongFilteredAnnotationSessionsRetireDecodedPixels() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
               let root = environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
@@ -1288,9 +1288,12 @@ final class PreviewScrollViewTests: XCTestCase {
         let before = rasterMemory()
         let beforeCPU = cpuSeconds()
         let started = ContinuousClock.now
+        let cycles = 300
         var closedRSS: [Double] = []
+        var closedFootprint: [Double] = []
         var renderDurations: [Duration] = []
-        for cycle in 1...100 {
+        for cycle in 1...cycles {
+            weak var retiredFile: FileTab?
             weak var retiredPoster: CGImage?
             weak var retiredPatch: CGImage?
             weak var retiredComposite: CGImage?
@@ -1299,6 +1302,7 @@ final class PreviewScrollViewTests: XCTestCase {
                 project.openLocalFile(url.path)
                 let pane = try XCTUnwrap(project.selectedTab)
                 guard case .file(let file) = pane.content else { return XCTFail("Expected an image file tab") }
+                retiredFile = file
                 file.loadIfNeeded()
                 try await waitFor { if case .loading = file.content { return false }; return true }
                 guard case .image(let preview) = file.content else { return XCTFail("Cannot preview large raster") }
@@ -1339,16 +1343,23 @@ final class PreviewScrollViewTests: XCTestCase {
                 XCTAssertNil(file.imageAnnotations)
             }
             try await waitFor("Annotation document and rendered images retire on close") {
-                retiredPoster == nil && retiredPatch == nil && retiredComposite == nil && retiredDocument == nil
+                retiredFile == nil && retiredPoster == nil && retiredPatch == nil && retiredComposite == nil && retiredDocument == nil
             }
             XCTAssertFalse(FileManager.default.fileExists(atPath: ImageAnnotationSidecar.path(for: url.path)))
-            if cycle.isMultiple(of: 10) { closedRSS.append(residentMiB()) }
+            if cycle.isMultiple(of: 10) {
+                let memory = rasterMemory()
+                closedRSS.append(memory.resident)
+                closedFootprint.append(memory.footprint)
+            }
         }
         let durations = renderDurations.sorted()
-        print("ANNOTATION_SESSION cycles=100 elapsed=\(started.duration(to: .now)) cpu_s=\(cpuSeconds() - beforeCPU) median_render=\(durations[49]) p95_render=\(durations[94]) rss_before=\(before) rss_after=\(rasterMemory()) closed_rss=\(closedRSS)")
-        let warmed = try XCTUnwrap(closedRSS.prefix(5).max())
-        let late = try XCTUnwrap(closedRSS.suffix(5).max())
-        XCTAssertLessThan(late - warmed, 64, "Repeated close must not retain per-file filtered buffers")
+        print("ANNOTATION_SESSION cycles=\(cycles) elapsed=\(started.duration(to: .now)) cpu_s=\(cpuSeconds() - beforeCPU) median_render=\(durations[cycles / 2 - 1]) p95_render=\(durations[cycles * 95 / 100 - 1]) memory_before=\(before) memory_after=\(rasterMemory()) closed_rss=\(closedRSS) closed_footprint=\(closedFootprint)")
+        // ImageIO may retain purgeable decoded pages in RSS long after every
+        // CGImage has been released. The kernel's physical footprint measures
+        // memory actually charged to this process, not those reclaimable pages.
+        let warmed = try XCTUnwrap(closedFootprint.dropFirst(5).prefix(5).max())
+        let late = try XCTUnwrap(closedFootprint.suffix(5).max())
+        XCTAssertLessThan(late - warmed, 64, "Repeated close must not accumulate charged physical memory")
         XCTAssertEqual(try Data(contentsOf: source), original)
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
@@ -1589,16 +1600,17 @@ final class PreviewScrollViewTests: XCTestCase {
         rasterMemory().resident
     }
 
-    private func rasterMemory() -> (resident: Double, peak: Double) {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+    private func rasterMemory() -> (resident: Double, peak: Double, footprint: Double) {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
         let result = withUnsafeMutablePointer(to: &info) { pointer in
             pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
         XCTAssertEqual(result, KERN_SUCCESS)
-        return (Double(info.resident_size) / 1_048_576, Double(info.resident_size_max) / 1_048_576)
+        return (Double(info.resident_size) / 1_048_576, Double(info.resident_size_peak) / 1_048_576,
+                Double(info.phys_footprint) / 1_048_576)
     }
 
     private func makeLongGIF(width: Int = 24, height: Int = 24, count: Int = 34) throws -> Data {
