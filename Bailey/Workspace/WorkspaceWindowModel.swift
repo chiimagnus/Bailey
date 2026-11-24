@@ -50,7 +50,7 @@ final class WorkspaceWindowModel {
             if let oldValue {
                 let previous = projects.first { $0.id == oldValue }
                 previous?.dock.clearContextTarget()
-                previous?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
+                previous?.tabs.forEach { $0.content.deactivate() }
             }
             selectedProject?.dock.clearContextTarget()
             filesTreeResponder = nil

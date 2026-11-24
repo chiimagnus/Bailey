@@ -87,6 +87,61 @@ final class NativeMediaFileUITests: XCTestCase {
         XCTAssertEqual(String(describing: toggle.value ?? ""), paused)
     }
 
+    func testWaveformSeeksTheSameNativeTimelineAndZoomsItsVisibleInterval() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let audio = fixture.root.appending(path: "Waveform.m4a")
+        try FileManager.default.copyItem(at: root.appending(path: ".github/features/audio-file-playback/demo-audio.m4a"),
+                                         to: audio)
+        let original = try Data(contentsOf: audio)
+        let other = try fixture.file("other.txt", text: "Another file")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        open(audio, in: window, app: app)
+        let waveform = window.descendants(matching: .any).matching(identifier: "bailey.audio.waveform").firstMatch
+        let timeline = window.sliders["timeline"]
+        let play = window.checkBoxes["play/pause"]
+        XCTAssertTrue(waveform.waitForExistence(timeout: 10))
+        XCTAssertTrue(timeline.waitForExistence(timeout: 10))
+        XCTAssertTrue(play.waitForExistence(timeout: 10))
+        let paused = String(describing: play.value ?? "")
+        func time() -> Double? { Double(String(describing: timeline.value ?? "")) }
+        func expectTime(_ seconds: Double) {
+            let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let actual = time() else { return false }
+                return abs(actual - seconds) < 0.35
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
+        }
+        // The checked-in AAC sample has a real 12-second timeline.
+        waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).click()
+        expectTime(9)
+        let right = waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let left = waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
+        right.press(forDuration: 0.1, thenDragTo: left)
+        expectTime(3)
+        XCTAssertEqual(String(describing: play.value ?? ""), paused)
+
+        waveform.rightClick()
+        let zoom = WorkspaceUITestSupport.menuItem("Zoom In", in: app)
+        XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+        zoom.click()
+        // Zooming around the center produces [3, 9]; one quarter is 4.5.
+        waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).click()
+        expectTime(4.5)
+        open(other, in: window, app: app)
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        WorkspaceUITestSupport.fileTab(audio, in: window).click()
+        XCTAssertTrue(timeline.waitForExistence(timeout: 10))
+        expectTime(4.5)
+        XCTAssertEqual(String(describing: play.value ?? ""), paused)
+        XCTAssertEqual(try Data(contentsOf: audio), original)
+    }
+
     func testNativeAudioControlsAndPauseWhenAnotherFileTakesFocus() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

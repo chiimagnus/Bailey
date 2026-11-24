@@ -62,7 +62,7 @@ final class Project: nonisolated Identifiable {
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
         dock.onDeactivate = { [weak self] item in
             guard let id = item.contentTabID else { return }
-            self?.tabs.first { $0.id == id }?.content.autoSaveOnFocusLoss()
+            self?.tabs.first { $0.id == id }?.content.deactivate()
         }
         hostConnectionObservation = NotificationCenter.default
             .publisher(for: SSHHostWorkspaces.connectionChanged)

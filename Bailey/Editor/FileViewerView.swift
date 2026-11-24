@@ -71,6 +71,9 @@ final class FileTab: nonisolated Identifiable {
     private(set) var content: Content
     private(set) var mediaPlayer: AVPlayer?
     private(set) var htmlPreview: HTMLPreview? {
+    private(set) var mediaEnvironmentRevision: UInt = 0
+    private(set) var mediaSleeping = false
+    @ObservationIgnored private var mediaEnvironmentObservation: NativeMediaEnvironmentObservation?
         didSet {
             if let oldValue, oldValue !== htmlPreview { oldValue.retire() }
         }
@@ -168,7 +171,42 @@ final class FileTab: nonisolated Identifiable {
         mediaPlayer?.pause()
         mediaPlayer?.currentItem?.cancelPendingSeeks()
         mediaPlayer?.replaceCurrentItem(with: nil)
+    func deactivate() {
+        mediaPlayer?.pause()
+        autoSaveOnFocusLoss()
+    }
+
+    func handleMediaEnvironmentEvent(_ event: NativeMediaEnvironmentObservation.Event) {
+        guard !isRetired, let player = mediaPlayer else { return }
+        player.pause()
+        player.currentItem?.cancelPendingSeeks()
+        mediaEnvironmentRevision &+= 1
+        switch event {
+        case .sleep:
+            mediaSleeping = true
+        case .wake:
+            mediaSleeping = false
+            reloadFromDiskIfClean()
+        case .outputChanged:
+            if !mediaSleeping { reloadFromDiskIfClean() }
+        }
+    }
+
+    private func installMedia(_ media: NativeMedia) {
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
+        mediaPlayer = player
+        mediaEnvironmentObservation = NativeMediaEnvironmentObservation { [weak self, weak player] event in
+            guard let self, let player, self.mediaPlayer === player else { return }
+            self.handleMediaEnvironmentEvent(event)
+        }
+    }
+
         mediaPlayer = nil
+        mediaEnvironmentObservation?.invalidate()
+        mediaEnvironmentObservation = nil
+        mediaSleeping = false
+        mediaEnvironmentRevision &+= 1
+        if case .media(let media) = content { media.asset.cancelLoading() }
     }
 
     private func installNativeDocument(_ text: String) {
@@ -1033,7 +1071,7 @@ final class FileTab: nonisolated Identifiable {
             do {
                 loaded = try await Self.readContent(
                     path: expectedPath, backend: backend, override: self?.preferredEncoding,
-                    isLocal: isLocal, currentMedia: currentMedia
+                    isLocal: isLocal, currentMedia: reusableMedia
                 )
             } catch {
                 let missingOrOversized: Bool
@@ -1115,7 +1153,7 @@ final class FileTab: nonisolated Identifiable {
                 self.gifPlayback = nil
             }
             if case .media(let media) = loaded.content {
-                self.mediaPlayer = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
+                self.installMedia(media)
             }
             if let encoding = loaded.encoding { self.fileEncoding = encoding }
             self.installNativeDocument(loaded.text)
@@ -1141,6 +1179,17 @@ final class FileTab: nonisolated Identifiable {
         case (.text, .text):
             return fileEncoding == loaded.encoding && TextFileEncoding.hasIdenticalCodeUnits(savedText, loaded.text)
         case (.image, .image):
+            // Reject a known replaced source before loading or decoding the
+            // new asset, not after that potentially slow validation finishes.
+            var reusableMedia = currentMedia
+            if let currentMedia, !(await NativeMedia.stillIdentifies(expectedPath, media: currentMedia)) {
+                guard !Task.isCancelled, let self, self.reloadGeneration == generation,
+                      !self.isDirty, self.readOnlyReason == nil else { return }
+                self.retireMedia()
+                self.content = .loading
+                self.reloadRevision &+= 1
+                reusableMedia = nil
+            }
             return savedSourceVersion == loaded.sourceVersion
         case (.media(let current), .media(let new)):
             return current.asset === new.asset
@@ -1445,12 +1494,12 @@ struct FileViewerView: View {
                     let isAudio = media.kind == .audio
                     let surface = NativePlayerView(player: player, allowsFullScreen: !isAudio,
                                                    controlsStyle: isAudio ? .floating : .inline,
-                                                   isDockActive: isFocused && appearsActive)
+                                                   isDockActive: isFocused && appearsActive && !file.mediaSleeping)
                     Group {
                         if isAudio {
                             VStack(spacing: 8) {
                                 NativeAudioWaveformView(file: file, media: media, player: player,
-                                                        active: isFocused && appearsActive)
+                                                        active: isFocused && appearsActive && !file.mediaSleeping)
                                     .frame(height: 72)
                                     .padding(.horizontal, 12)
                                 surface.frame(height: 112)

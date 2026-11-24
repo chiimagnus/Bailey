@@ -47,6 +47,7 @@ struct NativeAudioWaveformView: View {
 
     private struct Request: Hashable {
         let revision: String
+        let environmentRevision: UInt
         let interval: Range<Double>
         let count: Int
         let trackID: CMPersistentTrackID?
@@ -56,7 +57,8 @@ struct NativeAudioWaveformView: View {
         GeometryReader { geometry in
             if let viewport {
                 let request = Request(
-                    revision: file.fileContentRevision, interval: viewport.interval,
+                    revision: file.fileContentRevision, environmentRevision: file.mediaEnvironmentRevision,
+                    interval: viewport.interval,
                     count: bucketCount(for: geometry.size.width), trackID: trackID
                 )
                 VStack(spacing: 3) {
@@ -81,12 +83,15 @@ struct NativeAudioWaveformView: View {
                                 bucketCount: request.count, trackID: request.trackID
                             )
                             try Task.checkCancellation()
-                            guard file.fileContentRevision == request.revision, file.mediaPlayer === player else { return }
+                            guard file.fileContentRevision == request.revision,
+                                  file.mediaEnvironmentRevision == request.environmentRevision,
+                                  file.mediaPlayer === player, !file.mediaSleeping else { return }
                             completedRequest = request
                             result = .success(summary)
                         } catch {
                             guard !Task.isCancelled, file.fileContentRevision == request.revision,
-                                  file.mediaPlayer === player else { return }
+                                  file.mediaEnvironmentRevision == request.environmentRevision,
+                                  file.mediaPlayer === player, !file.mediaSleeping else { return }
                             completedRequest = request
                             result = .failure(error)
                         }
@@ -104,8 +109,10 @@ struct NativeAudioWaveformView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: file.fileContentRevision) {
-            viewport = nil
+        .task(id: active ? file.fileContentRevision : nil) {
+            guard active else { return }
+            updateTrack()
+            guard viewport == nil else { return }
             durationUnavailable = false
             completedRequest = nil
             result = nil
@@ -143,7 +150,7 @@ struct NativeAudioWaveformView: View {
     }
 
     private func seek(_ time: Double) {
-        guard time.isFinite, file.mediaPlayer === player else { return }
+        guard active, time.isFinite, file.mediaPlayer === player, !file.mediaSleeping else { return }
         // AVPlayer interrupts superseded seeks; no completion callback is allowed
         // to write an earlier requested time back into the view.
         player.seek(to: CMTime(seconds: time, preferredTimescale: 1_000_000),

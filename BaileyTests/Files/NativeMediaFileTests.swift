@@ -1464,6 +1464,106 @@ final class NativeMediaFileTests: XCTestCase {
         print("MEDIA_RACE cycles=10 loading_renames=\(loadingRenames) loading_closes=\(loadingCloses)")
     }
 
+    func testUnmountedPlayersPauseAtDockTransitionsAndResumeFromTheirOwnPosition() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appending(path: "first.wav")
+        let second = root.appending(path: "second.wav")
+        try Self.createWAV(first, payloadBytes: 960_000)
+        try Self.createWAV(second, payloadBytes: 960_000)
+        let project = Project(fallbackName: "Independent media owners", workspaceConfiguration: .standard)
+        project.openLocalFile(first.path)
+        guard case .file(let a)? = project.focusedContent else { return XCTFail("Missing first file") }
+        let aID = try XCTUnwrap(project.selectedTabID)
+        try await load(a)
+        let player = try XCTUnwrap(a.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        player.isMuted = true
+        player.play()
+        try await waitUntil { player.currentTime().seconds > 0.08 }
+        project.openLocalFile(second.path)
+        XCTAssertEqual(player.rate, 0)
+        let paused = player.currentTime().seconds
+        guard case .file(let b)? = project.focusedContent else { return XCTFail("Missing second file") }
+        try await load(b)
+        let other = try XCTUnwrap(b.mediaPlayer)
+        other.isMuted = true
+        other.play()
+        try await waitUntil { other.currentTime().seconds > 0.08 }
+        project.selectTab(aID)
+        XCTAssertEqual(other.rate, 0)
+        XCTAssertTrue(a.mediaPlayer === player)
+        XCTAssertTrue(player.currentItem === item)
+        XCTAssertEqual(player.currentTime().seconds, paused, accuracy: 0.12)
+        XCTAssertEqual(player.rate, 0, "Selection does not implicitly resume audio")
+        project.closeContent(.file(a))
+        project.closeContent(.file(b))
+        XCTAssertNil(player.currentItem)
+        XCTAssertNil(other.currentItem)
+    }
+
+    func testMediaSleepWakeAndOutputChangeNeverReviveAReplacedItem() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "sample.wav")
+        try Self.createWAV(url, payloadBytes: 960_000)
+        let project = Project(fallbackName: "Media environment", workspaceConfiguration: .standard)
+        project.openLocalFile(url.path)
+        guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file") }
+        try await load(tab)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        let revision = tab.mediaEnvironmentRevision
+        player.isMuted = true
+        player.play()
+        try await waitUntil { player.currentTime().seconds > 0.08 }
+        // Deliver the same workspace notifications as the system, without
+        // actually putting the user's machine to sleep or changing its output.
+        let center = NSWorkspace.shared.notificationCenter
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        try await waitUntil { tab.mediaSleeping }
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertGreaterThan(tab.mediaEnvironmentRevision, revision)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        try await waitUntil { !tab.mediaSleeping }
+        XCTAssertTrue(tab.mediaPlayer === player)
+        XCTAssertTrue(player.currentItem === item)
+        XCTAssertEqual(player.rate, 0)
+        let wakeRevision = tab.mediaEnvironmentRevision
+        tab.handleMediaEnvironmentEvent(.outputChanged)
+        XCTAssertGreaterThan(tab.mediaEnvironmentRevision, wakeRevision)
+        XCTAssertEqual(player.rate, 0)
+
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        try await waitUntil { tab.mediaSleeping }
+        let stamp = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
+        let replacement = root.appending(path: "replacement.wav")
+        try Self.createWAV(replacement, payloadBytes: 960_000)
+        let handle = try FileHandle(forWritingTo: replacement)
+        try handle.seek(toOffset: 44)
+        try handle.write(contentsOf: Data([0x10, 0x20]))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: replacement.path)
+        XCTAssertEqual(rename(replacement.path, url.path), 0)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        try await waitUntil { tab.mediaPlayer != nil && tab.mediaPlayer !== player }
+        let fresh = try XCTUnwrap(tab.mediaPlayer)
+        XCTAssertNil(player.currentItem)
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(fresh.rate, 0)
+        try FileManager.default.removeItem(at: url)
+        tab.reloadFromDiskIfClean()
+        try await waitUntil { fresh.currentItem == nil }
+        project.closeContent(.file(tab))
+        let closedRevision = tab.mediaEnvironmentRevision
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(tab.mediaPlayer)
+        XCTAssertEqual(tab.mediaEnvironmentRevision, closedRevision)
+    }
+
     private func load(_ tab: FileTab) async throws {
         tab.loadIfNeeded()
         try await waitUntil {

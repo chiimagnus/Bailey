@@ -1,5 +1,7 @@
+import AppKit
 import AVFoundation
 import AVKit
+import CoreAudio
 import Foundation
 import SwiftUI
 
@@ -19,6 +21,11 @@ nonisolated struct NativeMedia: Sendable {
         case "mp3", "m4a", "aac", "wav", "aif", "aiff", "caf", "flac": .audio
         default: nil
         }
+    }
+
+    @concurrent static func stillIdentifies(_ path: String, media: Self) async -> Bool {
+        guard let source = try? LocalWorkspaceBackend.readableFile(at: path) else { return false }
+        return source.path == media.asset.url.path && source.identity == media.identity
     }
 
     @concurrent static func open(_ path: String, reusing current: Self? = nil) async throws -> Self {
@@ -108,6 +115,53 @@ nonisolated struct NativeMedia: Sendable {
     }
 }
 
+/// Only the FileTab's current player subscribes to system media events.
+@MainActor
+final class NativeMediaEnvironmentObservation {
+    enum Event: Sendable { case sleep, wake, outputChanged }
+
+    private var observers: [NSObjectProtocol] = []
+    private var outputListener: AudioObjectPropertyListenerBlock?
+
+    private static var outputAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    }
+
+    init(onEvent: @escaping @MainActor @Sendable (Event) -> Void) {
+        let center = NSWorkspace.shared.notificationCenter
+        let events: [(Notification.Name, Event)] = [
+            (NSWorkspace.willSleepNotification, .sleep), (NSWorkspace.didWakeNotification, .wake)
+        ]
+        for (name, event) in events {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { onEvent(event) }
+            })
+        }
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in
+            MainActor.assumeIsolated { onEvent(.outputChanged) }
+        }
+        var address = Self.outputAddress
+        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                                              &address, .main, listener) == noErr {
+            outputListener = listener
+        }
+    }
+
+    func invalidate() {
+        for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        observers.removeAll()
+        if let outputListener {
+            var address = Self.outputAddress
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                                                   &address, .main, outputListener)
+            self.outputListener = nil
+        }
+    }
+
+    isolated deinit { invalidate() }
+}
+
 struct NativePlayerView: NSViewRepresentable {
     weak var player: AVPlayer?
     var allowsFullScreen = false
@@ -120,7 +174,10 @@ struct NativePlayerView: NSViewRepresentable {
 
         func playerViewWillEnterFullScreen(_ playerView: AVPlayerView) { isFullScreen = true }
 
-        func playerViewDidExitFullScreen(_ playerView: AVPlayerView) { isFullScreen = false }
+        func playerViewDidExitFullScreen(_ playerView: AVPlayerView) {
+            isFullScreen = false
+            if isDockActive == false { playerView.player?.pause() }
+        }
     }
 
     func makeCoordinator() -> Presentation { Presentation() }
@@ -136,12 +193,14 @@ struct NativePlayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
-        if view.player !== player { view.player = player }
+        let changedPlayer = view.player !== player
+        if changedPlayer { view.player = player }
         if view.showsFullScreenToggleButton != allowsFullScreen {
             view.showsFullScreenToggleButton = allowsFullScreen
         }
         let presentation = context.coordinator
-        if presentation.isDockActive == true, isDockActive == false, !presentation.isFullScreen {
+        if (presentation.isDockActive == true || changedPlayer), isDockActive == false,
+           !presentation.isFullScreen {
             player?.pause()
         }
         presentation.isDockActive = isDockActive
