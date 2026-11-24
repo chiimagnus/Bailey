@@ -72,6 +72,175 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertNil(remountedScroll.menu?.item(withTitle: resumeTitle))
     }
 
+    func testSustainedRealGIFPlaybackRetiresItsNativeFrames() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
+              let root = environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_LONG_SESSION=1 and BAILEY_IMAGE_ACCEPTANCE_ROOT")
+        }
+        let source = URL(fileURLWithPath: root).appending(path: "images/动画-34帧.gif")
+        let bytes = try Data(contentsOf: source)
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "Sustained.gif")
+        try bytes.write(to: url)
+        let project = Project(fallbackName: "Sustained GIF", workspaceConfiguration: .standard)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 440, height: 350),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { project.closeAll(); window.close() }
+        project.openLocalFile(url.path)
+        let pane = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = pane.content else { return XCTFail("Expected a file tab") }
+        let before = rasterMemory()
+        let cpuStart = cpuSeconds()
+        let started = ContinuousClock.now
+        weak var lastFrame: CGImage?
+        let cycle = try await { @MainActor () async throws -> (firstPixels: Duration, frames: Int,
+                                                              positions: Int, samples: [Double]) in
+            let firstHost = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
+            window.contentView = firstHost
+            window.orderFront(nil)
+            try await waitFor("Play the fixture in the native file surface") {
+                previewScroll(in: firstHost) != nil && file.gifPlayback?.image != nil
+            }
+            let firstPixels = started.duration(to: .now)
+            let firstScroll = try XCTUnwrap(previewScroll(in: firstHost))
+            let playback = try XCTUnwrap(file.gifPlayback)
+            firstScroll.zoomIn()
+            let scale = firstScroll.pixelScale
+            var residentSamples: [Double] = []
+            @MainActor func observedSprite(_ scroll: PreviewScrollView) -> Int? {
+                guard let strip = renderedBitmap(scroll, region: CGRect(x: 0, y: 101, width: 320, height: 1)) else {
+                    return nil
+                }
+                let blue = stride(from: 20, to: 300, by: 2).filter { column in
+                    guard let color = strip.colorAt(x: column, y: 0)?.usingColorSpace(.sRGB) else { return false }
+                    return color.blueComponent > 0.69 && color.greenComponent < 0.54
+                }
+                guard let first = blue.first, let last = blue.last, last - first >= 10 else { return nil }
+                return (first + last) / 2
+            }
+            @MainActor func observe(_ scroll: PreviewScrollView,
+                                    forSeconds seconds: Int) async throws -> (frames: Int, positions: Int) {
+                let start = ContinuousClock.now
+                let end = start.advanced(by: .seconds(seconds))
+                var nextPixels = start
+                var nextMemory = start
+                var prior: CGImage?
+                var frames = 0
+                var positions: Set<Int> = []
+                while ContinuousClock.now < end {
+                    guard !playback.failed else { throw CocoaError(.fileReadCorruptFile) }
+                    if let current = playback.image, current !== prior {
+                        frames += 1
+                        prior = current
+                    }
+                    let now = ContinuousClock.now
+                    if now >= nextPixels {
+                        if let center = observedSprite(scroll) { positions.insert(center) }
+                        nextPixels = now.advanced(by: .milliseconds(400))
+                    }
+                    if now >= nextMemory {
+                        residentSamples.append(residentMiB())
+                        nextMemory = now.advanced(by: .seconds(5))
+                    }
+                    try await Task.sleep(for: .milliseconds(35))
+                }
+                XCTAssertGreaterThan(frames, seconds * 7, "Playback must sustain the real 120 ms frames")
+                XCTAssertGreaterThan(positions.count, 6, "Native pixels must show the moving sprite")
+                XCTAssertEqual(scroll.pixelScale, scale, accuracy: 0.001)
+                return (frames, positions.count)
+            }
+
+            let first = try await observe(firstScroll, forSeconds: 90)
+            let pauseTitle = String(localized: "Pause Animation", table: "Editor")
+            let resumeTitle = String(localized: "Resume Animation", table: "Editor")
+            let pause = try XCTUnwrap(firstScroll.menu?.item(withTitle: pauseTitle))
+            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(pause.action), to: pause.target, from: pause))
+            let replacement = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
+            do {
+                let pausedFrame = try XCTUnwrap(playback.image)
+                window.contentView = replacement
+                try await waitFor("Remount the same paused frame") {
+                    previewScroll(in: replacement)?.menu?.item(withTitle: resumeTitle) != nil
+                }
+                try await Task.sleep(for: .milliseconds(650))
+                XCTAssertTrue(file.gifPlayback === playback)
+                XCTAssertTrue(playback.paused)
+                XCTAssertTrue(playback.image === pausedFrame)
+            }
+            let nextScroll = try XCTUnwrap(previewScroll(in: replacement))
+            let resume = try XCTUnwrap(nextScroll.menu?.item(withTitle: resumeTitle))
+            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(resume.action), to: resume.target, from: resume))
+            let second = try await observe(nextScroll, forSeconds: 30)
+            lastFrame = playback.image
+            project.close(pane)
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertNil(file.gifPlayback)
+            XCTAssertNil(playback.image)
+            try await waitFor("Closing must dismantle the real canvas") { previewScroll(in: replacement) == nil }
+            let retired = try XCTUnwrap(renderedBitmap(nextScroll, region: CGRect(x: 159, y: 95, width: 1, height: 1)))
+            XCTAssertEqual(try XCTUnwrap(retired.colorAt(x: 0, y: 0)).alphaComponent, 0, accuracy: 0.01)
+            XCTAssertNil(nextScroll.menu?.item(withTitle: pauseTitle))
+            window.contentView = nil
+            return (firstPixels, first.frames + second.frames, first.positions + second.positions, residentSamples)
+        }()
+        try await waitFor("Closing must release the last decoded pixels") { lastFrame == nil }
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [url.lastPathComponent])
+        let after = rasterMemory()
+        print("GIF_SUSTAINED elapsed=\(started.duration(to: .now)) cpu_s=\(cpuSeconds() - cpuStart) first_pixels=\(cycle.firstPixels) frames=\(cycle.frames) drawn_positions=\(cycle.positions) rss_before=\(before) rss_after_close=\(after) samples=\(cycle.samples)")
+        let warmed = try XCTUnwrap(cycle.samples.prefix(6).max())
+        let late = try XCTUnwrap(cycle.samples.suffix(6).max())
+        XCTAssertLessThan(late - warmed, 48, "Sustained playback must not retain each published frame")
+    }
+
+    func testNativeGIFsAtTheAttainableInlinePixelAndFrameBoundaries() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fixtures = [
+            (width: 999, height: 286, frames: 28, pixels: 7_999_992, animated: true),
+            (width: 1_000, height: 1_000, frames: 8, pixels: 8_000_000, animated: true),
+            (width: 863, height: 927, frames: 10, pixels: 8_000_010, animated: false),
+            (width: 24, height: 24, frames: 32, pixels: 18_432, animated: true),
+            (width: 24, height: 24, frames: 33, pixels: 19_008, animated: false),
+        ]
+        for fixture in fixtures {
+            let bytes = try makeLongGIF(width: fixture.width, height: fixture.height, count: fixture.frames)
+            let native = try XCTUnwrap(CGImageSourceCreateWithData(bytes as CFData, nil))
+            XCTAssertEqual(CGImageSourceGetCount(native), fixture.frames)
+            let preview = try MarkdownPicture.decode(bytes)
+            XCTAssertEqual(preview.poster.width, fixture.width)
+            XCTAssertEqual(preview.poster.height, fixture.height)
+            XCTAssertFalse(isGreen(NSBitmapImageRep(cgImage: preview.poster)))
+            XCTAssertEqual(preview.animation.count, fixture.animated ? fixture.frames : 0)
+            if fixture.animated {
+                let pixels = preview.animation.reduce(0) { $0 + $1.image.width * $1.image.height }
+                XCTAssertEqual(pixels, fixture.pixels)
+                let last = try XCTUnwrap(preview.animation.last)
+                XCTAssertTrue(isGreen(NSBitmapImageRep(cgImage: last.image)))
+            }
+
+            let url = folder.appending(path: "\(fixture.pixels).gif")
+            try bytes.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitFor { file.gifFramesRequest() != nil }
+            let request = try XCTUnwrap(file.gifFramesRequest())
+            let source = try await request()
+            XCTAssertEqual(source.count, fixture.frames)
+            let last = try await source.read(source.count - 1)
+            XCTAssertEqual(last.image.width * last.image.height * source.count, fixture.pixels)
+            XCTAssertTrue(isGreen(NSBitmapImageRep(cgImage: last.image)))
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+            file.retireContent()
+        }
+    }
+
     func testLongGIFDecodeStaysBoundedAndClosingReleasesThePoster() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
@@ -476,12 +645,6 @@ final class PreviewScrollViewTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let project = Project(fallbackName: "Repeated raster previews", workspaceConfiguration: .standard)
         defer { project.closeAll() }
-        func cpuSeconds() -> Double {
-            var usage = rusage()
-            XCTAssertEqual(getrusage(RUSAGE_SELF, &usage), 0)
-            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
-                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
-        }
         let beforeCPU = cpuSeconds()
         let before = rasterMemory()
         let started = ContinuousClock.now
@@ -564,6 +727,13 @@ final class PreviewScrollViewTests: XCTestCase {
         context.setFillColor(color.cgColor)
         context.fill(CGRect(origin: .zero, size: size))
         return try XCTUnwrap(context.makeImage())
+    }
+
+    private func cpuSeconds() -> Double {
+        var usage = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &usage), 0)
+        return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
     }
 
     private func residentMiB() -> Double {
