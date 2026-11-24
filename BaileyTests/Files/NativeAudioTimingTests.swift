@@ -1,4 +1,7 @@
+import AppKit
 import AVFoundation
+import AVKit
+import SwiftUI
 import Foundation
 import XCTest
 @testable import Bailey
@@ -166,6 +169,145 @@ final class NativeAudioTimingTests: XCTestCase {
         XCTAssertEqual(observed.count, countAfterCancellation)
         XCTAssertEqual(player.currentTime().seconds, 4, accuracy: 0.05)
         XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    func testMountedWaveformAndNativePlayerExposeTheSameActualSeekTime() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "Waveform.m4a")
+        try FileManager.default.copyItem(at: root.appending(path: ".github/features/audio-file-playback/demo-audio.m4a"), to: url)
+        let original = try Data(contentsOf: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        file.loadIfNeeded()
+        defer { file.retireContent() }
+        func wait(_ message: String, _ ready: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+            while !ready() {
+                guard ContinuousClock.now < deadline else {
+                    XCTFail(message)
+                    throw WorkspaceError.timedOut
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await wait("Ready native player") { file.mediaPlayer?.currentItem?.status == .readyToPlay }
+        let player = try XCTUnwrap(file.mediaPlayer)
+        guard case .media(let media) = file.content else { return XCTFail("Expected accepted audio") }
+        let duration = try await media.asset.load(.duration).seconds
+        XCTAssertEqual(duration, 12, accuracy: 0.1)
+        player.isMuted = true
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: VStack(spacing: 8) {
+            NativeAudioWaveformView(file: file, media: media, player: player, active: true)
+                .frame(height: 72).padding(.horizontal, 12)
+            NativePlayerView(player: player, controlsStyle: .floating, isDockActive: true)
+                .frame(height: 112)
+        })
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.close() }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let access = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString,
+                                                  &windows).rawValue
+        }.value
+        XCTAssertEqual(access, AXError.success.rawValue)
+        func attribute(_ element: NSObject, _ name: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(name)) else { return nil }
+            return element.value(forKey: name)
+        }
+        func elements(_ element: NSObject) -> [NSObject] {
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            return [element] + children.flatMap(elements)
+        }
+        func controls() -> [NSObject] {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            return (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(elements)
+        }
+        func control(_ identifier: String) -> NSObject? {
+            controls().first { attribute($0, "accessibilityIdentifier") as? String == identifier }
+        }
+        func waveform() -> NSObject? { control("bailey.audio.waveform") }
+        func timeline() -> NSObject? { control("timeline") }
+        try await wait("The waveform and native AVKit timeline must exist") {
+            waveform() != nil && timeline() != nil
+        }
+        for time in [9.0, 3.0, 4.49, 4.5, 4.51, 11.99, 0.0] {
+            let accepted = await player.seek(to: CMTime(seconds: time, preferredTimescale: 1_000_000),
+                                             toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(accepted)
+            let actual = player.currentTime().seconds
+            try await wait("Waveform AX slider must follow the native player at \(actual)") {
+                guard let element = waveform(), attribute(element, "accessibilityRole") as? String == "AXSlider",
+                      let value = attribute(element, "accessibilityValue") as? NSNumber,
+                      let native = timeline(), let nativeValue = attribute(native, "accessibilityValue") as? NSNumber
+                else { return false }
+                return abs(value.doubleValue - actual) < 0.01 && abs(nativeValue.doubleValue - actual) < 0.05
+            }
+            let element = try XCTUnwrap(waveform())
+            XCTAssertEqual((attribute(element, "accessibilityMinValue") as? NSNumber)?.doubleValue, 0)
+            XCTAssertEqual(try XCTUnwrap(attribute(element, "accessibilityMaxValue") as? NSNumber).doubleValue, duration, accuracy: 0.000_001)
+            let description = attribute(element, "accessibilityValueDescription") as? String
+            print("AUDIT_WAVEFORM_AX time=\(actual) value=\(String(describing: attribute(element, "accessibilityValue"))) description=\(String(describing: description)) label=\(String(describing: attribute(element, "accessibilityLabel")))")
+            XCTAssertEqual(description, Duration.seconds(actual).formatted(.time(pattern: .hourMinuteSecond)))
+            XCTAssertEqual(player.rate, 0)
+        }
+        // Native AX adjustments must seek the same player, not merely update a
+        // mirror of its accessible value. No foreground keyboard is required.
+        let start = await player.seek(to: CMTime(seconds: 6, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(start)
+        try await wait("The slider accepts the player's new time") {
+            guard let element = waveform(), let value = attribute(element, "accessibilityValue") as? NSNumber else { return false }
+            return abs(value.doubleValue - 6) < 0.01
+        }
+        for (name, direction) in [("accessibilityPerformIncrement", 1.0), ("accessibilityPerformDecrement", -1.0)] {
+            let element = try XCTUnwrap(waveform())
+            let before = player.currentTime().seconds
+            let selector = NSSelectorFromString(name)
+            XCTAssertTrue(element.responds(to: selector))
+            typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+            let invoke = unsafeBitCast(element.method(for: selector), to: Action.self)
+            XCTAssertTrue(invoke(element, selector))
+            try await wait("Native AX action \(name) must change AVPlayer time and update AXValue") {
+                let actual = player.currentTime().seconds
+                guard let current = waveform(), let value = attribute(current, "accessibilityValue") as? NSNumber else { return false }
+                return abs(actual - (before + direction * duration / 20)) < 0.01 && abs(value.doubleValue - actual) < 0.01
+            }
+            XCTAssertEqual(player.rate, 0)
+            print("AUDIT_WAVEFORM_AX action=\(name) time=\(player.currentTime().seconds)")
+        }
+        // The system volume slider must operate the same real player, even
+        // though its pointer geometry is controlled by AVKit. Playback is paused.
+        player.isMuted = false
+        player.volume = 0.5
+        func volumeSlider() -> NSObject? {
+            controls().first {
+                attribute($0, "accessibilityRole") as? String == "AXSlider"
+                    && (attribute($0, "accessibilityMinValue") as? NSNumber)?.doubleValue == 0
+                    && (attribute($0, "accessibilityMaxValue") as? NSNumber)?.doubleValue == 1
+            }
+        }
+        try await wait("Native AVKit volume slider") { volumeSlider() != nil }
+        let volume = try XCTUnwrap(volumeSlider())
+        XCTAssertTrue(volume.responds(to: NSSelectorFromString("setAccessibilityValue:")))
+        for value in [0.2, 0.75, 0.35] {
+            volume.setValue(NSNumber(value: value), forKey: "accessibilityValue")
+            try await wait("Native AVKit volume adjusts actual player to \(value)") {
+                guard let slider = volumeSlider(), let actual = attribute(slider, "accessibilityValue") as? NSNumber else { return false }
+                return abs(Double(player.volume) - value) < 0.001 && abs(actual.doubleValue - Double(player.volume)) < 0.001
+            }
+            print("AUDIT_AVKIT_VOLUME player=\(player.volume) ax=\(String(describing: attribute(volume, "accessibilityValue")))")
+            XCTAssertEqual(player.rate, 0)
+        }
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
 

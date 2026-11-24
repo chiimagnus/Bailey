@@ -269,18 +269,23 @@ struct NativeAudioWaveformView: View {
             } label: { Text("Next Waveform Section", tableName: "Editor") }
             .disabled(viewport.interval.upperBound >= viewport.duration)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityIdentifier("bailey.audio.waveform")
-        .accessibilityLabel(Text("Waveform", tableName: "Editor"))
-        .accessibilityValue(timeLabel(playbackTime))
-        .accessibilityAdjustableAction { direction in
-            let step = (viewport.interval.upperBound - viewport.interval.lowerBound) / 20
-            let current = player.currentTime().seconds
-            guard current.isFinite else { return }
-            switch direction {
-            case .increment: seek(min(viewport.duration, current + step))
-            case .decrement: seek(max(0, current - step))
-            @unknown default: break
+        .accessibilityRepresentation {
+            Slider(value: Binding(get: {
+                min(viewport.duration, max(0, playbackTime.isFinite ? playbackTime : 0))
+            }, set: seek), in: 0...viewport.duration) {
+                Text("Waveform", tableName: "Editor")
+            }
+            .accessibilityIdentifier("bailey.audio.waveform")
+            .accessibilityValue(timeLabel(playbackTime))
+            .accessibilityAdjustableAction { direction in
+                let step = (viewport.interval.upperBound - viewport.interval.lowerBound) / 20
+                let current = player.currentTime().seconds
+                guard current.isFinite else { return }
+                switch direction {
+                case .increment: seek(min(viewport.duration, current + step))
+                case .decrement: seek(max(0, current - step))
+                @unknown default: break
+                }
             }
         }
     }

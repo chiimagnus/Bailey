@@ -102,7 +102,7 @@ final class NativeMediaFileUITests: XCTestCase {
         )
         let window = app.windows.firstMatch
         open(audio, in: window, app: app)
-        let waveform = window.descendants(matching: .any).matching(identifier: "bailey.audio.waveform").firstMatch
+        let waveform = window.sliders["bailey.audio.waveform"]
         let timeline = window.sliders["timeline"]
         let play = window.checkBoxes["play/pause"]
         XCTAssertTrue(waveform.waitForExistence(timeout: 10))
@@ -112,12 +112,11 @@ final class NativeMediaFileUITests: XCTestCase {
         func time() -> Double? { Double(String(describing: timeline.value ?? "")) }
         func expectTime(_ seconds: Double) {
             let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                guard let actual = time() else { return false }
-                let accessible = Duration.seconds(actual).formatted(.time(pattern: .hourMinuteSecond))
-                return abs(actual - seconds) < 0.35
-                    && String(describing: waveform.value ?? "") == accessible
+                guard let actual = time(), let accessible = Double(String(describing: waveform.value ?? "")) else { return false }
+                return abs(actual - seconds) < 0.35 && abs(actual - accessible) < 0.05
             }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed,
+                           "Expected time \(seconds); native=\(String(describing: timeline.value)), waveform=\(String(describing: waveform.value))")
         }
         // The checked-in AAC sample has a real 12-second timeline.
         waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).click()
@@ -187,14 +186,26 @@ final class NativeMediaFileUITests: XCTestCase {
         let volume = window.sliders["volume"]
         XCTAssertTrue(volume.waitForExistence(timeout: 5))
         func volumeLevel() -> Double? { Double(String(describing: volume.value ?? "")) }
+        // AVKit owns the track, thumb geometry and quantized volume steps.
+        // Verify actual changes in both directions and exact restoration after mute.
+        volume.adjust(toNormalizedSliderPosition: 0.2)
+        let low = try XCTUnwrap(volumeLevel())
+        XCTAssertGreaterThan(low, 0)
+        XCTAssertLessThan(low, 0.5)
+        volume.adjust(toNormalizedSliderPosition: 0.75)
+        let high = try XCTUnwrap(volumeLevel())
+        XCTAssertGreaterThan(high, low)
+        XCTAssertLessThanOrEqual(high, 1)
         volume.adjust(toNormalizedSliderPosition: 0.35)
-        XCTAssertEqual(try XCTUnwrap(volumeLevel()), 0.35, accuracy: 0.08)
+        let adjusted = try XCTUnwrap(volumeLevel())
+        XCTAssertGreaterThan(adjusted, low)
+        XCTAssertLessThan(adjusted, high)
         let mute = window.buttons["mute"]
         XCTAssertTrue(mute.exists)
         mute.click()
         XCTAssertEqual(volumeLevel(), 0)
         mute.click()
-        XCTAssertEqual(try XCTUnwrap(volumeLevel()), 0.35, accuracy: 0.08)
+        XCTAssertEqual(try XCTUnwrap(volumeLevel()), adjusted, accuracy: 0.001)
         mute.click()
         XCTAssertEqual(volumeLevel(), 0)
         play.click()
