@@ -1270,6 +1270,89 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
+    func testHundredFilteredAnnotationSessionsRetireDecodedPixels() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
+              let root = environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_LONG_SESSION=1 and BAILEY_IMAGE_ACCEPTANCE_ROOT")
+        }
+        let source = URL(fileURLWithPath: root).appending(path: "images/超清大图-6000x4000.jpg")
+        let original = try Data(contentsOf: source)
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "Annotated large source.jpg")
+        try original.write(to: url)
+        let project = Project(fallbackName: "Repeated annotation sessions", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        let before = rasterMemory()
+        let beforeCPU = cpuSeconds()
+        let started = ContinuousClock.now
+        var closedRSS: [Double] = []
+        var renderDurations: [Duration] = []
+        for cycle in 1...100 {
+            weak var retiredPoster: CGImage?
+            weak var retiredPatch: CGImage?
+            weak var retiredComposite: CGImage?
+            weak var retiredDocument: ImageAnnotationDocument?
+            do {
+                project.openLocalFile(url.path)
+                let pane = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = pane.content else { return XCTFail("Expected an image file tab") }
+                file.loadIfNeeded()
+                try await waitFor { if case .loading = file.content { return false }; return true }
+                guard case .image(let preview) = file.content else { return XCTFail("Cannot preview large raster") }
+                retiredPoster = preview.poster
+                let document = try XCTUnwrap(file.imageAnnotations)
+                retiredDocument = document
+                let request = try XCTUnwrap(file.originalImageRequest())
+                let detail = try await request()
+                let x = CGFloat(100 + (cycle * 91) % 4800)
+                let y = CGFloat(100 + (cycle * 67) % 2800)
+                let region = CGRect(x: x, y: y, width: 640, height: 360)
+                document.begin()
+                document.tool = .rectangle
+                document.commitGesture(from: CGPoint(x: x + 20, y: y + 20), to: CGPoint(x: x + 140, y: y + 140))
+                document.tool = cycle.isMultiple(of: 2) ? .blur : .pixelate
+                document.commitGesture(from: CGPoint(x: x + 200, y: y + 20), to: CGPoint(x: x + 460, y: y + 280))
+                let patch = try await detail.render(region)
+                retiredPatch = patch.image
+                let poster = RasterDetail.Patch(image: preview.poster, rect: detail.bounds)
+                let start = ContinuousClock.now
+                let filtered = try await ImageAnnotationDrawing.preview(document.state, poster: poster, detail: patch,
+                    region: region, scale: 1)
+                renderDurations.append(start.duration(to: .now))
+                retiredComposite = filtered.image
+                XCTAssertEqual(filtered.rect, region)
+                XCTAssertEqual(filtered.image.width, 640)
+                XCTAssertEqual(filtered.image.height, 360)
+                try autoreleasepool {
+                    let bitmap = NSBitmapImageRep(cgImage: filtered.image)
+                    let color = try XCTUnwrap(bitmap.colorAt(x: 20, y: 300)?.usingColorSpace(.sRGB))
+                    XCTAssertGreaterThan(color.redComponent - color.greenComponent, 0.35)
+                }
+                document.cancel()
+                XCTAssertFalse(file.isDirty)
+                XCTAssertTrue(document.state.layers.isEmpty)
+                project.close(pane)
+                XCTAssertTrue(project.tabs.isEmpty)
+                XCTAssertNil(file.imageAnnotations)
+            }
+            try await waitFor("Annotation document and rendered images retire on close") {
+                retiredPoster == nil && retiredPatch == nil && retiredComposite == nil && retiredDocument == nil
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: ImageAnnotationSidecar.path(for: url.path)))
+            if cycle.isMultiple(of: 10) { closedRSS.append(residentMiB()) }
+        }
+        let durations = renderDurations.sorted()
+        print("ANNOTATION_SESSION cycles=100 elapsed=\(started.duration(to: .now)) cpu_s=\(cpuSeconds() - beforeCPU) median_render=\(durations[49]) p95_render=\(durations[94]) rss_before=\(before) rss_after=\(rasterMemory()) closed_rss=\(closedRSS)")
+        let warmed = try XCTUnwrap(closedRSS.prefix(5).max())
+        let late = try XCTUnwrap(closedRSS.suffix(5).max())
+        XCTAssertLessThan(late - warmed, 64, "Repeated close must not retain per-file filtered buffers")
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
     func testHundredRealRasterPreviewsRetireDecodedPixels() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",

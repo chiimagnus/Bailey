@@ -28,7 +28,12 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private(set) var readingPath: String?
     var pendingReadCount: Int { reading.count }
 
-    init(path: String, contents: Data) { files = [path: contents] }
+    private let reportsRegularFiles: Bool
+
+    init(path: String, contents: Data, reportsRegularFiles: Bool = false) {
+        files = [path: contents]
+        self.reportsRegularFiles = reportsRegularFiles
+    }
 
     func pauseOneRead() { nextReadPaused = true }
     func finishRead(with data: Data? = nil) {
@@ -86,7 +91,11 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     }
 
     func list(directory: String) async throws -> [WorkspaceEntry] { [] }
-    func stat(path: String) async throws -> WorkspaceStat? { nil }
+    func stat(path: String) async throws -> WorkspaceStat? {
+        guard reportsRegularFiles, let bytes = files[path] else { return nil }
+        return WorkspaceStat(isRegular: true, isDirectory: false, isSymlink: false,
+                             size: bytes.count, mtime: .distantPast)
+    }
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
@@ -2318,6 +2327,65 @@ final class FileTabPersistenceTests: XCTestCase {
         try await waitForFileTabState { !project.tabs.contains(where: { $0.id == filePane.id }) }
         XCTAssertFalse(file.isDirty)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved when closing the file")
+    }
+
+    func testAnnotationSaveQueuesLaterDraftAndKeepsFailedRevision() async throws {
+        let path = "/fixture/\(UUID().uuidString).png"
+        let context = try XCTUnwrap(CGContext(data: nil, width: 120, height: 100,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let bytes = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            bytes, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let original = bytes as Data
+        let version = WorkspaceFileVersion(data: original)
+        let size = CGSize(width: 120, height: 100)
+        let sidecar = ImageAnnotationSidecar.path(for: path)
+        let backend = EditorWorkspaceFixture(path: path, contents: original, reportsRegularFiles: true)
+        let initial = try await ImageAnnotationSidecar.encode(.init(), version: version, size: size)
+        await backend.replace(path: sidecar, with: initial)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        file.loadIfNeeded()
+        defer { file.retireContent() }
+        try await waitForFileTabState { file.imageAnnotations != nil }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        document.begin()
+        document.tool = .rectangle
+        document.commitGesture(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 30, y: 30))
+        let first = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        document.commitGesture(from: CGPoint(x: 40, y: 40), to: CGPoint(x: 70, y: 70))
+        let second = document.state
+        file.autoSaveOnFocusLoss()
+        await backend.finishWrite()
+        try await waitForFileTabState { document.savedState == first && file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        let persistedFirst = await backend.data(at: sidecar)
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(try XCTUnwrap(persistedFirst),
+                                                        version: version, size: size), first)
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        await backend.finishWrite()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(document.savedState, second)
+        let persistedSecond = await backend.data(at: sidecar)
+        document.commitGesture(from: CGPoint(x: 4, y: 60), to: CGPoint(x: 20, y: 90))
+        let unsaved = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        await backend.finishWrite(failing: true)
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(document.state, unsaved)
+        XCTAssertEqual(document.savedState, second)
+        let retained = await backend.data(at: sidecar)
+        let untouched = await backend.data(at: path)
+        XCTAssertEqual(retained, persistedSecond)
+        XCTAssertEqual(untouched, original)
     }
 
     func testFocusTriggeredSaveSerializesConcurrentEditsAndKeepsFailures() async throws {

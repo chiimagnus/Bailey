@@ -495,6 +495,250 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: moved.path))), annotations)
     }
 
+    func testChineseEmojiAnnotationReopensEditsAndRendersRealGlyphs() async throws {
+        let root = try makeRoot()
+        let path = root.appendingPathComponent("text.png")
+        let original = try png(width: 600, height: 400)
+        try original.write(to: path)
+        let file = try await open(path)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        let point = CGPoint(x: 350, y: 300)
+        add(.text, to: document, from: point, to: point)
+        document.textEdit?.text = "标注🙂"
+        document.commitText()
+        let first = try XCTUnwrap(document.state.layers.first)
+        XCTAssertEqual(first.text, "标注🙂")
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        let other = try await open(path)
+        defer { other.retireContent() }
+        let reopened = try XCTUnwrap(other.imageAnnotations)
+        XCTAssertEqual(reopened.state.layers, [first])
+        let options = ImageAnnotationDrawing.Options(width: 600, height: 400)
+        let before = try await other.annotatedImageData(request: other.fileContentRevision, options: options)
+        let bitmap = NSBitmapImageRep(cgImage: try image(before))
+        let rect = first.bounds.integral
+        var paintedPixels = 0
+        for y in Int(rect.minY)..<Int(rect.maxY) {
+            for x in Int(rect.minX)..<Int(rect.maxX) {
+                let color = try XCTUnwrap(bitmap.colorAt(x: x, y: 399 - y))
+                if color.alphaComponent > 0.25 { paintedPixels += 1 }
+            }
+        }
+        XCTAssertGreaterThan(paintedPixels, 30, "The transparent right half must contain rendered text pixels")
+        reopened.begin()
+        reopened.editSelectedText(at: CGPoint(x: rect.midX, y: rect.midY))
+        XCTAssertEqual(reopened.textEdit?.id, first.id)
+        reopened.textEdit?.text = "修改🙂：第二行\n新文本"
+        reopened.commitText()
+        let edited = try XCTUnwrap(reopened.state.layers.first)
+        XCTAssertEqual(edited.id, first.id)
+        XCTAssertEqual(edited.text, "修改🙂：第二行\n新文本")
+        let after = try await other.annotatedImageData(request: other.fileContentRevision, options: options)
+        XCTAssertNotEqual(after, before)
+        reopened.undoManager.undo()
+        XCTAssertEqual(reopened.state.layers, [first])
+        XCTAssertFalse(other.isDirty)
+        reopened.undoManager.redo()
+        XCTAssertTrue(other.isDirty)
+        await other.save()
+        XCTAssertFalse(other.isDirty)
+        let persisted = try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path)))
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(persisted, version: WorkspaceFileVersion(data: original),
+                                                        size: reopened.size).layers, [edited])
+        XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
+    func testReadOnlyDirectoryAndCancelledExportPreserveDraftAndLeaveNoTargets() async throws {
+        let root = try makeRoot()
+        let directory = root.appendingPathComponent("readonly")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let path = directory.appendingPathComponent("image.png")
+        let original = try png()
+        try original.write(to: path)
+        let file = try await open(path)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        add(.blur, to: document, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 60, y: 60))
+        let draft = document.state
+        let options = ImageAnnotationDrawing.Options(width: 160, height: 120)
+        let target = directory.appendingPathComponent("export.png")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+        XCTAssertFalse(FileManager.default.isWritableFile(atPath: directory.path))
+        await file.save()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        do {
+            try await file.exportAnnotatedImage(request: file.fileContentRevision, options: options, to: target)
+            XCTFail("Read-only directory must not permit a new export")
+        } catch {}
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["image.png"])
+        XCTAssertEqual(document.state, draft)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        let cancelled = Task {
+            try await file.exportAnnotatedImage(request: file.fileContentRevision, options: options, to: target)
+        }
+        cancelled.cancel()
+        do { try await cancelled.value; XCTFail("Cancelled export must not publish") }
+        catch is CancellationError {}
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["image.png"])
+        XCTAssertEqual(document.state, draft)
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let stored = try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path)))
+        try await file.exportAnnotatedImage(request: file.fileContentRevision, options: options, to: target)
+        XCTAssertEqual(try image(Data(contentsOf: target)).width, 160)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))), stored)
+    }
+
+    func testAllEXIFOrientationsSurviveAnnotationSaveAndPixelExport() async throws {
+        let root = try makeRoot()
+        let context = try XCTUnwrap(CGContext(data: nil, width: 120, height: 80,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        for (index, color) in [NSColor.white, .green, .blue, .yellow].enumerated() {
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(x: (index % 2) * 60, y: (1 - index / 2) * 40, width: 60, height: 40))
+        }
+        let source = try XCTUnwrap(context.makeImage())
+        for orientation in 1...8 {
+            let data = NSMutableData()
+            let writer = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(writer, source, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(writer))
+            let original = data as Data
+            let path = root.appendingPathComponent("orientation-\(orientation).jpg")
+            try original.write(to: path)
+            let file = try await open(path)
+            defer { file.retireContent() }
+            guard case .image(let preview) = file.content else { return XCTFail("Expected original raster") }
+            let document = try XCTUnwrap(file.imageAnnotations)
+            let width = orientation >= 5 ? 80 : 120
+            let height = orientation >= 5 ? 120 : 80
+            XCTAssertEqual(document.size, CGSize(width: width, height: height))
+            add(.rectangle, to: document, from: CGPoint(x: 8, y: 8), to: CGPoint(x: 34, y: 34))
+            let expected = document.state
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            let restored = try await open(path)
+            defer { restored.retireContent() }
+            XCTAssertEqual(restored.imageAnnotations?.state, expected)
+            let options = ImageAnnotationDrawing.Options(width: width, height: height)
+            let output = root.appendingPathComponent("export-\(orientation).png")
+            try await restored.exportAnnotatedImage(request: restored.fileContentRevision, options: options, to: output)
+            let rendered = try image(Data(contentsOf: output))
+            XCTAssertEqual(rendered.width, width)
+            XCTAssertEqual(rendered.height, height)
+            let stroke = try pixel(rendered, x: 8, y: 20)
+            XCTAssertGreaterThan(stroke.redComponent - stroke.greenComponent, 0.4, "EXIF \(orientation) stroke")
+            for (x, y) in [(width - 15, 15), (15, height - 15), (width - 15, height - 15)] {
+                let actual = try pixel(rendered, x: x, y: y)
+                let expected = try pixel(preview.poster, x: x, y: y)
+                XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.06, "EXIF \(orientation)")
+                XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.06)
+                XCTAssertEqual(actual.blueComponent, expected.blueComponent, accuracy: 0.06)
+            }
+            XCTAssertEqual(try Data(contentsOf: path), original)
+        }
+    }
+
+    func testActualFilesTreeRejectsHalfOfPairAndRenamesWholeDirectory() async throws {
+        let root = try makeRoot()
+        let folder = root.appendingPathComponent("paired")
+        let target = root.appendingPathComponent("target")
+        for directory in [folder, target] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        }
+        let path = folder.appendingPathComponent("image.png")
+        let original = try png()
+        try original.write(to: path)
+        let file = try await open(path)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        add(.arrow, to: document, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 50, y: 50))
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        let sidecar = ImageAnnotationSidecar.path(for: path.path)
+        let stored = try Data(contentsOf: URL(fileURLWithPath: sidecar))
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let row = try XCTUnwrap(tree.items.first { $0.path == folder.path })
+        await tree.toggle(row)
+        for half in [path.path, sidecar] {
+            let item = try XCTUnwrap(tree.items.first { $0.path == half })
+            let rename = await tree.rename(item, to: "renamed-" + item.name)
+            XCTAssertNil(rename)
+            for operation in [FileTreeModel.FileOperation.copy, .move, .delete] {
+                let result = await tree.performFileOperation(operation, paths: [half],
+                    into: operation == .delete ? nil : target.path)
+                XCTAssertTrue(result.succeeded.isEmpty)
+                XCTAssertEqual(result.failures.count, 1)
+            }
+        }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: sidecar)), stored)
+        let renamed = await tree.rename(row, to: "whole")
+        let moved = root.appendingPathComponent("whole/image.png")
+        XCTAssertEqual(renamed, moved.deletingLastPathComponent().path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+        file.updatePath(moved.path)
+        let restored = try await open(moved)
+        defer { restored.retireContent() }
+        XCTAssertEqual(restored.imageAnnotations?.state, document.state)
+        XCTAssertEqual(try Data(contentsOf: moved), original)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: moved.path))), stored)
+    }
+
+    func testNativeCloseVetoPreservesConflictedAnnotationDraft() async throws {
+        let root = try makeRoot()
+        let path = root.appendingPathComponent("close.png")
+        let original = try png()
+        try original.write(to: path)
+        let file = try await open(path)
+        let document = try XCTUnwrap(file.imageAnnotations)
+        add(.rectangle, to: document, from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
+        await file.save()
+        let other = try await open(path)
+        defer { other.retireContent() }
+        let otherDocument = try XCTUnwrap(other.imageAnnotations)
+        add(.arrow, to: otherDocument, from: CGPoint(x: 60, y: 10), to: CGPoint(x: 100, y: 40))
+        await other.save()
+        XCTAssertFalse(other.isDirty)
+        add(.ellipse, to: document, from: CGPoint(x: 10, y: 60), to: CGPoint(x: 40, y: 90))
+        let draft = document.state
+        let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
+        let accepted = try Data(contentsOf: sidecar)
+        let project = Project(fallbackName: "annotation close", workspaceConfiguration: .standard)
+        let tab = PaneTab(content: .file(file))
+        project.append(tab)
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 720, height: 520),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        project.onPresentationWindow = { window }
+        defer { window.close(); file.retireContent() }
+        project.close(tab)
+        try await waitFor("Native annotation close sheet") { window.attachedSheet != nil }
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertFirstButtonReturn)
+        try await waitFor("Conflicted save vetoes the close") { !file.autoSaveSuspendedForClose && file.saveError != nil }
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(document.state, draft)
+        XCTAssertEqual(try Data(contentsOf: sidecar), accepted)
+        project.close(tab)
+        try await waitFor("Native discard confirmation") { window.attachedSheet != nil }
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertSecondButtonReturn)
+        try await waitFor("Explicit discard closes annotation tab") { project.tabs.isEmpty }
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertEqual(try Data(contentsOf: sidecar), accepted)
+    }
+
     func testMountedCanvasUsesImageCoordinatesAtDifferentZoomAndNativeUndo() async throws {
         let root = try makeRoot()
         let path = root.appendingPathComponent("canvas.png")
