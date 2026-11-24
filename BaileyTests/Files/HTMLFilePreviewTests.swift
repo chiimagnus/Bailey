@@ -193,6 +193,10 @@ final class HTMLFilePreviewTests: XCTestCase {
         let png = try solidPNG(width: 11, height: 7)
         try png.write(to: external.appendingPathComponent("right.png"))
         try png.write(to: external.appendingPathComponent("wrong.jpg"))
+        let jpeg = try XCTUnwrap(NSBitmapImageRep(data: png)?.representation(using: .jpeg, properties: [:]))
+        XCTAssertEqual(Array(jpeg.suffix(2)), [0xff, 0xd9])
+        try jpeg.write(to: external.appendingPathComponent("right.jpg"))
+        try Data(jpeg.dropLast(2)).write(to: external.appendingPathComponent("cut.jpg"))
         try Data("\u{feff}p { color: rgb(12, 34, 56); }".utf8)
             .write(to: external.appendingPathComponent("right.css"))
         let file = try await open("""
@@ -205,6 +209,8 @@ final class HTMLFilePreviewTests: XCTestCase {
             <img src="wrong.svg" alt="different document type">
             <img src="right.png" alt="native raster">
             <img src="wrong.jpg" alt="wrong raster type">
+            <img src="right.jpg" alt="complete JPEG">
+            <img src="cut.jpg" alt="truncated JPEG">
             """, in: external)
         let original = try Data(contentsOf: URL(fileURLWithPath: file.path))
         let webView = try await display(file, in: project)
@@ -214,14 +220,14 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(color, "rgb(12, 34, 56)")
         let imageWidths = "Array.from(document.images, img => img.naturalWidth)"
         let initial = try await webView.evaluateJavaScript(imageWidths, contentWorld: .defaultClient) as? [Int]
-        XCTAssertEqual(initial, [31, 0, 0, 0, 11, 0])
+        XCTAssertEqual(initial, [31, 0, 0, 0, 11, 0, 11, 0])
 
         try FileManager.default.moveItem(at: ownImage, to: project.appendingPathComponent("own.svg"))
         let reopened = FileTab(path: file.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await reopened.waitForText()
         let nextView = try await display(reopened, in: project)
         let afterMove = try await nextView.evaluateJavaScript(imageWidths, contentWorld: .defaultClient) as? [Int]
-        XCTAssertEqual(afterMove, [0, 0, 0, 0, 11, 0])
+        XCTAssertEqual(afterMove, [0, 0, 0, 0, 11, 0, 11, 0])
         let status = try await nextView.evaluateJavaScript("""
             [document.querySelector('p').textContent, document.images[0].alt]
             """, contentWorld: .defaultClient) as? [String]

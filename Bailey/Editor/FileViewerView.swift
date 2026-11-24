@@ -1005,7 +1005,7 @@ final class FileTab: nonisolated Identifiable {
         try Task.checkCancellation()
         guard version.matches(bytes) else { throw WorkspaceError.changedExternally }
         try Task.checkCancellation()
-        guard let source = RasterPreview.source(bytes) else {
+        guard let source = try RasterPreview.source(bytes) else {
             throw CocoaError(.fileReadCorruptFile)
         }
         return try decode(bytes, source)
@@ -1057,19 +1057,24 @@ final class FileTab: nonisolated Identifiable {
         }
         let data = try await backend.read(path: path, maxBytes: limit)
         try Task.checkCancellation()
-        if isImage, let source = RasterPreview.source(data),
-           CGImageSourceGetType(source) != nil {
-            guard let preview = RasterPreview.decode(source, maximumDimension: 4096) else {
+        if isImage {
+            do {
+                if let source = try RasterPreview.source(data) {
+                    guard let preview = RasterPreview.decode(source, maximumDimension: 4096) else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                    return LoadedContent(
+                        content: .image(preview), text: "", encoding: nil,
+                        decodingFailed: false, sourceVersion: WorkspaceFileVersion(data: data)
+                    )
+                }
+            } catch {
                 return LoadedContent(
                     content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
                     text: "", encoding: nil, decodingFailed: false,
                     sourceVersion: nil
                 )
             }
-            return LoadedContent(
-                content: .image(preview), text: "", encoding: nil,
-                decodingFailed: false, sourceVersion: WorkspaceFileVersion(data: data)
-            )
         }
         guard data.count <= maxTextBytes else { throw WorkspaceError.tooLarge }
         let decoded = await TextFileEncoding.decode(data, path: path, backend: backend, override: override)

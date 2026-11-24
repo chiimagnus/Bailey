@@ -1,4 +1,5 @@
 import CoreImage
+import Darwin
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -14,10 +15,45 @@ nonisolated struct RasterPreview: Sendable {
         let seconds: TimeInterval
     }
 
-    static func source(_ bytes: Data) -> CGImageSource? {
-        CGImageSourceCreateWithData(bytes as CFData, [
+    static func source(_ bytes: Data) throws -> CGImageSource? {
+        guard let source = CGImageSourceCreateWithData(bytes as CFData, [
             kCGImageSourceShouldCache: false,
-        ] as CFDictionary)
+        ] as CFDictionary),
+              let type = CGImageSourceGetType(source) as String? else { return nil }
+        if type == UTType.jpeg.identifier, !hasPrimaryJPEGEnd(bytes) {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return source
+    }
+
+    private static func hasPrimaryJPEGEnd(_ data: Data) -> Bool {
+        data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress, bytes.count >= 4, bytes[0] == 0xff, bytes[1] == 0xd8 else {
+                return false
+            }
+            var offset = 2
+            var hasScan = false
+            while offset < bytes.count {
+                guard let prefix = memchr(base.advanced(by: offset), 0xff, bytes.count - offset) else { return false }
+                offset = base.distance(to: UnsafeRawPointer(prefix)) + 1
+                while offset < bytes.count, bytes[offset] == 0xff { offset += 1 }
+                guard offset < bytes.count else { return false }
+                let marker = bytes[offset]
+                offset += 1
+                switch marker {
+                case 0xd9: return hasScan
+                case 0xd8: return false
+                case 0x00, 0x01, 0xd0...0xd7: continue
+                default:
+                    guard bytes.count - offset >= 2 else { return false }
+                    let length = (Int(bytes[offset]) << 8) | Int(bytes[offset + 1])
+                    guard length >= 2, length <= bytes.count - offset else { return false }
+                    if marker == 0xda { hasScan = true }
+                    offset += length
+                }
+            }
+            return false
+        }
     }
 
     static func pixelSize(_ source: CGImageSource, at index: Int) -> CGSize? {

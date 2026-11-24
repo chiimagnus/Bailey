@@ -413,7 +413,7 @@ private nonisolated enum HTMLPreviewAsset {
         case .svg:
             try SVGArtwork.validateDocument(data)
         case .raster(let format):
-            guard let source = RasterPreview.source(data),
+            guard let source = try RasterPreview.source(data),
                   let identifier = CGImageSourceGetType(source),
                   UTType(identifier as String)?.preferredMIMEType == "image/\(format)" else {
                 throw CocoaError(.fileReadCorruptFile)

@@ -1170,6 +1170,48 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(picture.animation.isEmpty)
     }
 
+    func testJPEGNeedsThePrimaryImageEndMarkerNotAnEmbeddedThumbnail() throws {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 96, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 0.3, green: 0.8, blue: 0.1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 96, height: 64))
+        let image = try XCTUnwrap(context.makeImage())
+        func jpeg(progressive: Bool) throws -> Data {
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                bytes, UTType.jpeg.identifier as CFString, 1, nil
+            ))
+            CGImageDestinationAddImage(destination, image, [
+                kCGImagePropertyJFIFDictionary: [kCGImagePropertyJFIFIsProgressive: progressive],
+            ] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            XCTAssertGreaterThan(bytes.length, 2)
+            return bytes as Data
+        }
+        let embedded = try jpeg(progressive: false)
+        let length = embedded.count + 2
+        let applicationSegment = Data([0xff, 0xef, UInt8(length >> 8), UInt8(length & 0xff)]) + embedded
+        for progressive in [false, true] {
+            let primary = try jpeg(progressive: progressive)
+            XCTAssertEqual(Array(primary.suffix(2)), [0xff, 0xd9])
+            let frameMarker: UInt8 = progressive ? 0xc2 : 0xc0
+            XCTAssertNotNil(primary.range(of: Data([0xff, frameMarker])))
+            let merged = primary.prefix(2) + applicationSegment + primary.dropFirst(2)
+            let complete = merged + Data("trailing camera data".utf8)
+            let picture = try MarkdownPicture.decode(complete)
+            XCTAssertEqual(picture.poster.width, 96)
+            XCTAssertEqual(picture.poster.height, 64)
+            for shortened in [Data(merged.dropLast()), Data(merged.dropLast(2)),
+                              Data(merged.prefix(applicationSegment.count + 2))] {
+                XCTAssertThrowsError(try MarkdownPicture.decode(shortened)) { error in
+                    XCTAssertEqual((error as? CocoaError)?.code, .fileReadCorruptFile)
+                }
+            }
+        }
+    }
+
     func testGIFFramesHonorTimingAndAnimationBudget() throws {
         func frame(_ color: CGColor, width: Int = 16, height: Int = 16) throws -> CGImage {
             let context = try XCTUnwrap(CGContext(

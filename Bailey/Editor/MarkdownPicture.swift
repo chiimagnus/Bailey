@@ -20,7 +20,7 @@ nonisolated struct MarkdownPicture: Hashable, Sendable {
     var animation: [RasterPreview.GIFFrame] = []
 
     static func decode(_ data: Data) throws -> Self {
-        guard let source = RasterPreview.source(data),
+        guard let source = try RasterPreview.source(data),
               let poster = RasterPreview.decode(source, maximumDimension: 2048)?.poster else {
             throw CocoaError(.fileReadCorruptFile)
         }

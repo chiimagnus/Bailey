@@ -891,6 +891,49 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), changed)
     }
 
+    func testTruncatedRealJPEGDoesNotPublishAnImageAndRecoversWhenReplaced() async throws {
+        guard let fixture = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let original = URL(fileURLWithPath: fixture).appending(path: "images/超清大图-6000x4000.jpg")
+        let bytes = try Data(contentsOf: original)
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for truncation in [2, bytes.count / 2] {
+            let target = folder.appending(path: "truncated-\(truncation).jpg")
+            let shortened = Data(bytes.dropLast(truncation))
+            try shortened.write(to: target)
+            let file = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if case .unavailable(let reason) = file.content {
+                XCTAssertEqual(reason, String(localized: "Image is too large or invalid", table: "Workspace"))
+            } else {
+                XCTFail("A cut JPEG must not publish partial pixels")
+            }
+            XCTAssertNil(file.originalImageRequest())
+            XCTAssertEqual(try Data(contentsOf: target), shortened)
+
+            let prior = file.reloadRevision
+            try bytes.write(to: target, options: .atomic)
+            file.reloadFromDiskIfClean()
+            try await waitForFileTabState {
+                if case .image = file.content { return file.reloadRevision != prior }
+                return false
+            }
+            let request = try XCTUnwrap(file.originalImageRequest())
+            let detail = try await request()
+            let region = CGRect(x: 5750, y: 3800, width: 103, height: 77)
+            let patch = try await detail.render(region)
+            XCTAssertEqual(patch.rect, region)
+            XCTAssertEqual(patch.image.width, 103)
+            XCTAssertEqual(patch.image.height, 77)
+            XCTAssertEqual(try Data(contentsOf: target), bytes)
+        }
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+
     func testOriginalImageReadCannotPublishAfterRenameDisconnectOrClose() async throws {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: 4300, pixelsHigh: 8,
