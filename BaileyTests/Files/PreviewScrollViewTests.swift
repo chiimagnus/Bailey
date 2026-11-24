@@ -376,30 +376,52 @@ final class PreviewScrollViewTests: XCTestCase {
     }
 
     func testCMYKJPEGUsesTheBoundedWholeDecodeWithoutLosingColor() async throws {
-        let size = CGSize(width: 120, height: 60)
-        let colorSpace = CGColorSpaceCreateDeviceCMYK()
-        let context = try XCTUnwrap(CGContext(
-            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
-            space: colorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
+        let width = 120
+        let height = 60
+        let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.genericCMYK))
+        var channels = Data(count: width * height * 4)
+        for offset in stride(from: 0, to: channels.count, by: 4) { channels[offset] = 255 }
+        let provider = try XCTUnwrap(CGDataProvider(data: channels as CFData))
+        let cyan = try XCTUnwrap(CGImage(
+            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .relativeColorimetric
         ))
-        context.setFillColor(try XCTUnwrap(CGColor(colorSpace: colorSpace, components: [1, 0, 0, 0])))
-        context.fill(CGRect(origin: .zero, size: size))
         let jpeg = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
             jpeg, UTType.jpeg.identifier as CFString, 1, nil
         ))
-        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        CGImageDestinationAddImage(destination, cyan, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         let source = try XCTUnwrap(RasterPreview.source(jpeg as Data))
-        let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let reference = try XCTUnwrap(CGImageSourceCreateWithData(jpeg, nil))
+        let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(reference, 0, nil))
         XCTAssertEqual(raw.colorSpace?.model, .cmyk)
+        let size = CGSize(width: width, height: height)
         let detail = try RasterPreview.original(source, size: size)
         guard case .whole = detail else { return XCTFail("The RGB region path must not reinterpret CMYK pixels") }
         let patch = try await detail.render(CGRect(x: 30, y: 20, width: 20, height: 20))
         XCTAssertEqual(patch.rect.size, size)
-        let color = try XCTUnwrap(NSBitmapImageRep(cgImage: patch.image).colorAt(x: 5, y: 5)?.usingColorSpace(.sRGB))
-        XCTAssertGreaterThan(color.greenComponent - color.redComponent, 0.4)
-        XCTAssertGreaterThan(color.blueComponent - color.redComponent, 0.4)
+        let output = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        func pixel(from image: CGImage) throws -> [Double] {
+            let reader = try XCTUnwrap(CGContext(
+                data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 0,
+                space: output, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ))
+            reader.interpolationQuality = .none
+            reader.draw(image, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+            let bytes = try XCTUnwrap(reader.data).assumingMemoryBound(to: UInt8.self)
+            let offset = 4 * reader.bytesPerRow + 4 * 4
+            return (0..<3).map { Double(bytes[offset + $0]) / 255 }
+        }
+        let expected = try pixel(from: raw)
+        let original = try pixel(from: cyan)
+        XCTAssertGreaterThan(original[1] - original[0], 0.4, "Uncompressed CMYK: \(original)")
+        XCTAssertGreaterThan(expected[1] - expected[0], 0.4, "Native JPEG: \(expected)")
+        XCTAssertGreaterThan(expected[2] - expected[0], 0.4, "Native JPEG: \(expected)")
+        for (actual, expected) in zip(try pixel(from: patch.image), expected) {
+            XCTAssertEqual(actual, expected, accuracy: 0.02)
+        }
     }
 
     func testRealLargeJPEGRegionalPixelsDoNotKeepAFullRaster() async throws {
