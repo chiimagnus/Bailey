@@ -204,6 +204,7 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 | Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`（字号／宽度／车道数矩阵）、`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests`、`GitPanelVisibilityTests`（真实 Dock、离屏刷新、连续 Commit／Amend、48 组布局极值、1,026 项 Changes × 20 分支交叉压力、原生 AX／AppKit 鼠标命中）；`GitGraphUITests`、`GitGraphGeometryUITests` 验证完整 App 的真实点击、像素、菜单与 Dock 尺寸；拓扑测试同时测量长历史冷计算／重复输入复用，验证 HEAD／Ref 更新后缓存失效，不把单次 Debug 耗时作为永久性能承诺 |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff、Browser 和原生内容保留 | `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeDiffTabTests`、`NativeContentIdentityIntegrationTests`、`DiffEngineTests` |
+| 图片原像素、区域平移、颜色和关闭回收 | `PreviewScrollViewTests`（宿主像素和释放）、`RasterFilePreviewUITests`（真实 App 手势）；用 `BAILEY_IMAGE_LONG_SESSION=1` 与 `BAILEY_IMAGE_ACCEPTANCE_ROOT` 启用真实样本的 100 次开闭，记录首次像素、CPU 和分组 RSS |
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`NativeSyntaxHighlightingTests` |
 | 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`NativeSyntaxHighlightingTests` |
 | 原生组合输入、结束标记与最终替换 | `NativeEditorCompositionTests` |

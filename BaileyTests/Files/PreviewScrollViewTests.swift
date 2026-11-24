@@ -438,6 +438,102 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
+    func testHundredRealRasterPreviewsRetireDecodedPixels() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
+              let root = environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_LONG_SESSION=1 and BAILEY_IMAGE_ACCEPTANCE_ROOT")
+        }
+        let images = URL(fileURLWithPath: root).appending(path: "images")
+        let fixtures = try ["超清大图-6000x4000.jpg", "极宽图.png", "动画-34帧.gif"].map { name in
+            let url = images.appending(path: name)
+            return (url: url, bytes: try Data(contentsOf: url))
+        }
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let project = Project(fallbackName: "Repeated raster previews", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        func cpuSeconds() -> Double {
+            var usage = rusage()
+            XCTAssertEqual(getrusage(RUSAGE_SELF, &usage), 0)
+            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+        }
+        let beforeCPU = cpuSeconds()
+        let before = rasterMemory()
+        let started = ContinuousClock.now
+        var closedRSS: [Double] = []
+        var firstPixels: [Duration] = []
+        var completedByFormat: [String: Int] = [:]
+        for cycle in 1...100 {
+            let fixture = fixtures[(cycle - 1) % fixtures.count]
+            let format = fixture.url.pathExtension
+            let url = folder.appending(path: "Raster \(cycle).\(format)")
+            try FileManager.default.copyItem(at: fixture.url, to: url)
+            let openTime = ContinuousClock.now
+            weak var retiredPoster: CGImage?
+            weak var retiredDetail: CGImage?
+            weak var retiredSource: CGImage?
+            do {
+                project.openLocalFile(url.path)
+                let pane = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = pane.content else { return XCTFail("Expected the file tab") }
+                file.loadIfNeeded()
+                try await waitFor { if case .loading = file.content { return false }; return true }
+                guard case .image(let preview) = file.content else { return XCTFail("Cannot preview \(format)") }
+                retiredPoster = preview.poster
+                if format == "gif" {
+                    let request = try XCTUnwrap(file.gifFramesRequest())
+                    let frames = try await request()
+                    XCTAssertEqual(frames.count, 34)
+                    let last = try await frames.read(33)
+                    let renderer = NSBitmapImageRep(cgImage: last.image)
+                    XCTAssertGreaterThan(try XCTUnwrap(renderer.colorAt(x: 200, y: 90)).alphaComponent, 0.9)
+                    retiredDetail = last.image
+                } else {
+                    let request = try XCTUnwrap(file.originalImageRequest())
+                    let detail = try await request()
+                    let requestRect = CGRect(x: detail.bounds.midX, y: detail.bounds.midY, width: 256, height: 80)
+                    let patch = try await detail.render(requestRect)
+                    switch detail {
+                    case .region(let original, _, _):
+                        XCTAssertEqual(format, "jpg")
+                        XCTAssertEqual(patch.rect, requestRect)
+                        retiredSource = original
+                    case .whole(let original):
+                        XCTAssertEqual(format, "png")
+                        XCTAssertEqual(patch.rect.size, CGSize(width: 9000, height: 240))
+                        retiredSource = original
+                    }
+                    let renderer = NSBitmapImageRep(cgImage: patch.image)
+                    XCTAssertNotNil(renderer.colorAt(x: patch.image.width / 2, y: patch.image.height / 2))
+                    retiredDetail = patch.image
+                }
+                firstPixels.append(openTime.duration(to: .now))
+                project.close(pane)
+                XCTAssertTrue(project.tabs.isEmpty)
+                XCTAssertNil(file.gifPlayback)
+                XCTAssertNil(file.originalImageRequest())
+            }
+            try await waitFor("Decoded images must retire after closing \(url.lastPathComponent)") {
+                retiredPoster == nil && retiredDetail == nil && retiredSource == nil
+            }
+            XCTAssertEqual(try Data(contentsOf: url), fixture.bytes)
+            try FileManager.default.removeItem(at: url)
+            completedByFormat[format, default: 0] += 1
+            if cycle.isMultiple(of: 10) { closedRSS.append(residentMiB()) }
+        }
+        let durations = firstPixels.sorted()
+        let after = rasterMemory()
+        print("RASTER_SESSION files=\(completedByFormat) elapsed=\(started.duration(to: .now)) cpu_s=\(cpuSeconds() - beforeCPU) median_first_pixels=\(durations[49]) p95_first_pixels=\(durations[94]) rss_before=\(before) rss_after=\(after) closed_rss=\(closedRSS)")
+        let warmed = try XCTUnwrap(closedRSS.prefix(5).max())
+        let late = try XCTUnwrap(closedRSS.suffix(5).max())
+        XCTAssertLessThan(late - warmed, 64, "Repeated closes must not accumulate per-image buffers")
+        XCTAssertEqual(completedByFormat, ["jpg": 34, "png": 33, "gif": 33])
+        for fixture in fixtures { XCTAssertEqual(try Data(contentsOf: fixture.url), fixture.bytes) }
+    }
+
     private func solidRaster(size: CGSize, color: NSColor) throws -> CGImage {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
