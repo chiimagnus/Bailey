@@ -376,13 +376,31 @@ nonisolated enum ImageAnnotationDrawing {
         let area = layout.working.intersection(patch.rect.applying(transform).integral)
         guard !area.isEmpty else { return }
         let scaled = resample(input, transform: transform)
-        guard let pixels = filterContext.createCGImage(scaled, from: area, format: .RGBA8, colorSpace: space)
-        else { throw CocoaError(.fileReadCorruptFile) }
+        let pixels = try renderedImage(scaled, area: area, space: space)
         context.saveGState()
         context.concatenate(transform.inverted())
         context.interpolationQuality = .none
         context.draw(pixels, in: area)
         context.restoreGState()
+    }
+
+    /// Materialize into an owned bitmap only after Core Image reports completion.
+    /// createCGImage can return a transparent image after a GPU command-buffer
+    /// failure; its optional result does not report the render task's error.
+    static func renderedImage(_ image: CIImage, area: CGRect, space: CGColorSpace) throws -> CGImage {
+        try Task.checkCancellation()
+        let context = try bitmap(area, space: space, background: .transparent)
+        guard let data = context.data else { throw CocoaError(.fileReadCorruptFile) }
+        let destination = CIRenderDestination(bitmapData: data, width: context.width, height: context.height,
+                                              bytesPerRow: context.bytesPerRow, format: .RGBA8)
+        destination.colorSpace = space
+        destination.alphaMode = .premultiplied
+        destination.isFlipped = true
+        let task = try filterContext.startTask(toRender: image, from: area, to: destination, at: .zero)
+        _ = try task.waitUntilCompleted()
+        try Task.checkCancellation()
+        guard let pixels = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
+        return pixels
     }
 
     private static func bitmap(_ pixels: CGRect, space: CGColorSpace,
@@ -433,8 +451,7 @@ nonisolated enum ImageAnnotationDrawing {
                 let input = CIImage(cgImage: snapshot).transformed(by:
                     CGAffineTransform(translationX: working.minX, y: working.minY)).clampedToExtent()
                 let output = filtered(input, layer: layer, transform: transform).cropped(to: region.evaluation)
-                guard let patch = filterContext.createCGImage(output, from: region.evaluation, format: .RGBA8, colorSpace: space)
-                else { throw CocoaError(.fileReadCorruptFile) }
+                let patch = try renderedImage(output, area: region.evaluation, space: space)
                 context.saveGState()
                 context.concatenate(transform.inverted())
                 context.clip(to: region.output)

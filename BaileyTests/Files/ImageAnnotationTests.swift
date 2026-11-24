@@ -1,9 +1,19 @@
 import AppKit
+import CoreImage
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
+
+// A real Core Image processor fails at execution, after an image graph has
+// been created successfully. It does not reset the user's GPU or mock CIContext.
+private nonisolated final class FailingAnnotationRenderKernel: CIImageProcessorKernel {
+    override class func process(with inputs: [CIImageProcessorInput]?, arguments: [String: Any]?,
+                                output: CIImageProcessorOutput) throws {
+        throw NSError(domain: "Bailey.AnnotationRenderTest", code: 42)
+    }
+}
 
 @MainActor
 final class ImageAnnotationTests: XCTestCase {
@@ -387,6 +397,29 @@ final class ImageAnnotationTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testCoreImageExecutionFailureCannotPublishTransparentPixels() throws {
+        let region = CGRect(x: 17, y: 9, width: 32, height: 24)
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let failing = try FailingAnnotationRenderKernel.apply(withExtent: region, inputs: nil, arguments: nil)
+        XCTAssertThrowsError(try ImageAnnotationDrawing.renderedImage(failing, area: region, space: space)) { error in
+            let underlying = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError
+            XCTAssertEqual(underlying?.domain, "Bailey.AnnotationRenderTest")
+            XCTAssertEqual(underlying?.code, 42)
+        }
+        // The same renderer must still accept genuinely transparent imagery
+        // and subsequent successful renders; opacity is not an error signal.
+        let transparent = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
+        let blank = try ImageAnnotationDrawing.renderedImage(transparent, area: region, space: space)
+        XCTAssertEqual(try pixel(blank, x: 8, y: 8).alphaComponent, 0, accuracy: 0.001)
+        let red = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
+        let valid = try ImageAnnotationDrawing.renderedImage(red, area: region, space: space)
+        XCTAssertEqual(valid.width, 32)
+        XCTAssertEqual(valid.height, 24)
+        let sample = try pixel(valid, x: 8, y: 8)
+        XCTAssertEqual(sample.redComponent, 1, accuracy: 0.001)
+        XCTAssertEqual(sample.alphaComponent, 1, accuracy: 0.001)
     }
 
     func testRegionalAnnotationSamplingMatchesWholeImageAcrossColorsAndZooms() async throws {
