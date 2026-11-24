@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
@@ -119,6 +120,7 @@ final class RasterFilePreviewUITests: XCTestCase {
             guard let bitmap = NSBitmapImageRep(data: viewer.screenshot().pngRepresentation) else { return nil }
             return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
         }
+        startAnimation(viewer, in: app)
         let foregroundRed = try XCTUnwrap(centerColor())
         XCTAssertGreaterThan(foregroundRed.redComponent - foregroundRed.greenComponent, 0.45)
 
@@ -185,6 +187,7 @@ final class RasterFilePreviewUITests: XCTestCase {
         }
         let firstFrame = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in spriteCenter() != nil }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [firstFrame], timeout: 8), .completed)
+        startAnimation(viewer, in: app)
         let initial = try XCTUnwrap(spriteCenter())
         func expectMovement(from center: Int, inverted: Bool = false) {
             let moves = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -213,5 +216,20 @@ final class RasterFilePreviewUITests: XCTestCase {
         expectMovement(from: paused)
         XCTAssertEqual(try Data(contentsOf: file), bytes)
         XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+
+    private func startAnimation(_ viewer: XCUIElement, in app: XCUIApplication) {
+        let automatic = AccessibilitySettings.animatedImagesEnabled
+        viewer.rightClick()
+        let expected = WorkspaceUITestSupport.menuItem(
+            automatic ? "Pause Animation" : "Resume Animation", in: app
+        )
+        XCTAssertTrue(expected.waitForExistence(timeout: 5),
+                      "The native animation menu must reflect the current system preference")
+        if automatic {
+            app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        } else {
+            expected.click()
+        }
     }
 }

@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import AVFoundation
 import CoreVideo
@@ -1193,19 +1194,37 @@ final class MarkdownPreviewUITests: XCTestCase {
         let image = preview.buttons["Pulse"]
         XCTAssertTrue(image.waitForExistence(timeout: 10), preview.debugDescription)
 
-        var redSeen = false
-        var blueSeen = false
-        let changingFrames = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+        func sampledColor() -> NSColor? {
             guard let tiff = image.screenshot().image.tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: tiff),
-                  let sampled = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
-                    .usingColorSpace(.deviceRGB) else { return false }
-            redSeen = redSeen || sampled.redComponent > 0.7 && sampled.blueComponent < 0.3
-            blueSeen = blueSeen || sampled.blueComponent > 0.7 && sampled.redComponent < 0.3
-            return redSeen && blueSeen
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [changingFrames], timeout: 8), .completed,
-                       "Animated GIF must display both actual frames, not only a static poster")
+                  let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+            return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
+                .usingColorSpace(.deviceRGB)
+        }
+        func isRed(_ color: NSColor) -> Bool { color.redComponent > 0.7 && color.blueComponent < 0.3 }
+        func isBlue(_ color: NSColor) -> Bool { color.blueComponent > 0.7 && color.redComponent < 0.3 }
+        if AccessibilitySettings.animatedImagesEnabled {
+            var redSeen = false
+            var blueSeen = false
+            let changingFrames = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let sampled = sampledColor() else { return false }
+                redSeen = redSeen || isRed(sampled)
+                blueSeen = blueSeen || isBlue(sampled)
+                return redSeen && blueSeen
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [changingFrames], timeout: 8), .completed,
+                           "Animated GIF must display both actual frames, not only a static poster")
+        } else {
+            let poster = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                sampledColor().map(isRed) == true
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [poster], timeout: 8), .completed)
+            let changes = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                sampledColor().map { !isRed($0) } ?? true
+            }, object: nil)
+            changes.isInverted = true
+            XCTAssertEqual(XCTWaiter.wait(for: [changes], timeout: 1.6), .completed,
+                           "Disabled system animation must retain the actual first frame")
+        }
         XCTAssertEqual(try Data(contentsOf: document), original)
         app.typeKey("v", modifierFlags: [.command, .shift])
         XCTAssertTrue(preview.waitForNonExistence(timeout: 10))
