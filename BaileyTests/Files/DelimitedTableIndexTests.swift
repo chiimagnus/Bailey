@@ -323,6 +323,96 @@ final class DelimitedTableIndexTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.latin1.encoded(file.text))
     }
 
+    func testGridSavesOriginalEncodingAndRejectsAnotherWindowsSameSizeDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for (encoding, value) in [
+            (TextFileEncoding.utf8BOM, "e\u{301}😀"),
+            (.utf16LEBOM, "模型😀"), (.utf16BEBOM, "模型😀"),
+            (.gbk, "模型"), (.gb18030, "模型"), (.shiftJIS, "日本語"), (.latin1, "é"),
+        ] {
+            let path = directory.appendingPathComponent(UUID().uuidString + ".csv")
+            let original = "Name,Group,Value\r\n\(value),g,000\nOther,h,\"literal\""
+            let firstDraft = "Name,Group,Value\r\n\(value),g,111\nOther,h,\"literal\""
+            let secondDraft = "Name,Group,Value\r\n\(value),g,222\nOther,h,\"literal\""
+            let bytes = try XCTUnwrap(encoding.encoded(original))
+            let firstBytes = try XCTUnwrap(encoding.encoded(firstDraft))
+            let secondBytes = try XCTUnwrap(encoding.encoded(secondDraft))
+            XCTAssertEqual(bytes.count, firstBytes.count)
+            XCTAssertEqual(bytes.count, secondBytes.count)
+            try bytes.write(to: path)
+            let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+            try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: path.path)
+            let first = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            let second = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { first.retireContent(); second.retireContent() }
+            first.autoSaveSuspendedForClose = true
+            second.autoSaveSuspendedForClose = true
+            for (file, replacement) in [(first, "111"), (second, "222")] {
+                file.reopen(using: encoding)
+                try await file.waitForText()
+                let result = try await file.delimitedSnapshot(using: .comma)
+                let snapshot = try XCTUnwrap(result)
+                XCTAssertTrue(file.canEditDelimited(snapshot), encoding.name)
+                try await file.editDelimited(.cells([.init(row: 1, column: 2): replacement]), using: snapshot)
+                XCTAssertTrue(file.isDirty)
+                XCTAssertEqual(try Data(contentsOf: path), bytes)
+            }
+            await first.save()
+            XCTAssertEqual(try Data(contentsOf: path), firstBytes, encoding.name)
+            XCTAssertFalse(first.isDirty)
+            try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: path.path)
+            await second.save()
+            XCTAssertEqual(try Data(contentsOf: path), firstBytes, "A stale grid must not overwrite another window")
+            XCTAssertEqual(second.text, secondDraft)
+            XCTAssertTrue(second.isDirty)
+            XCTAssertNotNil(second.saveError)
+            second.documentUndoManager.undo()
+            XCTAssertEqual(second.text, original)
+            XCTAssertFalse(second.isDirty)
+            second.documentUndoManager.redo()
+            XCTAssertEqual(second.text, secondDraft)
+            // The original version returning on disk allows the existing save
+            // path to recover the entire rejected draft without re-encoding it.
+            try bytes.write(to: path, options: .atomic)
+            await second.save()
+            XCTAssertEqual(try Data(contentsOf: path), secondBytes, encoding.name)
+            XCTAssertFalse(second.isDirty)
+            XCTAssertNil(second.saveError)
+        }
+    }
+
+    func testMalformedGridRefusesMutationUntilSourceIsRepaired() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "Name,Value\r\nItem,\"unclosed"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        let initial = try await file.delimitedSnapshot(using: .comma)
+        let malformed = try XCTUnwrap(initial)
+        XCTAssertNotNil(malformed.index.issue)
+        XCTAssertFalse(file.canEditDelimited(malformed))
+        do {
+            try await file.editDelimited(.cells([.init(row: 1, column: 1): "overwrite"]), using: malformed)
+            XCTFail("Malformed input must stay read-only in the grid")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        file.nativeTextStorage.replaceCharacters(in: NSRange(location: file.nativeTextStorage.length, length: 0), with: "\"")
+        let repaired = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(repaired)
+        XCTAssertNil(snapshot.index.issue)
+        XCTAssertTrue(file.canEditDelimited(snapshot))
+        try await file.editDelimited(.cells([.init(row: 1, column: 1): "repaired"]), using: snapshot)
+        XCTAssertEqual(file.text, "Name,Value\r\nItem,\"repaired\"")
+        XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(file.text.utf8))
+    }
+
     func testInFlightSnapshotCannotPublishAcrossRename() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
