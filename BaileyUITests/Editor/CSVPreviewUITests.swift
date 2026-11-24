@@ -184,6 +184,89 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
     }
 
+    func testSortedGridAndSourceShareNativeUndoAndExactSave() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "Name,Group,Value\r\nItem 10,\"équipe\",orange\r\nItem 2,中文,blue\nOther,elsewhere,green\r\n"
+        let gridEdit = original.replacingOccurrences(of: ",blue\n", with: ",\"a,b\"\n")
+        let sourceEdit = gridEdit.replacingOccurrences(of: ",green\r\n", with: ",olive\r\n")
+        func encoded(_ text: String) -> Data { Data([0xef, 0xbb, 0xbf]) + Data(text.utf8) }
+        let file = try fixture.file("Editable.csv", text: original)
+        try encoded(original).write(to: file, options: .atomic)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        let blue = table.staticTexts["blue"]
+        XCTAssertTrue(blue.waitForExistence(timeout: 12))
+        XCTAssertFalse(window.textViews.firstMatch.exists, "The grid starts without a source editor")
+        let two = table.staticTexts["Item 2"], ten = table.staticTexts["Item 10"]
+        let name = table.buttons.matching(NSPredicate(format: "title == %@", "Name")).firstMatch
+        XCTAssertTrue(name.exists)
+        name.click()
+        let sorted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            two.exists && ten.exists && two.frame.minY < ten.frame.minY
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [sorted], timeout: 8), .completed)
+
+        blue.doubleClick()
+        app.typeText("a,b")
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        let changed = table.staticTexts["a,b"]
+        XCTAssertTrue(changed.waitForExistence(timeout: 10))
+        changed.click()
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(blue.waitForExistence(timeout: 10))
+        blue.click()
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(changed.waitForExistence(timeout: 10))
+
+        changed.click()
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(Data((editor.value as? String ?? "").utf8), Data(gridEdit.utf8))
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.setString(sourceEdit, forType: .string))
+        editor.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(Data((editor.value as? String ?? "").utf8), Data(sourceEdit.utf8))
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let olive = table.staticTexts["olive"], green = table.staticTexts["green"]
+        XCTAssertTrue(olive.waitForExistence(timeout: 10))
+        olive.click()
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(green.waitForExistence(timeout: 10))
+        XCTAssertTrue(changed.exists)
+        green.click()
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(blue.waitForExistence(timeout: 10))
+        blue.click()
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(changed.waitForExistence(timeout: 10))
+        changed.click()
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertTrue(olive.waitForExistence(timeout: 10))
+        olive.click()
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == encoded(sourceEdit)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed,
+                       "Saving must preserve BOM, physical row order, quotes and mixed line endings")
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tab.waitForNonExistence(timeout: 10))
+        row.doubleClick()
+        XCTAssertTrue(olive.waitForExistence(timeout: 10))
+        XCTAssertTrue(changed.exists)
+        XCTAssertEqual(try Data(contentsOf: file), encoded(sourceEdit))
+    }
+
     func testMalformedTableShowsLocalizedLineAndKeepsReadableRowsAndSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "名称,值\r\n可读,17\r\n残缺,\"未结束"

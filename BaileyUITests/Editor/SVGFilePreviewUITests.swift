@@ -84,6 +84,126 @@ final class SVGFilePreviewUITests: XCTestCase {
         }
     }
 
+    func testLiveSVGPreservesLastValidPixelsAndNativeUndoAcrossInvalidEdits() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = ##"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="220"><rect width="360" height="220" fill="#ff0000"/></svg>"##
+        let invalid = String(original.dropLast("</svg>".count))
+        let updated = original.replacingOccurrences(of: "#ff0000", with: "#00ff00")
+        let file = try fixture.file("Live.svg", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 12))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: window)
+        tab.rightClick()
+        let split = WorkspaceUITestSupport.menuItem("Show Side by Side", in: app)
+        XCTAssertTrue(split.waitForExistence(timeout: 5))
+        split.click()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let stale = window.staticTexts["SVG preview not updated."]
+        let error = window.staticTexts.matching(NSPredicate(
+            format: "value BEGINSWITH %@ OR label BEGINSWITH %@",
+            "Could not display this SVG.", "Could not display this SVG."
+        )).firstMatch
+        func checkPixels(green: Bool) {
+            let painted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard preview.exists,
+                      let bitmap = NSBitmapImageRep(data: window.screenshot().pngRepresentation) else { return false }
+                let frame = window.frame, point = preview.frame
+                let x = Int((point.midX - frame.minX) * CGFloat(bitmap.pixelsWide) / frame.width)
+                let y = Int((point.midY - frame.minY) * CGFloat(bitmap.pixelsHigh) / frame.height)
+                guard (0..<bitmap.pixelsWide).contains(x), (0..<bitmap.pixelsHigh).contains(y),
+                      let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+                return green ? color.greenComponent > 0.6 && color.greenComponent > 2 * max(color.redComponent, color.blueComponent)
+                    : color.redComponent > 0.6 && color.redComponent > 2 * max(color.greenComponent, color.blueComponent)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed)
+        }
+        func replaceSource(_ value: String) {
+            editor.typeKey("a", modifierFlags: .command)
+            NSPasteboard.general.clearContents()
+            XCTAssertTrue(NSPasteboard.general.setString(value, forType: .string))
+            editor.typeKey("v", modifierFlags: .command)
+            XCTAssertEqual(editor.value as? String, value)
+        }
+        func checkInvalid(retainedGreen: Bool) {
+            XCTAssertTrue(error.waitForExistence(timeout: 10))
+            XCTAssertTrue(stale.exists)
+            checkPixels(green: retainedGreen)
+        }
+        func checkValid(green: Bool) {
+            XCTAssertTrue(stale.waitForNonExistence(timeout: 10))
+            XCTAssertFalse(error.exists)
+            checkPixels(green: green)
+        }
+
+        editor.click()
+        checkValid(green: false)
+        replaceSource(invalid)
+        checkInvalid(retainedGreen: false)
+        replaceSource(updated)
+        checkValid(green: true)
+        editor.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, invalid)
+        checkInvalid(retainedGreen: true)
+        editor.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, original)
+        checkValid(green: false)
+        editor.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertEqual(editor.value as? String, invalid)
+        checkInvalid(retainedGreen: false)
+        editor.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertEqual(editor.value as? String, updated)
+        checkValid(green: true)
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+        editor.typeKey("s", modifierFlags: .command)
+        let written = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(updated.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [written], timeout: 10), .completed)
+
+        preview.rightClick()
+        let copy = WorkspaceUITestSupport.menuItem("Copy PNG…", in: app)
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        copy.click()
+        let sheet = window.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 8))
+        let clipboard = NSPasteboard.general
+        let version = clipboard.changeCount
+        sheet.buttons["Copy"].click()
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            clipboard.changeCount != version && clipboard.data(forType: .png) != nil
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 10), .completed)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(clipboard.data(forType: .png))))
+        XCTAssertEqual(bitmap.pixelsWide, 360)
+        XCTAssertEqual(bitmap.pixelsHigh, 220)
+        let color = try XCTUnwrap(bitmap.colorAt(x: 180, y: 110)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(color.greenComponent - max(color.redComponent, color.blueComponent), 0.6)
+
+        preview.rightClick()
+        let export = WorkspaceUITestSupport.menuItem("Export PNG…", in: app)
+        XCTAssertTrue(export.waitForExistence(timeout: 5))
+        export.click()
+        let destination = fixture.root.appendingPathComponent("Live.png")
+        try WorkspaceUITestSupport.saveNewFile(destination, in: app, window: window)
+        let exported = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: destination.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [exported], timeout: 10), .completed)
+        let exportedBitmap = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: destination)))
+        XCTAssertEqual(exportedBitmap.pixelsWide, 360)
+        XCTAssertEqual(exportedBitmap.pixelsHigh, 220)
+        let exportedColor = try XCTUnwrap(exportedBitmap.colorAt(x: 180, y: 110)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(exportedColor.greenComponent - max(exportedColor.redComponent, exportedColor.blueComponent), 0.6)
+        XCTAssertEqual(try Data(contentsOf: file), Data(updated.utf8))
+    }
+
     func testPNGOutputMenusOfferExplicitOptionsAndCancelWithoutChangingFiles() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

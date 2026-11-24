@@ -18,8 +18,7 @@ final class ImageAnnotationUITests: XCTestCase {
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         let original = try Data(contentsOf: file)
         let sidecar = URL(fileURLWithPath: file.path + ".bailey-annotations.json")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
-                                                     clipboardIsReadOnly: true)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
@@ -69,6 +68,31 @@ final class ImageAnnotationUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed)
         viewer.rightClick()
+        let copy = WorkspaceUITestSupport.menuItem("Copy Annotated Image", in: app)
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        let clipboard = NSPasteboard.general
+        let initialClipboardVersion = clipboard.changeCount
+        copy.click()
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            clipboard.changeCount != initialClipboardVersion && clipboard.data(forType: .png) != nil
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 10), .completed)
+        let png = try XCTUnwrap(clipboard.data(forType: .png))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
+        XCTAssertEqual(bitmap.pixelsWide, 640)
+        XCTAssertEqual(bitmap.pixelsHigh, 480)
+        func containsArrow(_ bitmap: NSBitmapImageRep) -> Bool {
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+                for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                    if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                       c.redComponent > 0.65, c.redComponent - c.greenComponent > 0.4,
+                       c.redComponent - c.blueComponent > 0.4 { return true }
+                }
+            }
+            return false
+        }
+        XCTAssertTrue(containsArrow(bitmap), "The clipboard must contain the rendered annotation, not just the original image")
+        viewer.rightClick()
         let export = WorkspaceUITestSupport.menuItem("Export Annotated Image…", in: app)
         XCTAssertTrue(export.waitForExistence(timeout: 5))
         export.click()
@@ -79,5 +103,24 @@ final class ImageAnnotationUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: sidecar), sidecarBytes)
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)),
                        [file.lastPathComponent, sidecar.lastPathComponent])
+
+        viewer.rightClick()
+        XCTAssertTrue(export.waitForExistence(timeout: 5))
+        export.click()
+        let proceed = window.sheets.firstMatch.buttons["Continue"]
+        XCTAssertTrue(proceed.waitForExistence(timeout: 5))
+        proceed.click()
+        let output = fixture.root.appendingPathComponent("Annotations-annotated.png")
+        try WorkspaceUITestSupport.saveNewFile(output, in: app, window: window)
+        let exported = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: output.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [exported], timeout: 10), .completed)
+        let exportedBitmap = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: output)))
+        XCTAssertEqual(exportedBitmap.pixelsWide, 640)
+        XCTAssertEqual(exportedBitmap.pixelsHigh, 480)
+        XCTAssertTrue(containsArrow(exportedBitmap))
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertEqual(try Data(contentsOf: sidecar), sidecarBytes)
     }
 }
