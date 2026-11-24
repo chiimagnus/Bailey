@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T2"
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -7,7 +7,7 @@ title = "共用音视频实际文件校验与正确读取分支"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 Windows SSH；c7f2eb4a、afe963cc 核销真实 MP3／AAC（含裸 VBR）／WAV／AIFF／CAF／FLAC 和 24 位单声道、32 位六声道的时长与定位；a85ed10f 核销 257 MiB WAV 及 100 次开闭，32ea1864 核销引用型音轨拒绝及替换恢复。145 项宿主及 Debug 严格验签通过；仍待合法 DRM 样本及其余容量和并发组合。 e292869e 保留完整轨道索引的无样本 M4A 复现错误建 player，修复后独立文件及 Markdown 暂存均拒绝，原子替换后实际 readyToPlay；有效 WAV 先封口后验证 8000 样本；定点两项、原生媒体组及正式构建签名通过。"
+note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 Windows SSH；c7f2eb4a、afe963cc 核销真实 MP3／AAC（含裸 VBR）／WAV／AIFF／CAF／FLAC 和 24 位单声道、32 位六声道的时长与定位；a85ed10f 核销 257 MiB WAV 及 100 次开闭，32ea1864 核销引用型音轨拒绝及替换恢复。145 项宿主及 Debug 严格验签通过；仍待合法 DRM 样本及其余容量和并发组合。 e292869e 保留完整轨道索引的无样本 M4A 复现错误建 player，修复后独立文件及 Markdown 暂存均拒绝，原子替换后实际 readyToPlay；有效 WAV 先封口后验证 8000 样本；定点两项、原生媒体组及正式构建签名通过。 f9b124ca：保留完整轨道索引、全部媒体样本置零的 M4A/MP4，真实 AVAsset 仍报告可播；共享路径改为首个实际解码音频缓冲/视频帧。截断与置零均拒绝，原子替换恢复，Markdown 暂存同样验证。Red 6 失败、Green 76 通过无跳过；329 MB 视频 510s 定位及真实七格式百次切换通过。"
 
 [[tasks]]
 id = "P1-T2"

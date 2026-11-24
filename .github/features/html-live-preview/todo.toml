@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T2"
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -7,7 +7,7 @@ title = "建立一条安全 HTML 静态渲染与共用资源链"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "5ac0c145 原生 WebKit；5297ea42 真实 Windows SSH；e43e8c5a 整页图片/CSS 预算；824dc93f 慢读取消；db850a1b 嵌套字体／越界链接；1c94d1a3 32 MiB 边界；38794efd 真 WebContent 退出、慢读取消、原生恢复和退役；d527ed2d BOM／显式 GBK／空页；fdf6c973 本机项目外文件、类型错配和资源移走。16 项资源回归含 Downloads 与 Windows SSH；71 项生命周期宿主及正式签名构建通过。继续核销其余 H03/H04/H05 与共享条件。 0e479782 核销同一图片在独立文件、Markdown、HTML 三窗口引用的真实版本刷新、窗口归属、源码字节及独立释放；HTML 12 项含 Downloads/test 真实样本无跳过通过，相关 172 项（165 通过、7 环境项跳过）、Debug 构建及严格验签通过。 20e7a3f6 实际 WebKit 快照证明 SVG 子资源隔离、DTD 拒绝、TCP 零连接／正对照及原字节；HTML 13 项含真实样本通过。"
+note = "5ac0c145 原生 WebKit；5297ea42 真实 Windows SSH；e43e8c5a 整页图片/CSS 预算；824dc93f 慢读取消；db850a1b 嵌套字体／越界链接；1c94d1a3 32 MiB 边界；38794efd 真 WebContent 退出、慢读取消、原生恢复和退役；d527ed2d BOM／显式 GBK／空页；fdf6c973 本机项目外文件、类型错配和资源移走。16 项资源回归含 Downloads 与 Windows SSH；71 项生命周期宿主及正式签名构建通过。继续核销其余 H03/H04/H05 与共享条件。 0e479782 核销同一图片在独立文件、Markdown、HTML 三窗口引用的真实版本刷新、窗口归属、源码字节及独立释放；HTML 12 项含 Downloads/test 真实样本无跳过通过，相关 172 项（165 通过、7 环境项跳过）、Debug 构建及严格验签通过。 20e7a3f6 实际 WebKit 快照证明 SVG 子资源隔离、DTD 拒绝、TCP 零连接／正对照及原字节；HTML 13 项含真实样本通过。 04e4f9d3：原生生成 PNG 与真实透明渐变 PNG 的 IEND 缺失、IDAT 截断、CRC 损坏在 FileTab、Markdown、HTML 三入口复现并拒绝；正常字节原子替换恢复。Red 13 断言，Green 162 通过、3 个长会话条件跳过、0 失败。 46426dd8：真实 WebKit 的 readonly 未阻止复选/单选激活；统一禁用非文本表单控件，保留文本只读复制，表单提交与导航仍零外连。Red 1 失败，Green 18 通过、1 个未设远端环境变量的用例跳过。"
 
 [[tasks]]
 id = "P1-T2"

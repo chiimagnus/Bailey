@@ -1,21 +1,21 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = "P1-T2"
 
 [[tasks]]
 id = "P1-T1"
 title = "复用 SVG 净化与 SwiftDraw，确认复杂 SVG 能力"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = "共享净化 b81bcc1f、原生矢量 b2022516、真 Windows 27ede424、滤镜替换／百次挂载 a564658c；df54f7ad 真实科研 SVG、ad4fea90 真 1 MiB±1、2d315c8a 压缩 SVG 及真 Windows 和 Mac 同路径。03d176ef 本地 use／symbol、带引号画笔引用和展开预算；研图三处标记与参考像素吻合，151 项宿主（真实 Windows SSH、无跳过）、4 项隔离 SVG GUI 与 Debug 验签通过。c31f256a 在宿主验证快速改写只挂载最新 SVG，跨格式改名和关闭清空旧画布并保留字节。有界原生解析的中途取消时刻和完整画质矩阵尚未核完；图案与内嵌图仍明确省略。 e68195e6 修复无 use 的裁剪／遮罩／滤镜／渐变引用预算绕过；真实科研样本像素及 SVG／Markdown 73 项通过、1 GIF 条件跳过、正式 Debug 验签；审计 F-03 已核销。 20e7a3f6 同一恶意 SVG 通过独立矢量画布、Markdown 资源与 HTML WebKit 比较真实绿色像素；外部文件／实体未渲染，TCP 监听零请求且正对照有效，原始字节不变。"
+commit = "7873e5ea"
+note = "共享净化 b81bcc1f、原生矢量 b2022516、真 Windows 27ede424、滤镜替换／百次挂载 a564658c；df54f7ad 真实科研 SVG、ad4fea90 真 1 MiB±1、2d315c8a 压缩 SVG 及真 Windows 和 Mac 同路径。03d176ef 本地 use／symbol、带引号画笔引用和展开预算；研图三处标记与参考像素吻合，151 项宿主（真实 Windows SSH、无跳过）、4 项隔离 SVG GUI 与 Debug 验签通过。c31f256a 在宿主验证快速改写只挂载最新 SVG，跨格式改名和关闭清空旧画布并保留字节。图案与内嵌图仍明确省略。 e68195e6 修复无 use 的裁剪／遮罩／滤镜／渐变引用预算绕过；真实科研样本像素及 SVG／Markdown 73 项通过、1 GIF 条件跳过、正式 Debug 验签；审计 F-03 已核销。 20e7a3f6 同一恶意 SVG 通过独立矢量画布、Markdown 资源与 HTML WebKit 比较真实绿色像素；外部文件／实体未渲染，TCP 监听零请求且正对照有效，原始字节不变。 d8654917：真实科研图及独立 WebKit 参考核对投影、真实字形、4,000 线段和极端坐标剪裁像素，SVG 13 项全部通过。 44e8ac42：780164 字节、13 万路径命令的正常像素与两次实际后台取消通过，未产生迟到像素。7873e5ea：真实 SVG 的 32 MiB−1／32 MiB／32 MiB+1 文件验证源码与预览边界、原字节不变；最新 SVG 15 项全部通过，P1-T1 的本机与 Windows 路径证据闭合。P1 阶段仍须独立核销 P1-T2 的物理设备和完整 App 验收，不将本任务完成等同阶段 Go。"
 
 [[tasks]]
 id = "P1-T2"
 title = "接入共用图形视口和源码／预览／并排命令"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "b2022516 已接入共用视口和三种展示方式，实际 SVG GUI 与 400% Retina 像素通过；真触控板、多屏倍率、SVG 冷恢复及焦点组合仍需验收。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
+note = "已有 b2022516 共用视口与三种模式、400% Retina 及 139ab5e9 七格式挂载；继续核对原生 SVG 标签重挂载、改名及位置恢复。 325ed5a6：修复共用图形视口位置，双 SVG、源码切换、重挂载、窗口尺寸、同类型改名与真实替换通过；21 项 SVG／图片定点宿主全部通过；F-04 Resolved。 aa26f533：双窗口八个真实磁盘文件标签冷恢复、默认模式、并排临时性、懒加载及标签复用；SessionStoreTests 11 项全过。完整 App 冷启动仍待 GUI 验收。"
 
 [[tasks]]
 id = "P2-T1"
