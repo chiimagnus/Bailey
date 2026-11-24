@@ -126,6 +126,10 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try Self.readSync(path: path, maxBytes: maxBytes)
     }
 
+    @concurrent func readPrefix(path: String, maxBytes: Int) async throws -> Data {
+        try Self.readSync(path: path, maxBytes: maxBytes, prefixOnly: true)
+    }
+
     @concurrent func read(path: String, maxBytes: Int, confinedTo directory: String) async throws -> Data {
         try Self.readSync(path: path, maxBytes: maxBytes, confinedTo: Self.canonicalPath(directory))
     }
@@ -192,7 +196,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         return info
     }
 
-    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {
+    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil,
+                                 prefixOnly: Bool = false) throws -> Data {
         try Task.checkCancellation()
         guard maxBytes >= 0, maxBytes < .max else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
@@ -203,8 +208,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             throw CocoaError(.fileReadNoPermission)
         }
         let info = try regularFileStat(handle)
-        let length = UInt64(info.st_size)
-        guard length <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        let fileLength = UInt64(info.st_size)
+        guard prefixOnly || fileLength <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        let length = min(fileLength, UInt64(maxBytes))
 
         var data = Data()
         while UInt64(data.count) < length {
@@ -218,8 +224,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         // A changed length invalidates the read; never return a partial or
         // mixed-length file as if it were the accepted full document.
         let after = try regularFileStat(handle)
-        guard UInt64(after.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
-        guard UInt64(after.st_size) == length else {
+        guard prefixOnly || UInt64(after.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        guard UInt64(after.st_size) == fileLength else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EBUSY))
         }
         return data

@@ -16,11 +16,23 @@ nonisolated struct RasterPreview: Sendable {
         let seconds: TimeInterval
     }
 
+    private static func rasterType(_ source: CGImageSource) -> String? {
+        guard let identifier = CGImageSourceGetType(source) as String?,
+              let type = UTType(identifier), type.conforms(to: .image),
+              !type.conforms(to: .svg), !type.conforms(to: .pdf) else { return nil }
+        return identifier
+    }
+
+    static func recognizesHeader(_ bytes: Data) -> Bool {
+        let source = CGImageSourceCreateIncremental(nil)
+        CGImageSourceUpdateData(source, bytes as CFData, false)
+        return rasterType(source) != nil
+    }
+
     static func source(_ bytes: Data) throws -> CGImageSource? {
         guard let source = CGImageSourceCreateWithData(bytes as CFData, [
             kCGImageSourceShouldCache: false,
-        ] as CFDictionary),
-              let type = CGImageSourceGetType(source) as String? else { return nil }
+        ] as CFDictionary), let type = rasterType(source) else { return nil }
         if type == UTType.jpeg.identifier, !hasPrimaryJPEGEnd(bytes) {
             throw CocoaError(.fileReadCorruptFile)
         }

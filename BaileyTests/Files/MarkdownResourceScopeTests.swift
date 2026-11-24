@@ -202,6 +202,18 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let originalImage = try XCTUnwrap(rasterTab.originalImageRequest())
             let originalRaster = try await originalImage()
             XCTAssertEqual(originalRaster.bounds.size, CGSize(width: 5000, height: 20))
+            let renamedRaster = directory + "/wide raster #100%.txt"
+            try await channel.rename(from: rasterPath, to: renamedRaster)
+            let rasterPrefix = try await channel.readPrefix(path: renamedRaster, maxBytes: 64)
+            XCTAssertEqual(rasterPrefix, Data(rasterBytes.prefix(64)))
+            let renamedTab = FileTab(path: renamedRaster, backend: channel, workspaceIdentity: "ssh:\(host)")
+            try await load(renamedTab)
+            guard case .image(let renamedImage) = renamedTab.content else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            XCTAssertEqual(renamedImage.pixelSize, raster.pixelSize)
+            try await channel.rename(from: renamedRaster, to: rasterPath)
+            renamedTab.retireContent()
             let relative = try XCTUnwrap(URL(string: "asset.svg"))
             let picture = try await resource.picture(relative)
             XCTAssertEqual(picture.pointSize?.width, 40)

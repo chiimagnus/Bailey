@@ -151,19 +151,27 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     /// Reads one byte past the cap so an oversized file can be told apart from
     /// one that happens to be exactly `maxBytes` long.
     func read(path: String, maxBytes: Int) async throws -> Data {
+        try await read(path: path, maxBytes: maxBytes, prefixOnly: false)
+    }
+
+    func readPrefix(path: String, maxBytes: Int) async throws -> Data {
+        try await read(path: path, maxBytes: maxBytes, prefixOnly: true)
+    }
+
+    private func read(path: String, maxBytes: Int, prefixOnly: Bool) async throws -> Data {
         try Task.checkCancellation()
         guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
         let quoted = RemoteCommands.quote(path)
-        let limit = maxBytes + 1
+        let limit = prefixOnly ? maxBytes : maxBytes + 1
         let command = requiring(path,
             "[ -f \(quoted) ] || exit \(ExitCode.notRegular); head -c \(limit) -- \(quoted)")
         let result = try await runner.runLimited(
             [command], stdin: nil, timeout: timeout,
             stdoutLimit: limit, stderrLimit: 64 << 10)
         guard result.status == 0 else { throw failure(command: command, result: result) }
-        if result.stdout.count == limit { throw WorkspaceError.tooLarge }
+        if !prefixOnly, result.stdout.count == limit { throw WorkspaceError.tooLarge }
         return result.stdout
     }
 

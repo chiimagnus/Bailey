@@ -680,6 +680,13 @@ final class FileTabPersistenceTests: XCTestCase {
                 XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
                 XCTAssertEqual(error.code, Int(ENOTSUP), path)
             }
+            do {
+                _ = try await LocalWorkspaceBackend.shared.readPrefix(path: path, maxBytes: 128)
+                XCTFail("Nonregular file must not expose a prefix: \(path)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
             XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
                               "FIFO and device reads must not block while waiting for input")
         }
@@ -699,6 +706,10 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
         XCTAssertFalse(file.isDirty)
         XCTAssertEqual(try Data(contentsOf: target), Data(original.utf8))
+        let prefix = try await LocalWorkspaceBackend.shared.readPrefix(path: link.path, maxBytes: 7)
+        XCTAssertEqual(prefix, Data(original.utf8.prefix(7)))
+        let entire = try await LocalWorkspaceBackend.shared.readPrefix(path: link.path, maxBytes: 64)
+        XCTAssertEqual(entire, Data(original.utf8))
     }
 
     func testImageExtensionNeverAuthorizesUnboundedBackendRead() async throws {
@@ -710,6 +721,73 @@ final class FileTabPersistenceTests: XCTestCase {
         let limit = await backend.lastReadLimit
         XCTAssertEqual(limit, 32 << 20,
                        "An image-looking extension must not bypass the text size limit")
+    }
+
+    func testRasterContentRatherThanSuffixDeterminesTheViewerAcrossRenameAndReload() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = try XCTUnwrap(CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8,
+                                             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 0.1, green: 0.9, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        let artwork = try XCTUnwrap(context.makeImage())
+        var fixtures: [(UTType, Data)] = []
+        for format in [UTType.png, .jpeg, .heic, .gif, .tiff, .bmp, .icns] {
+            let bytes = NSMutableData()
+            let writer = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, format.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(writer, artwork, nil)
+            XCTAssertTrue(CGImageDestinationFinalize(writer), format.identifier)
+            fixtures.append((format, bytes as Data))
+        }
+        let webp = try XCTUnwrap(Data(base64Encoded: "UklGRhwAAABXRUJQVlA4TA8AAAAvD8ADAAcQ9Y/+ByKi/wEA"))
+        fixtures.append((.webP, webp))
+        for (format, bytes) in fixtures {
+            let folder = root.appendingPathComponent(format.identifier)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            let named = folder.appendingPathComponent("sample.png")
+            try bytes.write(to: named)
+            let file = FileTab(path: named.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            func assertImage(_ tab: FileTab, at path: URL) async throws {
+                tab.loadIfNeeded()
+                try await waitForFileTabState { if case .loading = tab.content { return false }; return true }
+                guard case .image(let image) = tab.content else {
+                    return XCTFail("Expected \(format.identifier) image at \(path.lastPathComponent)")
+                }
+                let expected = try MarkdownPicture.decode(bytes)
+                XCTAssertEqual(image.pixelSize, CGSize(width: expected.poster.width, height: expected.poster.height))
+                XCTAssertEqual(try Data(contentsOf: path), bytes)
+                XCTAssertFalse(tab.isDirty)
+                XCTAssertFalse(tab.canPreviewFile, "A raster has no editable XML or CSV buffer")
+            }
+            try await assertImage(file, at: named)
+            for filename in ["无后缀 #100%", "sample.txt", "sample.svg", "sample.TIFF"] {
+                let destination = folder.appendingPathComponent(filename)
+                let from = URL(fileURLWithPath: file.path)
+                try FileManager.default.moveItem(at: from, to: destination)
+                file.updatePath(destination.path)
+                file.reloadFromDiskIfClean()
+                let reopened = FileTab(path: destination.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                defer { reopened.retireContent() }
+                try await assertImage(reopened, at: destination)
+                try await assertImage(file, at: destination)
+            }
+        }
+        for (name, source) in [("text.png", "ordinary text\n"),
+                               ("notes.txt", "BM is a shorthand for benchmark.\n"),
+                               ("format.md", "GIF89a is a GIF file header, not an image.\n"),
+                               ("vector.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"/>")] {
+            let url = root.appendingPathComponent(name)
+            let bytes = Data(source.utf8)
+            try bytes.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            try await file.waitForText()
+            XCTAssertEqual(file.text, source)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
     }
 
     func testActualLargeImagePreviewKeepsIndependentBoundedRead() async throws {
@@ -757,6 +835,17 @@ final class FileTabPersistenceTests: XCTestCase {
         guard case .image = linkedFile.content else {
             return XCTFail("A symlink to a large regular image must retain image preview")
         }
+        let renamed = root.appendingPathComponent("large raster #100%.txt")
+        try FileManager.default.moveItem(at: path, to: renamed)
+        let reopened = FileTab(path: renamed.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { reopened.retireContent() }
+        reopened.loadIfNeeded()
+        try await waitForFileTabState { if case .loading = reopened.content { return false }; return true }
+        guard case .image(let actual) = reopened.content else {
+            return XCTFail("A real image larger than the text limit remains previewable after a suffix change")
+        }
+        XCTAssertEqual(actual.pixelSize, CGSize(width: 4096, height: 3072))
+        XCTAssertEqual(try Data(contentsOf: renamed), pixels)
     }
 
     func testNativePNGsAtTheExactRasterPixelBudget() async throws {

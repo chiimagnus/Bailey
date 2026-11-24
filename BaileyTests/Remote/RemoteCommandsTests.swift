@@ -320,6 +320,10 @@ final class RemoteCommandsTests: XCTestCase {
         } catch WorkspaceError.tooLarge {}
         let bound = await runner.requestedStdoutLimit
         XCTAssertEqual(bound, 13)
+        let prefix = try await backend.readPrefix(path: "/fixture/file.txt", maxBytes: 12)
+        XCTAssertEqual(prefix.count, 12)
+        let prefixBound = await runner.requestedStdoutLimit
+        XCTAssertEqual(prefixBound, 12)
     }
 
     func testSSHReadRejectsSpecialFilesAndNULPathWithoutBlocking() async throws {
@@ -343,11 +347,22 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(linkedBytes, Data("hello".utf8))
         let emptyBytes = try await backend.read(path: emptyFile.path, maxBytes: 0)
         XCTAssertEqual(emptyBytes, Data())
+        let prefix = try await backend.readPrefix(path: linked.path, maxBytes: 3)
+        XCTAssertEqual(prefix, Data("hel".utf8))
+        let completePrefix = try await backend.readPrefix(path: linked.path, maxBytes: 20)
+        XCTAssertEqual(completePrefix, Data("hello".utf8))
         for path in [directory.path, fifo.path, fifoLink.path, "/dev/null"] {
             let started = ProcessInfo.processInfo.systemUptime
             do {
                 _ = try await backend.read(path: path, maxBytes: 64)
                 XCTFail("Nonregular remote path must not succeed: \(path)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
+            do {
+                _ = try await backend.readPrefix(path: path, maxBytes: 64)
+                XCTFail("Nonregular remote path must not expose a prefix: \(path)")
             } catch let error as NSError {
                 XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
                 XCTAssertEqual(error.code, Int(ENOTSUP), path)

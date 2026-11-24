@@ -239,7 +239,7 @@ final class FileTab: nonisolated Identifiable {
 
     nonisolated static let maxTextBytes = 32 << 20
     private nonisolated static let maxImageBytes = 256 << 20
-    private nonisolated static let imageExtensions: Set<String> = [
+    private nonisolated static let imageExtensionHints: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
 
@@ -1029,6 +1029,18 @@ final class FileTab: nonisolated Identifiable {
         return try decode(bytes, source)
     }
 
+    @concurrent private static func readLargeRaster(
+        _ path: String, backend: WorkspaceBackend, info: WorkspaceStat
+    ) async throws -> Data {
+        guard (info.isRegular || info.isSymlink), info.size > maxTextBytes, info.size <= maxImageBytes else {
+            throw WorkspaceError.tooLarge
+        }
+        let prefix = try await backend.readPrefix(path: path, maxBytes: 65_536)
+        guard RasterPreview.recognizesHeader(prefix) else { throw WorkspaceError.tooLarge }
+        // Use the observed length, not the image ceiling, in case the path grows.
+        return try await backend.read(path: path, maxBytes: info.size)
+    }
+
     @concurrent private static func readContent(
         path: String, backend: WorkspaceBackend, override: TextFileEncoding?,
         isLocal: Bool, currentMedia: NativeMedia?
@@ -1052,28 +1064,20 @@ final class FileTab: nonisolated Identifiable {
             }
             return LoadedContent(content: content, text: "", encoding: nil, decodingFailed: false, sourceVersion: nil)
         }
-        let isImage = imageExtensions.contains(suffix)
-        var limit = maxTextBytes
-        if isImage, let info = try await backend.stat(path: path), info.size > maxTextBytes {
-            guard (info.isRegular || info.isSymlink), info.size <= maxImageBytes else {
-                throw WorkspaceError.tooLarge
+        let data: Data
+        // The suffix is only a size-probe hint, not the format decision. Avoid
+        // transferring the first 32 MiB twice for ordinary large SSH images.
+        if imageExtensionHints.contains(suffix), let info = try await backend.stat(path: path),
+           info.size > maxTextBytes {
+            data = try await readLargeRaster(path, backend: backend, info: info)
+        } else {
+            do {
+                data = try await backend.read(path: path, maxBytes: maxTextBytes)
+            } catch WorkspaceError.tooLarge {
+                guard let info = try await backend.stat(path: path) else { throw WorkspaceError.tooLarge }
+                data = try await readLargeRaster(path, backend: backend, info: info)
             }
-            // A renamed text file must not make us read hundreds of MiB before
-            // discovering it is not an image. Check a bounded real header.
-            let probe = try await backend.runLimited(
-                argv: ["/usr/bin/head", "-c", "65536", "--", path],
-                cwd: nil, env: nil, stdin: nil, timeout: 25,
-                stdoutLimit: 65_536, stderrLimit: 16_384)
-            guard probe.status == 0 else {
-                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
-            }
-            let source = CGImageSourceCreateIncremental(nil)
-            CGImageSourceUpdateData(source, probe.stdout as CFData, false)
-            guard CGImageSourceGetType(source) != nil else { throw WorkspaceError.tooLarge }
-            // Never use .max: the path may grow between stat and the actual read.
-            limit = info.size
         }
-        let data = try await backend.read(path: path, maxBytes: limit)
         try Task.checkCancellation()
         if (suffix == "svg" || suffix == "svgz"), data.starts(with: [0x1f, 0x8b, 0x08]) {
             return LoadedContent(
@@ -1082,40 +1086,46 @@ final class FileTab: nonisolated Identifiable {
                 text: "", encoding: nil, decodingFailed: false, sourceVersion: nil
             )
         }
-        if isImage {
-            do {
-                if let source = try RasterPreview.source(data) {
-                    guard let preview = RasterPreview.decode(source, maximumDimension: 4096) else {
-                        throw CocoaError(.fileReadCorruptFile)
-                    }
-                    return LoadedContent(
-                        content: .image(preview), text: "", encoding: nil,
-                        decodingFailed: false, sourceVersion: WorkspaceFileVersion(data: data)
-                    )
+        let invalidRaster: Bool
+        do {
+            if let source = try RasterPreview.source(data) {
+                guard let preview = RasterPreview.decode(source, maximumDimension: 4096) else {
+                    throw CocoaError(.fileReadCorruptFile)
                 }
-            } catch {
                 return LoadedContent(
-                    content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
-                    text: "", encoding: nil, decodingFailed: false,
-                    sourceVersion: nil
+                    content: .image(preview), text: "", encoding: nil,
+                    decodingFailed: false, sourceVersion: WorkspaceFileVersion(data: data)
                 )
             }
+            invalidRaster = false
+        } catch {
+            try Task.checkCancellation()
+            // A recognized magic prefix is only a candidate (e.g. a plain
+            // text file starting with GIF89a). Preserve genuinely valid text.
+            invalidRaster = true
         }
-        guard data.count <= maxTextBytes else { throw WorkspaceError.tooLarge }
-        let decoded = await TextFileEncoding.decode(data, path: path, backend: backend, override: override)
-        switch decoded {
-        case .success(let document):
-            return LoadedContent(content: .text, text: document.text,
-                                 encoding: document.encoding, decodingFailed: false,
-                                 sourceVersion: WorkspaceFileVersion(data: data))
-        case .failure(let failure):
-            let unknownTextEncoding: Bool
-            if case .binary = failure { unknownTextEncoding = false }
-            else { unknownTextEncoding = true }
-            return LoadedContent(content: .unavailable(failure.message), text: "",
-                                 encoding: nil,
-                                 decodingFailed: unknownTextEncoding, sourceVersion: nil)
+        if data.count <= maxTextBytes {
+            let decoded = await TextFileEncoding.decode(data, path: path, backend: backend, override: override)
+            switch decoded {
+            case .success(let document):
+                return LoadedContent(content: .text, text: document.text,
+                                     encoding: document.encoding, decodingFailed: false,
+                                     sourceVersion: WorkspaceFileVersion(data: data))
+            case .failure(let failure) where !invalidRaster:
+                let unknownTextEncoding: Bool
+                if case .binary = failure { unknownTextEncoding = false }
+                else { unknownTextEncoding = true }
+                return LoadedContent(content: .unavailable(failure.message), text: "",
+                                     encoding: nil, decodingFailed: unknownTextEncoding, sourceVersion: nil)
+            case .failure: break
+            }
+        } else if !invalidRaster {
+            throw WorkspaceError.tooLarge
         }
+        return LoadedContent(
+            content: .unavailable(String(localized: "Image is too large or invalid", table: "Workspace")),
+            text: "", encoding: nil, decodingFailed: false, sourceVersion: nil
+        )
     }
 }
 

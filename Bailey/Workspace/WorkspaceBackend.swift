@@ -69,6 +69,8 @@ nonisolated protocol WorkspaceBackend: Sendable {
     /// At most `maxBytes`; throws `WorkspaceError.tooLarge` beyond that and
     /// `.notFound` when the path is gone.
     func read(path: String, maxBytes: Int) async throws -> Data
+    /// Read only the leading bytes of a regular file, without accepting it as a complete document.
+    func readPrefix(path: String, maxBytes: Int) async throws -> Data
     func write(path: String, data: Data) async throws
     /// Text save only: compare the accepted raw bytes before atomically publishing.
     /// No default fallback to unconditional write is permitted.
@@ -95,6 +97,15 @@ nonisolated protocol WorkspaceBackend: Sendable {
 }
 
 extension WorkspaceBackend {
+    func readPrefix(path: String, maxBytes: Int) async throws -> Data {
+        // In-memory fixtures can implement their existing bounded command path.
+        let result = try await runLimited(argv: ["/usr/bin/head", "-c", String(maxBytes), "--", path],
+                                          cwd: nil, env: nil, stdin: nil, timeout: 25,
+                                          stdoutLimit: maxBytes, stderrLimit: 16_384)
+        guard result.status == 0 else { throw CocoaError(.fileReadUnknown) }
+        return result.stdout
+    }
+
     func runLimited(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int
