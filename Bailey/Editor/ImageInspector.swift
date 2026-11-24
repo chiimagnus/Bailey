@@ -114,13 +114,18 @@ class PreviewScrollView: NSScrollView {
             menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
         }
         self.menu = menu
-        setAccessibilityCustomActions(actions.map { title, action in
-            NSAccessibilityCustomAction(name: title) { [weak self] in
-                guard let self else { return false }
-                _ = self.perform(action)
-                return true
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        menu?.items.compactMap { item in
+            guard item.target === self, item.action != nil else { return nil }
+            let title = item.title
+            return NSAccessibilityCustomAction(name: title) { [weak self, weak item] in
+                guard let self, let item, item.menu === self.menu, item.title == title,
+                      let action = item.action else { return false }
+                return NSApp.sendAction(action, to: self, from: item)
             }
-        })
+        }
     }
 
     @available(*, unavailable)

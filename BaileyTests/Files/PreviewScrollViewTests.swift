@@ -110,8 +110,13 @@ final class PreviewScrollViewTests: XCTestCase {
         }
         try await waitFor("Draw the final green frame") { isGreen(scroll) }
         XCTAssertEqual(scroll.pixelScale, scale, accuracy: 0.001)
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
+        let actions = try XCTUnwrap(scroll.accessibilityCustomActions())
+        XCTAssertEqual(actions.map(\.name), scroll.menu?.items.map(\.title))
+        let accessiblePause = try XCTUnwrap(actions.first { $0.name == pauseTitle }?.handler)
+        XCTAssertTrue(accessiblePause())
         try await waitFor { scroll.menu?.item(withTitle: resumeTitle) != nil }
+        XCTAssertEqual(scroll.accessibilityCustomActions()?.map(\.name), scroll.menu?.items.map(\.title))
+        XCTAssertFalse(accessiblePause(), "An old pause action must not resume playback")
         try await Task.sleep(for: .milliseconds(600))
         XCTAssertTrue(isGreen(scroll))
         let resume = try XCTUnwrap(scroll.menu?.item(withTitle: resumeTitle))
@@ -130,6 +135,12 @@ final class PreviewScrollViewTests: XCTestCase {
         let remountedScroll = try XCTUnwrap(previewScroll(in: remounted))
         XCTAssertTrue(file.gifPlayback === playback)
         XCTAssertTrue(isGreen(remountedScroll))
+        let resumeActions = try XCTUnwrap(remountedScroll.accessibilityCustomActions())
+        XCTAssertEqual(resumeActions.map(\.name), remountedScroll.menu?.items.map(\.title))
+        let accessibleResume = try XCTUnwrap(resumeActions.first { $0.name == resumeTitle }?.handler)
+        XCTAssertTrue(accessibleResume())
+        try await waitFor("Resume through the remounted accessibility action") { !isGreen(remountedScroll) }
+        XCTAssertEqual(remountedScroll.pixelScale, scale, accuracy: 0.001)
         XCTAssertEqual(try Data(contentsOf: url), bytes)
 
         file.retireContent()
@@ -138,6 +149,8 @@ final class PreviewScrollViewTests: XCTestCase {
         let center = try XCTUnwrap(retired.colorAt(x: retired.pixelsWide / 2, y: retired.pixelsHigh / 2))
         XCTAssertEqual(center.alphaComponent, 0, accuracy: 0.01, "A cached native view must release its image on dismantle")
         XCTAssertNil(remountedScroll.menu?.item(withTitle: resumeTitle))
+        XCTAssertEqual(remountedScroll.accessibilityCustomActions()?.map(\.name), remountedScroll.menu?.items.map(\.title))
+        XCTAssertFalse(accessibleResume(), "A retired animation action must not resume a closed file")
     }
 
     func testSustainedRealGIFPlaybackRetiresItsNativeFrames() async throws {
