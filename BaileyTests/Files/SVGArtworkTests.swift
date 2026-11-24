@@ -187,6 +187,70 @@ final class SVGArtworkTests: XCTestCase {
         }
     }
 
+    func testSharedRendererPlacesLocalSymbolsAndNestedInstances() throws {
+        let source = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+                 width="64" height="24">
+              <defs>
+                <linearGradient id="ink"><stop offset="0" stop-color="#00aaff"/><stop offset="1" stop-color="#00aaff"/></linearGradient>
+                <symbol id="tile" viewBox="0 0 8 8"><rect width="8" height="8"/></symbol>
+                <g id="stamp"><use xlink:href="#tile" width="12" height="12"/></g>
+              </defs>
+              <use href="#stamp" x="6" y="5" style="fill: url('#ink')"/>
+              <use href="#tile" x="33" y="5" width="16" height="12" fill="#ff2200"/>
+              <use x="55" href="#not-present"/>
+            </svg>
+            """.utf8)
+        let vector = try SVGArtwork.parse(source)
+        XCTAssertEqual(vector.omitted, ["use"])
+        let bitmap = NSBitmapImageRep(cgImage: try SVGArtwork.render(source).image)
+        let nested = try XCTUnwrap(bitmap.colorAt(x: 24, y: 22)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(nested.alphaComponent, 0.98)
+        XCTAssertGreaterThan(nested.blueComponent, 0.95)
+        XCTAssertLessThan(nested.redComponent, 0.05)
+        let symbol = try XCTUnwrap(bitmap.colorAt(x: 84, y: 22)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(symbol.alphaComponent, 0.98)
+        XCTAssertGreaterThan(symbol.redComponent, 0.95)
+        XCTAssertLessThan(symbol.blueComponent, 0.05)
+        XCTAssertLessThan(try XCTUnwrap(bitmap.colorAt(x: 66, y: 22)).alphaComponent, 0.02,
+                          "The symbol viewBox stays centered inside its wider viewport")
+    }
+
+    func testLocalInstancesShareTheExpandedGeometryBudget() throws {
+        let shapes = (0..<31).map { column in
+            "<rect x=\"\(column)\" width=\"1\" height=\"1\"/>"
+        }.joined()
+        func artwork(instances: Int) -> Data {
+            let stamps = (0..<instances).map { row in "<use href=\"#row\" y=\"\(row)\"/>" }.joined()
+            return Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="128">
+                  <defs><g id="row">\(shapes)</g></defs>\(stamps)
+                </svg>
+                """.utf8)
+        }
+        XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(instances: 123)).omitted.isEmpty)
+        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(instances: 124))) { error in
+            guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded SVG limit: \(error)") }
+        }
+    }
+
+    func testExpandedGeometryBudgetIncludesReusedPathData() throws {
+        let contour = "M1 1" + String(repeating: " l1 0 l0 1 l-1 0 l0 -1", count: 2048) + " z"
+        let copiesAtLimit = SVGArtwork.byteLimit / contour.utf8.count
+        func artwork(instances: Int) -> Data {
+            let stamps = (0..<instances).map { column in "<use href=\"#tile\" x=\"\(column * 4)\"/>" }.joined()
+            return Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" width="128" height="4">
+                  <defs><path id="tile" d="\(contour)"/></defs>\(stamps)
+                </svg>
+                """.utf8)
+        }
+        XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(instances: copiesAtLimit - 2)).omitted.isEmpty)
+        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(instances: copiesAtLimit))) { error in
+            guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded SVG size: \(error)") }
+        }
+    }
+
     func testDocumentSampleAndBlurHaveObservablePixels() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -219,7 +283,7 @@ final class SVGArtworkTests: XCTestCase {
         let bytes = try Data(contentsOf: file)
         let vector = try SVGArtwork.parse(bytes)
         XCTAssertEqual(vector.image.size, CGSize(width: 1400, height: 620))
-        XCTAssertEqual(vector.omitted, ["pattern", "use"])
+        XCTAssertEqual(vector.omitted, ["pattern"])
         let raster = try SVGArtwork.render(bytes)
         XCTAssertEqual(raster.pointSize, vector.image.size)
         let bitmap = NSBitmapImageRep(cgImage: raster.image)
@@ -240,7 +304,10 @@ final class SVGArtworkTests: XCTestCase {
         let offAxis = try pixel(at: CGPoint(x: 760, y: 446))
         XCTAssertGreaterThan(offAxis.redComponent, 0.9)
 
-        let samples = [CGPoint(x: 230, y: 135), CGPoint(x: 1000, y: 135)]
+        let samples = [
+            CGPoint(x: 230, y: 135), CGPoint(x: 1000, y: 135),
+            CGPoint(x: 346, y: 280), CGPoint(x: 580, y: 138), CGPoint(x: 855, y: 214),
+        ]
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
@@ -274,7 +341,7 @@ final class SVGArtworkTests: XCTestCase {
             XCTAssertEqual(target.count, channels.count)
             for (component, value) in zip(channels, target) {
                 XCTAssertEqual(component, Double(value) / 255, accuracy: 0.12,
-                               "Gradient must agree with the isolated native browser reference at \(point)")
+                               "Gradients and reused markers must agree with the native reference at \(point)")
             }
         }
         let glyphPixels = try stride(from: 160, to: 255, by: 2).flatMap { column in

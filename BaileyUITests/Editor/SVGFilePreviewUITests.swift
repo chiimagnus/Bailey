@@ -7,8 +7,11 @@ final class SVGFilePreviewUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let source = """
             <svg xmlns="http://www.w3.org/2000/svg" width="360" height="220" viewBox="-180 -110 360 220">
-              <defs><pattern id="paper" width="2" height="2"><rect width="1" height="1"/></pattern></defs>
-              <rect x="-180" y="-110" width="360" height="220" fill="#f11a14"/>
+              <defs>
+                <pattern id="paper" width="2" height="2"><rect width="1" height="1"/></pattern>
+                <symbol id="sheet" viewBox="0 0 36 22"><rect width="36" height="22"/></symbol>
+              </defs>
+              <use href="#sheet" x="-180" y="-110" width="360" height="220" fill="#f11a14"/>
             </svg>
             """
         let file = try fixture.file("图形.SVG", text: source)

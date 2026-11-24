@@ -795,21 +795,24 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               <defs>
                 <clipPath id="left"><rect x="-12" y="-8" width="12" height="16"/></clipPath>
                 <pattern id="p" width="1" height="1"><circle r="1"/></pattern>
-                <symbol id="other"><rect width="24" height="16"/></symbol>
+                <symbol id="other" viewBox="0 0 6 8"><rect width="6" height="8"/></symbol>
               </defs>
               <rect x="-12" y="-8" width="24" height="16" fill="red" clip-path="url(#left)"/>
-              <use href="#other"/>
+              <use href="#other" x="1" y="-4" width="6" height="8" fill="blue"/>
             </svg>
             """
         let source = Data(text.utf8)
         let vector = try SVGArtwork.parse(source)
-        XCTAssertEqual(vector.omitted, ["pattern", "symbol", "use"])
+        XCTAssertEqual(vector.omitted, ["pattern"])
         let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(source).image)
         let painted = try XCTUnwrap(raster.colorAt(x: 8, y: 16)?.usingColorSpace(.deviceRGB))
         let clipped = try XCTUnwrap(raster.colorAt(x: 40, y: 16)?.usingColorSpace(.deviceRGB))
+        let reused = try XCTUnwrap(raster.colorAt(x: 30, y: 16)?.usingColorSpace(.deviceRGB))
         XCTAssertGreaterThan(painted.redComponent, 0.9)
         XCTAssertGreaterThan(painted.alphaComponent, 0.9)
         XCTAssertLessThan(clipped.alphaComponent, 0.05)
+        XCTAssertGreaterThan(reused.blueComponent, 0.9)
+        XCTAssertGreaterThan(reused.alphaComponent, 0.9)
     }
 
     func testRenderedHeadingTextRangePointsPastMarkdownMarkers() async throws {

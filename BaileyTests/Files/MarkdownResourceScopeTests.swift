@@ -142,7 +142,10 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let outside = fixture + "/outside.svg"
             let original = Data("\u{feff}# 测试 🧪\r\n\r\n![Scoped asset](asset.svg)\r\n".utf8)
             let svg = Data("""
-                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1a7f37"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+                  <defs><symbol id="tile" viewBox="0 0 4 2"><rect width="4" height="2"/></symbol></defs>
+                  <use href="#tile" width="100%" height="100%" fill="#1a7f37"/>
+                </svg>
                 """.utf8)
             let made = try await backend.run(argv: ["mkdir", "--", directory],
                                              cwd: nil, env: nil, stdin: nil, timeout: 20)
@@ -202,6 +205,9 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let relative = try XCTUnwrap(URL(string: "asset.svg"))
             let picture = try await resource.picture(relative)
             XCTAssertEqual(picture.pointSize?.width, 40)
+            let embeddedTile = try XCTUnwrap(NSBitmapImageRep(cgImage: picture.poster).colorAt(x: 20, y: 10))
+            XCTAssertGreaterThan(embeddedTile.alphaComponent, 0.98)
+            XCTAssertGreaterThan(embeddedTile.greenComponent, embeddedTile.redComponent)
             let standalone = FileTab(path: asset, backend: channel, workspaceIdentity: "ssh:\(host)")
             try await standalone.waitForText()
             XCTAssertTrue(standalone.showsFilePreview)
