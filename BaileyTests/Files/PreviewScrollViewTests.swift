@@ -1672,6 +1672,9 @@ final class PreviewScrollViewTests: XCTestCase {
             if name.hasSuffix(".svg") {
                 expectedActions += [String(localized: "Copy PNG…", table: "Editor"),
                                     String(localized: "Export PNG…", table: "Editor")]
+            } else {
+                expectedActions += [String(localized: "Annotate Image", table: "Editor"),
+                                    String(localized: "Export Annotated Image…", table: "Editor")]
             }
             XCTAssertEqual(actions.map(\.name), expectedActions)
             XCTAssertEqual(actions.map(\.name), view.menu?.items.map(\.title))

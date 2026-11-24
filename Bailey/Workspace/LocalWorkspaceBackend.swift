@@ -464,8 +464,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         if type == UInt16(S_IFDIR), LocalPathScope.contains(target.path, in: physicalSource.path) {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
+        if parent.path == target.path && move { return .unchanged }
+        try ImageAnnotationSidecar.requireUnpairedLocal(physicalSource.path)
         if parent.path == target.path {
-            if move { return .unchanged }
             let name = original.lastPathComponent
             let ext = (name as NSString).pathExtension
             let stem = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
@@ -484,6 +485,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 var existing = Darwin.stat()
                 if lstat(candidate.path, &existing) == 0 { continue }
                 do {
+                    try ImageAnnotationSidecar.requireUnpairedLocal(candidate.path)
                     try copyExclusive(from: physicalSource, to: candidate)
                     return .copied(candidate.path)
                 } catch {
@@ -494,6 +496,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             throw CocoaError(.fileWriteFileExists)
         }
         let destination = target.appendingPathComponent(original.lastPathComponent)
+        try ImageAnnotationSidecar.requireUnpairedLocal(destination.path)
         if move {
             return try moveExclusive(from: physicalSource, to: destination, identity: identity)
         }

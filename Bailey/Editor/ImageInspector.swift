@@ -8,12 +8,15 @@ struct ImageInspector: View {
     var playback: GIFPlayback? = nil
     var loadAnimation: (() async throws -> GIFPlayback.Frames)? = nil
     var resourceRevision = ""
+    var annotationFile: FileTab? = nil
+    var onFocused: () -> Void = {}
     var viewportPosition: PreviewScrollView.Position? = nil
     var onViewportPositionChange: ((PreviewScrollView.Position?) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appearsActive) private var active
     @Environment(\.accessibilityPlayAnimatedImages) private var automaticallyPlays
     @State private var detailUnavailable = false
+    @State private var annotationRenderFailed = false
 
     private struct AnimationDemand: Hashable {
         let revision: String
@@ -24,6 +27,7 @@ struct ImageInspector: View {
         let paused = playback?.isPaused(automaticallyPlays: automaticallyPlays)
         let demand = AnimationDemand(revision: resourceRevision,
                                      playing: active && paused == false && loadAnimation != nil)
+        let document = annotationFile?.imageAnnotations
         RasterViewport(image: image, loadOriginal: loadOriginal,
                        animationFrame: playback?.image, paused: loadAnimation == nil ? nil : paused,
                        toggleAnimation: playback.map { playback in
@@ -31,10 +35,22 @@ struct ImageInspector: View {
                        },
                        resourceRevision: resourceRevision, viewportPosition: viewportPosition,
                        onViewportPositionChange: onViewportPositionChange,
+                       annotationFile: annotationFile, annotationDocument: document, annotationState: document?.state,
+                       annotationSelection: document?.selection ?? [],
+                       annotationEditing: document?.isEditing == true,
+                       canAnnotate: annotationFile?.canAnnotateImage == true,
+                       onFocused: onFocused,
+                       onAnnotationFailure: { annotationRenderFailed = $0 },
                        onDetailFailure: { detailUnavailable = $0 })
             .task(id: demand) {
                 guard demand.playing, let playback, let loadAnimation else { return }
                 await playback.play(automaticallyPlays: automaticallyPlays, load: loadAnimation)
+            }
+            .overlay(alignment: .top) {
+                if let document, document.isEditing, annotationFile?.canAnnotateImage == true {
+                    ImageAnnotationToolbar(document: document)
+                        .padding(8)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 if showsCloseButton {
@@ -45,7 +61,13 @@ struct ImageInspector: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if detailUnavailable || playback?.failed == true {
+                if annotationRenderFailed {
+                    Label(String(localized: "Could not render image annotations.", table: "Editor"),
+                          systemImage: "exclamationmark.triangle")
+                        .padding(8)
+                        .background(.regularMaterial, in: .rect(cornerRadius: 8))
+                        .padding(8)
+                } else if detailUnavailable || playback?.failed == true {
                     Label(playback?.failed == true
                           ? String(localized: "Could not play this GIF.", table: "Editor")
                           : String(localized: "Could not load original image pixels."),
@@ -67,6 +89,14 @@ private struct RasterViewport: NSViewRepresentable {
     let resourceRevision: String
     let viewportPosition: PreviewScrollView.Position?
     let onViewportPositionChange: ((PreviewScrollView.Position?) -> Void)?
+    let annotationFile: FileTab?
+    let annotationDocument: ImageAnnotationDocument?
+    let annotationState: ImageAnnotationState?
+    let annotationSelection: Set<UUID>
+    let annotationEditing: Bool
+    let canAnnotate: Bool
+    let onFocused: () -> Void
+    let onAnnotationFailure: (Bool) -> Void
     let onDetailFailure: (Bool) -> Void
 
     func makeNSView(context: Context) -> RasterScrollView {
@@ -78,7 +108,10 @@ private struct RasterViewport: NSViewRepresentable {
                       paused: paused, toggleAnimation: toggleAnimation,
                       resourceRevision: resourceRevision, viewportPosition: viewportPosition,
                       onViewportPositionChange: onViewportPositionChange,
-                      onDetailFailure: onDetailFailure)
+                      annotationFile: annotationFile, annotationDocument: annotationDocument, annotationState: annotationState,
+                      annotationSelection: annotationSelection, annotationEditing: annotationEditing,
+                      canAnnotate: canAnnotate, onFocused: onFocused,
+                      onAnnotationFailure: onAnnotationFailure, onDetailFailure: onDetailFailure)
     }
 
     static func dismantleNSView(_ scroll: RasterScrollView, coordinator: ()) {
@@ -296,6 +329,32 @@ private final class RasterScrollView: PreviewScrollView {
     private var resourceRevision = ""
     private var toggleAnimation: (() -> Void)?
     private lazy var animationMenuItem = NSMenuItem(title: "", action: #selector(togglePlayback), keyEquivalent: "")
+    private lazy var annotationMenuItem = NSMenuItem(title: "", action: #selector(toggleAnnotations), keyEquivalent: "")
+    private weak var annotationDocument: ImageAnnotationDocument?
+    private weak var annotationFile: FileTab?
+    private var outputTask: Task<Void, Never>?
+    private weak var outputSheet: NSWindow?
+    private lazy var exportMenuItem = NSMenuItem(title: String(localized: "Export Annotated Image…", table: "Editor"),
+                                                action: #selector(exportAnnotations), keyEquivalent: "")
+    private var canAnnotate = false
+    private var onFocused: (() -> Void)?
+    private var onAnnotationFailure: ((Bool) -> Void)?
+    private var annotationDragStart: CGPoint?
+    private var annotationDragTool: ImageAnnotationTool?
+    private var annotationTask: Task<Void, Never>?
+    private struct AnnotationDemand: Equatable {
+        let state: ImageAnnotationState
+        let poster: ObjectIdentifier
+        let detail: ObjectIdentifier?
+        let scale: CGFloat
+        let region: CGRect
+    }
+    private var annotationDemand: AnnotationDemand?
+    private var annotationFailure = false
+
+    override var undoManager: UndoManager? {
+        annotationDocument?.canMutate == true ? annotationDocument?.undoManager : super.undoManager
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -309,20 +368,59 @@ private final class RasterScrollView: PreviewScrollView {
     func update(_ image: RasterPreview, loadOriginal: (() async throws -> RasterDetail)?,
                 animationFrame: CGImage?, paused: Bool?, toggleAnimation: (() -> Void)?,
                 resourceRevision: String, viewportPosition: Position?, onViewportPositionChange: ((Position?) -> Void)?,
+                annotationFile: FileTab?, annotationDocument: ImageAnnotationDocument?, annotationState: ImageAnnotationState?,
+                annotationSelection: Set<UUID>, annotationEditing: Bool, canAnnotate: Bool,
+                onFocused: @escaping () -> Void, onAnnotationFailure: @escaping (Bool) -> Void,
                 onDetailFailure: @escaping (Bool) -> Void) {
         self.loadOriginal = loadOriginal
         self.onDetailFailure = onDetailFailure
         self.toggleAnimation = toggleAnimation
+        self.onFocused = onFocused
+        self.onAnnotationFailure = onAnnotationFailure
+        if self.annotationDocument !== annotationDocument || self.canAnnotate != canAnnotate
+            || self.annotationFile !== annotationFile {
+            cancelAnnotationDrag()
+            cancelOutput()
+        }
+        self.annotationFile = annotationFile
+        self.annotationDocument = annotationDocument
+        self.canAnnotate = canAnnotate
+        canvas.annotationEditing = annotationEditing && canAnnotate
+        canvas.annotationSelection = annotationSelection
+        if canvas.annotationState != annotationState {
+            canvas.annotationState = annotationState
+            invalidateAnnotationRendering()
+        }
+        if canAnnotate {
+            annotationMenuItem.title = annotationEditing
+                ? String(localized: "Finish Annotations", table: "Editor")
+                : String(localized: "Annotate Image", table: "Editor")
+            if annotationMenuItem.menu == nil {
+                annotationMenuItem.target = self
+                menu?.addItem(annotationMenuItem)
+            }
+            if exportMenuItem.menu == nil {
+                exportMenuItem.target = self
+                menu?.addItem(exportMenuItem)
+            }
+        } else {
+            annotationMenuItem.menu?.removeItem(annotationMenuItem)
+            exportMenuItem.menu?.removeItem(exportMenuItem)
+        }
         let changedResource = self.resourceRevision != resourceRevision
         self.resourceRevision = resourceRevision
         if thumbnail !== image.poster {
             self.onViewportPositionChange = nil
             resetDetail()
+            invalidateAnnotationRendering()
             thumbnail = image.poster
             canvas.image = image.poster
             canvas.setFrameSize(image.pixelSize)
             restorePosition(viewportPosition)
         } else if changedResource {
+            cancelOutput()
+            cancelAnnotationDrag()
+            invalidateAnnotationRendering()
             resetDetail()
         }
         self.onViewportPositionChange = onViewportPositionChange
@@ -339,6 +437,210 @@ private final class RasterScrollView: PreviewScrollView {
             menu?.removeItem(animationMenuItem)
         }
         updateDetailDemand()
+        updateAnnotationDemand()
+    }
+
+    private func cancelOutput() {
+        outputTask?.cancel()
+        outputTask = nil
+        if let sheet = outputSheet { sheet.sheetParent?.endSheet(sheet, returnCode: .cancel) }
+        outputSheet = nil
+    }
+
+    @objc private func exportAnnotations() {
+        guard annotationDocument?.canMutate == true, canAnnotate, outputTask == nil, outputSheet == nil, let file = annotationFile,
+              let document = annotationDocument, document.textEdit == nil, let window else { return }
+        let request = file.fileContentRevision
+        let settings = ImageAnnotationExportSettings(size: document.state.crop?.size ?? document.size)
+        let accessory = NSHostingView(rootView: ImageAnnotationExportOptionsView(settings: settings))
+        accessory.frame.size = accessory.fittingSize
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Export Annotated Image…", table: "Editor")
+        alert.accessoryView = accessory
+        alert.addButton(withTitle: String(localized: "Continue", table: "Editor"))
+        alert.addButton(withTitle: String(localized: "Cancel", table: "Editor"))
+        outputSheet = alert.window
+        alert.beginSheetModal(for: window) { [weak self, weak file] response in
+            guard let self, let file, self.annotationFile === file, self.resourceRevision == request else { return }
+            self.outputSheet = nil
+            guard response == .alertFirstButtonReturn else { return }
+            guard let options = settings.options else {
+                self.showOutputError(String(localized: "Invalid image export settings.", table: "Editor"))
+                return
+            }
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [options.format.type]
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = (file.name as NSString).deletingPathExtension + "-annotated." + options.format.fileExtension
+            panel.message = String(localized: "Export to a new local file. Existing files are not replaced.", table: "Editor")
+            self.outputSheet = panel
+            panel.beginSheetModal(for: window) { [weak self, weak file] response in
+                guard let self, let file, self.annotationFile === file, self.resourceRevision == request else { return }
+                self.outputSheet = nil
+                guard response == .OK, let destination = panel.url else { return }
+                self.outputTask = Task { @MainActor [weak self] in
+                    do {
+                        try await file.exportAnnotatedImage(request: request, options: options, to: destination)
+                    } catch {
+                        if !Task.isCancelled, self?.resourceRevision == request {
+                            self?.showOutputError(error.localizedDescription)
+                        }
+                    }
+                    if !Task.isCancelled, self?.resourceRevision == request { self?.outputTask = nil }
+                }
+            }
+        }
+    }
+
+    private func showOutputError(_ message: String) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Could not export image.", table: "Editor")
+        alert.informativeText = message
+        alert.beginSheetModal(for: window) { _ in }
+    }
+
+    @objc private func toggleAnnotations() {
+        guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument else { return }
+        onFocused?()
+        window?.makeFirstResponder(self)
+        if document.isEditing { document.finish() }
+        else { document.begin() }
+        syncAnnotationState()
+    }
+
+    private func syncAnnotationState() {
+        canvas.annotationSelection = annotationDocument?.selection ?? []
+        canvas.annotationEditing = canAnnotate && annotationDocument?.isEditing == true
+        let state = annotationDocument?.state
+        if canvas.annotationState != state {
+            canvas.annotationState = state
+            invalidateAnnotationRendering()
+        }
+        updateAnnotationDemand()
+    }
+
+    private func cancelAnnotationDrag() {
+        annotationDragStart = nil
+        annotationDragTool = nil
+        canvas.transientAnnotation = nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocused?()
+        guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing,
+              !event.modifierFlags.contains(.option) else {
+            super.mouseDown(with: event)
+            return
+        }
+        window?.makeFirstResponder(self)
+        let point = canvas.convert(event.locationInWindow, from: nil)
+        guard canvas.bounds.contains(point) else { return }
+        if document.tool == .select {
+            if event.clickCount == 2 {
+                document.editSelectedText(at: point)
+                syncAnnotationState()
+                return
+            }
+            document.select(at: point, tolerance: 6 / max(magnification, 0.01),
+                            extending: event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command))
+        }
+        annotationDragStart = point
+        annotationDragTool = document.tool
+        syncAnnotationState()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let first = annotationDragStart else {
+            super.mouseDragged(with: event)
+            return
+        }
+        guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing,
+              document.tool == annotationDragTool else { cancelAnnotationDrag(); return }
+        let point = canvas.convert(event.locationInWindow, from: nil)
+        canvas.transientAnnotation = document.proposedGesture(from: first, to: point)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let first = annotationDragStart else {
+            super.mouseUp(with: event)
+            return
+        }
+        defer { cancelAnnotationDrag(); syncAnnotationState() }
+        guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing,
+              document.tool == annotationDragTool else { return }
+        document.commitGesture(from: first, to: canvas.convert(event.locationInWindow, from: nil))
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing else {
+            super.keyDown(with: event)
+            return
+        }
+        switch event.keyCode {
+        case 53:
+            cancelAnnotationDrag()
+            document.cancel()
+        case 51, 117:
+            document.removeSelection()
+        default:
+            super.keyDown(with: event)
+        }
+        syncAnnotationState()
+    }
+
+    private func invalidateAnnotationRendering() {
+        annotationTask?.cancel()
+        annotationTask = nil
+        annotationDemand = nil
+        canvas.annotationComposite = nil
+        setAnnotationFailure(false)
+    }
+
+    private func setAnnotationFailure(_ failed: Bool) {
+        guard annotationFailure != failed else { return }
+        annotationFailure = failed
+        // Do not mutate SwiftUI state during NSViewRepresentable.update.
+        Task { [weak self] in
+            guard let self else { return }
+            self.onAnnotationFailure?(self.annotationFailure)
+        }
+    }
+
+    private func updateAnnotationDemand() {
+        guard window != nil, hasViewportLayout, let state = canvas.annotationState,
+              state.hasFilters, let thumbnail, !visibleImageRect.isEmpty else {
+            if annotationDemand != nil { invalidateAnnotationRendering() }
+            return
+        }
+        let visible = visibleImageRect
+        let margin = max(8, state.layers.filter { $0.kind.filtersPixels }.map { $0.strokeWidth * 8 }.max() ?? 0)
+        let region = visible.insetBy(dx: -max(visible.width / 4, margin),
+                                    dy: -max(visible.height / 4, margin)).integral.intersection(canvas.bounds)
+        let scale = min(pixelScale, 1)
+        let detail = canvas.patch
+        let next = AnnotationDemand(state: state, poster: ObjectIdentifier(thumbnail),
+                                    detail: detail.map { ObjectIdentifier($0.image) },
+                                    scale: scale, region: region)
+        if let current = annotationDemand, current.state == state, current.poster == next.poster,
+           current.detail == next.detail, current.scale == scale,
+           current.region.contains(visible) { return }
+        invalidateAnnotationRendering()
+        annotationDemand = next
+        let poster = RasterDetail.Patch(image: thumbnail, rect: canvas.bounds)
+        annotationTask = Task { [weak self] in
+            do {
+                let patch = try await ImageAnnotationDrawing.preview(state, poster: poster, detail: detail,
+                                                                    region: region, scale: scale)
+                guard !Task.isCancelled, let self, self.annotationDemand == next else { return }
+                self.annotationTask = nil
+                self.canvas.annotationComposite = patch
+            } catch {
+                guard !Task.isCancelled, let self, self.annotationDemand == next else { return }
+                self.annotationTask = nil
+                self.setAnnotationFailure(true)
+            }
+        }
     }
 
     @objc private func togglePlayback() { toggleAnimation?() }
@@ -346,13 +648,18 @@ private final class RasterScrollView: PreviewScrollView {
     override func reflectScrolledClipView(_ clip: NSClipView) {
         super.reflectScrolledClipView(clip)
         updateDetailDemand()
+        updateAnnotationDemand()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
+            cancelAnnotationDrag()
+            invalidateAnnotationRendering()
             resetDetail()
             if canvas.image !== thumbnail { canvas.image = thumbnail }
+        } else {
+            updateAnnotationDemand()
         }
     }
 
@@ -363,6 +670,19 @@ private final class RasterScrollView: PreviewScrollView {
         toggleAnimation = nil
         onViewportPositionChange = nil
         animationMenuItem.menu?.removeItem(animationMenuItem)
+        annotationMenuItem.menu?.removeItem(annotationMenuItem)
+        exportMenuItem.menu?.removeItem(exportMenuItem)
+        cancelOutput()
+        annotationFile = nil
+        cancelAnnotationDrag()
+        invalidateAnnotationRendering()
+        annotationDocument = nil
+        canAnnotate = false
+        canvas.annotationState = nil
+        canvas.annotationSelection = []
+        canvas.annotationEditing = false
+        onFocused = nil
+        onAnnotationFailure = nil
         resetDetail()
         canvas.image = nil
     }
@@ -371,7 +691,10 @@ private final class RasterScrollView: PreviewScrollView {
         detailTask?.cancel()
         detailTask = nil
         detail = nil
-        if canvas.patch != nil { canvas.patch = nil }
+        if canvas.patch != nil {
+            canvas.patch = nil
+            updateAnnotationDemand()
+        }
         if detailFailed {
             detailFailed = false
             Task { [weak self] in
@@ -413,6 +736,7 @@ private final class RasterScrollView: PreviewScrollView {
                 let current = self.visibleImageRect
                 if self.canvas.patch?.rect.contains(current) != true, patch.rect.intersects(current) {
                     self.canvas.patch = patch
+                    self.updateAnnotationDemand()
                 }
                 self.updateDetailDemand()
             } catch is CancellationError {
@@ -443,6 +767,19 @@ private final class RasterPreviewCanvas: PreviewCanvasView {
             if let patch { setNeedsDisplay(patch.rect) }
         }
     }
+    var annotationState: ImageAnnotationState? {
+        didSet { if annotationState != oldValue { needsDisplay = true } }
+    }
+    var transientAnnotation: ImageAnnotationState? {
+        didSet { if transientAnnotation != oldValue { needsDisplay = true } }
+    }
+    var annotationSelection: Set<UUID> = [] {
+        didSet { if annotationSelection != oldValue { needsDisplay = true } }
+    }
+    var annotationEditing = false {
+        didSet { if annotationEditing != oldValue { needsDisplay = true } }
+    }
+    var annotationComposite: RasterDetail.Patch? { didSet { needsDisplay = true } }
     private let checker = NSColor(patternImage: NSImage(size: CGSize(width: 16, height: 16), flipped: false) { rect in
         NSColor.windowBackgroundColor.setFill()
         rect.fill()
@@ -469,6 +806,26 @@ private final class RasterPreviewCanvas: PreviewCanvasView {
             context.draw(patch.image, in: patch.rect)
         } else {
             context.draw(image, in: bounds)
+        }
+        if let state = transientAnnotation ?? annotationState {
+            if transientAnnotation == nil, let composite = annotationComposite {
+                context.saveGState()
+                context.addRects([bounds, composite.rect])
+                context.clip(using: .evenOdd)
+                ImageAnnotationDrawing.drawPending(state, in: context)
+                context.restoreGState()
+                context.saveGState()
+                context.clip(to: composite.rect)
+                checker.setFill()
+                composite.rect.fill()
+                context.draw(composite.image, in: composite.rect)
+                context.restoreGState()
+            } else {
+                ImageAnnotationDrawing.drawPending(state, in: context)
+            }
+            ImageAnnotationDrawing.drawGuides(state, selection: annotationSelection,
+                editing: annotationEditing, bounds: bounds,
+                magnification: enclosingScrollView?.magnification ?? 1, in: context)
         }
     }
 }

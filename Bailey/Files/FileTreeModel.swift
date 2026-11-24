@@ -1009,6 +1009,12 @@ final class FileTreeModel {
                     case .unchanged: continue
                     }
                 } else {
+                    try await ImageAnnotationSidecar.requireUnpaired(physicalSource, backend: backend)
+                    if let physicalDestination, physicalDestination != physicalSource {
+                        try await ImageAnnotationSidecar.requireUnpaired(physicalDestination, backend: backend)
+                    }
+                    guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
+                          epoch == treeEpoch else { break }
                     switch action {
                     case .copy:
                         guard let physicalDestination else { continue }
@@ -1077,6 +1083,7 @@ final class FileTreeModel {
             let name = stem + suffix + (fileExtension.isEmpty ? "" : "." + fileExtension)
             let candidate = (parent as NSString).appendingPathComponent(name)
             do {
+                try await ImageAnnotationSidecar.requireUnpaired(candidate, backend: backend)
                 try await backend.copy(from: source, to: candidate)
                 return name
             } catch {
@@ -1197,6 +1204,9 @@ final class FileTreeModel {
             return nil
         }
         do {
+            try await ImageAnnotationSidecar.requireUnpaired(physicalSource, backend: backend)
+            try await ImageAnnotationSidecar.requireUnpaired(physicalDest, backend: backend)
+            guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
             try await backend.rename(from: physicalSource, to: physicalDest)
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {

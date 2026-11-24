@@ -5,6 +5,7 @@ import Darwin
 import ImageIO
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum FilePreviewMode: CaseIterable {
     case source, preview, sideBySide
@@ -80,6 +81,8 @@ final class FileTab: nonisolated Identifiable {
     }
     private(set) var gifPlayback: GIFPlayback?
     private(set) var svgPreview: SVGPreviewSnapshot?
+    private(set) var imageAnnotations: ImageAnnotationDocument?
+    private(set) var annotationError: String?
     @ObservationIgnored var graphicViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
@@ -136,6 +139,7 @@ final class FileTab: nonisolated Identifiable {
     /// independently of any cached SwiftUI/AppKit view lifetime.
     func retireNativeEditor() {
         svgPreview = nil
+        retireImageAnnotations()
         originalImageTask?.cancel()
         originalImageTask = nil
         if let nativeEditObserver {
@@ -306,11 +310,11 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var saveLatestRequested = false
     /// Encoding changes are explicit user actions, never merged or silently dropped.
     @ObservationIgnored private var pendingEncodingSaves: [TextFileEncoding] = []
-    @ObservationIgnored private var fileMutationHeld = false
+    private var fileMutationHeld = false
     @ObservationIgnored private var saveDeferredUntilMutation = false
     @ObservationIgnored private var deletedFromWorkspace = false
     var isSaving: Bool { lastSaveTask != nil }
-    @ObservationIgnored var autoSaveSuspendedForClose = false
+    var autoSaveSuspendedForClose = false
     @ObservationIgnored private var openingSavedHTML = false
     /// The workspace this file lives on. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
@@ -621,6 +625,7 @@ final class FileTab: nonisolated Identifiable {
         let encoding: TextFileEncoding?
         let decodingFailed: Bool
         let sourceVersion: WorkspaceFileVersion?
+        var annotations: ImageAnnotationSidecar.Loaded? = nil
     }
 
     func reopen(using encoding: TextFileEncoding?) {
@@ -852,6 +857,8 @@ final class FileTab: nonisolated Identifiable {
                 dirty = !TextFileEncoding.hasIdenticalCodeUnits(nativeTextStorage.string, savedText)
                 if !dirty { nativeCodeUnitDelta = [:] }
             }
+        } else if case .image = content {
+            dirty = imageAnnotations?.isDirty == true
         } else {
             dirty = false
         }
@@ -880,7 +887,7 @@ final class FileTab: nonisolated Identifiable {
         guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
         fileMutationHeld = true
         await lastSaveTask?.value
-        if isDirty { await writeCurrentText() }
+        if isDirty { await writeCurrentContent() }
         guard !isDirty, saveError == nil else {
             endFileMutation()
             return false
@@ -930,7 +937,7 @@ final class FileTab: nonisolated Identifiable {
             guard let self else { return }
             var intent = encoding
             while true {
-                await self.writeCurrentText(as: intent)
+                await self.writeCurrentContent(as: intent)
                 if !self.pendingEncodingSaves.isEmpty {
                     intent = self.pendingEncodingSaves.removeFirst()
                     self.saveLatestRequested = false
@@ -945,6 +952,111 @@ final class FileTab: nonisolated Identifiable {
         }
         lastSaveTask = task
         await task.value
+    }
+
+    private func writeCurrentContent(as encoding: TextFileEncoding? = nil) async {
+        if case .image = content, encoding == nil {
+            await writeCurrentAnnotations()
+        } else {
+            await writeCurrentText(as: encoding)
+        }
+    }
+
+    var canAnnotateImage: Bool {
+        imageAnnotations != nil && annotationError == nil && !isRetired &&
+            readOnlyReason == nil && reloadError == nil && !fileMutationHeld &&
+            !autoSaveSuspendedForClose
+    }
+
+    private func retireImageAnnotations() {
+        imageAnnotations?.permitsMutation = { false }
+        imageAnnotations?.onChange = nil
+        imageAnnotations?.undoManager.removeAllActions()
+        imageAnnotations = nil
+        annotationError = nil
+    }
+
+    private func installImageAnnotations(_ loaded: LoadedContent) {
+        guard case .image(let preview) = loaded.content, let annotations = loaded.annotations else {
+            retireImageAnnotations()
+            return
+        }
+        let state: ImageAnnotationState
+        let version: WorkspaceFileVersion?
+        switch annotations {
+        case .missing: state = .init(); version = nil
+        case .existing(let value, let accepted): state = value; version = accepted
+        case .unavailable(let message):
+            retireImageAnnotations()
+            annotationError = message
+            return
+        }
+        annotationError = nil
+        if let current = imageAnnotations, current.size == preview.pixelSize,
+           current.savedState == state, current.sidecarVersion == version { return }
+        retireImageAnnotations()
+        let document = ImageAnnotationDocument(size: preview.pixelSize, state: state, version: version)
+        document.onChange = { [weak self] in self?.refreshDirtyState() }
+        document.permitsMutation = { [weak self, weak document] in
+            guard let self, let document else { return false }
+            return self.imageAnnotations === document && self.canAnnotateImage
+        }
+        imageAnnotations = document
+    }
+
+    private func writeCurrentAnnotations() async {
+        guard let document = imageAnnotations, document.isDirty else { return }
+        guard !isRetired, readOnlyReason == nil, reloadError == nil,
+              let version = savedSourceVersion else {
+            saveError = readOnlyReason ?? String(localized: "The original image is unavailable.", table: "Editor")
+            return
+        }
+        let snapshot = document.state
+        let previous = document.sidecarVersion
+        let target = backend
+        let savedPath = path
+        let generation = targetGeneration
+        invalidateReload()
+        do {
+            let bytes = try await ImageAnnotationSidecar.encode(snapshot, version: version, size: document.size)
+            guard generation == targetGeneration, imageAnnotations === document, path == savedPath,
+                  readOnlyReason == nil else { throw WorkspaceError.changedExternally }
+            try await ImageAnnotationSidecar.publish(bytes, image: savedPath, backend: target,
+                                                     version: version, previous: previous)
+            guard generation == targetGeneration, imageAnnotations === document, path == savedPath else { return }
+            document.markSaved(snapshot, version: WorkspaceFileVersion(data: bytes))
+            saveError = nil
+        } catch {
+            guard generation == targetGeneration, imageAnnotations === document else { return }
+            saveError = String(localized: "Could not save image annotations.", table: "Editor") + " " + error.localizedDescription
+        }
+    }
+
+    func annotatedImageData(request: String, options: ImageAnnotationDrawing.Options) async throws -> Data {
+        guard canAnnotateImage, request == fileContentRevision, let document = imageAnnotations,
+              let version = savedSourceVersion, case .image(let preview) = content else {
+            throw WorkspaceError.changedExternally
+        }
+        let snapshot = document.state
+        let target = backend
+        let sourcePath = path
+        let size = preview.pixelSize
+        let original = try await Self.readOriginalImage(sourcePath, backend: target, version: version) { bytes, source in
+            try RasterPreview.original(bytes, source: source, size: size)
+        }
+        let bytes = try await ImageAnnotationDrawing.export(snapshot, source: original, options: options)
+        try await ImageAnnotationSidecar.verifySource(sourcePath, backend: target, version: version)
+        guard !Task.isCancelled, request == fileContentRevision, imageAnnotations === document,
+              snapshot == document.state, canAnnotateImage else { throw WorkspaceError.changedExternally }
+        return bytes
+    }
+
+    func exportAnnotatedImage(request: String, options: ImageAnnotationDrawing.Options, to destination: URL) async throws {
+        guard destination.isFileURL, UTType(filenameExtension: destination.pathExtension)?.conforms(to: options.format.type) == true else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        let bytes = try await annotatedImageData(request: request, options: options)
+        try await LocalWorkspaceBackend.shared.writeNewFile(path: destination.path, data: bytes)
     }
 
     private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
@@ -1135,6 +1247,7 @@ final class FileTab: nonisolated Identifiable {
             if self.matches(loaded) {
                 // Reload can accept changed bytes without changing decoded text.
                 self.savedSourceVersion = loaded.sourceVersion
+                self.installImageAnnotations(loaded)
                 return
             }
             // First-frame horizontal extent must use the actual font width,
@@ -1171,6 +1284,7 @@ final class FileTab: nonisolated Identifiable {
             self.preparedLineWidths = prepared
             self.savedText = loaded.text
             self.savedSourceVersion = loaded.sourceVersion
+            self.installImageAnnotations(loaded)
             self.nativeCodeUnitDelta = [:]
             self.reloadRevision &+= 1
         }
@@ -1329,9 +1443,13 @@ final class FileTab: nonisolated Identifiable {
                 guard let preview = RasterPreview.decode(source, maximumDimension: 4096) else {
                     throw CocoaError(.fileReadCorruptFile)
                 }
+                let version = WorkspaceFileVersion(data: data)
+                let annotations = preview.animationFrameCount <= 1
+                    ? await ImageAnnotationSidecar.load(image: path, backend: backend, version: version, size: preview.pixelSize)
+                    : nil
                 return LoadedContent(
                     content: .image(preview), text: "", encoding: nil,
-                    decodingFailed: false, sourceVersion: WorkspaceFileVersion(data: data)
+                    decodingFailed: false, sourceVersion: version, annotations: annotations
                 )
             }
             invalidRaster = false
@@ -1479,9 +1597,12 @@ struct FileViewerView: View {
                     if let error = file.reloadError {
                         errorBar(error)
                     }
+                    if let error = file.annotationError { errorBar(error) }
+                    if let error = file.saveError { errorBar(error) }
                     ImageInspector(image: image, loadOriginal: file.originalImageRequest(),
                                    playback: file.gifPlayback, loadAnimation: file.gifFramesRequest(),
                                    resourceRevision: file.fileContentRevision,
+                                   annotationFile: file, onFocused: onFocused,
                                    viewportPosition: file.graphicViewportPosition,
                                    onViewportPositionChange: { position in
                         guard case .image = file.content, file.reloadRevision == revision else { return }
