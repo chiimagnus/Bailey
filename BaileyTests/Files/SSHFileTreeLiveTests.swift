@@ -412,6 +412,65 @@ final class SSHFileTreeLiveTests: XCTestCase {
         await cleanup()
     }
 
+    func testAuthorizedWindowsCSVRebindConfirmsActualPublishedBytes() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
+        }
+        let id = UUID().uuidString.prefix(8)
+        let oldSocket = "/tmp/bailey-ack-a-\(id).sock"
+        let newSocket = "/tmp/bailey-ack-b-\(id).sock"
+        let runner = PublicationAcknowledgementRunner(host: host, socket: oldSocket)
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 25)
+        let live = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: newSocket), timeout: 25)
+        try await withPublicationSSHFixture(host: host, backend: backend, sockets: [oldSocket, newSocket],
+                                            prefix: "bailey-text-ack") { root in
+            let path = root + "/数据.csv"
+            let initial = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("Name,Value\r\n中文,000\nOther,\"literal\""))
+            try await backend.write(path: path, data: initial)
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(atPath: root) }
+            let local = URL(fileURLWithPath: path)
+            let sentinel = Data("Mac-only sentinel".utf8)
+            try sentinel.write(to: local)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            defer { file.retireContent() }
+            try await file.waitForText()
+            XCTAssertEqual(file.fileEncoding, .utf8BOM)
+            func edit(_ row: Int, _ value: String) async throws {
+                let result = try await file.delimitedSnapshot(using: .comma)
+                let snapshot = try XCTUnwrap(result)
+                try await file.editDelimited(.cells([.init(row: row, column: 1): value]), using: snapshot)
+            }
+            try await edit(1, "111")
+            let written = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(file.text))
+            // The underlying SSH command and atomic remote publication are
+            // real. Only the acknowledgement is deliberately suppressed.
+            await runner.loseNextAcknowledgement {
+                await MainActor.run { file.rebindWorkspace(to: nil) }
+            }
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            XCTAssertNotNil(file.readOnlyReason)
+            let remote = try await live.read(path: path, maxBytes: written.count)
+            XCTAssertEqual(remote, written)
+            file.rebindWorkspace(to: live)
+            try await edit(2, "next,field")
+            let expected = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(file.text))
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            let saved = try await live.read(path: path, maxBytes: expected.count)
+            XCTAssertEqual(saved, expected)
+            XCTAssertEqual(file.text, "Name,Value\r\n中文,111\nOther,\"next,field\"")
+            XCTAssertEqual(try Data(contentsOf: local), sentinel)
+            let reopened = FileTab(path: path, backend: live, workspaceIdentity: "ssh:\(host)")
+            defer { reopened.retireContent() }
+            try await reopened.waitForText()
+            XCTAssertEqual(reopened.fileEncoding, .utf8BOM)
+            XCTAssertEqual(reopened.text, file.text)
+        }
+    }
+
     func testAuthorizedWindowsSSHFileTabCapacityAndBytePreservingSave() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")

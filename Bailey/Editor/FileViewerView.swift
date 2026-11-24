@@ -116,6 +116,9 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var savedText = ""
     /// Actual source bytes, not a re-encoding of decoded or normalized text.
     @ObservationIgnored private var savedSourceVersion: WorkspaceFileVersion?
+    @ObservationIgnored private var pendingTextPublication: (
+        snapshot: TextFileEncoding.Publication, delta: [UInt16: Int]?
+    )?
     /// Scroll position and cursor, written back by the editor as they
     /// change. Lives here (not in the view) so the state survives tab
     /// switches, and in the session snapshot so it survives relaunches. Not
@@ -162,6 +165,7 @@ final class FileTab: nonisolated Identifiable {
         nativeTextStorage.setAttributedString(NSAttributedString(string: ""))
         savedText = ""
         savedSourceVersion = nil
+        pendingTextPublication = nil
         pendingStorageChange = false
         nativeCodeUnitDelta = [:]
     }
@@ -637,7 +641,7 @@ final class FileTab: nonisolated Identifiable {
 
     func reopen(using encoding: TextFileEncoding?) {
         guard !isMediaFile else { return }
-        guard !isDirty, !isSaving, !fileMutationHeld else {
+        guard !isDirty, !isSaving, !fileMutationHeld, pendingTextPublication == nil else {
             saveError = String(localized: "Save or discard edits before changing encoding.", table: "Editor")
             return
         }
@@ -857,13 +861,17 @@ final class FileTab: nonisolated Identifiable {
     func refreshDirtyState() {
         let dirty: Bool
         if case .text = content {
+            let textDirty: Bool
             if nativeTextStorage.length != (savedText as NSString).length
                 || nativeCodeUnitDelta?.isEmpty == false {
-                dirty = true
+                textDirty = true
             } else {
-                dirty = !TextFileEncoding.hasIdenticalCodeUnits(nativeTextStorage.string, savedText)
-                if !dirty { nativeCodeUnitDelta = [:] }
+                textDirty = !TextFileEncoding.hasIdenticalCodeUnits(nativeTextStorage.string, savedText)
+                if !textDirty { nativeCodeUnitDelta = [:] }
             }
+            // Undo to the old base is not clean if a different revision may
+            // already be on disk. Encoding-only saves still use isSaving/error.
+            dirty = textDirty || pendingTextPublication?.snapshot.changesText == true
         } else if case .image = content {
             dirty = imageAnnotations?.isDirty == true || pendingAnnotationPublication != nil
         } else {
@@ -894,8 +902,8 @@ final class FileTab: nonisolated Identifiable {
         guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
         fileMutationHeld = true
         await lastSaveTask?.value
-        if isDirty { await writeCurrentContent() }
-        guard !isDirty, saveError == nil else {
+        if isDirty || pendingTextPublication != nil { await writeCurrentContent() }
+        guard !isDirty, pendingTextPublication == nil, saveError == nil else {
             endFileMutation()
             return false
         }
@@ -1049,7 +1057,7 @@ final class FileTab: nonisolated Identifiable {
                 try await ImageAnnotationSidecar.publish(bytes, image: savedPath, backend: target,
                                                          version: version, previous: previous)
             } catch {
-                if imageAnnotations === document, !ImageAnnotationSidecar.publicationUncertain(error) {
+                if imageAnnotations === document, !WorkspaceError.publicationUncertain(error) {
                     pendingAnnotationPublication = nil
                     refreshDirtyState()
                 }
@@ -1104,31 +1112,92 @@ final class FileTab: nonisolated Identifiable {
         try await LocalWorkspaceBackend.shared.writeNewFile(path: destination.path, data: bytes)
     }
 
+    private func resolveTextPublication(path: String, target: WorkspaceBackend, generation: UInt,
+                                        replacingEncodingIntent: Bool = false)
+        async throws -> WorkspaceFileVersion.PublicationStatus? {
+        guard let pending = pendingTextPublication else { return nil }
+        let snapshot = pending.snapshot
+        guard snapshot.path == path else { throw WorkspaceError.changedExternally }
+        let status = try await snapshot.version.publicationStatus(
+            at: path, previous: snapshot.previous, backend: target)
+        guard generation == targetGeneration, !isRetired else { return nil }
+        // A confirmed unchanged file still has an unresolved explicit encoding
+        // request. Only another explicit encoding choice can supersede it.
+        if status == .unchanged, snapshot.explicit, !replacingEncodingIntent { return status }
+        pendingTextPublication = nil
+        if status == .published {
+            acceptPublishedText(snapshot.text, encoding: snapshot.encoding, wasExplicit: snapshot.explicit,
+                                version: snapshot.version, deltaAtWrite: pending.delta)
+        } else {
+            refreshDirtyState()
+            if !isDirty && !snapshot.explicit { saveError = nil }
+        }
+        return status
+    }
+
+    private func reportTextPublicationError(_ error: Error, generation: UInt) {
+        guard !isRetired else { return }
+        if generation != targetGeneration {
+            if pendingTextPublication != nil {
+                saveError = readOnlyReason ?? String(localized: "Save result could not be confirmed.", table: "Workspace")
+            }
+            return
+        }
+        if case WorkspaceError.changedExternally = error {
+            saveError = String(localized: "The file changed outside Bailey. Your edits remain unsaved.",
+                               table: "Editor")
+        } else {
+            saveError = error.localizedDescription
+        }
+    }
+
     private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
-        guard case .text = content, isDirty || (encoding != nil && encoding != fileEncoding) else { return }
+        guard case .text = content, !isRetired,
+              pendingTextPublication != nil || isDirty || (encoding != nil && encoding != fileEncoding) else { return }
         if let readOnlyReason {
             saveError = readOnlyReason
             return
         }
         guard reloadError == nil else { return }
+        let target = backend
+        let generation = targetGeneration
+        let savedPath = path
+        // Reconnect does not change the document's accepted version. Resolve
+        // the actual previous attempt on this machine before any new write.
+        if pendingTextPublication != nil {
+            do {
+                guard let status = try await resolveTextPublication(
+                    path: savedPath, target: target, generation: generation,
+                    replacingEncodingIntent: encoding != nil), pendingTextPublication == nil else { return }
+                if status == .unchanged, encoding == fileEncoding, !isDirty {
+                    saveError = nil
+                    return
+                }
+            } catch {
+                reportTextPublicationError(error, generation: generation)
+                return
+            }
+        }
+        guard isDirty || (encoding != nil && encoding != fileEncoding) else { return }
         guard let expected = savedSourceVersion else {
             saveError = String(localized: "Original file bytes are unknown. Reopen before saving.",
                                table: "Editor")
             return
         }
-        // Freeze one real revision before leaving the main actor. Subsequent
-        // edits stay live in NSTextStorage and are rebased after publication.
+        invalidateReload()
         let written = text
         let deltaAtWrite = nativeCodeUnitDelta
+        let changedText = isDirty
         let chosen = encoding ?? fileEncoding
-        let savedPath = path
-        let generation = targetGeneration
-        let target = backend
         let prepared = await TextFileEncoding.prepareSave(
             written, as: chosen, path: savedPath, checkDeclaration: chosen != fileEncoding
         )
-        guard generation == targetGeneration, path == savedPath,
+        guard generation == targetGeneration, path == savedPath, !isRetired,
               readOnlyReason == nil else { return }
+        guard savedSourceVersion == expected else {
+            reportTextPublicationError(WorkspaceError.changedExternally, generation: generation)
+            return
+        }
         let payload: TextFileEncoding.EncodedSave
         switch prepared {
         case .failure(.contradictsDeclaration):
@@ -1149,30 +1218,46 @@ final class FileTab: nonisolated Identifiable {
             return
         }
         invalidateReload()
+        pendingTextPublication = (.init(path: savedPath, text: written, encoding: chosen, explicit: encoding != nil,
+                                        changesText: changedText, previous: expected, version: payload.version),
+                                  deltaAtWrite)
+        refreshDirtyState()
         do {
             try await target.write(path: savedPath, data: payload.bytes, ifUnchanged: expected)
-            guard generation == targetGeneration else { return }
-            acceptPublishedText(written, encoding: chosen, wasExplicit: encoding != nil,
-                                version: payload.version, deltaAtWrite: deltaAtWrite)
         } catch {
-            guard generation == targetGeneration else { return }
-            if case WorkspaceError.changedExternally = error {
-                saveError = String(localized:
-                    "The file changed outside Bailey. Your edits remain unsaved.", table: "Editor")
+            // Retirement releases the attempted snapshot; there is no
+            // document left to update with a late response.
+            guard pendingTextPublication != nil else { return }
+            if !WorkspaceError.publicationUncertain(error) {
+                pendingTextPublication = nil
+                refreshDirtyState()
+                reportTextPublicationError(error, generation: targetGeneration)
                 return
             }
-            // A transport error may mean the remote rename completed but its
-            // acknowledgement was lost. Resolve the actual bytes once, without
-            // attempting another write or destroying the local draft.
-            let actual = try? await target.read(path: savedPath, maxBytes: payload.bytes.count)
-            guard generation == targetGeneration else { return }
-            if let actual, payload.version.matches(actual) {
-                acceptPublishedText(written, encoding: chosen, wasExplicit: encoding != nil,
-                                    version: payload.version, deltaAtWrite: deltaAtWrite)
-            } else {
-                saveError = error.localizedDescription
+            if generation == targetGeneration {
+                do {
+                    let status = try await resolveTextPublication(
+                        path: savedPath, target: target, generation: generation)
+                    if status == .published || (status == .unchanged && !isDirty && encoding == nil) {
+                        return
+                    }
+                } catch {
+                    reportTextPublicationError(error, generation: generation)
+                    return
+                }
             }
+            reportTextPublicationError(error, generation: generation)
+            return
         }
+        guard generation == targetGeneration, !isRetired else {
+            if !isRetired, pendingTextPublication != nil {
+                saveError = readOnlyReason ?? String(localized: "Save result could not be confirmed.", table: "Workspace")
+            }
+            return
+        }
+        pendingTextPublication = nil
+        acceptPublishedText(written, encoding: chosen, wasExplicit: encoding != nil,
+                            version: payload.version, deltaAtWrite: deltaAtWrite)
     }
 
     private func acceptPublishedText(
@@ -1190,6 +1275,8 @@ final class FileTab: nonisolated Identifiable {
                 if updated == 0 { nativeCodeUnitDelta?.removeValue(forKey: unit) }
                 else { nativeCodeUnitDelta?[unit] = updated }
             }
+        } else {
+            nativeCodeUnitDelta = nil
         }
         refreshDirtyState()
         saveError = nil
@@ -1203,7 +1290,7 @@ final class FileTab: nonisolated Identifiable {
         // While the file's machine is unreachable a read can only fail, and
         // replacing the content with "Could not read file" would throw away
         // what the user was looking at. The banner already says why.
-        guard !isRetired, readOnlyReason == nil, !isDirty else { return }
+        guard !isRetired, readOnlyReason == nil, !isDirty, pendingTextPublication == nil else { return }
         hasReadDemand = true
         refreshPending = false
         reloadTask?.cancel()

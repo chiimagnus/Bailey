@@ -6,7 +6,7 @@ import XCTest
 @testable import Bailey
 
 private actor DiffWorkspaceFixture: WorkspaceBackend {
-    private var contents = Data("baseline😀\r\n".utf8)
+    private var contents: Data
     private var pendingWrite: (Data, WorkspaceFileVersion?, CheckedContinuation<Void, Error>)?
     private var pendingRead: CheckedContinuation<Data, Error>?
     private var pauseRead = false
@@ -21,6 +21,10 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private var cancelledHeldGit = 0
     private var batchOIDs: [String] = []
     private var batchOverride: Data?
+
+    init(contents: Data = Data("baseline😀\r\n".utf8)) {
+        self.contents = contents
+    }
 
     func simulateBatchResponse(_ bytes: Data) {
         mutateIndexDuringBatch = true
@@ -5682,6 +5686,111 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(stored, Data("已保存但回执丢失👋\n".utf8))
         XCTAssertNil(diff.saveError)
         XCTAssertFalse(diff.isDirty)
+    }
+
+    func testWorktreeDiffReconnectConfirmsPublishedRevisionBeforeTheNextSave() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack-reconnect.csv", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
+        defer { diff.retireNativeSurface() }
+        try await wait { diff.canPresentNativeContent }
+        try replaceNativeDiffText(diff, with: "Name,Value\r\n中文,111")
+        let written = Data(diff.editedNewContent.utf8)
+        let saving = Task { await diff.save() }
+        try await wait { await backend.writing }
+        diff.rebindWorkspace(to: nil)
+        await backend.finishWrite(failing: true, publishedBeforeFailure: true)
+        await saving.value
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, written)
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertNotNil(diff.readOnlyReason)
+
+        let live = DiffWorkspaceFixture(contents: written)
+        diff.rebindWorkspace(to: live)
+        try replaceNativeDiffText(diff, with: "Name,Value\r\n中文,222")
+        let latest = diff.editedNewContent
+        let next = Task { await diff.save() }
+        try await wait { await live.writing }
+        await live.finishWrite()
+        await next.value
+        XCTAssertEqual(diff.editedNewContent, latest)
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertNil(diff.saveError)
+        let persisted = await live.stored()
+        XCTAssertEqual(persisted, Data(latest.utf8))
+        let writes = await live.writes
+        XCTAssertEqual(writes, 1)
+
+    }
+
+    func testWorktreeDiffUndoDuringUncertainPublicationKeepsDraftAndRestoresBytes() async throws {
+        let latest = "Name,Value\r\n中文,222"
+        let live = DiffWorkspaceFixture(contents: Data(latest.utf8))
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack-undo.csv", source: .worktree,
+                           untracked: true, origPath: nil, backend: live,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
+        defer { diff.retireNativeSurface() }
+        try await wait { diff.canPresentNativeContent }
+        XCTAssertEqual(diff.editedNewContent, latest)
+        try replaceNativeDiffText(diff, with: "Name,Value\r\n中文,333")
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        let undo = try XCTUnwrap(editor.undoManager)
+        let attempted = diff.editedNewContent
+        let attempt = Task { await diff.save() }
+        try await wait { await live.writing }
+        undo.undo()
+        XCTAssertEqual(diff.editedNewContent, latest)
+        XCTAssertTrue(diff.isDirty, "Undo cannot mark an unconfirmed publication clean")
+        await live.finishWrite(failing: true, publishedBeforeFailure: true)
+        await attempt.value
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(diff.editedNewContent, latest)
+        let actual = await live.stored()
+        XCTAssertEqual(actual, Data(attempted.utf8))
+        let revert = Task { await diff.save() }
+        try await wait { await live.writing }
+        await live.finishWrite()
+        await revert.value
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertNil(diff.saveError)
+        let final = await live.stored()
+        XCTAssertEqual(final, Data(latest.utf8))
+
+    }
+
+    func testWorktreeDiffDisconnectedCleanEncodingPublicationRemainsUnresolved() async throws {
+        let latest = "Name,Value\r\n中文,222"
+        let live = DiffWorkspaceFixture(contents: Data(latest.utf8))
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack-encoding.csv", source: .worktree,
+                           untracked: true, origPath: nil, backend: live,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
+        defer { diff.retireNativeSurface() }
+        try await wait { diff.canPresentNativeContent }
+        XCTAssertFalse(diff.isDirty)
+        let converting = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await live.writing }
+        diff.rebindWorkspace(to: nil)
+        await live.finishWrite(failing: true)
+        await converting.value
+        let unchanged = DiffWorkspaceFixture(contents: Data(latest.utf8))
+        diff.rebindWorkspace(to: unchanged)
+        await diff.save()
+        XCTAssertTrue(PaneContent.diff(diff).hasUnresolvedSave)
+        XCTAssertEqual(diff.fileEncoding, .utf8)
+        diff.reload()
+        XCTAssertFalse(diff.isLoading, "Refresh must not discard an unpublished encoding choice")
+        XCTAssertTrue(PaneContent.diff(diff).hasUnresolvedSave)
+        let retry = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await unchanged.writing }
+        await unchanged.finishWrite()
+        await retry.value
+        XCTAssertEqual(diff.fileEncoding, .utf8BOM)
+        XCTAssertFalse(PaneContent.diff(diff).hasUnresolvedSave)
+        let converted = await unchanged.stored()
+        XCTAssertEqual(converted, TextFileEncoding.utf8BOM.encoded(latest))
     }
 
     func testWorktreeDiffRejectsEncodingThatWouldExceedFiveMiB() async throws {

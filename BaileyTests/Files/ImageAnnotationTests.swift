@@ -5,34 +5,6 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
-/// Drops the response only after the real remote command has succeeded.
-private actor AnnotationAcknowledgementRunner: RemoteCommandRunner {
-    let base: SSHHostCommandRunner
-    private var dropNextPublication = false
-
-    init(host: String, socket: String) { base = SSHHostCommandRunner(host: host, socket: socket) }
-
-    func loseNextAcknowledgement() { dropNextPublication = true }
-
-    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
-        -> (status: Int32, stdout: Data, stderr: Data) {
-        let result = try await base.run(argv, stdin: stdin, timeout: timeout)
-        if dropNextPublication, stdin != nil, result.status == 0,
-           argv.first?.contains(#"cat > "$stage/item""#) == true {
-            dropNextPublication = false
-            return (255, Data(), Data("SSH publication acknowledgement lost".utf8))
-        }
-        return result
-    }
-
-    func runLimited(_ argv: [String], stdin: Data?, timeout: TimeInterval,
-                    stdoutLimit: Int, stderrLimit: Int) async throws
-        -> (status: Int32, stdout: Data, stderr: Data) {
-        try await base.runLimited(argv, stdin: stdin, timeout: timeout,
-                                  stdoutLimit: stdoutLimit, stderrLimit: stderrLimit)
-    }
-}
-
 @MainActor
 final class ImageAnnotationTests: XCTestCase {
     private func makeRoot() throws -> URL {
@@ -627,26 +599,10 @@ final class ImageAnnotationTests: XCTestCase {
             throw XCTSkip("Requires the authorized isolated Windows SSH host")
         }
         let socket = "/tmp/bailey-annotation-" + UUID().uuidString.prefix(8) + ".sock"
-        let runner = AnnotationAcknowledgementRunner(host: host, socket: socket)
+        let runner = PublicationAcknowledgementRunner(host: host, socket: socket)
         let backend = SSHWorkspaceBackend(runner: runner, timeout: 25)
-        let created = try await backend.run(argv: ["mktemp", "-d", "/tmp/bailey-annotation-XXXXXX"],
-            cwd: nil, env: nil, stdin: nil, timeout: 25)
-        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
-        let root = String(decoding: created.stdout, as: UTF8.self).trimmingCharacters(in: .newlines)
-        guard (root as NSString).deletingLastPathComponent == "/tmp",
-              (root as NSString).lastPathComponent.hasPrefix("bailey-annotation-") else {
-            throw WorkspaceError.notFound
-        }
-        func cleanup() async {
-            do { try await backend.delete(paths: [root]) }
-            catch { XCTFail("Cannot delete only the isolated remote fixture: \(error)") }
-            let result = await Task.detached {
-                ProcessRemoteCommandRunner.run(sshPath: "/usr/bin/ssh",
-                    arguments: ["-S", socket, "-O", "exit", host], stdin: nil, timeout: 10)
-            }.value
-            XCTAssertEqual(result.status, 0)
-        }
-        do {
+        try await withPublicationSSHFixture(host: host, backend: backend, sockets: [socket],
+                                            prefix: "bailey-annotation") { root in
             let name = "图像.png"
             let path = root + "/" + name
             let target = ImageAnnotationSidecar.path(for: path)
@@ -733,11 +689,7 @@ final class ImageAnnotationTests: XCTestCase {
             XCTAssertEqual(remoteSource, original)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), local)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: target)), sentinel)
-        } catch {
-            await cleanup()
-            throw error
         }
-        await cleanup()
     }
 
     func testInvalidSidecarsAndDanglingLinksCannotBecomeWritableDocuments() async throws {

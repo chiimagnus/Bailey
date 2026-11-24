@@ -81,21 +81,6 @@ nonisolated enum ImageAnnotationSidecar {
         guard version.matches(bytes) else { throw WorkspaceError.changedExternally }
     }
 
-    /// Only uncertain transport outcomes permit reconciliation, never a
-    /// definitive version conflict, occupied destination or cancellation.
-    static func publicationUncertain(_ error: Error) -> Bool {
-        switch error {
-        case WorkspaceError.timedOut, RemoteConnectionError.notConnected:
-            return true
-        case let failure as RemoteCommandFailure:
-            return failure.status == 255 || failure.status == -2
-        case RemoteConnectionError.commandFailed(let status, _):
-            return status == 255 || status == -2
-        default:
-            return false
-        }
-    }
-
     @concurrent static func confirmsPublication(image: String, backend: WorkspaceBackend,
                                                 version: WorkspaceFileVersion,
                                                 written: WorkspaceFileVersion) async throws -> Bool {
@@ -153,7 +138,7 @@ nonisolated enum ImageAnnotationSidecar {
             // A different source must not make this revision look saved.
             try await verifySource(image, backend: backend, version: version)
         } catch {
-            guard publicationUncertain(error) else { throw error }
+            guard WorkspaceError.publicationUncertain(error) else { throw error }
             let publicationError = error
             // Read back the exact attempted bytes; never retry a mutation
             // whose result is unknown. A failed read leaves it unresolved.

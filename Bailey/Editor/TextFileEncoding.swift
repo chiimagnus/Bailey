@@ -92,6 +92,18 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         let version: WorkspaceFileVersion
     }
 
+    /// One frozen attempted save, retained by its document until the actual
+    /// publication is known. The upload bytes need not survive the attempt.
+    struct Publication: Sendable {
+        let path: String
+        let text: String
+        let encoding: TextFileEncoding
+        let explicit: Bool
+        let changesText: Bool
+        let previous: WorkspaceFileVersion
+        let version: WorkspaceFileVersion
+    }
+
     /// The frozen native text is immutable; prepare its full encoding, strict
     /// round trip, declaration check and new content hash off the main actor.
     @concurrent static func prepareSave(

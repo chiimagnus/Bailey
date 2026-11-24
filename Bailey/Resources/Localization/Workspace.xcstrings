@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Save result could not be confirmed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚无法确认保存结果。"
+          }
+        }
+      }
+    },
     "Compressed SVG is not supported. Open an uncompressed SVG file." : {
       "localizations" : {
         "zh-Hans" : {

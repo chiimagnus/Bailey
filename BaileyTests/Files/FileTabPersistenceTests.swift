@@ -2462,6 +2462,202 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(document.state, finalDraft)
     }
 
+    func testCSVGridReconnectConfirmsPublishedRevisionBeforeSavingNewFields() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let original = "Name,Value\r\n中文,000\nOther,\"literal\""
+        let initial = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+        let backend = EditorWorkspaceFixture(path: path, contents: initial)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        defer { file.retireContent() }
+        try await file.waitForText()
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+
+        func edit(_ row: Int, _ value: String) async throws {
+            let result = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(result)
+            XCTAssertTrue(file.canEditDelimited(snapshot))
+            try await file.editDelimited(.cells([.init(row: row, column: 1): value]), using: snapshot)
+        }
+        try await edit(1, "111")
+        let first = file.text
+        let firstBytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(first))
+        let saving = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await backend.finishWrite(transportTimedOut: true)
+        await saving.value
+        let published = await backend.data(at: path)
+        XCTAssertEqual(published, firstBytes)
+        XCTAssertTrue(file.isDirty)
+
+        let live = EditorWorkspaceFixture(path: path, contents: firstBytes)
+        file.rebindWorkspace(to: live)
+        try await edit(2, "second,field")
+        let latest = file.text
+        let next = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        guard await live.writingPath == path else {
+            await next.value
+            return XCTFail("Reconnection must resolve the earlier publication before starting a new conditional write")
+        }
+        await live.finishWrite()
+        await next.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let stored = await live.data(at: path)
+        XCTAssertEqual(stored, TextFileEncoding.utf8BOM.encoded(latest))
+        XCTAssertEqual(file.text, "Name,Value\r\n中文,111\nOther,\"second,field\"")
+
+        // Undo while a different revision is in flight must not permit a clean
+        // reload or lose the user's intention to restore the last saved bytes.
+        try await edit(1, "222")
+        let attempted = file.text
+        let attempt = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, latest)
+        XCTAssertTrue(file.isDirty, "The unresolved publication may change the saved baseline")
+        let readsBefore = await live.readCount
+        file.reloadFromDiskIfClean()
+        try await Task.sleep(for: .milliseconds(50))
+        let readsAfter = await live.readCount
+        XCTAssertEqual(readsAfter, readsBefore, "A clean reload must not replace an unresolved undo")
+        await live.finishWrite(transportTimedOut: true)
+        await attempt.value
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, latest)
+        let attemptedBytes = await live.data(at: path)
+        XCTAssertEqual(attemptedBytes, TextFileEncoding.utf8BOM.encoded(attempted))
+        let revert = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        await live.finishWrite()
+        await revert.value
+        XCTAssertFalse(file.isDirty)
+        let reverted = await live.data(at: path)
+        XCTAssertEqual(reverted, TextFileEncoding.utf8BOM.encoded(latest))
+
+        // The old channel may also fail before publishing. Only an exact
+        // read of the old version permits another conditional submission.
+        try await edit(1, "333")
+        let retryDraft = file.text
+        let lost = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await live.finishWrite(failing: true, transportTimedOut: true)
+        await lost.value
+        let unchanged = EditorWorkspaceFixture(path: path, contents: try XCTUnwrap(reverted))
+        file.rebindWorkspace(to: unchanged)
+        let retry = Task { await file.save() }
+        try await waitForFileTabState { await unchanged.writingPath == path }
+        await unchanged.finishWrite()
+        await retry.value
+        XCTAssertFalse(file.isDirty)
+        let retried = await unchanged.data(at: path)
+        XCTAssertEqual(retried, TextFileEncoding.utf8BOM.encoded(retryDraft))
+
+        // A third version is not a successful write and must never become
+        // the accepted base for the next write. Preserve both real bytes
+        // and the native draft, even if the foreign revision has equal size.
+        try await edit(1, "444")
+        let attemptedDraft = file.text
+        let pendingSave = Task { await file.save() }
+        try await waitForFileTabState { await unchanged.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await unchanged.finishWrite(transportTimedOut: true)
+        await pendingSave.value
+        let attemptedData = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(attemptedDraft))
+        let foreignData = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(attemptedDraft.replacingOccurrences(of: "444", with: "999")))
+        XCTAssertEqual(attemptedData.count, foreignData.count)
+        let foreign = EditorWorkspaceFixture(path: path, contents: foreignData)
+        file.rebindWorkspace(to: foreign)
+        await file.save()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(file.text, attemptedDraft)
+        let untouched = await foreign.data(at: path)
+        XCTAssertEqual(untouched, foreignData)
+        // Once the exact attempted bytes reappear, a new explicit Save
+        // confirms the existing revision without writing it a second time.
+        await foreign.replace(path: path, with: attemptedData)
+        let beforeConfirmation = await foreign.readCount
+        let confirming = Task { await file.save() }
+        try await waitForFileTabState {
+            let writes = await foreign.writingPath
+            let reads = await foreign.readCount
+            return writes != nil || reads > beforeConfirmation && !file.isSaving
+        }
+        if await foreign.writingPath != nil {
+            XCTFail("Confirmation must not submit the same bytes again")
+            await foreign.finishWrite(failing: true)
+        }
+        await confirming.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let confirmed = await foreign.data(at: path)
+        XCTAssertEqual(confirmed, attemptedData)
+    }
+
+    func testDisconnectedCleanEncodingPublicationIsNotSilentlyDiscarded() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let source = "Name,Value\n中文,001"
+        let original = Data(source.utf8)
+        let backend = EditorWorkspaceFixture(path: path, contents: original)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        defer { file.retireContent() }
+        try await file.waitForText()
+        let writing = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        XCTAssertFalse(file.isDirty, "Encoding-only publication is not a text edit")
+        file.rebindWorkspace(to: nil)
+        await backend.finishWrite(transportTimedOut: true)
+        await writing.value
+        let newBytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(source))
+        let published = await backend.data(at: path)
+        XCTAssertEqual(published, newBytes)
+        XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave)
+        let live = EditorWorkspaceFixture(path: path, contents: newBytes)
+        file.rebindWorkspace(to: live)
+        // Reconciliation must confirm the prior conversion, not send a second write.
+        await file.save()
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let pending = await live.writingPath
+        XCTAssertNil(pending)
+        let persisted = await live.data(at: path)
+        XCTAssertEqual(persisted, newBytes)
+
+        // A lost response before publication must not be mistaken for a
+        // successful conversion. An explicit retry can then use the verified
+        // original bytes, without allowing a clean refresh to discard intent.
+        let convertingBack = Task { await file.save(as: .utf8) }
+        try await waitForFileTabState { await live.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await live.finishWrite(failing: true, transportTimedOut: true)
+        await convertingBack.value
+        let unchanged = EditorWorkspaceFixture(path: path, contents: newBytes)
+        file.rebindWorkspace(to: unchanged)
+        await file.save()
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+        XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave)
+        let unconfirmedWrite = await unchanged.writingPath
+        XCTAssertNil(unconfirmedWrite)
+        let readsBeforeRefresh = await unchanged.readCount
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        let readsAfterRefresh = await unchanged.readCount
+        XCTAssertEqual(readsAfterRefresh, readsBeforeRefresh)
+        XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave, "Refresh must not discard an unpublished encoding choice")
+        let retry = Task { await file.save(as: .utf8) }
+        try await waitForFileTabState { await unchanged.writingPath == path }
+        await unchanged.finishWrite()
+        await retry.value
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        XCTAssertFalse(PaneContent.file(file).hasUnresolvedSave)
+        let restored = await unchanged.data(at: path)
+        XCTAssertEqual(restored, original)
+    }
+
     func testFocusTriggeredSaveSerializesConcurrentEditsAndKeepsFailures() async throws {
         let path = "/fixture/\(UUID().uuidString).txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
@@ -2900,7 +3096,19 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.saveError, file.readOnlyReason)
         file.text = "baseline"
         file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty, "The previous channel published a different revision")
+        let actual = await backend.data(at: path)
+        XCTAssertEqual(actual, Data("unsaved".utf8))
+        let live = EditorWorkspaceFixture(path: path, contents: try XCTUnwrap(actual))
+        file.rebindWorkspace(to: live)
+        let restoring = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        await live.finishWrite()
+        await restoring.value
         XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let restored = await live.data(at: path)
+        XCTAssertEqual(restored, Data("baseline".utf8))
     }
 
     func testCleanReloadPublishesOnlyNewBytesAndDropsRenamedRead() async throws {
@@ -3468,7 +3676,7 @@ final class NativeFileTabTests: XCTestCase {
         editor.insertText("ab", replacementRange: NSRange(location: 0, length: 2))
         editor.breakUndoCoalescing()
         XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
-        XCTAssertFalse(file.isDirty, "Exact inverse edit returns to the original baseline")
+        XCTAssertTrue(file.isDirty, "An inverse edit cannot discard an in-flight revision before publication is known")
         await backend.finishWrite()
         await saving.value
         XCTAssertTrue(file.isDirty, "An in-flight write establishes a new baseline")
