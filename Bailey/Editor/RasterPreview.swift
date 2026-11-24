@@ -4,6 +4,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 import zlib
+import RasterRegions
 
 nonisolated struct RasterPreview: Sendable {
     static let pixelLimit = 32_000_000
@@ -195,10 +196,16 @@ nonisolated struct RasterPreview: Sendable {
                     animationFrameCount: index == 0 ? frameCount : 0)
     }
 
-    private static func orientPixels(_ image: CGImage, exif: CGImagePropertyOrientation) -> CGImage? {
-        guard exif != .up else { return image }
+    private static func orientationTransform(for orientation: CGImagePropertyOrientation, size: CGSize) -> CGAffineTransform {
+        // Constructing CIImage from a lazy CGImage can decode every pixel just
+        // to obtain a transform. EXIF geometry depends only on the extent.
+        CIImage(color: .clear).cropped(to: CGRect(origin: .zero, size: size)).orientationTransform(for: orientation)
+    }
+
+    static func orientPixels(_ image: CGImage, exif: CGImagePropertyOrientation, materialize: Bool = false) -> CGImage? {
+        guard exif != .up || materialize else { return image }
         let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        let transform = CIImage(cgImage: image).orientationTransform(for: exif)
+        let transform = orientationTransform(for: exif, size: rect.size)
         let bounds = rect.applying(transform)
         guard let originalSpace = image.colorSpace else { return nil }
         let space = originalSpace.model == .indexed ? originalSpace.baseColorSpace ?? originalSpace : originalSpace
@@ -215,19 +222,36 @@ nonisolated struct RasterPreview: Sendable {
         return context.makeImage()
     }
 
-    static func original(_ source: CGImageSource, size: CGSize) throws -> RasterDetail {
+    static func original(_ bytes: Data, source: CGImageSource, size: CGSize) throws -> RasterDetail {
         guard pixelSize(source, at: 0) == size else { throw CocoaError(.fileReadCorruptFile) }
         let type = CGImageSourceGetType(source) as String?
-        if type == UTType.jpeg.identifier || type == UTType.heic.identifier,
+        if [UTType.png.identifier, UTType.tiff.identifier, UTType.jpeg.identifier, UTType.heic.identifier].contains(type),
            let raw = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary),
-           raw.bitsPerComponent == 8, let colorSpace = raw.colorSpace, colorSpace.model == .rgb,
-           colorSpace.supportsOutput {
+           let colorSpace = raw.colorSpace {
             let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-            let orientation = properties?[kCGImagePropertyOrientation] as? UInt32 ?? 1
-            let transform = CIImage(cgImage: raw)
-                .orientationTransform(for: CGImagePropertyOrientation(rawValue: orientation) ?? .up)
-            let detail = RasterDetail.region(raw, transform, colorSpace)
-            if detail.bounds.size == size { return detail }
+            let orientation = CGImagePropertyOrientation(rawValue: properties?[kCGImagePropertyOrientation] as? UInt32 ?? 1) ?? .up
+            let rawSize = CGSize(width: raw.width, height: raw.height)
+            let transform = orientationTransform(for: orientation, size: rawSize)
+            let pixels: RasterDetail.RegionSource?
+            if type == UTType.png.identifier || type == UTType.tiff.identifier {
+                let codec: RasterDetail.RegionSource.Codec = type == UTType.png.identifier ? .png : .tiff
+                let invertsGray = codec == .tiff && colorSpace.model == .monochrome
+                    && raw.decode.map { $0[0] == 1 && $0[1] == 0 } == true
+                let supported = codec == .png || bytes.withUnsafeBytes { buffer in
+                    br_tiff_region_supported(buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count,
+                                             UInt32(raw.width), UInt32(raw.height), invertsGray) == BR_OK
+                }
+                pixels = supported ? .encoded(.init(codec: codec, bytes: bytes, size: rawSize,
+                    colorSpace: colorSpace, intent: raw.renderingIntent, invertsGray: invertsGray)) : nil
+            } else if raw.bitsPerComponent == 8, colorSpace.model == .rgb, colorSpace.supportsOutput {
+                pixels = .native(raw)
+            } else {
+                pixels = nil
+            }
+            if let pixels {
+                let detail = RasterDetail.region(pixels, transform, orientation)
+                if detail.bounds.size == size { return detail }
+            }
         }
         guard let original = decode(source, maximumDimension: Int(max(size.width, size.height)))?.poster,
               original.width == Int(size.width), original.height == Int(size.height) else {
@@ -239,7 +263,89 @@ nonisolated struct RasterPreview: Sendable {
 
 nonisolated enum RasterDetail: Sendable {
     case whole(CGImage)
-    case region(CGImage, CGAffineTransform, CGColorSpace)
+    case region(RegionSource, CGAffineTransform, CGImagePropertyOrientation)
+
+    enum RegionSource: Sendable {
+        enum Codec: Sendable { case png, tiff }
+
+        struct Encoded: Sendable {
+            let codec: Codec
+            let bytes: Data
+            let size: CGSize
+            let colorSpace: CGColorSpace
+            let intent: CGColorRenderingIntent
+            let invertsGray: Bool
+        }
+
+        case native(CGImage)
+        case encoded(Encoded)
+
+        var size: CGSize {
+            switch self {
+            case .native(let image): CGSize(width: image.width, height: image.height)
+            case .encoded(let source): source.size
+            }
+        }
+
+        func crop(_ rect: CGRect) throws -> CGImage {
+            switch self {
+            case .native(let image):
+                guard let cropped = image.cropping(to: rect) else { throw CocoaError(.fileReadCorruptFile) }
+                return cropped
+            case .encoded(let source):
+                var region = BRRegion()
+                let status = source.bytes.withUnsafeBytes { buffer in
+                    let read = source.codec == .png ? br_read_png_region : br_read_tiff_region
+                    return read(buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count,
+                        UInt32(source.size.width), UInt32(source.size.height), UInt32(rect.minX), UInt32(rect.minY),
+                        UInt32(rect.width), UInt32(rect.height), { Task.isCancelled }, &region)
+                }
+                if status == BR_CANCELLED { throw CancellationError() }
+                if status == BR_NO_MEMORY { throw WorkspaceError.tooLarge }
+                guard status == BR_OK, let pointer = region.pixels else { throw CocoaError(.fileReadCorruptFile) }
+                let pixels = Data(bytesNoCopy: pointer, count: region.row_bytes * Int(region.height), deallocator: .free)
+                let model: CGColorSpaceModel
+                switch region.model {
+                case BR_GRAY: model = .monochrome
+                case BR_RGB: model = .rgb
+                case BR_CMYK: model = .cmyk
+                case BR_INDEXED: model = .indexed
+                default: throw CocoaError(.fileReadCorruptFile)
+                }
+                let originalSpace = source.colorSpace
+                let space = originalSpace.model == .indexed && model != .indexed
+                    ? originalSpace.baseColorSpace ?? originalSpace : originalSpace
+                let alpha: CGImageAlphaInfo
+                switch region.alpha {
+                case BR_STRAIGHT_ALPHA: alpha = .last
+                case BR_ASSOCIATED_ALPHA: alpha = .premultipliedLast
+                default: alpha = .none
+                }
+                let bitmap = CGBitmapInfo(rawValue: alpha.rawValue)
+                    .union(region.bits_per_component == 16 ? .byteOrder16Little : [])
+                guard space.model == model, let provider = CGDataProvider(data: pixels as CFData) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                // Keep the native grayscale decode range, not inverted sample
+                // values: ColorSync can apply the range after its color transform.
+                let decode: [CGFloat] = source.invertsGray ? [1, 0] : []
+                guard let image = decode.withUnsafeBufferPointer({ range in
+                    CGImage(width: Int(region.width), height: Int(region.height),
+                        bitsPerComponent: Int(region.bits_per_component),
+                        bitsPerPixel: Int(region.channels * region.bits_per_component),
+                        bytesPerRow: region.row_bytes, space: space, bitmapInfo: bitmap,
+                        provider: provider, decode: range.isEmpty ? nil : range.baseAddress,
+                        shouldInterpolate: false, intent: source.intent)
+                }) else { throw CocoaError(.fileReadCorruptFile) }
+                return image
+            }
+        }
+
+        var needsMaterialization: Bool {
+            if case .native = self { return true }
+            return false
+        }
+    }
 
     struct Patch: Sendable {
         let image: CGImage
@@ -249,8 +355,8 @@ nonisolated enum RasterDetail: Sendable {
     var bounds: CGRect {
         switch self {
         case .whole(let image): CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        case .region(let image, let transform, _):
-            CGRect(x: 0, y: 0, width: image.width, height: image.height).applying(transform)
+        case .region(let source, let transform, _):
+            CGRect(origin: .zero, size: source.size).applying(transform)
         }
     }
 
@@ -259,24 +365,18 @@ nonisolated enum RasterDetail: Sendable {
         switch self {
         case .whole(let image):
             return Patch(image: image, rect: bounds)
-        case .region(let image, let transform, let colorSpace):
+        case .region(let source, let transform, let orientation):
             let rect = visible.integral.intersection(bounds)
             guard !rect.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
             let raw = rect.applying(transform.inverted())
-            let decoderRect = CGRect(x: raw.minX, y: CGFloat(image.height) - raw.maxY,
+            let decoderRect = CGRect(x: raw.minX, y: source.size.height - raw.maxY,
                                      width: raw.width, height: raw.height)
-            guard let cropped = image.cropping(to: decoderRect),
-                  let context = CGContext(data: nil, width: Int(rect.width), height: Int(rect.height),
-                                          bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
-                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            let cropped = try source.crop(decoderRect)
+            guard let pixels = RasterPreview.orientPixels(cropped, exif: orientation,
+                                                           materialize: source.needsMaterialization) else {
                 throw CocoaError(.fileReadCorruptFile)
             }
-            context.interpolationQuality = .none
-            context.translateBy(x: -rect.minX, y: -rect.minY)
-            context.concatenate(transform)
-            context.draw(cropped, in: raw)
             try Task.checkCancellation()
-            guard let pixels = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
             return Patch(image: pixels, rect: rect)
         }
     }

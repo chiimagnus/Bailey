@@ -117,6 +117,10 @@ Apple `swift-markdown`（经 `swift-cmark` 使用 cmark-gfm）仅负责解析 Ma
 Release 仅保留当前固定使用的 Latin Modern 数学字体及其数据表，保留原许可；
 其他字体仍在依赖缓存中，不随发布包分发。
 资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
+[Vendor/RasterRegions](../Vendor/RasterRegions/README.md) 固定 libpng 和 LibTIFF 的源码与许可，
+仅负责版本化栅格数据的原像素区域提取。Xcode 通过本地 SwiftPM 包编译，压缩依赖仅为 SDK zlib，
+不依赖 Homebrew 或额外安装；更新依赖时同时执行原像素专项、Debug／Release 构建及验签。
+
 块 HTML 复用 [本地 SwiftSoup](../Vendor/SwiftSoup/README.md) 的分词和节点原文区间；
 补丁只负责保留并公开文字和实体的字节位置，不替换 HTML 解析规则。
 

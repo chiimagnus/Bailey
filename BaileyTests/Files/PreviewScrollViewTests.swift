@@ -646,7 +646,11 @@ final class PreviewScrollViewTests: XCTestCase {
                     XCTAssertEqual(preview.pixelSize, size, name)
                     XCTAssertEqual(CGSize(width: preview.poster.width, height: preview.poster.height),
                                    orientation >= 5 ? CGSize(width: 8, height: 16) : CGSize(width: 16, height: 8), name)
-                    let detail = try RasterPreview.original(source, size: size)
+                    let detail = try RasterPreview.original(data as Data, source: source, size: size)
+                    guard case .region(.encoded(let encoded), _, _) = detail else {
+                        return XCTFail("Expected encoded region for \(name)")
+                    }
+                    XCTAssertEqual(encoded.codec, format == .png ? .png : .tiff, name)
                     let patch = try await detail.render(CGRect(origin: .zero, size: size))
                     XCTAssertEqual(patch.rect.size, size, name)
                     XCTAssertEqual(CGSize(width: patch.image.width, height: patch.image.height), size, name)
@@ -663,6 +667,12 @@ final class PreviewScrollViewTests: XCTestCase {
                     }
                     let reference = try displayBitmap(decodedRaw)
                     let actual = try displayBitmap(patch.image)
+                    let request = CGRect(x: 3, y: size.height / 2 - 7, width: size.width / 2 + 4, height: 13)
+                    let cropped = try await detail.render(request)
+                    XCTAssertEqual(cropped.rect, request, name)
+                    let expectedRegion = try XCTUnwrap(patch.image.cropping(to: CGRect(x: request.minX,
+                        y: size.height - request.maxY, width: request.width, height: request.height)))
+                    try assertRasterPixels(cropped.image, match: expectedRegion, tolerance: 257, name: name)
                     for (x, y) in [(4, 4), (Int(size.width) - 5, 4), (4, Int(size.height) - 5),
                                    (Int(size.width) - 5, Int(size.height) - 5)] {
                         let expectedCoordinate: (Int, Int)
@@ -718,7 +728,7 @@ final class PreviewScrollViewTests: XCTestCase {
                 XCTAssertTrue(CGImageDestinationFinalize(destination))
                 let source = try XCTUnwrap(RasterPreview.source(bytes as Data))
                 let reference = try XCTUnwrap(RasterPreview.decode(source, maximumDimension: 600))
-                let detail = try RasterPreview.original(source, size: reference.pixelSize)
+                let detail = try RasterPreview.original(bytes as Data, source: source, size: reference.pixelSize)
                 guard case .region = detail else {
                     return XCTFail("Expected regional ImageIO for \(format) EXIF \(orientation)")
                 }
@@ -748,16 +758,25 @@ final class PreviewScrollViewTests: XCTestCase {
     }
 
     func testNativeViewportReplacesRegionalPixelsWhenPannedWithoutReadingAgain() async throws {
+        for format in [UTType.jpeg, .png, .tiff] {
+            try await assertNativeViewportReplacesRegionalPixels(format: format)
+        }
+    }
+
+    private func assertNativeViewportReplacesRegionalPixels(format: UTType) async throws {
         let size = CGSize(width: 1800, height: 240)
         let thumbnail = try solidRaster(size: CGSize(width: 900, height: 120), color: .red)
-        let jpeg = NSMutableData()
+        let bytes = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
-            jpeg, UTType.jpeg.identifier as CFString, 1, nil
+            bytes, format.identifier as CFString, 1, nil
         ))
-        CGImageDestinationAddImage(destination, try solidRaster(size: size, color: .green), nil)
+        let options: [CFString: Any]? = format == .tiff
+            ? [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFCompression: 5]] : nil
+        CGImageDestinationAddImage(destination, try solidRaster(size: size, color: .green), options as CFDictionary?)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
-        let source = try XCTUnwrap(RasterPreview.source(jpeg as Data))
-        let detail = try RasterPreview.original(source, size: size)
+        let source = try XCTUnwrap(RasterPreview.source(bytes as Data))
+        let detail = try RasterPreview.original(bytes as Data, source: source, size: size)
+        guard case .region = detail else { return XCTFail("Expected regional pixels for \(format)") }
         var reads = 0
         let host = NSHostingView(rootView: ImageInspector(
             image: RasterPreview(poster: thumbnail, pixelSize: size),
@@ -819,7 +838,7 @@ final class PreviewScrollViewTests: XCTestCase {
         let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(reference, 0, nil))
         XCTAssertEqual(raw.colorSpace?.model, .cmyk)
         let size = CGSize(width: width, height: height)
-        let detail = try RasterPreview.original(source, size: size)
+        let detail = try RasterPreview.original(jpeg as Data, source: source, size: size)
         guard case .whole = detail else { return XCTFail("The RGB region path must not reinterpret CMYK pixels") }
         let patch = try await detail.render(CGRect(x: 30, y: 20, width: 20, height: 20))
         XCTAssertEqual(patch.rect.size, size)
@@ -843,6 +862,159 @@ final class PreviewScrollViewTests: XCTestCase {
         for (actual, expected) in zip(try pixel(from: patch.image), expected) {
             XCTAssertEqual(actual, expected, accuracy: 0.02)
         }
+    }
+
+    func testPNGRegionsAcrossPackedSamplesTransparencyAndAdam7Passes() async throws {
+        // 19x15 PNGs: independent specification-order rows with filter 0,
+        // including odd-width packed samples, tRNS and all seven Adam7 passes.
+        let fixtures = RasterRegionFixtures.png
+        for (name, encoded) in fixtures {
+            let bytes = try XCTUnwrap(Data(base64Encoded: encoded, options: .ignoreUnknownCharacters), name)
+            let source = try XCTUnwrap(RasterPreview.source(bytes), name)
+            let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil), name)
+            let size = CGSize(width: 19, height: 15)
+            let detail = try RasterPreview.original(bytes, source: source, size: size)
+            guard case .region(.encoded(let encodedSource), _, _) = detail, encodedSource.codec == .png else {
+                return XCTFail("Expected PNG scanlines for \(name)")
+            }
+            for rect in [CGRect(x: 0, y: 0, width: 19, height: 15),
+                         CGRect(x: 3, y: 4, width: 7, height: 9),
+                         CGRect(x: 15, y: 0, width: 4, height: 5)] {
+                let patch = try await detail.render(rect)
+                XCTAssertEqual(patch.rect, rect, name)
+                let reference = try XCTUnwrap(raw.cropping(to: CGRect(x: rect.minX,
+                    y: size.height - rect.maxY, width: rect.width, height: rect.height)), name)
+                try assertRasterPixels(patch.image, match: reference, tolerance: 257, name: name)
+            }
+        }
+    }
+
+    func testTIFFRegionsAcrossStripsTilesPlanesColorAndByteOrder() async throws {
+        for (name, encoded) in RasterRegionFixtures.tiff {
+            let bytes = try XCTUnwrap(Data(base64Encoded: encoded, options: .ignoreUnknownCharacters), name)
+            let source = try XCTUnwrap(RasterPreview.source(bytes), name)
+            let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil), name)
+            let size = CGSize(width: raw.width, height: raw.height)
+            let detail = try RasterPreview.original(bytes, source: source, size: size)
+            if ["jpeg-compressed", "gray-4-white-zip", "gray-16-white-lzw", "rgba-8-associated-separate"].contains(name) {
+                guard case .whole = detail else { return XCTFail("ImageIO-incompatible TIFF layout must retain its existing path: \(name)") }
+                let whole = try await detail.render(CGRect(x: 3, y: 4, width: 7, height: 9))
+                try assertRasterPixels(whole.image, match: raw, name: name)
+                continue
+            }
+            guard case .region(.encoded(let encodedSource), _, _) = detail, encodedSource.codec == .tiff else {
+                return XCTFail("Expected TIFF strip or tile decoding for \(name)")
+            }
+            for rect in [CGRect(origin: .zero, size: size),
+                         CGRect(x: 3, y: 4, width: 7, height: 9),
+                         CGRect(x: size.width - 4, y: 0, width: 4, height: 5),
+                         CGRect(x: size.width / 2 - 4, y: size.height / 2 - 4, width: 8, height: 8).integral] {
+                let patch = try await detail.render(rect)
+                XCTAssertEqual(patch.rect, rect, name)
+                let reference = try XCTUnwrap(raw.cropping(to: CGRect(x: rect.minX,
+                    y: size.height - rect.maxY, width: rect.width, height: rect.height)), name)
+                try assertRasterPixels(patch.image, match: reference, tolerance: 257, name: name)
+            }
+            XCTAssertEqual(bytes, Data(base64Encoded: encoded, options: .ignoreUnknownCharacters), name)
+        }
+    }
+
+    private func assertRasterPixels(_ actual: CGImage, match expected: CGImage,
+                                    tolerance: Int = 0, name: String) throws {
+        XCTAssertEqual(actual.width, expected.width, name)
+        XCTAssertEqual(actual.height, expected.height, name)
+        guard actual.width == expected.width, actual.height == expected.height else { return }
+        func rendered(_ image: CGImage) throws -> [UInt16] {
+            let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+            let context = try XCTUnwrap(CGContext(data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 16, bytesPerRow: image.width * 8, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.interpolationQuality = .none
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let values = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt16.self)
+            return Array(UnsafeBufferPointer(start: values, count: context.bytesPerRow * context.height / 2))
+        }
+        let errors = try zip(rendered(actual), rendered(expected)).map { abs(Int($0) - Int($1)) }
+        XCTAssertLessThanOrEqual(errors.max() ?? 0, tolerance, name)
+    }
+
+    func testRealPNGRegionsKeepOnlyRequestedPixelsAndMatchNativeImageIO() async throws {
+        try await assertRealRasterRegions(format: .png)
+    }
+
+    func testRealTIFFRegionsKeepOnlyRequestedPixelsAndMatchNativeImageIO() async throws {
+        try await assertRealRasterRegions(format: .tiff)
+    }
+
+    private func assertRealRasterRegions(format: UTType) async throws {
+        guard let sampleRoot = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let sourceURL = URL(fileURLWithPath: sampleRoot).appending(path: "images/超清大图-6000x4000.jpg")
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "Large.\(format == .png ? "png" : "tiff")")
+        try autoreleasepool {
+            let source = try XCTUnwrap(CGImageSourceCreateWithURL(sourceURL as CFURL, nil))
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, format.identifier as CFString, 1, nil))
+            let options: [CFString: Any]? = format == .tiff
+                ? [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFCompression: 5]] : nil
+            CGImageDestinationAddImageFromSource(destination, source, 0, options as CFDictionary?)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+        }
+        let bytes = try Data(contentsOf: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        file.loadIfNeeded()
+        try await waitFor { if case .loading = file.content { return false }; return true }
+        guard case .image(let preview) = file.content else { return XCTFail("Expected a real large \(format)") }
+        XCTAssertEqual(preview.pixelSize, CGSize(width: 6000, height: 4000))
+        XCTAssertEqual(preview.poster.width, 4096)
+        let request = try XCTUnwrap(file.originalImageRequest())
+        let before = rasterMemory()
+        let start = ContinuousClock.now
+        let detail = try await request()
+        guard case .region(.encoded(let encoded), _, _) = detail else {
+            return XCTFail("Expected encoded regions for \(format)")
+        }
+        XCTAssertEqual(encoded.codec, format == .png ? .png : .tiff)
+        let regions = [CGRect(x: 0, y: 3744, width: 256, height: 256),
+                       CGRect(x: 2899, y: 1903, width: 256, height: 256),
+                       CGRect(x: 5744, y: 0, width: 256, height: 256)]
+        var patches: [RasterDetail.Patch] = []
+        for rect in regions {
+            let patch = try await detail.render(rect)
+            XCTAssertEqual(patch.rect, rect)
+            XCTAssertEqual(patch.image.width, 256)
+            XCTAssertEqual(patch.image.height, 256)
+            patches.append(patch)
+        }
+        let after = rasterMemory()
+        print("\(format.identifier)_REGIONS resident/peak MiB: \(before) -> \(after), bytes=\(bytes.count), elapsed=\(start.duration(to: .now))")
+        let inputMiB = Double(bytes.count) / 1_048_576
+        // The versioned compressed file may be retained once; decoded memory must
+        // not grow by the complete 24MP RGBA buffer for three small regions.
+        XCTAssertLessThan(after.resident - before.resident, inputMiB + 48)
+        XCTAssertLessThanOrEqual(after.peak, max(before.peak, before.resident + inputMiB + 48))
+        // Reference decode occurs after the memory measurement, not before.
+        let native = try XCTUnwrap(CGImageSourceCreateWithData(bytes as CFData, nil))
+        let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(native, 0, nil))
+        for (rect, patch) in zip(regions, patches) {
+            let expected = try XCTUnwrap(raw.cropping(to: CGRect(x: rect.minX,
+                y: CGFloat(raw.height) - rect.maxY, width: rect.width, height: rect.height)))
+            try assertRasterPixels(patch.image, match: expected, name: "\(format) \(rect)")
+        }
+        let cancelled = Task.detached { try await detail.render(detail.bounds) }
+        cancelled.cancel()
+        do {
+            _ = try await cancelled.value
+            XCTFail("Cancelled original-pixel request must not publish an image")
+        } catch is CancellationError { }
+        // Cancellation is scoped to the request and cannot damage the versioned source.
+        let next = try await detail.render(regions[1])
+        try assertRasterPixels(next.image, match: patches[1].image, name: "After cancellation")
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
     func testRealLargeJPEGRegionalPixelsDoNotKeepAFullRaster() async throws {
@@ -888,13 +1060,22 @@ final class PreviewScrollViewTests: XCTestCase {
             throw XCTSkip("Set BAILEY_IMAGE_LONG_SESSION=1 and BAILEY_IMAGE_ACCEPTANCE_ROOT")
         }
         let images = URL(fileURLWithPath: root).appending(path: "images")
-        let fixtures = try ["超清大图-6000x4000.jpg", "极宽图.png", "动画-34帧.gif"].map { name in
+        var fixtures = try ["超清大图-6000x4000.jpg", "极宽图.png", "动画-34帧.gif"].map { name in
             let url = images.appending(path: name)
             return (url: url, bytes: try Data(contentsOf: url))
         }
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: folder) }
+        let tiffURL = folder.appending(path: "Large source.tiff")
+        try autoreleasepool {
+            let source = try XCTUnwrap(CGImageSourceCreateWithURL(fixtures[0].url as CFURL, nil))
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(tiffURL as CFURL, UTType.tiff.identifier as CFString, 1, nil))
+            let options = [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFCompression: 5]]
+            CGImageDestinationAddImageFromSource(destination, source, 0, options as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+        }
+        fixtures.append((url: tiffURL, bytes: try Data(contentsOf: tiffURL)))
         let project = Project(fallbackName: "Repeated raster previews", workspaceConfiguration: .standard)
         defer { project.closeAll() }
         let beforeCPU = cpuSeconds()
@@ -934,14 +1115,18 @@ final class PreviewScrollViewTests: XCTestCase {
                     let requestRect = CGRect(x: detail.bounds.midX, y: detail.bounds.midY, width: 256, height: 80)
                     let patch = try await detail.render(requestRect)
                     switch detail {
-                    case .region(let original, _, _):
-                        XCTAssertEqual(format, "jpg")
+                    case .region(let source, _, _):
                         XCTAssertEqual(patch.rect, requestRect)
-                        retiredSource = original
-                    case .whole(let original):
-                        XCTAssertEqual(format, "png")
-                        XCTAssertEqual(patch.rect.size, CGSize(width: 9000, height: 240))
-                        retiredSource = original
+                        switch source {
+                        case .native(let original):
+                            XCTAssertEqual(format, "jpg")
+                            retiredSource = original
+                        case .encoded(let encoded):
+                            XCTAssertTrue(["png", "tiff"].contains(format))
+                            XCTAssertEqual(encoded.codec, format == "png" ? .png : .tiff)
+                        }
+                    case .whole:
+                        return XCTFail("Large JPEG, PNG and TIFF must keep only requested detail pixels")
                     }
                     let renderer = NSBitmapImageRep(cgImage: patch.image)
                     XCTAssertNotNil(renderer.colorAt(x: patch.image.width / 2, y: patch.image.height / 2))
@@ -967,7 +1152,7 @@ final class PreviewScrollViewTests: XCTestCase {
         let warmed = try XCTUnwrap(closedRSS.prefix(5).max())
         let late = try XCTUnwrap(closedRSS.suffix(5).max())
         XCTAssertLessThan(late - warmed, 64, "Repeated closes must not accumulate per-image buffers")
-        XCTAssertEqual(completedByFormat, ["jpg": 34, "png": 33, "gif": 33])
+        XCTAssertEqual(completedByFormat, ["jpg": 25, "png": 25, "gif": 25, "tiff": 25])
         for fixture in fixtures { XCTAssertEqual(try Data(contentsOf: fixture.url), fixture.bytes) }
     }
 

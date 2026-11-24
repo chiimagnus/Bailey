@@ -905,10 +905,11 @@ final class FileTabPersistenceTests: XCTestCase {
                 if longest > 4_096 {
                     let request = try XCTUnwrap(file.originalImageRequest())
                     let detail = try await request()
-                    let region = try await detail.render(CGRect(x: 0, y: 0, width: 20, height: 20))
-                    XCTAssertEqual(region.rect.size, size)
-                    XCTAssertEqual(region.image.width, fixture.width)
-                    XCTAssertEqual(region.image.height, fixture.height)
+                    let rect = CGRect(x: 0, y: 0, width: 20, height: 20).intersection(CGRect(origin: .zero, size: size))
+                    let region = try await detail.render(rect)
+                    XCTAssertEqual(region.rect, rect)
+                    XCTAssertEqual(region.image.width, Int(rect.width))
+                    XCTAssertEqual(region.image.height, Int(rect.height))
                     inspected = region.image
                 } else {
                     XCTAssertNil(file.originalImageRequest())
@@ -1140,10 +1141,12 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertLessThanOrEqual(image.poster.height, 4096)
         let request = try XCTUnwrap(file.originalImageRequest())
         let original = try await request()
-        guard case .whole = original else { return XCTFail("PNG still uses the bounded full ImageIO decode") }
-        let pixels = try await original.render(CGRect(x: 1000, y: 1000, width: 120, height: 120))
-        XCTAssertEqual(pixels.image.width, 5000)
-        XCTAssertEqual(pixels.image.height, 2500)
+        guard case .region = original else { return XCTFail("PNG must use bounded scanline extraction") }
+        let rect = CGRect(x: 1000, y: 1000, width: 120, height: 120)
+        let pixels = try await original.render(rect)
+        XCTAssertEqual(pixels.rect, rect)
+        XCTAssertEqual(pixels.image.width, 120)
+        XCTAssertEqual(pixels.image.height, 120)
         XCTAssertEqual(try Data(contentsOf: path), imageBytes)
 
         var changed = imageBytes

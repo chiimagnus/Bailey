@@ -968,7 +968,7 @@ final class FileTab: nonisolated Identifiable {
               preview.poster.width < Int(preview.pixelSize.width) ||
                 preview.poster.height < Int(preview.pixelSize.height) else { return nil }
         let size = preview.pixelSize
-        return imageRequest { _, source in try RasterPreview.original(source, size: size) }
+        return imageRequest { bytes, source in try RasterPreview.original(bytes, source: source, size: size) }
     }
 
     func gifFramesRequest() -> (() async throws -> GIFPlayback.Frames)? {
