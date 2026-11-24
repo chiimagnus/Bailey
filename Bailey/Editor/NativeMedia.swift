@@ -11,6 +11,7 @@ nonisolated struct NativeMedia: Sendable {
     let identity: LocalFileIdentity
     let kind: Kind
     let videoAspectRatio: CGFloat?
+    let audioTrackID: CMPersistentTrackID?
 
     static func candidate(_ pathExtension: String) -> Kind? {
         switch pathExtension.lowercased() {
@@ -33,18 +34,21 @@ nonisolated struct NativeMedia: Sendable {
                 guard playable, !protected else { throw Failure.unsupported }
                 let kind: Kind
                 let videoAspectRatio: CGFloat?
+                let audioTrackID: CMPersistentTrackID?
                 let videoTracks = try await asset.loadTracks(withMediaType: .video)
                 if !videoTracks.isEmpty {
                     guard let track = try await decodableTrack(videoTracks, type: .video, in: asset) else {
                         throw Failure.unsupported
                     }
                     kind = .video
+                    audioTrackID = nil
                     let (size, transform) = try await track.load(.naturalSize, .preferredTransform)
                     let displayed = CGRect(origin: .zero, size: size).applying(transform).size
                     let ratio = displayed.width / displayed.height
                     videoAspectRatio = ratio.isFinite && ratio > 0 ? ratio : nil
-                } else if try await decodableTrack(asset.loadTracks(withMediaType: .audio), type: .audio, in: asset) != nil {
+                } else if let track = try await decodableTrack(asset.loadTracks(withMediaType: .audio), type: .audio, in: asset) {
                     kind = .audio
+                    audioTrackID = track.trackID
                     videoAspectRatio = nil
                 } else {
                     throw Failure.unsupported
@@ -54,7 +58,8 @@ nonisolated struct NativeMedia: Sendable {
                 guard accepted.path == source.path, accepted.identity == source.identity else {
                     throw WorkspaceError.changedExternally
                 }
-                return Self(asset: asset, identity: source.identity, kind: kind, videoAspectRatio: videoAspectRatio)
+                return Self(asset: asset, identity: source.identity, kind: kind,
+                            videoAspectRatio: videoAspectRatio, audioTrackID: audioTrackID)
             } catch is AVError {
                 try Task.checkCancellation()
                 throw Failure.unsupported

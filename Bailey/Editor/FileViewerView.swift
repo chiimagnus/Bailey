@@ -1260,10 +1260,19 @@ struct FileViewerView: View {
                                                    controlsStyle: isAudio ? .floating : .inline,
                                                    isDockActive: isFocused && appearsActive)
                     Group {
-                        if let aspectRatio = media.videoAspectRatio {
+                        if isAudio {
+                            VStack(spacing: 8) {
+                                NativeAudioWaveformView(file: file, media: media, player: player,
+                                                        active: isFocused && appearsActive)
+                                    .frame(height: 72)
+                                    .padding(.horizontal, 12)
+                                surface.frame(height: 112)
+                            }
+                            .frame(maxWidth: 520)
+                        } else if let aspectRatio = media.videoAspectRatio {
                             surface.aspectRatio(aspectRatio, contentMode: .fit)
                         } else {
-                            surface.frame(maxWidth: isAudio ? 520 : .infinity).frame(height: isAudio ? 112 : nil)
+                            surface
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

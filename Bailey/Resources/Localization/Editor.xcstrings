@@ -1,6 +1,66 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Zoom Out" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缩小"
+          }
+        }
+      }
+    },
+    "Zoom In" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大"
+          }
+        }
+      }
+    },
+    "Next Waveform Section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一段波形"
+          }
+        }
+      }
+    },
+    "Previous Waveform Section" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一段波形"
+          }
+        }
+      }
+    },
+    "Waveform Unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法显示波形"
+          }
+        }
+      }
+    },
+    "Waveform" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "波形"
+          }
+        }
+      }
+    },
     "This media file is damaged or uses an unsupported format." : {
       "localizations" : {
         "zh-Hans" : {

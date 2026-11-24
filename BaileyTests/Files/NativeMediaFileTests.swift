@@ -137,6 +137,23 @@ final class NativeMediaFileTests: XCTestCase {
             XCTAssertEqual(reader.status, .completed)
             XCTAssertEqual(decoded, expected, "Decoded PCM must match the actual marker at \(offset)s")
         }
+        // Decode the actual entire four-hour source without buffering the PCM.
+        // Each bucket covers one second, so the three non-silent markers have
+        // independent, exact expected positions even across sparse regions.
+        let waveformBefore = Self.residentMiB()
+        let waveformStart = ContinuousClock.now
+        let summary = try await NativeAudioWaveform.read(media, bucketCount: seconds)
+        XCTAssertEqual(summary.duration, Double(seconds), accuracy: 0.001)
+        XCTAssertEqual(summary.buckets.count, seconds)
+        let nonSilent = summary.buckets.indices.filter { summary.buckets[$0].peak > 0.01 }
+        XCTAssertEqual(nonSilent, markers.map(\.0))
+        for (offset, _) in markers {
+            XCTAssertEqual(summary.buckets[offset].peak, 12_000 / 32_768, accuracy: 0.001)
+            XCTAssertEqual(summary.buckets[offset].rms, 12_000 / 32_768 / sqrt(2), accuracy: 0.001)
+        }
+        XCTAssertTrue(player.currentItem === item)
+        XCTAssertEqual(player.currentTime().seconds, Double(seconds - 1), accuracy: 0.02)
+        print("MEDIA_WAVEFORM_FOUR_HOURS buckets=\(summary.buckets.count) elapsed=\(waveformStart.duration(to: .now)) resident_mib=\(waveformBefore)->\(Self.residentMiB())")
         player.play()
         try await waitUntil { player.currentTime().seconds > Double(seconds - 1) + 0.025 }
         player.pause()
