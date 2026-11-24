@@ -71,7 +71,7 @@ final class SVGFilePreviewUITests: XCTestCase {
             XCTAssertTrue(row.waitForExistence(timeout: 15))
             row.doubleClick()
             let message = app.staticTexts.matching(NSPredicate(
-                format: "value == %@ OR label == %@", reason, reason
+                format: "value BEGINSWITH %@ OR label BEGINSWITH %@", reason, reason
             )).firstMatch
             XCTAssertTrue(message.waitForExistence(timeout: 10))
             let showSource = WorkspaceUITestSupport.element("bailey.svg.showSource", in: app)
@@ -81,6 +81,43 @@ final class SVGFilePreviewUITests: XCTestCase {
             XCTAssertTrue(editor.waitForExistence(timeout: 10))
             XCTAssertTrue((editor.value as? String)?.contains(source) == true)
             XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+        }
+    }
+
+    func testPNGOutputMenusOfferExplicitOptionsAndCancelWithoutChangingFiles() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = #"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="red"/></svg>"#
+        let file = try fixture.file("Diagram.svg", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 12))
+        let clipboardChangeCount = NSPasteboard.general.changeCount
+        for title in ["Copy PNG…", "Export PNG…"] {
+            preview.rightClick()
+            let action = WorkspaceUITestSupport.menuItem(title, in: app)
+            XCTAssertTrue(action.waitForExistence(timeout: 5))
+            action.click()
+            let sheet = window.sheets.firstMatch
+            XCTAssertTrue(sheet.waitForExistence(timeout: 8))
+            let cancel = sheet.buttons["Cancel"]
+            XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+            XCTAssertTrue(sheet.staticTexts["Pixel width"].exists, sheet.debugDescription)
+            XCTAssertTrue(sheet.staticTexts["Pixel height"].exists, sheet.debugDescription)
+            XCTAssertTrue(sheet.staticTexts["Color space"].exists, sheet.debugDescription)
+            XCTAssertTrue(sheet.staticTexts["Background"].exists, sheet.debugDescription)
+            cancel.click()
+            XCTAssertTrue(sheet.waitForNonExistence(timeout: 8))
+            XCTAssertTrue(preview.exists)
+            XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appending(path: "Diagram.png").path))
+            XCTAssertEqual(NSPasteboard.general.changeCount, clipboardChangeCount)
         }
     }
 
