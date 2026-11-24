@@ -44,6 +44,7 @@ struct NativeAudioWaveformView: View {
     @State private var trackID: CMPersistentTrackID?
     @State private var result: Result<NativeAudioWaveform, Error>?
     @State private var completedRequest: Request?
+    @State private var playbackTime = 0.0
 
     private struct Request: Hashable {
         let revision: String
@@ -125,6 +126,13 @@ struct NativeAudioWaveformView: View {
                 durationUnavailable = true
             }
         }
+        .task(id: active ? file.fileContentRevision : nil) {
+            guard active, file.mediaPlayer === player, !file.mediaSleeping else { return }
+            await Self.observePlaybackTime(of: player) { seconds in
+                guard file.mediaPlayer === player, !file.mediaSleeping else { return }
+                playbackTime = seconds
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.mediaSelectionDidChangeNotification)) { event in
             guard let item = event.object as? AVPlayerItem, item === player.currentItem else { return }
             updateTrack()
@@ -141,7 +149,27 @@ struct NativeAudioWaveformView: View {
         Duration.seconds(seconds.isFinite ? max(0, seconds) : 0).formatted(.time(pattern: .hourMinuteSecond))
     }
 
-    private var accessibleTime: String { timeLabel(player.currentTime().seconds) }
+    /// AVPlayer reports actual time changes, including seeks while paused.
+    /// The view task owns the token and removes it on cancellation.
+    @MainActor static func observePlaybackTime(of player: AVPlayer,
+                                               onChange: @MainActor (Double) -> Void) async {
+        guard !Task.isCancelled else { return }
+        let (times, continuation) = AsyncStream<Double>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let token = player.addPeriodicTimeObserver(
+            forInterval: CMTime(value: 1, timescale: 10), queue: .main
+        ) { time in
+            continuation.yield(time.seconds)
+        }
+        defer {
+            player.removeTimeObserver(token)
+            continuation.finish()
+        }
+        onChange(player.currentTime().seconds)
+        for await seconds in times {
+            guard !Task.isCancelled else { break }
+            onChange(seconds)
+        }
+    }
 
     private func updateTrack() {
         trackID = player.currentItem?.tracks.first(where: {
@@ -180,18 +208,16 @@ struct NativeAudioWaveformView: View {
     }
 
     private func playhead(in viewport: AudioWaveformViewport) -> some View {
-        TimelineView(.animation(minimumInterval: 0.1, paused: !active)) { _ in
-            let time = player.currentTime().seconds
-            Canvas { context, size in
-                let range = viewport.interval
-                guard time.isFinite, time >= range.lowerBound, time <= range.upperBound else { return }
-                let fraction = (time - range.lowerBound) / (range.upperBound - range.lowerBound)
-                let x = size.width * CGFloat(fraction)
-                var line = Path()
-                line.move(to: CGPoint(x: x, y: 0))
-                line.addLine(to: CGPoint(x: x, y: size.height))
-                context.stroke(line, with: .foreground, lineWidth: 1)
-            }
+        Canvas { context, size in
+            let range = viewport.interval
+            guard playbackTime.isFinite, playbackTime >= range.lowerBound,
+                  playbackTime <= range.upperBound else { return }
+            let fraction = (playbackTime - range.lowerBound) / (range.upperBound - range.lowerBound)
+            let x = size.width * CGFloat(fraction)
+            var line = Path()
+            line.move(to: CGPoint(x: x, y: 0))
+            line.addLine(to: CGPoint(x: x, y: size.height))
+            context.stroke(line, with: .foreground, lineWidth: 1)
         }
         .allowsHitTesting(false)
     }
@@ -246,7 +272,7 @@ struct NativeAudioWaveformView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("bailey.audio.waveform")
         .accessibilityLabel(Text("Waveform", tableName: "Editor"))
-        .accessibilityValue(accessibleTime)
+        .accessibilityValue(timeLabel(playbackTime))
         .accessibilityAdjustableAction { direction in
             let step = (viewport.interval.upperBound - viewport.interval.lowerBound) / 20
             let current = player.currentTime().seconds

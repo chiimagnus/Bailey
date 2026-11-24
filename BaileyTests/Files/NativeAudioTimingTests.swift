@@ -99,6 +99,76 @@ final class NativeAudioTimingTests: XCTestCase {
         }
     }
 
+    func testWaveformTimeObservationFollowsPausedNativeSeeksAndStopsOnCancellation() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Waveform.m4a")
+        try FileManager.default.copyItem(at: root.appending(path: ".github/features/audio-file-playback/demo-audio.m4a"), to: url)
+        let original = try Data(contentsOf: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        file.loadIfNeeded()
+        defer { file.retireContent() }
+
+        func wait(_ message: String, _ ready: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+            while !ready() {
+                guard ContinuousClock.now < deadline else {
+                    XCTFail(message)
+                    throw WorkspaceError.timedOut
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        try await wait("The file's own AVPlayer must be ready") {
+            file.mediaPlayer?.currentItem?.status == .readyToPlay
+        }
+        let player = try XCTUnwrap(file.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        player.isMuted = true
+        XCTAssertEqual(player.rate, 0)
+
+        var observed: [Double] = []
+        let observer = Task {
+            await NativeAudioWaveformView.observePlaybackTime(of: player) { observed.append($0) }
+        }
+        defer { observer.cancel() }
+        try await wait("The waveform receives the native time on activation") {
+            observed.last.map { abs($0) < 0.05 } ?? false
+        }
+        for seconds in [8.0, 2.0, 10.0, 0.0] {
+            let accepted = await player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
+                                            toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(accepted)
+            XCTAssertEqual(player.currentTime().seconds, seconds, accuracy: 0.05)
+            try await wait("Waveform observation must follow the paused seek") {
+                observed.last.map { abs($0 - seconds) < 0.05 } ?? false
+            }
+            XCTAssertTrue(file.mediaPlayer === player)
+            XCTAssertTrue(player.currentItem === item)
+        }
+
+        try await Task.sleep(for: .milliseconds(200))
+        let countWhilePaused = observed.count
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(observed.count, countWhilePaused,
+                       "A stationary paused player needs no waveform refresh")
+        observer.cancel()
+        await observer.value
+        let countAfterCancellation = observed.count
+        let accepted = await player.seek(to: CMTime(seconds: 4, preferredTimescale: 600),
+                                        toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(accepted)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(observed.count, countAfterCancellation)
+        XCTAssertEqual(player.currentTime().seconds, 4, accuracy: 0.05)
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
     func testWaveformViewportKeepsAnchoredTimeAndClampsAtFileEnds() {
         var viewport = AudioWaveformViewport(duration: 14_400)
         let anchor = viewport.time(at: 0.75)

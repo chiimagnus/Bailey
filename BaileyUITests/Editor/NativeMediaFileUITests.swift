@@ -113,7 +113,9 @@ final class NativeMediaFileUITests: XCTestCase {
         func expectTime(_ seconds: Double) {
             let updated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 guard let actual = time() else { return false }
+                let accessible = Duration.seconds(actual).formatted(.time(pattern: .hourMinuteSecond))
                 return abs(actual - seconds) < 0.35
+                    && String(describing: waveform.value ?? "") == accessible
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
         }
