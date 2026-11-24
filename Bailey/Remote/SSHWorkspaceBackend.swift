@@ -191,6 +191,14 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         ), stdin: data)
     }
 
+    @concurrent func writeNewFile(path: String, data: Data) async throws {
+        let version = WorkspaceFileVersion(data: data)
+        try await shell(RemoteCommands.atomicWriteCommand(
+            path: path, expectedBytes: version.byteCount, sha256: version.sha256,
+            exclusive: true
+        ), stdin: data)
+    }
+
     func createFile(path: String) async throws {
         try await shell(RemoteCommands.createFileCommand(path: path))
     }

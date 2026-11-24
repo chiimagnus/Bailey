@@ -265,7 +265,8 @@ nonisolated enum RemoteCommands {
     /// A private same-directory staging directory prevents stale symlinks
     /// and concurrent writes from sharing unpublished data.
     static func atomicWriteCommand(path: String, expectedBytes: Int, sha256: String,
-                                   ifUnchanged version: WorkspaceFileVersion? = nil) -> String {
+                                   ifUnchanged version: WorkspaceFileVersion? = nil,
+                                   exclusive: Bool = false) -> String {
         let verifySource = version.map { _ in
             """
             [ -f "$1" ] || exit 47
@@ -276,6 +277,24 @@ nonisolated enum RemoteCommands {
             """
         } ?? ""
         let sourceArguments = version.map { " \($0.byteCount) \($0.sha256)" } ?? ""
+        let publish = exclusive ? """
+            if [ -e "$1" ] || [ -L "$1" ]; then exit 45; fi
+            if [ "$(uname -s)" = "Darwin" ]; then
+                # macOS BSD mv lacks -T; fail rather than risk treating a
+                # competing directory as the destination of the staged file.
+                echo "Exclusive remote publication is unavailable" >&2
+                exit 1
+            fi
+            mv -nT -- "$stage/item" "$1" || exit 1
+            if [ -e "$stage/item" ]; then exit 45; fi
+            """ : """
+            if [ "$(uname -s)" = "Darwin" ]; then
+                if [ -d "$1" ] && [ ! -L "$1" ]; then exit 1; fi
+                mv -fh -- "$stage/item" "$1"
+            else
+                mv -fT -- "$stage/item" "$1"
+            fi
+            """
         return """
         sh -c '
         set -eu
@@ -303,17 +322,18 @@ nonisolated enum RemoteCommands {
         actualHash=$(hash_stdin < "$stage/item") || exit 1
         actualHash=${actualHash%% *}
         [ "$actualHash" = "$3" ] || { echo "Remote upload checksum mismatch" >&2; exit 1; }
+        # All Bailey writers on a host with flock serialize the final
+        # check/publication without creating a persistent lock file.
+        if command -v flock >/dev/null 2>&1; then
+            exec 9<"$(dirname -- "$1")"
+            flock -x 9
+        fi
         \(verifySource)
         if [ -f "$1" ] && [ ! -L "$1" ]; then
             chmod --reference="$1" "$stage/item" 2>/dev/null ||
                 chmod "$(stat -f %Lp -- "$1")" "$stage/item"
         fi
-        if [ "$(uname -s)" = "Darwin" ]; then
-            if [ -d "$1" ] && [ ! -L "$1" ]; then exit 1; fi
-            mv -fh -- "$stage/item" "$1"
-        else
-            mv -fT -- "$stage/item" "$1"
-        fi
+        \(publish)
         trap - EXIT HUP INT TERM
         rmdir -- "$stage" || :
         ' _ \(quote(path)) \(expectedBytes) \(sha256)\(sourceArguments)

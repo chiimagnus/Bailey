@@ -87,10 +87,12 @@ nonisolated struct LocalFileIdentity: Equatable, Sendable {
 /// The Mac's own disk and process table. Wraps exactly the calls the panels
 /// made inline before the seam existed.
 ///
-/// Nothing is stored, so the type is `Sendable` and its `@concurrent`
+/// Publication coordination is process-wide; the backend is `Sendable` and its `@concurrent`
 /// methods run off the main actor even when a main-actor model awaits them.
 nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     static let shared = LocalWorkspaceBackend()
+    // Serialize Bailey conditional commits, not preparation or independent reads.
+    private static let publicationLock = NSLock()
 
     // MARK: - Files
 
@@ -276,23 +278,25 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         let item = stage + "/item"
         try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
         _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
-        if let version, let originalMode = try Self.verifyCurrentVersion(path: path, expected: version) {
-            guard chmod(item, mode_t(originalMode)) == 0 else {
-                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-            }
-        }
         let stagedHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: item))
         try stagedHandle.synchronize()
         try stagedHandle.close()
-        try Task.checkCancellation()
-        let status: Int32
-        if version != nil {
-            status = item.withCString { from in path.withCString { to in Darwin.rename(from, to) } }
-        } else {
-            status = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: path))
-        }
-        guard status == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        try Self.publicationLock.withLock {
+            try Task.checkCancellation()
+            let status: Int32
+            if let version {
+                if let originalMode = try Self.verifyCurrentVersion(path: path, expected: version) {
+                    guard chmod(item, mode_t(originalMode)) == 0 else {
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
+                }
+                status = item.withCString { from in path.withCString { to in Darwin.rename(from, to) } }
+            } else {
+                status = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: path))
+            }
+            guard status == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
         }
     }
 

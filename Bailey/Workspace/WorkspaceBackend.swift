@@ -72,7 +72,7 @@ nonisolated protocol WorkspaceBackend: Sendable {
     /// Read only the leading bytes of a regular file, without accepting it as a complete document.
     func readPrefix(path: String, maxBytes: Int) async throws -> Data
     func write(path: String, data: Data) async throws
-    /// Text save only: compare the accepted raw bytes before atomically publishing.
+    /// Document save: compare the accepted raw bytes before atomically publishing.
     /// No default fallback to unconditional write is permitted.
     func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws
     func createFile(path: String) async throws
