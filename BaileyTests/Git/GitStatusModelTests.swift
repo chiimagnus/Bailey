@@ -731,8 +731,8 @@ final class GitStatusModelTests: XCTestCase {
             root: linked.path,
             gitDirectory: gitDir.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        XCTAssertTrue(watched.contains(linked.path))
-        XCTAssertTrue(watched.contains(primary.appendingPathComponent(".git").path),
+        XCTAssertTrue(watched.contains(LocalPathScope.physicalPath(linked.path)))
+        XCTAssertTrue(watched.contains(LocalPathScope.physicalPath(primary.appendingPathComponent(".git").path)),
                       "Linked worktree must watch the shared refs directory")
 
         git(["branch", "another-from-primary"])
@@ -3159,9 +3159,9 @@ final class GitStatusModelTests: XCTestCase {
         let watched = GitFileEventWatcher.paths(
             root: main.path, gitDirectory: gitDirectory, worktrees: [linked.path]
         )
-        XCTAssertTrue(watched.contains { gitDirectory == $0 || gitDirectory.hasPrefix($0 + "/") },
+        XCTAssertTrue(watched.contains { LocalPathScope.contains(LocalPathScope.physicalPath(gitDirectory), in: $0) },
                       "The shared Git metadata must be covered by a recursive watcher root")
-        XCTAssertTrue(watched.contains { linked.path == $0 || linked.path.hasPrefix($0 + "/") },
+        XCTAssertTrue(watched.contains { LocalPathScope.contains(LocalPathScope.physicalPath(linked.path), in: $0) },
                       "The linked checkout must also be covered by a watcher root")
         let received = expectation(description: "External linked HEAD commit reaches native FSEvents")
         received.assertForOverFulfill = false

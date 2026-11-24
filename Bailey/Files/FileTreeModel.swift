@@ -472,7 +472,7 @@ final class FileTreeModel {
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: root)) != nil else {
             return nil
         }
-        let parent = physicalRootPath((root as NSString).deletingLastPathComponent)
+        let parent = LocalPathScope.physicalPath((root as NSString).deletingLastPathComponent)
         // FSEvents is recursive: monitoring '/' for /tmp or /var would subscribe
         // to the entire filesystem. Those top-level aliases reconcile on activation.
         guard parent != "/" else { return nil }
@@ -498,7 +498,7 @@ final class FileTreeModel {
             return
         }
         let root = rootPath
-        let physicalRoot = Self.physicalRootPath(root)
+        let physicalRoot = LocalPathScope.physicalPath(root)
         var mappings = [root: physicalRoot]
         for (parent, entries) in cachedDirectories {
             for entry in entries where entry.isSymlink && entry.isDirectory {
@@ -508,7 +508,7 @@ final class FileTreeModel {
                 // It still needs events: changing the link's target can split
                 // that compact row into multiple visible entries.
                 if items.contains(where: { $0.path == path || $0.path.hasPrefix(path + "/") }) {
-                    mappings[path] = Self.physicalRootPath(path)
+                    mappings[path] = LocalPathScope.physicalPath(path)
                 }
             }
         }
@@ -568,14 +568,6 @@ final class FileTreeModel {
         }
     }
 
-    private static func physicalRootPath(_ root: String) -> String {
-        root.withCString { source in
-            guard let resolved = Darwin.realpath(source, nil) else { return root }
-            defer { free(resolved) }
-            return String(cString: resolved)
-        }
-    }
-
     /// Recheck disk state, never apply event paths as file-tree entries.
     func refreshForLocalEvents(_ events: [GitFileEventWatcher.Event]) async {
         guard workspaceScope == "local", !rootPath.isEmpty, !events.isEmpty else { return }
@@ -591,7 +583,7 @@ final class FileTreeModel {
             guard event.path == (link as NSString).deletingLastPathComponent,
                   event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0
             else { return false }
-            return Self.physicalRootPath(rootPath) != localWatchMappings[rootPath]
+            return LocalPathScope.physicalPath(rootPath) != localWatchMappings[rootPath]
         }
         if rootLinkChanged || events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
             let epoch = treeEpoch
@@ -626,7 +618,7 @@ final class FileTreeModel {
         // FSEvents reports physical paths; expanded directory symlinks can
         // expose the same directory under several visible tree paths.
         let mappings = localWatchMappings.isEmpty
-            ? [rootPath: Self.physicalRootPath(rootPath)] : localWatchMappings
+            ? [rootPath: LocalPathScope.physicalPath(rootPath)] : localWatchMappings
         for event in events {
             // Never standardize a missing event path: NSString changes /private/var
             // to /var for existing entries but not reliably for deleted ones.

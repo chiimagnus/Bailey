@@ -24,6 +24,16 @@ nonisolated enum LocalPathScope {
         return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
     }
 
+    // FSEvents uses physical paths, including /private/var, which Foundation
+    // may shorten to /var even when resolving symbolic links.
+    static func physicalPath(_ root: String) -> String {
+        root.withCString { source in
+            guard let resolved = Darwin.realpath(source, nil) else { return root }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+    }
+
     /// After a move, resolve surviving ancestors rather than the now-missing old leaf.
     static func resolvedPath(_ path: String) -> String {
         var url = URL(fileURLWithPath: path)

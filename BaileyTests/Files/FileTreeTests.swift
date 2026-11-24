@@ -932,6 +932,50 @@ final class FileTreeTests: XCTestCase {
                       "An ignored file staged in a linked worktree must appear in ⌘P")
     }
 
+    func testNativeLinkedWorktreeSharedExcludeInvalidatesQuickOpenAcrossPathAliases() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let repository = base.appendingPathComponent("repository")
+        let linked = base.appendingPathComponent("linked")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        func git(_ args: [String], at directory: URL = repository) {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "BaileyTest"])
+        git(["config", "user.email", "test@example.invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        git(["config", "core.hooksPath", "/dev/null"])
+        git(["config", "core.excludesFile", "/dev/null"])
+        git(["commit", "--allow-empty", "-qm", "fixture"])
+        git(["worktree", "add", "-q", "-b", "feature", linked.path])
+        let sharedExclude = repository.appendingPathComponent(".git/info/exclude")
+        let original = Data("# Shared ignore rules\n".utf8)
+        try FileManager.default.createDirectory(at: sharedExclude.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try original.write(to: sharedExclude)
+        let ignored = linked.appendingPathComponent("shared-exclude.tmp")
+        try Data("untracked".utf8).write(to: ignored)
+        XCTAssertTrue(ProjectFileIndex.load(in: linked.path).contains { $0.absolutePath == ignored.path })
+
+        let tree = FileTreeModel()
+        await tree.sync(root: linked.path, backend: LocalWorkspaceBackend.shared)
+        let gitDirectory = try XCTUnwrap(ProjectFileIndex.gitDirectory(in: linked.path))
+        // Subscribe to both roots before enabling the watcher, so recovery from
+        // a stream replacement cannot satisfy this native-event assertion.
+        tree.setLocalFileIndexGitDirectory(gitDirectory)
+        let member = UUID()
+        tree.setLocalFileEventsEnabled(true, member: member)
+        defer { tree.setLocalFileEventsEnabled(false, member: member) }
+        let revision = tree.contentRevision
+        try (original + Data("\nshared-exclude.tmp\n".utf8)).write(to: sharedExclude, options: .atomic)
+        try await waitForCondition("The physical path of the shared Git exclude must invalidate the file index") {
+            tree.contentRevision > revision
+        }
+        XCTAssertFalse(ProjectFileIndex.load(in: linked.path).contains { $0.absolutePath == ignored.path })
+        XCTAssertEqual(try Data(contentsOf: ignored), Data("untracked".utf8))
+    }
+
     func testGitIgnoreAndIndexMetadataChangesInvalidateQuickOpenWithoutTreeChanges() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
