@@ -373,6 +373,97 @@ final class PreviewScrollViewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture), bytes)
     }
 
+    func testFileSVGKeepsIndependentViewportAcrossSourceRemountAndRename() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func artwork(width: Int = 1200, height: Int = 900, color: String) -> Data {
+            Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" width="\(width)" height="\(height)">
+                  <rect width="\(width)" height="\(height)" fill="\(color)"/>
+                  <circle cx="300" cy="350" r="80" fill="white"/>
+                </svg>
+                """.utf8)
+        }
+        let a = root.appending(path: "First.svg")
+        let b = root.appending(path: "Second.svg")
+        let firstBytes = artwork(color: "red")
+        let secondBytes = artwork(color: "blue")
+        try firstBytes.write(to: a)
+        try secondBytes.write(to: b)
+        let first = FileTab(path: a.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let second = FileTab(path: b.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await first.waitForText()
+        try await second.waitForText()
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 320)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); first.retireContent(); second.retireContent() }
+        window.orderBack(nil)
+
+        func mounted(_ host: NSView, width: Int = 1200, height: Int = 900) async throws -> SVGPreviewScrollView {
+            try await waitFor("Mount the requested SVG canvas") {
+                host.layoutSubtreeIfNeeded()
+                return previewScroll(in: host)?.documentView?.subviews.first?.frame.size == CGSize(width: width, height: height)
+            }
+            host.layoutSubtreeIfNeeded()
+            return try XCTUnwrap(previewScroll(in: host) as? SVGPreviewScrollView)
+        }
+        func mount(_ file: FileTab) async throws -> (NSHostingView<FileViewerView>, SVGPreviewScrollView) {
+            let host = NSHostingView(rootView: FileViewerView(file: file))
+            window.contentView = host
+            return (host, try await mounted(host))
+        }
+        func position(_ view: SVGPreviewScrollView, zoom: CGFloat, origin: CGPoint) -> CGPoint {
+            view.setZoom(zoom, at: CGPoint(x: 600, y: 450))
+            view.contentView.scroll(to: origin)
+            view.reflectScrolledClipView(view.contentView)
+            return CGPoint(x: view.contentView.bounds.midX, y: view.contentView.bounds.midY)
+        }
+        func assertPosition(_ view: SVGPreviewScrollView, scale: CGFloat, center: CGPoint,
+                            file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(view.pixelScale, scale, accuracy: 0.001, file: file, line: line)
+            XCTAssertEqual(view.contentView.bounds.midX, center.x, accuracy: 2, file: file, line: line)
+            XCTAssertEqual(view.contentView.bounds.midY, center.y, accuracy: 2, file: file, line: line)
+        }
+        let (firstHost, firstView) = try await mount(first)
+        let firstCenter = position(firstView, zoom: 3, origin: CGPoint(x: 150, y: 210))
+        assertPosition(firstView, scale: 3, center: firstCenter)
+        first.setFilePreview(false)
+        try await waitFor("Source must unmount the SVG view") { previewScroll(in: firstHost) == nil }
+        first.setFilePreview(true)
+        let afterSource = try await mounted(firstHost)
+        assertPosition(afterSource, scale: 3, center: firstCenter)
+
+        let (_, secondView) = try await mount(second)
+        XCTAssertLessThan(secondView.pixelScale, 1)
+        let secondCenter = position(secondView, zoom: 2.5, origin: CGPoint(x: 440, y: 290))
+        window.setContentSize(NSSize(width: 620, height: 460))
+        let (_, firstAgain) = try await mount(first)
+        assertPosition(firstAgain, scale: 3, center: firstCenter)
+        let (_, secondAgain) = try await mount(second)
+        assertPosition(secondAgain, scale: 2.5, center: secondCenter)
+
+        let renamed = root.appending(path: "Renamed.svg")
+        try FileManager.default.moveItem(at: a, to: renamed)
+        first.updatePath(renamed.path)
+        let (renamedHost, renamedView) = try await mount(first)
+        assertPosition(renamedView, scale: 3, center: firstCenter)
+        XCTAssertEqual(try Data(contentsOf: renamed), firstBytes)
+        XCTAssertEqual(try Data(contentsOf: b), secondBytes)
+
+        let replacement = artwork(width: 300, height: 200, color: "green")
+        try replacement.write(to: renamed, options: .atomic)
+        first.reloadFromDiskIfClean()
+        let reloaded = try await mounted(renamedHost, width: 300, height: 200)
+        assertPosition(reloaded, scale: 1, center: CGPoint(x: 150, y: 100))
+        XCTAssertFalse(first.isDirty)
+        XCTAssertEqual(try Data(contentsOf: renamed), replacement)
+        first.retireContent()
+        try await waitFor("Close releases the SVG canvas") { previewScroll(in: renamedHost) == nil }
+        XCTAssertTrue(reloaded.documentView?.subviews.isEmpty == true)
+    }
+
     func testFileImageRemountKeepsItsActualZoomAndPanAtANewWindowSize() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

@@ -76,7 +76,7 @@ final class FileTab: nonisolated Identifiable {
         }
     }
     private(set) var gifPlayback: GIFPlayback?
-    @ObservationIgnored var imageViewportPosition: PreviewScrollView.Position?
+    @ObservationIgnored var graphicViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
@@ -153,7 +153,7 @@ final class FileTab: nonisolated Identifiable {
         htmlPreview = nil
         targetGeneration &+= 1
         gifPlayback = nil
-        imageViewportPosition = nil
+        graphicViewportPosition = nil
         invalidateReload()
         retireMedia()
         content = .loading
@@ -572,7 +572,10 @@ final class FileTab: nonisolated Identifiable {
         targetGeneration &+= 1
         let previousKind = previewKind
         path = newPath
-        if previewKind != previousKind { previewOverride = nil }
+        if previewKind != previousKind {
+            previewOverride = nil
+            if previousKind == .svg || previewKind == .svg { graphicViewportPosition = nil }
+        }
         if previewKind != .html { htmlPreview = nil }
         editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if hasReadDemand, !isDirty, wasMedia || isMediaFile {
@@ -915,7 +918,7 @@ final class FileTab: nonisolated Identifiable {
                   !self.isDirty, self.readOnlyReason == nil else { return }
             self.retireMedia()
             self.retireNativeEditor()
-            self.imageViewportPosition = nil
+            self.graphicViewportPosition = nil
             self.content = loaded.content
             self.gifPlayback?.reset()
             if case .image(let image) = loaded.content, image.animationFrameCount > 1 {
@@ -1232,10 +1235,10 @@ struct FileViewerView: View {
                     ImageInspector(image: image, loadOriginal: file.originalImageRequest(),
                                    playback: file.gifPlayback, loadAnimation: file.gifFramesRequest(),
                                    resourceRevision: file.fileContentRevision,
-                                   viewportPosition: file.imageViewportPosition,
+                                   viewportPosition: file.graphicViewportPosition,
                                    onViewportPositionChange: { position in
                         guard case .image = file.content, file.reloadRevision == revision else { return }
-                        file.imageViewportPosition = position
+                        file.graphicViewportPosition = position
                     })
                         .id(revision)
                 }

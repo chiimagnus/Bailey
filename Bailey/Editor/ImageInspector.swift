@@ -92,6 +92,7 @@ class PreviewScrollView: NSScrollView {
     private var positionToRestore: Position?
     private var viewportSize = CGSize.zero
     private var backingScale: CGFloat = 1
+    var onViewportPositionChange: ((Position?) -> Void)?
     private var dragPoint: CGPoint?
     private var dragOrigin: CGPoint?
 
@@ -135,6 +136,11 @@ class PreviewScrollView: NSScrollView {
         super.layout()
         updateViewport()
         restorePositionWhenReady()
+    }
+
+    override func reflectScrolledClipView(_ clip: NSClipView) {
+        super.reflectScrolledClipView(clip)
+        if window != nil { onViewportPositionChange?(position) }
     }
 
     override func viewDidChangeBackingProperties() {
@@ -280,7 +286,6 @@ private final class RasterScrollView: PreviewScrollView {
     private var detailFailed = false
     private var resourceRevision = ""
     private var toggleAnimation: (() -> Void)?
-    private var onViewportPositionChange: ((Position?) -> Void)?
     private lazy var animationMenuItem = NSMenuItem(title: "", action: #selector(togglePlayback), keyEquivalent: "")
 
     override init(frame: NSRect) {
@@ -331,7 +336,6 @@ private final class RasterScrollView: PreviewScrollView {
 
     override func reflectScrolledClipView(_ clip: NSClipView) {
         super.reflectScrolledClipView(clip)
-        if window != nil { onViewportPositionChange?(position) }
         updateDetailDemand()
     }
 

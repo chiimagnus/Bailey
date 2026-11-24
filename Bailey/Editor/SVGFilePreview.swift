@@ -24,7 +24,13 @@ struct SVGFilePreview: View {
                             let names = artwork.omitted.prefix(8).joined(separator: ", ")
                             notice(String(localized: "SVG preview omits: \(names)", table: "Editor"))
                         }
-                        NativeSVGViewport(svg: artwork.image, request: request, onFocused: onFocused)
+                        NativeSVGViewport(svg: artwork.image, request: request,
+                                          viewportPosition: file.graphicViewportPosition,
+                                          onViewportPositionChange: { position in
+                            guard file.previewKind == .svg, case .text = file.content,
+                                  file.textPreviewRequestID == request else { return }
+                            file.graphicViewportPosition = position
+                        }, onFocused: onFocused)
                     }
                 case .error(let message):
                     notice(message).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,13 +78,16 @@ struct SVGFilePreview: View {
 private struct NativeSVGViewport: NSViewRepresentable {
     let svg: SVG
     let request: String
+    let viewportPosition: PreviewScrollView.Position?
+    let onViewportPositionChange: (PreviewScrollView.Position?) -> Void
     let onFocused: () -> Void
 
     func makeNSView(context: Context) -> SVGPreviewScrollView { SVGPreviewScrollView() }
 
     func updateNSView(_ scroll: SVGPreviewScrollView, context: Context) {
         scroll.onFocused = onFocused
-        scroll.install(svg, request: request)
+        scroll.install(svg, request: request, position: viewportPosition,
+                       onPositionChange: onViewportPositionChange)
     }
 
     static func dismantleNSView(_ scroll: SVGPreviewScrollView, coordinator: ()) { scroll.clear() }
@@ -110,19 +119,24 @@ final class SVGPreviewScrollView: PreviewScrollView {
         return true
     }
 
-    func install(_ svg: SVG, request: String) {
-        guard self.request != request else { return }
-        self.request = request
-        content?.removeFromSuperview()
-        let content = NSHostingView(rootView: SVGView(svg: svg))
-        content.frame = CGRect(origin: .zero, size: svg.size)
-        canvas.setFrameSize(svg.size)
-        canvas.addSubview(content)
-        self.content = content
-        fit()
+    func install(_ svg: SVG, request: String, position: Position? = nil,
+                 onPositionChange: ((Position?) -> Void)? = nil) {
+        if self.request != request {
+            onViewportPositionChange = nil
+            self.request = request
+            content?.removeFromSuperview()
+            let content = NSHostingView(rootView: SVGView(svg: svg))
+            content.frame = CGRect(origin: .zero, size: svg.size)
+            canvas.setFrameSize(svg.size)
+            canvas.addSubview(content)
+            self.content = content
+            restorePosition(position)
+        }
+        onViewportPositionChange = onPositionChange
     }
 
     func clear() {
+        onViewportPositionChange = nil
         content?.removeFromSuperview()
         content = nil
         request = nil
