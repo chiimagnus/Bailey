@@ -54,9 +54,7 @@ nonisolated enum SVGArtwork {
         var omitted = Set<String>()
         var instances = [XMLElement]()
         try clean(root, depth: 0, budget: &budget, instances: &instances, omitted: &omitted)
-        if !instances.isEmpty {
-            try checkExpansion(of: root, instances: instances, omitted: &omitted)
-        }
+        try checkExpansion(of: root, instances: instances, omitted: &omitted)
         return Sanitized(xml: root.xmlString, omitted: omitted.sorted())
     }
 

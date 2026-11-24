@@ -234,6 +234,37 @@ final class SVGArtworkTests: XCTestCase {
         }
     }
 
+    func testPaintAndClippingReferencesShareExpandedBudgetWithoutUse() throws {
+        for (element, attribute, member) in [
+            ("clipPath", "clip-path", "<rect width=\"1\" height=\"1\"/>"),
+            ("mask", "mask", "<rect width=\"1\" height=\"1\" fill=\"white\"/>"),
+            ("filter", "filter", "<feOffset dx=\"1\" dy=\"0\"/>"),
+        ] {
+            func artwork(references: Int) -> Data {
+                let definition = "<\(element) id=\"shared\">" + String(repeating: member, count: 31) + "</\(element)>"
+                let shapes = String(repeating: "<rect width=\"1\" height=\"1\" \(attribute)=\"url(#shared)\"/>", count: references)
+                return Data("""
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+                      <defs>\(definition)</defs>\(shapes)
+                    </svg>
+                    """.utf8)
+            }
+            XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(references: 123)).omitted.isEmpty, element)
+            XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(references: 124)), element) { error in
+                guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded SVG limit: \(error)") }
+            }
+        }
+        let gradient = "<linearGradient id=\"shared\">" + String(repeating: "<stop offset=\"0\" stop-color=\"red\"/>", count: 31) + "</linearGradient>"
+        func painted(references: Int) -> Data {
+            let shapes = String(repeating: "<rect width=\"1\" height=\"1\" fill=\"url(#shared)\"/>", count: references)
+            return Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><defs>\(gradient)</defs>\(shapes)</svg>".utf8)
+        }
+        XCTAssertTrue(try SVGArtwork.sanitizedXML(painted(references: 62)).omitted.isEmpty)
+        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(painted(references: 63))) { error in
+            guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded gradient limit: \(error)") }
+        }
+    }
+
     func testExpandedGeometryBudgetIncludesReusedPathData() throws {
         let contour = "M1 1" + String(repeating: " l1 0 l0 1 l-1 0 l0 -1", count: 2048) + " z"
         let copiesAtLimit = SVGArtwork.byteLimit / contour.utf8.count
