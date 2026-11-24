@@ -63,9 +63,33 @@ nonisolated struct NativeMedia: Sendable {
     private static func decodableTrack(_ type: AVMediaType, in asset: AVURLAsset) async throws -> AVAssetTrack? {
         for track in try await asset.loadTracks(withMediaType: type) {
             try Task.checkCancellation()
-            if try await track.load(.isDecodable, .isSelfContained) == (true, true) { return track }
+            if try await track.load(.isDecodable, .isSelfContained) == (true, true),
+               try hasMediaSample(track, in: asset) { return track }
         }
         return nil
+    }
+
+    // Track metadata alone can survive truncation of the media-data atom.
+    // Read only until a real sample is found; a zero-sample edit boundary is not media.
+    private static func hasMediaSample(_ track: AVAssetTrack, in asset: AVURLAsset) throws -> Bool {
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { return false }
+        reader.add(output)
+        // AVAssetReader forbids concurrent cancelReading and copyNextSampleBuffer calls.
+        // The entire probe stays on the caller's background executor and retires the reader before returning.
+        defer { reader.cancelReading() }
+        try Task.checkCancellation()
+        guard reader.startReading() else { return false }
+        while let sample = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            if sample.numSamples > 0, let data = sample.dataBuffer, CMBlockBufferGetDataLength(data) > 0 {
+                return true
+            }
+        }
+        try Task.checkCancellation()
+        return false
     }
 }
 

@@ -1478,8 +1478,12 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
         buffer.frameLength = 8_000
         buffer.floatChannelData?[0].initialize(repeating: 0, count: 8_000)
-        let writer = try AVAudioFile(forWriting: audio, settings: format.settings)
-        try writer.write(from: buffer)
+        do {
+            let writer = try AVAudioFile(forWriting: audio, settings: format.settings)
+            try writer.write(from: buffer)
+        }
+        // Stage a finalized WAV rather than a snapshot of a writer's still-open header.
+        XCTAssertEqual(try AVAudioFile(forReading: audio).length, 8_000)
         let resource = PreviewResource(
             path: document.path, directory: root.path, backend: LocalWorkspaceBackend.shared
         )
