@@ -762,6 +762,26 @@ struct DockTabGroupView: View {
         return project.tabs.first { $0.id == id }
     }
 
+    private func openHTML(_ tabID: UUID, saveFirst: Bool) {
+        guard case .file(let file)? = currentMenuTab(tabID)?.content else { return }
+        Task { @MainActor in
+            do {
+                try await project.openHTMLInBrowser(file, saveFirst: saveFirst) {
+                    currentMenuTab(tabID)?.content.id == file.id
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard currentMenuTab(tabID)?.content.id == file.id,
+                      let window = manager.attachedWindow else { return }
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Could not open the saved HTML.", table: "Editor")
+                alert.informativeText = error.localizedDescription
+                alert.beginSheetModal(for: window) { _ in }
+            }
+        }
+    }
+
     private func close(_ item: DockItem) {
         guard project.dock.group(containing: item)?.id == group.id else { return }
         manager.closePanel(item, in: project)
@@ -867,6 +887,23 @@ struct DockTabGroupView: View {
                         }
                     }
                     .disabled(project.filePreviewMode(for: tab) == mode)
+                }
+            }
+            if file.canPreviewFile, file.previewKind == .html {
+                if file.workspaceIdentity != nil {
+                    Text("Remote HTML cannot run in the local browser.", tableName: "Editor")
+                } else {
+                    Button(file.isDirty ? String(localized: "Open Saved HTML in Browser", table: "Editor")
+                           : String(localized: "Open HTML in Browser", table: "Editor")) {
+                        openHTML(tabID, saveFirst: false)
+                    }
+                    .disabled(!file.canRunLocalHTML || file.isSaving)
+                    if file.isDirty {
+                        Button(String(localized: "Save and Open HTML in Browser", table: "Editor")) {
+                            openHTML(tabID, saveFirst: true)
+                        }
+                        .disabled(!file.canRunLocalHTML || file.isSaving)
+                    }
                 }
             }
             if file.canPreviewMarkdown {

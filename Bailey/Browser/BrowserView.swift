@@ -281,7 +281,17 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
         let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = Self.destination(for: trimmed) else { return }
         errorMessage = nil
-        webView.load(URLRequest(url: url))
+        if url.isFileURL {
+            guard url.host == nil || url.host == "" || url.host == "localhost" else {
+                errorMessage = String(localized: "Only local file URLs can be opened.", table: "Browser")
+                return
+            }
+            let directory = url.deletingLastPathComponent()
+            // A root-level document must not grant WebKit access to the whole disk.
+            webView.loadFileURL(url, allowingReadAccessTo: directory.path == "/" ? url : directory)
+        } else {
+            webView.load(URLRequest(url: url))
+        }
     }
 
     func goBack() {

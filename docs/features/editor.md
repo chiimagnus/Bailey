@@ -445,6 +445,11 @@ HTML 保留阅读位置，刷新不改写正文或影响其他窗口。
 `NativeSyntaxHighlightingTests` 直接检查 Markdown、TSX、HTML、CSS 的原生 TextKit 着色、
 嵌入语言范围及正文不变。行号、Diff、滚动坐标与多标签释放也必须在真实 AppKit 窗口中检查；
 五个文件标签的实际释放由 `NativePaneRetentionIntegrationTests` 检查，
+本机 HTML 文件标签的右键还可显式在正常浏览器中运行。存在草稿时可选择「打开已保存的 HTML」或「保存并在浏览器中打开」；
+前者不触发该次导航的自动保存，后者仅在保存成功后运行。浏览器能运行脚本，静态预览仍不能。
+浏览器读取范围及 SSH 限制见 [browser.md](browser.md#地址与导航)。
+
+
 包括连续挂载五个 0／8／16／32 MiB 原生文本标签、真实字节保存与重开、关闭后旧正文清空与所有者释放；
 系统投递与关闭／恢复由 `WorkspaceWindowsUITests` 验证，不用 UI 标签计数冒充内存释放证据。
 具体环境、极端组合及完成标准由 [测试文档](../testing.md) 统一规定。

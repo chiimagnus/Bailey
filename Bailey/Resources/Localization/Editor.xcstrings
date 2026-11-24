@@ -1,6 +1,56 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Open Saved HTML in Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在浏览器中打开已保存的 HTML"
+          }
+        }
+      }
+    },
+    "Open HTML in Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在浏览器中打开 HTML"
+          }
+        }
+      }
+    },
+    "Save and Open HTML in Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存并在浏览器中打开 HTML"
+          }
+        }
+      }
+    },
+    "Remote HTML cannot run in the local browser." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程 HTML 无法在本机浏览器中运行。"
+          }
+        }
+      }
+    },
+    "Could not open the saved HTML." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开已保存的 HTML。"
+          }
+        }
+      }
+    },
     "Pixel width" : {
       "localizations" : {
         "zh-Hans" : {

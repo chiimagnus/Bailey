@@ -446,6 +446,31 @@ final class Project: nonisolated Identifiable {
         }
     }
 
+    /// Called only by an explicit HTML file action in the owning window.
+    @discardableResult
+    func openHTMLInBrowser(_ file: FileTab, saveFirst: Bool, isCurrent: () -> Bool) async throws -> BrowserTab {
+        guard isCurrent(), file.canRunLocalHTML,
+              tabs.contains(where: { $0.content.id == file.id }) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        let request = file.textPreviewRequestID
+        if saveFirst {
+            await file.save()
+            guard !file.isDirty, file.saveError == nil else {
+                throw NSError(domain: "Bailey.Editor", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                    file.saveError ?? String(localized: "Edits could not be saved.", table: "Editor")])
+            }
+        }
+        guard isCurrent(), request == file.textPreviewRequestID,
+              tabs.contains(where: { $0.content.id == file.id }) else { throw CancellationError() }
+        let url = try await file.savedHTMLForBrowser(request: request)
+        guard !Task.isCancelled, isCurrent(), request == file.textPreviewRequestID,
+              tabs.contains(where: { $0.content.id == file.id }) else { throw CancellationError() }
+        return try file.openSavedHTMLWithoutAutoSave {
+            newBrowserTab(initialURL: url.absoluteString, initialFocus: .webContent)
+        }
+    }
+
     // MARK: - Browser
 
     /// Opens a native browser as a new tab beside the current selection.

@@ -59,6 +59,149 @@ final class HTMLFilePreviewTests: XCTestCase {
         }
     }
 
+    func testExplicitBrowserRunsAcceptedSavedHTMLWithoutSavingTheMountedDraft() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("网页 Folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let path = directory.appendingPathComponent("index.html")
+        let css = directory.appendingPathComponent("style.css")
+        try Data("#revision { color: rgb(1, 2, 3) }".utf8).write(to: css)
+        let outside = root.appendingPathComponent("outside.svg")
+        try Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="green"/></svg>"#.utf8).write(to: outside)
+        func source(_ revision: String) -> String {
+            """
+            <!doctype html><meta charset="utf-8">
+            <title>\(revision)</title><link rel="stylesheet" href="style.css">
+            <div id="revision">\(revision)</div><div id="script">not run</div>
+            <img id="outside" src="../outside.svg" onload="this.dataset.result='loaded'" onerror="this.dataset.result='blocked'">
+            <script>document.getElementById('script').textContent = 'ran ' + document.title</script>
+            """
+        }
+        let original = Data(source("Saved").utf8)
+        let draft = source("Draft")
+        try original.write(to: path)
+        let project = Project(fallbackName: "Explicit HTML", workspaceConfiguration: .standard)
+        project.openLocalFile(path.path)
+        let pane = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = pane.content else { return XCTFail("Expected file tab") }
+        defer { file.retireContent() }
+        try await file.waitForText()
+
+        // Static preview must retain its security settings even after a normal
+        // Browser is opened for the same file.
+        let staticPreview = try await display(file, in: directory)
+        let staticScript = try await staticPreview.evaluateJavaScript(
+            "document.getElementById('script').textContent", contentWorld: .defaultClient
+        ) as? String
+        XCTAssertEqual(staticScript, "not run")
+
+        let host = NSHostingView(rootView: FileViewerView(file: file, resourceDirectory: directory.path))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderBack(nil)
+        file.setFilePreview(false)
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            return file.editorCoordinator?.scrollView?.window === window
+        }
+        let editor = try XCTUnwrap(file.editorCoordinator?.scrollView?.documentView as? NativeCodeTextView)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.insertText(draft, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        try await waitUntil { file.isDirty && file.text == draft }
+        XCTAssertEqual(try Data(contentsOf: path), original)
+
+        let browser = try await project.openHTMLInBrowser(file, saveFirst: false) { true }
+        XCTAssertEqual(project.selectedTab?.content.id, browser.id)
+        XCTAssertFalse(window.firstResponder === editor)
+        window.contentView = browser.webView
+        try await waitUntil { browser.title == "Saved" && !browser.isLoading }
+        let script = try await browser.webView.evaluateJavaScript("document.getElementById('script').textContent") as? String
+        let color = try await browser.webView.evaluateJavaScript("getComputedStyle(document.getElementById('revision')).color") as? String
+        XCTAssertEqual(script, "ran Saved")
+        XCTAssertEqual(color, "rgb(1, 2, 3)")
+        try await waitUntil {
+            (try? await browser.webView.evaluateJavaScript("document.getElementById('outside').dataset.result") as? String) != nil
+        }
+        let boundary = try await browser.webView.evaluateJavaScript("document.getElementById('outside').dataset.result") as? String
+        XCTAssertEqual(boundary, "blocked")
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, draft)
+        let staticScriptAfter = try await staticPreview.evaluateJavaScript(
+            "document.getElementById('script').textContent", contentWorld: .defaultClient
+        ) as? String
+        XCTAssertEqual(staticScriptAfter, "not run")
+
+        // Explicit save-and-run must persist the draft before running it.
+        let second = try await project.openHTMLInBrowser(file, saveFirst: true) { true }
+        window.contentView = second.webView
+        try await waitUntil { second.title == "Draft" && !second.isLoading }
+        let secondScript = try await second.webView.evaluateJavaScript("document.getElementById('script').textContent") as? String
+        XCTAssertEqual(secondScript, "ran Draft")
+        XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertNil(second.errorMessage)
+        XCTAssertFalse(browser.webView === second.webView)
+        browser.stopLoading()
+        second.stopLoading()
+    }
+
+    func testExplicitHTMLBrowserRejectsRemoteIdentityExternalVersionAndStaleTarget() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("index.html")
+        let source = Data("<title>accepted</title>".utf8)
+        let external = Data("<title>external</title>".utf8)
+        XCTAssertEqual(source.count, external.count)
+        try source.write(to: path)
+        let project = Project(fallbackName: "HTML conflict", workspaceConfiguration: .standard)
+        project.openLocalFile(path.path)
+        let pane = try XCTUnwrap(project.selectedTab)
+        guard case .file(let local) = pane.content else { return XCTFail("Expected local HTML") }
+        defer { local.retireContent() }
+        try await local.waitForText()
+        let remote = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: "windows-tailscale")
+        // Deliberately identical pathname and available local bytes; logical
+        // remote identity alone must prohibit any execution on this Mac.
+        try await remote.waitForText()
+        defer { remote.retireContent() }
+        project.append(PaneTab(content: .file(remote)))
+        XCTAssertFalse(remote.canRunLocalHTML)
+        do {
+            try await project.openHTMLInBrowser(remote, saveFirst: false) { true }
+            XCTFail("A remote HTML target must not be executed on this Mac")
+        } catch {}
+        XCTAssertEqual(project.tabs.count, 2)
+
+        local.text = "<title>dirty draft</title>"
+        XCTAssertTrue(local.isDirty)
+        let date = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path.path)[.modificationDate] as? Date)
+        try external.write(to: path)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path.path)
+        for saveFirst in [false, true] {
+            do {
+                try await project.openHTMLInBrowser(local, saveFirst: saveFirst) { true }
+                XCTFail("The changed disk version must not be executed or overwritten")
+            } catch {}
+            XCTAssertEqual(project.tabs.count, 2)
+            XCTAssertEqual(try Data(contentsOf: path), external)
+            XCTAssertEqual(local.text, "<title>dirty draft</title>")
+            XCTAssertTrue(local.isDirty)
+        }
+        do {
+            try await project.openHTMLInBrowser(local, saveFirst: false) { false }
+            XCTFail("A stale UI target must not create a Browser")
+        } catch {}
+        XCTAssertEqual(project.tabs.count, 2)
+        XCTAssertEqual(try Data(contentsOf: path), external)
+    }
+
     func testLiveHTMLKeepsReadingPositionAndOnlyDisplaysTheLatestDraft() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

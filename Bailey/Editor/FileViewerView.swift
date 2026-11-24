@@ -273,6 +273,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var deletedFromWorkspace = false
     var isSaving: Bool { lastSaveTask != nil }
     @ObservationIgnored var autoSaveSuspendedForClose = false
+    @ObservationIgnored private var openingSavedHTML = false
     /// The workspace this file lives on. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
     /// connection to the same machine when one arrives.
@@ -497,6 +498,59 @@ final class FileTab: nonisolated Identifiable {
         }
         let png = try await svgPNG(request: request, options: options)
         try await LocalWorkspaceBackend.shared.writeNewFile(path: destination.path, data: png)
+    }
+
+    var canRunLocalHTML: Bool {
+        canPreviewFile && previewKind == .html && workspaceIdentity == nil &&
+            backend is LocalWorkspaceBackend && !isRetired && readOnlyReason == nil &&
+            reloadError == nil && !fileMutationHeld && !autoSaveSuspendedForClose
+    }
+
+    /// Never stage or execute the editor's in-memory draft. Verify that the
+    /// real local file still has the accepted saved bytes before granting WebKit access.
+    func savedHTMLForBrowser(request: String) async throws -> URL {
+        guard canRunLocalHTML, request == textPreviewRequestID,
+              lastSaveTask == nil, let version = savedSourceVersion else {
+            throw WorkspaceError.changedExternally
+        }
+        let path = self.path
+        let resolved = try await Self.checkSavedHTML(path: path, version: version)
+        try Task.checkCancellation()
+        guard canRunLocalHTML, request == textPreviewRequestID,
+              lastSaveTask == nil, version == savedSourceVersion,
+              LocalPathScope.physicalPath(path) == resolved.path,
+              LocalFileIdentity.read(resolved.path) == resolved.identity else {
+            throw WorkspaceError.changedExternally
+        }
+        return URL(fileURLWithPath: resolved.path)
+    }
+
+    @concurrent private static func checkSavedHTML(
+        path: String, version: WorkspaceFileVersion
+    ) async throws -> (path: String, identity: LocalFileIdentity) {
+        let resolved = try LocalWorkspaceBackend.readableFile(at: path)
+        let bytes = try await LocalWorkspaceBackend.shared.read(path: resolved.path, maxBytes: version.byteCount)
+        guard version.matches(bytes), LocalFileIdentity.read(resolved.path) == resolved.identity else {
+            throw WorkspaceError.changedExternally
+        }
+        return resolved
+    }
+
+    /// The explicit "open saved version" action is not an ordinary focus-save
+    /// request. Resign the actual native editor synchronously while suppression
+    /// is active; Dock deactivation then uses the same boundary. Later genuine
+    /// focus transitions and explicit Save retain their usual behavior.
+    func openSavedHTMLWithoutAutoSave<T>(_ open: () -> T) throws -> T {
+        guard canRunLocalHTML, lastSaveTask == nil else { throw WorkspaceError.changedExternally }
+        openingSavedHTML = true
+        defer { openingSavedHTML = false }
+        if let editor = editorCoordinator?.scrollView?.documentView as? NativeCodeTextView,
+           let window = editor.window, window.firstResponder === editor {
+            guard !editor.hasMarkedText(), window.makeFirstResponder(nil) else {
+                throw WorkspaceError.changedExternally
+            }
+        }
+        return open()
     }
 
     func showHTMLPreview(request: String, in directory: String?) async {
@@ -775,7 +829,7 @@ final class FileTab: nonisolated Identifiable {
 
     /// A focus transition schedules one save, never a timed file-write loop.
     func autoSaveOnFocusLoss() {
-        guard isDirty, !autoSaveSuspendedForClose else { return }
+        guard isDirty, !autoSaveSuspendedForClose, !openingSavedHTML else { return }
         if lastSaveTask != nil {
             saveLatestRequested = true
         } else {
