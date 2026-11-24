@@ -156,26 +156,45 @@ nonisolated enum ImageAnnotationDrawing {
     /// The input patch uses the original image coordinate system, including EXIF.
     @concurrent static func preview(_ state: ImageAnnotationState, poster: RasterDetail.Patch,
                                     detail: RasterDetail.Patch?, region: CGRect,
-                                    scale requestedScale: CGFloat) async throws -> RasterDetail.Patch {
+                                    scale requestedScale: CGFloat, original: RasterDetail? = nil) async throws -> RasterDetail.Patch {
         try Task.checkCancellation()
         let region = region.intersection(poster.rect)
         guard !region.isEmpty, requestedScale.isFinite, requestedScale > 0 else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        let scale = min(requestedScale, 32_768 / region.width, 32_768 / region.height,
+        var scale = min(requestedScale, 32_768 / region.width, 32_768 / region.height,
                         sqrt(CGFloat(RasterPreview.pixelLimit) / (region.width * region.height)))
-        let width = max(1, Int(floor(region.width * scale)))
-        let height = max(1, Int(floor(region.height * scale)))
+        var transform = CGAffineTransform(scaleX: scale, y: scale)
+        var pixels = region.applying(transform).integral
+        if pixels.width > 32_768 || pixels.height > 32_768
+            || pixels.width * pixels.height > CGFloat(RasterPreview.pixelLimit) {
+            // Alignment can add less than two pixels to each dimension.
+            // Solve (w*s+2)*(h*s+2) <= the pixel budget only when needed.
+            let w = region.width, h = region.height
+            let limit = CGFloat(RasterPreview.pixelLimit)
+            scale = min(scale, 32_766 / w, 32_766 / h,
+                        (limit - 4) / (w + h + sqrt((w - h) * (w - h) + limit * w * h)))
+            transform = CGAffineTransform(scaleX: scale, y: scale)
+            pixels = region.applying(transform).integral
+        }
         let sourceSpace = poster.image.colorSpace
         let space = if let sourceSpace, sourceSpace.model == .rgb, sourceSpace.supportsOutput {
             sourceSpace
         } else {
             CGColorSpace(name: CGColorSpace.sRGB)!
         }
-        let image = try render(state, poster: poster, detail: detail, region: region,
-                               width: width, height: height, space: space,
-                               background: .transparent, aspectFit: false)
-        return .init(image: image, rect: region)
+        let layout = try RenderLayout(state, bounds: poster.rect, pixels: pixels,
+                                      content: pixels.intersection(poster.rect.applying(transform)),
+                                      transform: transform)
+        let exactDetail: RasterDetail.Patch?
+        if let original, detail?.rect.contains(layout.sourceRegion) != true {
+            exactDetail = try await original.render(layout.sourceRegion)
+        } else {
+            exactDetail = detail
+        }
+        let image = try render(state, poster: poster, detail: exactDetail, layout: layout,
+                               space: space, background: .transparent)
+        return .init(image: image, rect: pixels.applying(transform.inverted()))
     }
 
     @concurrent static func export(_ state: ImageAnnotationState, source: RasterDetail, options: Options) async throws -> Data {
@@ -184,11 +203,12 @@ nonisolated enum ImageAnnotationDrawing {
         let bounds = source.bounds
         _ = try state.validated(in: bounds.size)
         let region = state.crop ?? bounds
-        let patch = try await source.render(region)
+        let layout = try RenderLayout(state, bounds: bounds, region: region,
+                                      width: options.width, height: options.height)
+        let patch = try await source.render(layout.sourceRegion)
         try Task.checkCancellation()
-        let image = try render(state, poster: patch, detail: nil, region: region,
-                               width: options.width, height: options.height, space: space,
-                               background: options.background, aspectFit: true)
+        let image = try render(state, poster: patch, detail: nil, layout: layout,
+                               space: space, background: options.background)
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, options.format.type.identifier as CFString, 1, nil)
         else { throw CocoaError(.fileWriteUnknown) }
@@ -206,77 +226,235 @@ nonisolated enum ImageAnnotationDrawing {
         return data as Data
     }
 
-    private static func render(_ state: ImageAnnotationState, poster: RasterDetail.Patch,
-                               detail: RasterDetail.Patch?, region: CGRect, width: Int, height: Int,
-                               space: CGColorSpace, background: Background, aspectFit: Bool) throws -> CGImage {
-        guard width > 0, height > 0, width <= RasterPreview.pixelLimit / height,
-              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: space,
+    /// Keep the output pixel grid anchored to the original image. A crop
+    /// changes the output rectangle, not the phase of pixelation or blur.
+    private struct RenderLayout {
+        let pixels: CGRect
+        let content: CGRect
+        let working: CGRect
+        let transform: CGAffineTransform
+        let imageBounds: CGRect
+        let sourceRegion: CGRect
+        let filterRegions: [FilterRegion?]
+
+        init(_ state: ImageAnnotationState, bounds: CGRect, region: CGRect,
+             width: Int, height: Int) throws {
+            guard width > 0, height > 0, width <= RasterPreview.pixelLimit / height else {
+                throw WorkspaceError.tooLarge
+            }
+            let sx = CGFloat(width) / region.width, sy = CGFloat(height) / region.height
+            let xScale = min(sx, sy)
+            let yScale = xScale
+            let tx = (CGFloat(width) - region.width * xScale) / 2 - region.minX * xScale
+            let ty = (CGFloat(height) - region.height * yScale) / 2 - region.minY * yScale
+            let ox = floor(tx), oy = floor(ty)
+            let transform = CGAffineTransform(a: xScale, b: 0, c: 0, d: yScale,
+                                              tx: tx - ox, ty: ty - oy)
+            let pixels = CGRect(x: -ox, y: -oy, width: CGFloat(width), height: CGFloat(height))
+            let content = region.applying(transform).intersection(pixels)
+            try self.init(state, bounds: bounds, pixels: pixels, content: content, transform: transform)
+        }
+
+        init(_ state: ImageAnnotationState, bounds: CGRect, pixels: CGRect, content: CGRect,
+             transform: CGAffineTransform) throws {
+            let sourceBounds = bounds.applying(transform)
+            let sourcePixels = sourceBounds.integral
+            var required = content.integral.intersection(pixels)
+            var regions = [FilterRegion?](repeating: nil, count: state.layers.count)
+
+            // Work backwards through the ordered filters. Each predecessor
+            // must produce every pixel a successor can sample, including
+            // pixels outside the visible or exported crop.
+            if state.hasFilters {
+                let domain = CIImage(color: .black).cropped(to: sourcePixels)
+                let input = domain.clampedToExtent()
+                for index in state.layers.indices.reversed() {
+                    try Task.checkCancellation()
+                    let layer = state.layers[index]
+                    guard layer.kind.filtersPixels else { continue }
+                    let affected = layer.bounds.applying(transform).integral
+                        .intersection(required).intersection(sourcePixels)
+                    guard !affected.isEmpty else { continue }
+                    let evaluation = layer.kind == .pixelate
+                        ? pixelationCells(covering: affected, layer: layer, transform: transform)
+                            .intersection(sourcePixels)
+                        : affected
+                    regions[index] = FilterRegion(output: affected, evaluation: evaluation)
+                    let filter = ImageAnnotationDrawing.filtered(input, layer: layer, transform: transform)
+                    var roi = filter.regionOfInterest(for: domain, in: evaluation)
+                    if layer.kind == .pixelate {
+                        // Core Image may omit the sampled cell center from
+                        // a partial-cell ROI. Evaluate whole cells; include
+                        // their interpolation neighbors in the source demand.
+                        roi = roi.union(evaluation.insetBy(dx: -1, dy: -1))
+                    }
+                    roi = roi.integral.intersection(sourcePixels)
+                    if !roi.isEmpty { required = required.union(roi) }
+                }
+            }
+            guard !required.isEmpty, required.width <= 32_768, required.height <= 32_768,
+                  required.width * required.height <= CGFloat(RasterPreview.pixelLimit) else {
+                throw WorkspaceError.tooLarge
+            }
+            self.pixels = pixels
+            self.content = content
+            self.working = required
+            self.transform = transform
+            self.imageBounds = bounds
+            let input = CIImage(color: .black).cropped(to: bounds)
+            let resampled = ImageAnnotationDrawing.resample(input, transform: transform)
+            let sourceRegion = resampled.regionOfInterest(for: input, in: required)
+                .integral.intersection(bounds)
+            guard !sourceRegion.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+            self.sourceRegion = sourceRegion
+            self.filterRegions = regions
+        }
+    }
+
+    private struct FilterRegion {
+        let output: CGRect
+        let evaluation: CGRect
+    }
+
+    private static func pixelationCells(covering rect: CGRect, layer: ImageAnnotationLayer,
+                                        transform: CGAffineTransform) -> CGRect {
+        let size = pixelationScale(layer, transform: transform)
+        let x = floor((rect.minX - transform.tx) / size) * size + transform.tx
+        let y = floor((rect.minY - transform.ty) / size) * size + transform.ty
+        let maxX = ceil((rect.maxX - transform.tx) / size) * size + transform.tx
+        let maxY = ceil((rect.maxY - transform.ty) / size) * size + transform.ty
+        return CGRect(x: x, y: y, width: maxX - x, height: maxY - y).integral
+    }
+
+    private static func pixelationScale(_ layer: ImageAnnotationLayer, transform: CGAffineTransform) -> CGFloat {
+        max(1, layer.strokeWidth * 4 * transform.a)
+    }
+
+    private static func filtered(_ input: CIImage, layer: ImageAnnotationLayer,
+                                 transform: CGAffineTransform) -> CIImage {
+        if layer.kind == .blur {
+            input.applyingFilter("CIGaussianBlur",
+                parameters: [kCIInputRadiusKey: max(1, layer.strokeWidth * 2 * transform.a)])
+        } else {
+            input.applyingFilter("CIPixellate", parameters: [
+                kCIInputScaleKey: pixelationScale(layer, transform: transform),
+                kCIInputCenterKey: CIVector(x: transform.tx, y: transform.ty)])
+        }
+    }
+
+    /// The raster sampler and its source-demand calculation must be the same
+    /// operation. Core Graphics' implicit high-quality resampler may choose
+    /// different samples for an already-cropped CGImage.
+    private static func resample(_ image: CIImage, transform: CGAffineTransform) -> CIImage {
+        let clamped = image.clampedToExtent()
+        let scaled: CIImage
+        if transform.a == 1 && transform.d == 1 {
+            scaled = clamped
+        } else {
+            scaled = clamped.applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: transform.d,
+                kCIInputAspectRatioKey: transform.a / transform.d
+            ])
+        }
+        return scaled.transformed(by: CGAffineTransform(translationX: transform.tx, y: transform.ty))
+    }
+
+    private static func drawBase(_ patch: RasterDetail.Patch, in context: CGContext,
+                                 layout: RenderLayout, space: CGColorSpace) throws {
+        let transform = layout.transform
+        // Native one-to-one copies preserve exact input samples and avoid a
+        // second bitmap allocation when there is no resampling to perform.
+        if transform == .identity,
+           patch.rect.width == CGFloat(patch.image.width), patch.rect.height == CGFloat(patch.image.height) {
+            context.draw(patch.image, in: patch.rect)
+            return
+        }
+        let patchTransform = CGAffineTransform(scaleX: patch.rect.width / CGFloat(patch.image.width),
+                                              y: patch.rect.height / CGFloat(patch.image.height))
+        let input = CIImage(cgImage: patch.image).transformed(by: patchTransform)
+            .transformed(by: CGAffineTransform(translationX: patch.rect.minX, y: patch.rect.minY))
+        let area = layout.working.intersection(patch.rect.applying(transform).integral)
+        guard !area.isEmpty else { return }
+        let scaled = resample(input, transform: transform)
+        guard let pixels = filterContext.createCGImage(scaled, from: area, format: .RGBA8, colorSpace: space)
+        else { throw CocoaError(.fileReadCorruptFile) }
+        context.saveGState()
+        context.concatenate(transform.inverted())
+        context.interpolationQuality = .none
+        context.draw(pixels, in: area)
+        context.restoreGState()
+    }
+
+    private static func bitmap(_ pixels: CGRect, space: CGColorSpace,
+                               background: Background) throws -> CGContext {
+        guard let context = CGContext(data: nil, width: Int(pixels.width), height: Int(pixels.height),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { throw WorkspaceError.tooLarge }
-        let pixels = CGRect(x: 0, y: 0, width: width, height: height)
         if background != .transparent {
             let value: CGFloat = background == .white ? 1 : 0
             context.setFillColor(CGColor(srgbRed: value, green: value, blue: value, alpha: 1))
-            context.fill(pixels)
+            context.fill(CGRect(origin: .zero, size: pixels.size))
         }
-        let sx = CGFloat(width) / region.width, sy = CGFloat(height) / region.height
-        let xScale = aspectFit ? min(sx, sy) : sx
-        let yScale = aspectFit ? min(sx, sy) : sy
-        let transform = CGAffineTransform(a: xScale, b: 0, c: 0, d: yScale,
-            tx: (pixels.width - region.width * xScale) / 2 - region.minX * xScale,
-            ty: (pixels.height - region.height * yScale) / 2 - region.minY * yScale)
+        context.translateBy(x: -pixels.minX, y: -pixels.minY)
+        return context
+    }
+
+    private static func render(_ state: ImageAnnotationState, poster: RasterDetail.Patch,
+                               detail: RasterDetail.Patch?, layout: RenderLayout,
+                               space: CGColorSpace, background: Background) throws -> CGImage {
+        let working = layout.working
+        let transform = layout.transform
+        let context = try bitmap(working, space: space, background: background)
         context.concatenate(transform)
-        context.clip(to: region)
-        context.interpolationQuality = .high
-        if let detail {
+        context.clip(to: layout.imageBounds)
+        context.interpolationQuality = .none
+        if let detail, detail.rect.contains(layout.sourceRegion) {
+            try drawBase(detail, in: context, layout: layout, space: space)
+        } else if let detail {
             context.saveGState()
             context.addRects([poster.rect, detail.rect])
             context.clip(using: .evenOdd)
-            context.draw(poster.image, in: poster.rect)
+            try drawBase(poster, in: context, layout: layout, space: space)
             context.restoreGState()
-            context.draw(detail.image, in: detail.rect)
+            try drawBase(detail, in: context, layout: layout, space: space)
         } else {
-            context.draw(poster.image, in: poster.rect)
+            try drawBase(poster, in: context, layout: layout, space: space)
         }
-        let filters = state.hasFilters ? filterContext : nil
-        for layer in state.layers {
+        for (index, layer) in state.layers.enumerated() {
             try Task.checkCancellation()
             if !layer.kind.filtersPixels {
                 drawVector(layer, in: context)
                 continue
             }
-            // Filter the pixels composed so far, not an independent copy of
-            // the original. Layer order and alpha are shared with export.
-            let rect = layer.bounds.intersection(region).applying(transform).integral.intersection(pixels)
-            guard !rect.isEmpty else { continue }
-            guard let filters, let snapshot = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
+            guard let region = layout.filterRegions[index] else { continue }
+            guard let snapshot = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
             try autoreleasepool {
-                let image = CIImage(cgImage: snapshot).clampedToExtent()
-                let parameters: [String: Any]
-                let filter: String
-                if layer.kind == .blur {
-                    filter = "CIGaussianBlur"
-                    parameters = [kCIInputRadiusKey: max(1, layer.strokeWidth * 2 * xScale)]
-                } else {
-                    filter = "CIPixellate"
-                    parameters = [kCIInputScaleKey: max(1, layer.strokeWidth * 4 * xScale),
-                                  kCIInputCenterKey: CIVector(x: transform.tx, y: transform.ty)]
-                }
-                let output = image.applyingFilter(filter, parameters: parameters).cropped(to: rect)
-                guard let patch = filters.createCGImage(output, from: rect, format: .RGBA8, colorSpace: space) else {
-                    throw CocoaError(.fileReadCorruptFile)
-                }
+                let input = CIImage(cgImage: snapshot).transformed(by:
+                    CGAffineTransform(translationX: working.minX, y: working.minY)).clampedToExtent()
+                let output = filtered(input, layer: layer, transform: transform).cropped(to: region.evaluation)
+                guard let patch = filterContext.createCGImage(output, from: region.evaluation, format: .RGBA8, colorSpace: space)
+                else { throw CocoaError(.fileReadCorruptFile) }
                 context.saveGState()
                 context.concatenate(transform.inverted())
-                context.clip(to: rect)
+                context.clip(to: region.output)
                 context.setBlendMode(.copy)
-                context.draw(patch, in: rect)
+                context.draw(patch, in: region.evaluation)
                 context.restoreGState()
             }
         }
         try Task.checkCancellation()
         guard let image = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
-        return image
+        if working == layout.pixels, layout.content == layout.pixels { return image }
+
+        // Discard sampling halos only after composition. Letterbox space is
+        // the requested background, never source pixels outside the crop.
+        let output = try bitmap(layout.pixels, space: space, background: background)
+        output.interpolationQuality = .none
+        output.clip(to: layout.content)
+        output.setBlendMode(.copy)
+        output.draw(image, in: working)
+        guard let result = output.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
+        return result
     }
 }

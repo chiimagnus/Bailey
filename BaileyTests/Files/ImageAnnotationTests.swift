@@ -339,6 +339,182 @@ final class ImageAnnotationTests: XCTestCase {
         }
     }
 
+    func testFilteredCropAndRegionalPreviewMatchWholeCompositionAtBoundaries() async throws {
+        let bounds = CGRect(x: 0, y: 0, width: 240, height: 160)
+        let context = try XCTUnwrap(CGContext(data: nil, width: 240, height: 160,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+        context.fill(bounds)
+        context.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        context.fill(CGRect(x: 114, y: 0, width: 126, height: 160))
+        let source = try XCTUnwrap(context.makeImage())
+        let poster = RasterDetail.Patch(image: source, rect: bounds)
+        let crop = CGRect(x: 114, y: 20, width: 80, height: 100)
+        let regional = RasterDetail.region(.native(source), .identity, .up)
+        let detail = try await regional.render(crop)
+        let small = try XCTUnwrap(CGContext(data: nil, width: 12, height: 8,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        small.draw(source, in: CGRect(x: 0, y: 0, width: 12, height: 8))
+        let reducedPoster = RasterDetail.Patch(image: try XCTUnwrap(small.makeImage()), rect: bounds)
+        let rectangle = ImageAnnotationLayer(kind: .rectangle, start: CGPoint(x: 102, y: 40),
+            end: CGPoint(x: 110, y: 110), color: .red, strokeWidth: 8)
+        let blur = ImageAnnotationLayer(kind: .blur, start: .zero,
+            end: CGPoint(x: 240, y: 160), color: .red, strokeWidth: 8)
+        let pixelate = ImageAnnotationLayer(kind: .pixelate, start: CGPoint(x: 24, y: 8),
+            end: CGPoint(x: 232, y: 152), color: .red, strokeWidth: 8)
+        for (index, layers) in [[blur], [pixelate], [rectangle, blur, pixelate, blur]].enumerated() {
+            let state = ImageAnnotationState(layers: layers.map { layer in
+                // Each layer owns an independent identity, even if its geometry repeats.
+                .init(kind: layer.kind, start: layer.start, end: layer.end,
+                      color: layer.color, strokeWidth: layer.strokeWidth)
+            }, crop: crop)
+            for scale: CGFloat in [0.5, 1, 2] {
+                let whole = try await ImageAnnotationDrawing.preview(
+                    state, poster: poster, detail: nil, region: bounds, scale: scale)
+                let partial = try await ImageAnnotationDrawing.preview(
+                    state, poster: poster, detail: nil, region: crop, scale: scale)
+                let width = Int(crop.width * scale), height = Int(crop.height * scale)
+                let output = try image(await ImageAnnotationDrawing.export(state, source: .whole(source),
+                    options: .init(width: width, height: height)))
+                let expected = NSBitmapImageRep(cgImage: whole.image)
+                let regionalOutput = try image(await ImageAnnotationDrawing.export(state, source: regional,
+                    options: .init(width: width, height: height)))
+                let exactPreview = try await ImageAnnotationDrawing.preview(
+                    state, poster: reducedPoster, detail: detail, region: crop, scale: scale, original: regional)
+                let images = [partial.image, output, regionalOutput, exactPreview.image].map(NSBitmapImageRep.init(cgImage:))
+                if index == 0 && scale == 1 {
+                    let boundary = try XCTUnwrap(expected.colorAt(x: 114, y: expected.pixelsHigh - 1 - 70)?.usingColorSpace(.sRGB))
+                    XCTAssertLessThan(boundary.redComponent, 0.9, "The black pixels outside the crop must contribute")
+                }
+                if scale == 2 {
+                    let letterboxed = try image(await ImageAnnotationDrawing.export(state, source: regional,
+                        options: .init(width: width + 40, height: height, background: .transparent)))
+                    XCTAssertEqual(try pixel(letterboxed, x: 5, y: height / 2).alphaComponent, 0, accuracy: 0.01)
+                    let actual = try pixel(letterboxed, x: 20, y: height / 2)
+                    let reference = try pixel(output, x: 0, y: height / 2)
+                    XCTAssertEqual(actual.redComponent, reference.redComponent, accuracy: 0.025)
+                    XCTAssertEqual(actual.greenComponent, reference.greenComponent, accuracy: 0.025)
+                    XCTAssertEqual(actual.blueComponent, reference.blueComponent, accuracy: 0.025)
+                }
+                for x in [0, 1, width / 4, width / 2, width - 1] {
+                    for y in [0, 1, height / 2, height - 2, height - 1] {
+                        let reference = try XCTUnwrap(expected.colorAt(
+                            x: x + Int(crop.minX * scale),
+                            y: expected.pixelsHigh - 1 - y - Int(crop.minY * scale))?.usingColorSpace(.sRGB))
+                        for bitmap in images {
+                            let actual = try XCTUnwrap(bitmap.colorAt(x: x, y: height - 1 - y)?.usingColorSpace(.sRGB))
+                            let description = "layers=\(index), scale=\(scale), x=\(x), y=\(y)"
+                            XCTAssertEqual(actual.redComponent, reference.redComponent, accuracy: 0.025, description)
+                            XCTAssertEqual(actual.greenComponent, reference.greenComponent, accuracy: 0.025, description)
+                            XCTAssertEqual(actual.blueComponent, reference.blueComponent, accuracy: 0.025, description)
+                            XCTAssertEqual(actual.alphaComponent, reference.alphaComponent, accuracy: 0.025, description)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testRegionalAnnotationSamplingMatchesWholeImageAcrossColorsAndZooms() async throws {
+        // Fixed-seed coverage of filter chains, image/patch boundaries, alpha
+        // and the fractional zooms at which implicit CG sampling diverged.
+        var seed: UInt64 = 0x9284192
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((seed >> 32) % UInt64(bound))
+        }
+        func channels(_ image: NSBitmapImageRep, x: Int, y: Int) throws -> [CGFloat] {
+            let color = try XCTUnwrap(image.colorAt(x: x, y: image.pixelsHigh - 1 - y)?.usingColorSpace(.sRGB))
+            return [color.redComponent * color.alphaComponent, color.greenComponent * color.alphaComponent,
+                    color.blueComponent * color.alphaComponent, color.alphaComponent]
+        }
+        let bounds = CGRect(x: 0, y: 0, width: 240, height: 160)
+        let scales: [CGFloat] = [0.25, 0.5, 0.75, 1, 1.5, 2, 3]
+        let fractionalScales: [CGFloat] = [0.17, 0.37, 0.71, 1.37, 1.91, 2.11, 3.14159]
+        let strokes: [CGFloat] = [1, 2.5, 7.25, 16, 64]
+        let kinds: [ImageAnnotationLayer.Kind] = [.blur, .pixelate, .rectangle]
+        for colorSpace in [ImageAnnotationDrawing.ColorSpace.sRGB, .displayP3] {
+            let space = try XCTUnwrap(colorSpace.value)
+            let context = try XCTUnwrap(CGContext(data: nil, width: 240, height: 160,
+                bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            for y in stride(from: 0, to: 160, by: 4) {
+                for x in stride(from: 0, to: 240, by: 4) {
+                    let alpha = colorSpace == .sRGB ? 1 : CGFloat(next(5)) / 4
+                    context.setFillColor(red: CGFloat(next(256)) / 255, green: CGFloat(next(256)) / 255,
+                                         blue: CGFloat(next(256)) / 255, alpha: alpha)
+                    context.fill(CGRect(x: x, y: y, width: 4, height: 4))
+                }
+            }
+            let source = try XCTUnwrap(context.makeImage())
+            let regional = RasterDetail.region(.native(source), .identity, .up)
+            let poster = RasterDetail.Patch(image: source, rect: bounds)
+            for index in 0..<100 {
+                let scale = scales[index % scales.count]
+                let x = next(45) * 4, y = next(25) * 4
+                let crop = CGRect(x: x, y: y, width: (next((240 - x) / 4) + 1) * 4,
+                                  height: (next((160 - y) / 4) + 1) * 4)
+                let layers: [ImageAnnotationLayer] = (0..<(1 + next(4))).map { layer in
+                    let lx = next(40) * 4, ly = next(25) * 4
+                    let ex = lx + (next((240 - lx) / 4) + 1) * 4
+                    let ey = ly + (next((160 - ly) / 4) + 1) * 4
+                    let kind = layer == 0 ? (index.isMultiple(of: 2) ? .blur : .pixelate) : kinds[next(3)]
+                    return .init(kind: kind, start: CGPoint(x: lx, y: ly), end: CGPoint(x: ex, y: ey),
+                                 color: .red, strokeWidth: strokes[next(strokes.count)])
+                }
+                let state = ImageAnnotationState(layers: layers, crop: crop)
+                let whole = try await ImageAnnotationDrawing.preview(
+                    state, poster: poster, detail: nil, region: bounds, scale: scale)
+                let partial = try await ImageAnnotationDrawing.preview(
+                    state, poster: poster, detail: nil, region: crop, scale: scale)
+                let width = Int(crop.width * scale), height = Int(crop.height * scale)
+                let exported = try image(await ImageAnnotationDrawing.export(state, source: regional,
+                    options: .init(width: width, height: height, colorSpace: colorSpace)))
+                let reference = NSBitmapImageRep(cgImage: whole.image)
+                let images = [partial.image, exported].map(NSBitmapImageRep.init(cgImage:))
+                // A pan at a fractional zoom must sample exactly the same
+                // global pixel grid, even when the requested rect is not
+                // aligned to the device pixels and its rounded size changes.
+                let fractional = fractionalScales[index % fractionalScales.count]
+                let pan = CGRect(x: crop.minX + 1, y: crop.minY + 1,
+                                 width: crop.width - 2, height: crop.height - 2)
+                let fullFractional = try await ImageAnnotationDrawing.preview(
+                    state, poster: poster, detail: nil, region: bounds, scale: fractional)
+                let panned = try await ImageAnnotationDrawing.preview(
+                    state, poster: poster, detail: nil, region: pan, scale: fractional)
+                let panReference = NSBitmapImageRep(cgImage: fullFractional.image)
+                let panBitmap = NSBitmapImageRep(cgImage: panned.image)
+                let startX = Int((panned.rect.minX * fractional).rounded())
+                let startY = Int((panned.rect.minY * fractional).rounded())
+                for dx in Set([0, panned.image.width / 2, panned.image.width - 1]) {
+                    for dy in Set([0, panned.image.height / 2, panned.image.height - 1]) {
+                        let expected = try channels(panReference, x: startX + dx, y: startY + dy)
+                        let actual = try channels(panBitmap, x: dx, y: dy)
+                        for (a, e) in zip(actual, expected) {
+                            XCTAssertEqual(a, e, accuracy: 0.025,
+                                "\(colorSpace) pan \(index), zoom \(fractional), pixel (\(dx), \(dy))")
+                        }
+                    }
+                }
+                for dx in Set([0, min(1, width - 1), width / 4, width / 2, width - 1]) {
+                    for dy in Set([0, min(1, height - 1), height / 4, height / 2, height - 1]) {
+                        let expected = try channels(reference, x: Int(crop.minX * scale) + dx,
+                                                    y: Int(crop.minY * scale) + dy)
+                        for bitmap in images {
+                            let actual = try channels(bitmap, x: dx, y: dy)
+                            for (a, e) in zip(actual, expected) {
+                                XCTAssertEqual(a, e, accuracy: 0.025,
+                                    "\(colorSpace) case \(index), zoom \(scale), pixel (\(dx), \(dy))")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func testFiltersChangeActualPixelsAndRespectLayerOrder() async throws {
         let source = try image(png())
         let region = CGRect(x: 0, y: 0, width: source.width, height: source.height)

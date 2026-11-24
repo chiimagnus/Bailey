@@ -1324,7 +1324,7 @@ final class PreviewScrollViewTests: XCTestCase {
                 let poster = RasterDetail.Patch(image: preview.poster, rect: detail.bounds)
                 let start = ContinuousClock.now
                 let filtered = try await ImageAnnotationDrawing.preview(document.state, poster: poster, detail: patch,
-                    region: region, scale: 1)
+                    region: region, scale: 1, original: detail)
                 renderDurations.append(start.duration(to: .now))
                 retiredComposite = filtered.image
                 XCTAssertEqual(filtered.rect, region)

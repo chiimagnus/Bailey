@@ -638,11 +638,11 @@ private final class RasterScrollView: PreviewScrollView {
             return
         }
         let visible = visibleImageRect
-        let margin = max(8, state.layers.filter { $0.kind.filtersPixels }.map { $0.strokeWidth * 8 }.max() ?? 0)
-        let region = visible.insetBy(dx: -max(visible.width / 4, margin),
-                                    dy: -max(visible.height / 4, margin)).integral.intersection(canvas.bounds)
+        let region = visible.insetBy(dx: -visible.width / 4,
+                                    dy: -visible.height / 4).integral.intersection(canvas.bounds)
         let scale = min(pixelScale, 1)
         let detail = canvas.patch
+        let original = self.detail
         let next = AnnotationDemand(state: state, poster: ObjectIdentifier(thumbnail),
                                     detail: detail.map { ObjectIdentifier($0.image) },
                                     scale: scale, region: region)
@@ -655,7 +655,7 @@ private final class RasterScrollView: PreviewScrollView {
         annotationTask = Task { [weak self] in
             do {
                 let patch = try await ImageAnnotationDrawing.preview(state, poster: poster, detail: detail,
-                                                                    region: region, scale: scale)
+                                                                    region: region, scale: scale, original: original)
                 guard !Task.isCancelled, let self, self.annotationDemand == next else { return }
                 self.annotationTask = nil
                 self.canvas.annotationComposite = patch
