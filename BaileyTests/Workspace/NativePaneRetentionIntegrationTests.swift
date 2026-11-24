@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import AVFoundation
 import AVKit
 import Observation
@@ -856,6 +857,145 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
 
         try await settle { retiredFile == nil }
         XCTAssertNil(retiredFile, "The live Dock must not retain a closed 100k FileTab")
+    }
+
+    func testEmbeddedAndFileMediaOwnIndependentPlayersAndStagingLifetimes() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-shared-media-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".github/features")
+
+        func nativePlayers(in view: NSView) -> [AVPlayerView] {
+            if let playerView = view as? AVPlayerView { return [playerView] }
+            return view.subviews.flatMap { nativePlayers(in: $0) }
+        }
+        let project = Project(fallbackName: "Shared media", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 1080, height: 560),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        host.frame = window.contentView?.bounds ?? .zero
+        window.contentView = host
+        let windowTitle = "Shared media test " + UUID().uuidString
+        window.title = windowTitle
+        window.orderFront(nil)
+        let pid = ProcessInfo.processInfo.processIdentifier
+
+        for (tag, fixture, ext) in [
+            ("audio", "audio-file-playback/demo-audio.m4a", "m4a"),
+            ("video", "video-file-playback/demo-video.mp4", "mp4"),
+        ] {
+            let source = folder.appendingPathComponent("shared." + ext)
+            let bytes = try Data(contentsOf: fixtures.appendingPathComponent(fixture))
+            try bytes.write(to: source)
+            let document = folder.appendingPathComponent("Media.md")
+            let markdown = Data("# Media\n\n<\(tag) controls src=\"\(source.lastPathComponent)\"></\(tag)>\n".utf8)
+            try markdown.write(to: document)
+            project.openLocalFile(source.path)
+            let mediaTab = try XCTUnwrap(project.selectedTab)
+            guard case .file(let media) = mediaTab.content else { return XCTFail("Expected media file tab") }
+            project.openLocalFile(document.path)
+            let markdownTab = try XCTUnwrap(project.selectedTab)
+            guard case .file(let file) = markdownTab.content else { return XCTFail("Expected Markdown file tab") }
+            file.setFilePreview(true)
+            try await file.waitForText()
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return media.mediaPlayer?.currentItem?.status == .readyToPlay
+                    && file.markdownSourceIndex?.request == file.textPreviewRequestID
+            }
+            let independent = try XCTUnwrap(media.mediaPlayer)
+            XCTAssertEqual(nativePlayers(in: host).compactMap(\.player).count, 1,
+                           "Markdown must not stage or create a player until requested")
+            // Exercise the actual accessible button in the mounted Markdown
+            // view, not a second test-only staging or loading entry point.
+            @MainActor func pressLoadButton() async -> Bool {
+                func attribute(_ node: AXUIElement, _ name: String) -> CFTypeRef? {
+                    var value: CFTypeRef?
+                    guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success else { return nil }
+                    return value
+                }
+                func button(in node: AXUIElement) -> AXUIElement? {
+                    if attribute(node, kAXIdentifierAttribute) as? String == "bailey.markdown.media.load",
+                       attribute(node, kAXRoleAttribute) as? String == kAXButtonRole {
+                        return node
+                    }
+                    for child in attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+                        if let found = button(in: child) { return found }
+                    }
+                    return nil
+                }
+                let app = AXUIElementCreateApplication(pid)
+                for _ in 0..<100 {
+                    let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? []
+                    if let target = windows.first(where: {
+                        attribute($0, kAXTitleAttribute) as? String == windowTitle
+                    }), let load = button(in: target) {
+                        return AXUIElementPerformAction(load, kAXPressAction as CFString) == .success
+                    }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                return false
+            }
+            let pressed = await pressLoadButton()
+            XCTAssertTrue(pressed, "The real Markdown media button must expose a press action")
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return nativePlayers(in: host).compactMap(\.player).contains {
+                    $0 !== independent && $0.currentItem?.status == .readyToPlay
+                }
+            }
+            let embedded = try XCTUnwrap(nativePlayers(in: host).compactMap(\.player).first { $0 !== independent })
+            let independentItem = try XCTUnwrap(independent.currentItem)
+            let embeddedItem = try XCTUnwrap(embedded.currentItem)
+            let independentAsset = try XCTUnwrap(independentItem.asset as? AVURLAsset)
+            let embeddedAsset = try XCTUnwrap(embeddedItem.asset as? AVURLAsset)
+            XCTAssertEqual(try Data(contentsOf: independentAsset.url), bytes)
+            XCTAssertEqual(try Data(contentsOf: embeddedAsset.url), bytes)
+            XCTAssertNotEqual(independentAsset.url, embeddedAsset.url)
+            XCTAssertEqual(independentAsset.url.resolvingSymlinksInPath(), source.resolvingSymlinksInPath())
+            let stagedFolder = embeddedAsset.url.deletingLastPathComponent()
+            XCTAssertTrue(stagedFolder.lastPathComponent.hasPrefix("Bailey-Markdown-"))
+            let permissions = try XCTUnwrap(FileManager.default.attributesOfItem(
+                atPath: stagedFolder.path
+            )[.posixPermissions] as? Int)
+            XCTAssertEqual(permissions & 0o077, 0)
+            independent.isMuted = true
+            embedded.isMuted = true
+            let firstPosition = await independent.seek(to: CMTime(seconds: 1, preferredTimescale: 600),
+                                                       toleranceBefore: .zero, toleranceAfter: .zero)
+            let secondPosition = await embedded.seek(to: CMTime(seconds: 2, preferredTimescale: 600),
+                                                   toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(firstPosition)
+            XCTAssertTrue(secondPosition)
+            embedded.playImmediately(atRate: 1)
+            independent.playImmediately(atRate: 1)
+            try await settle { independent.rate != 0 && embedded.rate != 0 }
+            embedded.pause()
+            XCTAssertEqual(embedded.rate, 0)
+            XCTAssertNotEqual(independent.rate, 0, "Pausing Markdown must not pause the independent media tab")
+            project.closeContent(.file(file))
+            try await settle {
+                embedded.currentItem == nil && !FileManager.default.fileExists(atPath: stagedFolder.path)
+            }
+            XCTAssertEqual(embedded.rate, 0)
+            XCTAssertTrue(independent.currentItem === independentItem)
+            XCTAssertTrue(media.mediaPlayer === independent)
+            XCTAssertNotEqual(independent.rate, 0, "Closing Markdown must leave the other player's playback untouched")
+            independent.pause()
+            project.closeContent(.file(media))
+            try await settle { independent.currentItem == nil }
+            XCTAssertNil(media.mediaPlayer)
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: source), bytes)
+            XCTAssertEqual(try Data(contentsOf: document), markdown)
+        }
     }
 
     func testSevenRealFormatsSurviveOneHundredNativeViewerSwitchesAndClose() async throws {

@@ -51,6 +51,7 @@ struct MarkdownMediaView: View {
                         .foregroundStyle(.secondary)
                 }
                 Button(video ? "Load Video" : "Load Audio") { loading = true }
+                    .accessibilityIdentifier("bailey.markdown.media.load")
             }
             Button("Open File") { openURL(url) }
                 .buttonStyle(.link)
