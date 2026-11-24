@@ -1051,6 +1051,18 @@ final class FileTab: nonisolated Identifiable {
         return bytes
     }
 
+    func copyAnnotatedImage(request: String, to pasteboard: NSPasteboard = .general) async throws {
+        guard let document = imageAnnotations, canAnnotateImage, request == fileContentRevision else {
+            throw WorkspaceError.changedExternally
+        }
+        let size = document.state.crop?.size ?? document.size
+        let options = ImageAnnotationDrawing.Options(width: Int(size.width), height: Int(size.height))
+        let png = try await annotatedImageData(request: request, options: options)
+        try Task.checkCancellation()
+        pasteboard.clearContents()
+        guard pasteboard.setData(png, forType: .png) else { throw CocoaError(.fileWriteUnknown) }
+    }
+
     func exportAnnotatedImage(request: String, options: ImageAnnotationDrawing.Options, to destination: URL) async throws {
         guard destination.isFileURL, UTType(filenameExtension: destination.pathExtension)?.conforms(to: options.format.type) == true else {
             throw CocoaError(.fileWriteInvalidFileName)

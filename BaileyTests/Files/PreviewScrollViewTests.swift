@@ -1757,6 +1757,7 @@ final class PreviewScrollViewTests: XCTestCase {
                                     String(localized: "Export PNG…", table: "Editor")]
             } else {
                 expectedActions += [String(localized: "Annotate Image", table: "Editor"),
+                                    String(localized: "Copy Annotated Image", table: "Editor"),
                                     String(localized: "Export Annotated Image…", table: "Editor")]
             }
             XCTAssertEqual(actions.map(\.name), expectedActions)

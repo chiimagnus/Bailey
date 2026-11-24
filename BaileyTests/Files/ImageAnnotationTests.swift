@@ -214,6 +214,45 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
+    func testCopyAnnotatedDraftUsesActualCroppedPixelsWithoutWritingAndRejectsStaleRequests() async throws {
+        let root = try makeRoot()
+        let path = root.appendingPathComponent("copy.png")
+        let original = try png()
+        try original.write(to: path)
+        let file = try await open(path)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        add(.rectangle, to: document, from: CGPoint(x: 15, y: 20), to: CGPoint(x: 50, y: 60))
+        add(.crop, to: document, from: .zero, to: CGPoint(x: 80, y: 80))
+        let draft = document.state
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let request = file.fileContentRevision
+        try await file.copyAnnotatedImage(request: request, to: pasteboard)
+        let copied = try XCTUnwrap(pasteboard.data(forType: .png))
+        let rendered = try image(copied)
+        XCTAssertEqual(rendered.width, 80)
+        XCTAssertEqual(rendered.height, 80)
+        let color = try pixel(rendered, x: 15, y: 40)
+        XCTAssertGreaterThan(color.redComponent - color.greenComponent, 0.4)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(document.state, draft)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ImageAnnotationSidecar.path(for: path.path)))
+        do {
+            try await file.copyAnnotatedImage(request: "retired request", to: pasteboard)
+            XCTFail("An outdated request must not replace the clipboard")
+        } catch WorkspaceError.changedExternally {}
+        let cancelled = Task { try await file.copyAnnotatedImage(request: request, to: pasteboard) }
+        cancelled.cancel()
+        do { try await cancelled.value; XCTFail("Cancelled copy must not publish") }
+        catch is CancellationError {}
+        XCTAssertEqual(pasteboard.data(forType: .png), copied)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(document.state, draft)
+    }
+
     func testConcurrentFilteredExportsKeepTheirOwnPixelsAndColorSpace() async throws {
         let source = try image(png())
         let size = CGSize(width: source.width, height: source.height)

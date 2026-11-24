@@ -334,6 +334,8 @@ private final class RasterScrollView: PreviewScrollView {
     private weak var annotationFile: FileTab?
     private var outputTask: Task<Void, Never>?
     private weak var outputSheet: NSWindow?
+    private lazy var copyMenuItem = NSMenuItem(title: String(localized: "Copy Annotated Image", table: "Editor"),
+                                              action: #selector(copyAnnotations), keyEquivalent: "")
     private lazy var exportMenuItem = NSMenuItem(title: String(localized: "Export Annotated Image…", table: "Editor"),
                                                 action: #selector(exportAnnotations), keyEquivalent: "")
     private var canAnnotate = false
@@ -399,12 +401,17 @@ private final class RasterScrollView: PreviewScrollView {
                 annotationMenuItem.target = self
                 menu?.addItem(annotationMenuItem)
             }
+            if copyMenuItem.menu == nil {
+                copyMenuItem.target = self
+                menu?.addItem(copyMenuItem)
+            }
             if exportMenuItem.menu == nil {
                 exportMenuItem.target = self
                 menu?.addItem(exportMenuItem)
             }
         } else {
             annotationMenuItem.menu?.removeItem(annotationMenuItem)
+            copyMenuItem.menu?.removeItem(copyMenuItem)
             exportMenuItem.menu?.removeItem(exportMenuItem)
         }
         let changedResource = self.resourceRevision != resourceRevision
@@ -447,6 +454,15 @@ private final class RasterScrollView: PreviewScrollView {
         outputSheet = nil
     }
 
+    @objc private func copyAnnotations() {
+        guard annotationDocument?.canMutate == true, canAnnotate, outputTask == nil, outputSheet == nil,
+              let file = annotationFile, annotationDocument?.textEdit == nil else { return }
+        let request = file.fileContentRevision
+        runOutput(request: request, failureTitle: String(localized: "Could not copy image.", table: "Editor")) {
+            try await file.copyAnnotatedImage(request: request)
+        }
+    }
+
     @objc private func exportAnnotations() {
         guard annotationDocument?.canMutate == true, canAnnotate, outputTask == nil, outputSheet == nil, let file = annotationFile,
               let document = annotationDocument, document.textEdit == nil, let window else { return }
@@ -478,24 +494,32 @@ private final class RasterScrollView: PreviewScrollView {
                 guard let self, let file, self.annotationFile === file, self.resourceRevision == request else { return }
                 self.outputSheet = nil
                 guard response == .OK, let destination = panel.url else { return }
-                self.outputTask = Task { @MainActor [weak self] in
-                    do {
-                        try await file.exportAnnotatedImage(request: request, options: options, to: destination)
-                    } catch {
-                        if !Task.isCancelled, self?.resourceRevision == request {
-                            self?.showOutputError(error.localizedDescription)
-                        }
-                    }
-                    if !Task.isCancelled, self?.resourceRevision == request { self?.outputTask = nil }
+                self.runOutput(request: request, failureTitle: String(localized: "Could not export image.", table: "Editor")) {
+                    try await file.exportAnnotatedImage(request: request, options: options, to: destination)
                 }
             }
         }
     }
 
-    private func showOutputError(_ message: String) {
+    private func runOutput(request: String, failureTitle: String,
+                           _ operation: @escaping @MainActor () async throws -> Void) {
+        outputTask = Task { @MainActor [weak self] in
+            do {
+                try await operation()
+            } catch {
+                if !Task.isCancelled, self?.resourceRevision == request {
+                    self?.showOutputError(error.localizedDescription, title: failureTitle)
+                }
+            }
+            if !Task.isCancelled, self?.resourceRevision == request { self?.outputTask = nil }
+        }
+    }
+
+    private func showOutputError(_ message: String,
+                                 title: String = String(localized: "Could not export image.", table: "Editor")) {
         guard let window else { return }
         let alert = NSAlert()
-        alert.messageText = String(localized: "Could not export image.", table: "Editor")
+        alert.messageText = title
         alert.informativeText = message
         alert.beginSheetModal(for: window) { _ in }
     }
@@ -671,6 +695,7 @@ private final class RasterScrollView: PreviewScrollView {
         onViewportPositionChange = nil
         animationMenuItem.menu?.removeItem(animationMenuItem)
         annotationMenuItem.menu?.removeItem(annotationMenuItem)
+        copyMenuItem.menu?.removeItem(copyMenuItem)
         exportMenuItem.menu?.removeItem(exportMenuItem)
         cancelOutput()
         annotationFile = nil
