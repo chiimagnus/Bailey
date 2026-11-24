@@ -73,6 +73,8 @@
 
 ## 验证与未覆盖
 
+- 2026-11-24：冻结提交 `05696bb5` 的 Debug、Release、UI Test Target 构建及签名通过；真实样本、授权 Windows SSH、隔离 APFS 卷与完整宿主 `make test` 1366/1366 通过，0 失败、0 跳过，2007.208 秒。日志：`/tmp/bailey-seven-20261124-svg-final-full.log`。仅核销宿主证据，完整 App GUI 与实体设备条件仍保留原阻塞，不据此改为 Go。
+
 - macOS 27.3／Xcode 27.2、Apple Silicon。本轮按用户确认不要求 macOS 15.6 实机验收。
 - 178 项相关宿主、3 项完整 GUI、`make build` 和后置签名检查均以退出码 0 完成。
   包含实际 Files 路由、跨窗 Finder 宿主投递、冷恢复宿主、跨后缀移动、Windows Tailscale 读取原字节、
@@ -89,7 +91,6 @@
   但还不能证明播报顺序和跨 Dock 巡览。需在独占 Dev 桌面时手工核对，阻塞 P1 完整门禁。
 - 本机只有 2× 内置屏，尚无 1× 设备。原生滚动及双窗窄 Dock 的 2× 结果已测，
   不能证明 1× 下的字形和分隔线可见性；有相应设备时复跑同一 GUI。
-- 没有发现获授权的 Linux SSH 测试别名；真实 Windows Tailscale 和本机路径已测，
-  不能代替 POSIX 远端同名文件、断线／重连的完整 App 操作；补验需 Linux 测试环境。
+- 真实 Windows Tailscale 和本机路径已测。
 - 最终 e4267d71：共享读取、文件归属、原生生命周期与 330 项受影响宿主回归全过（含 JPEG 边界补测）；此前 CSV 专项及隔离 GUI 证据不变。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。

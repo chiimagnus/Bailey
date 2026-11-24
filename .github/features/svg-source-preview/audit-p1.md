@@ -6,17 +6,31 @@
 ## 结论
 
 - **结果**：No-Go（独立文件的基本图形、源码与并排已实现；P1 的完整矩阵尚未核销）。
-- **依据**：真矢量、滤镜收敛和换图有像素证据，四项发现均关闭；物理手势、完整 App 长会话和剩余视觉矩阵仍待核对。
+- **依据**：真矢量、滤镜和换图有像素证据，真实复杂科研 SVG 百次压力发现的持续 RSS 增长已通过直接 Canvas 绘制修复；正式构建与冻结版完整宿主回归已通过；待物理手势、完整 App 长会话和剩余视觉矩阵。
 
 ## 任务与改动
 
 - **P1-T1 复用 SVG 净化与 SwiftDraw，确认复杂 SVG 能力**：`SVGArtwork` 由 Markdown 与文件预览共同调用。
   独立文件使用 `FileTab` 当前文字快照，只在解析副本中统一 XML 编码声明；剔除内容同一次遍历产生提示，不写回原文。
 - **P1-T2 接入共用图形视口和源码／预览／并排命令**：`SVGPreviewScrollView` 复用 `PreviewScrollView`，
-  内容交给 SwiftDraw `SVGView`；File 菜单、Dock companion 与 `FileTab` 模式归现有所有者。
+  内容由原生 SwiftUI Canvas 直接调用同一 SwiftDraw 矢量绘制接口，不保留跨文档滤镜缓存；
+  File 菜单、Dock companion 与 `FileTab` 模式归现有所有者。
   用户行为和边界记录在 [文件编辑器](../../../docs/features/editor.md#读取与原生内容)。
 
 ## 发现项
+
+## 发现 F-05
+
+- 任务：`P1-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`BaileyTests/Files/PreviewScrollViewTests.swift`
+- 摘要：`真实复杂科研图的100次打开、缩放、退役与内存证据尚缺`
+- 风险：`简单48点模糊图百次挂载及七格式百次混合仅覆盖少量真实科研图，无法单独核销S06×S08真实复杂图的重复绘制和释放`
+- 预期修复：`沿FileTab与原生SVG文件视口执行真实科研图100次开闭，覆盖fit、100%、400%、深浅和两种窗口尺寸，核对当前绘制、实际画布释放、原字节及RSS/CPU`
+- 验证：`make test ONLY_TESTING=BaileyTests/PreviewScrollViewTests/testHundredRealResearchSVGPreviewsRetireNativeCanvases; 启用BAILEY_SVG_ACCEPTANCE_ROOT`
+- 解决证据：`05696bb5：真实复杂科研 SVG 百次开闭，旧共享滤镜缓存路径后段RSS增长162.2MiB，独立SwiftUI Canvas绘制后6.08MiB；真实像素、400%倍率、源字节与滤镜换图专项16/16。完整1366/1366无失败无跳过；百次12.4085秒，P95首像素67.01ms，关闭后的后五次最大RSS2796.75MiB不高于前五次2796.78125MiB，Debug/Release/UI target构建与签名通过。`
+
 
 ## 发现 F-04
 
@@ -72,6 +86,10 @@
 
 ## 验证与未覆盖
 
+- 2026-11-24：冻结提交 `05696bb5` 的 Debug、Release、UI Test Target 构建及签名通过；真实样本、授权 Windows SSH、隔离 APFS 卷与完整宿主 `make test` 1366/1366 通过，0 失败、0 跳过，2007.208 秒。日志：`/tmp/bailey-seven-20261124-svg-final-full.log`。仅核销宿主证据，完整 App GUI 与实体设备条件仍保留原阻塞，不据此改为 Go。
+
+- F-05：真实科研 SVG 百次 FileTab 开闭、fit／100%／400%、深浅与两种窗口尺寸，实际画布释放和原字节通过，但旧 SVGView 路径后半段 RSS 高水位增长 162.2 MiB，64 MiB 上限失败；显式释放截图临时对象仍重现。四个独立进程对照：无截图 62.4 MiB、固定尺寸 117.2 MiB、同尺寸简单 SVG 0.75 MiB、无缩放 61.9 MiB。定位到复杂 SVG 的绘制与共享滤镜缓存路径，不能以画布弱引用 nil 推断像素缓存已释放。
+- 直接使用 SwiftUI Canvas + SwiftDraw 公开矢量绘制接口后，原完整科研图测试百次 12.68 秒、CPU 12.48 秒、首像素 P95 68.9 ms、后半段 RSS 高水位仅增 6.08 MiB；原 64 MiB 阈值及所有像素和关闭断言不变。SVG 专项 16/16 通过、零跳过，真实滤镜换图、400% 四分之一点条带均通过。旧路径失败日志 `/tmp/bailey-seven-20261124-svg-autorelease.log`，对照 `/tmp/bailey-seven-20261124-svg-probe-{noCapture,fixed,simple,noZoom}.log`，Green `/tmp/bailey-seven-20261124-svg-direct-canvas.log`。05696bb5 冻结版正式 Debug／Release、UI Target 构建及签名通过；完整宿主 1366/1366，零失败、零跳过，耗时 2007.208 秒。真实科研 SVG 百次 12.41 秒，P95 67.0 ms，后半段 RSS 峰值未增长。完整 App 与物理设备仍需独立补验。
 - 设备为本机 macOS 27.3／Xcode 27.2、Apple Silicon、内置 Retina。按用户确认不要求 macOS 15.6 实机；部署目标保持不变。
 - 68 项相关宿主通过，包括 54 项 Markdown 原生回归。独立 `make test:SVGArtworkTests` 六项通过：
   仓库 `demo-plot.svg`、旋转和 mask 的像素、400% 真实窄线、滤镜异步后形状外像素、XML 声明和输入边界。
@@ -89,6 +107,7 @@
 - 44e8ac42 的 780164 字节／13 万路径命令正常渲染约 0.91 秒；1 ms／12 ms 后取消，退役约 2.6 ms／85.4 ms，无图像返回。7873e5ea 在真实磁盘核对 32 MiB 两侧源码／预览边界与原字节。SVG 专项 15 项全部通过，P1-T1 已核销；仍保留 P1 阶段门禁。
 - aa26f533：双窗口快照持久化后重新创建应用所有者，核对 SVG、CSV、HTML、Markdown 各自默认模式、临时 companion 移除、懒读取及标签复用，原字节不变。SessionStoreTests 11 项全部通过。
 - 实体 1× 屏、触控板惯性／捏合、VoiceOver 和完整 App 的 SVG 多窗口冷恢复未验；实际 Retina 像素与共享 PNG
-  缩放证明当前绘制路径，不证明物理设备行为。Windows Tailscale 已有宿主结果；没有获授权的 Linux 别名，不能替代 Linux E2E。
+  缩放证明当前绘制路径，不证明物理设备行为。实际 Windows Tailscale 已有宿主验收结果。
 - 最终 e4267d71：共享 330 项受影响回归全过（含 JPEG 边界补测），NativePaneRetentionIntegration 28 项全部通过；SVG 专项既有真实样本证据仍保留。共享执行记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- d768f481：真实 GIF／SVG 原生文件视图的四个 AX 缩放动作、菜单一致性、像素倍率、中心位置及重挂载恢复、源字节均验证通过；不替代物理输入或 VoiceOver 实际语音播报。

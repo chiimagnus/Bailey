@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：真实格式、读取预算、定位及播放器隔离已有原生和部分完整 GUI 证据；合法 DRM、实际设备输出／切换、睡眠与 VoiceOver 尚未完成。
+- **依据**：真实格式、读取预算、定位及播放器隔离已有原生和部分完整 GUI 证据；真实 CENC 保护判定及拒绝／恢复已通过；实际设备输出／切换、睡眠与 VoiceOver 尚未完成。
 
 ## 任务与改动
 
@@ -17,12 +17,14 @@
 
 ## 验证与未覆盖
 
+- 2026-11-24：冻结提交 `05696bb5` 的 Debug、Release、UI Test Target 构建及签名通过；真实样本、授权 Windows SSH、隔离 APFS 卷与完整宿主 `make test` 1366/1366 通过，0 失败、0 跳过，2007.208 秒。日志：`/tmp/bailey-seven-20261124-svg-final-full.log`。仅核销宿主证据，完整 App GUI 与实体设备条件仍保留原阻塞，不据此改为 Go。
+
 - NativeAudioTimingTests：真实样本派生 24 位单声道、32 位六声道、FLAC、裸 VBR AAC，真实 AVAsset 格式、声道、12 秒时长和 11 秒 seek，原字节一致。NativeMediaFileTests：MP3／AAC／WAV／AIFF／CAF 等实际音频缓冲、定位、大小写与链接。
 - f9b124ca、fd055633：截断和置零、未知 codec、引用型容器拒绝，原子替换恢复；64 MiB−1／等于／+1 的真实 M4A，独立文件可读、嵌入精确限额；获授权 Windows 同名隔离已测。
 - bc97976c：实际 48 kHz/16-bit 单声道 4 小时 PCM（1,382,400,044 字节），0／7200／14399 秒三个不同频率的每段一秒样本逐字节核对，真实播放推进；从加载至三处定位约 0.287 秒，过程峰值 RSS 增量 22,691,840 字节，关闭 item 清空、文件 SHA-256 不变。不声称连续播放四小时。
 - a85ed10f 百次实际音视频项目开闭；d5698ca3、8c6b63b1 实际 M4A/WAV 与 MP4 的两所有者 AX 加载、私有暂存、seek/暂停/关闭互不干扰，源字节与暂存目录清理。七格式组合有一个 AVKit 私有空壳（暂停且 item=nil），不是活跃播放器；不宣称所有系统对象清零。
 - 291 项补跑完整通过（零失败／跳过），含 17 项媒体、原生音频计时、28 项原生生命周期；之后 3 项长时间轴及共享媒体定点测试通过。此前真实隔离 GUI 的音量／静音、播放、调速与标签暂停已验证。
-- 合法 DRM 文件未提供，无法核对实际受保护资源；现有不支持／损坏／引用容器测试不替代 DRM。当前桌面有用户活动，不抢占 VoiceOver、音频设备切换、系统睡眠和完整 App 长会话；宿主 muted 播放及 AX 控件不证明物理声音输出或语音播报。需获授权 DRM、可切换输出设备和独占 Dev 会话。以上阻塞阶段。
+- bbb7b7f7：自有 AAC/H.264 的真实 ISO CENC 加密媒体通过原生保护判定；同时 playable=true，独立 FileTab 与 Markdown 暂存的共用入口均拒绝；原字节不变，未加密同源版本原子替换恢复。测试不依赖商业许可证，不验证受保护内容的授权播放。当前桌面有用户活动，不抢占 VoiceOver、音频设备切换、系统睡眠和完整 App 长会话；宿主 muted 播放及 AX 控件不证明物理声音输出或语音播报。需可切换输出设备和独占 Dev 会话。以上阻塞阶段。
 - 用户确认 macOS 27.3／Xcode 27.2、Apple Silicon，无需 15.6 实机，保留部署目标。文档归 [文件编辑器](../../../docs/features/editor.md)。
 - 最终 e4267d71：NativeMediaFileTests 20 项、NativeAudioTimingTests 1 项、NativePaneRetentionIntegrationTests 28 项全部通过。真实媒体首次加载中改名及关闭各 10 次均在 loading 状态触发，最终资产路径、轨道、源字节和旧播放器退役一致。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。

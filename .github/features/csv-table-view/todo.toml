@@ -7,7 +7,7 @@ title = "原文 UTF-16 字段索引与有界类型路由"
 status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = "1c9aefcc8b1ea3dfdb80c686167b64d8226c3a4c"
-note = "编码兼容提交 50fc8b13；184 宿主与真实 Windows Tailscale、正式 Debug 构建及验签通过。索引不是表格界面；P1-T2 和阶段门禁待执行。最低 macOS 15.6 保留编译部署目标，未实机；无 Linux 测试别名。"
+note = "编码兼容提交 50fc8b13；184 宿主与真实 Windows Tailscale、正式 Debug 构建及验签通过。索引不是表格界面；P1-T2 和阶段门禁待执行。最低 macOS 15.6 保留编译部署目标，未实机。"
 
 [[tasks]]
 id = "P1-T2"
@@ -20,15 +20,15 @@ note = "共享入口 24019b00；排序、筛选、查找和多格复制 49a9e09d
 [[tasks]]
 id = "P2-T1"
 title = "对原文源区间执行原生编辑、复用唯一 Undo"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = ""
+note = "aa65af7b及十万行百次编辑补测：100001条记录、100次编辑及源码模式切换、100次Undo/Redo同一NSTextStorage、未挂隐藏编辑器、UTF8 BOM/混合CRLF与LF/宽Unicode、未改字节与保存实测通过。总18.66秒，快照P95 128.62ms、编辑P95 50.69ms、同步Undo/Redo P95约3.74ms；完整App内中文IME、真实快捷键及GUI性能未核销。"
 
 [[tasks]]
 id = "P2-T2"
 title = "严格往返编码、条件保存和外部冲突"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = ""
+note = "b1129bb5：本机 NSLock 与实际 Windows SSH flock 父目录锁协调 Bailey 自身条件保存，仍非任意外部写入的原子 CAS。受控真实本机/Windows 实验均在最终 SHA 校验与 rename 之间注入独立写入，原实现会覆盖该外部版本；APFS RENAME_SWAP 与 Windows File.Replace 能保留被替换字节但不能按预期版本原子拒绝替换。保留 C12×C13 与检查/提交间竞态未核销，不能以双窗口协作通过代替此边界。"
