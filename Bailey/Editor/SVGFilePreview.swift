@@ -98,10 +98,23 @@ private struct NativeSVGViewport: NSViewRepresentable {
     }
 }
 
+private struct NativeSVGDrawing: View {
+    let svg: SVG
+
+    var body: some View {
+        // Draw at the current device scale without SVGView's shared filter
+        // cache, which retained buffers after complex documents were closed.
+        Canvas(opaque: false, colorMode: .linear, rendersAsynchronously: true) { context, size in
+            context.draw(svg, in: CGRect(origin: .zero, size: size))
+        }
+        .frame(width: svg.size.width, height: svg.size.height)
+    }
+}
+
 final class SVGPreviewScrollView: PreviewScrollView {
     private let canvas = PreviewCanvasView()
     private var request: String?
-    private var content: NSHostingView<SVGView>?
+    private var content: NSHostingView<NativeSVGDrawing>?
     var onFocused: () -> Void = {}
 
     init() {
@@ -125,7 +138,7 @@ final class SVGPreviewScrollView: PreviewScrollView {
             onViewportPositionChange = nil
             self.request = request
             content?.removeFromSuperview()
-            let content = NSHostingView(rootView: SVGView(svg: svg))
+            let content = NSHostingView(rootView: NativeSVGDrawing(svg: svg))
             content.frame = CGRect(origin: .zero, size: svg.size)
             canvas.setFrameSize(svg.size)
             canvas.addSubview(content)

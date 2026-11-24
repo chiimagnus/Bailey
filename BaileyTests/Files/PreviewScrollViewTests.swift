@@ -1229,6 +1229,118 @@ final class PreviewScrollViewTests: XCTestCase {
         for fixture in fixtures { XCTAssertEqual(try Data(contentsOf: fixture.url), fixture.bytes) }
     }
 
+    func testHundredRealResearchSVGPreviewsRetireNativeCanvases() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_SVG_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_SVG_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let original = URL(fileURLWithPath: root).appending(path: "graphics/复杂科研图.svg")
+        let bytes = try Data(contentsOf: original)
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appending(path: original.lastPathComponent)
+        try bytes.write(to: path)
+        let project = Project(fallbackName: "Research SVG lifecycle", workspaceConfiguration: .standard)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 360),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderBack(nil)
+        defer { project.closeAll(); window.close() }
+
+        // The sample has an opaque pale background and dark blue geometry.
+        // Inspect the displayed native canvas rather than merely its identity.
+        func paintsResearchGeometry(_ scroll: SVGPreviewScrollView) -> Bool {
+            // Screenshot bitmaps and sampled NSColors are test instrumentation,
+            // not retained preview content. Drain their Objective-C temporaries
+            // before recording the closed-window memory samples.
+            autoreleasepool {
+                window.displayIfNeeded()
+                guard let bitmap = scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds) else { return false }
+                scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+                var background = false
+                var axis = false
+                for y in stride(from: bitmap.pixelsHigh / 4, to: bitmap.pixelsHigh * 3 / 4, by: 8) {
+                    for x in 0..<bitmap.pixelsWide {
+                        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                              color.alphaComponent > 0.95 else { continue }
+                        background = background || (color.redComponent > 0.9 && color.greenComponent > 0.9
+                                                    && color.blueComponent > 0.9)
+                        axis = axis || (color.redComponent < 0.45 && color.greenComponent < 0.55
+                                        && color.blueComponent > color.redComponent + 0.07)
+                        if background && axis { return true }
+                    }
+                }
+                return false
+            }
+        }
+
+        let before = rasterMemory()
+        let beforeCPU = cpuSeconds()
+        let started = ContinuousClock.now
+        var closedRSS: [Double] = []
+        var firstPixels: [Duration] = []
+        for cycle in 0..<100 {
+            let appearance: NSAppearance.Name = cycle.isMultiple(of: 2) ? .aqua : .darkAqua
+            let size = cycle % 4 < 2 ? CGSize(width: 480, height: 360) : CGSize(width: 780, height: 510)
+            window.appearance = NSAppearance(named: appearance)
+            let opened = ContinuousClock.now
+            weak var retiredDrawing: NSView?
+            do {
+                project.openLocalFile(path.path)
+                let pane = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = pane.content else { return XCTFail("Expected a real SVG file tab") }
+                try await file.waitForText()
+                let host = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
+                host.sizingOptions = []
+                window.contentView = host
+                window.setContentSize(size)
+                try await waitFor("Mount the real research SVG at cycle \(cycle)") {
+                    host.layoutSubtreeIfNeeded()
+                    return previewScroll(in: host)?.documentView?.subviews.first?.frame.size
+                        == CGSize(width: 1400, height: 620)
+                }
+                let scroll = try XCTUnwrap(previewScroll(in: host) as? SVGPreviewScrollView)
+                XCTAssertEqual(host.bounds.width, size.width, accuracy: 1)
+                XCTAssertEqual(host.bounds.height, size.height, accuracy: 1)
+                XCTAssertEqual(scroll.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), appearance)
+                retiredDrawing = try XCTUnwrap(scroll.documentView?.subviews.first)
+                try await waitFor("Paint the research geometry at fit, cycle \(cycle)") {
+                    paintsResearchGeometry(scroll)
+                }
+                firstPixels.append(opened.duration(to: .now))
+
+                for scale: CGFloat in [1, 4] {
+                    scroll.setZoom(scale, at: CGPoint(x: 170, y: 310))
+                    scroll.layoutSubtreeIfNeeded()
+                    let visible = scroll.contentView.bounds
+                    scroll.contentView.scroll(to: CGPoint(x: max(0, 170 - visible.width / 2),
+                                                          y: max(0, 310 - visible.height / 2)))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    XCTAssertEqual(scroll.pixelScale, scale, accuracy: 0.001)
+                    try await waitFor("Paint the native research geometry at \(scale)x, cycle \(cycle)") {
+                        paintsResearchGeometry(scroll)
+                    }
+                }
+
+                project.close(pane)
+                XCTAssertTrue(project.tabs.isEmpty)
+                try await waitFor("Closing the SVG removes its actual drawing, cycle \(cycle)") {
+                    previewScroll(in: host) == nil && scroll.documentView?.subviews.isEmpty == true
+                }
+                window.contentView = nil
+            }
+            try await waitFor("Release the retired research drawing, cycle \(cycle)") { retiredDrawing == nil }
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            if (cycle + 1).isMultiple(of: 10) { closedRSS.append(residentMiB()) }
+        }
+        let durations = firstPixels.sorted()
+        print("SVG_RESEARCH_SESSION count=100 elapsed=\(started.duration(to: .now)) cpu_s=\(cpuSeconds() - beforeCPU) median_first_pixels=\(durations[49]) p95_first_pixels=\(durations[94]) rss_before=\(before) rss_after=\(rasterMemory()) closed_rss=\(closedRSS)")
+        let warmed = try XCTUnwrap(closedRSS.prefix(5).max())
+        let late = try XCTUnwrap(closedRSS.suffix(5).max())
+        XCTAssertLessThan(late - warmed, 64, "Retired SVG canvases must not accumulate per-file drawing buffers")
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+
     private func solidRaster(size: CGSize, color: NSColor) throws -> CGImage {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
