@@ -64,16 +64,19 @@ nonisolated struct NativeMedia: Sendable {
         for track in try await asset.loadTracks(withMediaType: type) {
             try Task.checkCancellation()
             if try await track.load(.isDecodable, .isSelfContained) == (true, true),
-               try hasMediaSample(track, in: asset) { return track }
+               try hasDecodedSample(track, type: type, in: asset) { return track }
         }
         return nil
     }
 
-    // Track metadata alone can survive truncation of the media-data atom.
-    // Read only until a real sample is found; a zero-sample edit boundary is not media.
-    private static func hasMediaSample(_ track: AVAssetTrack, in asset: AVURLAsset) throws -> Bool {
+    // A valid track index and nonempty compressed samples do not prove decodability.
+    // Decode only until the first actual audio buffer or video frame is available.
+    private static func hasDecodedSample(_ track: AVAssetTrack, type: AVMediaType, in asset: AVURLAsset) throws -> Bool {
         let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        let settings: [String: Any] = type == .video
+            ? [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+            : [AVFormatIDKey: kAudioFormatLinearPCM]
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { return false }
         reader.add(output)
@@ -84,7 +87,10 @@ nonisolated struct NativeMedia: Sendable {
         guard reader.startReading() else { return false }
         while let sample = output.copyNextSampleBuffer() {
             try Task.checkCancellation()
-            if sample.numSamples > 0, let data = sample.dataBuffer, CMBlockBufferGetDataLength(data) > 0 {
+            guard sample.numSamples > 0 else { continue }
+            if type == .video {
+                if sample.imageBuffer != nil { return true }
+            } else if let data = sample.dataBuffer, CMBlockBufferGetDataLength(data) > 0 {
                 return true
             }
         }

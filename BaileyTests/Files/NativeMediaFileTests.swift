@@ -51,7 +51,7 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
-    func testTruncatedMediaWithIntactMetadataIsRejectedAndCanRecover() async throws {
+    func testDamagedMediaWithIntactMetadataIsRejectedAndCanRecover() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -60,62 +60,75 @@ final class NativeMediaFileTests: XCTestCase {
         for (sample, type) in [("audio-file-playback/demo-audio.m4a", AVMediaType.audio),
                                ("video-file-playback/demo-video.mp4", .video)] {
             let original = try Data(contentsOf: fixtures.appending(path: sample))
-            // The fixtures are fast-start containers. Preserve the track index but remove every media sample.
+            // Preserve the fast-start track index while removing or corrupting the sample payload.
             let marker = try XCTUnwrap(original.range(of: Data("mdat".utf8)))
             XCTAssertNotNil(original[..<marker.lowerBound].range(of: Data("moov".utf8)))
             let atomStart = marker.lowerBound - 4
             let atomSize = original[atomStart..<marker.lowerBound].reduce(0) { ($0 << 8) | Int($1) }
             XCTAssertEqual(atomStart + atomSize, original.count)
-            let bytes = Data(original[..<marker.upperBound])
-            let url = directory.appending(path: "截断-" + URL(fileURLWithPath: sample).lastPathComponent)
-            try bytes.write(to: url)
-            let asset = AVURLAsset(url: url)
-            if let tracks = try? await asset.loadTracks(withMediaType: type), let track = tracks.first,
-               let reader = try? AVAssetReader(asset: asset) {
-                let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-                if reader.canAdd(output) {
-                    reader.add(output)
-                    if reader.startReading() {
-                        while let buffer = output.copyNextSampleBuffer() {
-                            // AVFoundation can emit an edit boundary with zero media samples.
-                            XCTAssertEqual(buffer.numSamples, 0)
-                        }
-                    }
-                    reader.cancelReading()
+            let header = Data(original[..<marker.upperBound])
+            let corrupt = header + Data(repeating: 0, count: original.count - header.count)
+            for (name, bytes, hasPayload) in [("截断", header, false), ("损坏", corrupt, true)] {
+                let url = directory.appending(path: name + "-" + URL(fileURLWithPath: sample).lastPathComponent)
+                try bytes.write(to: url)
+                let asset = AVURLAsset(url: url)
+                if hasPayload {
+                    let playable = try await asset.load(.isPlayable)
+                    XCTAssertTrue(playable, "The corrupted fixture must still pass AVAsset metadata checks")
                 }
+                var foundPayload = false
+                if let tracks = try? await asset.loadTracks(withMediaType: type), let track = tracks.first,
+                   let reader = try? AVAssetReader(asset: asset) {
+                    let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+                    if reader.canAdd(output) {
+                        reader.add(output)
+                        if reader.startReading() {
+                            while let buffer = output.copyNextSampleBuffer() {
+                                if buffer.numSamples > 0, let data = buffer.dataBuffer,
+                                   CMBlockBufferGetDataLength(data) > 0 {
+                                    foundPayload = true
+                                    break
+                                }
+                            }
+                        }
+                        reader.cancelReading()
+                    }
+                }
+                XCTAssertEqual(foundPayload, hasPayload, "The fixture must distinguish encoded bytes from decoded media")
+                let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                defer { tab.retireContent() }
+                try await load(tab)
+                if case .unavailable = tab.content {} else {
+                    XCTFail("A container without decodable samples must be unavailable: \(url.lastPathComponent)")
+                }
+                XCTAssertNil(tab.mediaPlayer)
+                XCTAssertEqual(try Data(contentsOf: url), bytes)
+                let resource = PreviewResource(path: directory.appending(path: "Preview.md").path,
+                                               directory: directory.path, backend: LocalWorkspaceBackend.shared)
+                var relative = URLComponents()
+                relative.path = url.lastPathComponent
+                let reference = try XCTUnwrap(relative.url)
+                let staged = try await MarkdownMedia.stage(reference, from: resource)
+                defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+                XCTAssertEqual(try Data(contentsOf: staged), bytes)
+                do {
+                    _ = try await NativeMedia.open(staged.path)
+                    XCTFail("The shared Markdown reader must reject undecodable media samples")
+                } catch NativeMedia.Failure.unsupported {}
+                let prior = tab.reloadRevision
+                try original.write(to: url, options: .atomic)
+                tab.reloadFromDiskIfClean()
+                try await waitUntil { if case .media = tab.content { return tab.reloadRevision != prior }; return false }
+                let item = try XCTUnwrap(tab.mediaPlayer?.currentItem)
+                try await waitUntil { item.status != .unknown }
+                XCTAssertEqual(item.status, .readyToPlay)
+                let recovered = try await MarkdownMedia.stage(reference, from: resource)
+                defer { try? FileManager.default.removeItem(at: recovered.deletingLastPathComponent()) }
+                let embedded = try await NativeMedia.open(recovered.path)
+                XCTAssertEqual(embedded.kind, type == .audio ? .audio : .video)
+                XCTAssertEqual(try Data(contentsOf: recovered), original)
+                XCTAssertEqual(try Data(contentsOf: url), original)
             }
-            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
-            defer { tab.retireContent() }
-            try await load(tab)
-            guard case .unavailable = tab.content else {
-                return XCTFail("A container without media samples must be unavailable: \(sample)")
-            }
-            XCTAssertNil(tab.mediaPlayer)
-            XCTAssertEqual(try Data(contentsOf: url), bytes)
-            let resource = PreviewResource(path: directory.appending(path: "Preview.md").path,
-                                           directory: directory.path, backend: LocalWorkspaceBackend.shared)
-            var relative = URLComponents()
-            relative.path = url.lastPathComponent
-            let reference = try XCTUnwrap(relative.url)
-            let staged = try await MarkdownMedia.stage(reference, from: resource)
-            defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
-            XCTAssertEqual(try Data(contentsOf: staged), bytes)
-            do {
-                _ = try await NativeMedia.open(staged.path)
-                XCTFail("The shared Markdown reader must also reject missing media samples")
-            } catch NativeMedia.Failure.unsupported {}
-            try original.write(to: url, options: .atomic)
-            tab.reloadFromDiskIfClean()
-            try await waitUntil { if case .media = tab.content { return true }; return false }
-            let item = try XCTUnwrap(tab.mediaPlayer?.currentItem)
-            try await waitUntil { item.status != .unknown }
-            XCTAssertEqual(item.status, .readyToPlay)
-            let recovered = try await MarkdownMedia.stage(reference, from: resource)
-            defer { try? FileManager.default.removeItem(at: recovered.deletingLastPathComponent()) }
-            let embedded = try await NativeMedia.open(recovered.path)
-            XCTAssertEqual(embedded.kind, type == .audio ? .audio : .video)
-            XCTAssertEqual(try Data(contentsOf: recovered), original)
-            XCTAssertEqual(try Data(contentsOf: url), original)
         }
     }
 
