@@ -19,6 +19,8 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
   先做 100%／400%、不同屏幕倍率的实际像素实验，
   若 SwiftUI 承载导致额外位图缩放，只改这一绘制适配层，不另建 SVG parser／备份 renderer。
 - 文件 `.svg` 仍由 `FileTab` 读取为 `.text`，文本、BOM、编码、Undo 和外部版本归 TextKit。
+  当前不解压 gzip 包裹的 `.svgz`；同为 gzip 内容但误用了 `.svg` 后缀时也报告压缩格式，
+  不交给 XML 或文本编码回退。
   共享 [图片 P1 的唯一原生缩放视口](../image-annotations/plan-p1.md#p1-t1)，
   直接接入 `PreviewScrollView`，不增加另一套缩放控件。
   复用 [文件预览共用 Dock／菜单](../file-viewer-routing/plan-p1.md#p1-t2)，默认图形。
@@ -40,10 +42,11 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
   也不能将 XML 解析后的归一化文本写回原文件。
   在 SVG 语法无效或目前不支持的高级功能下保持源码、清楚提示，
   不以 WebKit、外网或不安全的 SVG 内联资源作暗中 fallback。
-  现有净化遍历返回实际移除的 `pattern`、`use`、`symbol`、内嵌 `image` 等节点，
-  独立文件显示省略提示，不再对 SVG 做第二遍诊断解析。
-  若扩展支持，先确认引用展开后的图形数量与绘制成本仍受控，
-  再沿**现有**净化器补全并同步 Markdown 安全回归，不另设独立 SVG 规则。
+  共用净化器只给 `use` 保留同文档片段引用，可复用本地图形和 `symbol`。
+  展开沿同一份净化 XML 检查引用深度、图形节点和重复路径／绘制属性的字节预算；
+  SwiftDraw 负责实际的继承、坐标变换和符号视口，不另设独立 SVG 规则。
+  净化器返回省略项（如 `pattern`、内嵌 `image`、缺少目标的 `use`），
+  独立文件显示提示，不再另做一次解析来推测原因。
   确认 `clipPath`、mask、filter、pattern、渐变、文字／字体和大路径在 SwiftDraw 中的真实表现；
   SwiftDraw `SVGView` 对滤镜采用异步填充的 Canvas 缓存，
   首帧可能尚未应用滤镜：验证应比较最终滤镜收敛后的可见像素，

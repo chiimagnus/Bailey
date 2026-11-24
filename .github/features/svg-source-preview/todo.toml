@@ -7,7 +7,7 @@ title = "复用 SVG 净化与 SwiftDraw，确认复杂 SVG 能力"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "共享净化 b81bcc1f、原生矢量 b2022516、真实 Windows Tailscale 27ede424、滤镜替换与 100 次挂载 a564658c。df54f7ad 核销真实科研 SVG 轴线、中文、渐变及省略项（独立 WebKit 仅作像素参考）；ad4fea90 核销 1 MiB±1 宿主与完整 GUI 的像素、超限提示及原文。8 宿主、3 SVG GUI 全通过；仍待隔离子请求、深度／取消关键组合和 SVG 画质矩阵。"
+note = "共享净化 b81bcc1f、原生矢量 b2022516、真 Windows 27ede424、滤镜替换／百次挂载 a564658c；df54f7ad 真实科研 SVG、ad4fea90 真 1 MiB±1、2d315c8a 压缩 SVG 及真 Windows 和 Mac 同路径。03d176ef 本地 use／symbol、带引号画笔引用和展开预算；研图三处标记与参考像素吻合，151 项宿主（真实 Windows SSH、无跳过）、4 项隔离 SVG GUI 与 Debug 验签通过。c31f256a 在宿主验证快速改写只挂载最新 SVG，跨格式改名和关闭清空旧画布并保留字节。有界原生解析的中途取消时刻和完整画质矩阵尚未核完；图案与内嵌图仍明确省略。 e68195e6 修复无 use 的裁剪／遮罩／滤镜／渐变引用预算绕过；真实科研样本像素及 SVG／Markdown 73 项通过、1 GIF 条件跳过、正式 Debug 验签；审计 F-03 已核销。 20e7a3f6 同一恶意 SVG 通过独立矢量画布、Markdown 资源与 HTML WebKit 比较真实绿色像素；外部文件／实体未渲染，TCP 监听零请求且正对照有效，原始字节不变。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "接入共用图形视口和源码／预览／并排命令"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "b2022516 已接入共用视口和三种展示方式，实际 SVG GUI 与 400% Retina 像素通过；真触控板、多屏倍率、SVG 冷恢复及焦点组合仍需验收。"
+note = "b2022516 已接入共用视口和三种展示方式，实际 SVG GUI 与 400% Retina 像素通过；真触控板、多屏倍率、SVG 冷恢复及焦点组合仍需验收。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
 
 [[tasks]]
 id = "P2-T1"

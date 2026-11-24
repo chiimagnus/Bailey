@@ -7,7 +7,7 @@ title = "与音频共享的本机媒体检查、路由及版本保护"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "cdf773a3 共用读取，ddf88857 真 Windows 同名隔离，7452b16d 核销 HEVC／ProRes／M4V。c7f2eb4a 用 329018738 字节真实 ProRes 定位到 510 秒逐字节比较解码画面，a85ed10f 核销 100 次交替开闭。142 宿主及 Debug 验签通过；仍待外部引用、受保护／非法容器和并发关键组合。"
+note = "cdf773a3 共用读取、ddf88857 真 Windows 隔离、7452b16d 核销 HEVC／ProRes／M4V。c7f2eb4a 核销逾 256 MiB ProRes 的末段像素，a85ed10f 核销 100 次交替开闭，32ea1864 核销原生引用容器、跨项目依赖拒绝、Markdown 和同路径替换恢复。145 宿主及 Debug 验签通过；仍待受保护／不完整容器、其余画幅和并发关键组合。 e292869e 保留完整轨道索引的无样本 MP4 复现错误建 player，修复后两入口拒绝、替换恢复；329018738 字节 ProRes 在 510s 定位和百次开闭回归通过，正式 Debug 验签。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "原生 AVPlayerView 画面内操控与文件生命周期"
 status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "c0b414a4 核销系统全屏往返、播放／暂停和失焦；02d2af1b 核销真内嵌字幕的中文提示、原生菜单、同一暂停帧的开关像素及无字幕视频无语言项。9 项媒体宿主、5 项媒体／Markdown 隔离 GUI 通过；100 次轮换开闭和回收见 a85ed10f。仍待多屏与画幅、设备切换、语音辅助功能组合。"
+note = "c0b414a4 核销系统全屏往返和失焦；02d2af1b 核销原生字幕与实际中文提示；f2a17092 按真实轨道约束原生控件，横屏／旋转竖屏×三种窗格尺寸、隔离 GUI 的画面内时间轴和字幕开／关像素通过。146 项宿主（含真 Windows SSH）、5 项相关 GUI 路径（字幕单独复跑）、Debug 严格验签通过；剩余实际多屏、其它画幅、设备切换和 VoiceOver。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
 
 [[tasks]]
 id = "P2-T1"

@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = "P1-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -7,7 +7,7 @@ title = "建立一条安全 HTML 静态渲染与共用资源链"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "5ac0c145 原生 WebKit 与构建；5297ea42 真实 Windows SSH。e43e8c5a 核销整页图片和 CSS 容量；824dc93f 慢读取消与回收；db850a1b 嵌套字体和越界链接；1c94d1a3 32 MiB 文档边界，98 项相关宿主通过。仍需其余主动内容／权限组合及真实 WebContent 异常退役。"
+note = "5ac0c145 原生 WebKit；5297ea42 真实 Windows SSH；e43e8c5a 整页图片/CSS 预算；824dc93f 慢读取消；db850a1b 嵌套字体／越界链接；1c94d1a3 32 MiB 边界；38794efd 真 WebContent 退出、慢读取消、原生恢复和退役；d527ed2d BOM／显式 GBK／空页；fdf6c973 本机项目外文件、类型错配和资源移走。16 项资源回归含 Downloads 与 Windows SSH；71 项生命周期宿主及正式签名构建通过。继续核销其余 H03/H04/H05 与共享条件。 0e479782 核销同一图片在独立文件、Markdown、HTML 三窗口引用的真实版本刷新、窗口归属、源码字节及独立释放；HTML 12 项含 Downloads/test 真实样本无跳过通过，相关 172 项（165 通过、7 环境项跳过）、Debug 构建及严格验签通过。 20e7a3f6 实际 WebKit 快照证明 SVG 子资源隔离、DTD 拒绝、TCP 零连接／正对照及原字节；HTML 13 项含真实样本通过。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "复用已有 File 菜单、标签右键及 Dock 预览"
 status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "5ac0c145 已复用 File 菜单与 Dock；f7feb109 两项隔离 GUI 通过，覆盖双窗口、后台右键、前台快捷键、并排切换及原文字节。尚需补导航失败恢复及辅助功能组合。"
+note = "5ac0c145 共用 File 菜单与 Dock；f7feb109 及本轮两项隔离 GUI 验证双窗口、后台右键、前台快捷键、并排及原字节；b9a8a571 补源码原生查找与预览真实复制；38794efd 覆盖真实 WebContent 异常退出后的宿主恢复。VoiceOver、实际 1× 和其它 H08 组合仍待核销。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
 
 [[tasks]]
 id = "P2-T1"

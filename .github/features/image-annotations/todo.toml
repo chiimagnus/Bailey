@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = "P1-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -7,7 +7,7 @@ title = "用同一图片视口完成高精度缩放与资源按需解码"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "93c29eab、1bd6f296、81a665aa 共用原生视口、后台原图与版本校验（Windows Tailscale 已实测）；249a4efb 保留倍率和中心，核销换尺寸重挂载、改名、换图与 Fit。141 项宿主、macOS 27.3 隔离 Bailey Dev 的 PNG、GIF、Mermaid、SVG 共 5 项 E2E、Debug 验签通过。仍待真正区域解码、实际物理手势／1× 显示、容量极值和长会话。"
+note = "93c29eab／249a4efb 共用视口和位置；d4561f57 缩回释放／取消；7b503042 改名重读原像素；2ca0740a JPEG／HEIC 区域缓冲；b4ff168b 截断主图拒绝与恢复；4100f6dd 真 CMYK 对照；d75670d2 100 次真实开闭、对象释放和 RSS 平台；47e1bfba 核销 1×1、4095／4096／4097、3200 万像素±1 与 32/256 MiB±1。160 项相关宿主含真实 Windows SSH，坏图恢复／缩放和平移隔离 GUI、正式验签通过。仍需 PNG／普通 TIFF 的有界区域方案、真触控板／1×、长会话 GUI 及其余 I03/I07 环境组合。 独立 ImageIO/CoreGraphics 实测 6000×4000 PNG/TIFF：256×256 裁剪峰值约 103/172 MiB，整图约 195/263 MiB；重复十次 PNG 90–93 ms/区域、TIFF 热态 15 ms/区域。裁剪减少常驻缓冲但仍存在整图临时解码，故没有扩大现有 JPEG/HEIC 区域方案或宣称 PNG/TIFF 真区域解码。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "在共用 ImageIO 解码链完成 GIF 及图片状态恢复"
 status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "已核销原生局部帧、长帧和取消（4aa31080、eaddbc72、44dd0b49）、真 Windows SSH 改名断线重连（82a79a52）、双窗口失活与恢复（e5ad40a9）、关闭释放（fcf0d744、57e7be6b）、损坏中间帧和内嵌像素限额（c2a6db40）。147 项相关宿主、2 项真实隔离 GUI、Debug 验签通过。三轮共 720 帧解码 RSS 增量峰值约 5.3 MiB；仍待真实长时间播放的 CPU／内存曲线及 I06×I08 扩展组合。"
+note = "4aa31080／eaddbc72、44dd0b49、c2a6db40 共用 ImageIO 帧、时钟、取消及坏帧；82a79a52 真 Windows 改名断线重连；e5ad40a9 双窗口失活恢复；fcf0d744、57e7be6b 关闭释放；d75670d2 三种格式百次开闭含 33 次真实 GIF；9d167113 核销可达 800 万像素两侧／32–33 帧与真实 90＋30 秒连播，暂停重挂载保留对象和帧，965 帧发布，关闭释放，CPU 约 7.4 秒且 RSS 不累积。持续播放是原生宿主，不冒充完整 App 多窗口、物理输入或远端交叉验收。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
 
 [[tasks]]
 id = "P2-T1"

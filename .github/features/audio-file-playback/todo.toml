@@ -7,7 +7,7 @@ title = "共用音视频实际文件校验与正确读取分支"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 核销真 Windows SSH 隔离；c7f2eb4a 核销真实 MP3、AAC、WAV、AIFF、CAF 的轨道、7 秒定位与实际 PCM；a85ed10f 核销 257 MiB WAV 末段、免暂存、100 次本机交替开闭、无残留播放器和源校验和。142 宿主及 Debug 严格验签通过；仍待外部引用、DRM 合法样本、VBR／多声道与其余容量组合。"
+note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 Windows SSH；c7f2eb4a、afe963cc 核销真实 MP3／AAC（含裸 VBR）／WAV／AIFF／CAF／FLAC 和 24 位单声道、32 位六声道的时长与定位；a85ed10f 核销 257 MiB WAV 及 100 次开闭，32ea1864 核销引用型音轨拒绝及替换恢复。145 项宿主及 Debug 严格验签通过；仍待合法 DRM 样本及其余容量和并发组合。 e292869e 保留完整轨道索引的无样本 M4A 复现错误建 player，修复后独立文件及 Markdown 暂存均拒绝，原子替换后实际 readyToPlay；有效 WAV 先封口后验证 8000 样本；定点两项、原生媒体组及正式构建签名通过。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
 status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "919d2c41 原生 AVKit 控件；隔离 GUI 复验播放、定位、调速、音量、静音、切标签暂停和回到原标签。a85ed10f 核销实际 257 MiB WAV／MP3／ProRes 的 100 次交替播放与项目关闭，RSS 曲线稳定且无活跃播放器残留。设备输出／切换、睡眠、VoiceOver 与其他会话组合还未核销。"
+note = "919d2c41 原生 AVKit 控件；隔离 GUI 复验播放、定位、调速、音量、静音、切标签暂停和回到原标签。a85ed10f 核销实际 257 MiB WAV／MP3／ProRes 的 100 次交替播放与项目关闭，RSS 曲线稳定且无活跃播放器残留。设备输出／切换、睡眠、VoiceOver 与其他会话组合还未核销。 139ab5e9 七种 Downloads/test 真实格式经项目及原生 FileTab 百次切换（4.61 s），验证播放定位恢复、GIF 暂停、Markdown 撤销和原字节；关闭后标签、HTML/GIF、AVPlayerItem/AVAsset 全部释放，修复原生 AVPlayerView 卸载绑定；AVKit 私有 AVPlayerController 仍持有一个已暂停且无 currentItem 的音频空壳，RSS 136.3→364.8 MiB，不能宣称长会话所有对象清零。尚非完整 App E2E。"
 
 [[tasks]]
 id = "P2-T1"
