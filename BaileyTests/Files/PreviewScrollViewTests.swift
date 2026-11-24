@@ -7,6 +7,74 @@ import XCTest
 
 @MainActor
 final class PreviewScrollViewTests: XCTestCase {
+    func testMountedSVGUsesTheNewestEditAndReleasesCanvasesOnRenameAndClose() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appending(path: "Diagram.svg")
+        let renamed = root.appending(path: "Diagram.txt")
+        func svg(width: Int, fill: String, shapes: String = "") -> String {
+            """
+            <svg xmlns="http://www.w3.org/2000/svg" width="\(width)" height="48">
+              \(shapes)<rect width="\(width)" height="48" fill="\(fill)"/>
+            </svg>
+            """
+        }
+        let original = Data(svg(width: 64, fill: "#ff0000").utf8)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 380, height: 280),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { file.retireContent(); window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
+        window.contentView = host
+        window.orderFront(nil)
+        func waitForCanvas(width: Int) async throws -> SVGPreviewScrollView {
+            try await waitFor("Mount the document with width \(width) in the native SVG canvas") {
+                let size = previewScroll(in: host)?.documentView?.subviews.first?.frame.size
+                return size == CGSize(width: width, height: 48)
+            }
+            return try XCTUnwrap(previewScroll(in: host) as? SVGPreviewScrollView)
+        }
+        func replaceSource(with text: String) {
+            file.nativeTextStorage.replaceCharacters(
+                in: NSRange(location: 0, length: file.nativeTextStorage.length), with: text
+            )
+        }
+
+        let initialCanvas = try await waitForCanvas(width: 64)
+        let originalRequest = file.textPreviewRequestID
+        let manyShapes = String(repeating: "<circle cx=\"1\" cy=\"1\" r=\"1\"/>", count: 4094)
+        replaceSource(with: svg(width: 80, fill: "#0000ff", shapes: manyShapes))
+        try await Task.sleep(for: .milliseconds(15))
+        replaceSource(with: "<svg><g>")
+        await Task.yield()
+        let latest = svg(width: 96, fill: "#00ff00")
+        replaceSource(with: latest)
+        let latestCanvas = try await waitForCanvas(width: 96)
+        XCTAssertNotEqual(file.textPreviewRequestID, originalRequest)
+        XCTAssertEqual(file.text, latest)
+        XCTAssertTrue(file.isDirty)
+        if initialCanvas !== latestCanvas { XCTAssertTrue(initialCanvas.documentView?.subviews.isEmpty == true) }
+
+        try FileManager.default.moveItem(at: path, to: renamed)
+        file.updatePath(renamed.path)
+        try await waitFor("Renaming to .txt must detach the SVG view") { previewScroll(in: host) == nil }
+        XCTAssertTrue(latestCanvas.documentView?.subviews.isEmpty == true)
+        XCTAssertEqual(file.text, latest)
+        XCTAssertEqual(try Data(contentsOf: renamed), original)
+
+        try FileManager.default.moveItem(at: renamed, to: path)
+        file.updatePath(path.path)
+        let restored = try await waitForCanvas(width: 96)
+        file.retireContent()
+        try await waitFor("Closing the file must remove the preview") { previewScroll(in: host) == nil }
+        XCTAssertTrue(restored.documentView?.subviews.isEmpty == true)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
     func testFileGIFAdvancesPast32FramesAndPausesWithoutRefitting() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
