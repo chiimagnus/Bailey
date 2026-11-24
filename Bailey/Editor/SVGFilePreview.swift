@@ -2,57 +2,73 @@ import AppKit
 import SwiftDraw
 import SwiftUI
 
-struct SVGFilePreview: View {
-    private enum Output {
-        case image(SVGArtwork.Vector)
-        case error(String)
+struct SVGPreviewSnapshot {
+    struct Drawing {
+        let request: String
+        let artwork: SVGArtwork.Vector
     }
 
+    let request: String
+    let drawing: Drawing?
+    let error: String?
+
+    @concurrent static func parse(_ text: String) async throws -> SVGArtwork.Vector {
+        guard text.utf8.count <= SVGArtwork.byteLimit else { throw WorkspaceError.tooLarge }
+        let artwork = try SVGArtwork.parse(Data(text.utf8))
+        let size = artwork.image.size
+        guard max(size.width, size.height) <= 32_768,
+              size.width * size.height <= 8_000_000 else { throw WorkspaceError.tooLarge }
+        return artwork
+    }
+}
+
+struct SVGFilePreview: View {
     let file: FileTab
     let onFocused: () -> Void
     let onShowSource: () -> Void
-    @State private var rendered: (request: String, output: Output)?
 
     var body: some View {
         let request = file.textPreviewRequestID
+        let snapshot = file.svgPreview
         Group {
-            if let rendered, rendered.request == request {
-                switch rendered.output {
-                case .image(let artwork):
-                    VStack(spacing: 0) {
-                        if !artwork.omitted.isEmpty {
-                            let names = artwork.omitted.prefix(8).joined(separator: ", ")
-                            notice(String(localized: "SVG preview omits: \(names)", table: "Editor"))
-                        }
-                        NativeSVGViewport(svg: artwork.image, request: request,
-                                          viewportPosition: file.graphicViewportPosition,
-                                          onViewportPositionChange: { position in
-                            guard file.previewKind == .svg, case .text = file.content,
-                                  file.textPreviewRequestID == request else { return }
-                            file.graphicViewportPosition = position
-                        }, onFocused: onFocused)
+            if let drawing = snapshot?.drawing {
+                VStack(spacing: 0) {
+                    if !drawing.artwork.omitted.isEmpty {
+                        let names = drawing.artwork.omitted.prefix(8).joined(separator: ", ")
+                        notice(String(localized: "SVG preview omits: \(names)", table: "Editor"))
                     }
-                case .error(let message):
-                    notice(message).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    NativeSVGViewport(svg: drawing.artwork.image, request: drawing.request,
+                                      viewportPosition: file.graphicViewportPosition,
+                                      onViewportPositionChange: { position in
+                        guard file.previewKind == .svg, case .text = file.content,
+                              file.svgPreview?.drawing?.request == drawing.request else { return }
+                        file.graphicViewportPosition = position
+                    }, onFocused: onFocused)
                 }
+                .overlay(alignment: .top) {
+                    if drawing.request != request {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("SVG preview not updated.", tableName: "Editor")
+                                .fontWeight(.medium)
+                            if snapshot?.request == request, let error = snapshot?.error {
+                                notice(error)
+                            } else {
+                                Text("Updating SVG preview…", tableName: "Editor")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(8)
+                        .background(.regularMaterial, in: .rect(cornerRadius: 8))
+                        .padding(8)
+                    }
+                }
+            } else if snapshot?.request == request, let error = snapshot?.error {
+                notice(error).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: request) {
-            let output: Output
-            do {
-                output = .image(try await Self.parse(file.text))
-            } catch is CancellationError {
-                return
-            } catch WorkspaceError.tooLarge {
-                output = .error(String(localized: "SVG is too large to preview. You can still edit the source.", table: "Editor"))
-            } catch {
-                output = .error(String(localized: "Could not display this SVG.", table: "Editor"))
-            }
-            guard !Task.isCancelled, request == file.textPreviewRequestID else { return }
-            rendered = (request, output)
-        }
+        .task(id: request) { await file.showSVGPreview(request: request) }
     }
 
     private func notice(_ message: String) -> some View {
@@ -65,14 +81,6 @@ struct SVGFilePreview: View {
         .padding(8)
     }
 
-    @concurrent private static func parse(_ text: String) async throws -> SVGArtwork.Vector {
-        guard text.utf8.count <= SVGArtwork.byteLimit else { throw WorkspaceError.tooLarge }
-        let artwork = try SVGArtwork.parse(Data(text.utf8))
-        let size = artwork.image.size
-        guard max(size.width, size.height) <= 32_768,
-              size.width * size.height <= 8_000_000 else { throw WorkspaceError.tooLarge }
-        return artwork
-    }
 }
 
 private struct NativeSVGViewport: NSViewRepresentable {

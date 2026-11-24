@@ -101,6 +101,26 @@
         }
       }
     },
+    "Updating SVG preview…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新 SVG 预览…"
+          }
+        }
+      }
+    },
+    "SVG preview not updated." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SVG 预览未更新。"
+          }
+        }
+      }
+    },
     "This media file is damaged or uses an unsupported format." : {
       "localizations" : {
         "zh-Hans" : {

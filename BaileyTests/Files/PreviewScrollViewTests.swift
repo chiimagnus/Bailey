@@ -8,6 +8,150 @@ import XCTest
 
 @MainActor
 final class PreviewScrollViewTests: XCTestCase {
+    func testInvalidSVGEditsRetainVisiblePixelsAndViewportAcrossRemount() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appending(path: "Live.svg")
+        func source(_ color: String) -> String {
+            """
+            <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+              <rect x="0" y="0" width="1200" height="900" fill="#f9faff"/>
+              <path d="M 100 100 H 1100 V 800 H 100 Z" fill="\(color)"/>
+              <path d="M 200 200 L 1000 700" fill="none" stroke="#303030" stroke-width="3"/>
+            </svg>
+            """
+        }
+        let original = Data(source("#ff0000").utf8)
+        try original.write(to: path)
+        let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(original).image)
+        let expectedRed = try XCTUnwrap(raster.colorAt(x: raster.pixelsWide / 3, y: raster.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(expectedRed.redComponent * expectedRed.alphaComponent, 0.8)
+        XCTAssertGreaterThan(expectedRed.redComponent - expectedRed.greenComponent, 0.4)
+        let project = Project(fallbackName: "Live SVG", workspaceConfiguration: .standard)
+        project.openLocalFile(path.path)
+        let pane = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = pane.content else { return XCTFail("Expected SVG tab") }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 440, height: 340),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.orderBack(nil)
+        defer { project.closeAll(); window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file).environment(\.appearsActive, true))
+        host.sizingOptions = []
+        window.contentView = host
+        window.setContentSize(CGSize(width: 440, height: 340))
+
+        func replace(_ text: String) {
+            file.nativeTextStorage.replaceCharacters(
+                in: NSRange(location: 0, length: file.nativeTextStorage.length), with: text
+            )
+        }
+        func paints(_ isColor: (NSColor) -> Bool) -> Bool {
+            autoreleasepool {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                guard let scroll = previewScroll(in: host),
+                      scroll.bounds.width > 0, scroll.bounds.height > 0,
+                      let bitmap = scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds) else { return false }
+                scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+                for y in stride(from: bitmap.pixelsHigh / 4, to: bitmap.pixelsHigh * 3 / 4, by: 8) {
+                    for x in stride(from: bitmap.pixelsWide / 4, to: bitmap.pixelsWide * 3 / 4, by: 8) {
+                        if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                           color.alphaComponent > 0.95, isColor(color) { return true }
+                    }
+                }
+                return false
+            }
+        }
+        func red() -> Bool { paints { $0.redComponent > 0.8 && $0.redComponent - $0.greenComponent > 0.4 && $0.redComponent - $0.blueComponent > 0.4 } }
+        func green() -> Bool { paints { $0.greenComponent > 0.8 && $0.greenComponent - $0.redComponent > 0.4 && $0.greenComponent - $0.blueComponent > 0.4 } }
+        // The invalid document draws a translucent material banner over a
+        // saturated red fixture. Check its actual composited pixels, rather
+        // than depending on whether the background window exposes an AX tree.
+        func hasStaleBanner() -> Bool {
+            autoreleasepool {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                var matching = 0
+                for y in stride(from: 0, to: bitmap.pixelsHigh / 4, by: 8) {
+                    for x in stride(from: bitmap.pixelsWide / 10, to: bitmap.pixelsWide * 9 / 10, by: 8) {
+                        if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                           color.alphaComponent > 0.95,
+                           color.redComponent > 0.65, color.greenComponent > 0.4,
+                           color.blueComponent > 0.4, color.redComponent - color.greenComponent > 0.12 {
+                            matching += 1
+                        }
+                    }
+                }
+                return matching > 20
+            }
+        }
+
+
+        try await waitFor("Mount the original SVG canvas") {
+            host.layoutSubtreeIfNeeded()
+            return previewScroll(in: host)?.documentView?.subviews.first?.frame.size == CGSize(width: 1200, height: 900)
+        }
+        let initial = try XCTUnwrap(previewScroll(in: host))
+        initial.layoutSubtreeIfNeeded()
+        try await waitFor("Paint the original red SVG at fit") { red() }
+        initial.setZoom(3, at: CGPoint(x: 600, y: 450))
+        initial.contentView.scroll(to: CGPoint(x: 380, y: 260))
+        initial.reflectScrolledClipView(initial.contentView)
+        try await waitFor("Paint the original red SVG") { red() }
+        let position = try XCTUnwrap(file.graphicViewportPosition)
+        XCTAssertFalse(hasStaleBanner())
+        let invalid = "<svg><g></svg>"
+        XCTAssertThrowsError(try SVGArtwork.parse(Data(invalid.utf8)))
+        replace(invalid)
+        try await waitFor("An invalid document must report the parse error") {
+            file.svgPreview?.request == file.textPreviewRequestID && file.svgPreview?.error != nil
+        }
+        XCTAssertTrue(previewScroll(in: host) === initial, "Invalid XML must not remove the last valid native canvas")
+        XCTAssertTrue(red(), "The last valid pixels must stay visible, rather than an empty preview")
+        XCTAssertEqual(file.text, invalid)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+
+        // Switching to source and remounting while the document is invalid
+        // must preserve the same file's last valid artwork and reading anchor.
+        file.setFilePreview(false)
+        try await waitFor("Detach the drawing when switching to source") { previewScroll(in: host) == nil }
+        file.setFilePreview(true)
+        try await waitFor("Remount the last valid red drawing") { red() }
+        let remounted = try XCTUnwrap(previewScroll(in: host))
+        XCTAssertEqual(remounted.pixelScale, position.pixelScale, accuracy: 0.001)
+        XCTAssertEqual(remounted.contentView.bounds.midX, position.center.x, accuracy: 2)
+        XCTAssertEqual(remounted.contentView.bounds.midY, position.center.y, accuracy: 2)
+        XCTAssertNotNil(file.svgPreview?.error)
+        try await waitFor("The remounted canvas visibly labels its last valid drawing as stale") { hasStaleBanner() }
+
+
+        for _ in 0..<100 { replace(invalid) }
+        let latest = source("#00ff00")
+        replace(latest)
+        try await waitFor("Only the newest valid green drawing may replace the previous pixels") { green() }
+        let updated = try XCTUnwrap(previewScroll(in: host))
+        XCTAssertTrue(updated === remounted)
+        XCTAssertEqual(updated.pixelScale, position.pixelScale, accuracy: 0.001)
+        XCTAssertEqual(updated.contentView.bounds.midX, position.center.x, accuracy: 2)
+        XCTAssertEqual(updated.contentView.bounds.midY, position.center.y, accuracy: 2)
+        XCTAssertNil(file.svgPreview?.error)
+        try await waitFor("Remove the stale banner after a valid edit") { !hasStaleBanner() }
+        XCTAssertEqual(file.text, latest)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        // Exercise retirement without invoking the separate dirty-close/save policy.
+        file.retireContent()
+        try await waitFor("Closing the file must detach the native drawing") { previewScroll(in: host) == nil }
+        XCTAssertTrue(updated.documentView?.subviews.isEmpty == true)
+    }
+
     func testMountedSVGUsesTheNewestEditAndReleasesCanvasesOnRenameAndClose() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

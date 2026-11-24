@@ -76,6 +76,7 @@ final class FileTab: nonisolated Identifiable {
         }
     }
     private(set) var gifPlayback: GIFPlayback?
+    private(set) var svgPreview: SVGPreviewSnapshot?
     @ObservationIgnored var graphicViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
@@ -131,6 +132,7 @@ final class FileTab: nonisolated Identifiable {
     /// A true close or accepted replacement releases the old native document,
     /// independently of any cached SwiftUI/AppKit view lifetime.
     func retireNativeEditor() {
+        svgPreview = nil
         originalImageTask?.cancel()
         originalImageTask = nil
         if let nativeEditObserver {
@@ -258,6 +260,7 @@ final class FileTab: nonisolated Identifiable {
     private var targetGeneration: UInt = 0 {
         didSet {
             htmlPreview?.invalidate()
+            svgPreview = nil
             gifPlayback?.reset()
         }
     }
@@ -436,6 +439,35 @@ final class FileTab: nonisolated Identifiable {
         let scope = directory.flatMap { LocalPathScope.contains(path, in: $0) ? $0 : nil }
             ?? (path as NSString).deletingLastPathComponent
         return PreviewResource(path: path, directory: readOnlyReason == nil ? scope : nil, backend: backend)
+    }
+
+    func showSVGPreview(request: String) async {
+        guard !Task.isCancelled, !isRetired, canPreviewFile, previewKind == .svg,
+              request == textPreviewRequestID, svgPreview?.request != request else { return }
+        do {
+            if svgPreview != nil { try await Task.sleep(for: .milliseconds(120)) }
+            guard !isRetired, request == textPreviewRequestID else { return }
+            let artwork = try await SVGPreviewSnapshot.parse(text)
+            try Task.checkCancellation()
+            guard !isRetired, previewKind == .svg, request == textPreviewRequestID else { return }
+            svgPreview = SVGPreviewSnapshot(request: request,
+                                            drawing: .init(request: request, artwork: artwork), error: nil)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, !isRetired, previewKind == .svg, request == textPreviewRequestID else { return }
+            let message: String
+            if case WorkspaceError.tooLarge = error {
+                message = String(localized: "SVG is too large to preview. You can still edit the source.", table: "Editor")
+            } else {
+                let description = String(localized: "Could not display this SVG.", table: "Editor")
+                let diagnostic = error as NSError
+                message = diagnostic.domain == XMLParser.errorDomain
+                    ? description + " " + diagnostic.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : description
+            }
+            svgPreview = SVGPreviewSnapshot(request: request, drawing: svgPreview?.drawing, error: message)
+        }
     }
 
     func showHTMLPreview(request: String, in directory: String?) async {
