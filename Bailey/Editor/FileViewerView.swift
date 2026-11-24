@@ -1254,10 +1254,10 @@ struct FileViewerView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .id(ObjectIdentifier(player))
-                    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-                        player.pause()
+                    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { [weak player] _ in
+                        player?.pause()
                     }
-                    .onDisappear { player.pause() }
+                    .onDisappear { [weak player] in player?.pause() }
                 }
             case .loading:
                 Color.clear

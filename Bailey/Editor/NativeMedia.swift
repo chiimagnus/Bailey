@@ -94,7 +94,7 @@ nonisolated struct NativeMedia: Sendable {
 }
 
 struct NativePlayerView: NSViewRepresentable {
-    let player: AVPlayer
+    weak var player: AVPlayer?
     var allowsFullScreen = false
     var controlsStyle: AVPlayerViewControlsStyle = .inline
     var isDockActive: Bool?
@@ -127,8 +127,16 @@ struct NativePlayerView: NSViewRepresentable {
         }
         let presentation = context.coordinator
         if presentation.isDockActive == true, isDockActive == false, !presentation.isFullScreen {
-            player.pause()
+            player?.pause()
         }
         presentation.isDockActive = isDockActive
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: Presentation) {
+        // FileTab or Markdown owns playback; a cached AppKit view must not
+        // retain it after this native surface leaves the SwiftUI hierarchy.
+        view.updatesNowPlayingInfoCenter = false
+        view.delegate = nil
+        view.player = nil
     }
 }
