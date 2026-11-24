@@ -158,6 +158,47 @@ final class SVGArtworkTests: XCTestCase {
                              "Vector bands that merge at intrinsic size must resolve at current device scale")
     }
 
+    func testCancellationWhileParsingAndDrawingLargeSVGDoesNotPublishPixels() async throws {
+        let commands = String(repeating: "L20 24L21 25", count: 65_000)
+        let source = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="48">
+              <rect width="64" height="48" fill="#00cc00"/>
+              <path d="M20 24\(commands)" fill="none" stroke="red"/>
+            </svg>
+            """.utf8)
+        XCTAssertGreaterThan(source.count, SVGArtwork.byteLimit / 2)
+        XCTAssertLessThan(source.count, SVGArtwork.byteLimit)
+        let controlStarted = ContinuousClock.now
+        let control = try await Task.detached { try SVGArtwork.render(source) }.value
+        let controlDuration = controlStarted.duration(to: .now)
+        XCTAssertEqual(control.pointSize, CGSize(width: 64, height: 48))
+        let bitmap = NSBitmapImageRep(cgImage: control.image)
+        let green = try XCTUnwrap(bitmap.colorAt(x: 90, y: 60)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(green.greenComponent - green.redComponent, 0.4)
+
+        // The signal comes from the worker, not from its creator. The valid
+        // near-limit path is already being consumed when the task is cancelled.
+        for delay in [Duration.milliseconds(1), .milliseconds(12)] {
+            let signal = AsyncStream<Void>.makeStream()
+            let worker = Task.detached {
+                signal.continuation.yield(())
+                signal.continuation.finish()
+                return try SVGArtwork.render(source)
+            }
+            var events = signal.stream.makeAsyncIterator()
+            _ = await events.next()
+            try await Task.sleep(for: delay)
+            let cancelledAt = ContinuousClock.now
+            worker.cancel()
+            do {
+                _ = try await worker.value
+                XCTFail("A cancelled SVG request must not publish a raster")
+            } catch is CancellationError {
+                print("SVG_CANCEL bytes=\(source.count) control=\(controlDuration) delay=\(delay) retire=\(cancelledAt.duration(to: .now))")
+            }
+        }
+    }
+
     func testSharedSVGByteDepthAndNodeLimitsKeepExactBoundaries() throws {
         let start = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"16\">"
         let end = "</svg>"
