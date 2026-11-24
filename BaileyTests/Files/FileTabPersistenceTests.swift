@@ -930,6 +930,73 @@ final class FileTabPersistenceTests: XCTestCase {
         }
     }
 
+    func testMountedOriginalImageRecoversFromRenameDuringDetailRead() async throws {
+        let size = CGSize(width: 5001, height: 101)
+        let sample = CGRect(x: 2500, y: 50, width: 1, height: 1)
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(NSColor.black.cgColor)
+        context.fill(CGRect(origin: .zero, size: size))
+        context.setFillColor(NSColor.green.cgColor)
+        context.fill(sample)
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: XCTUnwrap(context.makeImage()))
+            .representation(using: .png, properties: [:]))
+        let oldPath = "/fixture/detail.png"
+        let newPath = "/fixture/renamed.png"
+        let backend = EditorWorkspaceFixture(path: oldPath, contents: png)
+        let file = FileTab(path: oldPath, backend: backend, workspaceIdentity: "fixture-remote")
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 420, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            file.retireContent()
+            window.close()
+            Task { await backend.finishRead() }
+        }
+        window.contentView = host
+        window.orderFront(nil)
+        func scrollView(in view: NSView) -> PreviewScrollView? {
+            (view as? PreviewScrollView) ?? view.subviews.lazy.compactMap(scrollView(in:)).first
+        }
+        try await waitForFileTabState { scrollView(in: host) != nil }
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(scrollView(in: host))
+        let canvas = try XCTUnwrap(scroll.documentView)
+        func paintedGreen() -> CGFloat {
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+                                                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                isPlanar: false, colorSpaceName: .deviceRGB,
+                                                bytesPerRow: 0, bitsPerPixel: 0),
+                  let painting = NSGraphicsContext(bitmapImageRep: bitmap) else { return -1 }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = painting
+            painting.cgContext.translateBy(x: -sample.minX, y: -sample.minY)
+            canvas.draw(sample)
+            NSGraphicsContext.restoreGraphicsState()
+            return bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB)?.greenComponent ?? -1
+        }
+        XCTAssertLessThan(paintedGreen(), 0.9, "The thumbnail cannot retain the original one-pixel detail")
+        await backend.pauseOneRead()
+        scroll.actualSize()
+        try await waitForFileTabState { await backend.readingPath == oldPath }
+        let center = scroll.contentView.bounds.midX
+
+        try await backend.rename(from: oldPath, to: newPath)
+        file.updatePath(newPath)
+        await backend.finishRead(with: png)
+        try await waitForFileTabState { paintedGreen() > 0.95 }
+        XCTAssertTrue(scrollView(in: host) === scroll)
+        XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
+        XCTAssertEqual(scroll.contentView.bounds.midX, center, accuracy: 1)
+        let reads = await backend.readCount
+        let moved = await backend.data(at: newPath)
+        XCTAssertEqual(reads, 3, "Read the poster, cancel the original, and request the renamed original exactly once")
+        XCTAssertEqual(moved, png)
+    }
+
     func testInvalidUTF8AndImageFallbackRespectTextCapacity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

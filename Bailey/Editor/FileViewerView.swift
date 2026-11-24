@@ -1211,7 +1211,7 @@ struct FileViewerView: View {
                     }
                     ImageInspector(image: image, loadOriginal: file.originalImageRequest(),
                                    playback: file.gifPlayback, loadAnimation: file.gifFramesRequest(),
-                                   animationRevision: file.fileContentRevision,
+                                   resourceRevision: file.fileContentRevision,
                                    viewportPosition: file.imageViewportPosition,
                                    onViewportPositionChange: { position in
                         guard case .image = file.content, file.reloadRevision == revision else { return }
