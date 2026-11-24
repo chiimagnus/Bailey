@@ -875,16 +875,43 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let project = Project(fallbackName: "Shared media", workspaceConfiguration: .standard)
         defer { project.closeAll() }
         let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
+        host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 1080, height: 560),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        host.frame = window.contentView?.bounds ?? .zero
-        window.contentView = host
-        let windowTitle = "Shared media test " + UUID().uuidString
-        window.title = windowTitle
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 560))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        window.setContentSize(container.bounds.size)
         window.orderFront(nil)
         let pid = ProcessInfo.processInfo.processIdentifier
+        // Activate the host's native accessibility tree without requiring this
+        // offscreen window to appear in the system-wide window list.
+        let ax = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(ax, AXError.success.rawValue)
+
+        func attribute(_ element: NSObject, _ name: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(name)) else { return nil }
+            return element.value(forKey: name)
+        }
+        func loadButton(in element: NSObject) -> NSObject? {
+            if attribute(element, "accessibilityIdentifier") as? String == "bailey.markdown.media.load" {
+                return element
+            }
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            for child in children {
+                if let found = loadButton(in: child) { return found }
+            }
+            return nil
+        }
 
         var sources = [
             ("audio", fixtures.appendingPathComponent("audio-file-playback/demo-audio.m4a")),
@@ -919,38 +946,29 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             let independent = try XCTUnwrap(media.mediaPlayer)
             XCTAssertEqual(nativePlayers(in: host).compactMap(\.player).count, 1,
                            "Markdown must not stage or create a player until requested")
-            // Exercise the actual accessible button in the mounted Markdown
-            // view, not a second test-only staging or loading entry point.
-            @MainActor func pressLoadButton() async -> Bool {
-                func attribute(_ node: AXUIElement, _ name: String) -> CFTypeRef? {
-                    var value: CFTypeRef?
-                    guard AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success else { return nil }
-                    return value
-                }
-                func button(in node: AXUIElement) -> AXUIElement? {
-                    if attribute(node, kAXIdentifierAttribute) as? String == "bailey.markdown.media.load",
-                       attribute(node, kAXRoleAttribute) as? String == kAXButtonRole {
-                        return node
-                    }
-                    for child in attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
-                        if let found = button(in: child) { return found }
-                    }
-                    return nil
-                }
-                let app = AXUIElementCreateApplication(pid)
-                for _ in 0..<100 {
-                    let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement] ?? []
-                    if let target = windows.first(where: {
-                        attribute($0, kAXTitleAttribute) as? String == windowTitle
-                    }), let load = button(in: target) {
-                        return AXUIElementPerformAction(load, kAXPressAction as CFString) == .success
-                    }
-                    try? await Task.sleep(for: .milliseconds(50))
-                }
-                return false
+            // Exercise the real accessible control from this mounted host,
+            // as the other native component tests do. Window-server enumeration
+            // can omit an offscreen window during a complete host test run.
+            XCTAssertTrue(host.window === window)
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return loadButton(in: host) != nil
             }
-            let pressed = await pressLoadButton()
-            XCTAssertTrue(pressed, "The real Markdown media button must expose a press action")
+            XCTAssertEqual(host.bounds.width, 1080, accuracy: 1,
+                           "The window must retain its allocated viewport, not shrink to SwiftUI's ideal size")
+            XCTAssertEqual(host.bounds.height, 560, accuracy: 1)
+            let load = try XCTUnwrap(loadButton(in: host), "Markdown media button in its owning host")
+            XCTAssertEqual(attribute(load, "accessibilityRole") as? String, kAXButtonRole)
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            guard load.responds(to: selector) else {
+                return XCTFail("The real Markdown media button must expose a press action")
+            }
+            typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+            let press = unsafeBitCast(load.method(for: selector), to: Action.self)
+            guard press(load, selector) else {
+                return XCTFail("The real Markdown media button must perform its press action")
+            }
             try await settle {
                 host.layoutSubtreeIfNeeded()
                 return nativePlayers(in: host).compactMap(\.player).contains {
