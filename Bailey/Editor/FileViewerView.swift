@@ -319,6 +319,7 @@ final class FileTab: nonisolated Identifiable {
 
     var fileContentRevision: String { "\(id)-\(targetGeneration)-\(reloadRevision)" }
     var textPreviewRequestID: String { "\(fileContentRevision)-\(textEditRevision)" }
+    private(set) var previewAssetRevision: UInt = 0
 
     struct DelimitedSnapshot {
         let index: DelimitedTableIndex
@@ -366,11 +367,25 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func showHTMLPreview(request: String, in directory: String?) async {
-        guard !isRetired, canPreviewFile, previewKind == .html, request == textPreviewRequestID else { return }
+        guard !Task.isCancelled, !isRetired, canPreviewFile, previewKind == .html,
+              request == textPreviewRequestID else { return }
+        let assets = previewAssetRevision
         let preview = htmlPreview ?? HTMLPreview()
         htmlPreview = preview
-        await preview.display(text, resource: previewResource(in: directory), request: request) {
-            !isRetired && request == textPreviewRequestID
+        await preview.display(text, resource: previewResource(in: directory), request: request, assets: assets) {
+            !isRetired && request == textPreviewRequestID && assets == previewAssetRevision
+        }
+    }
+
+    func refreshPreviewAssets() {
+        guard !isRetired, readOnlyReason == nil else { return }
+        switch previewKind {
+        case .markdown:
+            previewAssetRevision &+= 1
+        case .html where htmlPreview?.hasRefreshableAssets == true:
+            previewAssetRevision &+= 1
+        default:
+            break
         }
     }
 
@@ -1142,7 +1157,6 @@ struct FileViewerView: View {
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
     @State private var windowReference = FileWindowReference()
-    @State private var assetRefresh: UInt = 0
     @Environment(\.appearsActive) private var appearsActive
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1166,7 +1180,7 @@ struct FileViewerView: View {
                         switch kind {
                         case .markdown:
                             MarkdownFilePreview(
-                                file: file, directory: resourceDirectory, assetRefresh: assetRefresh,
+                                file: file, directory: resourceDirectory, assetRefresh: file.previewAssetRevision,
                                 onOpenLink: onMarkdownLink,
                                 onLocateSource: { offset in
                                     file.pendingMarkdownSource = (
@@ -1265,10 +1279,8 @@ struct FileViewerView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
             guard notification.object as? NSWindow === windowReference.window else { return }
+            if rendersOnlyPreview || file.showsFilePreview { file.refreshPreviewAssets() }
             if !rendersOnlyPreview, file.readOnlyReason == nil { file.refreshWhenSelected() }
-        }
-        .onChange(of: appearsActive) { _, active in
-            if active && (rendersOnlyPreview || file.showsFilePreview) { assetRefresh &+= 1 }
         }
     }
 

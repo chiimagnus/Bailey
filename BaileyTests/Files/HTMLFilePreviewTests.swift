@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import Network
+import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 import XCTest
@@ -371,6 +372,132 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: document), original)
     }
 
+    func testOwnWindowRefreshesHTMLAssetsWithoutRewritingTheDocument() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let asset = root.appendingPathComponent("图形.png")
+        try solidPNG(width: 41, height: 24, red: 0.9, green: 0.05, blue: 0.75).write(to: asset)
+        let source = """
+            <!doctype html><style>body { min-height: 1800px; }</style><img src="图形.png" alt="Shared image">
+            """
+        let page = try await open(source, in: root)
+        let image = FileTab(path: asset.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let markdownURL = root.appendingPathComponent("shared.md")
+        let markdownSource = "![Shared image](图形.png)\n"
+        try Data(markdownSource.utf8).write(to: markdownURL)
+        let markdown = FileTab(path: markdownURL.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await markdown.waitForText()
+        page.setFilePreview(true)
+        markdown.setFilePreview(true)
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 420)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let imageWindow = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let markdownWindow = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        for item in [window, imageWindow, markdownWindow] { item.isReleasedWhenClosed = false }
+        defer {
+            for item in [window, imageWindow, markdownWindow] { item.close() }
+            for file in [page, image, markdown] { file.retireContent() }
+        }
+        window.contentView = NSHostingView(rootView: FileViewerView(file: page, resourceDirectory: root.path))
+        imageWindow.contentView = NSHostingView(rootView: FileViewerView(file: image))
+        markdownWindow.contentView = NSHostingView(rootView: FileViewerView(file: markdown, resourceDirectory: root.path))
+        for item in [window, imageWindow, markdownWindow] { item.orderFront(nil) }
+
+        func htmlWidth(_ view: WKWebView?) async -> Int? {
+            guard let view, !view.isLoading else { return nil }
+            return try? await view.evaluateJavaScript(
+                "document.images[0]?.naturalWidth", contentWorld: .defaultClient
+            ) as? Int
+        }
+        func fileWidth() -> Int? {
+            guard case .image(let artwork) = image.content else { return nil }
+            return artwork.poster.width
+        }
+        func markdownShowsRevisedImage(_ revised: Bool) -> Bool {
+            guard let view = markdownWindow.contentView else { return false }
+            view.layoutSubtreeIfNeeded()
+            markdownWindow.displayIfNeeded()
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            var matches = 0
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 4) {
+                for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    let found = revised
+                        ? color.greenComponent > 0.6 && color.greenComponent - max(color.redComponent, color.blueComponent) > 0.25
+                        : min(color.redComponent, color.blueComponent) > 0.5
+                            && min(color.redComponent, color.blueComponent) - color.greenComponent > 0.25
+                    if found { matches += 1 }
+                    if matches >= 24 { return true }
+                }
+            }
+            return false
+        }
+        do {
+            try await waitUntil {
+                window.contentView?.layoutSubtreeIfNeeded()
+                imageWindow.contentView?.layoutSubtreeIfNeeded()
+                guard fileWidth() == 41, markdownShowsRevisedImage(false) else { return false }
+                return await htmlWidth(page.htmlPreview?.webView) == 41
+            }
+        } catch {
+            let html = await htmlWidth(page.htmlPreview?.webView)
+            if let view = markdownWindow.contentView,
+               let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                if let png = bitmap.representation(using: .png, properties: [:]) {
+                    let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                    attachment.name = "Markdown shared image initial view"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+            }
+            return XCTFail("Initial image versions: file=\(fileWidth() as Any), HTML=\(html as Any), Markdown=\(markdownShowsRevisedImage(false)), parsed=\(markdown.markdownSourceIndex != nil), error=\(error)")
+        }
+        let webView = try XCTUnwrap(page.htmlPreview?.webView)
+        let documentRequest = page.textPreviewRequestID
+        let readingOffset = try await webView.evaluateJavaScript("window.scrollTo(0, 460); window.scrollY",
+                                                                contentWorld: .defaultClient) as? Int
+        XCTAssertEqual(readingOffset, 460)
+        let revised = try solidPNG(width: 67, height: 24, red: 0.1, green: 0.8, blue: 0.1)
+        try revised.write(to: asset, options: .atomic)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: imageWindow)
+        try await waitUntil { fileWidth() == 67 }
+        let beforeOwnWindow = await htmlWidth(webView)
+        XCTAssertEqual(beforeOwnWindow, 41)
+        XCTAssertTrue(markdownShowsRevisedImage(false))
+        XCTAssertFalse(markdownShowsRevisedImage(true))
+
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        do {
+            try await waitUntil { await htmlWidth(webView) == 67 }
+        } catch {
+            let actual = await htmlWidth(webView)
+            return XCTFail("The standalone image refreshed, but the same asset in WebKit is still \(actual as Any)")
+        }
+        try await waitUntil {
+            let offset = try? await webView.evaluateJavaScript("window.scrollY", contentWorld: .defaultClient)
+            return offset as? Int == readingOffset
+        }
+        XCTAssertTrue(markdownShowsRevisedImage(false))
+        XCTAssertFalse(markdownShowsRevisedImage(true))
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: markdownWindow)
+        do { try await waitUntil { markdownShowsRevisedImage(true) } }
+        catch { return XCTFail("Markdown did not display the replacement image, revision=\(markdown.previewAssetRevision), error=\(error)") }
+        XCTAssertFalse(markdownShowsRevisedImage(false))
+        XCTAssertTrue(page.htmlPreview?.webView === webView)
+        XCTAssertEqual(page.textPreviewRequestID, documentRequest)
+        XCTAssertFalse(page.isDirty)
+        XCTAssertFalse(markdown.isDirty)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: page.path)), Data(source.utf8))
+        XCTAssertEqual(try Data(contentsOf: markdownURL), Data(markdownSource.utf8))
+        XCTAssertEqual(try Data(contentsOf: asset), revised)
+        window.close()
+        page.retireContent()
+        XCTAssertEqual(fileWidth(), 67, "Closing the page must not retire the independent image viewer")
+        XCTAssertTrue(markdownShowsRevisedImage(true), "Closing the page must not retire the Markdown image")
+    }
+
     func testPageBoundsCombinedPixelsOfConcurrentCompressedImages() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -545,12 +672,13 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertNil(file.htmlPreview)
     }
 
-    private func solidPNG(width: Int, height: Int) throws -> Data {
+    private func solidPNG(width: Int, height: Int, red: CGFloat = 0.1,
+                          green: CGFloat = 0.5, blue: CGFloat = 0.8) throws -> Data {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
         ))
-        context.setFillColor(red: 0.1, green: 0.5, blue: 0.8, alpha: 1)
+        context.setFillColor(red: red, green: green, blue: blue, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let buffer = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(buffer, UTType.png.identifier as CFString, 1, nil))

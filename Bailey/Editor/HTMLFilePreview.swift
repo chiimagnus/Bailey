@@ -29,7 +29,7 @@ struct HTMLFilePreview: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: [request, scope.directory ?? ""]) {
+        .task(id: [request, scope.directory ?? "", String(file.previewAssetRevision)]) {
             await file.showHTMLPreview(request: request, in: directory)
         }
     }
@@ -92,13 +92,22 @@ final class HTMLPreviewWebView: WKWebView {
 
 @Observable
 final class HTMLPreview: NSObject, WKNavigationDelegate {
+    private struct Revision: Equatable {
+        let document: String
+        let directory: String?
+        let assets: UInt
+    }
+
     let webView: HTMLPreviewWebView
     private(set) var failed = false
     @ObservationIgnored private let handler = HTMLPreviewScheme()
-    @ObservationIgnored private var revision: [String]?
+    @ObservationIgnored private var revision: Revision?
     @ObservationIgnored private var navigation: WKNavigation?
     @ObservationIgnored private var nextNavigationURL: URL?
     @ObservationIgnored private var attempt: UInt = 0
+    @ObservationIgnored private var scrollToRestore: CGPoint?
+
+    var hasRefreshableAssets: Bool { !failed && handler.hasRequestedAssets }
 
     private static let contentRules = Task { @MainActor in
         try await WKContentRuleListStore.default().compileContentRuleList(
@@ -129,12 +138,25 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         webView.navigationDelegate = self
     }
 
-    func display(_ text: String, resource: PreviewResource, request: String, isCurrent: () -> Bool) async {
-        let revision = [request, resource.directory ?? ""]
+    func display(_ text: String, resource: PreviewResource, request: String, assets: UInt, isCurrent: () -> Bool) async {
+        let revision = Revision(document: request, directory: resource.directory, assets: assets)
         if self.revision == revision && !failed {
             handler.enabled = true
             return
         }
+        var scroll: CGPoint?
+        if self.revision?.document == request, self.revision?.directory == resource.directory {
+            let attempt = self.attempt
+            scroll = scrollToRestore
+            if scroll == nil,
+               let offsets = try? await webView.evaluateJavaScript("([window.scrollX, window.scrollY])",
+                                                                 contentWorld: .defaultClient) as? [Double],
+               offsets.count == 2, offsets.allSatisfy(\.isFinite) {
+                scroll = CGPoint(x: offsets[0], y: offsets[1])
+            }
+            guard self.attempt == attempt else { return }
+        }
+        guard !Task.isCancelled, isCurrent() else { return }
         invalidate()
         let attempt = self.attempt
         do {
@@ -147,6 +169,7 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
             webView.configuration.userContentController.removeAllContentRuleLists()
             webView.configuration.userContentController.add(rules)
             self.revision = revision
+            scrollToRestore = scroll
             failed = false
             nextNavigationURL = url
             navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
@@ -178,6 +201,7 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         attempt &+= 1
         revision = nil
         navigation = nil
+        scrollToRestore = nil
         nextNavigationURL = nil
         webView.stopLoading()
         handler.invalidate()
@@ -210,6 +234,17 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation code: WKNavigation!, withError error: any Error) {
         if let navigation, code === navigation { failed = true }
+    }
+
+    func webView(_ webView: WKWebView, didFinish code: WKNavigation!) {
+        guard let navigation, code === navigation, let scroll = scrollToRestore,
+              let url = handler.documentURL else { return }
+        scrollToRestore = nil
+        webView.callAsyncJavaScript(
+            "if (location.href === expected) window.scrollTo({left, top, behavior: 'instant'});",
+            arguments: ["expected": url.absoluteString, "left": scroll.x, "top": scroll.y],
+            in: nil, in: .defaultClient, completionHandler: nil
+        )
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -245,6 +280,7 @@ private final class HTMLPreviewScheme: NSObject, WKURLSchemeHandler {
     private var remainingRasterPixels = 0
     var enabled = false
     var isLoading: Bool { !pending.isEmpty || !callbacks.isEmpty }
+    var hasRequestedAssets: Bool { documentURL != nil && remainingReads < Self.resourceLimit }
 
     func install(document: Data, resource: PreviewResource) throws -> URL {
         var components = URLComponents()
