@@ -38,7 +38,7 @@
 - 风险：`各格式单独 GUI 和百次宿主切换不能证明跨进程系统菜单、窗口目标、实际 Dock 与会话恢复的集成行为`
 - 预期修复：`补一条独立 Dev 完整 App E2E，使用真实综合样本、同名文件双窗及系统文件投递，逐格式检查实际预览、媒体位置及源字节；正常退出重启验证所有文件标签默认模式和归属`
 - 验证：`make build:ui；独占图形会话中 make test:ui ONLY_TESTING=BaileyUITests/FilePreviewWorkspaceUITests`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`d84a65a6：新增完整 App 七格式双窗口、系统投递及正常退出重启用例；443168ca 的 make build:ui 成功，退出 0。实际独占 GUI 会话尚未运行，保持 Open。日志 /tmp/bailey-seven-ui-443168ca-20261125.log。`
 
 
 ## 发现 F-03
@@ -81,6 +81,8 @@
 
 
 ## 验证与未覆盖
+
+- 2026-11-25：冻结提交 `3f87e2e8` 的完整宿主 XCTest 与 xcresult 一致，1406/1406 通过、0 失败、0 跳过，宿主耗时 2171.755 秒；`** TEST SUCCEEDED **`，Dev 严格签名复核通过。真实 Windows SSH、隔离 APFS 跨卷、真实图像与媒体样本均执行。结果包 `.build/DerivedData-Dev/Logs/Test/Test-Bailey-2026.11.25_00-15-20-+0800.xcresult`，日志 `/tmp/bailey-seven-full-3f87e2e8-20261125.log`。此证据不覆盖之后提交的 b1442e88、443168ca，设备及完整 GUI 仍为 No-Go。
 
 - 本轮产品 Debug/Release 构建与严格签名、补测7/7后的 `make build:ui` 与 Dev 严格签名均通过；日志 `/tmp/bailey-seven-final-debug-20261124.log`、`/tmp/bailey-seven-final-release-20261124.log`、`/tmp/bailey-seven-p2-final-ui-build-20261124.log`。新增七种完整App双窗口/退出重开用例及GIF系统设置尊重用例已构建，当前机器无独占图形验收会话，实际UI未执行。
 
