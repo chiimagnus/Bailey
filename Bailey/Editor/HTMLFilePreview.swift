@@ -160,9 +160,14 @@ final class HTMLPreviewWebView: WKWebView {
 @Observable
 final class HTMLPreview: NSObject, WKNavigationDelegate {
     private struct Revision: Equatable {
+        let target: String
         let document: String
         let directory: String?
         let assets: UInt
+
+        func sharesReadingPosition(with other: Revision) -> Bool {
+            target == other.target && directory == other.directory
+        }
     }
 
     let webView: HTMLPreviewWebView
@@ -230,14 +235,17 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         webView.navigationDelegate = self
     }
 
-    func display(_ text: String, resource: PreviewResource, request: String, assets: UInt, isCurrent: () -> Bool) async {
-        let revision = Revision(document: request, directory: resource.directory, assets: assets)
-        if self.revision == revision && !failed {
+    func display(_ text: String, resource: PreviewResource, target: String,
+                 request: String, assets: UInt, isCurrent: () -> Bool) async {
+        let revision = Revision(target: target, document: request, directory: resource.directory, assets: assets)
+        if self.revision == revision, navigation != nil, !failed {
             handler.enabled = true
             return
         }
         var scroll: CGPoint?
-        if self.revision?.document == request, self.revision?.directory == resource.directory {
+        let sameTarget = self.revision?.sharesReadingPosition(with: revision) == true
+        let editing = sameTarget && self.revision?.document != request
+        if sameTarget {
             let attempt = self.attempt
             scroll = scrollToRestore
             if scroll == nil,
@@ -250,8 +258,13 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         }
         guard !Task.isCancelled, isCurrent() else { return }
         invalidate()
+        // Keep the reading anchor across superseded preparations, not just
+        // completed navigations. Retiring or rebinding a file clears it.
+        self.revision = revision
+        scrollToRestore = scroll
         let attempt = self.attempt
         do {
+            if editing { try await Task.sleep(for: .milliseconds(120)) }
             guard let rules = try await Self.contentRules.value else { throw URLError(.cannotLoadFromNetwork) }
             try Task.checkCancellation()
             let data = try await Self.documentBytes(text)
@@ -260,8 +273,6 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
             let url = try handler.install(document: data, resource: resource)
             webView.configuration.userContentController.removeAllContentRuleLists()
             webView.configuration.userContentController.add(rules)
-            self.revision = revision
-            scrollToRestore = scroll
             failed = false
             nextNavigationURL = url
             navigation = webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
@@ -343,7 +354,13 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
     func suspend() {
         showsFind = false
         invalidateFind()
-        if webView.isLoading || handler.isLoading { invalidate() }
+        if webView.isLoading || handler.isLoading || navigation == nil {
+            let previous = revision
+            let scroll = scrollToRestore
+            invalidate()
+            revision = previous
+            scrollToRestore = scroll
+        }
         handler.enabled = false
     }
 
@@ -398,12 +415,15 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
         guard let navigation, code === navigation else { return }
         if showsFind, !findQuery.isEmpty { enqueueFind(.match(findQuery, backwards: false)) }
         guard let scroll = scrollToRestore, let url = handler.documentURL else { return }
-        scrollToRestore = nil
+        let generation = attempt
         webView.callAsyncJavaScript(
             "if (location.href === expected) window.scrollTo({left, top, behavior: 'instant'});",
             arguments: ["expected": url.absoluteString, "left": scroll.x, "top": scroll.y],
-            in: nil, in: .defaultClient, completionHandler: nil
-        )
+            in: nil, in: .defaultClient
+        ) { [weak self] _ in
+            guard let self, self.attempt == generation else { return }
+            self.scrollToRestore = nil
+        }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

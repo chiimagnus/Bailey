@@ -59,6 +59,90 @@ final class HTMLFilePreviewTests: XCTestCase {
         }
     }
 
+    func testLiveHTMLKeepsReadingPositionAndOnlyDisplaysTheLatestDraft() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("Live.html")
+        func source(_ revision: String) -> String {
+            """
+            <!doctype html><meta charset="utf-8">
+            <div style="height:1500px"></div>
+            <h1 id="revision">\(revision)</h1>
+            <div style="height:3000px"></div>
+            <script>document.getElementById('revision').textContent = 'SCRIPT RAN'</script>
+            """
+        }
+        let original = Data(source("Original").utf8)
+        try original.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.setFilePreview(true)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 340),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { file.retireContent(); window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, resourceDirectory: root.path))
+        host.sizingOptions = []
+        window.contentView = host
+        window.setContentSize(CGSize(width: 500, height: 340))
+        window.orderFront(nil)
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            guard let preview = file.htmlPreview else { return false }
+            return preview.webView.window === window && preview.webView.url != nil && !preview.webView.isLoading
+        }
+        let preview = try XCTUnwrap(file.htmlPreview)
+        let webView = preview.webView
+        func renderedRevision() async -> String? {
+            try? await webView.evaluateJavaScript("document.getElementById('revision')?.textContent",
+                                                  contentWorld: .defaultClient) as? String
+        }
+        func scrollY() async -> Double? {
+            try? await webView.evaluateJavaScript("window.scrollY", contentWorld: .defaultClient) as? Double
+        }
+        let initial = await renderedRevision()
+        XCTAssertEqual(initial, "Original")
+        print("HTML_LIVE original DOM loaded")
+        _ = try await webView.evaluateJavaScript("window.scrollTo(0, 1520)", contentWorld: .defaultClient)
+        try await waitUntil { (await scrollY() ?? 0) > 1000 }
+        let initialScroll = await scrollY()
+        let readingPosition = try XCTUnwrap(initialScroll)
+        print("HTML_LIVE initial scroll=\(readingPosition)")
+        let latest = source("最终版本 🧪")
+        for revision in 0..<100 {
+            file.nativeTextStorage.replaceCharacters(
+                in: NSRange(location: 0, length: file.nativeTextStorage.length),
+                with: source("Intermediate \(revision)")
+            )
+        }
+        file.nativeTextStorage.replaceCharacters(
+            in: NSRange(location: 0, length: file.nativeTextStorage.length), with: latest
+        )
+        try await waitUntil { await renderedRevision() == "最终版本 🧪" && !webView.isLoading }
+        print("HTML_LIVE latest DOM loaded, scroll=\(String(describing: await scrollY()))")
+        // The actual navigation must settle at the original reading position,
+        // not just carry a saved offset in the model.
+        try await waitUntil { abs((await scrollY() ?? 0) - readingPosition) < 2 }
+        XCTAssertTrue(file.htmlPreview === preview)
+        XCTAssertTrue(file.htmlPreview?.webView === webView)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, latest)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        file.setFilePreview(false)
+        try await waitUntil { webView.superview == nil }
+        file.setFilePreview(true)
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            return webView.window === window && !webView.isLoading
+        }
+        XCTAssertTrue(file.htmlPreview?.webView === webView)
+        let restoredScroll = await scrollY()
+        XCTAssertEqual(try XCTUnwrap(restoredScroll), readingPosition, accuracy: 2)
+        let restoredRevision = await renderedRevision()
+        XCTAssertEqual(restoredRevision, "最终版本 🧪")
+        XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
     func testFindMenuTargetsReadOnlyHTMLPreviewRatherThanItsSource() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

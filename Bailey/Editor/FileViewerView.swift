@@ -372,7 +372,8 @@ final class FileTab: nonisolated Identifiable {
         let assets = previewAssetRevision
         let preview = htmlPreview ?? HTMLPreview()
         htmlPreview = preview
-        await preview.display(text, resource: previewResource(in: directory), request: request, assets: assets) {
+        await preview.display(text, resource: previewResource(in: directory), target: fileContentRevision,
+                              request: request, assets: assets) {
             !isRetired && request == textPreviewRequestID && assets == previewAssetRevision
         }
     }
