@@ -384,6 +384,75 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
+    func testProtectedNativeMediaIsRejectedBeforePlaybackAndRecoversAfterReplacement() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let resource = PreviewResource(path: directory.appending(path: "Preview.md").path,
+                                       directory: directory.path, backend: LocalWorkspaceBackend.shared)
+        for (ext, type, fixture) in [
+            ("m4a", AVMediaType.audio, NativeProtectedMediaFixtures.m4a),
+            ("mp4", AVMediaType.video, NativeProtectedMediaFixtures.mp4),
+        ] {
+            let encrypted = try XCTUnwrap(Data(base64Encoded: fixture.encrypted, options: .ignoreUnknownCharacters))
+            let plain = try XCTUnwrap(Data(base64Encoded: fixture.plain, options: .ignoreUnknownCharacters))
+            XCTAssertNotEqual(encrypted, plain)
+            let url = directory.appendingPathComponent("Protected." + ext)
+            try encrypted.write(to: url)
+            let asset = AVURLAsset(url: url)
+            let (playable, protected, duration) = try await asset.load(.isPlayable, .hasProtectedContent, .duration)
+            XCTAssertTrue(playable, "The fixture must pass the metadata-only playable check")
+            XCTAssertTrue(protected, "AVFoundation must identify genuinely encrypted media")
+            XCTAssertGreaterThan(duration.seconds, 0)
+            let tracks = try await asset.loadTracks(withMediaType: type)
+            XCTAssertFalse(tracks.isEmpty)
+
+            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            guard case .unavailable = tab.content else {
+                return XCTFail("Protected media must not publish an independent player")
+            }
+            XCTAssertNil(tab.mediaPlayer)
+            XCTAssertTrue(tab.text.isEmpty)
+            XCTAssertFalse(tab.isDirty)
+            XCTAssertEqual(try Data(contentsOf: url), encrypted)
+
+            let reference = try XCTUnwrap(URL(string: url.lastPathComponent))
+            let staged = try await MarkdownMedia.stage(reference, from: resource)
+            defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+            XCTAssertEqual(try Data(contentsOf: staged), encrypted)
+            do {
+                _ = try await NativeMedia.open(staged.path)
+                XCTFail("The shared embedded-media path must refuse protected content")
+            } catch NativeMedia.Failure.unsupported {}
+            XCTAssertEqual(try Data(contentsOf: staged), encrypted)
+            XCTAssertEqual(try Data(contentsOf: url), encrypted)
+
+            // Replace with the actual unencrypted source of the CENC fixture,
+            // not a different or metadata-only file.
+            try plain.write(to: url, options: .atomic)
+            let clearAsset = AVURLAsset(url: url)
+            let (clearPlayable, clearProtected) = try await clearAsset.load(.isPlayable, .hasProtectedContent)
+            XCTAssertTrue(clearPlayable)
+            XCTAssertFalse(clearProtected)
+            tab.reloadFromDiskIfClean()
+            try await waitUntil { tab.mediaPlayer != nil }
+            guard case .media(let media) = tab.content else { return XCTFail("Unprotected replacement must load") }
+            XCTAssertEqual(media.kind, type == .audio ? .audio : .video)
+            let item = try XCTUnwrap(tab.mediaPlayer?.currentItem)
+            try await waitUntil { item.status != .unknown }
+            XCTAssertEqual(item.status, .readyToPlay)
+            let recovered = try await MarkdownMedia.stage(reference, from: resource)
+            defer { try? FileManager.default.removeItem(at: recovered.deletingLastPathComponent()) }
+            let embedded = try await NativeMedia.open(recovered.path)
+            XCTAssertEqual(embedded.kind, media.kind)
+            XCTAssertEqual(try Data(contentsOf: recovered), plain)
+            XCTAssertEqual(try Data(contentsOf: url), plain)
+            XCTAssertEqual(try Data(contentsOf: staged), encrypted, "The previous staged version is immutable")
+        }
+    }
+
     func testUnsupportedNativeCodecsKeepRealTrackMetadataButNeverPublishAPlayer() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
