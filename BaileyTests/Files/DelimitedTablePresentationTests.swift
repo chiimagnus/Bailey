@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -250,6 +251,160 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertEqual(file.text, edited, "A different native text responder must own the command")
         XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
         XCTAssertNil(file.editorView)
+    }
+
+    func testMountedCSVGridRetainsKeyboardFocusAcrossEditUndoRedo() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "Name,Value\r\nItem,old\n"
+        let edited = "Name,Value\r\nItem,中文\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let container = NSView(frame: window.contentView!.bounds)
+        let hosted = NSHostingView(rootView: CSVTableView(file: file, canFocus: { true },
+                                                         onFocused: {}, onShowSource: {}))
+        hosted.frame = CGRect(x: 0, y: 30, width: 500, height: 230)
+        let other = NSTextField(frame: CGRect(x: 0, y: 0, width: 100, height: 24))
+        container.addSubview(hosted)
+        container.addSubview(other)
+        window.contentView = container
+        window.orderBack(nil)
+        defer { window.close() }
+
+        func mountedGrid(_ view: NSView) -> DelimitedGrid? {
+            if let grid = view as? DelimitedGrid { return grid }
+            return view.subviews.lazy.compactMap { mountedGrid($0) }.first
+        }
+        func gridShowing(_ value: String, column: Int = 1) async throws -> DelimitedGrid {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            repeat {
+                hosted.layoutSubtreeIfNeeded()
+                if let grid = mountedGrid(hosted), grid.table.numberOfRows == 1,
+                   let field = grid.table.view(atColumn: column, row: 0, makeIfNecessary: true) as? NSTextField,
+                   field.stringValue == value, !file.hasPendingDelimitedEdit {
+                    return grid
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            } while ContinuousClock.now < deadline
+            XCTFail("Hosted grid did not display expected value: \(value)")
+            return try XCTUnwrap(mountedGrid(hosted))
+        }
+        let grid = try await gridShowing("old")
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        grid.table.onEdit(.init(row: 0, column: 1))
+        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                             replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertFalse(grid.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(file.text, original)
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(editor.hasMarkedText())
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        let afterEdit = try await gridShowing("中文")
+        XCTAssertEqual(file.text, edited)
+        XCTAssertTrue(afterEdit === grid, "A new document revision must not replace the native table")
+        XCTAssertTrue(window.firstResponder === grid.table, "Return must leave the table as first responder")
+        guard afterEdit === grid, window.firstResponder === grid.table else { return }
+
+        let undo = NSSelectorFromString("undo:")
+        let redo = NSSelectorFromString("redo:")
+        XCTAssertTrue(window.firstResponder?.tryToPerform(undo, with: nil) == true)
+        let afterUndo = try await gridShowing("old")
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertTrue(afterUndo === grid)
+        XCTAssertTrue(window.firstResponder === grid.table)
+        XCTAssertTrue(window.firstResponder?.tryToPerform(redo, with: nil) == true)
+        let afterRedo = try await gridShowing("中文")
+        XCTAssertTrue(afterRedo === grid)
+        XCTAssertTrue(window.firstResponder === grid.table)
+        XCTAssertEqual(file.text, edited)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
+
+        XCTAssertTrue(window.makeFirstResponder(other))
+        let otherResponder = window.firstResponder
+        file.documentUndoManager.undo()
+        let afterExternalUndo = try await gridShowing("old")
+        XCTAssertTrue(afterExternalUndo === grid)
+        XCTAssertTrue(window.firstResponder === otherResponder, "Refreshing a background table must not steal focus")
+        XCTAssertEqual(file.text, original)
+        file.documentUndoManager.redo()
+        _ = try await gridShowing("中文")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(edited.utf8))
+
+        // Native field submission must still navigate using the current
+        // projection, including unchanged and cancelled edits.
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        func begin(_ column: Int) throws -> NSTextView {
+            grid.table.onEdit(.init(row: 0, column: column))
+            let cell = try XCTUnwrap(grid.table.view(atColumn: column, row: 0, makeIfNecessary: true) as? NSTextField)
+            return try XCTUnwrap(cell.currentEditor() as? NSTextView)
+        }
+        let nameEditor = try begin(0)
+        nameEditor.insertText("Row", replacementRange: NSRange(location: 0, length: nameEditor.string.utf16.count))
+        nameEditor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        let afterTab = try await gridShowing("Row", column: 0)
+        XCTAssertTrue(afterTab === grid)
+        XCTAssertTrue(window.firstResponder === grid.table)
+        XCTAssertEqual(grid.table.selection.caret, .init(row: 0, column: 1))
+        let valueEditor = try begin(1)
+        valueEditor.insertText("新值", replacementRange: NSRange(location: 0, length: valueEditor.string.utf16.count))
+        valueEditor.doCommand(by: #selector(NSResponder.insertBacktab(_:)))
+        let afterBacktab = try await gridShowing("新值")
+        XCTAssertTrue(afterBacktab === grid)
+        XCTAssertTrue(window.firstResponder === grid.table)
+        XCTAssertEqual(grid.table.selection.caret, .init(row: 0, column: 0))
+        let unchanged = try begin(0)
+        unchanged.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertFalse(file.hasPendingDelimitedEdit)
+        XCTAssertTrue(window.firstResponder === grid.table)
+        let cancelled = try begin(1)
+        cancelled.insertText("discard", replacementRange: NSRange(location: 0, length: cancelled.string.utf16.count))
+        cancelled.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(file.hasPendingDelimitedEdit)
+        XCTAssertTrue(window.firstResponder === grid.table)
+        XCTAssertEqual(file.text, "Name,Value\r\nRow,新值\n")
+
+        let blurred = try begin(1)
+        blurred.insertText("blur", replacementRange: NSRange(location: 0, length: blurred.string.utf16.count))
+        XCTAssertTrue(window.makeFirstResponder(other))
+        let blurredResponder = window.firstResponder
+        let afterBlur = try await gridShowing("blur")
+        XCTAssertTrue(afterBlur === grid)
+        XCTAssertTrue(window.firstResponder === blurredResponder)
+        XCTAssertEqual(file.text, "Name,Value\r\nRow,blur\n")
+        XCTAssertEqual(try Data(contentsOf: path), Data(edited.utf8))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data("Name,Value\r\nRow,blur\n".utf8))
+
+        file.text = ""
+        let emptyDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while grid.table.numberOfRows != 0, ContinuousClock.now < emptyDeadline {
+            hosted.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(mountedGrid(hosted) === grid)
+        XCTAssertEqual(grid.table.numberOfRows, 0)
+        XCTAssertNil(grid.table.selection.caret)
+        XCTAssertEqual(file.delimitedTable.selectedValue, "")
+        grid.paste("must not edit an obsolete row")
+        XCTAssertEqual(file.text, "")
+        XCTAssertTrue(window.firstResponder === blurredResponder)
+        file.text = "Name,Value\r\nRow,blur\n"
+        let afterEmpty = try await gridShowing("blur")
+        XCTAssertTrue(afterEmpty === grid)
+        XCTAssertFalse(file.isDirty)
     }
 
     func testMountedGridRemainsEditableAfterPublishingTheSameTextRevision() async throws {

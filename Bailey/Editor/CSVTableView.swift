@@ -128,9 +128,10 @@ struct CSVTableView: View {
     private func surface(
         _ request: ParseRequest, active: DelimitedTablePresentation?, matches: [DelimitedTablePresentation.Cell]
     ) -> some View {
+        let snapshot = parsed.flatMap { $0.0 == request && active != nil ? $0.1 : nil }
+        let hasRows = snapshot.map { !$0.index.records.isEmpty } ?? false
         VStack(spacing: 0) {
-            if let parsed, parsed.0 == request, let active {
-                let snapshot = parsed.1
+            if let snapshot {
                 if let issue = snapshot.index.issue {
                     notice(String(localized: "Table issue at line \(issue.line), column \(issue.column).", table: "Editor"))
                 } else if snapshot.index.columnCount > DelimitedGrid.maximumColumns {
@@ -140,30 +141,39 @@ struct CSVTableView: View {
                 } else if !file.savedTextPreservesOriginalBytes {
                     notice(String(localized: "The current encoding cannot preserve the original bytes. Edit the source instead.", table: "Editor"))
                 }
-                if snapshot.index.records.isEmpty {
-                    Spacer()
-                    Text("No table rows to display.", tableName: "Editor").foregroundStyle(.secondary)
-                    if file.canEditDelimited(snapshot) {
-                        Button(String(localized: "Insert Row", table: "Editor")) {
-                            file.submitDelimitedEdit(.insertRows(before: 0, count: 1), using: snapshot, selecting: nil)
-                        }
-                        .disabled(file.hasPendingDelimitedEdit)
+            }
+            ZStack {
+                NativeDelimitedGrid(
+                    file: file, snapshot: snapshot, presentation: active, controls: controls,
+                    findStep: controls.findStep, matches: matches, onFocused: onFocused,
+                    onFilter: { column in
+                        filterDraft = controls.configuration.filters[column] ?? ""
+                        filterColumn = column
                     }
-                    Spacer()
-                } else {
-                    NativeDelimitedGrid(
-                        file: file, snapshot: snapshot, presentation: active, controls: controls,
-                        findStep: controls.findStep, matches: matches, onFocused: onFocused,
-                        onFilter: { column in
-                            filterDraft = controls.configuration.filters[column] ?? ""
-                            filterColumn = column
+                )
+                .opacity(hasRows ? 1 : 0)
+                .allowsHitTesting(hasRows)
+                .accessibilityHidden(!hasRows)
+
+                if let snapshot, !hasRows {
+                    VStack {
+                        Spacer()
+                        Text("No table rows to display.", tableName: "Editor").foregroundStyle(.secondary)
+                        if file.canEditDelimited(snapshot) {
+                            Button(String(localized: "Insert Row", table: "Editor")) {
+                                file.submitDelimitedEdit(.insertRows(before: 0, count: 1), using: snapshot, selecting: nil)
+                            }
+                            .disabled(file.hasPendingDelimitedEdit)
                         }
-                    )
+                        Spacer()
+                    }
+                } else if snapshot == nil {
+                    if failed == request {
+                        notice(String(localized: "Could not display the table.", table: "Editor"))
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
                 }
-            } else if failed == request {
-                notice(String(localized: "Could not display the table.", table: "Editor"))
-            } else {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -249,8 +259,8 @@ private extension DelimitedTableIndex.Separator {
 
 private struct NativeDelimitedGrid: NSViewRepresentable {
     let file: FileTab
-    let snapshot: FileTab.DelimitedSnapshot
-    let presentation: DelimitedTablePresentation
+    let snapshot: FileTab.DelimitedSnapshot?
+    let presentation: DelimitedTablePresentation?
     let controls: DelimitedTableControls
     let findStep: Int
     let matches: [DelimitedTablePresentation.Cell]
@@ -265,8 +275,12 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
         grid.table.file = file
         grid.table.onFocused = onFocused
         grid.onFilter = onFilter
-        grid.install(snapshot, presentation: presentation)
-        grid.showMatch(matches, step: findStep)
+        if let snapshot, let presentation, !snapshot.index.records.isEmpty {
+            grid.install(snapshot, presentation: presentation)
+            grid.showMatch(matches, step: findStep)
+        } else {
+            grid.clearProjection()
+        }
     }
 
     static func dismantleNSView(_ grid: DelimitedGrid, coordinator: ()) { grid.detach() }
@@ -293,6 +307,7 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         let snapshot: FileTab.DelimitedSnapshot
         let physical: DelimitedTablePresentation.Cell
         let original: String
+        var movement: Int? = nil
     }
     private var editing: CellEdit?
     private var previousMatches: [DelimitedTablePresentation.Cell] = []
@@ -333,7 +348,10 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         super.viewWillMove(toWindow: newWindow)
     }
 
-    func detach() {
+    // The view and its first responder survive re-indexing; stale rows, selection
+    // and pending clipboard work do not.
+    func clearProjection() {
+        guard snapshot != nil || presentation != nil else { return }
         finishEditing()
         copyTask?.cancel()
         copyTask = nil
@@ -341,12 +359,17 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         snapshot = nil
         presentation = nil
         source = ""
+        previousMatches = []
+        table.reloadData()
+    }
+
+    func detach() {
+        clearProjection()
         file = nil
         table.file = nil
         controls = nil
         table.onFocused = {}
         onFilter = { _ in }
-        table.reloadData()
     }
 
     func install(_ snapshot: FileTab.DelimitedSnapshot, presentation: DelimitedTablePresentation) {
@@ -498,18 +521,36 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard let edit = editing, control === edit.field,
-              commandSelector == #selector(NSResponder.cancelOperation(_:)),
-              !textView.hasMarkedText() else { return false }
-        cancelEditing()
-        window?.makeFirstResponder(table)
+        guard let edit = editing, control === edit.field, !textView.hasMarkedText(),
+              let window, window.firstResponder === textView else { return false }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelEditing()
+            window.makeFirstResponder(table)
+            return true
+        }
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            editing?.movement = NSReturnTextMovement
+        case #selector(NSResponder.insertTab(_:)):
+            editing?.movement = NSTabTextMovement
+        case #selector(NSResponder.insertBacktab(_:)):
+            editing?.movement = NSBacktabTextMovement
+        default:
+            return false
+        }
+        // Only explicit keyboard submission transfers focus back to the grid.
+        // Ordinary blur, saving, and detaching must not take focus from others.
+        guard window.makeFirstResponder(table) else {
+            editing?.movement = nil
+            return false
+        }
         return true
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
         guard let edit = editing, notification.object as? NSTextField === edit.field else { return }
         let value = edit.field.stringValue
-        let movement = notification.userInfo?["NSTextMovement"] as? Int
+        let movement = edit.movement ?? notification.userInfo?["NSTextMovement"] as? Int
         editing = nil
         restoreField(edit)
         guard movement != NSCancelTextMovement else {
