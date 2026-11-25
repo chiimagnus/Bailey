@@ -7,8 +7,8 @@
 
 - Markdown 内嵌 `<audio controls>`／`<video controls>` 已经使用
   `MarkdownMedia.stage → NativeMedia.open → AVPlayer → NativePlayerView`。
-  独立音视频实际共用 `NativeMedia` 的普通文件、外部引用与轨道校验。视频及 Markdown 内嵌保留 AVPlayerView；
-  独立音频用系统按钮和滑块操作文件标签的 AVPlayer，不显示视频画布。
+  独立音视频实际共用 `NativeMedia` 的普通文件、外部引用与轨道校验，
+  与 Markdown 内嵌共用 `NativePlayerView`（`AVPlayerView`）；独立音频使用紧凑系统播放器，不另建控制条。
 - Markdown 嵌入资源须通过 `PreviewResource` 授权并在**用户点击后**
   将最多 64 MiB 的资源暂存到受控临时目录，播放器由内嵌 View 暂时持有，卸载清理。
   **独立本机媒体不用这条暂存路径**：经当前 `FileTab` 真实本机身份／文件检查后，
@@ -53,9 +53,9 @@
 <a id="p1-t2"></a>
 ### P1-T2 文件标签所有的 AVPlayer 和可用的紧凑控件
 
-- **位置**：新音频内容视图、`FileTab` 的播放器持有／释放、
+- **位置**：`FileViewerView`、`NativePlayerView`、`FileTab` 的播放器持有／释放、
   `PaneContent` 文件生命周期、`docs/features/editor.md`。
-- **实施**：优先使用系统原生播放／暂停、连续 seek、静音与音量。
+- **实施**：直接使用 AVKit 的系统播放／暂停、连续 seek、静音与音量；不自行组合按钮与滑块。
   Dock 隐藏或切标签默认暂停且不后台发声；重挂载复用同一 player，
   真实 `Project.remove/terminateAll`／FileTab 退役时取消加载、清空 item 和观察者、停止实际播放；
   不能仅依靠 SwiftUI `onDisappear` 当作最终关闭信号。
