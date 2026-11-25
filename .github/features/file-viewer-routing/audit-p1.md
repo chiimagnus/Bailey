@@ -140,3 +140,8 @@
 - 最终受影响回归（e4267d71）：`make test ONLY_TESTING` 选定 FileTabPersistence、FileTree、GitStatusModel、HTMLFilePreview、MarkdownResourceScope、NativeAudioTiming、NativeMediaFile、NativePaneRetentionIntegration 八类共 330 项；启用真实样本和 Windows SSH，实际 329 通过、1 JPEG 长测条件跳过、0 失败，退出 0。启用 JPEG 长测开关定点补测通过，退出 0；按测试身份合计 330/330 通过。初次中断全量、291 项剩余补跑、长媒体定点及本次回归按测试身份去重得到 1359 个最新通过结果；这是跨提交分段证据，不是最终 HEAD 单次全量通过。临时 APFS 测试镜像已卸载清理。日志 `/tmp/bailey-final-affected-20261124.log`、`/tmp/bailey-final-jpeg-boundaries-20261124.log`。
 - 最终 e4267d71：正式 `make build` 与 `make build:release` 顺序执行，完整命令退出 0；Debug／Release 再次 `codesign --verify --deep --strict` 通过；Release 精简重新签名后约 56 MiB（du -h）。构建日志 `/tmp/bailey-final-debug-20261124.log`、`/tmp/bailey-final-release-20261124.log`。未替换用户已安装 App。
 - 本轮：bbb7b7f7 真实 CENC 音视频保护判定及拒绝／恢复；d768f481 原生 GIF／SVG 无障碍缩放与位置恢复。定点 5 项（含独立 APFS 跨卷三项）全部通过、零跳过、make test 退出 0、Dev 严格签名验证通过。全量重复复测至 580 通过、3 项夹具前缀跳过、0 失败时主动中止以优先核销新增任务；三项已补过，不称单次全量成功。日志 `/tmp/bailey-macos-final-full-20261124.log`、`/tmp/bailey-protected-ax-cross-volume-20261124.log`。
+
+- 2026-11-25 接手：本机共享保存冲突恢复 `bd6e74a2`，定点宿主 5/5、零跳过，`make build` 与 Debug 严格验签通过；详见 [CSV P2 F-02](../csv-table-view/audit-p2.md)。未执行新完整 App 用例，未替换已安装 App。当前仅内置 Retina XDR 与内置扬声器，未确认独占图形会话；1×／外接 HDR、多屏、实际音频输出切换、睡眠、中文 IME、VoiceOver 播报、物理触控板、减弱动态效果及双窗长会话均不能由宿主核销。此前七格式双窗冷启动证据保留。
+- 扩大宿主回归（冻结 `bd6e74a2`，含真实样本及 Windows SSH）：选中 297 项，主动中止时 233 通过、1 失败（HTML/SVG 净化诊断的过时精确集合）、2 条件跳过（JPEG 长测未启用、未配置独立测试卷），61 项未完成；不视为全量通过。真实 Windows 旁车、Git raw save 与 CP936 三项均通过；HTML 综合真实资源样本通过。日志 `/tmp/bailey-late-publication-affected.wyntrfWs`，命令因中止退出 143。
+
+- `2f8482e0` 单独补测上述过时断言与 SVG pattern，2/2 通过、零跳过，命令退出 0；扩大回归仍为中止，不合并冒充最终单次全量通过。

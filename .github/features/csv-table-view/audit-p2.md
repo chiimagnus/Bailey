@@ -128,3 +128,4 @@
 - C12×C13：本机和 Windows 实测非协作第三方可在最后校验与 rename 之间写入。协作锁、RENAME_SWAP、File.Replace 都不能证明任意第三方的严格 CAS；不将其视作通过。
 - 现行保存机制见 `docs/features/editor.md` 与 `docs/features/ssh.md`；27c2b254 已提交新增跨模式编辑、Undo/Redo 及实际编码字节 UI 验收，make build:ui 和 Dev 严格验签通过；未执行新增完整 App，F-03 延期；F-02 严格非协作 CAS 独立延期。
 
+- 2026-11-25 F-02 部分缓解（`bd6e74a2`）：独立子进程在最终校验后原位写入／原子替换，原实现 2 项测试 12 条断言失败；APFS 交换后验证被替换入口，冲突保留完整外部版本及恢复路径，目标可能已是本地草稿，保留 dirty 且旧基线重试被拒，恢复基线后显式重试可保存。不自动回滚覆盖后续写入。定点 5/5、零跳过；日志 `/tmp/bailey-late-publication-red.jDU5Is3V`、`/tmp/bailey-late-publication-green-v2.5gJvMfiG`、`/tmp/bailey-save-recovery-build.S9RL3c5U`。独立进程仍可通过旧文件描述符在核对及清理后写入已解除链接的 inode，SSH 非协作边界也未改变；F-02 继续 Deferred，不称严格 CAS。不支持交换的文件系统拒绝覆盖；独立 exFAT 镜像创建被系统拒绝，未实测该文件系统，未修改权限。恢复路径已验证模型错误字符串，窄窗单行错误栏完整可见性未验，真实 IME／跨窗长会话继续 blocked。

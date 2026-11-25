@@ -40,3 +40,5 @@
 - 文档归 [文件编辑器](../../../docs/features/editor.md)，无新增独立写入模型；本轮未进入 P2。
 - 最终 e4267d71：14 项 HTMLFilePreviewTests、5 项 MarkdownResourceScopeTests、28 项 NativePaneRetentionIntegrationTests 全部通过；真实 Windows SSH 本轮再次通过。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+
+- 2026-11-25 `2f8482e0`：扩大回归发现 4e15407e 后净化诊断新增 @href，旧精确集合断言失效；同步完整集合并新增实际 XML 不含网络地址及外部文件名断言，未改生产安全逻辑。真实 WebKit／Markdown／SVG 及 pattern 定点 2/2，零失败零跳过、命令退出 0；日志 `/tmp/bailey-shared-svg-regression.dDisRHxn`。
