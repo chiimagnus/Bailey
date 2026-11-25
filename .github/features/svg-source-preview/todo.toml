@@ -15,7 +15,7 @@ title = "接入共用图形视口和源码／预览／并排命令"
 status = "blocked"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "已有 b2022516 共用视口与三种模式、400% Retina 及 139ab5e9 七格式挂载；继续核对原生 SVG 标签重挂载、改名及位置恢复。 325ed5a6：修复共用图形视口位置，双 SVG、源码切换、重挂载、窗口尺寸、同类型改名与真实替换通过；21 项 SVG／图片定点宿主全部通过；F-04 Resolved。 aa26f533：双窗口八个真实磁盘文件标签冷恢复、默认模式、并排临时性、懒加载及标签复用；SessionStoreTests 11 项全过。完整 App 冷启动仍待 GUI 验收。 阻塞：实际 1× 屏、物理触控板惯性与捏合、VoiceOver、完整 App 多窗口冷启动；已有原生视口、2× GUI、宿主冷恢复及 Windows SSH 证据不替代这些验收。 d768f481：真实挂载 GIF／SVG 的 FileViewerView，执行 4 个 NSAccessibilityCustomAction，与原生菜单逐一对应，核对 100%／125%／fit、重挂载中心与倍率恢复、源文件字节一致；定点 5 项全过。仅证明原生 AX 动作，不替代 VoiceOver 语音播报或真实输入设备。 1b6928bd：整图 fit、多倍率裁剪平移、真实科研图百次与高倍细线像素通过；完整 App UI 自动化初始化超时，F-07 Deferred，P1-T2 仍 blocked。 76330ab4：默认fit允许放大，400/1600/6400%实际像素及极小SVG视口恢复通过，栅格规则不变；真实273份绘制诊断通过。XCTest/完整GUI阻塞，F-10 Deferred，任务仍blocked。 最新：原失败的整包图案用例及七格式双窗冷启动均通过；真实 1× 屏、触控板和 VoiceOver 仍待验。"
+note = "已有 b2022516 共用视口与三种模式、400% Retina 及 139ab5e9 七格式挂载；继续核对原生 SVG 标签重挂载、改名及位置恢复。 325ed5a6：修复共用图形视口位置，双 SVG、源码切换、重挂载、窗口尺寸、同类型改名与真实替换通过；21 项 SVG／图片定点宿主全部通过；F-04 Resolved。 aa26f533：双窗口八个真实磁盘文件标签冷恢复、默认模式、并排临时性、懒加载及标签复用；SessionStoreTests 11 项全过。完整 App 冷启动仍待 GUI 验收。 阻塞：实际 1× 屏、物理触控板惯性与捏合、VoiceOver、完整 App 多窗口冷启动；已有原生视口、2× GUI、宿主冷恢复及 Windows SSH 证据不替代这些验收。 d768f481：真实挂载 GIF／SVG 的 FileViewerView，执行 4 个 NSAccessibilityCustomAction，与原生菜单逐一对应，核对 100%／125%／fit、重挂载中心与倍率恢复、源文件字节一致；定点 5 项全过。仅证明原生 AX 动作，不替代 VoiceOver 语音播报或真实输入设备。 1b6928bd：整图 fit、多倍率裁剪平移、真实科研图百次与高倍细线像素通过；完整 App UI 自动化初始化超时，F-07 Deferred，P1-T2 仍 blocked。 76330ab4：默认fit允许放大，400/1600/6400%实际像素及极小SVG视口恢复通过，栅格规则不变；真实273份绘制诊断通过。XCTest/完整GUI阻塞，F-10 Deferred，任务仍blocked。 最新：原失败的整包图案用例及七格式双窗冷启动均通过；真实 1× 屏、触控板和 VoiceOver 仍待验。 核对此前实际 XCTest 原始日志：F-07 四象限及源码重挂载、F-10 >400% 矢量像素通过，已单独核销；设备和阶段门禁保留。"
 
 [[tasks]]
 id = "P2-T1"

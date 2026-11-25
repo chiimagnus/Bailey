@@ -63,3 +63,5 @@
 - `4c304e53`：正式 Debug `make build` 退出 0，Debug 与 Dev 严格验签通过，未替换已安装 App。日志 `/tmp/bailey-audio-avkit-build.log`。
 
 - `7bbfd8ab`：复核 4c304e53 完整 App 原始 AX/系统日志，浮动 timeline AXValue 保持在 4.070605s，但原生 elapsed time 从 00:04 连续推进至 00:10，播放队列启动；不能据旧断言超时认定播放停滞。新增真实挂载宿主以实际 AVPlayer 时间和原生计时双证据验证 4→6.009239s、显示 6s、暂停保持、原字节不变。音频及嵌入媒体专项 3/3，零跳过；UI 目标构建和 Dev 严格验签通过。完整 App 修正后的播放、切标签、暂停与窄窗复验未执行，无独占会话；设备、睡眠及 VoiceOver 门禁不变。日志 /tmp/bailey-native-audio-play.s0PZ5MBP、/tmp/bailey-audio-clock-verified.KeRSQ2BZ、/tmp/bailey-audio-clock-ui-build.f7jlDIdR。
+
+- dd7ab6dc 上实际执行修正后的 NativeMediaFileUITests.testNativeAudioControlsAndPauseWhenAnotherFileTakesFocus，40.454s、1/1、零跳过、make test:ui 退出 0。原生定位、播放推进、音量/静音恢复、切标签后暂停位置保持和原字节通过。日志 /tmp/bailey-audio-clock-full-ui.BUPl9tbn。窄窗控件逐一操作、VoiceOver、实体设备及睡眠未核销。
