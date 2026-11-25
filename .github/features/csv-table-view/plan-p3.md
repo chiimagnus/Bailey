@@ -9,6 +9,12 @@
 `installColumns` 固定新列宽 140 pt，`DelimitedNativeTable.style` 使用系统配色；
 `prototype.html` 的 .csv-area、.csv-table、.row-id、.numeric、.selected、.csv-input、.find-pop
 定义实际视觉基准；应用配色由现有 Theme 统一提供，见 [主题与共享值](../../../docs/ui.md#主题与共享值)。
+`AppSettings.theme → applyAppearance → NSApp.appearance` 决定当前窗口外观，
+`themeLight/themeDark → reloadThemeSelection → Theme.reloadSelection → Theme.changes.revision` 决定主题配色。
+两条路径必须同时覆盖：改变系统／明暗外观不一定增加 Theme revision；同一外观换主题不一定改变 colorScheme。
+FileViewerView 已读取主题 revision，但 CSVTableView 自身未观察它，NativeDelimitedGrid 未接收配色；
+`install` 在相同 presentation.id 时提前返回，`style` 仅在单元格创建／选择更新时调用，且使用系统固定配色。
+因此不能靠重新安装数据或强制重建 SwiftUI View 实现主题刷新。
 `NativeLineNumberGutter` 与源码固定 gutter 的实际布局及测试可供固定行号栏复用思路，
 不把 TextKit 的物理文本行号直接用于 CSV 逻辑记录。
 `DelimitedTablePresentation` 的 rows 是展示到物理记录的映射，Selection.Block 是既有区间选区。
@@ -36,10 +42,20 @@
   quoted 换行仅在显示摘要中以 ↵ 提示，完整读取、复制与编辑仍使用原值。
   优先 NSTableView 原生表头、网格线、行高、滚动和 field editor；仅对原型要求而原生未覆盖的状态补绘制，
   不为每格叠多层 View。表头纵向固定、横向与数据同步；固定行号栏归 T2。
-  背景、表头、行号、正文、网格线、数字高亮、Hover、选区、编辑框及按需浮层均使用 App 当前生效的主题，
-  从 Theme.terminal(dark:) 取得相应配色；主题变化通过现有 Theme.changes 即时重绘原生表格和活动编辑器，
-  保留输入、焦点、滚动、选区与正文。数字高亮使用主题绿色，缺失时使用正文色。
-  不设 CSV 独立主题，不硬编码原型暗色值；空表不画假数据。
+  **主题接入**：CSVTableView 在实际绘制子树读取 Theme.changes.revision 与当前 colorScheme，
+  从 Theme.terminal(dark:) 解析当前配色，经 NativeDelimitedGrid.updateNSView 传递给同一 DelimitedGrid。
+  借鉴 SourceTextEditor.apply 的原生更新方式：配色改变时独立于 install 的 presentation.id 刷新
+  scroll/clip/table 背景、表头、分隔线、已实现的可见单元格及当前输入编辑器；
+  复用现有 style／可见行刷新边界，新实现的复用单元格也使用当前配色。
+  T2 固定行号栏和 P4 的多行编辑、筛选／替换／统计浮层沿同一主题来源。
+  未生效的另一套明暗主题设置变化不导致当前数据重新安装；不缓存过期 NSColor／CGColor，
+  不按主题 revision 改 View.id、ParseRequest、DisplayRequest 或 SearchRequest，不 reloadData 全表来换色。
+  `style` 区分普通 NSTextField 和正在输入的原生 field editor，仅更新必要的文字、背景、插入点、
+  选择及焦点外观，不重设 stringValue、firstResponder、marked text 或 Undo；不修改窗口共享 field editor 的无关控件样式。
+  未输入的背景、表头、行号、正文、网格线、数字高亮、Hover、选区、编辑框及按需浮层统一从现有主题派生。
+  数字绿色缺失时用当前正文色，低对比时沿用现有主题派生可读色的方式，
+  原生系统菜单／材质仍遵循 App 有效外观与无障碍设置；不要求用自绘菜单重现 HTML。
+  不设 CSV 独立主题、主题缓存／监听总线或固定色备选路径，不硬编码原型暗色值；空表不画假数据。
 - **列宽**：新列首次建立时，测量表头和少量均匀分布的物理数据记录（不依赖当前筛选）。
   以最多 4096 个数据采样格、每格最多 128 UTF-16 码元为初始预算；
   采样只读有界字段片段，使用实际字体；以原型约 110–290 pt 的紧凑列宽为初始视觉范围，
@@ -51,7 +67,10 @@
   现有 controls 只保存标签内人工调整的宽度；不持久化新布局，不因普通编辑、筛选或换主题覆盖人工值。
   分隔符／列结构变化按 T2、P4-T1 的身份规则清理或重映射。
 - **本任务清理**：删除固定 140 pt 作为默认策略及被替换的系统交替行色、选区配色，
-  不叠加两套绘制。将同一 FileTab 的 controls 通过一个实际入口取得，去掉 representable／grid 重复传递和持有；
+  不叠加两套绘制。移除被新配色替换的 `style` 中 .selectedContentBackgroundColor、
+  .alternateSelectedControlTextColor、.labelColor 固定选择路径；同一主题色只在实际所有者解析，
+  原生编辑器与复用单元格不保留旧默认配色分支。将同一 FileTab 的 controls 通过一个实际入口取得，
+  去掉 representable／grid 重复传递和持有；
   仍保留原生控件访问 file、Undo 与卸载所需的真实引用。
 - **验收**：用原型 CSV 分支的 INITIAL（sample_id、material、confining_MPa、strain_rate_s-1、peak_MPa、notes）
   作同尺寸样例，执行时与原型实际渲染截图对照；检查紧凑行高、字体、网格线、表头、数字高亮、
@@ -60,6 +79,7 @@
   不以 NSTableView 名称推定列虚拟化。复用
   `SwiftMarkdownLayoutTests.testGitHubStylePreviewRendersAcrossLightDarkAndNarrowWidths`、
   `AppSettingsTests.testThemeRevisionInvalidatesObserversAndUpdatesNativePalette`、
+  `AppSettingsTests.testMountedSettingsSidebarActuallyRepaintsGhosttyAccent` 的已挂载像素验证方式、
   `DelimitedTablePresentationTests.testNativeGridVirtualizesTallAndWideTablesAndCanReachTheirLastCells`、
   `testRepeatedNativeTableMountsClearRowsAndSelectionInBothAppearances`。
 
@@ -124,18 +144,43 @@
 
 | 编号 | 专项条件 | 通过标准 |
 | --- | --- | --- |
-| C15 视觉 | 亮／暗／自动／自定义主题，920／480／220／150 pt，实际 2× 及可执行倍率，空表／仅表头／筛选零行，中英文和数字混排，输入中切主题 | 与 CSV 原型视觉层次及几何一致、适配主题；控件和编辑器不重叠，不重建表或改变原文 |
-| C16 尺寸与虚拟化 | 0／1／10万行、2501／4096／超限列、百万字段、32 MiB 临界值、超长字段、原生拖动／适配、100 次挂载 | 实际末格可达，有界采样、首屏／滚动耗时、实际实现行及单元格数量可核验；保留现有 480×330 宿主实际实现行少于 100 的断言；人工宽度保留、关闭释放 |
+| C15 视觉与主题 | 下列 C15a–C15f 全部条件；920／480／360／260／220／150 pt、低高度／实际支持的最小尺寸、实际 2× 及可执行倍率 | 与 CSV 原型视觉层次及几何一致、适配主题；控件与编辑器不重叠，不重建表或改变原文 |
+| C16 尺寸与虚拟化 | 0／1／10万行；1／2501／4095／4096／4097 列；999999／1000000／1000001 字段；32 MiB 前／等于／后（原编码字节与索引码元分别核对），超长单格／表头、原生拖动／适配、100 次挂载 | 实际末格可达，有界采样、首屏／滚动耗时、实际实现行及单元格数量可核验；保留现有 480×330 宿主实际实现行少于 100 的断言；人工宽度保留、关闭释放 |
 | C17 选择与目标 | 行号／表头／矩形／非连续、Shift／⌘、鼠标／键盘／AX，排序／筛选／分隔符／表头变动、并排、双窗、Undo 后重新索引 | 固定行号和表头与真实网格对齐，当前有效投影是唯一动作目标；正确的物理字段、剪贴板、第一响应者及磁盘字节 |
 
-交叉 C15×C16、C15×C17、C16×C17、C02×C17、C06×C17、C09×C17、C13×C17。
+### C15 主题与真实渲染专项
+
+| 条件 | 必验场景与最终判据 |
+| --- | --- |
+| C15a 全部主题 | 遍历 Theme.commonLightThemes + Theme.commonDarkThemes 当前实际全部 60 个可选定义，包含两套 Default；逐套核对原型样例的背景、表头、行号（T2）、网格线、数字／普通文字、选择、Hover、输入及浮层的真实颜色或像素。对比度不足、缺少 ANSI 绿／选择色的可构造主题输入，用现有 Theme 解析及可读色规则验证，不新增可配置主题功能。未知主题名回退由 Theme 现有入口负责。颜色不是数值、选择或只读状态的唯一提示。 |
+| C15b 双路径即时刷新 | 默认→非默认→默认；同为浅色／深色的主题切换；System／Light／Dark 全部转换及 System 随真实系统外观变化；修改未生效的另一主题槽、设置重置、重开 App。独立 AppSettings 配置不得污染当前窗口。核对已挂载 CSV 实际像素与同一窗口的源文／Markdown／Dock 主题，不靠切标签才生效。 |
+| C15c 状态与焦点 | 首次挂载、普通／Hover／选择／非连续选区、活动／非活动窗口、右键目标、滚动到首中末列、拖动列宽、空／仅表头／坏表／只读／筛选零行、查找／筛选和活动 field editor。换主题后全部已实现控件与之后复用的控件无旧色，保持窗口第一响应者、真实选区、滚动原点及人工宽度；不能为上色改写选择。 |
+| C15d 输入与数据 | 原位输入中（含实际中文 IME marked text、英文输入、Unicode 组合、长字段）切换主题，保存／取消／撤销／重做；P4 增加多行／表头输入和替换／统计浮层。检查当前输入、插入点／选择、原文代次、解析／展示 ID、在途操作与磁盘最终字节。单纯换色不得提交编辑、改变 dirty／Undo、重新解析或触发保存。 |
+| C15e 几何与可访问性 | 所有 C15 窗格尺寸及连续改变宽高，系统滚动条自动／始终显示、实际可用显示倍率、鼠标／触控板、键盘、VoiceOver、提高对比度／减弱透明度／减弱动态效果；中文／英文及适用的区域数字样本。实测固定表头和行号、半可见行、滚动条、边界像素、浮层锚点和编辑器不互相覆盖；真实 AX 名称、行列位置与状态不依赖配色。 |
+| C15f 规模与并发 | 十万行、最大列／字段／文本边界及长单元格，在快速滚动、拖选、排序／筛选／分隔符切换、输入／Undo、后台解析／查找、远端重载／断线及关闭同时重复切换主题；复用同一表格，不触发新的数据任务或全表 View 构造，测主线程耗时、可见对象数、RSS／footprint 和关闭释放；迟到的结果不能恢复旧配色。 |
+
+宿主以实际 FileViewerView → CSVTableView → NativeDelimitedGrid 链挂载，而不是手动调用 grid.style 后宣称响应式生效。
+复用原生像素捕获（NSHostingView、NSWindow、NSBitmapImageRep）、主题恢复与实际文件临时目录。
+先用相同 presentation.id 的已挂载网格完成 Red（改主题后旧像素或原生样式仍在）→ Green → Refactor，
+再检查表头／复用格／编辑器、所有主题及状态；原生对象身份、请求 ID、原文及文件哈希同时核对。
+以实际应用 Settings 和系统外观操作的隔离 Dev E2E 验证用户入口、双窗及正在输入的组合，
+不把单独设置 window.appearance 当作系统自动外观实测；不通过调大等待或重挂载测试掩盖旧色。
+
+交叉 C15×C16、C15×C17、C16×C17、C02×C17、C06×C17、C09×C17、C13×C17；
+C15a×C15c、C15b×C15c/d/e/f、C15d×C15f、C15e×C16、C15b×R06/R07/R08/R10。
+先执行全部可行单项、全部极值和可承受的有限组合，再扩大两两、多因素及已知失败组合；
+主题集合从实际 Theme.common* 枚举而非写死几个代表项。
 宿主复用 DelimitedTablePresentationTests、DelimitedTableIndexTests、SwiftMarkdownLayoutTests、
-AppSettingsTests、FileTabPersistenceTests、NativePaneRetentionIntegrationTests、WindowOwnershipIntegrationTests。
+AppSettingsTests、NativeEditorLayoutTests、NativeEditorCompositionTests、FileTabPersistenceTests、
+NativePaneRetentionIntegrationTests、WindowOwnershipIntegrationTests。
 完整 App 复用 CSVPreviewUITests、FilePreviewWorkspaceUITests 验证真实鼠标、菜单、焦点和旁白。
 用现有 Makefile 的 `make test:类名`、`make test ONLY_TESTING=...`、
 `make test:ui ONLY_TESTING=BaileyUITests/CSVPreviewUITests`、`make build`、`make build:dev`，
 按实际受影响路径定点执行；正式阶段整合 `make test`。
-用户此前暂停 GUI／全量测试的决定仍有效，需恢复授权并独占图形会话；未测不计通过。
+本机环境沿共享 R01（当前 macOS／SDK／Apple Silicon，保留最低 macOS 15.6 部署目标，不冒称旧系统实机）；
+缺配的物理显示设备及真实睡眠按共享延期约定处理，获授权 Windows Tailscale 走真实后端。
+用户此前暂停 GUI／全量测试的决定仍有效，需恢复验收并独占图形会话；未测不计通过。
+每个无法安全执行的条件记录具体前提、原因、尝试／替代证据、潜在影响、补验方式及是否阻塞对应 Gate。
 
 每任务同时更新 docs/features/editor.md，若共享视觉规则变化才更新 docs/ui.md。
 按同机条件记录真实 UI、性能、RSS／footprint、资源释放和剩余环境缺口，不将初始预算当实测结果。
