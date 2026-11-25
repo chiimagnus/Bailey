@@ -12,6 +12,7 @@ final class NativeMediaFileUITests: XCTestCase {
         try FileManager.default.copyItem(
             at: root.appending(path: ".github/features/video-file-playback/demo-video.mp4"), to: video
         )
+        let original = try Data(contentsOf: video)
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
         )
@@ -48,11 +49,39 @@ final class NativeMediaFileUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed, app.debugDescription)
         let enteredAt = try XCTUnwrap(fullTimeline().flatMap(time))
+        // Full-screen AVKit hides its own accessibility controls during
+        // playback. Sample the actual central video pixels instead of treating
+        // an absent slider as a stopped player or a fabricated zero time.
+        func fullFrame() -> [NSColor]? {
+            guard app.state == .runningForeground,
+                  let bitmap = NSBitmapImageRep(data: XCUIScreen.main.screenshot().pngRepresentation) else { return nil }
+            let x0 = bitmap.pixelsWide * 35 / 100, x1 = bitmap.pixelsWide * 65 / 100
+            let y0 = bitmap.pixelsHigh * 35 / 100, y1 = bitmap.pixelsHigh * 65 / 100
+            let colors = stride(from: y0, to: y1, by: 4).flatMap { y in
+                stride(from: x0, to: x1, by: 4).compactMap { x in
+                    bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                }
+            }
+            return colors.count > 1_000 ? colors : nil
+        }
+        func difference(_ before: [NSColor], _ after: [NSColor]) -> Double? {
+            guard before.count == after.count, !before.isEmpty else { return nil }
+            let changed = zip(before, after).filter { old, new in
+                max(abs(old.redComponent - new.redComponent), abs(old.greenComponent - new.greenComponent),
+                    abs(old.blueComponent - new.blueComponent)) > 0.15
+            }.count
+            return Double(changed) / Double(before.count)
+        }
+        let enteringFrame = try XCTUnwrap(fullFrame())
+        var playingDifference = 0.0
         let advances = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (fullTimeline().flatMap(time) ?? 0) > enteredAt + 0.15
+            guard let next = fullFrame(), let delta = difference(enteringFrame, next) else { return false }
+            playingDifference = delta
+            return delta > 0.03
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [advances], timeout: 2), .completed,
-                       "The native playhead must keep advancing in full screen")
+        XCTAssertEqual(XCTWaiter.wait(for: [advances], timeout: 4), .completed,
+                       "The actual full-screen video frame must change during playback")
+        print("VIDEO_FULLSCREEN playingChanged=\(playingDifference) entered=\(enteredAt)")
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             fullTimeline() == nil && tab.exists && window.sliders["timeline"].exists
@@ -64,7 +93,8 @@ final class NativeMediaFileUITests: XCTestCase {
         let returnedAt = try XCTUnwrap(time(inlineTimeline))
         XCTAssertGreaterThan(returnedAt, enteredAt)
         let inlineAdvances = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (time(inlineTimeline) ?? 0) > returnedAt + 0.15
+            guard let current = time(inlineTimeline) else { return false }
+            return current > returnedAt + 0.15
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [inlineAdvances], timeout: 3), .completed)
 
@@ -74,17 +104,21 @@ final class NativeMediaFileUITests: XCTestCase {
         fullScreen.click()
         let pausedFullScreen = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in fullTimeline() != nil }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [pausedFullScreen], timeout: 5), .completed)
-        let progressesWhilePaused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            abs((fullTimeline().flatMap(time) ?? pausedAt) - pausedAt) > 0.06
-        }, object: nil)
-        progressesWhilePaused.isInverted = true
-        XCTAssertEqual(XCTWaiter.wait(for: [progressesWhilePaused], timeout: 1.5), .completed)
+        let pausedFrame = try XCTUnwrap(fullFrame())
+        for _ in 0..<3 {
+            Thread.sleep(forTimeInterval: 0.6)
+            let next = try XCTUnwrap(fullFrame())
+            let delta = try XCTUnwrap(difference(pausedFrame, next))
+            XCTAssertLessThanOrEqual(delta, 0.002, "Actual paused video pixels must remain stable")
+        }
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         let pausedExit = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             fullTimeline() == nil && tab.isSelected
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [pausedExit], timeout: 8), .completed)
         XCTAssertEqual(String(describing: toggle.value ?? ""), paused)
+        XCTAssertEqual(try XCTUnwrap(time(inlineTimeline)), pausedAt, accuracy: 0.1)
+        XCTAssertEqual(try Data(contentsOf: video), original)
     }
 
     func testNativeAudioControlsAndPauseWhenAnotherFileTakesFocus() throws {
