@@ -19,13 +19,13 @@
 
 - 任务：`P1-T2`
 - 严重级别：`Medium`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Editor/NativeMediaFileUITests.swift:190-198`
 - 摘要：`隔离云端完整 App 的 AVKit 原生音量调节为 0.4375，测试硬编码指针比例 0.35±0.08 未通过`
 - 风险：`未验证静音还原及切标签保持；不能仅凭失败断言推定播放器音量失效`
 - 预期修复：`核对实际 AVKit 控件值、方向、范围和还原行为，区分系统控件指针到数值映射与 Bailey 自身故障；不替换原生控件或放宽任意误差`
 - 验证：`读取 45448818282 真机截图/录屏及宿主 AVKit AX；运行实际音量和静音回归`
-- 解决证据：`bd72f327：独立云端 AVKit 指针归一位置不等于量化音量值；本机真实挂载 AVPlayerView 的 AX 音量 slider 写入 0.2／0.75／0.35 后实际 player.volume 与 AXValue 一致，播放器保持暂停。修改 UI 验收为低、高、中间真实音量顺序与静音后精确还原；本机宿主通过，不伪称更新后完整 App GUI 已执行。日志 /tmp/bailey-waveform-native-timeline-volume-20261125.log。 待真实 GUI 复验。 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
+- 解决证据：`45534516603（4575cddb，macOS 27.0.1/Xcode 27.2 独立云端）：testNativeAudioControlsAndPauseWhenAnotherFileTakesFocus 实际通过，32.879 秒；音量低高及中间值、静音恢复、真实播放/暂停及文件切换通过。前次指针映射问题已核销。xcresult 与日志 /tmp/bailey-gui-45534516603.h0OonZ；实体设备与语音播报仍独立阻塞。`
 
 
 ## 验证与未覆盖

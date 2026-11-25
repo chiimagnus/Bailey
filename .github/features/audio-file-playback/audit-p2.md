@@ -15,17 +15,30 @@
 
 ## 发现项
 
-## 发现 F-01
+## 发现 F-02
 
 - 任务：`P2-T1`
 - 严重级别：`Medium`
 - 状态：`Deferred`
+- 位置：`BaileyUITests/Editor/NativeMediaFileUITests.swift:126`
+- 摘要：`云端首次点击波形实际 seek 和 AX 数值均通过，后续 press thenDragTo 产生 pathType=1 的触摸事件、buttonType=0；录像指针没有移动`
+- 风险：`测试未向 macOS 波形交付真实鼠标拖动，无法核验连续 seek 与后续缩放`
+- 预期修复：`使用项目已验证的 macOS click(forDuration:thenDragTo:) 鼠标拖拽 API，保留实际 AVPlayer 和 AX 时间断言`
+- 验证：`独立云端完整 App 原用例点击、实际鼠标拖拽、缩放、切换及原字节；不放宽时间断言`
+- 解决证据：`e05e3732：45534516603 事件归档及录像证实 press thenDragTo 发送触摸而非鼠标拖动；首次点击9秒及AX断言已通过。改用仓库已验证的 macOS click(forDuration:thenDragTo:) API，保持 seek/缩放断言；UI测试目标及严格验签通过，完整鼠标拖动用例需含新提交的隔离图形会话复验，当前本机被用户使用、远端未包含提交。按已批准环境延期，不声称实际拖动已通过。`
+
+
+## 发现 F-01
+
+- 任务：`P2-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Editor/NativeMediaFileUITests.swift:113-124; Bailey/Editor/NativeAudioWaveformView.swift:148-172,275`
 - 摘要：`隔离云端完整 App 首次点击波形后，时间和无障碍值联合断言超时；录屏显示实际 AVKit 及波形游标移动`
 - 风险：`可能存在跨系统 AX 表达差异或波形时间反馈失配，后续真实拖动／缩放未验证`
 - 预期修复：`分别验证已接受的 AVPlayer 时间、绘制游标及真实 AX 值，定位差异后修复所有者或无效测试假设`
 - 验证：`实际宿主挂载波形与 AVPlayerView，核对原生 AX 时间；完整 App 点击／拖动／缩放／重挂载复测`
-- 解决证据：`bd72f327：云端 45448818282 录像显示实际 seek 到 9 秒，而本机真实挂载复现波形 AXUnknown 且 AXValue=nil；原生 AXSlider 表示替换后七次实际定位、数值时间、可读描述、两个步进动作、AVKit 真实音量调整均通过。无第二播放器或额外计时器。NativeAudioTimingTests 5/5，图像与音频联合 27/27；完整 App 新用例仍待独占 GUI 复验，日志 /tmp/bailey-waveform-ax-red-20261125.log、/tmp/bailey-waveform-ax-inspect-20261125.log、/tmp/bailey-waveform-native-timeline-volume-20261125.log、/tmp/bailey-ci-render-task-green-20261125.log。 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
+- 解决证据：`bd72f327：原生 AXSlider 替代旧 AXUnknown，宿主七次真实 AVPlayer 定位及 AX 数值/描述/步进通过。隔离云端 45534516603（4575cddb，macOS 27.0.1）：首次波形点击后 expectTime(9) 实际通过，验证 AVKit 与波形时间/AX 数值；原失败已核销。后续拖动没有交付 macOS 鼠标事件，单列 F-02，完整拖动与缩放仍不算通过。实际 xcresult /tmp/bailey-gui-45534516603.h0OonZ。`
 
 
 ## 验证与未覆盖

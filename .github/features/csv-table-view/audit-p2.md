@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：原生编辑、Undo、有版本保存及断线草稿恢复已通过真实宿主回归；新发现的编辑事务归属与基线证明已修复（8488bb8a），最新全量复验进行中。非协作 CAS 与独占完整 App 按用户决定延期，不替代原验收。
+- **依据**：原生编辑、Undo、有版本保存及断线草稿恢复已通过真实宿主回归；新发现的编辑事务归属与基线证明已修复（8488bb8a），8488bb8a 完整宿主 1422/1422 通过；本轮新增编码发布竞态与真实原生菜单已完成定点修复，完整 GUI 复验仍待。非协作 CAS 与独占完整 App 按用户决定延期，不替代原验收。
 
 ## 任务与改动
 
@@ -14,6 +14,32 @@
 - **P2-T2 严格往返编码、条件保存和外部冲突**：FileTab、DiffTab、TextFileEncoding、WorkspaceFileVersion 共用原字节版本和提交确认；重连保留在途快照，不盲目重复写入。
 
 ## 发现项
+
+## 发现 F-07
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Deferred`
+- 位置：`Bailey/Editor/CSVTableView.swift:641-651; BaileyUITests/Editor/CSVPreviewUITests.swift:221`
+- 摘要：`完整 App 原生表格获得键盘焦点且已成功编辑，但系统 undo:/redo: 菜单禁用，实际 Cmd-Z 未撤销`
+- 风险：`原生共享 UndoManager 中的网格编辑无法由系统菜单或键盘访问`
+- 预期修复：`在 DelimitedNativeTable 原生 responder 提供 undo:/redo: 标准命令与验证，复用 FileTab 唯一 UndoManager；不注册第二套快捷键或全局路由`
+- 验证：`真实挂载原生表格，以系统 undo:/redo: selector 执行和校验菜单启用、源字节与原生 Undo；完整 App 复跑 CSV 跨模式快捷键用例`
+- 解决证据：`9b62d36c：45534516603 实际 CSV 键盘聚焦仍禁用系统菜单；本机原生表格 Red 3 断言失败。标准 undo:/redo: selector 与 NSMenuItemValidation 接入 FileTab 唯一 UndoManager，真实挂载原生字段编辑、撤销回原文 clean、重做 dirty、焦点转至另一字段后不消费撤销通过。243/243 宿主、UI目标和Release严格验签通过。修复后独占完整 App 仍未执行；当前远端未包含本地新提交，且用户正在使用本机图形会话。按用户已批准的环境延期保持 Deferred，不能以宿主替代完整快捷键验收。`
+
+
+## 发现 F-06
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/FileViewerView.swift:495-515,1237-1355`
+- 摘要：`后台准备已接受的网格输入期间，显式编码保存可确认发布并改变 fileEncoding，虽原文代次未变，准备结果仍被拒绝`
+- 风险：`合法且可往返的新字段可能被丢弃，仅显示表格编辑错误；违反 C11×C12 保存中继续输入的约束`
+- 预期修复：`先通过受控写入确认与真实大字段事务复现，再在 FileTab 的文档事务／编码发布边界修复；不增加独立保存队列或放弃严格编码校验`
+- 验证：`FileTabPersistenceTests：编码转换在途接受原生网格事务，释放受控写入，验证单一原文、Undo、后续保存真实编码字节；相关编码、保存、网格与生命周期回归`
+- 解决证据：`9b62d36c：受控真实写入回执期间接收 2 MiB 中文粘贴，旧版 Red 3 断言失败，修复以接收时编码验证事务、原文代次决定提交，编码发布不废弃草稿。UTF-16 LE BOM 转换后精确保存；Latin-1 转换后拒绝无法无损表示的后续保存、原磁盘字节不变、改 UTF8 BOM 后精确保存；两组均核对唯一 NSTextStorage 与 Undo/Redo。最终四项专项与243项受影响宿主回归零失败零跳过（含真 Windows CSV 与图像旁车），Dev/UI构建及Release严格验签通过。日志 /tmp/bailey-seven-csv-image-undo-red-v2-20261125.log、/tmp/bailey-seven-native-undo-and-encoding-green-v2-20261125.log、/tmp/bailey-seven-undo-affected-20261125.log。`
+
 
 ## 发现 F-05
 
@@ -51,7 +77,7 @@
 - 风险：`宿主虽证明共享TextKit和字节模型，不能证明完整App的首响应者及系统快捷键把编辑命令交给同一个文档`
 - 预期修复：`在现有CSV E2E补一条真实排序后编辑、源码编辑、跨模式Undo/Redo、保存与重开；复用现有隔离测试设施`
 - 验证：`实际make build:ui及独占图形会话make test:ui ONLY_TESTING=BaileyUITests/CSVPreviewUITests/testSortedGridAndSourceShareNativeUndoAndExactSave`
-- 解决证据：`已补充真实排序后编辑、源码切换、跨模式 Undo/Redo、BOM 与混合换行完整保存、重开；Swift 6／macOS 15.6 部署目标 typecheck 通过（/tmp/bailey-seven-new-editor-ui-typecheck-20261125.log）。未运行完整 App， 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
+- 解决证据：`已补充真实排序后编辑、源码切换、跨模式 Undo/Redo、BOM 与混合换行完整保存、重开；Swift 6／macOS 15.6 部署目标 typecheck 通过（/tmp/bailey-seven-new-editor-ui-typecheck-20261125.log）。隔离云端 45534516603 已实际执行：网格已成功编辑且键盘聚焦，但 Undo/Redo 菜单禁用、Cmd-Z 断言失败，见 F-07。修复后的完整 GUI 仍待复验；宿主与构建结果不替代 E2E。`
 
 
 ## 发现 F-02

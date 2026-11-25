@@ -15,6 +15,19 @@
 
 ## 发现项
 
+## 发现 F-07
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Deferred`
+- 位置：`Bailey/Editor/ImageInspector.swift:357-359,555-610; BaileyUITests/Editor/ImageAnnotationUITests.swift:39-49`
+- 摘要：`RasterScrollView 仅声明 UndoManager，未提供标准 undo:/redo: responder 动作；既有完整 GUI 连续撤销/重做只核对最终图层，不能排除两条动作均无效`
+- 风险：`可能与实际 CSV 键盘撤销失败同根；图片标注 I11 的真实键盘撤销、回到 clean 和重做缺少有效证据`
+- 预期修复：`补足真实挂载原生 selector 的 Red，按实际结果在图片 viewport responder 使用同一标注文档 UndoManager；UI 检查每个动作的中间像素`
+- 验证：`ImageAnnotationTests/testMountedCanvasUsesImageCoordinatesAtDifferentZoomAndNativeUndo；实际隔离完整 App 撤销像素消失、重做恢复、保存及导出原字节`
+- 解决证据：`0a808796：挂载画布 Red 缺标准原生命令；接入 selector 后实际 firstResponder 回退到 NSWindow，追加诊断复现；明确共用预览滚动视图接受原生焦点后，同一标注文档 0.1×/1×/4× 三次真实拖动、重挂载、三次撤销 clean、三次重做 dirty、失焦不消费命令、原图/旁车不改写全部通过。GUI 改为逐次核对可见箭头像素。243/243 真实相关宿主、UI 构建与 Release 严格验签通过；新 GUI 尚未执行，用户使用桌面且远端未包含新提交，按已批准环境延期。`
+
+
 ## 发现 F-06
 
 - 任务：`P2-T2`
@@ -102,5 +115,5 @@
 - b0ccce58：八种 EXIF 取向、中文／emoji 字形实际像素、保存期间编辑、原生关闭失败否决、只读目录及取消、真实 Files 关联保护、百次大图滤镜全部通过。100 次 RSS 176.3→897.6 MiB、峰值 1123 MiB；bdd4c12b 已优化同一测试 P95 至 2.856ms，仍有残余 RSS 增长。
 - 非协作外部进程的检查／发布间竞态已复现；实体 1×、触控板、VoiceOver 及独占完整 App 尚缺环境，不能以宿主动作代替。I13 和 I10/I11/I16 的相关交叉验收未核销。
 - 当前行为见 docs/features/editor.md 图片标注与导出；72006d6b 新增原生复制当前标注合成图；文档同步。
-- 本轮完整 App 用例补充真实原生复制菜单与 NSSavePanel 成功导出，解码 PNG 核对尺寸、标注像素、底图及旁车原字节；共用系统选择器路径验证。Swift 6 typecheck 已通过，独占 GUI 尚未实测。
+- 本轮完整 App 用例补充真实原生复制菜单与 NSSavePanel 成功导出，解码 PNG 核对尺寸、标注像素、底图及旁车原字节；共用系统选择器路径验证。45534516603（4575cddb）实际通过该复制/导出用例；原撤销及重做连续执行仅断言最终图层，缺少中间状态证明，另见 F-07。
 
