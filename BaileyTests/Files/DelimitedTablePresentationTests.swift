@@ -92,6 +92,82 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertNil(file.editorView)
     }
 
+    func testFocusedNativeGridReceivesStandardUndoAndRedoActions() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "Name,Value\r\nItem,old\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let grid = DelimitedGrid()
+        grid.controls = file.delimitedTable
+        grid.file = file
+        grid.table.file = file
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let container = NSView(frame: window.contentView!.bounds)
+        grid.frame = container.bounds
+        let other = NSTextField(frame: CGRect(x: 0, y: 0, width: 60, height: 20))
+        container.addSubview(grid)
+        container.addSubview(other)
+        window.contentView = container
+        window.orderBack(nil)
+        defer { grid.detach(); window.close() }
+        func refresh() async throws {
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            let presentation = try await DelimitedTablePresentation.evaluate(
+                source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
+            grid.install(snapshot, presentation: presentation)
+            grid.layoutSubtreeIfNeeded()
+        }
+        try await refresh()
+        grid.table.onEdit(.init(row: 0, column: 1))
+        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.insertText("a,b", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while file.hasPendingDelimitedEdit, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let edited = "Name,Value\r\nItem,\"a,b\"\n"
+        XCTAssertEqual(file.text, edited)
+        XCTAssertTrue(file.documentUndoManager.canUndo)
+        try await refresh()
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+
+        let undo = NSSelectorFromString("undo:")
+        let redo = NSSelectorFromString("redo:")
+        let undoItem = NSMenuItem(title: "Undo", action: undo, keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Redo", action: redo, keyEquivalent: "Z")
+        XCTAssertTrue(grid.table.responds(to: undo), "The focused table must implement the native menu action")
+        XCTAssertTrue(grid.table.responds(to: redo))
+        guard let validator = grid.table as? NSMenuItemValidation,
+              grid.table.responds(to: undo), grid.table.responds(to: redo) else {
+            return XCTFail("Standard Edit menu has no valid native responder")
+        }
+        XCTAssertTrue(validator.validateMenuItem(undoItem))
+        XCTAssertFalse(validator.validateMenuItem(redoItem))
+        _ = grid.table.perform(undo, with: undoItem)
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(validator.validateMenuItem(undoItem))
+        XCTAssertTrue(validator.validateMenuItem(redoItem))
+        _ = grid.table.perform(redo, with: redoItem)
+        XCTAssertEqual(file.text, edited)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(window.makeFirstResponder(other))
+        XCTAssertFalse(validator.validateMenuItem(undoItem))
+        _ = grid.table.perform(undo, with: undoItem)
+        XCTAssertEqual(file.text, edited, "A different native text responder must own the command")
+        XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
+        XCTAssertNil(file.editorView)
+    }
+
     func testMountedGridRemainsEditableAfterPublishingTheSameTextRevision() async throws {
         for conversion in [nil, TextFileEncoding.utf16LEBOM] {
             let path = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".csv")

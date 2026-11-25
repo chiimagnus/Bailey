@@ -2555,6 +2555,83 @@ final class FileTabPersistenceTests: XCTestCase {
         }
     }
 
+    func testAcceptedCSVEditSurvivesOverlappingEncodingPublication() async throws {
+        try await checkAcceptedCSVEditOverlappingEncodingPublication(.utf16LEBOM)
+    }
+
+    func testAcceptedCSVEditSurvivesIncompatibleEncodingPublication() async throws {
+        try await checkAcceptedCSVEditOverlappingEncodingPublication(.latin1)
+    }
+
+    private func checkAcceptedCSVEditOverlappingEncodingPublication(_ encoding: TextFileEncoding) async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let original = "Name,Value\r\nItem,old\n"
+        let initial = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+        let backend = EditorWorkspaceFixture(path: path, contents: initial)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let storage = file.nativeTextStorage
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(loaded)
+
+        // Pause the actual conditional publication, accept a wide grid paste,
+        // then complete the conversion while the paste is being prepared.
+        let converting = Task { await file.save(as: encoding) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        let value = String(repeating: "x", count: 2 << 20) + ",中文"
+        let origin = DelimitedTablePresentation.Cell(row: 0, column: 1)
+        let selection = DelimitedTablePresentation.Cell(row: 1, column: 1)
+        file.submitDelimitedEdit(.paste(value, rows: [1], origin: origin, columns: 2),
+                                 using: snapshot, selecting: selection)
+        try await waitForFileTabState { file.delimitedTable.pendingCell == selection }
+        XCTAssertTrue(file.hasPendingDelimitedEdit)
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+        XCTAssertTrue(file.text.utf16.elementsEqual(original.utf16))
+        await backend.finishWrite()
+        await converting.value
+        try await waitForFileTabState { !file.hasPendingDelimitedEdit }
+
+        let expected = "Name,Value\r\nItem,\"\(value)\"\n"
+        let converted = await backend.data(at: path)
+        XCTAssertEqual(converted, encoding.encoded(original))
+        XCTAssertEqual(file.fileEncoding, encoding)
+        XCTAssertNil(file.delimitedTable.editError)
+        XCTAssertTrue(file.text.utf16.elementsEqual(expected.utf16),
+                      "A valid accepted paste cannot disappear when the encoding baseline changes")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        guard file.text.utf16.elementsEqual(expected.utf16) else { return }
+
+        file.documentUndoManager.undo()
+        XCTAssertTrue(file.text.utf16.elementsEqual(original.utf16))
+        XCTAssertFalse(file.isDirty)
+        file.documentUndoManager.redo()
+        XCTAssertTrue(file.text.utf16.elementsEqual(expected.utf16))
+        XCTAssertTrue(file.isDirty)
+        let finalEncoding: TextFileEncoding
+        if encoding == .latin1 {
+            await file.save()
+            XCTAssertNotNil(file.saveError)
+            XCTAssertTrue(file.isDirty)
+            XCTAssertTrue(file.text.utf16.elementsEqual(expected.utf16))
+            let unchanged = await backend.data(at: path)
+            XCTAssertEqual(unchanged, converted)
+            finalEncoding = .utf8BOM
+        } else {
+            finalEncoding = encoding
+        }
+        let saving = Task { await file.save(as: finalEncoding == encoding ? nil : finalEncoding) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await saving.value
+        let saved = await backend.data(at: path)
+        XCTAssertTrue(saved == finalEncoding.encoded(expected))
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+    }
+
     func testCSVGridReconnectConfirmsPublishedRevisionBeforeSavingNewFields() async throws {
         let path = "/fixture/\(UUID().uuidString).csv"
         let original = "Name,Value\r\n中文,000\nOther,\"literal\""

@@ -455,13 +455,14 @@ final class FileTab: nonisolated Identifiable {
         } else {
             String(localized: "Could not edit the table.", table: "Editor")
         }
+        let encoding = fileEncoding
         invalidateReload()
         delimitedEditTask = Task { [weak self] in
             guard let self else { return false }
             defer { delimitedEditTask = nil }
             do {
                 delimitedTable.pendingCell = cell
-                try await applyAcceptedDelimitedEdit(change, using: snapshot)
+                try await applyAcceptedDelimitedEdit(change, using: snapshot, encoding: encoding)
                 if documentEditRevision == snapshot.documentRevision { delimitedTable.pendingCell = nil }
                 if case .insertRows = change, snapshot.index.records.isEmpty {
                     delimitedTable.configuration.header = false
@@ -489,18 +490,20 @@ final class FileTab: nonisolated Identifiable {
     /// transaction to the very same NSTextStorage and UndoManager as typing.
     func editDelimited(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot) async throws {
         guard canEditDelimited(snapshot) else { throw WorkspaceError.changedExternally }
-        try await applyAcceptedDelimitedEdit(change, using: snapshot)
+        try await applyAcceptedDelimitedEdit(change, using: snapshot, encoding: fileEncoding)
     }
 
     private func applyAcceptedDelimitedEdit(_ change: DelimitedTableMutation.Change,
-                                            using snapshot: DelimitedSnapshot) async throws {
+                                            using snapshot: DelimitedSnapshot,
+                                            encoding: TextFileEncoding) async throws {
         guard matchesDelimitedDocument(snapshot) else { throw WorkspaceError.changedExternally }
-        let encoding = fileEncoding
         let replacements = try await DelimitedTableMutation.prepare(
             change, source: snapshot.source, index: snapshot.index, encoding: encoding
         )
         try Task.checkCancellation()
-        guard matchesDelimitedDocument(snapshot), encoding == fileEncoding else { throw WorkspaceError.changedExternally }
+        // Publishing an encoding changes the saved baseline, not the accepted draft.
+        // A subsequent save validates the draft against the newly selected encoding.
+        guard matchesDelimitedDocument(snapshot) else { throw WorkspaceError.changedExternally }
         guard !replacements.isEmpty else { return }
         if let editor = editorCoordinator?.scrollView?.documentView as? NativeCodeTextView {
             guard !editor.hasMarkedText() else { throw WorkspaceError.changedExternally }

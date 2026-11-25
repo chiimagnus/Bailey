@@ -638,7 +638,7 @@ private final class DelimitedHeader: NSTableHeaderView {
     }
 }
 
-final class DelimitedNativeTable: NSTableView {
+final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     typealias Cell = DelimitedTablePresentation.Cell
     private(set) var selection = DelimitedTablePresentation.Selection()
     var onFocused: () -> Void = {}
@@ -649,6 +649,29 @@ final class DelimitedNativeTable: NSTableView {
     var onMenu: () -> NSMenu? = { nil }
     weak var file: FileTab?
     override var undoManager: UndoManager? { file?.documentUndoManager ?? super.undoManager }
+
+    private var focusedDocumentUndoManager: UndoManager? {
+        guard window?.firstResponder === self, let file, !file.hasPendingDelimitedEdit else { return nil }
+        return file.documentUndoManager
+    }
+
+    @objc func undo(_ sender: Any?) {
+        guard let manager = focusedDocumentUndoManager, manager.canUndo else { return }
+        manager.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard let manager = focusedDocumentUndoManager, manager.canRedo else { return }
+        manager.redo()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): focusedDocumentUndoManager?.canUndo == true
+        case #selector(redo(_:)): focusedDocumentUndoManager?.canRedo == true
+        default: true
+        }
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         if let cell = cell(at: event), !selection.contains(cell) { select(cell) }
