@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交暴露连续快捷键焦点缺陷 F-10（已修复且宿主回归通过，待完整 App 连续快捷键复验）；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH 复验留用户指定的第二项；严格非协作 CAS 边界、P1 无障碍及现有设备门禁独立保留。
+- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交暴露连续快捷键焦点缺陷 F-10（已修复且宿主回归通过，待完整 App 连续快捷键复验）；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH CSV 比较、版本绑定覆盖及重连已通过；严格非协作 CAS 边界、P1 无障碍及现有设备门禁独立保留。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -27,7 +27,7 @@
 - 风险：`被迫借助外部工具恢复旧文件或关闭草稿；简单强制覆盖会绕过已接受版本及目标保护`
 - 预期修复：`共享冲突快照、现有只读原生 Diff、一次性版本与草稿绑定的显式覆盖；继续走原保存队列和有条件写入，复用旁车保护`
 - 验证：`FileTabPersistenceTests、NativeDiffTabTests、ImageAnnotationTests，真实本机双窗口及获授权 SSH，比较/取消/确认/过期版本与草稿/恢复原字节`
-- 解决证据：`e471b25b：共享冲突快照绑定文档、目标代次、路径、原基线、磁盘与草稿 SHA-256；原生 Diff 比较/取消/显式条件覆盖、比较过期拒绝、编码意图、保存中继续编辑、独立进程迟到写入恢复、Git index/HEAD、图片旁车与底图已验。最终新增宿主8/8，真实 GUI 2/2，均零跳过；受影响宿主回归127通过、2项图像样本配置跳过、0失败；最终 make build 和严格验签通过。日志 /tmp/bailey-save-conflict-final-test.SPReHd、/tmp/bailey-save-conflict-final-ui.n6xMZo、/tmp/bailey-save-conflict-regress.1nc20Y、/tmp/bailey-save-conflict-final-build.STnTDk。仅核销本轮实现和本机验收；用户明确第二步远端定点复验暂不做，F-02 严格非协作 CAS Deferred 不变。`
+- 解决证据：`e471b25b：共享冲突快照绑定文档、目标代次、路径、原基线、磁盘与草稿 SHA-256；原生 Diff 比较/取消/显式条件覆盖、比较过期拒绝、编码意图、保存中继续编辑、独立进程迟到写入恢复、Git index/HEAD、图片旁车与底图已验。最终新增宿主8/8，真实 GUI 2/2，均零跳过；受影响宿主回归127通过、2项图像样本配置跳过、0失败；最终 make build 和严格验签通过。日志 /tmp/bailey-save-conflict-final-test.SPReHd、/tmp/bailey-save-conflict-final-ui.n6xMZo、/tmp/bailey-save-conflict-regress.1nc20Y、/tmp/bailey-save-conflict-final-build.STnTDk。本机验收后，e697efb5 补充两条独立真实 Windows Tailscale SSH 通道：同长度同 mtime 的独立改写、只读比较、旧磁盘确认及旧连接确认拒绝、重新确认后保存、BOM／混合换行与本机同名文件不变，44.056 秒通过；既有 CSV 丢回执与重连用例 29.949 秒通过。日志 /tmp/bailey-tailscale-reviewed.F3CYF2、/tmp/bailey-tailscale-routing.DnjOhC。两轮其余用例另有失败或中断，不冒称整轮通过；F-02 严格非协作 CAS Deferred 不变。`
 
 
 ## 发现 F-10
