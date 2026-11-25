@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 多 Dock 交叉组合及 VoiceOver 尚待复验，阶段 No-Go；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
+- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 360/260/220/150 点 Dock 真实系统拼音、保存、撤销与重做已通过，VoiceOver 尚待复验，阶段 No-Go；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -170,3 +170,5 @@
 - 隔离完整 Dev 无人参与真实系统拼音，选文字工具、显式点击实际文字框、字母键组合、空格候选中文、添加文字；撤销消失、重做恢复截图，保存仅一个中文文字图层且底图原字节不变。证据 /tmp/bailey-native-ime-auto.dL04QZ/runimage.log、image-009 至 015 的 AX 及截图。前一多窗格试验的窄文字框未自动获焦，候选未形成，保留该未通过组合，不冒称任意窄窗格焦点已验。原输入源已恢复。
 
 - 2026-11-26：`4c7290d8` 在真实原生宿主以 360／260／220／150 点窗宽进入标注、点击可视画布、验证文字 field editor 取得焦点，原生 marked text 组合及中文确认、取消后编辑器退役、底图字节不变，定点通过（`/tmp/bailey-narrow-native-red.Pw7kXN`）。最窄输入框可用宽度 42 点。结合既有隔离完整 App 系统拼音证据；不将宿主 marked text 冒称窄窗完整 App 系统候选，后者及 VoiceOver 为后续可执行验收，任务 pending。
+
+- 2026-11-26：隔离 Bailey Dev 实体 Dock 360.5/260.5/220.5/150.5 点四档，实际系统拼音 `zhongwen` 的 marked text → 中文候选 → 添加文字 → ⌘S → ⌘Z/⌘S（实际旁车无图层）→ ⇧⌘Z/⌘S（恢复单一中文文字层），每档原图字节不变，输入源恢复为启动时状态，Dev 正常退出，4/4、零失败。日志 `/tmp/bailey-final-narrow-ime.3Qkodm/run3.log`、逐步 AX 与截图在同目录；不把早期自动化定位失败或宿主覆盖冒称实机通过。
