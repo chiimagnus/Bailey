@@ -108,6 +108,11 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     static let shared = LocalWorkspaceBackend()
     // Serialize Bailey conditional commits, not preparation or independent reads.
     private static let publicationLock = NSLock()
+    private let beforeConditionalPublication: (@Sendable (String) throws -> Void)?
+
+    init(beforeConditionalPublication: (@Sendable (String) throws -> Void)? = nil) {
+        self.beforeConditionalPublication = beforeConditionalPublication
+    }
 
     // MARK: - Files
 
@@ -293,11 +298,12 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
-    /// FileTab's conditional save has its own commit contract. POSIX offers
-    /// atomic rename, not a universal compare-and-rename against outside writers.
+    /// Exchange retains the displaced entry for conflict verification. It is
+    /// not a filesystem CAS, especially against writers with an open descriptor.
     @concurrent func write(path: String, data: Data,
                            ifUnchanged version: WorkspaceFileVersion) async throws {
-        try Self.writeStaged(path: path, data: data, ifUnchanged: version)
+        try Self.writeStaged(path: path, data: data, ifUnchanged: version,
+                             beforeConditionalPublication: beforeConditionalPublication)
     }
 
     @concurrent func writeNewFile(path: String, data: Data) async throws {
@@ -349,11 +355,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
 
     @concurrent func writeImageExport(_ target: ImageExportTarget, to path: String, data: Data) async throws {
         guard try Self.exportPath(path) == target.path else { throw WorkspaceError.changedExternally }
-        try Self.writeStaged(path: target.path, data: data, ifUnchanged: target.version, exportTarget: target)
+        try Self.writeStaged(path: target.path, data: data, ifUnchanged: target.version, exportTarget: target,
+                             beforeConditionalPublication: beforeConditionalPublication)
     }
 
     private static func writeStaged(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion?,
-                                    exportTarget: ImageExportTarget? = nil) throws {
+                                    exportTarget: ImageExportTarget? = nil,
+                                    beforeConditionalPublication: (@Sendable (String) throws -> Void)? = nil) throws {
         try Task.checkCancellation()
         guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
@@ -372,8 +380,14 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         let stage = String(decoding: template.dropLast().map { UInt8(bitPattern: $0) },
                            as: UTF8.self)
-        defer { try? FileManager.default.removeItem(atPath: stage) }
         let item = stage + "/item"
+        var ownsStage = true
+        defer {
+            if ownsStage {
+                _ = unlink(item)
+                _ = rmdir(stage)
+            }
+        }
         try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
         _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
         let stagedHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: item))
@@ -390,7 +404,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 try ImageAnnotationSidecar.requireUnpairedLocal(path)
             }
             if let version {
-                if let originalMode = try Self.verifyCurrentVersion(path: path, expected: version) {
+                let originalMode = try Self.verifyCurrentVersion(path: path, expected: version)
+                if let originalMode {
                     guard chmod(item, mode_t(originalMode)) == 0 else {
                         throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
                     }
@@ -399,7 +414,44 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                     guard LocalFileIdentity.read(path) == target.identity else { throw WorkspaceError.changedExternally }
                     try ImageAnnotationSidecar.requireUnpairedLocal(path)
                 }
-                status = item.withCString { from in path.withCString { to in Darwin.rename(from, to) } }
+                try beforeConditionalPublication?(path)
+                status = item.withCString { from in
+                    path.withCString { to in renamex_np(from, to, UInt32(RENAME_SWAP)) }
+                }
+                guard status == 0 else {
+                    let code = errno
+                    if code == ENOENT || code == ENOTDIR { throw WorkspaceError.changedExternally }
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+                }
+                // The stage now belongs to the displaced writer. Never clean it
+                // on an unverified result, including cancellation after exchange.
+                ownsStage = false
+                do {
+                    if let identity = exportTarget?.identity,
+                       LocalFileIdentity.read(item)?.refersToSameEntry(as: identity) != true {
+                        throw WorkspaceError.changedExternally
+                    }
+                    if let originalMode {
+                        guard try Self.verifyCurrentVersion(path: item, expected: version) == originalMode else {
+                            throw WorkspaceError.changedExternally
+                        }
+                    } else {
+                        // A relative symlink was moved one directory deeper.
+                        // Verify its original referent without changing it.
+                        let link = try FileManager.default.destinationOfSymbolicLink(atPath: item)
+                        let referent = link.hasPrefix("/") ? link : (parent as NSString).appendingPathComponent(link)
+                        _ = try Self.verifyCurrentVersion(path: referent, expected: version)
+                    }
+                    guard unlink(item) == 0 else {
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
+                    ownsStage = true
+                } catch {
+                    let recovery = retainDisplacedEntry(item: item, stage: stage, target: path)
+                    throw NSError(domain: "Bailey.Save", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "The file changed during save or its previous version could not be verified. The destination may contain your draft. The displaced entry is preserved at: \(recovery)", table: "Workspace")
+                    ])
+                }
             } else {
                 status = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: path))
             }
@@ -407,6 +459,20 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
         }
+    }
+
+    /// Make the conflicting entry discoverable without touching the destination
+    /// again. If the move fails, the private stage is itself the recovery location.
+    private static func retainDisplacedEntry(item: String, stage: String, target: String) -> String {
+        let parent = (target as NSString).deletingLastPathComponent
+        let directory = (parent as NSString).appendingPathComponent("Bailey Save Recovery " + UUID().uuidString)
+        let name = (target as NSString).lastPathComponent
+        let renamedItem = (stage as NSString).appendingPathComponent(name)
+        let storedName = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: renamedItem)) == 0
+            ? name : "item"
+        let destination = exclusiveRename(from: URL(fileURLWithPath: stage), to: URL(fileURLWithPath: directory)) == 0
+            ? directory : stage
+        return (LocalPathScope.physicalPath(destination) as NSString).appendingPathComponent(storedName)
     }
 
     /// Verify bytes through a bounded streaming, nonblocking regular-file FD,

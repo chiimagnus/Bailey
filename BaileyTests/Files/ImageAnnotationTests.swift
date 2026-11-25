@@ -53,8 +53,8 @@ final class ImageAnnotationTests: XCTestCase {
         }
     }
 
-    private func open(_ path: URL) async throws -> FileTab {
-        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+    private func open(_ path: URL, backend: LocalWorkspaceBackend = .shared) async throws -> FileTab {
+        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
         file.loadIfNeeded()
         try await waitFor("Open original image and its annotation document") {
             if case .image = file.content { return true }
@@ -789,6 +789,65 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertNil(replaced.imageAnnotations)
         XCTAssertNotNil(replaced.annotationError)
         XCTAssertFalse(replaced.canAnnotateImage)
+    }
+
+    func testLateIndependentSidecarPublicationRetainsDisplacedLayersAndDraft() async throws {
+        for replacing in [false, true] {
+            let root = try makeRoot()
+            let path = root.appendingPathComponent("image 中文.png")
+            let original = try png()
+            try original.write(to: path)
+            let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
+            let rival = root.appendingPathComponent("rival.json")
+            let seed = try await open(path)
+            defer { seed.retireContent() }
+            let initial = try XCTUnwrap(seed.imageAnnotations)
+            add(.arrow, to: initial, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 35, y: 35))
+            await seed.save()
+            XCTAssertFalse(seed.isDirty)
+            let baseline = try Data(contentsOf: sidecar)
+            let other = ImageAnnotationDocument(size: initial.size, state: initial.state)
+            add(.ellipse, to: other, from: CGPoint(x: 20, y: 20), to: CGPoint(x: 50, y: 50))
+            let version = WorkspaceFileVersion(data: original)
+            let external = try await ImageAnnotationSidecar.encode(other.state, version: version, size: other.size)
+            try external.write(to: rival)
+            let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+                try publishIndependentFile(rival, to: $0, replacing: replacing)
+            })
+            let file = try await open(path, backend: backend)
+            defer { file.retireContent() }
+            let doc = try XCTUnwrap(file.imageAnnotations)
+            add(.rectangle, to: doc, from: CGPoint(x: 10, y: 10), to: CGPoint(x: 60, y: 60))
+            let draft = doc.state
+            await file.save()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: rival.path), "Independent publication must have run")
+            XCTAssertTrue(file.isDirty)
+            XCTAssertEqual(doc.state, draft)
+            XCTAssertNotNil(file.saveError)
+            let entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            let recovery = entries.filter { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") }
+            XCTAssertEqual(recovery.count, 1)
+            guard let directory = recovery.first else { continue }
+            let stored = directory.appendingPathComponent(sidecar.lastPathComponent)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertTrue(file.saveError?.contains(stored.path) == true,
+                          "Expected recovery at \(stored.path), got \(file.saveError ?? "nil")")
+            let written = try Data(contentsOf: sidecar)
+            XCTAssertEqual(try ImageAnnotationSidecar.decode(written, version: version, size: doc.size), draft)
+            XCTAssertEqual(try Data(contentsOf: path), original)
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            XCTAssertNotNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: sidecar), written)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            try baseline.write(to: sidecar, options: .atomic)
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: sidecar), written)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: path), original)
+        }
     }
 
     func testExistingSidecarHasOnlyOneSuccessfulConcurrentPublisher() async throws {

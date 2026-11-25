@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "The file changed during save or its previous version could not be verified. The destination may contain your draft. The displaced entry is preserved at: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存期间文件发生变化，或无法核验其旧版本。目标路径可能已包含当前草稿。被替换的文件已保留在：%@"
+          }
+        }
+      }
+    },
     "Save result could not be confirmed." : {
       "localizations" : {
         "zh-Hans" : {

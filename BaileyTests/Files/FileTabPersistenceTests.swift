@@ -124,6 +124,18 @@ private func waitForFileTabState(_ condition: () async -> Bool) async throws {
     }
 }
 
+/// The independent process neither observes nor participates in Bailey's publication lock.
+nonisolated func publishIndependentFile(_ source: URL, to path: String, replacing: Bool) throws {
+    guard FileManager.default.fileExists(atPath: source.path) else { return }
+    let writer = Process()
+    writer.executableURL = URL(fileURLWithPath: "/bin/sh")
+    writer.arguments = ["-c", replacing ? "mv -f \"$1\" \"$2\"" : "cat \"$1\" > \"$2\" && rm \"$1\"", "_",
+                        source.path, path]
+    try writer.run()
+    writer.waitUntilExit()
+    guard writer.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+}
+
 @MainActor
 final class FileTabPersistenceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
@@ -311,6 +323,61 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertNotNil(file.saveError)
     }
 
+    func testCSVLateIndependentPublicationRetainsDisplacedBytesAndDraft() async throws {
+        for replacing in [false, true] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bailey-csv-late-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let path = root.appendingPathComponent("table 中文.csv")
+            let rival = root.appendingPathComponent("rival.csv")
+            let baseline = Data("Name,Value\r\nItem,old\n".utf8)
+            let external = Data("Name,Value\r\nItem,ext\n".utf8)
+            let draft = "Name,Value\r\nItem,new\n"
+            try baseline.write(to: path)
+            try external.write(to: rival)
+            let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+                try publishIndependentFile(rival, to: $0, replacing: replacing)
+            })
+            let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            try await file.editDelimited(.paste("new", rows: [1], origin: .init(row: 0, column: 1), columns: 2),
+                                         using: snapshot)
+            XCTAssertEqual(file.text, draft)
+            await file.save()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: rival.path), "Independent publication must have run")
+            XCTAssertTrue(file.isDirty)
+            XCTAssertEqual(file.text, draft)
+            XCTAssertNotNil(file.saveError)
+            let entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            let recovery = entries.filter { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") }
+            XCTAssertEqual(recovery.count, 1)
+            guard let directory = recovery.first else { continue }
+            let stored = directory.appendingPathComponent(path.lastPathComponent)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertTrue(file.saveError?.contains(stored.path) == true,
+                          "Expected recovery at \(stored.path), got \(file.saveError ?? "nil")")
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            // Repeating Save must neither consume the recovery nor accept the stale baseline.
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            XCTAssertNotNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            // Explicitly reconcile the source to the accepted baseline, then retry.
+            try baseline.write(to: path, options: .atomic)
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+        }
+    }
+
     func testLocalConditionalWriteKeepsModeAndDoesNotFollowSymlink() async throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-cas-local-\(UUID().uuidString)")
@@ -335,6 +402,13 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: linked), baseline)
         XCTAssertEqual(try Data(contentsOf: source), update)
         XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: linked.path))
+        let relative = folder.appendingPathComponent("relative.sh")
+        try FileManager.default.createSymbolicLink(atPath: relative.path, withDestinationPath: source.lastPathComponent)
+        try await backend.write(path: relative.path, data: baseline,
+                                ifUnchanged: WorkspaceFileVersion(data: update))
+        XCTAssertEqual(try Data(contentsOf: relative), baseline)
+        XCTAssertEqual(try Data(contentsOf: source), update)
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: relative.path))
         let removed = folder.appendingPathComponent("removed.sh")
         try baseline.write(to: removed)
         try FileManager.default.removeItem(at: removed)
@@ -345,7 +419,7 @@ final class FileTabPersistenceTests: XCTestCase {
         } catch WorkspaceError.changedExternally {}
         XCTAssertFalse(FileManager.default.fileExists(atPath: removed.path))
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)),
-                       Set([source.lastPathComponent, linked.lastPathComponent]))
+                       Set([source.lastPathComponent, linked.lastPathComponent, relative.lastPathComponent]))
     }
 
     func testLocalConditionalWriteSupportsLongLegalFileName() async throws {
