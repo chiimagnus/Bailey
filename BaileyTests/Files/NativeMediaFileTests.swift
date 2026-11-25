@@ -1443,7 +1443,11 @@ final class NativeMediaFileTests: XCTestCase {
             XCTAssertEqual(player.rate, 0)
             probe.measurement.withLock { $0.frames = 0; $0.lowPower = 0; $0.highPower = 0; $0.peak = 0 }
             player.play()
-            try await waitUntil { probe.measurement.withLock { $0.frames >= 24_000 } }
+            // The processing tap can receive queued PCM before the playback clock starts.
+            try await waitUntil {
+                probe.measurement.withLock { $0.frames >= 24_000 }
+                    && player.currentTime().seconds > seek
+            }
             player.pause()
             let signal = probe.measurement.withLock { $0 }
             print("AUDIO_SELECTION language=\(language) frames=\(signal.frames) sampleRate=\(signal.sampleRate) low=\(signal.lowPower) high=\(signal.highPower)")
