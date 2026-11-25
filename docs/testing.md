@@ -370,6 +370,10 @@ Tag／Stash 徽标右键正确消费所属提交或混合选区、剪贴板最�
 交互式 Rebase 用系统 `/bin/sh -c` 内联编辑器验证真实 PTY 与提交重写，
 避免跨进程执行 UI Runner 沙盒内的脚本。
 
+`SSHFileTreeLiveTests` 的远端 CSV 冲突回归通过独立 SSH 连接验证同大小、同修改时间改写，
+旧磁盘／旧连接确认拒绝和重新确认后的精确保存；`ImageAnnotationTests` 核对真实旁车版本、
+原图保护与关联文件操作。两者均检查本机同路径文件不被远端写入影响。
+
 `GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，
 以及固定 SSH 项目的独立握手和真实 Rebase；
 其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。

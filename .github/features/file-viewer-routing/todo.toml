@@ -4,10 +4,10 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "核销读取与公共资源边界，移除新格式产生的重复路径"
-status = "blocked"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = "本机公共读取／授权／容量／取消与跨窗117次、宿主100+100及相关154/154已验；六项既有发现均解决。最新807fbdee全量 MarkdownResourceScopeTests 真实远端 regions.jpg 读取和清理超时；独立系统 OpenSSH 同样出现两次 TCP connect 超时及两次15秒握手／读取超时，稳定后热通道实际字节正确。真实远端 R10 定点复验是本任务具体剩余项；共享保存、格式专属输入与缺配外设不再重复阻塞。详见 audit-p1.md。"
+commit = "35503954"
+note = "本机公共读取/授权/容量/取消、宿主100+100及154/154、真实双窗117次与冷恢复均已验；六项既有发现已解决。真实Windows Tailscale恢复后公共资源79.435秒、32MiB精确读写39.155秒、图片旁车两项及相邻普通改名/Git Diff共6/6通过，零XCTest跳过；原生Windows符号链接创建不可用的条件分支未验，权限不改。e697efb5/86602be8补齐远端冲突回归。公共读取任务独立核销；阶段最终整合留第六项，不重复阻塞。详见audit-p1.md。"
 
 [[tasks]]
 id = "P1-T2"
