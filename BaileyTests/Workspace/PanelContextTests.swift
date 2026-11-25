@@ -607,6 +607,35 @@ final class PanelContextTests: XCTestCase {
         XCTAssertTrue(renamedByOldChannel.isEmpty, "A stale channel must not rename a file after replacement")
     }
 
+    func testReturningToCancelledProjectDoesNotWaitForItsOldRead() async throws {
+        let backend = DelayedWorkspaceFixture("same-channel")
+        let tree = FileTreeModel()
+        let queue = PanelSyncQueue()
+        let first = PanelContext.Identity(project: UUID(), workspace: "ssh:fixture", directory: "/root")
+        let second = PanelContext.Identity(project: UUID(), workspace: "ssh:fixture", directory: "/other")
+        await backend.suspendNextList()
+        queue.run(for: first) {
+            await tree.sync(root: "/root", backend: backend, scope: "ssh:fixture", panelIdentity: first)
+        }
+        try await wait { await backend.awaitingList }
+        queue.run(for: second) {}
+        var completed = false
+        queue.run(for: first) {
+            completed = await tree.sync(root: "/root", backend: backend, scope: "ssh:fixture",
+                                        panelIdentity: first)
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while !completed, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let completedBeforeOldRead = completed
+        await backend.releaseList()
+        XCTAssertTrue(completedBeforeOldRead,
+                      "Returning to the same project must not wait for its cancelled directory read")
+        try await wait { completed }
+        XCTAssertEqual(tree.items.map(\.path), ["/root/tracked.txt"])
+    }
+
     func testPanelSyncQueueCoalescesSameTargetWithLatestRequest() async throws {
         let backend = DelayedWorkspaceFixture("old-channel")
         await backend.suspendNextList()

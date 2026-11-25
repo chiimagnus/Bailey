@@ -26,17 +26,16 @@ final class PanelSyncQueue {
             pendingBody = body
             return
         }
-        activeTask?.cancel()
-        generation &+= 1
+        cancel()
         let currentGeneration = generation
         self.target = target
         isRunning = true
         pendingBody = nil
         activeTask = Task { @MainActor in
             var currentBody = body
-            while true {
+            while !Task.isCancelled, currentGeneration == generation {
                 await currentBody()
-                guard currentGeneration == generation else { return }
+                guard !Task.isCancelled, currentGeneration == generation else { return }
                 guard let next = pendingBody else {
                     isRunning = false
                     activeTask = nil
@@ -46,6 +45,15 @@ final class PanelSyncQueue {
                 currentBody = next
             }
         }
+    }
+
+    func cancel() {
+        generation &+= 1
+        activeTask?.cancel()
+        activeTask = nil
+        pendingBody = nil
+        isRunning = false
+        target = nil
     }
 }
 
@@ -275,6 +283,7 @@ struct ToolPanelView: View {
             syncModels()
         }
         .onDisappear {
+            syncQueue.cancel()
             stopLocalFileWatcher()
             stopRemoteFileWatcher()
         }

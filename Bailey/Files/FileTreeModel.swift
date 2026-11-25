@@ -742,6 +742,7 @@ final class FileTreeModel {
         root: String, backend: WorkspaceBackend, scope: String = "local",
         panelIdentity: PanelContext.Identity? = nil, connectionRevision: UInt64 = 0
     ) async -> Bool {
+        guard !Task.isCancelled else { return false }
         let scopeChanged = root != rootPath || workspaceScope != scope
         let backendChanged = (self.backend as AnyObject) !== (backend as AnyObject)
         let identityChanged = self.panelIdentity != panelIdentity
@@ -755,19 +756,9 @@ final class FileTreeModel {
         if scopeChanged || channelChanged {
             stopLocalFileWatcher()
             if scopeChanged { localIndexGitDirectory = nil }
-            changedDirectoriesPending.removeAll()
             treeEpoch &+= 1
-            rebuildGeneration &+= 1
-            projectionTask?.cancel()
-            projectionTask = nil
+            cancelRebuild()
             cachedDirectories.removeAll()
-            // A stalled old SSH traversal cannot delay the new workspace.
-            isRebuilding = false
-            rebuildPending = false
-            refreshPending = false
-            let waiters = rebuildWaiters
-            rebuildWaiters.removeAll()
-            for waiter in waiters { waiter.resume(returning: false) }
         }
         self.backend = backend
         self.panelIdentity = panelIdentity
@@ -1423,6 +1414,22 @@ final class FileTreeModel {
         cachedDirectories.removeValue(forKey: (path as NSString).deletingLastPathComponent)
     }
 
+    // A cancelled caller may still be waiting for a non-cooperative backend.
+    // A new request must not queue behind it, even when returning to the
+    // same project. The generation rejects the old result.
+    private func cancelRebuild() {
+        rebuildGeneration &+= 1
+        projectionTask?.cancel()
+        projectionTask = nil
+        isRebuilding = false
+        rebuildPending = false
+        refreshPending = false
+        changedDirectoriesPending.removeAll()
+        let waiters = rebuildWaiters
+        rebuildWaiters.removeAll()
+        for waiter in waiters { waiter.resume(returning: false) }
+    }
+
     private func awaitPendingRebuild() async {
         guard isRebuilding else { return }
         _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -1434,7 +1441,12 @@ final class FileTreeModel {
     private func rebuild(
         refresh: Bool = false, changed: Set<String> = [], awaitQueuedResult: Bool = false
     ) async -> Bool {
-        guard !rootPath.isEmpty else { return false }
+        guard !rootPath.isEmpty, !Task.isCancelled else { return false }
+        if projectionTask?.isCancelled == true {
+            cancelRebuild()
+            // The cancelled read may have consumed pending file events.
+            refreshPending = true
+        }
         if refresh { refreshPending = true }
         changedDirectoriesPending.formUnion(changed)
         if isRebuilding {
@@ -1473,12 +1485,17 @@ final class FileTreeModel {
                 )
             }
             projectionTask = task
-            let projected = await task.value
+            let projected = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
             guard generation == rebuildGeneration else { return false }
             projectionTask = nil
-            guard let projected else {
-                readFailed = true
-                break
+            guard !Task.isCancelled, let projected else {
+                cancelRebuild()
+                refreshPending = true
+                return false
             }
             readFailed = readFailed || projected.readFailed
             guard epoch == treeEpoch else {
