@@ -126,9 +126,11 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
             case gif:
                 let viewer = inWindow("bailey.image.inspector", window)
                 XCTAssertTrue(viewer.waitForExistence(timeout: 15))
-                viewer.rightClick()
-                XCTAssertTrue(WorkspaceUITestSupport.menuItem("100%", in: app).waitForExistence(timeout: 5))
-                app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+                if initially {
+                    viewer.rightClick()
+                    XCTAssertTrue(WorkspaceUITestSupport.menuItem("100%", in: app).waitForExistence(timeout: 5))
+                    app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+                }
             case audio, video:
                 let timeline = window.sliders["timeline"]
                 XCTAssertTrue(timeline.waitForExistence(timeout: 15))
@@ -156,8 +158,11 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
         let first = app.windows.matching(identifier: firstID).firstMatch
         try await deliver(files)
         assertAllTabs(first, expected: files, excluding: [otherCSV, otherHTML])
-        for file in files { try await inspect(file, in: first, initially: true) }
-        let videoPosition = try XCTUnwrap(mediaTime(first))
+        var positions: [URL: Double] = [:]
+        for file in files {
+            try await inspect(file, in: first, initially: true)
+            if file == audio || file == video { positions[file] = try XCTUnwrap(mediaTime(first)) }
+        }
 
         app.typeKey("n", modifierFlags: [.command, .shift])
         let other = app.windows.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
@@ -181,22 +186,26 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
         assertAllTabs(first, expected: files, excluding: [otherCSV, otherHTML])
         assertAllTabs(second, expected: [otherCSV, otherHTML], excluding: files)
 
-        for _ in 0..<2 {
+        // Exercise the real App for over 100 transitions, not just a host loop.
+        // Each round returns to the other window and checks both same-named owners.
+        for round in 1...13 {
             for file in files.reversed() {
                 try await inspect(file, in: first, initially: false)
-                if file == video {
-                    // AVPlayerView may recreate its AX slider before it publishes
-                    // the retained player's current time. Require the real
-                    // playhead to converge to the same position without seeking.
-                    wait("The native video playhead must restore \(videoPosition) after remount") {
+                if let expected = positions[file] {
+                    // Remounting AVKit must restore the existing paused position.
+                    wait("The native media playhead must restore \(expected) for \(file.lastPathComponent)") {
                         guard let time = mediaTime(first) else { return false }
-                        return abs(time - videoPosition) <= 0.1
+                        return abs(time - expected) <= 0.1
                     }
-                    XCTAssertEqual(try XCTUnwrap(mediaTime(first)), videoPosition, accuracy: 0.1)
+                    XCTAssertEqual(try XCTUnwrap(mediaTime(first)), expected, accuracy: 0.1)
                 }
             }
+            try await select(otherHTML, in: second)
+            XCTAssertTrue(second.webViews.firstMatch.staticTexts["Second window HTML"].waitForExistence(timeout: 10))
             try await select(otherCSV, in: second)
             XCTAssertTrue(inWindow("bailey.csv.table", second).staticTexts["Second window"].exists)
+            XCTAssertEqual(app.state, .runningForeground)
+            print("PREVIEW_UI_STRESS round=\(round) switches=\(round * 9)")
         }
         try await select(html, in: first)
         WorkspaceUITestSupport.fileTab(html, in: first).rightClick()
