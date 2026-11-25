@@ -90,7 +90,7 @@ protocol Renderer {
     func scale(sx: Types.Float, sy: Types.Float)
 
     func setFill(color: Types.Color)
-    func setFill(pattern: Types.Pattern)
+    func fill(pattern: Types.Pattern, path: Types.Path, rule: Types.FillRule)
     func setStroke(color: Types.Color)
     func setLine(width: Types.Float)
     func setLine(cap: Types.LineCap)
@@ -142,8 +142,8 @@ extension Renderer {
             rotate(angle: a)
         case .setFill(color: let c):
             setFill(color: c)
-        case .setFillPattern(let p):
-            setFill(pattern: p)
+        case let .fillPattern(pattern, path, rule):
+            fill(pattern: pattern, path: path, rule: rule)
         case .setStroke(color: let c):
             setStroke(color: c)
         case .setLine(width: let w):
@@ -208,7 +208,7 @@ enum RendererCommand<Types: RendererTypes>: @unchecked Sendable {
     case scale(sx: Types.Float, sy: Types.Float)
 
     case setFill(color: Types.Color)
-    case setFillPattern(Types.Pattern)
+    case fillPattern(Types.Pattern, Types.Path, rule: Types.FillRule)
     case setStroke(color: Types.Color)
     case setLine(width: Types.Float)
     case setLineCap(Types.LineCap)

@@ -729,7 +729,21 @@ struct CGRenderer: Renderer {
         ctx.setFillColor(color)
     }
 
-    func setFill(pattern: CGTransformingPattern) {
+    func fill(pattern: CGTransformingPattern, path: CGPath, rule: CGPathFillRule) {
+        let context = ctx
+        context.saveGState()
+        defer { context.restoreGState() }
+        if context.isBitmapContext {
+            context.addPath(path)
+            context.clip(using: rule)
+            pattern.paint(in: context)
+        } else {
+            setVectorFill(pattern: pattern)
+            fill(path: path, rule: rule)
+        }
+    }
+
+    private func setVectorFill(pattern: CGTransformingPattern) {
         let patternSpace = CGColorSpace(patternBaseSpace: nil)!
         ctx.setFillColorSpace(patternSpace)
         var alpha: CGFloat = 1.0

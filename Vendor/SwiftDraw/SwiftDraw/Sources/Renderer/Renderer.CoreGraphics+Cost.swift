@@ -72,8 +72,8 @@ extension RendererCommand<CGTypes> {
         switch self {
         case .setClip(path: let p, rule: _):
             return [p]
-        case .setFillPattern(let p):
-            return p.contents.allPaths
+        case let .fillPattern(pattern, path, _):
+            return [path] + pattern.contents.allPaths
         case .clipToMask(let contents):
             return contents.allPaths
         case .stroke(let p):
@@ -89,8 +89,8 @@ extension RendererCommand<CGTypes> {
 
     var allImages: [CGImage] {
         switch self {
-        case .setFillPattern(let p):
-            return p.contents.allImages
+        case .fillPattern(let pattern, _, _):
+            return pattern.contents.allImages
         case .clipToMask(let contents):
             return contents.allImages
         case .draw(image: let i, in: _):

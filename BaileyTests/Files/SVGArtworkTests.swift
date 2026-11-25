@@ -629,6 +629,136 @@ final class SVGArtworkTests: XCTestCase {
         }
     }
 
+    func testOpaquePatternHasNoTileSeamsAtFractionalOutputScales() async throws {
+        let bytes = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="360" height="220" viewBox="-180 -110 360 220">
+              <defs>
+                <pattern id="paper" width="2" height="2" patternUnits="userSpaceOnUse">
+                  <rect width="2" height="2" fill="#f11a14"/>
+                </pattern>
+                <symbol id="sheet" viewBox="0 0 36 22"><rect width="36" height="22"/></symbol>
+              </defs>
+              <use href="#sheet" x="-180" y="-110" width="360" height="220" fill="url(#paper)"/>
+            </svg>
+            """.utf8)
+        let vector = try SVGArtwork.parse(bytes)
+        for (width, colorSpace) in [
+            (439, SVGArtwork.PNGOptions.ColorSpace.sRGB), (675, .displayP3),
+            (719, .sRGB), (720, .displayP3), (1087, .sRGB),
+        ] {
+            let height = (width * 220 + 359) / 360
+            let png = try await SVGArtwork.png(vector, options: .init(width: width, height: height,
+                                                                       colorSpace: colorSpace))
+            let pixels = try sRGBBitmap(png)
+            var mismatches = 0
+            pixels.bytes.withUnsafeBytes { (rgba: UnsafeRawBufferPointer) in
+                for y in 10..<(height - 10) {
+                    for x in 10..<(width - 10) {
+                        let index = y * pixels.bytesPerRow + x * 4
+                        if rgba[index + 3] != 255 || rgba[index] < 230 ||
+                            rgba[index + 1] > 35 || rgba[index + 2] > 30 {
+                            mismatches += 1
+                        }
+                    }
+                }
+            }
+            XCTAssertEqual(mismatches, 0, "Unexpected transparency or color at \(width) pixels")
+        }
+    }
+
+    func testFractionalPatternKeepsPhaseClippingAndOpacityAcrossTheOutput() async throws {
+        for (matrix, width, height) in [
+            (CGAffineTransform.identity, 675, 338), (.identity, 3375, 1688),
+            (CGAffineTransform(a: -1, b: 0.23, c: 0.17, d: 1, tx: 11.25, ty: -25.3), 2250, 1125),
+        ] {
+            let bytes = Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" width="360" height="180">
+                  <defs>
+                    <pattern id="tile" width="20" height="20" patternUnits="userSpaceOnUse"
+                      patternTransform="matrix(\(matrix.a) \(matrix.b) \(matrix.c) \(matrix.d) \(matrix.tx) \(matrix.ty))">
+                      <g opacity=".5">
+                        <rect x="-4" width="9" height="20" fill="red"/>
+                        <rect x="10" width="5" height="20" fill="blue"/>
+                      </g>
+                    </pattern>
+                  </defs>
+                  <rect width="360" height="180" fill="url(#tile)" fill-opacity=".5"/>
+                </svg>
+                """.utf8)
+            let vector = try SVGArtwork.parse(bytes)
+            let png = try await SVGArtwork.png(vector, options: .init(width: width, height: height))
+            let pixels = try sRGBBitmap(png)
+            let scale = min(CGFloat(width) / 360, CGFloat(height) / 180)
+            let toPixel = CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+                                           tx: (CGFloat(width) - 360 * scale) / 2,
+                                           ty: (CGFloat(height) - 180 * scale) / 2)
+            let toPattern = matrix.concatenating(toPixel).inverted()
+            var mismatches = 0
+            var checked = 0
+            for y in stride(from: 10, to: height - 10, by: 19) {
+                for x in 10..<(width - 10) {
+                    let xInPattern = CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5).applying(toPattern).x
+                    let phase = xInPattern - floor(xInPattern / 20) * 20
+                    let part = Int(phase / 5)
+                    let offset = phase - CGFloat(part * 5)
+                    // Only exclude the antialiasing footprint of the actual color transition,
+                    // never the distance to a guessed or rounded repeat boundary.
+                    guard min(offset, 5 - offset) / hypot(toPattern.a, toPattern.c) > 1.05 else { continue }
+                    let index = y * pixels.bytesPerRow + x * 4
+                    let alpha = Int(pixels.bytes[index + 3])
+                    if part == 0 {
+                        if abs(alpha - 64) > 1 || Int(pixels.bytes[index]) < 62 || pixels.bytes[index + 2] > 1 {
+                            mismatches += 1
+                        }
+                    } else if part == 2 {
+                        if abs(alpha - 64) > 1 || Int(pixels.bytes[index + 2]) < 62 || pixels.bytes[index] > 1 {
+                            mismatches += 1
+                        }
+                    } else if alpha != 0 {
+                        mismatches += 1
+                    }
+                    checked += 1
+                }
+            }
+            XCTAssertGreaterThan(checked, 5_000)
+            XCTAssertEqual(mismatches, 0, "Fractional pattern moved or changed alpha at \(width)×\(height)")
+        }
+    }
+
+    func testFractionalPatternRespectsEvenOddFillAndDashedStroke() async throws {
+        let bytes = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="96" height="48">
+              <defs>
+                <pattern id="ink" width="4.75" height="6.25" patternUnits="userSpaceOnUse">
+                  <rect width="4.75" height="6.25" fill="red"/>
+                </pattern>
+              </defs>
+              <path d="M 1 1 H 45 V 47 H 1 Z M 15 15 H 31 V 33 H 15 Z" fill="url(#ink)" fill-rule="evenodd"/>
+              <path d="M 52 15 H 92" fill="none" stroke="url(#ink)" stroke-width="8"
+                stroke-dasharray="6 5" stroke-opacity=".5"/>
+            </svg>
+            """.utf8)
+        let vector = try SVGArtwork.parse(bytes)
+        let png = try await SVGArtwork.png(vector, options: .init(width: 240, height: 120))
+        let bitmap = try sRGBBitmap(png)
+        func sample(_ x: CGFloat, _ y: CGFloat) throws -> NSColor {
+            try XCTUnwrap(bitmap.colorAt(x: Int(x * 2.5), y: Int(y * 2.5)))
+        }
+        for (x, y) in [(5.0, 15.0), (32.0, 27.0)] {
+            let color = try sample(x, y)
+            XCTAssertEqual(color.alphaComponent, 1)
+            XCTAssertGreaterThan(color.redComponent, 0.98)
+        }
+        for (x, y) in [(54.0, 15.0), (65.0, 15.0), (77.0, 15.0)] {
+            let color = try sample(x, y)
+            XCTAssertEqual(color.alphaComponent, 0.5, accuracy: 0.01)
+            XCTAssertGreaterThan(color.redComponent, 0.98)
+        }
+        for (x, y) in [(22.0, 22.0), (47.0, 22.0), (60.0, 15.0), (65.0, 9.0)] {
+            XCTAssertEqual(try sample(x, y).alphaComponent, 0)
+        }
+    }
+
     func testPatternReferencesAndEmbeddedRasterAreBoundedAndCannotReadExternalResources() throws {
         let root = "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"32\" height=\"16\">"
         func artwork(_ body: String) -> Data { Data((root + body + "</svg>").utf8) }

@@ -65,14 +65,6 @@
       }
     },
     {
-      "identity" : "swiftdraw",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/swhitty/SwiftDraw",
-      "state" : {
-        "revision" : "ad1eb8c20177afbbb8b00e0f706f84c64aa672cc"
-      }
-    },
-    {
       "identity" : "swifttreesitter",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ChimeHQ/SwiftTreeSitter",

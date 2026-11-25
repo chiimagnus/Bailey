@@ -227,7 +227,7 @@
 				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
 				BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */,
 				BC1000000000000000000071 /* XCLocalSwiftPackageReference "Vendor/RasterRegions" */,
-				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
+				BC1000000000000000000031 /* XCLocalSwiftPackageReference "Vendor/SwiftDraw" */,
 				BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */,
 				BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */,
@@ -544,6 +544,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/SwiftSoup;
 		};
+		BC1000000000000000000031 /* XCLocalSwiftPackageReference "Vendor/SwiftDraw" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/SwiftDraw;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -553,14 +557,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 2.10.2;
-			};
-		};
-		BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/swhitty/SwiftDraw";
-			requirement = {
-				kind = revision;
-				revision = ad1eb8c20177afbbb8b00e0f706f84c64aa672cc;
 			};
 		};
 		BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */ = {
@@ -612,7 +608,7 @@
 		};
 		BC1000000000000000000032 /* SwiftDraw */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */;
+			package = BC1000000000000000000031 /* XCLocalSwiftPackageReference "Vendor/SwiftDraw" */;
 			productName = SwiftDraw;
 		};
 		BC1000000000000000000012 /* Yams */ = {

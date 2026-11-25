@@ -256,8 +256,7 @@ extension LayerTree {
                         contentsOf: renderCommands(
                             withOpacity: fill.opacity,
                             [
-                                .setFillPattern(pattern),
-                                .fill(path, rule: rule),
+                                .fillPattern(pattern, path, rule: rule),
                             ]
                         )
                     )
@@ -403,8 +402,7 @@ extension LayerTree {
                     if stroke.opacity < 1 {
                         commands.append(.setAlpha(provider.createFloat(from: stroke.opacity)))
                     }
-                    commands.append(.setFillPattern(pattern))
-                    commands.append(.fill(area, rule: provider.createFillRule(from: .nonzero)))
+                    commands.append(.fillPattern(pattern, area, rule: provider.createFillRule(from: .nonzero)))
                     commands.append(contentsOf: renderCommands(forDashResetOf: stroke))
                     commands.append(.popState)
                 }

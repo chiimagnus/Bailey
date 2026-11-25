@@ -512,12 +512,15 @@ public final class CGTextRenderer: Renderer {
         lines.append("ctx.setFillColor(\(identifier))")
     }
 
-    func setFill(pattern: String) {
+    func fill(pattern: String, path: [LayerTree.Shape], rule: String) {
+        pushState()
         let identifier = createOrGetPattern(pattern)
         let alpha = identifier.replacingOccurrences(of: "pattern", with: "patternAlpha")
         lines.append("ctx.setFillColorSpace(CGColorSpace(patternBaseSpace: nil)!)")
         lines.append("var \(alpha) : CGFloat = 1.0")
         lines.append("ctx.setFillPattern(\(identifier), colorComponents: &\(alpha))")
+        fill(path: path, rule: rule)
+        popState()
     }
 
     func setStroke(color: String) {

@@ -100,9 +100,6 @@ extension LayerTree {
                 } else {
                     return nil
                 }
-            case .setFillPattern:
-                // a pattern replaces the fill colour: a later setFill of the same colour is not redundant
-                state.top.fill = nil
             case .pushState:
                 state.push(state.top)
             case .popState:
