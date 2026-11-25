@@ -1656,6 +1656,34 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(field.stringValue, "rp")
         XCTAssertEqual(document.tool, .text)
         XCTAssertEqual(document.state.layers, [stroke])
+        document.cancelText()
+        field.removeFromSuperview()
+        for width in [360, 260, 220, 150] {
+            window.setContentSize(CGSize(width: width, height: 480))
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            XCTAssertTrue(window.makeFirstResponder(scroll))
+            try key("t")
+            // Use the center of the actual visible document viewport, not a
+            // point outside the narrowed window.
+            let visible = scroll.contentView.bounds
+            try mouse(.leftMouseDown, Int(visible.midX), Int(visible.midY))
+            try mouse(.leftMouseUp, Int(visible.midX), Int(visible.midY))
+            try await waitFor("Annotation text field focused at width \(width)") {
+                (window.firstResponder as? NSTextView)?.isFieldEditor == true
+            }
+            let textEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
+            print("ANNOTATION_WIDTH \(width) window=\(window.contentView?.bounds.width ?? -1) field=\(textEditor.frame)")
+            XCTAssertGreaterThanOrEqual(textEditor.frame.width, 40, "A focused text editor must remain visible and usable")
+            textEditor.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(textEditor.hasMarkedText())
+            textEditor.insertText("中文", replacementRange: textEditor.markedRange())
+            XCTAssertEqual(document.textEdit?.text, "中文")
+            document.cancelText()
+            try await waitFor("The cancelled text editor retires") {
+                (window.firstResponder as? NSTextView)?.isFieldEditor != true
+            }
+        }
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
