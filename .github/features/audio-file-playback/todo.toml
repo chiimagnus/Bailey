@@ -12,15 +12,15 @@ note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 
 [[tasks]]
 id = "P1-T2"
 title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
-status = "pending"
+status = "blocked"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "4c304e53 恢复系统 AVKit；F-02 原自定义控件缺陷已解决。dd7ab6dc 完整 App 原生播放／定位／音量／静音／切标签40.454秒通过，当前 NativeAudioTimingTests 通过。下一步仅补原生窄窗控件逐项实际操作及 VoiceOver；真实声音/睡眠与P2-T2组合验收。"
+note = "4c304e53 保持系统 AVKit；dd7ab6dc 真实完整 App 播放／定位／音量／静音／切标签 40.454 秒通过；本轮原生挂载计时／音量再次通过，Core Audio 已确认 Dev 启动内置输出通路。逐项窄窗实际操作复验遇临时 Sheet，未取得有效结果；当前用户正在使用图形会话，VoiceOver 和窄窗不得抢占桌面。"
 
 [[tasks]]
 id = "P2-T2"
 title = "隐藏、重新激活与真实资源回收"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = "共享混合媒体百次资源释放、真实117次双窗及冷恢复、原生时间和暂停位置均已验；当前 NativeMediaFileTests 真实通知/换源/关闭通过。下一步与视频 P2-T2 共享真实睡眠／唤醒与内置音频输出验收；第二输出设备已延期。"
+note = "共享百次播放释放、117 次双窗冷恢复、当前原生计时及睡眠／唤醒和输出变化通知路径回归通过；实际内置扬声器 Core Audio 输出通路通过，未测物理听感。当前用户使用 Mac，不触发真实系统睡眠；真实睡眠／唤醒和物理听感仍阻塞，第二输出设备已延期。"

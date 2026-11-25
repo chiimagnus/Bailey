@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：已验证实际轨道、解码帧、源字节、画幅、HDR 元数据、CENC 拒绝／恢复、原生系统全屏和双窗 117 次长会话。内置 XDR／音频输出及 VoiceOver 等仍未核销；缺配外接屏和第二输出设备延期。
+- **依据**：已验证实际轨道、解码帧、源字节、画幅、HDR 元数据、CENC 拒绝／恢复、原生系统全屏和双窗 117 次长会话。实际音轨输出的软件链已确认；内置 XDR 物理 HDR 呈现、物理听感及 VoiceOver 等仍未核销；缺配外接屏和第二输出设备延期。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -43,3 +43,5 @@
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+
+- 2026-11-25：c7840ffa 实际 4K Main10 HDR 解码、横竖屏原生 AVPlayerView 控件布局和快速 seek 最终帧复验均通过；完整隔离 Dev 原生音轨菜单出现 English/French，操作法语选项成功，Core Audio 实际内置输出通路启动。物理 XDR 亮度呈现、VoiceOver 仍未取得独占会话证据。P1-T2 blocked；未修改生产播放器。

@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：真实格式、读取预算、定位及播放器隔离已有原生和部分完整 GUI 证据；真实 CENC 保护判定及拒绝／恢复已通过；内置扬声器真实输出、窄窗操作、睡眠与 VoiceOver 尚未完成；第二输出设备切换延期。
+- **依据**：真实格式、读取预算、定位及播放器隔离已有原生和部分完整 GUI 证据；真实 CENC 保护判定及拒绝／恢复已通过；本轮原生计时、音量、内置扬声器软件输出通路已核验；物理听感、窄窗操作、睡眠与 VoiceOver 尚未完成；第二输出设备切换延期。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -68,3 +68,5 @@
 - dd7ab6dc 上实际执行修正后的 NativeMediaFileUITests.testNativeAudioControlsAndPauseWhenAnotherFileTakesFocus，40.454s、1/1、零跳过、make test:ui 退出 0。原生定位、播放推进、音量/静音恢复、切标签后暂停位置保持和原字节通过。日志 /tmp/bailey-audio-clock-full-ui.BUPl9tbn。窄窗控件逐一操作、VoiceOver、实体设备及睡眠未核销。
 
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+
+- 2026-11-25：c7840ffa 本轮针对性宿主 8 项中 7 通过、1 项字幕因 Runner 环境变量缺失跳过；字幕另行正确传入变量后与新增轨道测试 2/2 通过、零跳过。原生 AVKit 音频时间、音量与暂停再次通过。完整隔离 Dev 实际打开媒体，Core Audio 进程输出状态从 0 到 1，默认输出 device 77、transport 为 built-in、设备运行状态从 0 到 1（PID 96766）；这只证明软件输出通路，不证明扬声器的声学听感。窄窗补验遇临时 Sheet，未完成；当前用户在共享桌面操作，不强行继续前台测试。日志 /tmp/bailey-media-final.YMDYjJ、/tmp/bailey-media-tracks-final.AhtZ6j、/tmp/bailey-media-track.TQKMOs/{gui2,compact}.log。
