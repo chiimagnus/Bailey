@@ -1,0 +1,462 @@
+//
+//  XML.Parser.Scanner.swift
+//  SwiftDraw
+//
+//  Created by Simon Whitty on 2/11/18.
+//  Copyright 2020 Simon Whitty
+//
+//  Distributed under the permissive zlib license
+//  Get the latest version from here:
+//
+//  https://github.com/swhitty/SwiftDraw
+//
+//  This software is provided 'as-is', without any express or implied
+//  warranty.  In no event will the authors be held liable for any damages
+//  arising from the use of this software.
+//
+//  Permission is granted to anyone to use this software for any purpose,
+//  including commercial applications, and to alter it and redistribute it
+//  freely, subject to the following restrictions:
+//
+//  1. The origin of this software must not be misrepresented; you must not
+//  claim that you wrote the original software. If you use this software
+//  in a product, an acknowledgment in the product documentation would be
+//  appreciated but is not required.
+//
+//  2. Altered source versions must be plainly marked as such, and must not be
+//  misrepresented as being the original software.
+//
+//  3. This notice may not be removed or altered from any source distribution.
+//
+
+import Foundation
+
+package extension XMLParser {
+
+    struct Scanner {
+
+        package let scanner: Foundation.Scanner
+        package var currentIndex: String.Index
+
+        package init(text: String) {
+            self.scanner = Foundation.Scanner(string: text)
+            self.currentIndex = scanner.currentIndex
+            scanner.charactersToBeSkipped = Foundation.CharacterSet.whitespacesAndNewlines
+        }
+
+        package var isEOF: Bool { return scanner.isAtEnd }
+
+        @discardableResult
+        package mutating func scanString(_ token: String) throws -> Bool {
+            return try scanString(matchingAny: [token]) == token
+        }
+
+        @discardableResult
+        package mutating func scanStringIfPossible(_ token: String) -> Bool {
+            return (try? scanString(token)) == true
+        }
+
+        @discardableResult
+        package mutating func nextScanString(_ token: String) -> Bool {
+            scanner.currentIndex = currentIndex
+            defer { scanner.currentIndex = currentIndex }
+            return scanStringIfPossible(token)
+        }
+
+        package mutating func scanString(matchingAny tokens: Set<String>) throws -> String {
+            scanner.currentIndex = currentIndex
+            guard let match = tokens.first(where: { scanner.scanString($0) != nil }) else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return match
+        }
+
+        package mutating func scanCase<T: RawRepresentable & CaseIterable>(from type: T.Type) throws -> T
+        where T.RawValue == String {
+            scanner.currentIndex = currentIndex
+
+            guard let match = type.allCases.first(where: { scanner.scanString($0.rawValue) != nil }) else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return match
+        }
+
+        package mutating func scanString(matchingAny characters: Foundation.CharacterSet) throws -> String {
+            scanner.currentIndex = currentIndex
+            guard
+                let match = scanner.scanCharacters(from: characters),
+                match.isEmpty == false
+            else {
+                throw Error.invalid
+            }
+
+            currentIndex = scanner.currentIndex
+            return match
+        }
+
+        package mutating func doScanString(_ string: String) -> Bool {
+            scanner.currentIndex = currentIndex
+            guard scanner.scanString(string) != nil else {
+                return false
+            }
+            currentIndex = scanner.currentIndex
+            return true
+        }
+
+        package mutating func scanString(upTo token: String) throws -> String {
+            scanner.currentIndex = currentIndex
+            guard let match = scanner.scanUpToString(token) else {
+                throw Error.invalid
+            }
+
+            currentIndex = scanner.currentIndex
+            return match
+        }
+
+        package mutating func scanString(
+            upTo characters: Foundation.CharacterSet,
+            preservingStrings: Bool = false
+        ) throws -> String {
+            let location = currentIndex
+
+            guard preservingStrings else {
+                guard let match = scanner.scanUpToCharacters(from: characters) else {
+                    scanner.currentIndex = location
+                    throw Error.invalid
+                }
+                currentIndex = scanner.currentIndex
+                return match
+            }
+
+            var result = ""
+            let terminatorsAndQuotes = characters.union(CharacterSet(charactersIn: "\"'("))
+            let savedSkip = scanner.charactersToBeSkipped
+            scanner.charactersToBeSkipped = nil
+            defer { scanner.charactersToBeSkipped = savedSkip }
+
+            // skip leading whitespace once before scanning
+            _ = scanner.scanCharacters(from: .whitespacesAndNewlines)
+
+            while !scanner.isAtEnd {
+                if let text = scanner.scanUpToCharacters(from: terminatorsAndQuotes) {
+                    result += text
+                }
+
+                guard !scanner.isAtEnd else { break }
+
+                let ch = scanner.string[scanner.currentIndex]
+
+                if ch == "\"" || ch == "'" {
+                    let quote = String(ch)
+                    scanner.currentIndex = scanner.string.index(after: scanner.currentIndex)
+                    let body = scanner.scanUpToString(quote) ?? ""
+                    result += quote + body
+                    if !scanner.isAtEnd {
+                        result += quote
+                        scanner.currentIndex = scanner.string.index(after: scanner.currentIndex)
+                    }
+                } else if ch == "(" {
+                    scanner.currentIndex = scanner.string.index(after: scanner.currentIndex)
+                    let body = scanner.scanUpToString(")") ?? ""
+                    result += "(" + body
+                    if !scanner.isAtEnd {
+                        result += ")"
+                        scanner.currentIndex = scanner.string.index(after: scanner.currentIndex)
+                    }
+                } else {
+                    // Hit an actual terminator
+                    break
+                }
+            }
+
+            guard !result.isEmpty else {
+                scanner.currentIndex = location
+                throw Error.invalid
+            }
+
+            currentIndex = scanner.currentIndex
+            return result
+        }
+
+        package mutating func scanFunction(_ name: String, preservingStrings: Bool = false) throws -> [String] {
+            scanner.currentIndex = currentIndex
+            try scanString(name)
+            try scanString("(")
+            var args = [String]()
+            let delimiters = CharacterSet(charactersIn: ",)")
+            while !doScanString(")") {
+                let arg = try scanString(upTo: delimiters, preservingStrings: preservingStrings)
+                    .trimmingCharacters(in: .whitespaces)
+                args.append(arg)
+                _ = doScanString(",")
+            }
+            currentIndex = scanner.currentIndex
+            return args
+        }
+
+        package mutating func scanStrings(delimitedBy delimiter: String = ",") throws -> [String] {
+            scanner.currentIndex = currentIndex
+            let delimiters = CharacterSet(charactersIn: delimiter)
+            var strings = [String]()
+            while !isEOF {
+                let value = try scanString(upTo: delimiters, preservingStrings: true)
+                    .trimmingCharacters(in: .whitespaces)
+                strings.append(value)
+                _ = doScanString(delimiter)
+            }
+            currentIndex = scanner.currentIndex
+            return strings
+        }
+
+        package mutating func scanStringFunction(_ name: String) throws -> String {
+            scanner.currentIndex = currentIndex
+            try scanString(name)
+            try scanString("(")
+            let arg = try scanString(upTo: ")")
+            _ = try scanString(")")
+            currentIndex = scanner.currentIndex
+            // CSS allows whitespace and a single- or double-quoted string inside the parentheses
+            return arg.trimmingCharacters(in: .whitespacesAndNewlines).unquoted
+        }
+
+        package mutating func scanURLFunction(_ name: String) throws -> DOM.URL {
+            let body = try scanStringFunction(name)
+            guard let url = DOM.URL(string: body) else {
+                throw Error.invalid
+            }
+            return url
+        }
+
+        package mutating func scanCharacter(matchingAny characters: Foundation.CharacterSet) throws -> Character {
+            let location = currentIndex
+            guard let scalar = scanner.scan(first: characters) else {
+                scanner.currentIndex = location
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return Character(scalar)
+        }
+
+        package mutating func scanUInt8() throws -> UInt8 {
+            scanner.currentIndex = currentIndex
+            var longVal: UInt64 = 0
+            guard
+                scanner.scanUnsignedLongLong(&longVal),
+                let val = UInt8(exactly: longVal)
+            else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return val
+        }
+
+        package mutating func scanFloat() throws -> Float {
+            scanner.currentIndex = currentIndex
+            guard let val = scanner.scanFloat() else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return val
+        }
+
+        package mutating func scanDouble() throws -> Double {
+            scanner.currentIndex = currentIndex
+            guard let val = scanner.scanDoubleCompatibly() else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return val
+        }
+
+        package mutating func scanUnit(_ unit: DOM.Unit) -> Bool {
+            scanner.currentIndex = currentIndex
+            guard scanner.scanString(unit.rawValue) != nil else {
+                return false
+            }
+            currentIndex = scanner.currentIndex
+            return true
+        }
+
+        package mutating func scanUnit() -> DOM.Unit? {
+            if scanUnit(.pixel) {
+                return .pixel
+            } else if scanUnit(.inch) {
+                return .inch
+            } else if scanUnit(.centimeter) {
+                return .centimeter
+            } else if scanUnit(.millimeter) {
+                return .millimeter
+            } else if scanUnit(.point) {
+                return .point
+            } else if scanUnit(.pica) {
+                return .pica
+            } else if scanUnit(.em) {
+                return .em
+            } else if scanUnit(.ex) {
+                return .ex
+            } else {
+                return nil
+            }
+        }
+
+        package mutating func scanLength() throws -> DOM.Length {
+            scanner.currentIndex = currentIndex
+            guard
+                let int64 = scanner.scanInt64(),
+                let val = DOM.Length(exactly: int64),
+                val >= 0
+            else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return val
+        }
+
+        package mutating func scanBool() throws -> Bool {
+            return try scanCase(from: Boolean.self).boolValue
+        }
+
+        package mutating func scanCoordinate() throws -> DOM.Coordinate {
+            let double = try scanDouble()
+            let unit = scanUnit() ?? .pixel
+            return DOM.Coordinate(double.apply(unit: unit))
+        }
+
+        package mutating func scanCoordinateOrPercentage() throws -> DOM.Coordinate {
+            let double = try scanDouble()
+            scanner.currentIndex = currentIndex
+            if scanner.scanString("%") != nil {
+                currentIndex = scanner.currentIndex
+                return DOM.Coordinate(double / 100.0)
+            }
+            let unit = scanUnit() ?? .pixel
+            return DOM.Coordinate(double.apply(unit: unit))
+        }
+
+        package mutating func scanPercentageFloat() throws -> Float {
+            scanner.currentIndex = currentIndex
+            let val = try scanFloat()
+            guard val >= 0.0, val <= 1.0 else {
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return val
+        }
+
+        package mutating func scanAlpha() throws -> Float {
+            if let pc = try? scanPercentage() {
+                return pc
+            } else {
+                return try scanFloat()
+            }
+        }
+
+        package mutating func scanPercentage() throws -> Float {
+            let initialLocation = currentIndex
+            scanner.currentIndex = currentIndex
+
+            let numeric = Foundation.CharacterSet(charactersIn: "+-0123456789.Ee")
+            let numericString = try scanString(matchingAny: numeric)
+
+            guard
+                let val = Double(numericString),
+                val >= 0, val <= 100,
+                (scanner.scanString("%") != nil) || val == 0
+            else {
+                currentIndex = initialLocation
+                throw Error.invalid
+            }
+            currentIndex = scanner.currentIndex
+            return Float(val / 100.0)
+        }
+    }
+}
+
+private enum Boolean: String, CaseIterable {
+    case `true`
+    case `false`
+    case upperFalse = "FALSE"
+    case upperTrue = "TRUE"
+    case zero = "0"
+    case one = "1"
+
+    var boolValue: Bool {
+        switch self {
+        case .true, .upperTrue, .one:
+            return true
+        case .false, .upperFalse, .zero:
+            return false
+        }
+    }
+}
+
+package extension Scanner {
+
+    enum Error: Swift.Error {
+        case invalid
+    }
+
+    func scanBool() throws -> Bool {
+        guard let match = Boolean.allCases.first(where: { self.scanString($0.rawValue) != nil }) else {
+            throw Error.invalid
+        }
+
+        return match.boolValue
+    }
+
+    func scan(first set: Foundation.CharacterSet) -> UnicodeScalar? {
+        let start = currentIndex
+        guard let scalar = scanCharacters(from: set)?.unicodeScalars.first else {
+            currentIndex = start
+            return nil
+        }
+
+        currentIndex = start
+        _ = scanCharacter()
+        return scalar
+    }
+
+    func scanDoubleCompatibly() -> Double? {
+        #if canImport(Darwin)
+        return scanDouble()
+        #else
+        let start = currentIndex
+        if let value = scanDouble() {
+            return value
+        }
+
+        currentIndex = start
+        let numeric = Foundation.CharacterSet(charactersIn: "+-0123456789.Ee")
+        guard let scannedNumber = scanCharacters(from: numeric), !scannedNumber.isEmpty else {
+            currentIndex = start
+            return nil
+        }
+
+        var numericEnd = currentIndex
+        var numericPrefix = scannedNumber
+        while Double(numericPrefix) == nil, !numericPrefix.isEmpty {
+            numericEnd = string.index(before: numericEnd)
+            numericPrefix.removeLast()
+        }
+
+        guard let value = Double(numericPrefix), !numericPrefix.isEmpty else {
+            currentIndex = start
+            return nil
+        }
+
+        currentIndex = numericEnd
+        return value
+        #endif
+    }
+
+    func scanCoordinate() throws -> DOM.Coordinate {
+        guard let val = scanDoubleCompatibly() else { throw XMLParser.Error.invalid }
+        return DOM.Coordinate(val)
+    }
+
+    var currentOffet: Int {
+        string.distance(from: string.startIndex, to: currentIndex)
+    }
+}
