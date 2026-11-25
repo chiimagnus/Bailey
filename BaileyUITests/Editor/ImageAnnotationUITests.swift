@@ -36,8 +36,27 @@ final class ImageAnnotationUITests: XCTestCase {
         let b = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.68))
         a.click(forDuration: 0.15, thenDragTo: b)
         XCTAssertFalse(FileManager.default.fileExists(atPath: sidecar.path))
+        func expectArrow(_ expected: Bool) {
+            let pixels = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard viewer.exists,
+                      let bitmap = NSBitmapImageRep(data: viewer.screenshot().pngRepresentation) else { return false }
+                for y in stride(from: bitmap.pixelsHigh / 3, to: bitmap.pixelsHigh * 4 / 5, by: 2) {
+                    for x in stride(from: bitmap.pixelsWide / 3, to: bitmap.pixelsWide * 2 / 3, by: 2) {
+                        if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                           color.redComponent > 0.65, color.redComponent - color.greenComponent > 0.4,
+                           color.redComponent - color.blueComponent > 0.4 { return expected }
+                    }
+                }
+                return !expected
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [pixels], timeout: 10), .completed,
+                           "Expected arrow pixels: \(expected)")
+        }
+        expectArrow(true)
         app.typeKey("z", modifierFlags: .command)
+        expectArrow(false)
         app.typeKey("z", modifierFlags: [.command, .shift])
+        expectArrow(true)
         app.typeKey("s", modifierFlags: .command)
         let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             FileManager.default.fileExists(atPath: sidecar.path)
@@ -55,18 +74,7 @@ final class ImageAnnotationUITests: XCTestCase {
         XCTAssertTrue(tab.waitForNonExistence(timeout: 10))
         row.doubleClick()
         XCTAssertTrue(viewer.waitForExistence(timeout: 10))
-        let painted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard let bitmap = NSBitmapImageRep(data: viewer.screenshot().pngRepresentation) else { return false }
-            for y in stride(from: bitmap.pixelsHigh / 3, to: bitmap.pixelsHigh * 4 / 5, by: 2) {
-                for x in stride(from: bitmap.pixelsWide / 3, to: bitmap.pixelsWide * 2 / 3, by: 2) {
-                    if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                       c.redComponent > 0.65, c.redComponent - c.greenComponent > 0.4,
-                       c.redComponent - c.blueComponent > 0.4 { return true }
-                }
-            }
-            return false
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed)
+        expectArrow(true)
         viewer.rightClick()
         let copy = WorkspaceUITestSupport.menuItem("Copy Annotated Image", in: app)
         XCTAssertTrue(copy.waitForExistence(timeout: 5))

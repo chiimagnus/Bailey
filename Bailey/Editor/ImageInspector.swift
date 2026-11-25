@@ -173,6 +173,7 @@ class PreviewScrollView: NSScrollView {
     private var minimumManualMagnification: CGFloat { 0.1 / backingScale }
 
     override var acceptsFirstResponder: Bool { true }
+    override func becomeFirstResponder() -> Bool { true }
 
     override func layout() {
         super.layout()
@@ -318,7 +319,7 @@ private final class CenteredPreviewClipView: NSClipView {
     }
 }
 
-private final class RasterScrollView: PreviewScrollView {
+private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
     private let canvas = RasterPreviewCanvas()
     private var thumbnail: CGImage?
     private var loadOriginal: (() async throws -> RasterDetail)?
@@ -356,6 +357,32 @@ private final class RasterScrollView: PreviewScrollView {
 
     override var undoManager: UndoManager? {
         annotationDocument?.canMutate == true ? annotationDocument?.undoManager : super.undoManager
+    }
+
+    private var focusedAnnotationUndoManager: UndoManager? {
+        guard window?.firstResponder === self, canAnnotate,
+              let document = annotationDocument, document.canMutate else { return nil }
+        return document.undoManager
+    }
+
+    @objc func undo(_ sender: Any?) {
+        guard let manager = focusedAnnotationUndoManager, manager.canUndo else { return }
+        manager.undo()
+        syncAnnotationState()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard let manager = focusedAnnotationUndoManager, manager.canRedo else { return }
+        manager.redo()
+        syncAnnotationState()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): focusedAnnotationUndoManager?.canUndo == true
+        case #selector(redo(_:)): focusedAnnotationUndoManager?.canRedo == true
+        default: true
+        }
     }
 
     override init(frame: NSRect) {

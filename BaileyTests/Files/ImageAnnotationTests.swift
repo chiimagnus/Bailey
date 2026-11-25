@@ -1116,9 +1116,41 @@ final class ImageAnnotationTests: XCTestCase {
         scroll = try await mount()
         XCTAssertTrue(scroll.undoManager === document.undoManager)
         XCTAssertEqual(document.state, saved)
-        for _ in 0..<3 { scroll.undoManager?.undo() }
+        XCTAssertTrue(window.makeFirstResponder(scroll))
+        XCTAssertTrue(file.canAnnotateImage)
+        XCTAssertTrue(document.canMutate)
+        XCTAssertTrue(document.undoManager.canUndo)
+        XCTAssertTrue(window.firstResponder === scroll, "Actual responder: \(String(describing: window.firstResponder))")
+        let undo = NSSelectorFromString("undo:")
+        let redo = NSSelectorFromString("redo:")
+        let undoItem = NSMenuItem(title: "Undo", action: undo, keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Redo", action: redo, keyEquivalent: "Z")
+        XCTAssertTrue(scroll.responds(to: undo))
+        XCTAssertTrue(scroll.responds(to: redo))
+        guard let validator = scroll as? NSMenuItemValidation,
+              scroll.responds(to: undo), scroll.responds(to: redo) else {
+            return XCTFail("The focused native canvas must receive standard Edit menu actions")
+        }
+        for remaining in stride(from: 2, through: 0, by: -1) {
+            XCTAssertTrue(validator.validateMenuItem(undoItem))
+            _ = scroll.perform(undo, with: undoItem)
+            XCTAssertEqual(document.state.layers.count, remaining)
+        }
         XCTAssertFalse(file.isDirty)
         XCTAssertTrue(document.state.isEmpty)
+        XCTAssertFalse(validator.validateMenuItem(undoItem))
+        for remaining in 1...3 {
+            XCTAssertTrue(validator.validateMenuItem(redoItem))
+            _ = scroll.perform(redo, with: redoItem)
+            XCTAssertEqual(document.state.layers.count, remaining)
+        }
+        XCTAssertEqual(document.state, saved)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertFalse(validator.validateMenuItem(redoItem))
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        XCTAssertFalse(validator.validateMenuItem(undoItem))
+        _ = scroll.perform(undo, with: undoItem)
+        XCTAssertEqual(document.state, saved, "A nonfocused canvas must not consume Undo")
         XCTAssertEqual(try Data(contentsOf: path), original)
         XCTAssertFalse(FileManager.default.fileExists(atPath: ImageAnnotationSidecar.path(for: path.path)))
     }
