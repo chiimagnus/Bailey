@@ -98,5 +98,4 @@
 
 必须交叉 A01×A02、A02×A03、A03×A06、A04×A06、A05×A06、A07×A06、R03×A03。
 宿主能证明资源和时间状态；真实有声输出、系统设备与焦点路径须在隔离 Bailey Dev 验证，
-当前第二个音频输出设备及其切换组合按[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)延期，
-内置扬声器及系统可执行的生命周期仍须验收。缺少 DRM 合法样本时注明未测，不寻求绕过。
+按[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)验收内置扬声器及已连接的蓝牙耳机双向切换；设备特有的物理空间听感与系统生命周期分别记录。缺少 DRM 合法样本时注明未测，不寻求绕过。

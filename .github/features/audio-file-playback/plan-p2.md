@@ -10,5 +10,5 @@
 - 改名、换源、关闭项目或标签、设备变化和睡眠／唤醒时，不恢复过期的播放器。
 - 用真实文件检查声音停止、旧播放器与媒体项退役、原文件校验和不变。
   与[原生播放的格式、焦点和生命周期覆盖](plan-p1.md)一起验收；
-  第二个输出设备切换及真实系统睡眠按[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)延期；
+  真实系统睡眠按[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)延期；内置扬声器及蓝牙耳机双向切换实测。
   保留系统通知路径及现有输出设备验证。

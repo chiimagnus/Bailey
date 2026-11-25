@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：宿主定位与资源退役、真实原生 AVKit 播放／暂停定位恢复、双窗 117 次切换与冷启动通过；内置扬声器软件及实际声学输出均已确认，P2-T2 独立核销；VoiceOver 和 P1 门禁仍未完成；真实睡眠由用户延期亲验，第二输出设备切换延期。
+- **依据**：宿主定位与资源退役、真实原生 AVKit 播放／暂停定位恢复、双窗 117 次切换与冷启动通过；内置扬声器软件及实际声学输出均已确认，P2-T2 独立核销；VoiceOver 和 P1 门禁仍未完成；真实睡眠由用户延期亲验，蓝牙耳机与内置扬声器双向切换已通过。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -63,3 +63,5 @@
 - 2026-11-26：用户明确将真实系统睡眠／唤醒延期至本人亲验。系统睡眠与唤醒通知路径原测试仍有效，真实睡眠不计通过且不再单独阻塞本轮。
 
 - 2026-11-26：`f1df034c` 版本完整隔离 Dev 实际播放自制 14 s WAV（静音、440、880、静音、880、440、静音，各 2 s），原生播放复选框 0→1、timeline 3.309 s，源文件字节不变。现有内置麦克风授权下仅记录两频点能量／RMS／时间戳，系统输出 13%、未改音量或权限；128 个时间窗，按点击结束时间对齐、每段排除边缘 0.35 s，440 Hz 两段中位能量 7.91e-5／6.75e-5，880 Hz 两段 1.53e-5／1.35e-5，三静音段两频点均低于 4.2e-7，实际声音从内置扬声器传至麦克风的证据成立。未保存原始麦克风录音，未声称主观音质或实体空间听感通过。隔离 App 与采集进程正常退出；日志 `/tmp/bailey-speaker-check.l0h7Ol/{run.log,spectrum.log}`。真实睡眠及第二输出设备已延期；结合已有生命周期实测，P2-T2 独立核销，不把共享阶段未验重复计为任务阻塞。
+
+- 2026-11-26：用户连接 Beats Studio Pro 后恢复第二输出设备验收。`a2d9f21d` 实际 Core Audio Bluetooth（91）→内置扬声器（77）→Bluetooth，独立 M4A 与双音轨 MOV 各双向切换，系统事件自动暂停、保持 player/item/位置、手动恢复后时钟推进、Core Audio 进程活动输出设备与目标一致，关闭退役及原字节不变；1/1、零跳过、4.951 秒。退出后默认输出仍为原 Beats。不将真实路由与 PCM 等同于耳机主观空间听感或视频独立声学测量。日志 `/tmp/bailey-real-route.log`；复验命令 `TEST_RUNNER_BAILEY_REAL_AUDIO_ROUTE_TEST=1 make test ONLY_TESTING=BaileyTests/NativeMediaFileTests/testActualBuiltInAndBluetoothOutputRoutesPreserveTheFilePlayer`，仅在明确授权改变系统输出且蓝牙耳机已连接时运行。

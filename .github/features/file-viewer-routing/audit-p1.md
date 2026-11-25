@@ -186,3 +186,5 @@
 - `35503954`：按用户授权使用本机图形会话，实际隔离 Bailey Dev，真实 Downloads/test 样本拷贝，两窗9个标签；13轮共117次格式/窗口切换，第二窗同名 CSV／HTML 保持独立，音视频暂停位置每次匹配（±0.1s），随后正常退出、冷启动、关闭所有文件及源字节核对。`make test:ui ONLY_TESTING=BaileyUITests/FilePreviewWorkspaceUITests/testSevenRealFormatsKeepWindowOwnershipAcrossSwitchesAndNormalRelaunch` 1/1、零失败零跳过，747.190秒，退出0；日志 `/tmp/bailey-routing-ui-long.vPv7txF1`。此项核销完整 App 双窗长会话，不宣称 GUI RSS 回到基线或硬件／输入门禁完成。此前宿主100+100对象退役证据单独保留。
 
 - 2026-11-26：在独立 Bailey Dev 实际尝试 VoiceOver（系统旁白）：快捷键及 LaunchServices 启动均有延迟；最终 `NSWorkspace.isVoiceOverEnabled=true`，在测试图片视图操作焦点／动作，但读取 VoiceOver 实际末句的既有 Apple Events 授权返回 -1744，字幕面板未出现。未取得播报文字或听感，不核销 R01 真实播报；已从系统设置复核关闭（AX 开关 0、系统状态 false）、恢复原输入法、退出隔离 App，未改系统授权。证据 `/tmp/bailey-voiceover-check.hK5aeT/{run.log,active.log,settings-final-confirm.json}`。
+
+- 2026-11-26：用户已提供并授权使用连接的 Beats Studio Pro；真实内置／蓝牙双向切换对独立音视频均通过，第二输出设备不再属于缺配项；详见[音频 P2](../audio-file-playback/audit-p2.md)。

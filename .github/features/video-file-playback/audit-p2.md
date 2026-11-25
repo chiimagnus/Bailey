@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：原生多音轨切换实际 PCM、中文字幕、定位、换源、系统全屏（含半速真实像素）、双窗 117 次跨格式会话和冷启动已验；内置输出软件通路已确认，物理听感、HDR 光学呈现（软件合成链已通过）及对应交叉项尚未核销；真实睡眠由用户延期亲验，缺配外接屏与第二输出设备延期。
+- **依据**：原生多音轨切换实际 PCM、中文字幕、定位、换源、系统全屏（含半速真实像素）、双窗 117 次跨格式会话和冷启动已验；内置输出软件通路已确认，物理听感、HDR 光学呈现（软件合成链已通过）及对应交叉项尚未核销；真实睡眠由用户延期亲验，缺配外接屏延期；蓝牙与内置输出实际切换通过。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -64,3 +64,5 @@
 - 2026-11-26：用户明确将真实系统睡眠／唤醒延期至本人亲验；保留模拟通知与资源退役既有证据，不计作实机睡眠通过。
 
 - 2026-11-26：共享原生播放器 `f1df034c` 的实际视频选轨 PCM 专项通过；同版隔离 Dev 独立 WAV 的扬声器到麦克风声学验证通过（见[音频 P2](../audio-file-playback/audit-p2.md)）。另用同频谱、真实 H.264/AAC 视频尝试完整 App 声学复验，前一次 AX 观测不完整、复试 ScreenCaptureKit 已被另一进程持有，均未到达播放/采集；未终止其他进程，未以 WAV 结果冒称视频实体输出通过。日志 `/tmp/bailey-video-speaker-check.20c8BG/{run.log,retry.log}`。真实睡眠已延期，视频物理声学结果保留未核销。
+
+- 2026-11-26：用户连接 Beats Studio Pro 后恢复第二输出设备验收。`a2d9f21d` 实际 Core Audio Bluetooth（91）→内置扬声器（77）→Bluetooth，独立 M4A 与双音轨 MOV 各双向切换，系统事件自动暂停、保持 player/item/位置、手动恢复后时钟推进、Core Audio 进程活动输出设备与目标一致，关闭退役及原字节不变；1/1、零跳过、4.951 秒。退出后默认输出仍为原 Beats。不将真实路由与 PCM 等同于耳机主观空间听感或视频独立声学测量。日志 `/tmp/bailey-real-route.log`；复验命令 `TEST_RUNNER_BAILEY_REAL_AUDIO_ROUTE_TEST=1 make test ONLY_TESTING=BaileyTests/NativeMediaFileTests/testActualBuiltInAndBluetoothOutputRoutesPreserveTheFilePlayer`，仅在明确授权改变系统输出且蓝牙耳机已连接时运行。
