@@ -1936,7 +1936,15 @@ struct FileViewerView: View {
                                                    controlsStyle: isAudio ? .floating : .inline, isDockActive: active)
                     Group {
                         if isAudio {
-                            surface.frame(maxWidth: 520).frame(height: 112)
+                            // AVKit hides essential transport controls when compressed.
+                            // Keep its native controls at a usable width; only narrow panes scroll.
+                            ScrollView(.horizontal) {
+                                surface.frame(width: 520, height: 112)
+                            }
+                            .defaultScrollAnchor(.center)
+                            .scrollBounceBehavior(.basedOnSize)
+                            .frame(maxWidth: 520)
+                            .frame(height: 112)
                         } else if let aspectRatio = media.videoAspectRatio {
                             surface.aspectRatio(aspectRatio, contentMode: .fit)
                         } else {
