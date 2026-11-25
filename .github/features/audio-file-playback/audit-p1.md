@@ -25,7 +25,7 @@
 - 风险：`偏离原生播放器需求，并重复维护系统已有的按钮、进度、音量和观察逻辑。`
 - 预期修复：`复用 NativePlayerView 的 AVPlayerView，删除 FileAudioControls 及专用字符串；不恢复波形。核查紧凑系统布局及原有播放器生命周期。`
 - 验证：`真实音频窗口截图/实际控制和轴线，窄/宽/深浅窗口，seek/播放/音量/速率/焦点，Markdown 音频。`
-- 解决证据：`4c304e53 恢复 AVKit，删除自建控件。宿主 5/5，完整 App 原生定位、音量及静音已验证；采用系统 floating 样式（inline 未暴露直接音量滑块）。播放队列启动但 AX 时间轴超时；完整播放／切换、窄窗可操作性与实体设备尚待核销。日志 /tmp/bailey-audio-avkit-verified.pulZ13uc、/tmp/bailey-audio-avkit-ui-retry.70HpEaHA。`
+- 解决证据：`7bbfd8ab：复核 4c304e53 完整 App 原始 AX/系统日志，浮动 timeline AXValue 保持在 4.070605s，但原生 elapsed time 从 00:04 连续推进至 00:10，播放队列启动；不能据旧断言超时认定播放停滞。新增真实挂载宿主以实际 AVPlayer 时间和原生计时双证据验证 4→6.009239s、显示 6s、暂停保持、原字节不变。音频及嵌入媒体专项 3/3，零跳过；UI 目标构建和 Dev 严格验签通过。完整 App 修正后的播放、切标签、暂停与窄窗复验未执行，无独占会话；设备、睡眠及 VoiceOver 门禁不变。日志 /tmp/bailey-native-audio-play.s0PZ5MBP、/tmp/bailey-audio-clock-verified.KeRSQ2BZ、/tmp/bailey-audio-clock-ui-build.f7jlDIdR。`
 
 
 ## 发现 F-01
@@ -61,3 +61,5 @@
 - 完整 App 媒体批次 2/4 通过（视频字幕、定位和前后台），另两项在启动时失败。音频单项复验成功进入系统控件，定位至 4.0706s、音量及静音恢复通过；点击播放后 CoreMedia 报告 Playing、内置扬声器 AudioQueue 启动、时间基速率 1，随后 UI 时间轴仍超时，不能据此判定实际声音或完整播放／切换通过。退出 2；保留未核销门禁，不另造控件或放宽断言。日志 `/tmp/bailey-audio-avkit-verified.pulZ13uc`、`/tmp/bailey-audio-avkit-ui.VaE9WYf2`、`/tmp/bailey-audio-avkit-ui-retry.70HpEaHA`。
 
 - `4c304e53`：正式 Debug `make build` 退出 0，Debug 与 Dev 严格验签通过，未替换已安装 App。日志 `/tmp/bailey-audio-avkit-build.log`。
+
+- `7bbfd8ab`：复核 4c304e53 完整 App 原始 AX/系统日志，浮动 timeline AXValue 保持在 4.070605s，但原生 elapsed time 从 00:04 连续推进至 00:10，播放队列启动；不能据旧断言超时认定播放停滞。新增真实挂载宿主以实际 AVPlayer 时间和原生计时双证据验证 4→6.009239s、显示 6s、暂停保持、原字节不变。音频及嵌入媒体专项 3/3，零跳过；UI 目标构建和 Dev 严格验签通过。完整 App 修正后的播放、切标签、暂停与窄窗复验未执行，无独占会话；设备、睡眠及 VoiceOver 门禁不变。日志 /tmp/bailey-native-audio-play.s0PZ5MBP、/tmp/bailey-audio-clock-verified.KeRSQ2BZ、/tmp/bailey-audio-clock-ui-build.f7jlDIdR。
