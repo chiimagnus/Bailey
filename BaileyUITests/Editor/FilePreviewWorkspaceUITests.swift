@@ -61,20 +61,23 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
                 // clicking a potentially occluded background window.
                 try await deliver([file])
             } else if !tab.isSelected {
-                if tab.isHittable {
-                    tab.click()
-                } else {
-                    // Seven long Unicode filenames can overflow the tab strip.
-                    // Exercise the real Next Panel command, which scrolls the
-                    // selected tab into view, rather than clicking clipped AX frames.
-                    let count = window.buttons.matching(identifier: "bailey.tab.file").count
-                    for _ in 0..<count {
-                        if tab.isSelected { break }
-                        app.typeKey("]", modifierFlags: [.command, .shift])
-                    }
+                // AX can report a clipped tab as hittable even when its center is
+                // outside the strip. Cycle with the actual Panel menu shortcuts.
+                let tabs = window.buttons.matching(identifier: "bailey.tab.file").allElementsBoundByIndex
+                let count = tabs.count
+                let current = tabs.firstIndex(where: { $0.isSelected })
+                let destination = tabs.firstIndex(where: {
+                    $0.label == tab.label
+                })
+                let backwards = if let current, let destination, count > 0 {
+                    (current - destination + count) % count < (destination - current + count) % count
+                } else { false }
+                for _ in 0..<count {
+                    if tab.isSelected { break }
+                    app.typeKey(backwards ? "[" : "]", modifierFlags: [.command, .shift])
                 }
             }
-            wait("The correct file and its window must receive focus") {
+            wait("The correct file and its window must receive focus: \(file.lastPathComponent)") {
                 tab.isSelected && app.windows.firstMatch.identifier == window.identifier
             }
         }
@@ -146,6 +149,9 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
             for file in excluding { XCTAssertFalse(WorkspaceUITestSupport.fileTab(file, in: window).exists) }
         }
 
+        wait("The initial project window must remain available after launch") {
+            app.state == .runningForeground && app.windows.firstMatch.exists
+        }
         let firstID = app.windows.firstMatch.identifier
         let first = app.windows.matching(identifier: firstID).firstMatch
         try await deliver(files)
@@ -179,6 +185,13 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
             for file in files.reversed() {
                 try await inspect(file, in: first, initially: false)
                 if file == video {
+                    // AVPlayerView may recreate its AX slider before it publishes
+                    // the retained player's current time. Require the real
+                    // playhead to converge to the same position without seeking.
+                    wait("The native video playhead must restore \(videoPosition) after remount") {
+                        guard let time = mediaTime(first) else { return false }
+                        return abs(time - videoPosition) <= 0.1
+                    }
                     XCTAssertEqual(try XCTUnwrap(mediaTime(first)), videoPosition, accuracy: 0.1)
                 }
             }
