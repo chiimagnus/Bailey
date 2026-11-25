@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import AVKit
 import CryptoKit
+import CoreAudio
 import CoreVideo
 import Darwin
 import Foundation
@@ -1807,6 +1808,107 @@ final class NativeMediaFileTests: XCTestCase {
         project.closeContent(.file(b))
         XCTAssertNil(player.currentItem)
         XCTAssertNil(other.currentItem)
+    }
+
+    func testActualBuiltInAndBluetoothOutputRoutesPreserveTheFilePlayer() async throws {
+        guard ProcessInfo.processInfo.environment["BAILEY_REAL_AUDIO_ROUTE_TEST"] == "1" else {
+            throw XCTSkip("Opt in only when a connected Bluetooth headset is available and changing the system output is authorized")
+        }
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        func address(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+            AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        }
+        func number(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+            var a = address(selector)
+            var value: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(object, &a, 0, nil, &size, &value) == noErr ? value : nil
+        }
+        func ids(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID] {
+            var a = address(selector, scope: scope)
+            var size: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(object, &a, 0, nil, &size) == noErr, size > 0 else { return [] }
+            var values = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+            let status = values.withUnsafeMutableBytes {
+                AudioObjectGetPropertyData(object, &a, 0, nil, &size, $0.baseAddress!)
+            }
+            return status == noErr ? Array(values.prefix(Int(size) / MemoryLayout<AudioObjectID>.size)) : []
+        }
+        func setOutput(_ device: AudioObjectID) -> OSStatus {
+            var a = address(kAudioHardwarePropertyDefaultOutputDevice)
+            var value = device
+            return AudioObjectSetPropertyData(system, &a, 0, nil, UInt32(MemoryLayout<AudioObjectID>.size), &value)
+        }
+        let original = try XCTUnwrap(number(system, kAudioHardwarePropertyDefaultOutputDevice))
+        let outputs = ids(system, kAudioHardwarePropertyDevices).filter {
+            !ids($0, kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput).isEmpty
+        }
+        let builtIn = try XCTUnwrap(outputs.first { number($0, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeBuiltIn }, "No real built-in output")
+        let bluetooth = try XCTUnwrap(outputs.first { number($0, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeBluetooth }, "Connect a real Bluetooth audio output first")
+        XCTAssertNotEqual(builtIn, bluetooth)
+        defer {
+            if number(system, kAudioHardwarePropertyDefaultOutputDevice) != original {
+                XCTAssertEqual(setOutput(original), noErr, "Restore the user's original output")
+            }
+        }
+        func processObject() -> AudioObjectID? {
+            var a = address(kAudioHardwarePropertyTranslatePIDToProcessObject)
+            var pid = ProcessInfo.processInfo.processIdentifier
+            var object = AudioObjectID(kAudioObjectUnknown)
+            var size = UInt32(MemoryLayout<AudioObjectID>.size)
+            let status = AudioObjectGetPropertyData(system, &a, UInt32(MemoryLayout<pid_t>.size), &pid, &size, &object)
+            return status == noErr && object != kAudioObjectUnknown ? object : nil
+        }
+        func processOutputs(on device: AudioObjectID) -> Bool {
+            guard let object = processObject() else { return false }
+            return number(object, kAudioProcessPropertyIsRunningOutput) == 1
+                && ids(object, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeOutput).contains(device)
+        }
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appending(path: ".github/features")
+        let samples = [fixtures.appending(path: "audio-file-playback/demo-audio.m4a"),
+                       fixtures.appending(path: "video-file-playback/demo-audio-tracks.mov")]
+        // Start at Bluetooth so each kind covers Bluetooth -> built-in -> Bluetooth.
+        XCTAssertEqual(setOutput(bluetooth), noErr)
+        try await waitUntil { number(system, kAudioHardwarePropertyDefaultOutputDevice) == bluetooth }
+        for url in samples {
+            let bytes = try Data(contentsOf: url)
+            let project = Project(fallbackName: "Real audio routing", workspaceConfiguration: .standard)
+            defer { project.closeAll() }
+            project.openLocalFile(url.path)
+            guard case .file(let tab)? = project.focusedContent else { return XCTFail("Expected real media tab") }
+            try await load(tab)
+            let player = try XCTUnwrap(tab.mediaPlayer)
+            let item = try XCTUnwrap(player.currentItem)
+            try await waitUntil { item.status == .readyToPlay }
+            player.volume = 0.025
+            let initial = player.currentTime().seconds
+            player.play()
+            try await waitUntil { player.currentTime().seconds > initial + 0.15 && processOutputs(on: bluetooth) }
+            print("REAL_ROUTE media=\(url.lastPathComponent) initial=\(bluetooth) actualProcessOutput=true")
+            for target in [builtIn, bluetooth] {
+                let before = player.currentTime().seconds
+                // No synthetic workspace notification or direct handler call.
+                XCTAssertEqual(setOutput(target), noErr)
+                try await waitUntil {
+                    number(system, kAudioHardwarePropertyDefaultOutputDevice) == target && player.rate == 0
+                }
+                let stopped = player.currentTime().seconds
+                XCTAssertGreaterThanOrEqual(stopped, before - 0.08)
+                try await Task.sleep(for: .milliseconds(350))
+                XCTAssertEqual(player.currentTime().seconds, stopped, accuracy: 0.08)
+                XCTAssertTrue(tab.mediaPlayer === player)
+                XCTAssertTrue(player.currentItem === item)
+                player.play()
+                try await waitUntil { player.currentTime().seconds > stopped + 0.15 && processOutputs(on: target) }
+                print("REAL_ROUTE media=\(url.lastPathComponent) target=\(target) paused=\(stopped) resumed=\(player.currentTime().seconds) actualProcessOutput=true")
+            }
+            project.closeAll()
+            XCTAssertNil(tab.mediaPlayer)
+            XCTAssertNil(player.currentItem)
+            XCTAssertEqual(player.rate, 0)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
     }
 
     func testMediaSleepWakeAndOutputChangeNeverReviveAReplacedItem() async throws {
