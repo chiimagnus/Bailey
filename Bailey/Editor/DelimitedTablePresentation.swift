@@ -138,7 +138,8 @@ nonisolated struct DelimitedTablePresentation: Sendable {
                 if column != selectedColumns.first { output.append("\t"); size += 1 }
                 guard selection.contains(Cell(row: row, column: column)) else { continue }
                 let value = Self.value(in: text, index: index, record: rows[row], column: column)
-                let encoded = value.utf8.contains(where: { $0 == 9 || $0 == 10 || $0 == 13 || $0 == 34 })
+                let emptyFinalRecord = value.isEmpty && row == finalRow && selectedColumns.count == 1
+                let encoded = emptyFinalRecord || value.utf8.contains(where: { $0 == 9 || $0 == 10 || $0 == 13 || $0 == 34 })
                     ? "\"" + value.replacingOccurrences(of: "\"", with: "\"\"", options: .literal) + "\"" : value
                 size += encoded.utf8.count
                 guard size <= 64 << 20 else { return nil }

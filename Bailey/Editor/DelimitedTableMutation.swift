@@ -62,7 +62,10 @@ nonisolated enum DelimitedTableMutation {
                 let field = fields[fields.startIndex + cell.column]
                 if field.value(in: text).utf16.elementsEqual(value.utf16) { continue }
                 let old = text.substring(with: field.source)
-                let quoted = old.utf16.first == 34
+                // A bare empty row at EOF disappears; between CR and LF it merges two records.
+                let emptyRecord = value.isEmpty && fields.count == 1 &&
+                    (NSMaxRange(field.source) == text.length || joinsLineEndings(removing: field.source, in: text))
+                let quoted = old.utf16.first == 34 || emptyRecord
                 let replacement = escape(value, separator: index.separator, quoted: quoted)
                 edits.append(.init(range: field.source, old: old, new: replacement))
             }
@@ -84,9 +87,13 @@ nonisolated enum DelimitedTableMutation {
             replacements = [.init(range: NSRange(location: position, length: 0), old: "", new: value)]
         case .deleteRows(let rows):
             guard rows.allSatisfy(index.records.indices.contains) else { throw Failure.invalidSelection }
-            replacements = rows.map { row in
-                let range = index.records[row].source
-                return .init(range: range, old: text.substring(with: range), new: "")
+            replacements = IndexSet(rows).rangeView.map { run in
+                let first = index.records[run.lowerBound].source
+                let last = index.records[run.upperBound - 1].source
+                let range = NSUnionRange(first, last)
+                // Keep a surviving empty LF record distinct from a preceding CR record.
+                let boundary = joinsLineEndings(removing: range, in: text) ? "\"\"" : ""
+                return .init(range: range, old: text.substring(with: range), new: boundary)
             }
         }
 
@@ -106,6 +113,11 @@ nonisolated enum DelimitedTableMutation {
         guard bytes.count <= FileTab.maxTextBytes else { throw Failure.tooLarge }
         try Task.checkCancellation()
         return ordered
+    }
+
+    private static func joinsLineEndings(removing range: NSRange, in text: NSString) -> Bool {
+        range.location > 0 && NSMaxRange(range) < text.length &&
+            text.character(at: range.location - 1) == 13 && text.character(at: NSMaxRange(range)) == 10
     }
 
     private static func escape(_ value: String, separator: DelimitedTableIndex.Separator, quoted: Bool) -> String {

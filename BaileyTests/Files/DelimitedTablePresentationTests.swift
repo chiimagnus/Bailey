@@ -6,6 +6,90 @@ import XCTest
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
+    func testClearingAFieldPreservesRowsAndUneditedBytes() async throws {
+        let cases = [
+            ("text", 0, 0, "\"\""), ("head\r\nold", 1, 0, "head\r\n\"\""),
+            ("head\rvalue\ntail", 1, 0, "head\r\"\"\ntail"),
+            ("head\r\nvalue\n", 1, 0, "head\r\n\n"), ("head\nvalue\r", 1, 0, "head\n\r"),
+            ("head\n\"value\"\n", 1, 0, "head\n\"\"\n"),
+            ("x,y\r\n1,value", 1, 1, "x,y\r\n1,"),
+        ]
+        for (original, row, column, expected) in cases {
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+            try Data(original.utf8).write(to: path)
+            defer { try? FileManager.default.removeItem(at: path) }
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            defer { file.retireContent() }
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            try await file.editDelimited(.cells([.init(row: row, column: column): ""]), using: snapshot)
+            let refreshed = try await file.delimitedSnapshot(using: .comma)
+            XCTAssertEqual(refreshed?.index.records.count, snapshot.index.records.count, original.debugDescription)
+            XCTAssertEqual(Data(file.text.utf8), Data(expected.utf8))
+            file.documentUndoManager.undo()
+            XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
+            XCTAssertFalse(file.isDirty)
+            file.documentUndoManager.redo()
+            await file.save()
+            XCTAssertEqual(try Data(contentsOf: path), Data(expected.utf8))
+        }
+    }
+
+    func testDeletingRowsCannotFuseTheLineEndingsOfSurvivingRecords() async throws {
+        let original = "head\rA\nB\n\nmid\rC\n\nend"
+        let expected = "head\r\"\"\nmid\r\"\"\nend"
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        try await file.editDelimited(.deleteRows([1, 2, 5]), using: try XCTUnwrap(loaded))
+        let refreshed = try await file.delimitedSnapshot(using: .comma)
+        XCTAssertEqual(refreshed?.index.records.count, 5)
+        XCTAssertEqual(file.text, expected)
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        file.documentUndoManager.redo()
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(expected.utf8))
+    }
+
+    func testCopyPasteIncludesFinalEmptySingleColumnRecord() async throws {
+        let source = "One,Keep\nnew,other\n,untouched\n"
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma)
+        let view = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
+        for onlyEmpty in [false, true] {
+            var selection = DelimitedTablePresentation.Selection()
+            selection.select(.init(row: onlyEmpty ? 1 : 0, column: 0))
+            selection.select(.init(row: 1, column: 0), extending: true)
+            let copy = try await view.copy(selection, source: source, index: index)
+            let clipboard = try XCTUnwrap(copy)
+
+            let original = "first\tkeep\nlast\tkeep"
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".tsv")
+            try Data(original.utf8).write(to: path)
+            defer { try? FileManager.default.removeItem(at: path) }
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            defer { file.retireContent() }
+            let loaded = try await file.delimitedSnapshot(using: .tab)
+            try await file.editDelimited(.paste(clipboard, rows: [0, 1],
+                                                origin: .init(row: onlyEmpty ? 1 : 0, column: 0), columns: 2),
+                                         using: try XCTUnwrap(loaded))
+            await file.save()
+            XCTAssertEqual(try Data(contentsOf: path), Data(((onlyEmpty ? "first" : "new") + "\tkeep\n\tkeep").utf8))
+            file.documentUndoManager.undo()
+            XCTAssertEqual(file.text, original)
+        }
+    }
+
     func testNativeGridEditingAndPasteUsePhysicalRecordsAndOneUndoStack() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         let original = "Name,Group,Value\r\nItem 10,g,\"old\"\r\nItem 2,g,old\r\nOther,h,unchanged"
