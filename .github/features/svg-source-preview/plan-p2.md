@@ -49,7 +49,9 @@ XML 错误是编辑中间态，保留旧画面，同时标注“预览未更新�
 
 必须回归 S01–S08 与[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)，
 验证旧画面被保留时**界面明确显示对应的源版本状态**。
-源码及确认导出目标的保存冲突复用[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不在 SVG 层另造写入机制。
+源码保存复用[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，
+PNG 导出只允许独占创建新目标，不使用已有目标的条件覆盖。P2-T2 独立核销导出和当前源码保存接线；
+共享非协作 CAS 与后续冲突交互由 CSV P2-T2 核销，阶段保留对应集成回归。
 
 | 编号 | 测试操作／条件 | 最终断言 |
 | --- | --- | --- |

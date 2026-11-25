@@ -37,7 +37,7 @@ SwiftUI 重挂载不重新创建 WebKit 进程或丢失滚动；
 <a id="p2-t2"></a>
 ### P2-T2 明确浏览器运行的已保存版本与文件权限
 
-- **位置**：现有 `BrowserTab`／`Project.newBrowserTab`、HTML 文件右键、
+- **位置**：现有 `BrowserTab`／`Project.openHTMLInBrowser`、HTML 文件右键、
   `FileTab.save`／`PaneContent` 保存保护、文档。
 - **实施**：用户主动运行 HTML 时，先清楚区分**预览中的未保存内容**和磁盘已保存版本；
   有脏稿时提示先保存或选择仅打开已保存版本，**不能自动保存**，
@@ -66,6 +66,8 @@ SwiftUI 重挂载不重新创建 WebKit 进程或丢失滚动；
 执行 P1 的 H01–H08 和[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)回归，
 重点将输入／时序／资源权限组合，不以一次成功刷新证明热更新正确。
 源码保存及显式运行前的冲突保护复用[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不自动覆盖或执行未保存草稿。
+P2-T2 独立核销已保存版本、拒绝冲突执行、权限与草稿保护；不承担共享 CAS 实现，
+并排连续 IME／滚动属于 P2-T1，后续共享保存变动再补受影响回归。
 
 | 编号 | 真实操作与前提 | 完成判据 |
 | --- | --- | --- |

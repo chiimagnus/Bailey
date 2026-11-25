@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：实际实时编辑、非法源码恢复、复制／导出及真实中文 IME 确认和源码保存后矢量呈现通过；双窗 117 次综合会话通过。并排组合输入、现有设备／VoiceOver、共享保存冲突及严格 CAS 边界、P1 门禁仍未核销。
+- **依据**：P2-T2 独立完成，48bbbd5d 后的三项 PNG／独占发布宿主与真实 App 复制／新目标导出均通过，普通源码保存接线通过。P2-T1 并排连续输入、现有设备／VoiceOver、共享磁盘错误与保存冲突回归、P1 阶段门禁仍待；未执行实际磁盘满。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 

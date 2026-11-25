@@ -67,7 +67,8 @@ CSV 不复用 Markdown 的 GFM 表格解析器，因为二者的字段、引号�
 
 ## 阶段验收
 
-本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；
+任务独立核销与阶段共同验证按[验收归属](../file-viewer-routing/plan-p1.md#acceptance-ownership)，不复制公共测试。
 
 宿主证明解析范围、原编码与字节保真、并发／取消／容量；
 隔离 Bailey Dev 证明打开（Files／Finder／会话恢复）、只读网格／排序／筛选、

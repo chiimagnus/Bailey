@@ -66,7 +66,8 @@
 
 ## 阶段验收
 
-本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；
+任务独立核销与阶段共同验证按[验收归属](../file-viewer-routing/plan-p1.md#acceptance-ownership)，不复制公共测试。
 
 先运行现有 `MarkdownResourceScopeTests`、`FileTabPersistenceTests`、
 `NativePaneRetentionIntegrationTests` 与新增 AVAsset／生命周期宿主测试；

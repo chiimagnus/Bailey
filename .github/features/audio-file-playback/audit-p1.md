@@ -20,13 +20,13 @@
 
 - 任务：`P1-T2`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`Bailey/Editor/FileViewerView.swift:1868`
 - 摘要：`原浮动 AVKit 与波形布局割裂；85022a8b 去除波形时误将 AVKit 替换为自行组合的 FileAudioControls。用户明确要求系统播放器，而非自定义控件。`
 - 风险：`偏离原生播放器需求，并重复维护系统已有的按钮、进度、音量和观察逻辑。`
 - 预期修复：`复用 NativePlayerView 的 AVPlayerView，删除 FileAudioControls 及专用字符串；不恢复波形。核查紧凑系统布局及原有播放器生命周期。`
 - 验证：`真实音频窗口截图/实际控制和轴线，窄/宽/深浅窗口，seek/播放/音量/速率/焦点，Markdown 音频。`
-- 解决证据：`7bbfd8ab：复核 4c304e53 完整 App 原始 AX/系统日志，浮动 timeline AXValue 保持在 4.070605s，但原生 elapsed time 从 00:04 连续推进至 00:10，播放队列启动；不能据旧断言超时认定播放停滞。新增真实挂载宿主以实际 AVPlayer 时间和原生计时双证据验证 4→6.009239s、显示 6s、暂停保持、原字节不变。音频及嵌入媒体专项 3/3，零跳过；UI 目标构建和 Dev 严格验签通过。后续 dd7ab6dc 的完整 App 实际原生定位、播放、音量／静音、切标签及暂停恢复 1/1（40.454s），原字节一致，日志 /tmp/bailey-audio-clock-full-ui.BUPl9tbn；窄窗逐个控件与实体设备、睡眠及 VoiceOver 门禁不变。宿主日志 /tmp/bailey-native-audio-play.s0PZ5MBP、/tmp/bailey-audio-clock-verified.KeRSQ2BZ、/tmp/bailey-audio-clock-ui-build.f7jlDIdR。`
+- 解决证据：`4c304e53 删除 FileAudioControls 和专用文案，恢复共用 NativePlayerView 的 AVKit floating 原生控制；807fbdee 冻结宿主 NativeAudioTimingTests 实际播放器时间与原生音量通过，dd7ab6dc 完整 App 原生播放／定位／静音／切标签暂停通过（40.454秒、1/1、0跳过）。原自定义控件缺陷已消除；逐个窄窗控件、VoiceOver、内置声音及真实睡眠为独立剩余验收，不以此项解决声称整任务完成。`
 
 
 ## 发现 F-01

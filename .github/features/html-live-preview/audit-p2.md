@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：静态／执行态 WebKit 隔离、编辑与滚动恢复、真实中文 IME 确认和源码保存后渲染，以及双窗 117 次综合会话通过。并排连续组合输入、现有设备／VoiceOver、共享保存冲突及严格 CAS 边界、P1 门禁仍未核销。
+- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 尚需并排连续 IME／滚动组合；VoiceOver、共享保存后续回归与 P1 门禁留阶段。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
