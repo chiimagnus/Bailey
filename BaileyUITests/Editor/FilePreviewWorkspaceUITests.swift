@@ -39,12 +39,6 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
         func inWindow(_ id: String, _ window: XCUIElement) -> XCUIElement {
             window.descendants(matching: .any).matching(identifier: id).firstMatch
         }
-        func owner(of file: URL) -> XCUIElement? {
-            guard let found = app.windows.allElementsBoundByIndex.first(where: {
-                WorkspaceUITestSupport.fileTab(file, in: $0).exists
-            }) else { return nil }
-            return app.windows.matching(identifier: found.identifier).firstMatch
-        }
         func deliver(_ urls: [URL]) async throws {
             let applications = NSRunningApplication.runningApplications(withBundleIdentifier: devID)
             XCTAssertEqual(applications.count, 1)
@@ -205,12 +199,32 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
         wait("Normal Quit must finish before cold relaunch", timeout: 15) { app.state == .notRunning }
         app.launch()
         app.activate()
-        wait("Both original windows and their tabs must be restored", timeout: 30) {
-            app.windows.count == 2 && owner(of: csv) != nil && owner(of: otherCSV) != nil
+        var restoredOwners: (primary: String, secondary: String)?
+        wait("Both original windows must restore their own same-named CSV", timeout: 30) {
+            // Index queries resolve again for each property; window stacking can
+            // change during relaunch. Check ownership only in ID-bound windows.
+            let ids = Set(app.windows.allElementsBoundByIndex.map(\.identifier))
+            guard ids.count == 2, !ids.contains("") else { return false }
+            var primaryID: String?, secondaryID: String?
+            for id in ids {
+                let windows = app.windows.matching(identifier: id)
+                guard windows.count == 1 else { return false }
+                let window = windows.firstMatch
+                let hasPrimary = WorkspaceUITestSupport.fileTab(csv, in: window).exists
+                let hasSecondary = WorkspaceUITestSupport.fileTab(otherCSV, in: window).exists
+                switch (hasPrimary, hasSecondary) {
+                case (true, false): primaryID = id
+                case (false, true): secondaryID = id
+                default: return false
+                }
+            }
+            guard let primaryID, let secondaryID else { return false }
+            restoredOwners = (primaryID, secondaryID)
+            return true
         }
-        let restoredFirst = try XCTUnwrap(owner(of: csv))
-        let restoredSecond = try XCTUnwrap(owner(of: otherCSV))
-        XCTAssertNotEqual(restoredFirst.identifier, restoredSecond.identifier)
+        let owners = try XCTUnwrap(restoredOwners, app.debugDescription)
+        let restoredFirst = app.windows.matching(identifier: owners.primary).firstMatch
+        let restoredSecond = app.windows.matching(identifier: owners.secondary).firstMatch
         assertAllTabs(restoredFirst, expected: files, excluding: [otherCSV, otherHTML])
         assertAllTabs(restoredSecond, expected: [otherCSV, otherHTML], excluding: files)
         for file in files { try await inspect(file, in: restoredFirst, initially: true) }
