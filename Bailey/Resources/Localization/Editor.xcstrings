@@ -141,6 +141,36 @@
         }
       }
     },
+    "Pen limit reached" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已达到画笔容量上限"
+          }
+        }
+      }
+    },
+    "Delete a stroke or export a copy before adding more ink." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除一些笔画，或将图片导出后在副本上继续标注。"
+          }
+        }
+      }
+    },
+    "Pen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画笔"
+          }
+        }
+      }
+    },
     "Select Annotation" : {
       "localizations" : {
         "zh-Hans" : {

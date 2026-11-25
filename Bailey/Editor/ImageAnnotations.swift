@@ -5,7 +5,7 @@ import Observation
 /// Geometry is in the oriented image's original pixels, with the same
 /// bottom-left origin as the shared RasterPreviewCanvas.
 nonisolated enum ImageAnnotationTool: String, CaseIterable, Sendable {
-    case select, arrow, rectangle, ellipse, text, number, blur, pixelate, crop
+    case select, pen, arrow, rectangle, ellipse, text, number, blur, pixelate, crop
 }
 
 nonisolated enum ImageAnnotationColor: String, Codable, CaseIterable, Sendable {
@@ -24,10 +24,12 @@ nonisolated enum ImageAnnotationColor: String, Codable, CaseIterable, Sendable {
 
 nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case arrow, rectangle, ellipse, text, number, blur, pixelate
+        case pen, arrow, rectangle, ellipse, text, number, blur, pixelate
 
         var filtersPixels: Bool { self == .blur || self == .pixelate }
     }
+
+    static let maximumPenPoints = 2_048
 
     let id: UUID
     let kind: Kind
@@ -36,9 +38,10 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
     var color: ImageAnnotationColor
     var strokeWidth: CGFloat
     var text: String
+    private(set) var via: [CGPoint]?
 
     init(id: UUID = UUID(), kind: Kind, start: CGPoint, end: CGPoint,
-         color: ImageAnnotationColor, strokeWidth: CGFloat, text: String = "") {
+         color: ImageAnnotationColor, strokeWidth: CGFloat, text: String = "", via: [CGPoint]? = nil) {
         self.id = id
         self.kind = kind
         self.start = start
@@ -46,25 +49,41 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
         self.color = color
         self.strokeWidth = strokeWidth
         self.text = text
+        self.via = via
     }
 
+    var penPointCount: Int { kind == .pen ? 2 + (via?.count ?? 0) : 0 }
+
     var bounds: CGRect {
-        CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
-               width: abs(end.x - start.x), height: abs(end.y - start.y))
+        var minX = min(start.x, end.x), maxX = max(start.x, end.x)
+        var minY = min(start.y, end.y), maxY = max(start.y, end.y)
+        for point in via ?? [] {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     var hitBounds: CGRect {
-        kind == .arrow ? bounds.insetBy(dx: -strokeWidth * 2, dy: -strokeWidth * 2) : bounds
+        let padding = switch kind {
+        case .arrow: strokeWidth * 2
+        case .pen: strokeWidth / 2
+        default: CGFloat.zero
+        }
+        return bounds.insetBy(dx: -padding, dy: -padding)
     }
 
     func hit(_ point: CGPoint, tolerance: CGFloat) -> Bool {
         let tolerance = max(0, tolerance) + strokeWidth / 2
-        if kind == .arrow {
-            let dx = end.x - start.x, dy = end.y - start.y
-            let squared = dx * dx + dy * dy
-            guard squared > 0 else { return false }
-            let t = min(1, max(0, ((point.x - start.x) * dx + (point.y - start.y) * dy) / squared))
-            return hypot(point.x - start.x - t * dx, point.y - start.y - t * dy) <= tolerance
+        if kind == .pen || kind == .arrow {
+            var previous = start
+            for next in via ?? [] {
+                if Self.hitsSegment(point, from: previous, to: next, tolerance: tolerance) { return true }
+                previous = next
+            }
+            return Self.hitsSegment(point, from: previous, to: end, tolerance: tolerance)
         }
         let rect = bounds.insetBy(dx: -tolerance, dy: -tolerance)
         guard rect.contains(point) else { return false }
@@ -76,27 +95,40 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
         return true
     }
 
+    private static func hitsSegment(_ point: CGPoint, from start: CGPoint, to end: CGPoint,
+                                    tolerance: CGFloat) -> Bool {
+        let dx = end.x - start.x, dy = end.y - start.y
+        let squared = dx * dx + dy * dy
+        let x = point.x - start.x, y = point.y - start.y
+        let t = squared == 0 ? 0 : min(1, max(0, (x * dx + y * dy) / squared))
+        let offsetX = x - t * dx, offsetY = y - t * dy
+        return offsetX * offsetX + offsetY * offsetY <= tolerance * tolerance
+    }
+
     mutating func translate(x: CGFloat, y: CGFloat) {
         start.x += x
         start.y += y
         end.x += x
         end.y += y
+        via = via?.map { CGPoint(x: $0.x + x, y: $0.y + y) }
     }
 }
 
 nonisolated struct ImageAnnotationState: Codable, Equatable, Sendable {
     static let maximumLayers = 1_024
     static let maximumTextUnits = 4_096
+    static let maximumPenPoints = 65_536
 
     var layers: [ImageAnnotationLayer] = []
     var crop: CGRect?
 
     var isEmpty: Bool { layers.isEmpty && crop == nil }
     var hasFilters: Bool { layers.contains { $0.kind.filtersPixels } }
+    var penPointCount: Int { layers.reduce(0) { $0 + $1.penPointCount } }
 
     func validated(in size: CGSize) throws -> Self {
         guard size.width.isFinite, size.height.isFinite, size.width >= 1, size.height >= 1,
-              layers.count <= Self.maximumLayers,
+              layers.count <= Self.maximumLayers, penPointCount <= Self.maximumPenPoints,
               Set(layers.map(\.id)).count == layers.count else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -109,12 +141,17 @@ nonisolated struct ImageAnnotationState: Codable, Equatable, Sendable {
                   layer.strokeWidth > 0, layer.strokeWidth <= 128,
                   layer.text.utf16.count <= Self.maximumTextUnits,
                   !layer.text.utf16.contains(0) else { throw CocoaError(.fileReadCorruptFile) }
-            if layer.kind == .arrow {
+            if let via = layer.via {
+                guard layer.kind == .pen, layer.penPointCount <= ImageAnnotationLayer.maximumPenPoints,
+                      via.allSatisfy(valid) else { throw CocoaError(.fileReadCorruptFile) }
+            }
+            switch layer.kind {
+            case .pen: break
+            case .arrow:
                 guard layer.start != layer.end else { throw CocoaError(.fileReadCorruptFile) }
-            } else {
-                guard layer.bounds.width >= 1, layer.bounds.height >= 1 else {
-                    throw CocoaError(.fileReadCorruptFile)
-                }
+            default:
+                let bounds = layer.bounds
+                guard bounds.width >= 1, bounds.height >= 1 else { throw CocoaError(.fileReadCorruptFile) }
             }
             if layer.kind == .text || layer.kind == .number {
                 guard !layer.text.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
@@ -225,12 +262,9 @@ final class ImageAnnotationDocument {
     func movedSelection(by delta: CGPoint) -> ImageAnnotationState {
         let selected = state.layers.filter { selection.contains($0.id) }
         guard !selected.isEmpty, delta.x.isFinite, delta.y.isFinite else { return state }
-        let minX = selected.map { $0.bounds.minX }.min()!
-        let maxX = selected.map { $0.bounds.maxX }.max()!
-        let minY = selected.map { $0.bounds.minY }.min()!
-        let maxY = selected.map { $0.bounds.maxY }.max()!
-        let x = min(size.width - maxX, max(-minX, delta.x))
-        let y = min(size.height - maxY, max(-minY, delta.y))
+        let bounds = selected.reduce(CGRect.null) { $0.union($1.bounds) }
+        let x = min(size.width - bounds.maxX, max(-bounds.minX, delta.x))
+        let y = min(size.height - bounds.maxY, max(-bounds.minY, delta.y))
         var result = state
         for index in result.layers.indices where selection.contains(result.layers[index].id) {
             result.layers[index].translate(x: x, y: y)
@@ -238,7 +272,7 @@ final class ImageAnnotationDocument {
         return result
     }
 
-    func proposedGesture(from first: CGPoint, to last: CGPoint) -> ImageAnnotationState {
+    func proposedGesture(from first: CGPoint, to last: CGPoint, via: [CGPoint] = []) -> ImageAnnotationState {
         guard canMutate, isEditing, first.x.isFinite, first.y.isFinite, last.x.isFinite, last.y.isFinite else { return state }
         if tool == .select {
             return movedSelection(by: CGPoint(x: last.x - first.x, y: last.y - first.y))
@@ -255,8 +289,22 @@ final class ImageAnnotationDocument {
         guard result.layers.count < ImageAnnotationState.maximumLayers else { return result }
         let kind: ImageAnnotationLayer.Kind
         var start = a, end = b, text = ""
+        var intermediate: [CGPoint]?
         switch tool {
         case .select, .crop, .text: return result
+        case .pen:
+            guard via.count <= ImageAnnotationLayer.maximumPenPoints - 2 else { return result }
+            var points: [CGPoint] = []
+            points.reserveCapacity(via.count)
+            for sample in via {
+                guard sample.x.isFinite, sample.y.isFinite else { return result }
+                let point = clamped(sample)
+                if point != (points.last ?? a) { points.append(point) }
+            }
+            if points.last == b { points.removeLast() }
+            guard result.penPointCount + points.count + 2 <= ImageAnnotationState.maximumPenPoints else { return result }
+            kind = .pen
+            intermediate = points.isEmpty ? nil : points
         case .arrow:
             guard hypot(b.x - a.x, b.y - a.y) >= 1 else { return result }
             kind = .arrow
@@ -276,20 +324,21 @@ final class ImageAnnotationDocument {
                             y: min(size.height - side, max(0, a.y - side / 2)))
             end = CGPoint(x: start.x + side, y: start.y + side)
         }
-        if kind != .arrow {
+        if kind != .arrow, kind != .pen {
             let rect = rectangle(start, end)
             guard rect.width >= 1, rect.height >= 1 else { return result }
         }
-        result.layers.append(.init(kind: kind, start: start, end: end, color: color, strokeWidth: line, text: text))
+        result.layers.append(.init(kind: kind, start: start, end: end, color: color, strokeWidth: line,
+                                   text: text, via: intermediate))
         return result
     }
 
-    func commitGesture(from first: CGPoint, to last: CGPoint) {
+    func commitGesture(from first: CGPoint, to last: CGPoint, via: [CGPoint] = []) {
         guard canMutate, isEditing else { return }
         if tool == .text {
             textEdit = .init(id: nil, point: clamped(first), text: "")
         } else {
-            replace(with: proposedGesture(from: first, to: last))
+            replace(with: proposedGesture(from: first, to: last, via: via))
         }
     }
 

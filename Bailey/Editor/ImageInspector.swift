@@ -17,6 +17,7 @@ struct ImageInspector: View {
     @Environment(\.accessibilityPlayAnimatedImages) private var automaticallyPlays
     @State private var detailUnavailable = false
     @State private var annotationRenderFailed = false
+    @State private var annotationCanvas = AnnotationCanvasTarget()
 
     private struct AnimationDemand: Hashable {
         let revision: String
@@ -28,7 +29,7 @@ struct ImageInspector: View {
         let demand = AnimationDemand(revision: resourceRevision,
                                      playing: active && paused == false && loadAnimation != nil)
         let document = annotationFile?.imageAnnotations
-        RasterViewport(image: image, loadOriginal: loadOriginal,
+        RasterViewport(target: annotationCanvas, image: image, loadOriginal: loadOriginal,
                        animationFrame: playback?.image, paused: loadAnimation == nil ? nil : paused,
                        toggleAnimation: playback.map { playback in
                            { playback.togglePause(automaticallyPlays: automaticallyPlays) }
@@ -48,7 +49,7 @@ struct ImageInspector: View {
             }
             .overlay(alignment: .top) {
                 if let document, document.isEditing, annotationFile?.canAnnotateImage == true {
-                    ImageAnnotationToolbar(document: document)
+                    ImageAnnotationToolbar(document: document, focusCanvas: annotationCanvas.focus)
                         .padding(8)
                 }
             }
@@ -80,7 +81,17 @@ struct ImageInspector: View {
     }
 }
 
+private final class AnnotationCanvasTarget {
+    weak var scroll: RasterScrollView?
+
+    func focus() {
+        guard let scroll else { return }
+        scroll.window?.makeFirstResponder(scroll)
+    }
+}
+
 private struct RasterViewport: NSViewRepresentable {
+    let target: AnnotationCanvasTarget
     let image: RasterPreview
     let loadOriginal: (() async throws -> RasterDetail)?
     let animationFrame: CGImage?
@@ -100,7 +111,9 @@ private struct RasterViewport: NSViewRepresentable {
     let onDetailFailure: (Bool) -> Void
 
     func makeNSView(context: Context) -> RasterScrollView {
-        RasterScrollView(frame: .zero)
+        let scroll = RasterScrollView(frame: .zero)
+        target.scroll = scroll
+        return scroll
     }
 
     func updateNSView(_ scroll: RasterScrollView, context: Context) {
@@ -360,6 +373,7 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
     private var onAnnotationFailure: ((Bool) -> Void)?
     private var annotationDragStart: CGPoint?
     private var annotationDragTool: ImageAnnotationTool?
+    private var penSamples: [CGPoint] = []
     private var annotationTask: Task<Void, Never>?
     private struct AnnotationDemand: Equatable {
         let state: ImageAnnotationState
@@ -607,10 +621,12 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
     private func cancelAnnotationDrag() {
         annotationDragStart = nil
         annotationDragTool = nil
+        penSamples.removeAll(keepingCapacity: true)
         canvas.transientAnnotation = nil
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard annotationDocument?.textEdit == nil else { return }
         onFocused?()
         guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing,
               !event.modifierFlags.contains(.option) else {
@@ -642,7 +658,13 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
         guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing,
               document.tool == annotationDragTool else { cancelAnnotationDrag(); return }
         let point = canvas.convert(event.locationInWindow, from: nil)
-        canvas.transientAnnotation = document.proposedGesture(from: first, to: point)
+        if annotationDragTool == .pen, point != (penSamples.last ?? first) {
+            if penSamples.count == ImageAnnotationLayer.maximumPenPoints - 2 {
+                penSamples = stride(from: 0, to: penSamples.count, by: 2).map { penSamples[$0] }
+            }
+            penSamples.append(point)
+        }
+        canvas.transientAnnotation = document.proposedGesture(from: first, to: point, via: penSamples)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -653,11 +675,17 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
         defer { cancelAnnotationDrag(); syncAnnotationState() }
         guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing,
               document.tool == annotationDragTool else { return }
-        document.commitGesture(from: first, to: canvas.convert(event.locationInWindow, from: nil))
+        let previousCount = document.state.layers.count
+        document.commitGesture(from: first, to: canvas.convert(event.locationInWindow, from: nil), via: penSamples)
+        if document.tool == .pen, previousCount == document.state.layers.count {
+            showOutputError(String(localized: "Delete a stroke or export a copy before adding more ink.", table: "Editor"),
+                            title: String(localized: "Pen limit reached", table: "Editor"))
+        }
     }
 
     override func keyDown(with event: NSEvent) {
-        guard annotationDocument?.canMutate == true, canAnnotate, let document = annotationDocument, document.isEditing else {
+        guard window?.firstResponder === self, canAnnotate, let document = annotationDocument,
+              document.canMutate, document.isEditing, document.textEdit == nil else {
             super.keyDown(with: event)
             return
         }
@@ -668,7 +696,16 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
         case 51, 117:
             document.removeSelection()
         default:
-            super.keyDown(with: event)
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+            guard modifiers.isEmpty, let key = event.charactersIgnoringModifiers?.lowercased(),
+                  let tool = ImageAnnotationTool.allCases.first(where: { $0.shortcut == key }) else {
+                super.keyDown(with: event)
+                return
+            }
+            if document.tool != tool {
+                cancelAnnotationDrag()
+                document.tool = tool
+            }
         }
         syncAnnotationState()
     }

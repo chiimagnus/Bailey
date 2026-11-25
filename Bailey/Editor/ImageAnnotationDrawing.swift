@@ -51,6 +51,17 @@ nonisolated enum ImageAnnotationDrawing {
         context.setLineCap(.round)
         context.setLineJoin(.round)
         switch layer.kind {
+        case .pen:
+            if layer.start == layer.end, layer.via?.contains(where: { $0 != layer.start }) != true {
+                let radius = layer.strokeWidth / 2
+                context.fillEllipse(in: CGRect(x: layer.start.x - radius, y: layer.start.y - radius,
+                                               width: layer.strokeWidth, height: layer.strokeWidth))
+            } else {
+                context.move(to: layer.start)
+                for point in layer.via ?? [] { context.addLine(to: point) }
+                context.addLine(to: layer.end)
+                context.strokePath()
+            }
         case .arrow:
             let start = layer.start, end = layer.end
             let dx = end.x - start.x, dy = end.y - start.y

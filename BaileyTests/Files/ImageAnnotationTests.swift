@@ -202,6 +202,149 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertFalse(document.isDirty)
     }
 
+    func testPenBendsHitOnlyTheStrokeAndMoveWithNativeUndo() throws {
+        let document = ImageAnnotationDocument(size: CGSize(width: 160, height: 120))
+        document.begin()
+        document.tool = .pen
+        let start = CGPoint(x: 120, y: 24), bend = CGPoint(x: 96, y: 64), end = CGPoint(x: 120, y: 96)
+        let pending = document.proposedGesture(from: start, to: end, via: [start, bend, bend, end])
+        XCTAssertTrue(document.state.isEmpty, "Preview should not register an edit")
+        XCTAssertEqual(pending.layers.first?.via, [bend])
+        document.commitGesture(from: start, to: end, via: [bend])
+        let ink = try XCTUnwrap(document.state.layers.first)
+        XCTAssertEqual(ink.bounds, CGRect(x: 96, y: 24, width: 24, height: 72))
+        XCTAssertTrue(ink.hit(bend, tolerance: 0))
+        XCTAssertFalse(ink.hit(CGPoint(x: 116, y: 64), tolerance: 0), "Do not hit empty space inside the bounds")
+
+        document.undoManager.undo()
+        XCTAssertTrue(document.state.isEmpty, "The complete stroke is one undo action")
+        document.undoManager.redo()
+        XCTAssertEqual(document.state.layers, [ink])
+        document.tool = .select
+        document.select(at: bend, tolerance: 0, extending: false)
+        document.commitGesture(from: bend, to: CGPoint(x: 1000, y: -1000))
+        let moved = try XCTUnwrap(document.state.layers.first)
+        XCTAssertEqual(moved.start, CGPoint(x: 160, y: 0))
+        XCTAssertEqual(moved.via, [CGPoint(x: 136, y: 40)])
+        XCTAssertEqual(moved.end, CGPoint(x: 160, y: 72))
+        document.undoManager.undo()
+        XCTAssertEqual(document.state.layers, [ink])
+
+        document.tool = .pen
+        let edge = CGPoint(x: 5, y: 6)
+        document.commitGesture(from: edge, to: edge)
+        let dot = try XCTUnwrap(document.state.layers.last)
+        XCTAssertTrue(dot.hit(edge, tolerance: 0))
+        XCTAssertFalse(dot.hit(CGPoint(x: 7, y: 6), tolerance: 0))
+        document.commitGesture(from: edge, to: edge, via: [CGPoint(x: CGFloat.infinity, y: 0)])
+        XCTAssertEqual(document.state.layers.last, dot, "Nonfinite path samples must not enter the document")
+        let loopOrigin = CGPoint(x: 15, y: 12)
+        document.commitGesture(from: loopOrigin, to: loopOrigin, via: [CGPoint(x: -1, y: 120.5)])
+        let loop = try XCTUnwrap(document.state.layers.last)
+        let corner = CGPoint(x: 0, y: 120)
+        XCTAssertEqual(loop.via, [corner], "A stroke returning to its origin still keeps its intermediate samples")
+        XCTAssertTrue(loop.hit(corner, tolerance: 0))
+        document.tool = .select
+        document.select(at: edge, tolerance: 0, extending: false)
+        document.select(at: bend, tolerance: 0, extending: true)
+        XCTAssertEqual(document.selection, [dot.id, ink.id])
+        document.commitGesture(from: bend, to: CGPoint(x: 1000, y: 1000))
+        XCTAssertEqual(document.state.layers[1].start, CGPoint(x: 45, y: 30))
+        XCTAssertEqual(document.state.layers.last, loop, "Only the selected paths move")
+        document.cancel()
+        XCTAssertTrue(document.state.isEmpty)
+    }
+
+    func testPenPathPointBudgetsAndMalformedGeometry() throws {
+        let size = CGSize(width: 160, height: 120)
+        let start = CGPoint(x: 20, y: 10), end = CGPoint(x: 7, y: 13)
+        let maximumIntermediate = ImageAnnotationLayer.maximumPenPoints - 2
+        let points = (0..<maximumIntermediate).map { CGPoint(x: 30, y: $0.isMultiple(of: 2) ? 48 : 50) }
+        func layer(_ kind: ImageAnnotationLayer.Kind = .pen, via: [CGPoint]) -> ImageAnnotationLayer {
+            .init(kind: kind, start: start, end: end, color: .red, strokeWidth: 2, via: via)
+        }
+        let full = (0..<(ImageAnnotationState.maximumPenPoints / ImageAnnotationLayer.maximumPenPoints))
+            .map { _ in layer(via: points) }
+        XCTAssertNoThrow(try ImageAnnotationState(layers: full).validated(in: size))
+        for layers in [
+            full + [layer(via: [start])],
+            [layer(via: points + [start])],
+            [layer(via: [CGPoint(x: -1, y: 0)])],
+            [layer(via: [CGPoint(x: 0, y: CGFloat.nan)])],
+            [layer(.rectangle, via: [start])],
+        ] {
+            XCTAssertThrowsError(try ImageAnnotationState(layers: layers).validated(in: size))
+        }
+
+        let document = ImageAnnotationDocument(size: size)
+        document.begin()
+        document.tool = .pen
+        document.commitGesture(from: start, to: end, via: points + [start])
+        XCTAssertTrue(document.state.isEmpty)
+        document.commitGesture(from: start, to: end, via: points)
+        XCTAssertEqual(document.state.layers.first?.via?.count, maximumIntermediate)
+        let maxedDocument = ImageAnnotationDocument(size: size, state: .init(layers: full))
+        maxedDocument.begin()
+        maxedDocument.tool = .pen
+        XCTAssertEqual(maxedDocument.proposedGesture(from: start, to: end).layers.count, full.count)
+    }
+
+    func testPenReopensLegacySidecarAndPreservesBentPixelsInCopyAndExport() async throws {
+        let root = try makeRoot()
+        let path = root.appendingPathComponent("pen.png")
+        let original = try png()
+        try original.write(to: path)
+        let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
+        let version = WorkspaceFileVersion(data: original)
+        let legacy = """
+            {"schema":1,"sourceSHA256":"\(version.sha256)","sourceBytes":\(version.byteCount),
+             "pixelSize":[160,120],"annotations":{"layers":[
+              {"id":"B3226ED0-4111-4D04-9491-183ABBD129D8","kind":"rectangle","start":[10,10],
+               "end":[20,20],"color":"blue","strokeWidth":2,"text":""}]}}
+            """
+        try Data(legacy.utf8).write(to: sidecar)
+        let file = try await open(path)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        XCTAssertEqual(document.state.layers.map(\.kind), [.rectangle])
+        document.begin()
+        document.tool = .pen
+        document.commitGesture(from: CGPoint(x: 120, y: 24), to: CGPoint(x: 120, y: 96),
+                               via: [CGPoint(x: 96, y: 64)])
+        document.commitGesture(from: CGPoint(x: 137.5, y: 48.5), to: CGPoint(x: 137.5, y: 48.5))
+        add(.crop, to: document, from: CGPoint(x: 90, y: 15), to: CGPoint(x: 150, y: 105))
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        try await file.copyAnnotatedImage(request: file.fileContentRevision, to: pasteboard)
+        XCTAssertEqual(try Data(contentsOf: sidecar), Data(legacy.utf8), "Copy keeps the earlier saved document")
+        let copied = try image(XCTUnwrap(pasteboard.data(forType: .png)))
+
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let saved = try Data(contentsOf: sidecar)
+        let reopened = try await open(path)
+        defer { reopened.retireContent() }
+        XCTAssertEqual(reopened.imageAnnotations?.state, document.state)
+        let output = root.appendingPathComponent("pen-export.png")
+        try await reopened.exportAnnotatedImage(request: reopened.fileContentRevision,
+            options: .init(width: 60, height: 90), to: output)
+        let exported = try image(Data(contentsOf: output))
+        for result in [copied, exported] {
+            XCTAssertEqual(result.width, 60)
+            XCTAssertEqual(result.height, 90)
+            for (x, y) in [(6, 49), (17, 29), (18, 65), (47, 33)] {
+                let ink = try pixel(result, x: x, y: y)
+                XCTAssertGreaterThan(ink.redComponent - ink.greenComponent, 0.5)
+                XCTAssertGreaterThan(ink.alphaComponent, 0.5)
+            }
+            XCTAssertLessThan(try pixel(result, x: 30, y: 49).alphaComponent, 0.01,
+                              "Do not draw a straight line between the first and last points")
+        }
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertEqual(try Data(contentsOf: sidecar), saved)
+    }
+
     func testSaveReopenUndoAndExportNeverChangeTheOriginalBytes() async throws {
         let root = try makeRoot()
         let path = root.appendingPathComponent("原图.png")
@@ -1197,6 +1340,107 @@ final class ImageAnnotationTests: XCTestCase {
         try await waitFor("Explicit discard closes annotation tab") { project.tabs.isEmpty }
         XCTAssertEqual(try Data(contentsOf: path), original)
         XCTAssertEqual(try Data(contentsOf: sidecar), accepted)
+    }
+
+    func testAnnotationKeysFollowOnlyTheNativeCanvasAndCommitTheDrawnPath() async throws {
+        let original = try png(width: 400, height: 300)
+        let path = try makeRoot().appendingPathComponent("keys.png")
+        try original.write(to: path)
+        let file = try await open(path)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 640, height: 480),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderBack(nil)
+        func findCanvas(in view: NSView) -> PreviewScrollView? {
+            if let scroll = view as? PreviewScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findCanvas).first
+        }
+        try await waitFor("Mount the standalone file viewer") {
+            host.layoutSubtreeIfNeeded()
+            return findCanvas(in: host)?.documentView?.bounds.size == document.size
+        }
+        let scroll = try XCTUnwrap(findCanvas(in: host))
+        let canvas = try XCTUnwrap(scroll.documentView)
+        func key(_ letter: String, modifiers: NSEvent.ModifierFlags = []) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: letter, charactersIgnoringModifiers: letter, isARepeat: false, keyCode: 0))
+            window.sendEvent(event)
+        }
+        func mouse(_ type: NSEvent.EventType, _ x: Int, _ y: Int) throws {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type,
+                location: canvas.convert(CGPoint(x: x, y: y), to: nil), modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 1, clickCount: 1, pressure: 1))
+            switch type {
+            case .leftMouseDown: canvas.mouseDown(with: event)
+            case .leftMouseDragged: canvas.mouseDragged(with: event)
+            default: canvas.mouseUp(with: event)
+            }
+        }
+        XCTAssertTrue(window.makeFirstResponder(scroll))
+        try key("r")
+        XCTAssertEqual(document.tool, .select, "Preview has no tool shortcuts")
+        let annotate = try XCTUnwrap(scroll.accessibilityCustomActions()?.first {
+            $0.name == String(localized: "Annotate Image", table: "Editor")
+        })
+        XCTAssertTrue(try XCTUnwrap(annotate.handler)())
+        XCTAssertTrue(window.firstResponder === scroll)
+        let tools: [(String, ImageAnnotationTool)] = [
+            ("p", .pen), ("r", .rectangle), ("v", .select), ("a", .arrow), ("e", .ellipse),
+            ("t", .text), ("n", .number), ("b", .blur), ("m", .pixelate), ("c", .crop)
+        ]
+        for (letter, tool) in tools {
+            try key(letter)
+            XCTAssertEqual(document.tool, tool)
+        }
+        for flags: NSEvent.ModifierFlags in [.shift, .control, .option] {
+            try key("r", modifiers: flags)
+            XCTAssertEqual(document.tool, .crop)
+        }
+        XCTAssertFalse(file.isDirty)
+        try key("P", modifiers: .capsLock)
+        try mouse(.leftMouseDown, 110, 90)
+        try mouse(.leftMouseDragged, 135, 140)
+        try mouse(.leftMouseUp, 160, 90)
+        let stroke = try XCTUnwrap(document.state.layers.first)
+        XCTAssertEqual(stroke.kind, .pen)
+        XCTAssertEqual(try XCTUnwrap(stroke.via?.first).y, 140, accuracy: 0.01)
+        try mouse(.leftMouseDown, 100, 90)
+        try mouse(.leftMouseDragged, 110, 150)
+        try key("r")
+        try mouse(.leftMouseUp, 120, 90)
+        XCTAssertEqual(document.state.layers, [stroke], "A tool switch cancels only the in-flight gesture")
+        try key("t")
+        try mouse(.leftMouseDown, 100, 80)
+        try mouse(.leftMouseUp, 100, 80)
+        try await waitFor("Native annotation text field receives focus") {
+            (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.setMarkedText("拼", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        editor.insertText("拼", replacementRange: editor.markedRange())
+        for letter in ["p", "r", "a"] { try key(letter) }
+        XCTAssertEqual(document.textEdit?.text, "拼pra")
+        XCTAssertEqual(document.tool, .text)
+        try mouse(.leftMouseDown, 120, 110)
+        try mouse(.leftMouseUp, 120, 110)
+        XCTAssertEqual(document.textEdit?.text, "拼pra", "Clicking elsewhere cannot discard an unsubmitted label")
+        let field = NSSearchField()
+        host.addSubview(field)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        for letter in ["r", "p"] { try key(letter) }
+        XCTAssertEqual(field.stringValue, "rp")
+        XCTAssertEqual(document.tool, .text)
+        XCTAssertEqual(document.state.layers, [stroke])
+        XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
     func testMountedCanvasUsesImageCoordinatesAtDifferentZoomAndNativeUndo() async throws {

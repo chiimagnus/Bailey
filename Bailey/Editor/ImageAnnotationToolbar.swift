@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ImageAnnotationToolbar: View {
     let document: ImageAnnotationDocument
+    let focusCanvas: () -> Void
     @FocusState private var textFocused: Bool
 
     var body: some View {
@@ -9,6 +10,16 @@ struct ImageAnnotationToolbar: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 6) { tools; actions }
                 VStack(spacing: 6) { tools; actions }
+                VStack(spacing: 6) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 24, maximum: 24), spacing: 3)], spacing: 3) {
+                        toolButtons
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        actions
+                        ScrollView(.horizontal) { actions }
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             if let edit = document.textEdit {
                 HStack {
@@ -19,9 +30,12 @@ struct ImageAnnotationToolbar: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($textFocused)
                     .onAppear { textFocused = true }
-                    .onSubmit { document.commitText() }
-                    Button(String(localized: "Add Text", table: "Editor")) { document.commitText() }
-                    Button(String(localized: "Cancel", table: "Editor")) { document.cancelText() }
+                    .onSubmit { commitText() }
+                    Button(String(localized: "Add Text", table: "Editor"), action: commitText)
+                    Button(String(localized: "Cancel", table: "Editor")) {
+                        document.cancelText()
+                        focusCanvas()
+                    }
                 }
                 .frame(maxWidth: 360)
                 if let error = document.textError {
@@ -35,22 +49,32 @@ struct ImageAnnotationToolbar: View {
         .background(.regularMaterial, in: .rect(cornerRadius: 10))
     }
 
+    private func commitText() {
+        document.commitText()
+        if document.textEdit == nil { focusCanvas() }
+    }
+
     private var tools: some View {
-        HStack(spacing: 3) {
-            ForEach(ImageAnnotationTool.allCases, id: \.self) { tool in
-                Button {
-                    document.tool = tool
-                } label: {
-                    Image(systemName: tool.symbol)
-                        .frame(width: 24, height: 24)
-                        .background(document.tool == tool ? Color.accentColor.opacity(0.18) : .clear,
-                                    in: .rect(cornerRadius: 5))
-                }
-                .help(tool.title)
-                .accessibilityLabel(tool.title)
-                .accessibilityAddTraits(document.tool == tool ? .isSelected : [])
-                .accessibilityIdentifier("bailey.annotation.tool." + tool.rawValue)
+        HStack(spacing: 3) { toolButtons }
+    }
+
+    private var toolButtons: some View {
+        ForEach(ImageAnnotationTool.allCases, id: \.self) { tool in
+            Button {
+                document.tool = tool
+                focusCanvas()
+            } label: {
+                Image(systemName: tool.symbol)
+                    .frame(width: 24, height: 24)
+                    .background(document.tool == tool ? Color.accentColor.opacity(0.18) : .clear,
+                                in: .rect(cornerRadius: 5))
+                    .contentShape(.rect)
             }
+            .help(Text(verbatim: tool.hint))
+            .accessibilityLabel(tool.title)
+            .accessibilityAddTraits(document.tool == tool ? .isSelected : [])
+            .accessibilityIdentifier("bailey.annotation.tool." + tool.rawValue)
+            .disabled(document.textEdit != nil)
         }
     }
 
@@ -100,10 +124,28 @@ struct ImageAnnotationToolbar: View {
     }
 }
 
-private extension ImageAnnotationTool {
-    var symbol: String {
+extension ImageAnnotationTool {
+    var shortcut: String {
+        switch self {
+        case .select: "v"
+        case .pen: "p"
+        case .arrow: "a"
+        case .rectangle: "r"
+        case .ellipse: "e"
+        case .text: "t"
+        case .number: "n"
+        case .blur: "b"
+        case .pixelate: "m"
+        case .crop: "c"
+        }
+    }
+
+    fileprivate var hint: String { "\(title) (\(shortcut.uppercased()))" }
+
+    fileprivate var symbol: String {
         switch self {
         case .select: "cursorarrow"
+        case .pen: "pencil.tip"
         case .arrow: "arrow.up.right"
         case .rectangle: "rectangle"
         case .ellipse: "circle"
@@ -115,8 +157,9 @@ private extension ImageAnnotationTool {
         }
     }
 
-    var title: String {
+    fileprivate var title: String {
         switch self {
+        case .pen: String(localized: "Pen", table: "Editor")
         case .select: String(localized: "Select Annotation", table: "Editor")
         case .arrow: String(localized: "Arrow", table: "Editor")
         case .rectangle: String(localized: "Rectangle", table: "Editor")
