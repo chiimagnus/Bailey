@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：原生多音轨切换实际 PCM、中文字幕、定位、换源、系统全屏（含半速真实像素）、双窗 117 次跨格式会话和冷启动已验；内置输出软件通路已确认，物理听感、HDR 光学呈现（软件合成链已通过）及对应交叉项尚未核销；真实睡眠由用户延期亲验，缺配外接屏延期；蓝牙与内置输出实际切换通过。
+- **依据**：原生多音轨切换实际 PCM、中文字幕、定位、换源、系统全屏（含半速真实像素）、双窗 117 次跨格式会话和冷启动已验；内置扬声器实际视频声学输出与第二设备双向切换均已通过，P2-T2 独立完成；HDR 光学呈现归 P1 共享显示验收，其他对应交叉项及阶段门禁仍待核销；真实睡眠由用户延期亲验，缺配外接屏延期；蓝牙与内置输出实际切换通过。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -68,3 +68,5 @@
 - 2026-11-26：用户连接 Beats Studio Pro 后恢复第二输出设备验收。`a2d9f21d` 实际 Core Audio Bluetooth（91）→内置扬声器（77）→Bluetooth，独立 M4A 与双音轨 MOV 各双向切换，系统事件自动暂停、保持 player/item/位置、手动恢复后时钟推进、Core Audio 进程活动输出设备与目标一致，关闭退役及原字节不变；1/1、零跳过、4.951 秒。退出后默认输出仍为原 Beats。不将真实路由与 PCM 等同于耳机主观空间听感或视频独立声学测量。日志 `/tmp/bailey-real-route.log`；复验命令 `TEST_RUNNER_BAILEY_REAL_AUDIO_ROUTE_TEST=1 make test ONLY_TESTING=BaileyTests/NativeMediaFileTests/testActualBuiltInAndBluetoothOutputRoutesPreserveTheFilePlayer`，仅在明确授权改变系统输出且蓝牙耳机已连接时运行。
 
 - `3e421fd1`：扩展回归 58 项中同一选轨用例两条播放时钟断言失败、1 项真实七格式样本环境跳过；真实混合 PCM 正确，原因是音频 tap 在播放时钟推进前收到预缓冲。保留原断言，等待两条件同时满足；百次真实开闭压力与选轨同批复验 2/2，零跳过、零失败。扩展 58 项尚未整批复验。日志 `/tmp/bailey-spatial-expanded.log`、`/tmp/bailey-audio-clock-rerun.log`。
+
+- 2026-11-26：视频真实声学补验。隔离 App 两次 GUI 尝试分别未启动实际播放及 AX action 不可调用，未计通过。改用真实 FileTab、FileViewerView 实际挂载 AVKit 和同一 AVPlayer，H.264/AAC 自制 14 秒 MP4（静音、440、880、静音、880、440、静音，各 2 秒）播放至 13.515 秒并核对源字节。宿主专项 1/1、零跳过，16.822 秒、退出 0；外部已授权内置麦克风仅采集已知频点能量／RMS／时间戳，无原始录音。按播放起点对齐，排除段边界 0.5/0.35 秒：440 Hz 两段能量中位数 5.095e-5／4.592e-5，880 Hz 两段 1.068e-5／1.083e-5，静音两频点中位数均低于 3.4e-8。系统音量仍 13%，内置输入／输出 84/77，测量后恢复原 Beats 输入／输出 97/91，进程退出、无活动输入。专项临时宿主方法已移除，不加入常规测试矩阵；保留实际测试源码、原样日志和频谱于 `/tmp/bailey-final-video-acoustic.GXNOUB/{host-method.swift,host-run.py,host-test.log,host-spectrum.log,host-run.log}`。不将声学证据冒充耳机主观空间音频或 HDR 光学测量。P2-T2 生命周期与其真实输出已核销；HDR 显示验收独立归 P1。
