@@ -191,3 +191,25 @@ struct ChromeIconButton: View {
         .tooltip(tooltip, edge: tooltipEdge, alignment: tooltipAlignment)
     }
 }
+
+/// File and Diff errors can contain a recovery location; never truncate it.
+struct WorkspaceErrorBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Color(red: 0.82, green: 0.60, blue: 0.13))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.04))
+    }
+}

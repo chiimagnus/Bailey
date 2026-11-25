@@ -129,7 +129,11 @@ final class FileTab: nonisolated Identifiable {
     private(set) var isDirty = false
     private(set) var fileEncoding = TextFileEncoding.utf8
     @ObservationIgnored private var preferredEncoding: TextFileEncoding?
-    var saveError: String?
+    private var saveFailure = WorkspaceSaveFailure()
+    var saveError: String? {
+        get { saveFailure.message }
+        set { saveFailure.message = newValue }
+    }
     private(set) var reloadError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
@@ -1152,7 +1156,7 @@ final class FileTab: nonisolated Identifiable {
             saveError = nil
         } catch {
             guard generation == targetGeneration, imageAnnotations === document else { return }
-            saveError = String(localized: "Could not save image annotations.", table: "Editor") + " " + error.localizedDescription
+            saveFailure.record(error, message: String(localized: "Could not save image annotations.", table: "Editor") + " " + error.localizedDescription)
         }
     }
 
@@ -1256,7 +1260,7 @@ final class FileTab: nonisolated Identifiable {
             saveError = String(localized: "The file changed outside Bailey. Your edits remain unsaved.",
                                table: "Editor")
         } else {
-            saveError = error.localizedDescription
+            saveFailure.record(error, message: error.localizedDescription)
         }
     }
 
@@ -1942,17 +1946,6 @@ struct FileViewerView: View {
     }
 
     private func errorBar(_ message: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10))
-            Text(message)
-                .font(.system(size: 11))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(Color(red: 0.82, green: 0.60, blue: 0.13))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(Color.primary.opacity(0.04))
+        WorkspaceErrorBanner(message: message)
     }
 }

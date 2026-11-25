@@ -365,9 +365,30 @@ final class FileTabPersistenceTests: XCTestCase {
             // Repeating Save must neither consume the recovery nor accept the stale baseline.
             await file.save()
             XCTAssertTrue(file.isDirty)
-            XCTAssertNotNil(file.saveError)
+            XCTAssertTrue(file.saveError?.contains(stored.path) == true, "A retry must retain the exact recovery location")
             XCTAssertEqual(try Data(contentsOf: stored), external)
             XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            // A second independent publication must retain both recovery paths.
+            try baseline.write(to: path, options: .atomic)
+            let secondExternal = Data("Name,Value\r\nItem,two\n".utf8)
+            try secondExternal.write(to: rival)
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            let recoveries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") }
+                .map { $0.appendingPathComponent(path.lastPathComponent) }
+            XCTAssertEqual(recoveries.count, 2)
+            let second = try XCTUnwrap(recoveries.first { $0.path != stored.path })
+            XCTAssertEqual(try Data(contentsOf: second), secondExternal)
+            await file.save()
+            let notice = try XCTUnwrap(file.saveError)
+            for location in [stored, second] {
+                XCTAssertTrue(notice.contains(location.path))
+                XCTAssertEqual(notice.components(separatedBy: location.path).count, 2,
+                               "Each recovery should be reported once")
+            }
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            XCTAssertEqual(file.text, draft)
             // Explicitly reconcile the source to the accepted baseline, then retry.
             try baseline.write(to: path, options: .atomic)
             await file.save()
@@ -375,6 +396,30 @@ final class FileTabPersistenceTests: XCTestCase {
             XCTAssertNil(file.saveError)
             XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
             XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: second), secondExternal)
+        }
+    }
+
+    func testRecoveryBannerWrapsLongPathsInNarrowNativeHost() throws {
+        let path = "/private/var/folders/" + String(repeating: "目录-with-long-name/", count: 6)
+            + "Bailey Save Recovery 12345678-1234-1234-1234-123456789012/实验.csv"
+        let messages = [DisplacedSaveError(recoveryPath: path).localizedDescription,
+                        "保存期间文件发生变化，目标可能包含草稿。被替换的文件已保留在：" + path]
+        for message in messages {
+            for scheme in [ColorScheme.light, .dark] {
+                func height(_ width: CGFloat) -> CGFloat {
+                    let host = NSHostingView(rootView: WorkspaceErrorBanner(message: message)
+                        .environment(\.colorScheme, scheme).frame(width: width))
+                    let size = host.fittingSize
+                    XCTAssertEqual(size.width, width, accuracy: 1)
+                    return size.height
+                }
+                let wide = height(920), medium = height(480), narrow = height(220)
+                XCTAssertGreaterThan(wide, 20)
+                XCTAssertGreaterThan(medium, wide)
+                XCTAssertGreaterThan(narrow, medium)
+                print("RECOVERY_BANNER scheme=\(scheme) widths=920/480/220 heights=\(wide)/\(medium)/\(narrow)")
+            }
         }
     }
 

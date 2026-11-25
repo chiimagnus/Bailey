@@ -5554,6 +5554,54 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
     }
 
+    func testLateIndependentDiffPublicationKeepsRecoveryLocationOnRetry() async throws {
+        for replacing in [false, true] {
+            let directory = try repository()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let relative = "table 中文.csv"
+            let path = directory.appendingPathComponent(relative)
+            let rival = directory.appendingPathComponent("rival.csv")
+            let baseline = Data("Name,Value\nItem,old\n".utf8)
+            let external = Data("Name,Value\nItem,ext\n".utf8)
+            let draft = "Name,Value\nItem,new\n"
+            try baseline.write(to: path)
+            for args in [["add", "--", relative], ["commit", "-qm", "baseline"]] {
+                XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+            }
+            try external.write(to: rival)
+            let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+                try publishIndependentFile(rival, to: $0, replacing: replacing)
+            })
+            let diff = DiffTab(repoRoot: directory.path, path: relative, source: .worktree,
+                               untracked: false, origPath: nil, backend: backend,
+                               workspaceIdentity: nil, preferences: try isolatedPreferences())
+            try await wait { diff.canPresentNativeContent }
+            diff.autoSaveSuspendedForClose = true
+            try replaceNativeDiffText(diff, with: draft)
+            XCTAssertTrue(diff.isDirty)
+            await diff.save()
+            let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            let recovery = try XCTUnwrap(entries.first { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") })
+            let stored = recovery.appendingPathComponent(relative).resolvingSymlinksInPath()
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertTrue(diff.saveError?.contains(LocalPathScope.physicalPath(stored.path)) == true)
+            XCTAssertTrue(diff.isDirty)
+            XCTAssertEqual(diff.editedNewContent, draft)
+            await diff.save()
+            XCTAssertTrue(diff.saveError?.contains(LocalPathScope.physicalPath(stored.path)) == true,
+                          "A retry must retain the exact recovery location")
+            XCTAssertTrue(diff.isDirty)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            try baseline.write(to: path, options: .atomic)
+            await diff.save()
+            XCTAssertNil(diff.saveError)
+            XCTAssertFalse(diff.isDirty)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+        }
+    }
+
     func testCleanWorktreeDiffEncodingWriteIsProtectedDuringTabAndBatchClose() async throws {
         for batch in [false, true] {
             for failing in [false, true] {

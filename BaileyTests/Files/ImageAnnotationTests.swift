@@ -837,7 +837,7 @@ final class ImageAnnotationTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: path), original)
             await file.save()
             XCTAssertTrue(file.isDirty)
-            XCTAssertNotNil(file.saveError)
+            XCTAssertTrue(file.saveError?.contains(stored.path) == true, "A retry must retain the exact recovery location")
             XCTAssertEqual(try Data(contentsOf: sidecar), written)
             XCTAssertEqual(try Data(contentsOf: stored), external)
             try baseline.write(to: sidecar, options: .atomic)

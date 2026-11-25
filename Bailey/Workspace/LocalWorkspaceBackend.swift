@@ -448,9 +448,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                     ownsStage = true
                 } catch {
                     let recovery = retainDisplacedEntry(item: item, stage: stage, target: path)
-                    throw NSError(domain: "Bailey.Save", code: 1, userInfo: [
-                        NSLocalizedDescriptionKey: String(localized: "The file changed during save or its previous version could not be verified. The destination may contain your draft. The displaced entry is preserved at: \(recovery)", table: "Workspace")
-                    ])
+                    throw DisplacedSaveError(recoveryPath: recovery)
                 }
             } else {
                 status = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: path))

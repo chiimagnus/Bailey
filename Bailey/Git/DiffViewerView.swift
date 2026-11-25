@@ -139,7 +139,11 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var isDirty = false
     private(set) var fileEncoding = TextFileEncoding.utf8
     @ObservationIgnored private var preferredEncoding: TextFileEncoding?
-    var saveError: String?
+    private var saveFailure = WorkspaceSaveFailure()
+    var saveError: String? {
+        get { saveFailure.message }
+        set { saveFailure.message = newValue }
+    }
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
     private(set) var readOnlyReason: String?
@@ -1147,7 +1151,7 @@ final class DiffTab: nonisolated Identifiable {
         if case WorkspaceError.changedExternally = error {
             saveError = String(localized: "The file changed outside Bailey. Your edits remain unsaved.", table: "Git")
         } else {
-            saveError = error.localizedDescription
+            saveFailure.record(error, message: error.localizedDescription)
         }
     }
 
@@ -1969,18 +1973,7 @@ struct DiffViewerView: View {
     }
 
     private func readErrorBar(_ message: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10))
-            Text(message)
-                .font(.system(size: 11))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(Color(red: 0.82, green: 0.60, blue: 0.13))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(Color.primary.opacity(0.04))
+        WorkspaceErrorBanner(message: message)
     }
 }
 
