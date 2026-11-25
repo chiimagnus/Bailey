@@ -300,7 +300,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     nonisolated static let maxTextBytes = 32 << 20
-    private nonisolated static let maxImageBytes = 256 << 20
+    nonisolated static let maxImageBytes = 256 << 20
     private nonisolated static let imageExtensionHints: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
@@ -1190,12 +1190,38 @@ final class FileTab: nonisolated Identifiable {
         guard pasteboard.setData(png, forType: .png) else { throw CocoaError(.fileWriteUnknown) }
     }
 
-    func exportAnnotatedImage(request: String, options: ImageAnnotationDrawing.Options, to destination: URL) async throws {
+    func prepareAnnotationExport(request: String, options: ImageAnnotationDrawing.Options,
+                                 to destination: URL) async throws -> LocalWorkspaceBackend.ImageExportTarget {
+        try Task.checkCancellation()
         guard destination.isFileURL, UTType(filenameExtension: destination.pathExtension)?.conforms(to: options.format.type) == true else {
             throw CocoaError(.fileWriteInvalidFileName)
         }
+        guard canAnnotateImage, request == fileContentRevision else { throw WorkspaceError.changedExternally }
+        let target = try await LocalWorkspaceBackend.shared.prepareImageExport(
+            path: destination.path, protecting: workspaceIdentity == nil ? path : nil
+        )
+        try Task.checkCancellation()
+        guard canAnnotateImage, request == fileContentRevision else {
+            throw WorkspaceError.changedExternally
+        }
+        return target
+    }
+
+    func exportAnnotatedImage(request: String, options: ImageAnnotationDrawing.Options, to destination: URL,
+                              confirmedTarget: LocalWorkspaceBackend.ImageExportTarget? = nil) async throws {
+        let target: LocalWorkspaceBackend.ImageExportTarget
+        if let confirmedTarget {
+            target = confirmedTarget
+            guard destination.isFileURL,
+                  UTType(filenameExtension: destination.pathExtension)?.conforms(to: options.format.type) == true else {
+                throw WorkspaceError.changedExternally
+            }
+        } else {
+            target = try await prepareAnnotationExport(request: request, options: options, to: destination)
+            guard !target.replacesExistingFile else { throw CocoaError(.fileWriteFileExists) }
+        }
         let bytes = try await annotatedImageData(request: request, options: options)
-        try await LocalWorkspaceBackend.shared.writeNewFile(path: destination.path, data: bytes)
+        try await LocalWorkspaceBackend.shared.writeImageExport(target, to: destination.path, data: bytes)
     }
 
     private func resolveTextPublication(path: String, target: WorkspaceBackend, generation: UInt,

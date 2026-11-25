@@ -119,7 +119,7 @@ final class ImageAnnotationUITests: XCTestCase {
         XCTAssertTrue(proceed.waitForExistence(timeout: 5))
         proceed.click()
         let output = fixture.root.appendingPathComponent("Annotations-annotated.png")
-        try WorkspaceUITestSupport.saveNewFile(output, in: app, window: window)
+        try WorkspaceUITestSupport.saveFile(output, in: app, window: window)
         let exported = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             FileManager.default.fileExists(atPath: output.path)
         }, object: nil)
@@ -128,7 +128,69 @@ final class ImageAnnotationUITests: XCTestCase {
         XCTAssertEqual(exportedBitmap.pixelsWide, 640)
         XCTAssertEqual(exportedBitmap.pixelsHigh, 480)
         XCTAssertTrue(containsArrow(exportedBitmap))
+
+        // The native panel's overwrite confirmation is followed by the
+        // document's version-bound confirmation. Both affect only this fixture.
+        let previous = try Data(contentsOf: output)
+        func chooseExistingExport() throws {
+            let beforeSelection = try Data(contentsOf: output)
+            viewer.rightClick()
+            XCTAssertTrue(export.waitForExistence(timeout: 5))
+            export.click()
+            XCTAssertTrue(proceed.waitForExistence(timeout: 5))
+            proceed.click()
+            try WorkspaceUITestSupport.saveFile(output, in: app, window: window, replacing: true)
+            // NSSavePanel hosts this alert in a nested, out-of-process sheet.
+            let nativeReplace = window.sheets["save-panel"].descendants(matching: .button)
+                .matching(identifier: "action-button-1").firstMatch
+            XCTAssertTrue(nativeReplace.waitForExistence(timeout: 10))
+            XCTAssertEqual(try Data(contentsOf: output), beforeSelection)
+            nativeReplace.click()
+            XCTAssertTrue(window.sheets["save-panel"].waitForNonExistence(timeout: 10))
+            let confirmation = window.staticTexts.matching(NSPredicate(
+                format: "value == %@ OR label == %@", "Replace existing export?", "Replace existing export?"
+            )).firstMatch
+            XCTAssertTrue(confirmation.waitForExistence(timeout: 10))
+            XCTAssertEqual(try Data(contentsOf: output), beforeSelection)
+        }
+        try chooseExistingExport()
+        window.sheets.firstMatch.buttons["Cancel"].click()
+        XCTAssertEqual(try Data(contentsOf: output), previous)
+        // Use a different valid image to establish an observable replacement.
+        try original.write(to: output, options: .atomic)
+        try chooseExistingExport()
+        window.sheets.firstMatch.buttons["Replace"].click()
+        let replaced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let bytes = try? Data(contentsOf: output), bytes != original,
+                  let image = NSBitmapImageRep(data: bytes) else { return false }
+            return containsArrow(image)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [replaced], timeout: 10), .completed)
         XCTAssertEqual(try Data(contentsOf: file), original)
         XCTAssertEqual(try Data(contentsOf: sidecar), sidecarBytes)
+
+        // Rename only the original through the actual Files menu; the saved
+        // sidecar and the open viewer must follow it without another document.
+        row.rightClick()
+        let rename = WorkspaceUITestSupport.menuItem("Rename", in: app)
+        XCTAssertTrue(rename.waitForExistence(timeout: 8))
+        rename.click()
+        let name = window.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 8))
+        name.typeKey("a", modifierFlags: .command)
+        name.typeText("Renamed.png")
+        name.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let renamed = fixture.root.appending(path: "Renamed.png")
+        let renamedSidecar = URL(fileURLWithPath: renamed.path + ".bailey-annotations.json")
+        let renamedPair = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: renamed)) == original &&
+                (try? Data(contentsOf: renamedSidecar)) == sidecarBytes &&
+                !FileManager.default.fileExists(atPath: file.path) &&
+                !FileManager.default.fileExists(atPath: sidecar.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [renamedPair], timeout: 15), .completed)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(renamed, in: window).waitForExistence(timeout: 10))
+        XCTAssertFalse(tab.exists)
+        expectArrow(true)
     }
 }

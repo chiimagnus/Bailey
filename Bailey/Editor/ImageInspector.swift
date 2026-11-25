@@ -515,14 +515,31 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
             panel.allowedContentTypes = [options.format.type]
             panel.canCreateDirectories = true
             panel.nameFieldStringValue = (file.name as NSString).deletingPathExtension + "-annotated." + options.format.fileExtension
-            panel.message = String(localized: "Export to a new local file. Existing files are not replaced.", table: "Editor")
+            panel.message = String(localized: "Export a flattened image without modifying the original or its annotations.", table: "Editor")
             self.outputSheet = panel
             panel.beginSheetModal(for: window) { [weak self, weak file] response in
                 guard let self, let file, self.annotationFile === file, self.resourceRevision == request else { return }
                 self.outputSheet = nil
                 guard response == .OK, let destination = panel.url else { return }
-                self.runOutput(request: request, failureTitle: String(localized: "Could not export image.", table: "Editor")) {
-                    try await file.exportAnnotatedImage(request: request, options: options, to: destination)
+                self.runOutput(request: request, failureTitle: String(localized: "Could not export image.", table: "Editor")) { [weak self] in
+                    let target = try await file.prepareAnnotationExport(request: request, options: options, to: destination)
+                    guard let self, !Task.isCancelled, self.resourceRevision == request else { return }
+                    if target.replacesExistingFile {
+                        let confirmation = NSAlert()
+                        confirmation.alertStyle = .warning
+                        confirmation.messageText = String(localized: "Replace existing export?", table: "Editor")
+                        confirmation.informativeText = target.path
+                        confirmation.addButton(withTitle: String(localized: "Replace", table: "Editor"))
+                        confirmation.addButton(withTitle: String(localized: "Cancel", table: "Editor"))
+                        self.outputSheet = confirmation.window
+                        let response = await confirmation.beginSheetModal(for: window)
+                        guard self.outputSheet === confirmation.window, !Task.isCancelled,
+                              self.resourceRevision == request else { return }
+                        self.outputSheet = nil
+                        guard response == .alertFirstButtonReturn else { return }
+                    }
+                    try await file.exportAnnotatedImage(request: request, options: options, to: destination,
+                                                        confirmedTarget: target)
                 }
             }
         }

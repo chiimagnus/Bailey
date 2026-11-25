@@ -206,12 +206,13 @@ enum WorkspaceUITestSupport {
         }
     }
 
-    /// The save panel may only publish a new file into this test's own project.
-    static func saveNewFile(_ url: URL, in app: XCUIApplication, window: XCUIElement) throws {
+    /// The native panel may only select an output in this test's own project.
+    static func saveFile(_ url: URL, in app: XCUIApplication, window: XCUIElement,
+                         replacing: Bool = false) throws {
         let destination = url.standardizedFileURL
         let parent = destination.deletingLastPathComponent()
         precondition(session?.project?.path == parent.path, "Save output must belong to the test project")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(FileManager.default.fileExists(atPath: destination.path), replacing)
         let sheet = window.sheets.firstMatch
         // An image export first presents its format alert, then the save panel.
         // Wait for the native panel itself before invoking Go to Folder.
@@ -229,7 +230,7 @@ enum WorkspaceUITestSupport {
             ])).firstMatch
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 !app.textFields["PathTextField"].exists && isSelectedDirectory() && expectedName.exists
-                    && !FileManager.default.fileExists(atPath: destination.path)
+                    && FileManager.default.fileExists(atPath: destination.path) == replacing
             }, object: nil)
             guard XCTWaiter.wait(for: [ready], timeout: 12) == .completed else {
                 throw NSError(domain: "BaileyUITestPicker", code: 7, userInfo: [

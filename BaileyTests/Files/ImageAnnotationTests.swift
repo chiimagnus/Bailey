@@ -17,8 +17,8 @@ private nonisolated final class FailingAnnotationRenderKernel: CIImageProcessorK
 
 @MainActor
 final class ImageAnnotationTests: XCTestCase {
-    private func makeRoot() throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-annotations-" + UUID().uuidString)
+    private func makeRoot(on volume: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let root = volume.appendingPathComponent("bailey-annotations-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
@@ -78,6 +78,61 @@ final class ImageAnnotationTests: XCTestCase {
     private func pixel(_ image: CGImage, x: Int, y: Int) throws -> NSColor {
         let bitmap = NSBitmapImageRep(cgImage: image)
         return try XCTUnwrap(bitmap.colorAt(x: x, y: image.height - 1 - y)?.usingColorSpace(.sRGB))
+    }
+
+    func testConfirmedExportReplacesOnlyTheAcceptedIndependentFile() async throws {
+        let root = try makeRoot()
+        let original = try png()
+        let source = root.appendingPathComponent("original.png")
+        let output = root.appendingPathComponent("export.png")
+        try original.write(to: source)
+        let file = try await open(source)
+        defer { file.retireContent() }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        add(.arrow, to: document, from: CGPoint(x: 30, y: 10), to: CGPoint(x: 120, y: 90))
+        let revision = file.fileContentRevision
+        let options = ImageAnnotationDrawing.Options(width: 160, height: 120)
+        let previous = try png(offset: 1)
+        try previous.write(to: output)
+        let target = try await file.prepareAnnotationExport(request: revision, options: options, to: output)
+        XCTAssertTrue(target.replacesExistingFile)
+        XCTAssertEqual(try Data(contentsOf: output), previous, "Confirmation preparation is read-only")
+        do {
+            try await file.exportAnnotatedImage(request: revision, options: options, to: output)
+            XCTFail("An existing output still requires confirmation")
+        } catch {}
+        try await file.exportAnnotatedImage(request: revision, options: options, to: output, confirmedTarget: target)
+        let rendered = try Data(contentsOf: output)
+        XCTAssertNotEqual(rendered, previous)
+        XCTAssertEqual(try image(rendered).width, 160)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ImageAnnotationSidecar.path(for: source.path)))
+
+        let stale = try await file.prepareAnnotationExport(request: revision, options: options, to: output)
+        try previous.write(to: output, options: .atomic)
+        do {
+            try await file.exportAnnotatedImage(request: revision, options: options, to: output, confirmedTarget: stale)
+            XCTFail("A replacement after confirmation must not overwrite new bytes")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: output), previous)
+        let link = root.appendingPathComponent("alias.png")
+        try FileManager.default.linkItem(at: source, to: link)
+        for forbidden in [source, link] {
+            do {
+                _ = try await file.prepareAnnotationExport(request: revision, options: options, to: forbidden)
+                XCTFail("The original and hard-link alias must not be replacement targets")
+            } catch {}
+        }
+        let protectedOutputSidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: output.path))
+        try Data("protected".utf8).write(to: protectedOutputSidecar)
+        do {
+            _ = try await file.prepareAnnotationExport(request: revision, options: options, to: output)
+            XCTFail("An annotated image must not be a replacement target")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: output), previous)
+        XCTAssertEqual(try Data(contentsOf: protectedOutputSidecar), Data("protected".utf8))
+        XCTAssertEqual(try Data(contentsOf: source), original)
     }
 
     func testMutationLockAndRetirementRejectStaleAnnotationActions() async throws {
@@ -722,6 +777,39 @@ final class ImageAnnotationTests: XCTestCase {
             XCTAssertEqual(remoteSource, original)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), local)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: target)), sentinel)
+            // Exercise the real remote Files operations, not a mock backend.
+            let destination = root + "/paired-copy"
+            try await backend.createDirectory(path: destination)
+            let tree = FileTreeModel()
+            await tree.sync(root: root, backend: backend, scope: "ssh:" + host)
+            let copy = await tree.performFileOperation(.copy, paths: [path, target], into: destination)
+            XCTAssertTrue(copy.failures.isEmpty, copy.failures.joined(separator: "\n"))
+            let copiedImage = destination + "/" + name
+            let copiedSidecar = ImageAnnotationSidecar.path(for: copiedImage)
+            XCTAssertEqual(Set(copy.succeeded.compactMap(\.destination)), [copiedImage, copiedSidecar])
+            let copiedBytes = try await backend.read(path: copiedImage, maxBytes: original.count)
+            let copiedAnnotation = try await backend.read(path: copiedSidecar, maxBytes: result.count)
+            XCTAssertEqual(copiedBytes, original)
+            XCTAssertEqual(copiedAnnotation, result)
+            let item = try XCTUnwrap(tree.items.first { $0.path == path })
+            let newName = "重命名.png"
+            let renamed = await tree.rename(item, to: newName)
+            let newPath = root + "/" + newName
+            XCTAssertEqual(renamed, newPath)
+            let moved = await tree.performFileOperation(.move, paths: [newPath], into: destination)
+            XCTAssertTrue(moved.failures.isEmpty, moved.failures.joined(separator: "\n"))
+            let newDestination = destination + "/" + newName
+            let newAnnotation = ImageAnnotationSidecar.path(for: newDestination)
+            let movedImage = try await backend.read(path: newDestination, maxBytes: original.count)
+            let movedAnnotation = try await backend.read(path: newAnnotation, maxBytes: result.count)
+            XCTAssertEqual(movedImage, original)
+            XCTAssertEqual(movedAnnotation, result)
+            let deleted = await tree.performFileOperation(.delete, paths: [newDestination, newAnnotation], into: nil)
+            XCTAssertTrue(deleted.failures.isEmpty, deleted.failures.joined(separator: "\n"))
+            let after = try await backend.list(directory: destination)
+            XCTAssertEqual(Set(after.map(\.name)), [name, name + ImageAnnotationSidecar.suffix])
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), local)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: target)), sentinel)
         }
     }
 
@@ -767,9 +855,9 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
-    func testFilesTransfersCannotSeparatePairButContainingDirectoryMovesTogether() async throws {
+    func testLocalTransferCarriesValidatedPairWithoutOverwritingOrMovingSidecarAlone() async throws {
         let root = try makeRoot()
-        let folder = root.appendingPathComponent("paired")
+        let folder = root.appendingPathComponent("source")
         let destination = root.appendingPathComponent("target")
         for url in [folder, destination] {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
@@ -783,32 +871,44 @@ final class ImageAnnotationTests: XCTestCase {
         add(.arrow, to: document, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 50, y: 50))
         await file.save()
         XCTAssertFalse(file.isDirty)
-        let sidecar = ImageAnnotationSidecar.path(for: path.path)
-        let annotations = try Data(contentsOf: URL(fileURLWithPath: sidecar))
-        for item in [path.path, sidecar] {
-            for move in [true, false] {
-                do {
-                    _ = try await LocalWorkspaceBackend.shared.transferLocalFile(from: item, into: destination.path, move: move)
-                    XCTFail("A single half must not transfer")
-                } catch {}
-            }
+        let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
+        let annotations = try Data(contentsOf: sidecar)
+        let output = destination.appendingPathComponent(path.lastPathComponent)
+        let outputSidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: output.path))
+        let backend = LocalWorkspaceBackend.shared
+        for move in [false, true] {
             do {
-                try await ImageAnnotationSidecar.requireUnpaired(item, backend: LocalWorkspaceBackend.shared)
-                XCTFail("Rename/delete must refuse the pair")
+                _ = try await backend.transferLocalFile(from: sidecar.path, into: destination.path, move: move)
+                XCTFail("Selecting only the sidecar must not separate it from its image")
             } catch {}
         }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path), [])
+        try Data("unrelated".utf8).write(to: outputSidecar)
+        do {
+            _ = try await backend.transferLocalFile(from: path.path, into: destination.path, move: true)
+            XCTFail("A destination sidecar collision must stop the entire move")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: outputSidecar), Data("unrelated".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
         XCTAssertEqual(try Data(contentsOf: path), original)
-        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: sidecar)), annotations)
-        _ = try await LocalWorkspaceBackend.shared.transferLocalFile(from: folder.path, into: destination.path, move: true)
-        let moved = destination.appendingPathComponent("paired/image.png")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
-        file.updatePath(moved.path)
-        let restored = try await open(moved)
+        XCTAssertEqual(try Data(contentsOf: sidecar), annotations)
+        try FileManager.default.removeItem(at: outputSidecar)
+        _ = try await backend.transferLocalFile(from: path.path, into: destination.path, move: false)
+        XCTAssertEqual(try Data(contentsOf: output), original)
+        XCTAssertEqual(try Data(contentsOf: outputSidecar), annotations)
+        XCTAssertEqual(try Data(contentsOf: sidecar), annotations)
+        let copied = try await open(output)
+        XCTAssertEqual(copied.imageAnnotations?.state, document.state)
+        copied.retireContent()
+        try FileManager.default.removeItem(at: output)
+        try FileManager.default.removeItem(at: outputSidecar)
+        _ = try await backend.transferLocalFile(from: path.path, into: destination.path, move: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecar.path))
+        XCTAssertEqual(try Data(contentsOf: output), original)
+        XCTAssertEqual(try Data(contentsOf: outputSidecar), annotations)
+        let restored = try await open(output)
         defer { restored.retireContent() }
         XCTAssertEqual(restored.imageAnnotations?.state, document.state)
-        XCTAssertEqual(try Data(contentsOf: moved), original)
-        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: moved.path))), annotations)
     }
 
     func testChineseEmojiAnnotationReopensEditsAndRendersRealGlyphs() async throws {
@@ -963,8 +1063,22 @@ final class ImageAnnotationTests: XCTestCase {
         }
     }
 
-    func testActualFilesTreeRejectsHalfOfPairAndRenamesWholeDirectory() async throws {
-        let root = try makeRoot()
+    private func mountedClipboardTestVolume() throws -> URL {
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let marker = project.appendingPathComponent(".build/.file-clipboard-test-volume")
+        guard let mount = try? String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              (mount.hasPrefix("/private/tmp/bailey-clipboard-vol.") ||
+                  mount.hasPrefix("/tmp/bailey-clipboard-vol.")),
+              mount.hasSuffix("/mounted") else {
+            throw XCTSkip("Requires an isolated mounted test volume; never a user volume")
+        }
+        return URL(fileURLWithPath: mount)
+    }
+
+    func testActualFilesTreeRenamesAndDeletesValidatedImagePair() async throws {
+        let root = try makeRoot(on: mountedClipboardTestVolume())
         let folder = root.appendingPathComponent("paired")
         let target = root.appendingPathComponent("target")
         for directory in [folder, target] {
@@ -985,7 +1099,7 @@ final class ImageAnnotationTests: XCTestCase {
         await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let row = try XCTUnwrap(tree.items.first { $0.path == folder.path })
         await tree.toggle(row)
-        for half in [path.path, sidecar] {
+        for half in [sidecar] {
             let item = try XCTUnwrap(tree.items.first { $0.path == half })
             let rename = await tree.rename(item, to: "renamed-" + item.name)
             XCTAssertNil(rename)
@@ -999,16 +1113,46 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
         XCTAssertEqual(try Data(contentsOf: path), original)
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: sidecar)), stored)
-        let renamed = await tree.rename(row, to: "whole")
-        let moved = root.appendingPathComponent("whole/image.png")
-        XCTAssertEqual(renamed, moved.deletingLastPathComponent().path)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
-        file.updatePath(moved.path)
+        let item = try XCTUnwrap(tree.items.first { $0.path == path.path })
+        let renamed = await tree.rename(item, to: "renamed.png")
+        let moved = folder.appendingPathComponent("renamed.png")
+        XCTAssertEqual(renamed, moved.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecar))
         let restored = try await open(moved)
-        defer { restored.retireContent() }
         XCTAssertEqual(restored.imageAnnotations?.state, document.state)
+        restored.retireContent()
         XCTAssertEqual(try Data(contentsOf: moved), original)
-        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: moved.path))), stored)
+        let movedSidecar = ImageAnnotationSidecar.path(for: moved.path)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: movedSidecar)), stored)
+        let localCopy = try makeRoot()
+        XCTAssertNotEqual(LocalFileIdentity.read(root.path)?.device, LocalFileIdentity.read(localCopy.path)?.device)
+        let transferred = await LocalWorkspaceBackend.shared.transferLocalFiles([moved], into: localCopy.path, move: true)
+        XCTAssertTrue(transferred.failures.isEmpty, transferred.failures.joined(separator: "\n"))
+        XCTAssertEqual(transferred.moved.count, 2)
+        let copiedImage = localCopy.appendingPathComponent(moved.lastPathComponent)
+        XCTAssertEqual(try Data(contentsOf: copiedImage), original)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: ImageAnnotationSidecar.path(for: copiedImage.path))), stored)
+        // Restore another pair to the disposable volume for the real tree deletion.
+        let copied = await LocalWorkspaceBackend.shared.transferLocalFiles([copiedImage], into: folder.path)
+        XCTAssertEqual(copied.copied.count, 2, copied.failures.joined(separator: "\n"))
+        // The pair was recreated by an independent file operation. Refresh the
+        // actual tree before issuing a command against its current rows.
+        let refreshed = await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertTrue(refreshed)
+        XCTAssertTrue(tree.items.contains { $0.path == moved.path })
+        let revealed = await tree.revealFile(moved.path)
+        XCTAssertTrue(revealed)
+        let traversal = await tree.performFileOperation(.delete,
+            paths: [folder.path + "/../paired/" + moved.lastPathComponent], into: nil)
+        XCTAssertTrue(traversal.succeeded.isEmpty)
+        XCTAssertEqual(traversal.failures.count, 1)
+        XCTAssertEqual(try Data(contentsOf: moved), original)
+        let deleted = await tree.performFileOperation(.delete, paths: [moved.path, movedSidecar], into: nil)
+        XCTAssertTrue(deleted.failures.isEmpty, deleted.failures.joined(separator: "\n"))
+        XCTAssertEqual(Set(deleted.succeeded.map(\.source)), [moved.path, movedSidecar])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: moved.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: movedSidecar))
     }
 
     func testNativeCloseVetoPreservesConflictedAnnotationDraft() async throws {

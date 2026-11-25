@@ -896,12 +896,14 @@ final class WorkspaceWindowModel {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target) else { return nil }
         do {
             return try await application.withProtectedFiles(
-                paths: [item.path], workspace: target.workspace
+                paths: ImageAnnotationSidecar.protectedPaths([item.path]), workspace: target.workspace
             ) {
                 guard self.selectedProjectID == project.id, project.matchesPanelTarget(target) else {
                     throw CancellationError()
                 }
-                let newPath = await project.fileTree.rename(item, to: newName)
+                let newPath = await project.fileTree.rename(item, to: newName) { source, destination in
+                    self.application.fileRenamed(from: source, to: destination, workspace: target.workspace)
+                }
                 if let newPath {
                     self.application.fileRenamed(
                         from: item.path, to: newPath, workspace: target.workspace
@@ -949,7 +951,7 @@ final class WorkspaceWindowModel {
         }
         if operation == .copy, target.workspace == nil { return await perform() }
         do {
-            return try await application.withProtectedFiles(paths: paths, workspace: target.workspace) {
+            return try await application.withProtectedFiles(paths: ImageAnnotationSidecar.protectedPaths(paths), workspace: target.workspace) {
                 await perform()
             }
         } catch {
@@ -1213,7 +1215,7 @@ final class WorkspaceWindowModel {
                 }
                 do {
                     result = try await application.withProtectedFiles(
-                        paths: protectedPaths, workspace: nil,
+                        paths: ImageAnnotationSidecar.protectedPaths(protectedPaths), workspace: nil,
                         didSave: { savedPath in
                             let savedPhysicalPath = LocalPathScope.resolvedPath(savedPath)
                             for path in paths {

@@ -71,12 +71,22 @@
         }
       }
     },
-    "This image and its annotations must stay together. Move, copy, rename or delete their containing folder instead." : {
+    "Select the original image to manage its annotations together. Invalid annotation pairs must be repaired first." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "图片与标注必须一起保留。请移动、复制、重命名或删除它们所在的文件夹。"
+            "value" : "请选择原图，一并管理其标注。损坏的标注关联须先修复。"
+          }
+        }
+      }
+    },
+    "The image and annotation operation did not finish. Check both locations before retrying." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片及标注操作未完成。重试前请检查两处位置。"
           }
         }
       }
@@ -321,12 +331,32 @@
         }
       }
     },
-    "Export to a new local file. Existing files are not replaced." : {
+    "Export a flattened image without modifying the original or its annotations." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "导出到新的本地文件，不覆盖已有文件。"
+            "value" : "导出合成后的图片，不修改原图及其标注。"
+          }
+        }
+      }
+    },
+    "Replace existing export?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换已有导出文件？"
+          }
+        }
+      }
+    },
+    "Replace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换"
           }
         }
       }

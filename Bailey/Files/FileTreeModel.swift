@@ -111,7 +111,7 @@ final class FileTreeModel {
         let epoch = treeEpoch
         let backend = self.backend
         let requestRevision = interactionRevision
-        let normalized = (path as NSString).standardizingPath
+        let normalized = LocalPathScope.lexicalPath(path)
         guard !root.isEmpty, path == normalized, path != root,
               LocalPathScope.contains(path, in: root), isCurrentTarget()
         else { return false }
@@ -876,7 +876,7 @@ final class FileTreeModel {
             )
             return FileBatchResult(failures: [reason])
         }
-        let sourcePaths = Array(Set(paths)).sorted {
+        let sourcePaths = Array(Set(ImageAnnotationSidecar.coalescedSelection(paths))).sorted {
             $0.count == $1.count ? $0 < $1 : $0.count < $1.count
         }.reduce(into: [String]()) { accepted, path in
             guard !accepted.contains(where: { LocalPathScope.contains(path, in: $0) }) else { return }
@@ -884,8 +884,10 @@ final class FileTreeModel {
         }
 
         var result = FileBatchResult()
-        let rootPath = (root as NSString).standardizingPath
-        let targetPath = directory.map { ($0 as NSString).standardizingPath }
+        guard let rootPath = LocalPathScope.lexicalPath(root) else {
+            return FileBatchResult(failures: [String(localized: "Couldn’t complete file operation.", table: "Workspace")])
+        }
+        let targetPath = directory.flatMap(LocalPathScope.lexicalPath)
         let physicalRoot: String
         do {
             physicalRoot = try await Self.physicalDirectory(
@@ -940,7 +942,7 @@ final class FileTreeModel {
         for source in sourcePaths {
             guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
                   epoch == treeEpoch else { break }
-            let normalized = (source as NSString).standardizingPath
+            let normalized = LocalPathScope.lexicalPath(source)
             guard normalized == source,
                   source != rootPath, LocalPathScope.contains(source, in: rootPath) else {
                 result.failures.append(
@@ -984,6 +986,7 @@ final class FileTreeModel {
             }
             do {
                 var completedDestination = destination
+                var includesAnnotation = false
                 if scope == "local", backend is LocalWorkspaceBackend,
                    action == .copy || action == .move {
                     guard let physicalTarget, let targetPath else { continue }
@@ -998,6 +1001,10 @@ final class FileTreeModel {
                     case .copied(let path), .moved(let path):
                         completedDestination = (targetPath as NSString)
                             .appendingPathComponent((path as NSString).lastPathComponent)
+                    case .copiedPair(let path), .movedPair(let path):
+                        includesAnnotation = true
+                        completedDestination = (targetPath as NSString)
+                            .appendingPathComponent((path as NSString).lastPathComponent)
                     case .copiedWithoutRemoval(let path, let retainedAt):
                         let copy = (targetPath as NSString)
                             .appendingPathComponent((path as NSString).lastPathComponent)
@@ -1009,8 +1016,8 @@ final class FileTreeModel {
                     case .unchanged: continue
                     }
                 } else {
-                    try await ImageAnnotationSidecar.requireUnpaired(physicalSource, backend: backend)
-                    if let physicalDestination, physicalDestination != physicalSource {
+                    let pair = try await ImageAnnotationSidecar.pair(at: physicalSource, backend: backend)
+                    if pair == nil, let physicalDestination, physicalDestination != physicalSource {
                         try await ImageAnnotationSidecar.requireUnpaired(physicalDestination, backend: backend)
                     }
                     guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
@@ -1024,24 +1031,37 @@ final class FileTreeModel {
                                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
                             }
                             let name = try await Self.copyWithUniqueName(
-                                source: physicalSource, into: resolvedParent, backend: backend
+                                source: physicalSource, into: resolvedParent, backend: backend, pair: pair
                             )
                             completedDestination = (sourceParent as NSString).appendingPathComponent(name)
+                        } else if let pair {
+                            try await pair.copy(to: physicalDestination, backend: backend)
                         } else {
                             try await backend.copy(from: physicalSource, to: physicalDestination)
                         }
                     case .move:
-                        guard let physicalDestination, physicalDestination != source else { continue }
-                        try await backend.rename(from: physicalSource, to: physicalDestination)
+                        guard let physicalDestination, physicalDestination != physicalSource else { continue }
+                        if let pair { try await pair.move(to: physicalDestination, backend: backend) }
+                        else { try await backend.rename(from: physicalSource, to: physicalDestination) }
                     case .delete:
-                        try await backend.delete(paths: [physicalSource])
+                        if let pair { try await pair.remove(backend: backend) }
+                        else { try await backend.delete(paths: [physicalSource]) }
                     }
+                    includesAnnotation = pair != nil
                 }
                 result.succeeded.append((
                     source: source, destination: action == .delete ? nil : completedDestination
                 ))
+                if includesAnnotation {
+                    result.succeeded.append((source: ImageAnnotationSidecar.path(for: source),
+                        destination: action == .delete ? nil : completedDestination.map { ImageAnnotationSidecar.path(for: $0) }))
+                }
             } catch {
                 result.failures.append("\(source): \(error.localizedDescription)")
+                if root == self.rootPath, scope == workspaceScope, epoch == treeEpoch {
+                    invalidateDirectory(containing: source)
+                    if let destination { invalidateDirectory(containing: destination) }
+                }
             }
         }
 
@@ -1061,7 +1081,7 @@ final class FileTreeModel {
             for entry in result.copiedWithoutRemoval {
                 invalidateDirectory(containing: entry.destination)
             }
-            if !result.succeeded.isEmpty || !result.copiedWithoutRemoval.isEmpty {
+            if !result.succeeded.isEmpty || !result.copiedWithoutRemoval.isEmpty || !result.failures.isEmpty {
                 await rebuild(refresh: true)
             }
             if !result.failures.isEmpty {
@@ -1073,7 +1093,7 @@ final class FileTreeModel {
     }
 
     private static func copyWithUniqueName(
-        source: String, into parent: String, backend: WorkspaceBackend
+        source: String, into parent: String, backend: WorkspaceBackend, pair: ImageAnnotationSidecar.Pair?
     ) async throws -> String {
         let original = (source as NSString).lastPathComponent
         let fileExtension = (original as NSString).pathExtension
@@ -1082,6 +1102,12 @@ final class FileTreeModel {
             let suffix = number == 1 ? " copy" : " copy \(number)"
             let name = stem + suffix + (fileExtension.isEmpty ? "" : "." + fileExtension)
             let candidate = (parent as NSString).appendingPathComponent(name)
+            if let pair {
+                if try await ImageAnnotationSidecar.entryExists(candidate, backend: backend) { continue }
+                if try await ImageAnnotationSidecar.entryExists(ImageAnnotationSidecar.path(for: candidate), backend: backend) { continue }
+                try await pair.copy(to: candidate, backend: backend)
+                return name
+            }
             do {
                 try await ImageAnnotationSidecar.requireUnpaired(candidate, backend: backend)
                 try await backend.copy(from: source, to: candidate)
@@ -1132,7 +1158,7 @@ final class FileTreeModel {
     /// absolute path when the file actually moved, so callers can follow it
     /// (e.g. re-point open tabs).
     @discardableResult
-    func rename(_ item: Item, to newName: String) async -> String? {
+    func rename(_ item: Item, to newName: String, didMoveAnnotation: ((String, String) -> Void)? = nil) async -> String? {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
@@ -1203,20 +1229,32 @@ final class FileTreeModel {
             )
             return nil
         }
+        var includesAnnotation = false
         do {
-            try await ImageAnnotationSidecar.requireUnpaired(physicalSource, backend: backend)
-            try await ImageAnnotationSidecar.requireUnpaired(physicalDest, backend: backend)
+            let pair = try await ImageAnnotationSidecar.pair(at: physicalSource, backend: backend)
+            if pair == nil { try await ImageAnnotationSidecar.requireUnpaired(physicalDest, backend: backend) }
             guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
-            try await backend.rename(from: physicalSource, to: physicalDest)
+            if let pair {
+                try await pair.move(to: physicalDest, backend: backend)
+                includesAnnotation = true
+                didMoveAnnotation?(ImageAnnotationSidecar.path(for: item.path), ImageAnnotationSidecar.path(for: dest))
+            } else {
+                try await backend.rename(from: physicalSource, to: physicalDest)
+            }
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
                 presentError(String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"), error.localizedDescription)
+                invalidateDirectory(containing: item.path)
+                await rebuild()
             }
             return nil
         }
         // The disk mutation succeeded; only the old tree's visual state is stale.
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return dest }
         remapPaths(from: item.path, to: dest)
+        if includesAnnotation {
+            remapPaths(from: ImageAnnotationSidecar.path(for: item.path), to: ImageAnnotationSidecar.path(for: dest))
+        }
         invalidateDirectory(containing: item.path)
         await rebuild()
         return dest

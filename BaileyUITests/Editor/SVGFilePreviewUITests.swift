@@ -194,7 +194,7 @@ final class SVGFilePreviewUITests: XCTestCase {
         XCTAssertTrue(export.waitForExistence(timeout: 5))
         export.click()
         let destination = fixture.root.appendingPathComponent("Live.png")
-        try WorkspaceUITestSupport.saveNewFile(destination, in: app, window: window)
+        try WorkspaceUITestSupport.saveFile(destination, in: app, window: window)
         let exported = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             FileManager.default.fileExists(atPath: destination.path)
         }, object: nil)
