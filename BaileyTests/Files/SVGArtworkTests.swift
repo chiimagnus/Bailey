@@ -450,9 +450,9 @@ final class SVGArtworkTests: XCTestCase {
                 XCTAssertThrowsError(try SVGArtwork.sanitizedXML(Data(text.utf8)))
             }
         }
-        for nodes in [4095, 4096] {
+        for nodes in [8191, 8192] {
             let data = Data((start + String(repeating: "<rect/>", count: nodes) + end).utf8)
-            if nodes == 4095 {
+            if nodes == 8191 {
                 XCTAssertTrue(try SVGArtwork.sanitizedXML(data).omitted.isEmpty)
             } else {
                 XCTAssertThrowsError(try SVGArtwork.sanitizedXML(data))
@@ -501,8 +501,8 @@ final class SVGArtworkTests: XCTestCase {
                 </svg>
                 """.utf8)
         }
-        XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(instances: 123)).omitted.isEmpty)
-        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(instances: 124))) { error in
+        XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(instances: 247)).omitted.isEmpty)
+        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(instances: 248))) { error in
             guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded SVG limit: \(error)") }
         }
     }
@@ -522,8 +522,8 @@ final class SVGArtworkTests: XCTestCase {
                     </svg>
                     """.utf8)
             }
-            XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(references: 123)).omitted.isEmpty, element)
-            XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(references: 124)), element) { error in
+            XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(references: 247)).omitted.isEmpty, element)
+            XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(references: 248)), element) { error in
                 guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded SVG limit: \(error)") }
             }
         }
@@ -532,8 +532,8 @@ final class SVGArtworkTests: XCTestCase {
             let shapes = String(repeating: "<rect width=\"1\" height=\"1\" fill=\"url(#shared)\"/>", count: references)
             return Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><defs>\(gradient)</defs>\(shapes)</svg>".utf8)
         }
-        XCTAssertTrue(try SVGArtwork.sanitizedXML(painted(references: 62)).omitted.isEmpty)
-        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(painted(references: 63))) { error in
+        XCTAssertTrue(try SVGArtwork.sanitizedXML(painted(references: 125)).omitted.isEmpty)
+        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(painted(references: 126))) { error in
             guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected expanded gradient limit: \(error)") }
         }
     }
@@ -954,7 +954,7 @@ final class SVGArtworkTests: XCTestCase {
         let directory = URL(fileURLWithPath: root)
         let files = try XCTUnwrap(FileManager.default.enumerator(at: directory,
             includingPropertiesForKeys: [.isRegularFileKey])).compactMap { $0 as? URL }
-            .filter { $0.pathExtension.lowercased() == "svg" && $0.pathComponents.contains("原图") }
+            .filter { $0.pathExtension.lowercased() == "svg" }
             .sorted { $0.path < $1.path }
         XCTAssertFalse(files.isEmpty)
         let window = NSWindow(contentRect: CGRect(x: -2000, y: -2000, width: 620, height: 480),

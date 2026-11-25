@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 nonisolated enum SVGArtwork {
     static let byteLimit = 1 << 20
-    private static let nodeLimit = 4_096
+    private static let nodeLimit = 8_192
     private static let depthLimit = 48
     private static let referenceDepthLimit = 16
 
