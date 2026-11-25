@@ -681,66 +681,6 @@
         }
       }
     },
-    "Playback position" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "播放进度"
-          }
-        }
-      }
-    },
-    "Volume" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音量"
-          }
-        }
-      }
-    },
-    "Play" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "播放"
-          }
-        }
-      }
-    },
-    "Pause" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暂停"
-          }
-        }
-      }
-    },
-    "Mute" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "静音"
-          }
-        }
-      }
-    },
-    "Unmute" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取消静音"
-          }
-        }
-      }
-    },
     "Updating SVG preview…" : {
       "localizations" : {
         "zh-Hans" : {

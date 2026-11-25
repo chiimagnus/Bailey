@@ -944,8 +944,10 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                     && file.markdownSourceIndex?.request == file.textPreviewRequestID
             }
             let independent = try XCTUnwrap(media.mediaPlayer)
-            XCTAssertEqual(nativePlayers(in: host).compactMap(\.player).count, tag == "audio" ? 0 : 1,
-                           "Markdown must not stage or create a player until requested")
+            let mountedPlayers = nativePlayers(in: host).compactMap(\.player)
+            XCTAssertEqual(mountedPlayers.count, 1)
+            XCTAssertTrue(mountedPlayers.first === independent,
+                          "Only the standalone system player may exist before requesting Markdown media")
             // Exercise the real accessible control from this mounted host,
             // as the other native component tests do. Window-server enumeration
             // can omit an offscreen window during a complete host test run.
@@ -1148,10 +1150,6 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 case 4:
                     return mounted(PreviewScrollView.self, in: host) { $0.accessibilityIdentifier() == "bailey.image.inspector" } != nil
                         && file.gifPlayback != nil
-                case 5:
-                    guard let player = file.mediaPlayer else { return false }
-                    return mounted(FileAudioControls.Bar.self, in: host)?.player === player
-                        && player.currentItem?.status == .readyToPlay
                 default:
                     guard let player = file.mediaPlayer else { return false }
                     return mounted(AVPlayerView.self, in: host) { $0.player === player } != nil
@@ -1297,9 +1295,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                         let moved = await player.seek(to: CMTime(seconds: 2, preferredTimescale: 600),
                                                       toleranceBefore: .zero, toleranceAfter: .zero)
                         XCTAssertTrue(moved)
-                        if index == 6 {
-                            cachedPlayerViews[index] = try XCTUnwrap(mounted(AVPlayerView.self, in: host) { $0.player === player })
-                        }
+                        cachedPlayerViews[index] = try XCTUnwrap(mounted(AVPlayerView.self, in: host) { $0.player === player })
                         player.playImmediately(atRate: 1)
                     } else {
                         XCTAssertEqual(player.rate, 0)

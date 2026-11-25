@@ -71,19 +71,22 @@ final class NativeAudioTimingTests: XCTestCase {
             controls().first { attribute($0, "accessibilityIdentifier") as? String == identifier }
         }
         func timeline() -> NSObject? { control("timeline") }
-        try await wait("The file exposes the native timeline") { timeline() != nil }
-        let bar = try XCTUnwrap(mounted(FileAudioControls.Bar.self, in: host))
-        XCTAssertTrue(bar.player === player)
-        XCTAssertNil(mounted(AVPlayerView.self, in: host), "Audio must never mount a movie canvas")
-        for width in [520, 220, 150] {
+        try await wait("The file mounts Apple AVKit") { mounted(AVPlayerView.self, in: host) != nil }
+        let surface = try XCTUnwrap(mounted(AVPlayerView.self, in: host),
+                                    "Standalone audio must use Apple's AVKit player, not a hand-built transport")
+        XCTAssertTrue(surface.player === player)
+        XCTAssertEqual(surface.controlsStyle, .floating)
+        XCTAssertFalse(surface.showsFullScreenToggleButton)
+        for width in [520, 320, 220, 150] {
             window.setContentSize(NSSize(width: width, height: 260))
             host.layoutSubtreeIfNeeded()
-            for slider in bar.arrangedSubviews.compactMap({ $0 as? NSSlider }) {
-                XCTAssertFalse(slider.isHiddenOrHasHiddenAncestor)
-                XCTAssertGreaterThan(slider.bounds.width, 10)
-                XCTAssertTrue(bar.bounds.insetBy(dx: -1, dy: -1).contains(bar.convert(slider.bounds, from: slider)))
-            }
+            XCTAssertGreaterThan(surface.bounds.width, 0)
+            XCTAssertTrue(host.bounds.insetBy(dx: -1, dy: -1).contains(host.convert(surface.bounds, from: surface)))
+            print("AUDIO_AVKIT width=\(width) controls=\(controls().compactMap { attribute($0, "accessibilityIdentifier") as? String })")
         }
+        window.setContentSize(NSSize(width: 520, height: 260))
+        host.layoutSubtreeIfNeeded()
+        try await wait("The system AVKit timeline is available") { timeline() != nil }
         for time in [9.0, 3.0, 4.49, 4.5, 4.51, 11.99, 0.0] {
             let accepted = await player.seek(to: CMTime(seconds: time, preferredTimescale: 1_000_000),
                                              toleranceBefore: .zero, toleranceAfter: .zero)
@@ -110,9 +113,7 @@ final class NativeAudioTimingTests: XCTestCase {
         let volume = try XCTUnwrap(volumeSlider())
         XCTAssertTrue(volume.responds(to: NSSelectorFromString("setAccessibilityValue:")))
         for value in [0.2, 0.75, 0.35] {
-            let slider = try XCTUnwrap(volume as? NSSlider)
-            slider.doubleValue = value
-            XCTAssertTrue(slider.sendAction(slider.action, to: slider.target))
+            volume.setValue(NSNumber(value: value), forKey: "accessibilityValue")
             try await wait("Native volume adjusts actual player to \(value)") {
                 guard let slider = volumeSlider(), let actual = attribute(slider, "accessibilityValue") as? NSNumber else { return false }
                 return abs(Double(player.volume) - value) < 0.001 && abs(actual.doubleValue - Double(player.volume)) < 0.001

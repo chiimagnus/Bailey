@@ -162,6 +162,7 @@ final class NativeMediaEnvironmentObservation {
 struct NativePlayerView: NSViewRepresentable {
     weak var player: AVPlayer?
     var allowsFullScreen = false
+    var controlsStyle: AVPlayerViewControlsStyle = .inline
     var isDockActive: Bool?
 
     final class Presentation: NSObject, AVPlayerViewDelegate {
@@ -182,7 +183,7 @@ struct NativePlayerView: NSViewRepresentable {
         let view = AVPlayerView()
         view.delegate = context.coordinator
         context.coordinator.isDockActive = isDockActive
-        view.controlsStyle = .inline
+        view.controlsStyle = controlsStyle
         view.showsFullScreenToggleButton = allowsFullScreen
         view.player = player
         return view
