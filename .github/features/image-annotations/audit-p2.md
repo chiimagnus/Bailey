@@ -6,7 +6,9 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：核心标注、保存与导出已有真实宿主证据；复制入口已核销；共享保存竞态和完整 App／实体设备验收仍未完成。
+- **依据**：核心标注、保存与导出已有真实宿主证据；复制入口已核销；共享保存竞态、真实中文标注 IME 与现有设备／完整 App 验收仍未完成。
+- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
+  保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
 ## 任务与改动
 

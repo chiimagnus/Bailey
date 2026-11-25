@@ -81,6 +81,8 @@ WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都�
 
 ## 阶段验收
 
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+
 宿主测试覆盖路径权限、拒绝规则、版本竞争、保存字节与 WebKit 配置；
 真实 Bailey Dev 核对网页渲染、实际网络／子资源拦截、焦点／菜单／Dock 与暗亮主题。
 使用 `make test:MarkdownResourceScopeTests,FileTabPersistenceTests,NativePaneRetentionIntegrationTests`

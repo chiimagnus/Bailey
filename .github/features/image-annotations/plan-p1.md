@@ -77,6 +77,8 @@
 
 ## 阶段验收
 
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+
 运行 `make test:SwiftMarkdownNativeTests,MarkdownResourceScopeTests,FileTabPersistenceTests,NativePaneRetentionIntegrationTests`
 及新增的 ImageIO／原生 `NSScrollView` 宿主测试，再执行 `make build` 与阶段完整宿主测试。
 隔离 Bailey Dev 验证真实 Mac 手势、前后像素、Retina 和 Markdown 插图放大；

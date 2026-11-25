@@ -65,6 +65,7 @@ SwiftUI 重挂载不重新创建 WebKit 进程或丢失滚动；
 
 执行 P1 的 H01–H08 和[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)回归，
 重点将输入／时序／资源权限组合，不以一次成功刷新证明热更新正确。
+源码保存及显式运行前的冲突保护复用[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不自动覆盖或执行未保存草稿。
 
 | 编号 | 真实操作与前提 | 完成判据 |
 | --- | --- | --- |

@@ -35,6 +35,37 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 两者复用文件及安全边界，不复用不等价的内容语义。
 源码高亮扩展名表、文件图标和可预览性是三个不同判断，不建立统一 Registry／`FileKind`。
 
+<a id="shared-save-conflicts"></a>
+## 共享保存冲突：以 VS Code 为参考
+
+先对照已阅读的 VS Code 上游提交 `d0ba83679483e1fd146517a8e62282ee32c0f4ec`，
+而不是另造文件事务框架。关键执行链：
+
+- [TextFileEditorModel 保存与结果](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/workbench/services/textfile/common/textFileEditorModel.ts#L1030-L1098)：保存序列化、已读版本、快照代次；
+  成功仅清除对应版本的 dirty，失败保留可编辑草稿及冲突状态。
+- [FileService.validateWriteFile](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/platform/files/common/fileService.ts#L457-L539)：通过 mtime／etag 检查外部变化，必要时比较待写与磁盘字节；
+  [etag 定义](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/platform/files/common/files.ts)仅基于修改时间与大小，上游明确允许同长度改写漏检的性能取舍。
+- [DiskFileSystemProvider.writeFile／doWriteFileAtomic](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/platform/files/node/diskFileSystemProvider.ts#L277-L338)：按 provider 能力选择写入方式，
+  原子路径锁定本次资源、写临时文件并 rename 替换；不是文件系统级比较并交换（CAS）。
+- [TextFileSaveErrorHandler](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.ts#L110-L136)：遇到 `FILE_MODIFIED_SINCE` 提供比较与显式覆盖，
+  [冲突接受或回退](https://github.com/microsoft/vscode/blob/d0ba83679483e1fd146517a8e62282ee32c0f4ec/src/vs/workbench/contrib/files/browser/editors/textFileSaveErrorHandler.ts#L410-L442)由用户明确选择。
+
+**落地：**在 [CSV P2-T2](../csv-table-view/plan-p2.md#p2-t2) 核对并吸收这套行为，
+统一到 `FileTab.save`／`WorkspaceFileVersion`／`WorkspaceBackend.write(ifUnchanged:)`、
+`LocalWorkspaceBackend` 与 `SSHWorkspaceBackend`，同步 `DiffTab`、图像旁车和确认导出。
+比较冲突优先复用现有 Diff 与原生错误／确认入口，先核对实际可用能力，再做必要的最小改动；
+显式覆盖须绑定本次用户确认的目标和磁盘版本，随后变化仍须提示，不放开自动保存的版本保护。
+保留现有 SHA-256、同长度同 mtime 检测、原编码、已替换版本恢复和保存失败后的 dirty；
+不照搬上游较弱的元数据判断、无条件覆盖或 Electron 架构。若直接移植代码，遵循上游 MIT 许可。
+
+**验收：**在本机与获授权的 Windows Tailscale SSH 上复用现有双进程屏障：
+检查前改写、检查至发布间原位写／替换、旧描述符迟到写、同长度同 mtime 改写、
+保存中继续输入、断线／重连、比较、显式覆盖／取消、关闭否决及重试。
+逐项核对原磁盘、冲突版本、草稿、提示及最终字节；不得让旧确认覆盖新版本。
+VS Code 的分离版本检查和 rename 不等于严格 CAS；现有平台实测边界见
+[CSV P2 审计](../csv-table-view/audit-p2.md#发现-f-02)。不再凭空尝试更多假锁或重复检查；
+严格非协作 CAS 如仍不成立，保留未满足项及安全恢复边界，不能以复刻 VS Code 自动核销。
+
 ## 任务
 
 <a id="p1-t1"></a>
@@ -86,7 +117,8 @@ Markdown PR #101 已在 `main` 的 `4f336b88` 合并；所有后续格式直接�
 
 ## 阶段验收与执行顺序
 
-验收范围为 macOS App 与已授权 Windows SSH，保留现有远端功能及路径安全契约。
+验收范围为 macOS App 与已授权 Windows Tailscale SSH，保留现有远端功能及路径安全契约。
+全七份计划统一采用下方[本轮验收环境](#acceptance-environment)。
 
 此计划与**下一种格式的首个接入任务共同执行**，不作为单独“框架项目”先行。
 CSV 的字段索引不依赖图形视口，先以 [CSV P1-T2](../csv-table-view/plan-p1.md#p1-t2)
@@ -103,13 +135,31 @@ SVG／HTML 后续使用同一模式；SVG 的图形能力仍依赖图片共用�
 完整执行相关 `make test:...`、`make build`、阶段性 `make test` 和必要的隔离 Bailey Dev。
 测试应覆盖 macOS 支持基线、编码和大小极值、错误恢复、真实本机与获授权 SSH、
 多窗口、窄宽 Dock、深浅主题、键盘与手势，以及跨格式、切换、刷新、关闭的交互组合。
-真实 SSH、系统缩放／触控板或特殊运行环境不可用时，逐项记明原因、影响、替代证据与补验方法；
+未配备的设备按本轮延期规则处理；其它真实 SSH、输入或特殊运行环境不可用时，
+逐项记明原因、影响、替代证据与补验方法；
 未跑的组合不能冒称通过。完成后同步 `docs/features/editor.md`，只有所有权改变才改 `docs/architecture.md`。
+
+<a id="acceptance-environment"></a>
+### 本轮验收环境与延期条件
+
+- 远端真实验收统一使用已授权 `windows-tailscale` SSH 别名；即 Windows OpenSSH 经 Tailscale 网络直连，
+  不使用 Cloudflare SSH／Access／ProxyCommand 回退。沿用既有 `BAILEY_P4_TEST_SSH_HOST` 和
+  `TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST` 参数，执行命令及隔离要求见
+  [测试规范](../../../docs/testing.md)。连接失败记录实际错误，恢复后重验，不能换 CF 路线或报通过。
+  此约束针对测试环境，不删除产品现有通用 SSH 支持。
+- 用户明确延期当前没有的设备：物理 1×／外接 HDR 屏、多显示器迁移、第二个音频输出设备及其依赖组合。
+  不创建虚拟显示器、不安装虚拟音频驱动、不改系统权限；这些条件记为延期／未测，不计为通过，
+  也不再单独阻塞本轮任务或阶段。设备具备时恢复原矩阵中的相应验收。
+- 继续验证本机内置 2× XDR、内置扬声器、实际 HDR 解码与可执行的 EDR 软件链、
+  已有鼠标／触控板、中文 IME、VoiceOver、减弱动态效果、窄宽 Dock、真实睡眠及长会话。
+  区分真正的物理呈现／听感与宿主通知、像素或状态验证；可执行项不因缺外设被豁免。
+  真正无法安全执行的项目单独记录原因、替代证据与剩余门禁。
 
 <a id="shared-verification"></a>
 ### 所有格式共用的验收条件
 
-以下是**将来每项格式实施时的必验条件**，不是声称当前已通过。
+以下是各格式的完整适用验收矩阵；本轮明确延期的设备项按[验收环境](#acceptance-environment)处理，
+其它可执行条件仍为必验项，不代表当前已经通过。
 先沿真实 `Files/Finder/⌘O → Project → FileTab → FileViewerView/TabSwitcher`
 建立可观察的夹具，再分别验证加载、交互与磁盘最终结果。
 宿主测试承担可控组合；完整 Bailey Dev 只负责菜单、手势、焦点与窗口等不可替代的路径。
@@ -122,11 +172,11 @@ SVG／HTML 后续使用同一模式；SVG 的图形能力仍依赖图片共用�
 | R03 路径 | ASCII、空格、中文／emoji、组合音调／不同规范形、大小写、单引号、`%/#/?`、255 字节合法文件名、文件夹重命名、相对 `.`／`..`、链接到允许／越界目标、悬空链接。 | 读取和打开的是授权的真实目标；失败不换机器、不泄漏外部字节；任何规范化／解析不改变原路径指向。 |
 | R04 文件类型 | 后缀正确／大写／错误／无后缀、合法头与假后缀、空文件、截断或损坏、二进制 NUL、不可读、FIFO／socket／目录、存取时移除或换成链接。 | 不在类型未验证前走无界读取或执行内容；错误确实留在原目标，可编辑的草稿与旧有效内容按现有约定保护。 |
 | R05 容量 | 文本 `0/1/32 MiB-1/32 MiB/32 MiB+1`，图片 `32 MiB` 分流点及 `256 MiB`、`32,000,000` 像素边界；新媒体大于内存但有效的文件、文件读时增长／截短。 | 等于预算可用，超过预算明确拒绝或按设计退化；无整文件媒体拷贝、内存无界增长、部分字节当作完整文件。 |
-| R06 版本与编辑 | 未改、未保存、自动保存等待中、Undo 回原字节、编码不支持、外部同长度同 mtime 改写、两标签并发保存、刷新失败后恢复、文件重命名／删除。 | 旧回调不覆盖新文本、草稿或实际磁盘；⌘S、失焦、关闭／取消关闭与真实 Git Diff 的字节结果一致。只读格式始终不写盘。 |
+| R06 版本与编辑 | 未改、未保存、自动保存等待中、Undo 回原字节、编码不支持、外部同长度同 mtime 改写、两标签并发保存、刷新失败后恢复、文件重命名／删除；按[共用保存冲突方案](#shared-save-conflicts)核对比较、显式覆盖与恢复。 | 旧回调不覆盖新文本、草稿或实际磁盘；⌘S、失焦、关闭／取消关闭与真实 Git Diff 的字节结果一致。只读格式始终不写盘。 |
 | R07 竞态 | 初读／重新载入／资源请求中先后触发切 Dock、切项目、重命名、删除、关闭和再次打开；重复切模式、快速输入／Undo、取消后完成回调。 | 核对文件 ID、机器、连接、路径和编辑／重载代次；旧内容不显示到新标签，关闭后没有未清理请求或新的磁盘写入。 |
 | R08 UI/布局 | 单窗／双窗、同文件多 Dock、分栏窄／宽、标签右键后台目标、主菜单活动目标、⌘⇧V／⌘W／⌘S、TabSwitcher、主题与字体／折行（适用时）、读写焦点。 | Dock 只有一个布局所有者、每份源正文只有一个 Undo；主菜单与右键不串目标，无额外顶部栏，切模式与重挂载不清选区／阅读锚点。 |
 | R09 生命周期 | 冷标签懒加载、后台标签不触发全尺寸预览、10 次与 100 次打开／切换／关标签、真正的项目／窗口关闭、外部重载、App 重启恢复。 | 原生正文／WebView／AVPlayer／解码任务在有效内容期间复用，真关闭后取消并释放；对比前后 RSS／retained heap 和对象引用，不把 100 次增长当作已证无泄漏。 |
-| R10 权限／远端 | 本机允许／拒绝读取、已授权 Windows SSH、相同路径的本机假文件、断线→重连与旧通道回写；检验实际远端 Shell 能力。 | 不访问错误主机／越界路径、不以断线回退本机；没有可用且获授权的远端主机时记录具体阻塞、替代宿主证据及验收限制，不代替远端 E2E。 |
+| R10 权限／远端 | 本机允许／拒绝读取、已授权 Windows Tailscale SSH（`windows-tailscale`）、相同路径的本机假文件、断线→重连与旧通道回写；检验实际远端 Shell 能力。 | 不访问错误主机／越界路径、不以断线回退本机；没有可用且获授权的远端主机时记录具体阻塞、替代宿主证据及验收限制，不代替远端 E2E。 |
 | R11 视觉/性能 | 短／超长行、巨宽图／表、多帧、多媒体、大资源和嵌套 Dock；快速滚动、持续输入、宽度／字号／主题变换、真实内存压力。 | 记录 MainActor 阻塞、首帧／交互延迟、CPU／RSS／解码峰值、重挂载前后原生对象与可见像素；先复现，解决有证据的共享瓶颈，不追加任意定时等待。 |
 
 **必须执行的交叉组合：** R02×R03×R10（Finder 本机文件与 SSH 同名路径）；

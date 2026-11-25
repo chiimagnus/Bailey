@@ -78,6 +78,8 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
 
 ## 阶段验收
 
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+
 新增 `SVG` 净化／SwiftDraw 像素和原生视口宿主测试，回归
 `SwiftMarkdownNativeTests`、`MarkdownResourceScopeTests`、`FileTabPersistenceTests`，
 `make build`、阶段 `make test` 和隔离 Bailey Dev 图形、鼠标、菜单实际行为。

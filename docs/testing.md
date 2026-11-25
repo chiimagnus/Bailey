@@ -278,11 +278,11 @@ XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称�
 正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。
 独立 UI 启动器使用临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实位于临时目录；
 仅改 `HOME` 不会改变 Foundation 的主目录。
-获授权的 Windows SSH GUI 测试只在一次性测试主目录中引用原 SSH 别名。
-测试夹具在存在 Cloudflare Access 缓存时会建立临时符号链接；
-使用直连 Tailscale 的 `windows-tailscale` 别名时不依赖该缓存或 Cloudflare 代理。
-不复制令牌、不修改用户 SSH 配置，测试结束只解除链接，正式设置仍在隔离目录之外。
-没有授权时不能以共享缓存绕过原有 SSH 测试门禁。
+获授权的 Windows SSH GUI 测试只在一次性测试主目录中引用 `windows-tailscale` 别名，
+统一使用经 Tailscale 网络直连的 Windows OpenSSH，不通过 Cloudflare SSH／Access 代理。
+现有夹具的 Cloudflare 缓存链接属于历史兼容路径，不作为当前验收依赖；不复制令牌、
+不修改用户 SSH 配置，不借用用户 master。测试结束只解除自己的链接，正式设置保持隔离。
+没有授权时不得连接测试主机。
 GUI 添加远端项目使用窗口内 `SSHFolderPickerView` 的主机、路径与确认控件，
 不再查找旧版系统 Sheet 的 `comboBox` 和 `textView`。
 **普通 UI 方法各自使用独立的 Bailey Dev 进程和临时数据**。
@@ -346,7 +346,8 @@ Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or 
 真实 SSH 宿主测试只使用专用且获准的测试 master，不借用用户连接或结束其后台任务。
 完整 App UI Runner 的沙盒不允许监听 OpenSSH 的 `/tmp` 控制套接字，
 因此 `WorkspaceGitUITests` 的夹具明确禁用多路复用，独立握手；
-Cloudflare 连接失败不得算作测试通过，失败后须核对测试专属远端目录是否残留。
+Tailscale SSH 连接失败不得算作测试通过或回退 Cloudflare SSH；
+失败后须核对测试专属远端目录是否残留。
 真实 Windows SSH 回归必须**明确指定获授权的测试主机**。
 `BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，Git 外部刷新与 Markdown 资源实测也使用它；
 未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
@@ -382,7 +383,7 @@ CRLF Split 失焦自动保存的原始 Unicode 字节及 Staged 只读差异；
 不以模型测试替代。
 `SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、
 拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。
-通过已授权 `windows-tailscale` SSH 别名执行完整 Windows 实机宿主测试：
+真实 Windows 实机宿主测试统一通过已授权 `windows-tailscale` SSH 别名执行：
 
 ```sh
 BAILEY_P4_TEST_SSH_HOST=windows-tailscale TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows-tailscale make test

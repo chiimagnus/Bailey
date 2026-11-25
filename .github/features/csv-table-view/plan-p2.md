@@ -86,4 +86,6 @@ P1 的 C01–C07 和[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-
 
 必须交叉 C08×C10、C09×C11、C10×C14、C12×C13、C11×C12 和 C13×R10；
 **保存检查与最终写入间的外部替换**需借受控后端屏障实际测试。
-现有 `write(ifUnchanged:)` 非原子 CAS 的平台限制不能靠循环重试或文件级假锁掩盖。
+保存冲突按[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，在本任务核对 VS Code 的版本基线、写入、冲突比较、
+显式覆盖与草稿保护，再收敛已有 Backend／FileTab／DiffTab 路径并同步各调用者。
+保留真实双进程竞态和严格 CAS 的未满足项，不以循环重试、假锁或元数据降级掩盖。

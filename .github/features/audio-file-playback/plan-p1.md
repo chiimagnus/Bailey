@@ -66,6 +66,8 @@
 
 ## 阶段验收
 
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+
 先运行现有 `MarkdownResourceScopeTests`、`FileTabPersistenceTests`、
 `NativePaneRetentionIntegrationTests` 与新增 AVAsset／生命周期宿主测试；
 确认 Markdown 内嵌音视频可加载且暂存文件会删除、独立文件直接用本机 URL。
@@ -93,4 +95,5 @@
 
 必须交叉 A01×A02、A02×A03、A03×A06、A04×A06、A05×A06、A07×A06、R03×A03。
 宿主能证明资源和时间状态；真实有声输出、系统设备与焦点路径须在隔离 Bailey Dev 验证，
-缺少专用音频设备／DRM 合法测试样本时注明不支持或未测，而非为了测试寻求绕过。
+当前第二个音频输出设备及其切换组合按[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)延期，
+内置扬声器及系统可执行的生命周期仍须验收。缺少 DRM 合法样本时注明未测，不寻求绕过。

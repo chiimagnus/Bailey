@@ -47,7 +47,8 @@
 宿主 AVAsset/AVPlayerItem 和真实文件版本测试，加隔离 Bailey Dev 实际操作及音轨结果；
 执行 `make build`、受影响 `make test:...` 和阶段 `make test`。
 按 `docs/testing.md` 逐一核销适用 macOS、容量、异常、设备与并发组合，
-缺乏真实样本或设备时明确说明而非宣称支持。
+未配备的外接屏、第二输出设备及组合按[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)延期；
+现有内置 XDR、内置音频、睡眠及可执行的软件链继续验证。缺乏其它真实样本时明确说明。
 
 ### 视频轨道与故障恢复专项验收矩阵（P2）
 

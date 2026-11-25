@@ -76,8 +76,8 @@ Finder 本机文件与 SSH 文件不能因相同路径读写错机器。
 按 `docs/testing.md` 使用真实文件／受控 SSH／原生 Undo 的宿主测试和隔离 Bailey Dev，
 核对保存、关闭否决、跨窗口、菜单、导出及像素结果；
 运行相关 `make test:...`、`make build` 与阶段完整宿主测试。
-未验证现有 `write(ifUnchanged:)` 对外部竞态具备真正原子 CAS 语义时，
-不能仅凭方法名宣称永不覆盖；如可复现检查／发布间竞态，应在共享 Backend 修复并覆盖本机／SSH。
+已有 sidecar 与确认导出复用[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，在 CSV P2-T2 的共享写入所有者处理冲突，
+标注仅负责自己的草稿和原图保护；不另做 CAS 或重试。真实非协作竞态仍按共同边界验收。
 
 ### 标注与写盘专项验收矩阵（P2）
 

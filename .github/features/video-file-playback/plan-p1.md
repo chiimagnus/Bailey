@@ -68,6 +68,8 @@
 
 ## 阶段验收
 
+本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)。
+
 复用音频的文件身份与 AVAsset 宿主测试、Markdown 嵌入视频回归，
 新增 AVPlayerView 与多文件生命周期测试；执行相关 `make test:...`、
 `make build`、阶段 `make test` 及隔离 Bailey Dev 的真实画面／声音／菜单／全屏操作。
