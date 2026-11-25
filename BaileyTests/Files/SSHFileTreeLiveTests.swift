@@ -471,6 +471,111 @@ final class SSHFileTreeLiveTests: XCTestCase {
         }
     }
 
+    func testAuthorizedWindowsReviewedCSVConflictRejectsExternalRevisionAndOldChannel() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
+        }
+        let id = UUID().uuidString.prefix(8)
+        let socket = "/tmp/bailey-review-a-\(id).sock"
+        let rivalSocket = "/tmp/bailey-review-b-\(id).sock"
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
+        let rival = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: rivalSocket), timeout: 25)
+        try await withPublicationSSHFixture(host: host, backend: rival, sockets: [socket, rivalSocket],
+                                            prefix: "bailey-review-csv") { root in
+            let path = root + "/数据.csv"
+            let base = "Name,Value\r\n中文,old\n"
+            let external = "Name,Value\r\n中文,ext\n"
+            let newer = "Name,Value\r\n中文,two\n"
+            let draft = "Name,Value\r\n中文,new\n"
+            let encoding = TextFileEncoding.utf8BOM
+            let baseline = try XCTUnwrap(encoding.encoded(base))
+            let externalBytes = try XCTUnwrap(encoding.encoded(external))
+            let newerBytes = try XCTUnwrap(encoding.encoded(newer))
+            let draftBytes = try XCTUnwrap(encoding.encoded(draft))
+            try await backend.write(path: path, data: baseline)
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(atPath: root) }
+            let local = URL(fileURLWithPath: path)
+            let sentinel = Data("Mac-only sentinel".utf8)
+            try sentinel.write(to: local)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            defer { file.retireContent() }
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            XCTAssertEqual(file.fileEncoding, encoding)
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            try await file.editDelimited(.cells([.init(row: 1, column: 1): "new"]), using: XCTUnwrap(loaded))
+            XCTAssertEqual(file.text, draft)
+
+            // This shell deliberately does not use Bailey's publication lock.
+            // Preserve both length and mtime on the actual Windows file.
+            let beforeStat = try await rival.stat(path: path)
+            let before = try XCTUnwrap(beforeStat)
+            let result = try await rival.run(argv: [
+                "sh", "-c", "set -eu; cp -p -- \"$1\" \"$2\"; cat > \"$1\"; touch -r \"$2\" \"$1\"; rm -- \"$2\"",
+                "_", path, root + "/mtime"
+            ], cwd: nil, env: nil, stdin: externalBytes, timeout: 25)
+            XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+            let afterStat = try await rival.stat(path: path)
+            let after = try XCTUnwrap(afterStat)
+            XCTAssertEqual(before.size, after.size)
+            XCTAssertEqual(before.mtime, after.mtime)
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            XCTAssertTrue(file.canCompareSaveConflict)
+            let first = try await file.compareSaveConflict()
+            XCTAssertEqual(first.diskVersion, WorkspaceFileVersion(data: externalBytes))
+            XCTAssertEqual(first.draftVersion, WorkspaceFileVersion(data: draftBytes))
+            XCTAssertTrue(first.review.text.contains("中文,ext"))
+            XCTAssertTrue(first.review.text.contains("中文,new"))
+            let unchanged = try await rival.read(path: path, maxBytes: externalBytes.count)
+            XCTAssertEqual(unchanged, externalBytes, "Comparing without confirming never writes")
+            print("REVIEW_CSV_LIVE same-size and mtime conflict verified")
+            // An independently launched remote shell publishes a different revision.
+            let changed = try await rival.run(argv: ["sh", "-c", "cat > \"$1\"", "_", path],
+                                              cwd: nil, env: nil, stdin: newerBytes, timeout: 25)
+            XCTAssertEqual(changed.status, 0)
+            do {
+                try await file.resolveSaveConflict(first)
+                XCTFail("Old comparison must not replace a later remote revision")
+            } catch WorkspaceError.changedExternally {}
+            let retained = try await rival.read(path: path, maxBytes: newerBytes.count)
+            XCTAssertEqual(retained, newerBytes)
+            XCTAssertTrue(file.isDirty)
+            XCTAssertEqual(file.text, draft)
+            print("REVIEW_CSV_LIVE stale disk confirmation rejected")
+            let oldChannel = try await file.compareSaveConflict()
+            let exited = try await Task.detached {
+                try ProcessRemoteCommandRunner.launch(sshPath: "/usr/bin/ssh",
+                    arguments: ["-S", socket, "-O", "exit", host], stdin: nil, timeout: 10)
+            }.value
+            XCTAssertEqual(exited.status, 0)
+            file.rebindWorkspace(to: nil)
+            XCTAssertFalse(file.canCompareSaveConflict)
+            file.rebindWorkspace(to: rival)
+            do {
+                try await file.resolveSaveConflict(oldChannel)
+                XCTFail("Approval from the closed channel must expire")
+            } catch WorkspaceError.changedExternally {}
+            print("REVIEW_CSV_LIVE old channel approval rejected")
+            let fresh = try await file.compareSaveConflict()
+            XCTAssertEqual(fresh.diskVersion, WorkspaceFileVersion(data: newerBytes))
+            try await file.resolveSaveConflict(fresh)
+            let stored = try await rival.read(path: path, maxBytes: draftBytes.count)
+            XCTAssertEqual(stored, draftBytes)
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: local), sentinel)
+            let reopened = FileTab(path: path, backend: rival, workspaceIdentity: "ssh:\(host)")
+            defer { reopened.retireContent() }
+            try await reopened.waitForText()
+            XCTAssertEqual(reopened.text, draft)
+            XCTAssertEqual(reopened.fileEncoding, encoding)
+            let remaining = try await rival.list(directory: root)
+            XCTAssertEqual(remaining.map(\.name), ["数据.csv"])
+        }
+    }
+
     func testAuthorizedWindowsSSHFileTabCapacityAndBytePreservingSave() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
