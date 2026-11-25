@@ -395,6 +395,44 @@ final class PanelContextTests: XCTestCase {
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
     }
 
+    func testLargeProjectSwitchReusesExpandedTrees() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-project-scale-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let roots = ["first", "second"].map { base.appendingPathComponent($0) }
+        for root in roots {
+            let folder = root.appendingPathComponent("src")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<3_000 {
+                try Data().write(to: folder.appendingPathComponent("file-\(index).txt"))
+            }
+        }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        var projects: [Project] = []
+        for root in roots {
+            manager.addLocalFolders([root])
+            let project = try XCTUnwrap(manager.selectedProject)
+            projects.append(project)
+            _ = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+            let folder = try XCTUnwrap(project.fileTree.items.first)
+            await project.fileTree.toggle(folder)
+            XCTAssertEqual(project.fileTree.items.count, 3_001)
+        }
+        let start = CFAbsoluteTimeGetCurrent()
+        for index in 0..<6 {
+            let project = projects[index % 2]
+            manager.selectedProjectID = project.id
+            _ = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+            XCTAssertEqual(project.fileTree.items.count, 3_001)
+            XCTAssertTrue(project.fileTree.items.allSatisfy { $0.path.hasPrefix(roots[index % 2].path + "/") })
+        }
+        print("PROJECT_SCALE rows=3001 switches=6 elapsed_ms=\((CFAbsoluteTimeGetCurrent() - start) * 1_000)")
+    }
+
     func testGitFixedTargetFollowsOnlyAuthorizedProject() throws {
         let project = Project(fallbackName: "Fixed", workspaceConfiguration: .standard)
         project.customDirectory = "/tmp/bailey-git-fixed"

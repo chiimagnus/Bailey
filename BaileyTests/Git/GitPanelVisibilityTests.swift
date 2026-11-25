@@ -5,6 +5,108 @@ import XCTest
 
 @MainActor
 final class GitPanelVisibilityTests: XCTestCase {
+    func testLargeHistoryFolderUsesViewportRowsAndRetainsScrollHost() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-GraphScale-\(UUID().uuidString)")
+        let folder = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: root.path)
+            guard result.status == 0 else {
+                throw NSError(domain: "GraphScale", code: Int(result.status),
+                              userInfo: [NSLocalizedDescriptionKey: result.stderr])
+            }
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Bailey Graph Scale"])
+        try git(["config", "user.email", "graph-scale@example.invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        let count = 4_000
+        for index in 0..<count {
+            try Data("x".utf8).write(to: folder.appendingPathComponent("file-\(index).txt"))
+        }
+        try git(["add", "-A"])
+        try git(["commit", "-qm", "Large history folder"])
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        defer { model.sync(root: "") }
+        let config = root.deletingLastPathComponent().appendingPathComponent("Bailey-GraphScale-\(UUID().uuidString).toml")
+        defer { try? FileManager.default.removeItem(at: config) }
+        let settings = AppSettings(configURL: config)
+        settings.gitViewMode = .tree
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 320, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: GitPanel(
+            settings: settings, model: model, manager: manager, project: project, sshHost: nil,
+            openFile: { _ in }, openDiff: { _, _ in }, openCommitDiff: { _, _ in }
+        ))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        manager.syncGitStatus(model)
+        func layout() {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        func waitFor(_ condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+            while !condition() && ContinuousClock.now < deadline {
+                layout()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(condition())
+        }
+        func views(_ root: NSView) -> [NSView] {
+            [root] + root.subviews.flatMap(views)
+        }
+        try await waitFor { !model.isRefreshing && model.recentCommits.first?.files.count == count }
+        layout()
+        let commit = try XCTUnwrap(model.recentCommits.first)
+        let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
+            $0.contentView.bounds.height > 200
+        })
+        let before = try XCTUnwrap(scroll.documentView?.frame.height)
+        let start = ContinuousClock.now
+        model.expandedCommitIDs.insert(commit.id)
+        try await waitFor { (scroll.documentView?.frame.height ?? 0) > CGFloat(count * 16) }
+        let elapsed = start.duration(to: .now)
+        let expandedHeight = try XCTUnwrap(scroll.documentView?.frame.height)
+        let nativeViews = views(host).count
+        print("GIT_GRAPH_SCALE files=\(count) first_expand=\(elapsed) native_views=\(nativeViews)")
+        XCTAssertLessThan(nativeViews, 1_000, "The expanded commit must not mount thousands of offscreen file rows")
+        let key = "commit:" + commit.id + ":folder"
+        for _ in 0..<2 {
+            model.toggleCollapsedFolder(key)
+            try await waitFor { (scroll.documentView?.frame.height ?? .infinity) < before + 150 }
+            model.toggleCollapsedFolder(key)
+            try await waitFor { (scroll.documentView?.frame.height ?? 0) > CGFloat(count * 16) }
+        }
+        // LazyVStack estimates unmeasured row heights; reopening need not
+        // reproduce the exact estimate. Verify the full scroll range instead.
+        XCTAssertEqual(scroll.documentView?.frame.height ?? 0, expandedHeight,
+                       accuracy: expandedHeight * 0.02)
+        XCTAssertTrue(views(host).contains { $0 === scroll })
+        func bottomOffset() -> CGFloat {
+            max(0, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height)
+        }
+        try await waitFor {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: bottomOffset()))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            layout()
+            return scroll.contentView.bounds.minY >= bottomOffset() - 90
+                && scroll.contentView.bounds.minY > CGFloat(count * 12)
+        }
+        XCTAssertLessThan(views(host).count, 1_000, "Scrolling must not mount the entire history subtree")
+    }
+
     func testRealDockConstrainsGitScrollWidthToItsAllocatedPane() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GitDockWidth-" + UUID().uuidString)

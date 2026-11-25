@@ -3713,6 +3713,43 @@ final class FileTreeTests: XCTestCase {
         XCTAssertLessThan(tree.items.count, 75, "Symlink loops cannot generate an unbounded tree")
     }
 
+    func testLargeCachedFolderProjection() async throws {
+        let root = fixture.appendingPathComponent("large-tree")
+        let folders = ["first", "second"].map { root.appendingPathComponent($0) }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<3_000 {
+                try Data().write(to: folder.appendingPathComponent("file-\(index).swift"))
+            }
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        for folder in folders {
+            await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == folder.path }))
+        }
+        XCTAssertEqual(tree.items.count, 6_002)
+        let original = tree.items
+        let requests = await counting.requests
+        let folder = try XCTUnwrap(original.first { $0.path == folders[0].path })
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<5 {
+            await tree.toggle(folder)
+            XCTAssertEqual(tree.items.count, 3_002)
+            await tree.toggle(folder)
+            XCTAssertEqual(tree.items, original)
+        }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertLessThan(elapsed, 1_000, "Warm disclosure must reuse prepared directory rows")
+        let after = await counting.requests
+        XCTAssertEqual(after, requests, "Warm disclosure must not enumerate directories again")
+        print("FILES_TREE_SCALE rows=\(original.count) warm_10_ms=\(elapsed)")
+        let switchStart = CFAbsoluteTimeGetCurrent()
+        await tree.sync(root: root.path, backend: counting)
+        XCTAssertEqual(tree.items, original)
+        print("FILES_TREE_SCALE rows=\(original.count) remount_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
+    }
+
     func testCollapsedAndExpandedFoldersDoNotRereadUnchangedDirectories() async throws {
         let root = fixture.appendingPathComponent("cached")
         let sub = root.appendingPathComponent("sub")

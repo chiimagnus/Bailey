@@ -456,7 +456,6 @@ private struct FileTreeRow: View {
     private var displayRow: TreeDisplayModel.Row {
         var row = item
         row.status = gitDecoration
-        row.isExpanded = model.isExpanded(item)
         return row
     }
 
@@ -829,7 +828,7 @@ private struct FileTreeRow: View {
     @ViewBuilder
     private var leadingGlyphs: some View {
         if item.isDirectory {
-            TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
+            TreeFolderIcon(expanded: item.isExpanded, scale: fontScale)
         } else {
             MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
         }

@@ -230,6 +230,33 @@ final class GitStatusModelTests: XCTestCase {
         model.toggleCollapsedFolder("unstaged:src")
         XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).selections,
                        first.selections)
+        let foldStart = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<5 {
+            model.toggleCollapsedFolder("unstaged:src")
+            XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).changedRows.count, 1)
+            model.toggleCollapsedFolder("unstaged:src")
+            XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).selections, first.selections)
+        }
+        let foldMS = (CFAbsoluteTimeGetCurrent() - foldStart) * 1_000
+        print("GIT_CHANGE_SCALE entries=\(count) fold_10_ms=\(foldMS)")
+        XCTAssertLessThan(foldMS, 1_500, "Disclosure must not rebuild or re-sort the status hierarchy")
+
+        let other = root.deletingLastPathComponent().appendingPathComponent("Bailey-Git-Scale-Other-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: other) }
+        XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: other.path).status, 0)
+        // Return to a previously loaded repository through the production cache,
+        // not by assigning a mock display to the Git model.
+        model.sync(root: other.path)
+        try await wait { model.isRepo && model.rootPath == other.path && !model.isRefreshing }
+        let switchStart = CFAbsoluteTimeGetCurrent()
+        model.sync(root: root.path)
+        let returned = model.displayChanges(filter: "", mode: .tree, closed: [])
+        print("GIT_CHANGE_SCALE entries=\(count) cached_switch_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
+        XCTAssertEqual(returned.changedCount, count)
+        XCTAssertEqual(returned.selections, first.selections)
+        try await wait { !model.isRefreshing }
+
         XCTAssertEqual(model.displayChanges(filter: "FiLe-5700", mode: .tree, closed: [])
                        .changedCount, 1)
         let list = model.displayChanges(filter: "", mode: .list, closed: [])

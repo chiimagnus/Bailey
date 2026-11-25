@@ -754,74 +754,111 @@ final class GitStatusModel {
         var filteredCount: Int { mergeCount + stagedCount + changedCount }
     }
 
-    private struct ChangeDisplayKey: Equatable {
+    private struct ChangeSourceKey: Equatable {
         let scope: String
         let repository: String
         let entriesRevision: UInt64
-        let mode: GitViewMode
         let filter: String
+    }
+
+    private struct ChangeDisplayKey: Equatable {
+        let source: ChangeSourceKey
+        let mode: GitViewMode
         let folders: Set<String>
         let closed: Set<ChangeSection>
     }
 
+    private struct ChangeSectionSource {
+        let entries: [Entry]
+        let section: ChangeSection
+        private var tree: TreeDisplayModel.PathTree?
+        private var byPath: [String: Entry] = [:]
+        private var projection: (mode: GitViewMode, folders: Set<String>, rows: [ChangeItem])?
+
+        init(entries: [Entry], section: ChangeSection) {
+            self.entries = entries
+            self.section = section
+        }
+
+        mutating func rows(mode: GitViewMode, collapsed: Set<String>) -> [ChangeItem] {
+            let folders = mode == .tree ? Set(collapsed.filter {
+                $0.hasPrefix(section.rawValue + ":")
+            }) : []
+            if let projection, projection.mode == mode, projection.folders == folders {
+                return projection.rows
+            }
+            func displayRow(_ entry: Entry) -> TreeDisplayModel.Row {
+                .init(name: entry.fileName, path: entry.path,
+                      isDirectory: false, status: .init(section.status(entry)))
+            }
+            let rows: [ChangeItem]
+            if mode == .list {
+                rows = entries.map { ChangeItem(kind: section, row: displayRow($0), entry: $0) }
+            } else {
+                if tree == nil {
+                    tree = TreeDisplayModel.PathTree(entries.map(displayRow), section: section.rawValue)
+                    byPath = Dictionary(entries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+                }
+                rows = tree!.rows(collapsed: folders).compactMap { row in
+                    if row.isDirectory { return ChangeItem(kind: section, row: row, entry: nil) }
+                    guard let entry = byPath[row.path] else { return nil }
+                    return ChangeItem(kind: section, row: row, entry: entry)
+                }
+            }
+            projection = (mode, folders, rows)
+            return rows
+        }
+    }
+
+    @ObservationIgnored private var changeSourceCache: (key: ChangeSourceKey, sections: [ChangeSection: ChangeSectionSource])?
     @ObservationIgnored private var changeDisplayCache: (key: ChangeDisplayKey, value: ChangeDisplay)?
     @ObservationIgnored private var changeDisplayRevision: UInt64 = 0
 
-    /// Derive visible rows only when Git status or display inputs change.
-    /// Focus and selection never invalidate the tree.
+    /// Source hierarchy and sibling order survive disclosure and selection changes.
     func displayChanges(
         filter: String, mode: GitViewMode, closed: Set<ChangeSection>
     ) -> ChangeDisplay {
         let folders = mode == .tree ? Set(collapsedFolders.filter {
             $0.hasPrefix("merge:") || $0.hasPrefix("staged:") || $0.hasPrefix("unstaged:")
         }) : []
-        let key = ChangeDisplayKey(
+        let sourceKey = ChangeSourceKey(
             scope: currentScope, repository: repoRoot, entriesRevision: changeEntriesRevision,
-            mode: mode, filter: filter, folders: folders, closed: closed
+            filter: filter.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        let key = ChangeDisplayKey(source: sourceKey, mode: mode, folders: folders, closed: closed)
         if let cached = changeDisplayCache, cached.key == key { return cached.value }
 
-        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        func matching(_ entries: [Entry]) -> [Entry] {
-            query.isEmpty ? entries : entries.filter { $0.path.localizedCaseInsensitiveContains(query) }
-        }
-        func rows(_ entries: [Entry], section: ChangeSection) -> [ChangeItem] {
-            if mode == .list {
-                return entries.map { entry in
-                    ChangeItem(kind: section, row: TreeDisplayModel.Row(
-                        name: entry.fileName, path: entry.path, isDirectory: false,
-                        status: .init(section.status(entry))
-                    ), entry: entry)
+        if changeSourceCache?.key != sourceKey {
+            func matching(_ entries: [Entry]) -> [Entry] {
+                sourceKey.filter.isEmpty ? entries : entries.filter {
+                    $0.path.localizedCaseInsensitiveContains(sourceKey.filter)
                 }
             }
-            let files = entries.map {
-                TreeDisplayModel.Row(name: $0.fileName, path: $0.path,
-                                     isDirectory: false, status: .init(section.status($0)))
-            }
-            let byPath = Dictionary(entries.map { ($0.path, $0) },
-                                    uniquingKeysWith: { first, _ in first })
-            return TreeDisplayModel.pathRows(files, section: section.rawValue, collapsed: folders)
-                .compactMap { row in
-                    if row.isDirectory { return ChangeItem(kind: section, row: row, entry: nil) }
-                    guard let entry = byPath[row.path] else { return nil }
-                    return ChangeItem(kind: section, row: row, entry: entry)
-                }
+            changeSourceCache = (sourceKey, [
+                .merge: ChangeSectionSource(entries: matching(mergeEntries), section: .merge),
+                .staged: ChangeSectionSource(entries: matching(stagedEntries), section: .staged),
+                .unstaged: ChangeSectionSource(entries: matching(changedEntries), section: .unstaged)
+            ])
         }
-        let merge = matching(mergeEntries)
-        let staged = matching(stagedEntries)
-        let changed = matching(changedEntries)
-        let mergeRows = closed.contains(.merge) ? [] : rows(merge, section: .merge)
-        let stagedRows = closed.contains(.staged) ? [] : rows(staged, section: .staged)
-        let changedRows = closed.contains(.unstaged) ? [] : rows(changed, section: .unstaged)
+        func rows(_ section: ChangeSection) -> [ChangeItem] {
+            guard !closed.contains(section) else { return [] }
+            return changeSourceCache!.sections[section]!.rows(mode: mode, collapsed: folders)
+        }
+        let mergeCount = changeSourceCache!.sections[.merge]!.entries.count
+        let stagedCount = changeSourceCache!.sections[.staged]!.entries.count
+        let changedCount = changeSourceCache!.sections[.unstaged]!.entries.count
+        let mergeRows = rows(.merge)
+        let stagedRows = rows(.staged)
+        let changedRows = rows(.unstaged)
         let navigation = mergeRows + stagedRows + changedRows
         let selections = navigation.map {
-            ChangeSelection(scope: key.scope, repository: key.repository,
+            ChangeSelection(scope: sourceKey.scope, repository: sourceKey.repository,
                             section: $0.kind.rawValue, path: $0.row.path)
         }
         changeDisplayRevision &+= 1
         let display = ChangeDisplay(
             revision: changeDisplayRevision,
-            mergeCount: merge.count, stagedCount: staged.count, changedCount: changed.count,
+            mergeCount: mergeCount, stagedCount: stagedCount, changedCount: changedCount,
             mergeRows: mergeRows, stagedRows: stagedRows, changedRows: changedRows,
             navigation: navigation, selections: selections
         )
@@ -3829,6 +3866,7 @@ final class GitStatusModel {
         stagedEntries = []
         changedEntries = []
         entryMembership.removeAll()
+        changeSourceCache = nil
         changeDisplayCache = nil
         graphCommitsCache = nil
         knownRemotesCache = nil
