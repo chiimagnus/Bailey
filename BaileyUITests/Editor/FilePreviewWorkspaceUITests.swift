@@ -118,7 +118,7 @@ final class FilePreviewWorkspaceUITests: XCTestCase {
                 let omission = window.staticTexts.matching(NSPredicate(
                     format: "label CONTAINS %@ OR value CONTAINS %@", "omits: pattern", "omits: pattern"
                 )).firstMatch
-                XCTAssertTrue(omission.waitForExistence(timeout: 10))
+                XCTAssertFalse(omission.exists, "The research plot pattern should now render")
             case html:
                 let web = window.webViews.firstMatch
                 if initially {

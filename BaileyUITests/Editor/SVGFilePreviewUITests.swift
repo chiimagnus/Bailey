@@ -8,10 +8,11 @@ final class SVGFilePreviewUITests: XCTestCase {
         let source = """
             <svg xmlns="http://www.w3.org/2000/svg" width="360" height="220" viewBox="-180 -110 360 220">
               <defs>
-                <pattern id="paper" width="2" height="2"><rect width="1" height="1"/></pattern>
+                <pattern id="paper" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="#f11a14"/></pattern>
+                <foreignObject width="1" height="1"/>
                 <symbol id="sheet" viewBox="0 0 36 22"><rect width="36" height="22"/></symbol>
               </defs>
-              <use href="#sheet" x="-180" y="-110" width="360" height="220" fill="#f11a14"/>
+              <use href="#sheet" x="-180" y="-110" width="360" height="220" fill="url(#paper)"/>
             </svg>
             """
         let file = try fixture.file("图形.SVG", text: source)
@@ -36,7 +37,7 @@ final class SVGFilePreviewUITests: XCTestCase {
         let painted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in redCenter() }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 8), .completed)
         let omitted = app.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@ OR label CONTAINS %@", "omits: pattern", "omits: pattern"
+            format: "value CONTAINS %@ OR label CONTAINS %@", "omits: foreignObject", "omits: foreignObject"
         )).firstMatch
         XCTAssertTrue(omitted.exists)
 
@@ -119,8 +120,10 @@ final class SVGFilePreviewUITests: XCTestCase {
                 let y = Int((point.midY - frame.minY) * CGFloat(bitmap.pixelsHigh) / frame.height)
                 guard (0..<bitmap.pixelsWide).contains(x), (0..<bitmap.pixelsHigh).contains(y),
                       let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
-                return green ? color.greenComponent > 0.6 && color.greenComponent > 2 * max(color.redComponent, color.blueComponent)
-                    : color.redComponent > 0.6 && color.redComponent > 2 * max(color.greenComponent, color.blueComponent)
+                // A window screenshot contains display-profile transformed colors.
+                // Require a bright, strongly dominant channel, not the source RGB ratio.
+                return green ? color.greenComponent > 0.6 && color.greenComponent - max(color.redComponent, color.blueComponent) > 0.35
+                    : color.redComponent > 0.6 && color.redComponent - max(color.greenComponent, color.blueComponent) > 0.35
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed)
         }

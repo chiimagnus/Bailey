@@ -757,7 +757,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             """
         let sanitized = try SVGArtwork.sanitizedXML(Data(source.utf8))
         let cleaned = sanitized.xml
-        XCTAssertEqual(sanitized.omitted, ["@fill", "@onclick", "@style", "image", "script"])
+        XCTAssertEqual(sanitized.omitted, ["@fill", "@href", "@onclick", "@style", "image", "script"])
         XCTAssertTrue(cleaned.contains("linearGradient"))
         XCTAssertTrue(cleaned.contains("fill:url(#safe)"),
                       "A valid local CSS gradient must survive sanitization")
@@ -795,6 +795,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               <defs>
                 <clipPath id="left"><rect x="-12" y="-8" width="12" height="16"/></clipPath>
                 <pattern id="p" width="1" height="1"><circle r="1"/></pattern>
+                <foreignObject width="1" height="1"/>
                 <symbol id="other" viewBox="0 0 6 8"><rect width="6" height="8"/></symbol>
               </defs>
               <rect x="-12" y="-8" width="24" height="16" fill="red" clip-path="url(#left)"/>
@@ -803,7 +804,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
             """
         let source = Data(text.utf8)
         let vector = try SVGArtwork.parse(source)
-        XCTAssertEqual(vector.omitted, ["pattern"])
+        XCTAssertEqual(vector.omitted, ["foreignObject"])
         let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(source).image)
         let painted = try XCTUnwrap(raster.colorAt(x: 8, y: 16)?.usingColorSpace(.deviceRGB))
         let clipped = try XCTUnwrap(raster.colorAt(x: 40, y: 16)?.usingColorSpace(.deviceRGB))

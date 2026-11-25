@@ -114,9 +114,10 @@ nonisolated enum SVGArtwork {
         let root = try documentRoot(data)
         var budget = nodeLimit
         var omitted = Set<String>()
-        var instances = [XMLElement]()
-        try clean(root, depth: 0, budget: &budget, instances: &instances, omitted: &omitted)
-        try checkExpansion(of: root, instances: instances, omitted: &omitted)
+        var references = [XMLElement]()
+        var rasterPixels = [String: Int]()
+        try clean(root, depth: 0, budget: &budget, references: &references, rasterPixels: &rasterPixels, omitted: &omitted)
+        try checkExpansion(of: root, references: references, rasterPixels: rasterPixels, omitted: &omitted)
         return Sanitized(xml: root.xmlString, omitted: omitted.sorted())
     }
 
@@ -150,44 +151,78 @@ nonisolated enum SVGArtwork {
     }
 
     private static let instanceTargets: Set<String> = [
-        "svg", "g", "rect", "circle", "ellipse", "line", "polygon", "polyline", "path", "text", "use", "symbol",
+        "svg", "g", "rect", "circle", "ellipse", "line", "polygon", "polyline", "path", "text", "use", "symbol", "image",
     ]
     private static let allowed = instanceTargets.union([
-        "defs", "title", "desc", "tspan", "linearGradient", "radialGradient", "stop",
+        "defs", "title", "desc", "tspan", "linearGradient", "radialGradient", "stop", "pattern",
         "clipPath", "mask", "filter", "feGaussianBlur", "feOffset", "feBlend", "feComposite",
         "feFlood", "feMerge", "feMergeNode", "feColorMatrix", "feDropShadow",
     ])
 
+    private static let fragmentReferences: Set<String> = ["use", "pattern", "linearGradient", "radialGradient"]
+
+    /// Only a validated, self-contained PNG or JPEG is passed to SwiftDraw's image decoder.
+    private static func embeddedRaster(_ href: String) throws -> (href: String, pixels: Int)? {
+        let formats: [(String, UTType)] = [("data:image/png;base64,", .png),
+            ("data:image/jpeg;base64,", .jpeg), ("data:image/jpg;base64,", .jpeg)]
+        guard let (prefix, type) = formats.first(where: { href.hasPrefix($0.0) }),
+              let bytes = Data(base64Encoded: String(href.dropFirst(prefix.count)).filter { !$0.isWhitespace })
+        else { return nil }
+        do {
+            guard let source = try RasterPreview.source(bytes),
+                  CGImageSourceGetType(source) as String? == type.identifier,
+                  CGImageSourceGetCount(source) == 1,
+                  let size = RasterPreview.pixelSize(source, at: 0) else { return nil }
+            try Task.checkCancellation()
+            return (prefix + bytes.base64EncodedString(), Int(size.width) * Int(size.height))
+        } catch is CancellationError { throw CancellationError() }
+        catch { return nil }
+    }
+
     private static func clean(
-        _ element: XMLElement, depth: Int, budget: inout Int, instances: inout [XMLElement],
-        omitted: inout Set<String>
+        _ element: XMLElement, depth: Int, budget: inout Int, references: inout [XMLElement],
+        rasterPixels: inout [String: Int], omitted: inout Set<String>
     ) throws {
         try Task.checkCancellation()
         guard depth <= depthLimit, budget > 0 else { throw WorkspaceError.tooLarge }
         budget -= 1
-        if element.localName == "use" {
+        let kind = element.localName ?? ""
+        if fragmentReferences.contains(kind) || kind == "image" {
             let attributes = element.attributes ?? []
             let reference = attributes.first { $0.name == "href" }
                 ?? attributes.first { $0.name == "xlink:href" }
-            guard let href = reference?.stringValue, localFragment(href) != nil else {
-                if reference != nil { omitted.insert("@href") }
-                omitted.insert("use")
-                element.detach()
-                return
-            }
+            let href = reference?.stringValue
             for attribute in attributes where attribute.localName?.lowercased() == "href" {
                 attribute.detach()
             }
-            let localHref = XMLNode(kind: .attribute)
-            localHref.name = "href"
-            localHref.stringValue = href
-            element.addAttribute(localHref)
-            instances.append(element)
+            var accepted: String?
+            if kind == "image" {
+                if let href, let raster = try embeddedRaster(href) {
+                    accepted = raster.href
+                    rasterPixels[raster.href] = raster.pixels
+                }
+            } else if let href, localFragment(href) != nil {
+                accepted = href
+                references.append(element)
+            }
+            if let accepted {
+                let localHref = XMLNode(kind: .attribute)
+                localHref.name = "href"
+                localHref.stringValue = accepted
+                element.addAttribute(localHref)
+            } else {
+                if reference != nil { omitted.insert("@href") }
+                if kind == "use" || kind == "image" {
+                    omitted.insert(kind)
+                    element.detach()
+                    return
+                }
+            }
         }
         for attribute in element.attributes ?? [] {
             let name = attribute.localName?.lowercased() ?? ""
             let value = attribute.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if name == "href", element.localName == "use" { continue }
+            if attribute.name == "href", fragmentReferences.contains(kind) || kind == "image" { continue }
             guard !name.hasPrefix("on"), name != "href", name != "base",
                   !(name == "style" && value.contains("@")), let urls = localURLs(in: value) else {
                 omitted.insert("@" + name)
@@ -201,7 +236,7 @@ nonisolated enum SVGArtwork {
         }
         for child in element.children ?? [] {
             if let child = child as? XMLElement, let name = child.localName, allowed.contains(name) {
-                try clean(child, depth: depth + 1, budget: &budget, instances: &instances, omitted: &omitted)
+                try clean(child, depth: depth + 1, budget: &budget, references: &references, rasterPixels: &rasterPixels, omitted: &omitted)
             } else if child.kind != .text {
                 if child.kind == .element, let name = child.localName { omitted.insert(name) }
                 child.detach()
@@ -210,7 +245,7 @@ nonisolated enum SVGArtwork {
     }
 
     private static func checkExpansion(
-        of root: XMLElement, instances: [XMLElement], omitted: inout Set<String>
+        of root: XMLElement, references: [XMLElement], rasterPixels: [String: Int], omitted: inout Set<String>
     ) throws {
         var targets = [String: XMLElement]()
         var ambiguous = Set<String>()
@@ -223,22 +258,35 @@ nonisolated enum SVGArtwork {
             }
             pending.append(contentsOf: (element.children ?? []).compactMap { $0 as? XMLElement })
         }
-        for instance in instances {
-            if let href = instance.attribute(forName: "href")?.stringValue, let id = localFragment(href),
-               let target = targets[id], let name = target.localName, target !== root,
-               instanceTargets.contains(name) {
-                continue
+        for reference in references {
+            let kind = reference.localName ?? ""
+            if let href = reference.attribute(forName: "href")?.stringValue, let id = localFragment(href),
+               let target = targets[id], let name = target.localName, target !== root {
+                guard !ambiguous.contains(id) else { throw CocoaError(.fileReadCorruptFile) }
+                let valid = kind == "use" ? instanceTargets.contains(name) :
+                    (kind == "pattern" ? name == "pattern" : ["linearGradient", "radialGradient"].contains(name))
+                if valid { continue }
             }
-            instance.detach()
-            omitted.insert("use")
+            if kind == "use" {
+                reference.detach()
+                omitted.insert(kind)
+            } else {
+                reference.attribute(forName: "href")?.detach()
+                omitted.insert("@href")
+            }
         }
 
         var nodes = nodeLimit
         var bytes = byteLimit
+        var pixels = RasterPreview.pixelLimit
         func visit(_ element: XMLElement, depth: Int, path: Set<String>, inheritedPaints: Set<String>) throws {
             try Task.checkCancellation()
             guard depth <= depthLimit, nodes > 0 else { throw WorkspaceError.tooLarge }
             nodes -= 1
+            if element.localName == "image", let href = element.attribute(forName: "href")?.stringValue {
+                pixels -= rasterPixels[href] ?? 0
+            }
+            guard pixels >= 0 else { throw WorkspaceError.tooLarge }
             let attributes = element.attributes ?? []
             let children = element.children ?? []
             bytes -= (element.name?.utf8.count ?? 0) + attributes.reduce(0) { cost, attribute in
@@ -262,7 +310,7 @@ nonisolated enum SVGArtwork {
                 for id in localURLs(in: attribute.stringValue ?? "")?.fragments ?? [] {
                     guard !ambiguous.contains(id) else { throw CocoaError(.fileReadCorruptFile) }
                     switch targets[id]?.localName {
-                    case "linearGradient", "radialGradient":
+                    case "linearGradient", "radialGradient", "pattern":
                         paints.insert(id)
                     case "clipPath", "mask", "filter":
                         try follow(id)
@@ -275,9 +323,9 @@ nonisolated enum SVGArtwork {
                 try follow(id)
                 try follow(id)
             }
-            if element.localName == "use", let href = element.attribute(forName: "href")?.stringValue,
-               let id = localFragment(href) {
-                try follow(id, paints: paints)
+            if fragmentReferences.contains(element.localName ?? ""),
+               let href = element.attribute(forName: "href")?.stringValue, let id = localFragment(href) {
+                try follow(id, paints: element.localName == "use" ? paints : [])
             }
             for child in children.compactMap({ $0 as? XMLElement }) {
                 try visit(child, depth: depth + 1, path: path, inheritedPaints: paints)

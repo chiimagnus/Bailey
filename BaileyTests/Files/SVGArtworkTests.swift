@@ -579,6 +579,92 @@ final class SVGArtworkTests: XCTestCase {
         XCTAssertLessThan(far.alphaComponent, 0.02)
     }
 
+    func testNativePatternsAndEmbeddedRasterProduceRealPixels() async throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 8, height: 8,
+            bitsPerComponent: 8, bytesPerRow: 0, space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0, green: 1, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let rep = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+        for (type, mime) in [(NSBitmapImageRep.FileType.png, "image/png"), (.jpeg, "image/jpeg")] {
+            let data = try XCTUnwrap(rep.representation(using: type, properties: [:]))
+            let decoded = try XCTUnwrap(NSBitmapImageRep(data: data))
+            let originalColor = try XCTUnwrap(decoded.colorAt(x: 4, y: 4)?.usingColorSpace(.sRGB))
+            XCTAssertGreaterThan(originalColor.greenComponent - max(originalColor.redComponent, originalColor.blueComponent), 0.8)
+            let href = "data:\(mime);base64,\(data.base64EncodedString())"
+            let source = Data("""
+                <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="16">
+                  <defs>
+                    <pattern id="tile" width="8" height="8" patternUnits="userSpaceOnUse">
+                      <rect width="8" height="8" fill="red"/>
+                      <rect x="4" width="4" height="8" fill="blue"/>
+                    </pattern>
+                    <pattern id="inherited" xlink:href="#tile"/>
+                    <image id="embedded" width="8" height="8" href="\(href)"/>
+                  </defs>
+                  <rect width="24" height="16" fill="url(#inherited)"/>
+                  <use href="#embedded" x="24" y="0"/>
+                  <image x="32" y="8" width="8" height="8" xlink:href="\(href)"/>
+                </svg>
+                """.utf8)
+            let vector = try SVGArtwork.parse(source)
+            XCTAssertTrue(vector.omitted.isEmpty, "\(vector.omitted)")
+            let png = try await SVGArtwork.png(vector, options: .init(width: 80, height: 32))
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: png))
+            func color(_ x: Int, _ y: Int) throws -> NSColor {
+                try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            }
+            for x in [4, 20, 36] {
+                let red = try color(x, 8)
+                let blue = try color(x + 8, 8)
+                XCTAssertGreaterThan(red.redComponent - red.blueComponent, 0.7)
+                XCTAssertGreaterThan(blue.blueComponent - blue.redComponent, 0.7)
+            }
+            for (x, y) in [(56, 8), (72, 24)] {
+                let green = try color(x, y)
+                XCTAssertGreaterThan(green.greenComponent - max(green.redComponent, green.blueComponent), 0.6,
+                                     "Embedded \(mime) at \(x),\(y): \(green)")
+            }
+            XCTAssertLessThan(try color(56, 24).alphaComponent, 0.01)
+        }
+    }
+
+    func testPatternReferencesAndEmbeddedRasterAreBoundedAndCannotReadExternalResources() throws {
+        let root = "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"32\" height=\"16\">"
+        func artwork(_ body: String) -> Data { Data((root + body + "</svg>").utf8) }
+        for href in ["https://example.invalid/a.png", "file:///tmp/not-authorized.png",
+                     "../private.png", "data:image/svg+xml;base64,PHN2Zy8+",
+                     "data:image/png;base64,AAAA"] {
+            let cleaned = try SVGArtwork.sanitizedXML(artwork("""
+                <image x="0" width="8" height="8" href="\(href)"/>
+                <pattern id="external" href="\(href)" width="8" height="8"><rect width="8" height="8" fill="red"/></pattern>
+                <rect x="16" width="16" height="16" fill="green"/>
+                """))
+            XCTAssertTrue(cleaned.omitted.contains("image"))
+            XCTAssertTrue(cleaned.omitted.contains("@href"))
+            XCTAssertFalse(cleaned.xml.contains(href))
+        }
+        for cycle in [
+            "<pattern id=\"a\" href=\"#a\" width=\"4\" height=\"4\"/>",
+            "<pattern id=\"a\" href=\"#b\"/><pattern id=\"b\" href=\"#a\"/>",
+            "<pattern id=\"a\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\" fill=\"url(#a)\"/></pattern>",
+        ] {
+            XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork("<defs>\(cycle)</defs><rect width=\"32\" height=\"16\" fill=\"url(#a)\"/>")))
+        }
+        let context = try XCTUnwrap(CGContext(data: nil, width: 4096, height: 4096,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try XCTUnwrap(context.makeImage())
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+        let dataURI = "data:image/png;base64," + png.base64EncodedString()
+        let one = "<image id=\"raster\" width=\"8\" height=\"8\" href=\"\(dataURI)\"/>"
+        XCTAssertTrue(try SVGArtwork.sanitizedXML(artwork(one)).omitted.isEmpty)
+        let repeated = "<defs>\(one)</defs><use href=\"#raster\"/><use href=\"#raster\" x=\"8\"/>"
+        XCTAssertThrowsError(try SVGArtwork.sanitizedXML(artwork(repeated))) { error in
+            guard case WorkspaceError.tooLarge = error else { return XCTFail("Expected decoded pixel budget: \(error)") }
+        }
+    }
+
     func testResearchSamplePlacesRealGeometryAndReportsOmittedElements() async throws {
         guard let root = ProcessInfo.processInfo.environment["BAILEY_SVG_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_SVG_ACCEPTANCE_ROOT to the comprehensive sample directory")
@@ -587,7 +673,7 @@ final class SVGArtworkTests: XCTestCase {
         let bytes = try Data(contentsOf: file)
         let vector = try SVGArtwork.parse(bytes)
         XCTAssertEqual(vector.image.size, CGSize(width: 1400, height: 620))
-        XCTAssertEqual(vector.omitted, ["pattern"])
+        XCTAssertTrue(vector.omitted.isEmpty, "The real research plot now retains its supported grid pattern")
         let raster = try SVGArtwork.render(bytes)
         XCTAssertEqual(raster.pointSize, vector.image.size)
         let bitmap = NSBitmapImageRep(cgImage: raster.image)
