@@ -48,10 +48,13 @@ final class RasterFilePreviewUITests: XCTestCase {
         try before.write(to: file, options: .atomic)
         row.doubleClick()
         XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        XCTAssertEqual(viewer.label, "Image preview")
+        XCTAssertEqual(viewer.value as? String, "Fit")
         viewer.rightClick()
         let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
         XCTAssertTrue(actual.waitForExistence(timeout: 5))
         actual.click()
+        XCTAssertEqual(viewer.value as? String, "100%")
         let left = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.16, dy: 0.5))
         let right = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.84, dy: 0.5))
 
@@ -83,6 +86,12 @@ final class RasterFilePreviewUITests: XCTestCase {
         left.click(forDuration: 0.2, thenDragTo: right)
         left.click(forDuration: 0.2, thenDragTo: right)
         expectPixels(blue: false)
+        // The wheel delta moves content, not the document's viewport origin.
+        viewer.scroll(byDeltaX: -2200, deltaY: 0)
+        expectPixels(blue: true)
+        viewer.scroll(byDeltaX: 2200, deltaY: 0)
+        expectPixels(blue: false)
+        XCTAssertEqual(viewer.value as? String, "100%")
         XCTAssertEqual(try Data(contentsOf: file), before)
     }
 

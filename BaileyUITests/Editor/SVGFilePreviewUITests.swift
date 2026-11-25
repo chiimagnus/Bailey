@@ -142,10 +142,13 @@ final class SVGFilePreviewUITests: XCTestCase {
         row.doubleClick()
         let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 12))
+        XCTAssertEqual(preview.label, "SVG preview")
+        XCTAssertEqual(preview.value as? String, "Fit")
         preview.rightClick()
         let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
         XCTAssertTrue(actual.waitForExistence(timeout: 5))
         actual.click()
+        XCTAssertEqual(preview.value as? String, "100%")
         for _ in 0..<9 {
             preview.rightClick()
             let zoom = WorkspaceUITestSupport.menuItem("Zoom in", in: app)
@@ -169,6 +172,7 @@ final class SVGFilePreviewUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed,
                        "The actual window must resolve quarter-unit vector bands above 400%, not enlarge a cached fit bitmap")
+        XCTAssertEqual(preview.value as? String, pow(1.25, 9).formatted(.percent.precision(.fractionLength(0))))
         let attachment = XCTAttachment(screenshot: window.screenshot())
         attachment.name = "fine-vector-above-400-percent"
         attachment.lifetime = .keepAlways

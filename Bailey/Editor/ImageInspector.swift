@@ -166,6 +166,24 @@ class PreviewScrollView: NSScrollView {
         self.menu = menu
     }
 
+    override func accessibilityLabel() -> String? {
+        isScalableVector
+            ? String(localized: "SVG preview", table: "Editor")
+            : String(localized: "Image preview", table: "Editor")
+    }
+
+    override func accessibilityValue() -> Any? { accessibilityZoomDescription }
+
+    private var accessibilityZoomDescription: String {
+        fitting ? String(localized: "Fit", table: "Editor")
+            : Double(pixelScale).formatted(.percent.precision(.fractionLength(0)))
+    }
+
+    private func notifyAccessibilityZoomChange(from previous: String) {
+        guard window != nil, accessibilityZoomDescription != previous else { return }
+        NSAccessibility.post(element: self, notification: .valueChanged)
+    }
+
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         menu?.items.compactMap { item in
             guard item.target === self, item.action != nil else { return nil }
@@ -264,6 +282,8 @@ class PreviewScrollView: NSScrollView {
     }
 
     @objc func fit() {
+        let previous = accessibilityZoomDescription
+        defer { notifyAccessibilityZoomChange(from: previous) }
         fitting = true
         guard let size = documentView?.frame.size, let scale = fitMagnification else { return }
         updateMaximumMagnification()
@@ -281,12 +301,16 @@ class PreviewScrollView: NSScrollView {
     }
 
     func setZoom(_ scale: CGFloat, at anchor: CGPoint) {
+        let previous = accessibilityZoomDescription
+        defer { notifyAccessibilityZoomChange(from: previous) }
         fitting = false
         minMagnification = minimumManualMagnification
         setMagnification(scale / backingScale, centeredAt: anchor)
     }
 
     override func magnify(with event: NSEvent) {
+        let previous = accessibilityZoomDescription
+        defer { notifyAccessibilityZoomChange(from: previous) }
         if fitting, magnification < minimumManualMagnification, event.magnification <= 0 { return }
         fitting = false
         minMagnification = minimumManualMagnification
