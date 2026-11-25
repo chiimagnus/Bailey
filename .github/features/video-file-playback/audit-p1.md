@@ -48,3 +48,5 @@
 
 - 2026-11-26：`1bf65468` 扩展原生回归，实际挂载 4K HEVC Main10／BT.2020／PQ 测试片并保持同一 AVPlayer、正确画幅及源字节。测试宿主录屏权限检查失败（`/tmp/bailey-hdr-window-retry.log`），改用已有录屏权限的独立 ScreenCaptureKit 采样器，仅捕获专用测试窗口，不修改系统权限。`captureHDRScreenshotCanonicalDisplay` 得到 1280×864、16-bit Extended Display P3；转换至 extendedLinearSRGB，左右两组 16×16 像素均值分别 0.122114 和 1.444777（高于 SDR 白 1），内置 XDR 当前 EDR 3.96755、潜在 16；宿主实验 1/1、最终关联定点 5/5 均通过，零跳过（`/tmp/bailey-remaining-final-tests.log`）。证据 `/tmp/bailey-hdr-window-external-pixels.log`、`/tmp/bailey-physical-acceptance.veEc5t/hdr-pixels.log`。核销可执行 HDR 软件链，不声称已测屏幕出光亮度。后续 VoiceOver 等可执行验收仍 pending。
 - 最终 `1bf65468` 源码及音频窄窗修复：`make build` 退出 0，Debug/Dev 严格验签通过（`/tmp/bailey-remaining-final-build.log`）；未替换正式安装的 App。
+
+- 2026-11-26：`f1df034c` 统一独立及 Markdown 原生播放器空间化配置。Apple `afconvert` 自制 APAC MP4（4 声道、48 kHz、ACN/SN3D）实际解码、音频路由、播放时钟、seek 和原字节通过；默认仅多声道的差异 Red 2 项 3 条断言，Green 6/6，零跳过，含嵌入资源隔离、原生控件、实际选轨 PCM、HDR 和系统通知回归。正式 Debug 构建及严格验签通过。日志 `/tmp/bailey-spatial-{red.6SPuRh3M,green.log,build.log}`。实际空间听感受设备与系统设置影响，未冒称实体空间呈现通过。

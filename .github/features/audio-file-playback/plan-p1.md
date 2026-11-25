@@ -28,6 +28,8 @@
   仅真正可用的播放器控件接管 Space；不以全局事件监听抢终端焦点。
 - 独立音频仅提供播放／暂停、进度、音量／静音。窄窗保持 520 点的同一原生 AVKit 内容宽度，使用系统横向滚动访问控件；不因压缩而隐藏必要操作。
 
+- 独立和 Markdown 内嵌媒体通过 `NativeMedia.makePlayer()` 统一设置 `AVPlayerItem.allowedAudioSpatializationFormats`，使用系统空间音频策略；不使用已弃用的布尔配置，不引入第二套播放器。macOS 26 及以上使用真实四声道 APAC 夹具验证解码、原生播放和定位；实体空间听感另验。
+
 ## 任务
 
 <a id="p1-t1"></a>

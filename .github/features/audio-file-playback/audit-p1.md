@@ -85,3 +85,5 @@
 - 2026-11-25：c7840ffa 本轮针对性宿主 8 项中 7 通过、1 项字幕因 Runner 环境变量缺失跳过；字幕另行正确传入变量后与新增轨道测试 2/2 通过、零跳过。原生 AVKit 音频时间、音量与暂停再次通过。完整隔离 Dev 实际打开媒体，Core Audio 进程输出状态从 0 到 1，默认输出 device 77、transport 为 built-in、设备运行状态从 0 到 1（PID 96766）；这只证明软件输出通路，不证明扬声器的声学听感。窄窗补验遇临时 Sheet，未完成；当前用户在共享桌面操作，不强行继续前台测试。日志 /tmp/bailey-media-final.YMDYjJ、/tmp/bailey-media-tracks-final.AhtZ6j、/tmp/bailey-media-track.TQKMOs/{gui2,compact}.log。
 
 - 2026-11-26：`9f6ab1c6` 核销 F-03，原生五档窗宽宿主与关联回归 3/3；仅在窄窗使用可水平滚动的同一原生浮动播放器，保留宽窗、既有进度及生命周期，无自建控件。完整 App 窄窗交叉验收与 VoiceOver 尚待有效图形会话，任务 pending；不重复计入已经修复的布局缺陷。
+
+- 2026-11-26：`f1df034c` 统一独立及 Markdown 原生播放器空间化配置。Apple `afconvert` 自制 APAC MP4（4 声道、48 kHz、ACN/SN3D）实际解码、音频路由、播放时钟、seek 和原字节通过；默认仅多声道的差异 Red 2 项 3 条断言，Green 6/6，零跳过，含嵌入资源隔离、原生控件、实际选轨 PCM、HDR 和系统通知回归。正式 Debug 构建及严格验签通过。日志 `/tmp/bailey-spatial-{red.6SPuRh3M,green.log,build.log}`。实际空间听感受设备与系统设置影响，未冒称实体空间呈现通过。

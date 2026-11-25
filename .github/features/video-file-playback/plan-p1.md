@@ -29,6 +29,8 @@
   不重写一套悬浮控件状态机、遮罩、计时器或重复速度／音量工具栏。
   非活动标签默认暂停，不启用幽灵后台音频。
 
+- 独立和 Markdown 内嵌媒体通过 `NativeMedia.makePlayer()` 统一设置 `AVPlayerItem.allowedAudioSpatializationFormats`，使用系统空间音频策略；不使用已弃用的布尔配置，不引入第二套播放器。macOS 26 及以上使用真实四声道 APAC 夹具验证解码、原生播放和定位；实体空间听感另验。
+
 ## 任务
 
 <a id="p1-t1"></a>
