@@ -39,6 +39,7 @@ actor PublicationAcknowledgementRunner: RemoteCommandRunner {
 func withPublicationSSHFixture(host: String, backend: SSHWorkspaceBackend, sockets: [String],
                                prefix: String, body: (String) async throws -> Void) async throws {
     let root = "/tmp/\(prefix)-\(UUID().uuidString.lowercased())"
+    print("PUBLICATION_SSH_FIXTURE \(root)")
     var created = false
     var uncertain = false
     func cleanup() async {

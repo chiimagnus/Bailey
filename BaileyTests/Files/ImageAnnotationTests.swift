@@ -42,8 +42,8 @@ final class ImageAnnotationTests: XCTestCase {
         return data as Data
     }
 
-    private func waitFor(_ label: String, _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(10)
+    private func waitFor(_ label: String, timeout: Duration = .seconds(10), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
         while !condition() {
             guard ContinuousClock.now < deadline else {
                 XCTFail(label)
@@ -931,6 +931,113 @@ final class ImageAnnotationTests: XCTestCase {
                            [path.lastPathComponent, sidecar.lastPathComponent])
             a.retireContent()
             b.retireContent()
+        }
+    }
+
+    func testAuthorizedWindowsReviewedSidecarRejectsStaleLayersAndReplacedOriginal() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Requires the authorized isolated Windows SSH host")
+        }
+        let id = UUID().uuidString.prefix(8)
+        let socket = "/tmp/bailey-image-review-a-\(id).sock"
+        let rivalSocket = "/tmp/bailey-image-review-b-\(id).sock"
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
+        let rival = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: rivalSocket), timeout: 25)
+        try await withPublicationSSHFixture(host: host, backend: rival, sockets: [socket, rivalSocket],
+                                            prefix: "bailey-review-image") { root in
+            let path = root + "/标注.png"
+            let sidecar = ImageAnnotationSidecar.path(for: path)
+            let original = try png()
+            let replacement = try png(offset: 1)
+            let version = WorkspaceFileVersion(data: original)
+            try await rival.write(path: path, data: original)
+            let remoteStat = try await backend.stat(path: path)
+            XCTAssertEqual(remoteStat?.size, original.count)
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(atPath: root) }
+            let sentinel = Data("Mac-only sidecar".utf8)
+            try replacement.write(to: URL(fileURLWithPath: path))
+            try sentinel.write(to: URL(fileURLWithPath: sidecar))
+            let first = FileTab(path: path, backend: rival, workspaceIdentity: "ssh:\(host)")
+            let second = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            defer { first.retireContent(); second.retireContent() }
+            first.loadIfNeeded()
+            second.loadIfNeeded()
+            // Loading spans several separately bounded SSH commands. Wait for
+            // their actual terminal state rather than a local-image deadline.
+            try await waitFor("Both remote image documents finished loading", timeout: .seconds(125)) {
+                if case .loading = first.content { return false }
+                if case .loading = second.content { return false }
+                return true
+            }
+            let a = try XCTUnwrap(first.imageAnnotations, first.annotationError ?? "First remote image unavailable")
+            let b = try XCTUnwrap(second.imageAnnotations, second.annotationError ?? "Second remote image unavailable")
+            add(.arrow, to: a, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 60, y: 60))
+            add(.ellipse, to: b, from: CGPoint(x: 30, y: 30), to: CGPoint(x: 100, y: 100))
+            XCTAssertTrue(first.isDirty, "First draft must actually contain an annotation")
+            XCTAssertTrue(second.isDirty, "Second draft must actually contain an annotation")
+            XCTAssertNil(a.sidecarVersion)
+            XCTAssertNil(b.sidecarVersion)
+            let aBytes = try await ImageAnnotationSidecar.encode(a.state, version: version, size: a.size)
+            let bBytes = try await ImageAnnotationSidecar.encode(b.state, version: version, size: b.size)
+            await first.save()
+            XCTAssertFalse(first.isDirty)
+            XCTAssertNil(first.saveError)
+            let initial = try await rival.read(path: sidecar, maxBytes: aBytes.count)
+            XCTAssertEqual(initial, aBytes)
+            await second.save()
+            XCTAssertTrue(second.isDirty)
+            XCTAssertTrue(second.canCompareSaveConflict)
+            let firstReview = try await second.compareSaveConflict()
+            XCTAssertEqual(firstReview.diskVersion, WorkspaceFileVersion(data: aBytes))
+            XCTAssertEqual(firstReview.draftVersion, WorkspaceFileVersion(data: bBytes))
+            XCTAssertTrue(firstReview.review.rows.contains { $0.kind == .added })
+            XCTAssertTrue(firstReview.review.rows.contains { $0.kind == .removed })
+            let unchanged = try await rival.read(path: sidecar, maxBytes: aBytes.count)
+            XCTAssertEqual(unchanged, aBytes)
+            print("REVIEW_IMAGE_LIVE first creation conflict and read-only comparison verified")
+            add(.rectangle, to: a, from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
+            await first.save()
+            XCTAssertFalse(first.isDirty)
+            let newer = try await rival.read(path: sidecar, maxBytes: ImageAnnotationSidecar.maximumBytes)
+            do {
+                try await second.resolveSaveConflict(firstReview)
+                XCTFail("Stale layer approval must be refused")
+            } catch WorkspaceError.changedExternally {}
+            let retained = try await rival.read(path: sidecar, maxBytes: newer.count)
+            XCTAssertEqual(retained, newer)
+            print("REVIEW_IMAGE_LIVE stale layer confirmation rejected")
+            let secondReview = try await second.compareSaveConflict()
+            try await rival.write(path: path, data: replacement)
+            do {
+                try await second.resolveSaveConflict(secondReview)
+                XCTFail("The reviewed sidecar cannot overwrite after the original changes")
+            } catch WorkspaceError.changedExternally {}
+            let protected = try await rival.read(path: sidecar, maxBytes: newer.count)
+            XCTAssertEqual(protected, newer)
+            XCTAssertTrue(second.isDirty)
+            print("REVIEW_IMAGE_LIVE replaced original rejected")
+            try await rival.write(path: path, data: original)
+            let fresh = try await second.compareSaveConflict()
+            try await second.resolveSaveConflict(fresh)
+            XCTAssertFalse(second.isDirty)
+            XCTAssertNil(second.saveError)
+            let saved = try await rival.read(path: sidecar, maxBytes: bBytes.count)
+            XCTAssertEqual(saved, bBytes)
+            let source = try await rival.read(path: path, maxBytes: original.count)
+            XCTAssertEqual(source, original)
+            let reopened = FileTab(path: path, backend: rival, workspaceIdentity: "ssh:\(host)")
+            defer { reopened.retireContent() }
+            reopened.loadIfNeeded()
+            try await waitFor("Remote sidecar finished reopening", timeout: .seconds(125)) {
+                if case .loading = reopened.content { return false }
+                return true
+            }
+            XCTAssertEqual(reopened.imageAnnotations?.state, b.state)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), replacement)
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: sidecar)), sentinel)
+            let remaining = try await rival.list(directory: root)
+            XCTAssertEqual(Set(remaining.map(\.name)), ["标注.png", "标注.png" + ImageAnnotationSidecar.suffix])
         }
     }
 
