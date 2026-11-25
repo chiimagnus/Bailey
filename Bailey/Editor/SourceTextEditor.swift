@@ -254,7 +254,7 @@ struct SourceTextEditor: NSViewRepresentable {
     /// Guarded assignments: the font/color setters restyle the whole
     /// document, and this runs on every SwiftUI render.
     private func apply(to textView: NativeCodeTextView, scrollView: NSScrollView) {
-        textView.isEditable = file.readOnlyReason == nil && file.reloadError == nil
+        textView.isEditable = file.readOnlyReason == nil && file.reloadError == nil && file.delimitedEditTask == nil
         if textView.font != font {
             textView.font = font
             textView.updateGutter()
@@ -445,6 +445,7 @@ struct SourceTextEditor: NSViewRepresentable {
                       replacementString: String?) -> Bool {
             guard view === textView, let file, file.editorCoordinator === self,
                   let replacementString, let storage = view.textStorage else { return true }
+            guard file.delimitedEditTask == nil else { return false }
             pendingReplacement = (range, storage.attributedSubstring(from: range).string,
                                   replacementString, storage.length)
             return true

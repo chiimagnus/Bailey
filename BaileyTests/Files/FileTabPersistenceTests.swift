@@ -2462,6 +2462,99 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(document.state, finalDraft)
     }
 
+    func testGridByteProofTracksAcceptedBaselineWithoutReplacingUnchangedText() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let source = "Name,Value\r\nItem,old\n"
+        let plain = Data(source.utf8)
+        let bom = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(source))
+        try bom.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        file.reopen(using: .utf8)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, source)
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(loaded)
+        let storage = file.nativeTextStorage
+        XCTAssertFalse(file.canEditDelimited(snapshot), "An explicit decode that strips a BOM cannot prove byte equality")
+        XCTAssertEqual(try Data(contentsOf: path), bom)
+
+        try plain.write(to: path, options: .atomic)
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState { file.savedTextPreservesOriginalBytes }
+        XCTAssertTrue(file.canEditDelimited(snapshot))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        try bom.write(to: path, options: .atomic)
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState { !file.savedTextPreservesOriginalBytes }
+        XCTAssertFalse(file.canEditDelimited(snapshot))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+
+        await file.save(as: .utf16LEBOM)
+        XCTAssertNil(file.saveError)
+        XCTAssertTrue(file.canEditDelimited(snapshot))
+        XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.utf16LEBOM.encoded(source))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+    }
+
+    func testAcceptedCSVInputSurvivesDisconnectAndSameMachineReconnect() async throws {
+        for committed in [false, true] {
+            let path = "/fixture/\(UUID().uuidString).csv"
+            let original = "Name,Value\r\nItem,old\n"
+            let bytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+            let backend = EditorWorkspaceFixture(path: path, contents: bytes)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+            try await file.waitForText()
+            defer { file.retireContent() }
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            let grid = DelimitedGrid()
+            grid.controls = file.delimitedTable
+            grid.file = file
+            grid.table.file = file
+            let presentation = try await DelimitedTablePresentation.evaluate(
+                source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = grid
+            window.orderBack(nil)
+            defer { grid.detach(); window.close() }
+            grid.install(snapshot, presentation: presentation)
+            grid.layoutSubtreeIfNeeded()
+            grid.table.onEdit(.init(row: 0, column: 1))
+            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.insertText("中文,值", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            if committed { XCTAssertTrue(window.makeFirstResponder(grid.table)) }
+            XCTAssertEqual(file.text, original)
+            file.rebindWorkspace(to: nil)
+            XCTAssertNil(field.currentEditor(), "Disconnect must end the native field editor before accepting more input")
+            grid.detach()
+            try await waitForFileTabState { !file.hasPendingDelimitedEdit }
+            let expected = "Name,Value\r\nItem,\"中文,值\"\n"
+            XCTAssertEqual(file.text, expected, "Already accepted input must survive a transport transition")
+            XCTAssertTrue(file.isDirty)
+            XCTAssertNotNil(file.readOnlyReason)
+            let unchanged = await backend.data(at: path)
+            XCTAssertEqual(unchanged, bytes)
+            guard file.text == expected else { continue }
+            let live = EditorWorkspaceFixture(path: path, contents: bytes)
+            file.rebindWorkspace(to: live)
+            let saving = Task { await file.save() }
+            try await waitForFileTabState { await live.writingPath == path }
+            await live.finishWrite()
+            await saving.value
+            let saved = await live.data(at: path)
+            XCTAssertEqual(saved, TextFileEncoding.utf8BOM.encoded(expected))
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            XCTAssertTrue(file.documentUndoManager.canUndo)
+        }
+    }
+
     func testCSVGridReconnectConfirmsPublishedRevisionBeforeSavingNewFields() async throws {
         let path = "/fixture/\(UUID().uuidString).csv"
         let original = "Name,Value\r\n中文,000\nOther,\"literal\""

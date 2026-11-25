@@ -188,7 +188,7 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let tableSnapshot = try await table.delimitedSnapshot()
             let tableIndex = try XCTUnwrap(tableSnapshot?.index)
             XCTAssertEqual(table.fileEncoding, .utf8)
-            XCTAssertTrue(tableSnapshot?.preservesOriginalBytes == true)
+            XCTAssertTrue(table.canEditDelimited(try XCTUnwrap(tableSnapshot)))
             XCTAssertEqual(tableIndex.fields(in: tableIndex.records[1]).last?.value(in: table.text as NSString),
                            "多行\r\n数据")
             let rasterURL = try XCTUnwrap(URL(string: "wide.png"))

@@ -194,7 +194,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             try await file.waitForText()
             let loaded = try await file.delimitedSnapshot()
             let first = try XCTUnwrap(loaded)
-            XCTAssertTrue(first.preservesOriginalBytes, encoding.name)
+            XCTAssertTrue(file.canEditDelimited(first), encoding.name)
             XCTAssertEqual(first.index.separator, .tab)
             let record = first.index.records[1]
             let field = try XCTUnwrap(first.index.fields(in: record).first)
@@ -203,7 +203,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             XCTAssertNotEqual(file.textPreviewRequestID, first.requestID)
             let edited = try await file.delimitedSnapshot()
             let next = try XCTUnwrap(edited)
-            XCTAssertTrue(next.preservesOriginalBytes)
+            XCTAssertTrue(file.canEditDelimited(next))
             XCTAssertEqual(next.index.fields(in: next.index.records[1]).first?.source.length, 7)
             XCTAssertEqual(try Data(contentsOf: path), bytes, "Indexing and editing in memory must not publish bytes")
         }

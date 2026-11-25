@@ -544,7 +544,7 @@ final class FinderDeliveryIntegrationTests: XCTestCase {
         try await tableFile.waitForText()
         XCTAssertEqual(remote.filePreviewMode(for: tableTab), .preview)
         let tableSnapshot = try await tableFile.delimitedSnapshot()
-        XCTAssertTrue(tableSnapshot?.preservesOriginalBytes == true)
+        XCTAssertTrue(tableFile.canEditDelimited(try XCTUnwrap(tableSnapshot)))
         XCTAssertEqual(try Data(contentsOf: tableURL), tableBytes)
     }
 

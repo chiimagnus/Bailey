@@ -117,11 +117,6 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         return .success(EncodedSave(bytes: bytes, version: WorkspaceFileVersion(data: bytes)))
     }
 
-    @concurrent func preserves(_ version: WorkspaceFileVersion, for text: String) async -> Bool {
-        guard let bytes = encoded(text), !Task.isCancelled else { return false }
-        return version.matches(bytes)
-    }
-
     func decoded(_ bytes: Data) -> String? {
         guard bytes.starts(with: signature) else { return nil }
         let contents = signature.isEmpty ? bytes : Data(bytes.dropFirst(signature.count))

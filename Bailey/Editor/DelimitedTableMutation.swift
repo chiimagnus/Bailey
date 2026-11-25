@@ -5,6 +5,7 @@ import Foundation
 nonisolated enum DelimitedTableMutation {
     enum Change: Sendable {
         case cells([DelimitedTablePresentation.Cell: String])
+        case paste(String, rows: [Int], origin: DelimitedTablePresentation.Cell, columns: Int)
         case insertRows(before: Int, count: Int)
         case deleteRows(Set<Int>)
     }
@@ -31,6 +32,24 @@ nonisolated enum DelimitedTableMutation {
         let text = source as NSString
         let replacements: [Replacement]
         switch change {
+        case .paste(let clipboardText, let rows, let origin, let columns):
+            // Freeze physical row order when the user invokes Paste, rather
+            // than consulting a possibly unmounted or resorted table later.
+            let clipboard = try await DelimitedTableIndex.parse(clipboardText, preferred: .tab, selected: .tab)
+            guard clipboard.issue == nil, !clipboard.records.isEmpty,
+                  rows.indices.contains(origin.row), (0..<columns).contains(origin.column),
+                  clipboard.records.count <= rows.count - origin.row,
+                  clipboard.columnCount <= columns - origin.column else { throw Failure.invalidSelection }
+            let clipboardSource = clipboardText as NSString
+            var changes: [DelimitedTablePresentation.Cell: String] = [:]
+            for (row, record) in clipboard.records.enumerated() {
+                try Task.checkCancellation()
+                let physical = rows[origin.row + row]
+                for (column, field) in clipboard.fields(in: record).enumerated() {
+                    changes[.init(row: physical, column: origin.column + column)] = field.value(in: clipboardSource)
+                }
+            }
+            return try await prepare(.cells(changes), source: source, index: index, encoding: encoding)
         case .cells(let cells):
             var edits: [Replacement] = []
             for (cell, value) in cells {

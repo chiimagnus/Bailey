@@ -49,7 +49,7 @@ enum PaneContent: nonisolated Identifiable {
 
     @MainActor var isDirty: Bool {
         switch self {
-        case .file(let file): file.isDirty
+        case .file(let file): file.isDirty || file.hasPendingDelimitedEdit
         case .diff(let diff): diff.isDirty
         case .session, .browser: false
         }

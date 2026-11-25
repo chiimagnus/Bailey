@@ -581,6 +581,16 @@
         }
       }
     },
+    "The current encoding cannot preserve the original bytes. Edit the source instead.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前编码无法保留原始字节，请改用源码编辑。"
+          }
+        }
+      }
+    },
     "Could not edit the table.": {
       "localizations": {
         "zh-Hans": {

@@ -116,6 +116,8 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var savedText = ""
     /// Actual source bytes, not a re-encoding of decoded or normalized text.
     @ObservationIgnored private var savedSourceVersion: WorkspaceFileVersion?
+    /// Proof about the accepted disk baseline, not the derived table index.
+    private(set) var savedTextPreservesOriginalBytes = false
     @ObservationIgnored private var pendingTextPublication: (
         snapshot: TextFileEncoding.Publication, delta: [UInt16: Int]?
     )?
@@ -148,6 +150,8 @@ final class FileTab: nonisolated Identifiable {
     /// A true close or accepted replacement releases the old native document,
     /// independently of any cached SwiftUI/AppKit view lifetime.
     func retireNativeEditor() {
+        delimitedEditingGrid?.cancelEditing()
+        delimitedEditTask?.cancel()
         svgPreview = nil
         retireImageAnnotations()
         originalImageTask?.cancel()
@@ -165,6 +169,7 @@ final class FileTab: nonisolated Identifiable {
         nativeTextStorage.setAttributedString(NSAttributedString(string: ""))
         savedText = ""
         savedSourceVersion = nil
+        savedTextPreservesOriginalBytes = false
         pendingTextPublication = nil
         pendingStorageChange = false
         nativeCodeUnitDelta = [:]
@@ -337,6 +342,9 @@ final class FileTab: nonisolated Identifiable {
     let workspaceIdentity: String?
     private var previewOverride: Bool?
     @ObservationIgnored lazy var delimitedTable = DelimitedTableControls()
+    private weak var delimitedEditingGrid: DelimitedGrid?
+    private(set) var delimitedEditTask: Task<Bool, Never>?
+    var hasPendingDelimitedEdit: Bool { delimitedEditingGrid != nil || delimitedEditTask != nil }
     private var textEditRevision: UInt = 0
     @ObservationIgnored var markdownReadingOffset: Int?
     @ObservationIgnored var markdownReadingViewportY: CGFloat = 0
@@ -380,13 +388,13 @@ final class FileTab: nonisolated Identifiable {
     var textPreviewRequestID: String { "\(fileContentRevision)-\(textEditRevision)" }
     private(set) var previewAssetRevision: UInt = 0
 
+    private var documentEditRevision: String { "\(id)-\(reloadRevision)-\(textEditRevision)" }
+
     struct DelimitedSnapshot {
         let index: DelimitedTableIndex
         let source: String
         let requestID: String
-        let preservesOriginalBytes: Bool
-        let encoding: TextFileEncoding
-        let version: WorkspaceFileVersion?
+        let documentRevision: String
     }
 
     func delimitedSnapshot(using selected: DelimitedTableIndex.Separator? = nil) async throws -> DelimitedSnapshot? {
@@ -395,38 +403,104 @@ final class FileTab: nonisolated Identifiable {
         let request = textPreviewRequestID
         let source = text
         let index = try await DelimitedTableIndex.parse(source, preferred: preferred, selected: selected)
-        guard request == textPreviewRequestID else { return nil }
-        let version = savedSourceVersion
-        let encoding = fileEncoding
-        let preservesOriginal: Bool
-        if let version, index.issue == nil, !index.needsSeparatorChoice {
-            preservesOriginal = await encoding.preserves(version, for: savedText)
-        } else {
-            preservesOriginal = false
-        }
         try Task.checkCancellation()
         guard request == textPreviewRequestID else { return nil }
         return DelimitedSnapshot(index: index, source: source, requestID: request,
-                                 preservesOriginalBytes: preservesOriginal && encoding == fileEncoding
-                                    && version == savedSourceVersion, encoding: encoding, version: version)
+                                 documentRevision: documentEditRevision)
+    }
+
+    private func matchesDelimitedDocument(_ snapshot: DelimitedSnapshot) -> Bool {
+        guard !isRetired, case .text = content else { return false }
+        return snapshot.documentRevision == documentEditRevision && savedTextPreservesOriginalBytes &&
+            snapshot.index.issue == nil && !snapshot.index.needsSeparatorChoice
     }
 
     func canEditDelimited(_ snapshot: DelimitedSnapshot) -> Bool {
-        !isRetired && canPreviewFile && previewKind == .delimited &&
+        matchesDelimitedDocument(snapshot) && previewKind == .delimited &&
             readOnlyReason == nil && reloadError == nil && !fileMutationHeld &&
-            snapshot.preservesOriginalBytes && snapshot.requestID == textPreviewRequestID &&
-            snapshot.encoding == fileEncoding && snapshot.version == savedSourceVersion
+            snapshot.requestID == textPreviewRequestID
+    }
+
+    func beginDelimitedEditing(in grid: DelimitedGrid, using snapshot: DelimitedSnapshot) -> Bool {
+        guard !hasPendingDelimitedEdit, canEditDelimited(snapshot) else { return false }
+        delimitedEditingGrid = grid
+        invalidateReload()
+        return true
+    }
+
+    func endDelimitedEditing(in grid: DelimitedGrid) {
+        if delimitedEditingGrid === grid { delimitedEditingGrid = nil }
+    }
+
+    func commitDelimitedEditing(in grid: DelimitedGrid, change: DelimitedTableMutation.Change,
+                                using snapshot: DelimitedSnapshot, selecting cell: DelimitedTablePresentation.Cell) {
+        guard delimitedEditingGrid === grid else { return }
+        delimitedEditingGrid = nil
+        enqueueDelimitedEdit(change, using: snapshot, selecting: cell)
+    }
+
+    func submitDelimitedEdit(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot,
+                             selecting cell: DelimitedTablePresentation.Cell?) {
+        guard !hasPendingDelimitedEdit, canEditDelimited(snapshot) else { return }
+        enqueueDelimitedEdit(change, using: snapshot, selecting: cell)
+    }
+
+    /// An accepted native input belongs to the document, not to the view or
+    /// connection. Transport loss prevents new input and writes, but cannot
+    /// discard an input transaction already accepted by this document.
+    private func enqueueDelimitedEdit(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot,
+                                      selecting cell: DelimitedTablePresentation.Cell?) {
+        let message = if case .paste = change {
+            String(localized: "Could not paste into the table.", table: "Editor")
+        } else {
+            String(localized: "Could not edit the table.", table: "Editor")
+        }
+        invalidateReload()
+        delimitedEditTask = Task { [weak self] in
+            guard let self else { return false }
+            defer { delimitedEditTask = nil }
+            do {
+                delimitedTable.pendingCell = cell
+                try await applyAcceptedDelimitedEdit(change, using: snapshot)
+                if documentEditRevision == snapshot.documentRevision { delimitedTable.pendingCell = nil }
+                if case .insertRows = change, snapshot.index.records.isEmpty {
+                    delimitedTable.configuration.header = false
+                }
+                delimitedTable.editError = nil
+                return true
+            } catch {
+                delimitedTable.pendingCell = nil
+                if !Task.isCancelled { delimitedTable.editError = message }
+                return false
+            }
+        }
+    }
+
+    private func finishPendingDelimitedEdit() async -> Bool {
+        delimitedEditingGrid?.finishEditing()
+        if let task = delimitedEditTask, !(await task.value) {
+            saveError = delimitedTable.editError
+            return false
+        }
+        return !hasPendingDelimitedEdit
     }
 
     /// Prepare and check encoding away from the main actor, then commit one
     /// transaction to the very same NSTextStorage and UndoManager as typing.
     func editDelimited(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot) async throws {
         guard canEditDelimited(snapshot) else { throw WorkspaceError.changedExternally }
+        try await applyAcceptedDelimitedEdit(change, using: snapshot)
+    }
+
+    private func applyAcceptedDelimitedEdit(_ change: DelimitedTableMutation.Change,
+                                            using snapshot: DelimitedSnapshot) async throws {
+        guard matchesDelimitedDocument(snapshot) else { throw WorkspaceError.changedExternally }
+        let encoding = fileEncoding
         let replacements = try await DelimitedTableMutation.prepare(
-            change, source: snapshot.source, index: snapshot.index, encoding: snapshot.encoding
+            change, source: snapshot.source, index: snapshot.index, encoding: encoding
         )
         try Task.checkCancellation()
-        guard canEditDelimited(snapshot) else { throw WorkspaceError.changedExternally }
+        guard matchesDelimitedDocument(snapshot), encoding == fileEncoding else { throw WorkspaceError.changedExternally }
         guard !replacements.isEmpty else { return }
         if let editor = editorCoordinator?.scrollView?.documentView as? NativeCodeTextView {
             guard !editor.hasMarkedText() else { throw WorkspaceError.changedExternally }
@@ -481,6 +555,7 @@ final class FileTab: nonisolated Identifiable {
 
     func setFilePreview(_ enabled: Bool) {
         guard previewKind != nil else { return }
+        delimitedEditingGrid?.finishEditing()
         switch content {
         case .text, .loading: previewOverride = enabled
         case .image, .media, .unavailable: break
@@ -637,11 +712,12 @@ final class FileTab: nonisolated Identifiable {
         let decodingFailed: Bool
         let sourceVersion: WorkspaceFileVersion?
         var annotations: ImageAnnotationSidecar.Loaded? = nil
+        var textPreservesOriginalBytes = false
     }
 
     func reopen(using encoding: TextFileEncoding?) {
         guard !isMediaFile else { return }
-        guard !isDirty, !isSaving, !fileMutationHeld, pendingTextPublication == nil else {
+        guard !isDirty, !isSaving, !hasPendingDelimitedEdit, !fileMutationHeld, pendingTextPublication == nil else {
             saveError = String(localized: "Save or discard edits before changing encoding.", table: "Editor")
             return
         }
@@ -789,6 +865,7 @@ final class FileTab: nonisolated Identifiable {
         targetGeneration &+= 1
         invalidateReload()
         readOnlyReason = reason
+        if isReadOnly { delimitedEditingGrid?.finishEditing() }
         if let reason, case .loading = content { content = .unavailable(reason) }
     }
 
@@ -889,7 +966,9 @@ final class FileTab: nonisolated Identifiable {
 
     /// A focus transition schedules one save, never a timed file-write loop.
     func autoSaveOnFocusLoss() {
-        guard isDirty, !autoSaveSuspendedForClose, !openingSavedHTML else { return }
+        guard !autoSaveSuspendedForClose, !openingSavedHTML else { return }
+        delimitedEditingGrid?.finishEditing()
+        guard isDirty || hasPendingDelimitedEdit else { return }
         if lastSaveTask != nil {
             saveLatestRequested = true
         } else {
@@ -899,6 +978,8 @@ final class FileTab: nonisolated Identifiable {
 
     /// Hold the original save target stable until all queued writes have completed.
     func beginFileMutation() async -> Bool {
+        guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
+        if hasPendingDelimitedEdit, !(await finishPendingDelimitedEdit()) { return false }
         guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
         fileMutationHeld = true
         await lastSaveTask?.value
@@ -925,6 +1006,7 @@ final class FileTab: nonisolated Identifiable {
         invalidateReload()
         let reason = String(localized: "This file was deleted. Copy your edits before closing.", table: "Editor")
         readOnlyReason = reason
+        delimitedEditingGrid?.finishEditing()
         if case .media = content {
             retireMedia()
             content = .unavailable(reason)
@@ -970,6 +1052,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func writeCurrentContent(as encoding: TextFileEncoding? = nil) async {
+        if hasPendingDelimitedEdit, !(await finishPendingDelimitedEdit()) { return }
         if case .image = content, encoding == nil {
             await writeCurrentAnnotations()
         } else {
@@ -1268,6 +1351,8 @@ final class FileTab: nonisolated Identifiable {
         if wasExplicit { preferredEncoding = encoding }
         savedText = written
         savedSourceVersion = version
+        // The acknowledged bytes were produced by strict prepareSave.
+        savedTextPreservesOriginalBytes = true
         // Edits landing during I/O still belong to the next revision.
         if let deltaAtWrite, nativeCodeUnitDelta != nil {
             for (unit, count) in deltaAtWrite {
@@ -1290,7 +1375,8 @@ final class FileTab: nonisolated Identifiable {
         // While the file's machine is unreachable a read can only fail, and
         // replacing the content with "Could not read file" would throw away
         // what the user was looking at. The banner already says why.
-        guard !isRetired, readOnlyReason == nil, !isDirty, pendingTextPublication == nil else { return }
+        guard !isRetired, readOnlyReason == nil, !isDirty, !hasPendingDelimitedEdit,
+              pendingTextPublication == nil else { return }
         hasReadDemand = true
         refreshPending = false
         reloadTask?.cancel()
@@ -1379,6 +1465,7 @@ final class FileTab: nonisolated Identifiable {
             if self.matches(loaded) {
                 // Reload can accept changed bytes without changing decoded text.
                 self.savedSourceVersion = loaded.sourceVersion
+                self.savedTextPreservesOriginalBytes = loaded.textPreservesOriginalBytes
                 self.installImageAnnotations(loaded)
                 return
             }
@@ -1416,6 +1503,7 @@ final class FileTab: nonisolated Identifiable {
             self.preparedLineWidths = prepared
             self.savedText = loaded.text
             self.savedSourceVersion = loaded.sourceVersion
+            self.savedTextPreservesOriginalBytes = loaded.textPreservesOriginalBytes
             self.installImageAnnotations(loaded)
             self.nativeCodeUnitDelta = [:]
             self.reloadRevision &+= 1
@@ -1597,7 +1685,8 @@ final class FileTab: nonisolated Identifiable {
             case .success(let document):
                 return LoadedContent(content: .text, text: document.text,
                                      encoding: document.encoding, decodingFailed: false,
-                                     sourceVersion: WorkspaceFileVersion(data: data))
+                                     sourceVersion: WorkspaceFileVersion(data: data),
+                                     textPreservesOriginalBytes: document.encoding.encoded(document.text) == data)
             case .failure(let failure) where !invalidRaster:
                 let unknownTextEncoding: Bool
                 if case .binary = failure { unknownTextEncoding = false }
@@ -1675,6 +1764,8 @@ struct FileViewerView: View {
                     }
                     if let error = file.saveError {
                         errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
+                    } else if let error = file.delimitedTable.editError {
+                        errorBar(error)
                     }
                     if (file.showsFilePreview || rendersOnlyPreview), let kind = file.previewKind {
                         switch kind {
@@ -1811,7 +1902,7 @@ struct FileViewerView: View {
                     Button(encoding.name) { file.reopen(using: encoding) }
                 }
             }
-            .disabled(file.isDirty)
+            .disabled(file.isDirty || file.hasPendingDelimitedEdit)
             if case .text = file.content {
                 Menu(String(localized: "Save with Encoding", table: "Editor")) {
                     ForEach(TextFileEncoding.choices, id: \.self) { encoding in

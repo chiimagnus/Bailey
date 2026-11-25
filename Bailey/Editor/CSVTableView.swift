@@ -131,27 +131,23 @@ struct CSVTableView: View {
         VStack(spacing: 0) {
             if let parsed, parsed.0 == request, let active {
                 let snapshot = parsed.1
-                if let error = controls.editError { notice(error) }
                 if let issue = snapshot.index.issue {
                     notice(String(localized: "Table issue at line \(issue.line), column \(issue.column).", table: "Editor"))
                 } else if snapshot.index.columnCount > DelimitedGrid.maximumColumns {
                     notice(String(localized: "This table has too many columns to display.", table: "Editor"))
                 } else if snapshot.index.needsSeparatorChoice {
                     notice(String(localized: "Choose the table delimiter.", table: "Editor"))
+                } else if !file.savedTextPreservesOriginalBytes {
+                    notice(String(localized: "The current encoding cannot preserve the original bytes. Edit the source instead.", table: "Editor"))
                 }
                 if snapshot.index.records.isEmpty {
                     Spacer()
                     Text("No table rows to display.", tableName: "Editor").foregroundStyle(.secondary)
                     if file.canEditDelimited(snapshot) {
                         Button(String(localized: "Insert Row", table: "Editor")) {
-                            Task {
-                                do {
-                                    try await file.editDelimited(.insertRows(before: 0, count: 1), using: snapshot)
-                                    controls.configuration.header = false
-                                    controls.editError = nil
-                                } catch { controls.editError = String(localized: "Could not edit the table.", table: "Editor") }
-                            }
+                            file.submitDelimitedEdit(.insertRows(before: 0, count: 1), using: snapshot, selecting: nil)
                         }
+                        .disabled(file.hasPendingDelimitedEdit)
                     }
                     Spacer()
                 } else {
@@ -291,7 +287,6 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     private var presentation: DelimitedTablePresentation?
     private var source: NSString = ""
     private var copyTask: Task<Void, Never>?
-    private var editTask: Task<Void, Never>?
     private struct CellEdit {
         let field: NSTextField
         let cell: DelimitedTablePresentation.Cell
@@ -333,10 +328,13 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { finishEditing() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     func detach() {
-        cancelEditing()
-        editTask?.cancel()
-        editTask = nil
+        finishEditing()
         copyTask?.cancel()
         copyTask = nil
         table.clearSelection()
@@ -353,7 +351,7 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
 
     func install(_ snapshot: FileTab.DelimitedSnapshot, presentation: DelimitedTablePresentation) {
         guard presentation.id != self.presentation?.id else { return }
-        cancelEditing()
+        finishEditing()
         let oldHeader = self.presentation?.header
         let rebuildColumns = self.snapshot?.requestID != snapshot.requestID ||
             self.snapshot?.index.separator != snapshot.index.separator || oldHeader != presentation.header
@@ -457,12 +455,13 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     }
 
     private func beginEditing(_ cell: DelimitedTablePresentation.Cell) {
-        guard editing == nil, editTask == nil, let file, let snapshot,
+        guard editing == nil, let file, !file.hasPendingDelimitedEdit, let snapshot,
               file.canEditDelimited(snapshot), let physical = physicalCell(cell),
               let window else { return }
         table.select(cell, reveal: true)
         table.layoutSubtreeIfNeeded()
-        guard let field = table.view(atColumn: cell.column, row: cell.row, makeIfNecessary: true) as? NSTextField else { return }
+        guard let field = table.view(atColumn: cell.column, row: cell.row, makeIfNecessary: true) as? NSTextField,
+              file.beginDelimitedEditing(in: self, using: snapshot) else { return }
         let original = value(cell)
         editing = CellEdit(field: field, cell: cell, snapshot: snapshot, physical: physical, original: original)
         field.stringValue = original
@@ -483,9 +482,17 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         table.style(edit.field, cell: edit.cell)
     }
 
-    private func cancelEditing() {
+    func finishEditing() {
+        guard let edit = editing, let window = edit.field.window else { return }
+        // Commit through AppKit's actual field editor, without activating a
+        // different Dock group or retaining an offscreen editable field.
+        window.endEditing(for: edit.field)
+    }
+
+    func cancelEditing() {
         guard let edit = editing else { return }
         editing = nil
+        file?.endDelimitedEditing(in: self)
         edit.field.abortEditing()
         restoreField(edit)
     }
@@ -505,7 +512,10 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         let movement = notification.userInfo?["NSTextMovement"] as? Int
         editing = nil
         restoreField(edit)
-        guard movement != NSCancelTextMovement else { return }
+        guard movement != NSCancelTextMovement else {
+            file?.endDelimitedEditing(in: self)
+            return
+        }
         var destination = edit.physical
         if movement == NSTabTextMovement || movement == NSBacktabTextMovement,
            let next = table.adjacent(to: edit.cell, backwards: movement == NSBacktabTextMovement),
@@ -513,67 +523,35 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
             destination = physical
         }
         if value.utf16.elementsEqual(edit.original.utf16) {
+            file?.endDelimitedEditing(in: self)
             if let row = presentation?.rows.firstIndex(of: destination.row) {
                 table.select(.init(row: row, column: destination.column), reveal: true)
             }
             return
         }
-        apply(.cells([edit.physical: value]), snapshot: edit.snapshot, selecting: destination)
+        file?.commitDelimitedEditing(in: self, change: .cells([edit.physical: value]),
+                                     using: edit.snapshot, selecting: destination)
     }
 
     private func apply(_ change: DelimitedTableMutation.Change, snapshot: FileTab.DelimitedSnapshot,
                        selecting cell: DelimitedTablePresentation.Cell?) {
-        guard let file, let controls, editTask == nil, file.canEditDelimited(snapshot) else { return }
-        editTask = Task { [weak self] in
-            // Preserve the physical record, not its previous filtered/sorted display row.
-            controls.pendingCell = cell
-            defer { self?.editTask = nil }
-            do {
-                try await file.editDelimited(change, using: snapshot)
-                if file.textPreviewRequestID == snapshot.requestID { controls.pendingCell = nil }
-                controls.editError = nil
-            } catch {
-                controls.pendingCell = nil
-                if !Task.isCancelled { controls.editError = String(localized: "Could not edit the table.", table: "Editor") }
-            }
-        }
+        file?.submitDelimitedEdit(change, using: snapshot, selecting: cell)
     }
 
-    // Read a rectangular TSV clipboard using the same parser as file data.
-    // Literal text (including formulas) is never evaluated or reformatted.
+    /// Read a rectangular TSV clipboard using the same parser as file data.
+    /// Literal text (including formulas) is never evaluated or reformatted.
     func paste(_ text: String) {
-        guard editTask == nil, let file, let controls, let snapshot, let presentation,
-              let origin = table.selection.caret, file.canEditDelimited(snapshot) else { return }
-        editTask = Task { [weak self] in
-            defer { self?.editTask = nil }
-            do {
-                let clipboard = try await DelimitedTableIndex.parse(text, preferred: .tab, selected: .tab)
-                guard clipboard.issue == nil, !clipboard.records.isEmpty,
-                      clipboard.records.count <= presentation.rows.count - origin.row,
-                      clipboard.columnCount <= min(snapshot.index.columnCount, Self.maximumColumns) - origin.column,
-                      self?.presentation?.id == presentation.id else { throw DelimitedTableMutation.Failure.invalidSelection }
-                let source = text as NSString
-                var changes: [DelimitedTablePresentation.Cell: String] = [:]
-                for (row, record) in clipboard.records.enumerated() {
-                    try Task.checkCancellation()
-                    let physical = presentation.rows[origin.row + row]
-                    for (column, field) in clipboard.fields(in: record).enumerated() {
-                        changes[.init(row: physical, column: origin.column + column)] = field.value(in: source)
-                    }
-                }
-                controls.pendingCell = .init(row: presentation.rows[origin.row], column: origin.column)
-                try await file.editDelimited(.cells(changes), using: snapshot)
-                if file.textPreviewRequestID == snapshot.requestID { controls.pendingCell = nil }
-                controls.editError = nil
-            } catch {
-                controls.pendingCell = nil
-                if !Task.isCancelled { controls.editError = String(localized: "Could not paste into the table.", table: "Editor") }
-            }
-        }
+        guard let file, !file.hasPendingDelimitedEdit, let snapshot, let presentation,
+              let origin = table.selection.caret, presentation.rows.indices.contains(origin.row),
+              file.canEditDelimited(snapshot) else { return }
+        file.submitDelimitedEdit(.paste(text, rows: presentation.rows, origin: origin,
+                                        columns: min(snapshot.index.columnCount, Self.maximumColumns)),
+                                 using: snapshot,
+                                 selecting: .init(row: presentation.rows[origin.row], column: origin.column))
     }
 
     private func recordMenu() -> NSMenu? {
-        guard let file, let snapshot, file.canEditDelimited(snapshot), editTask == nil else { return nil }
+        guard let file, let snapshot, file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit else { return nil }
         let menu = NSMenu()
         func item(_ title: String, action: Selector) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")

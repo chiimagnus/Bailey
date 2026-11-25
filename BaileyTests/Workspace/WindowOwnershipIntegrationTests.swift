@@ -1402,6 +1402,67 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         }
     }
 
+    func testNativeGridInputParticipatesInWorkspaceSaveAndMoveProtection() async throws {
+        for move in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let source = root.appendingPathComponent("source.csv")
+            let target = root.appendingPathComponent("target.csv")
+            let original = "Name,Value\r\nItem,old\n"
+            let expected = "Name,Value\r\nItem,新值🧪\n"
+            try Data(original.utf8).write(to: source)
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            manager.openFile(source.path)
+            guard case .file(let file)? = manager.selectedProject?.focusedContent else {
+                return XCTFail("Expected focused CSV file")
+            }
+            try await file.waitForText()
+            let controls = file.delimitedTable
+            let grid = DelimitedGrid()
+            grid.controls = controls
+            grid.file = file
+            grid.table.file = file
+            let window = NSWindow(contentRect: CGRect(x: -900, y: -900, width: 500, height: 260),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = grid
+            window.orderBack(nil)
+            defer { grid.detach(); window.close() }
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            let presentation = try await DelimitedTablePresentation.evaluate(
+                source: snapshot.source, index: snapshot.index, configuration: controls.configuration)
+            grid.install(snapshot, presentation: presentation)
+            grid.layoutSubtreeIfNeeded()
+            grid.table.onEdit(.init(row: 0, column: 1))
+            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.insertText("新值🧪", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            XCTAssertEqual(file.text, original)
+            XCTAssertTrue(manager.canSaveSelectedFile, "Cmd-S must be enabled while the native field owns input")
+            XCTAssertEqual(try Data(contentsOf: source), Data(original.utf8))
+            if move {
+                try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+                    XCTAssertEqual(try Data(contentsOf: source), Data(expected.utf8))
+                    try await LocalWorkspaceBackend.shared.rename(from: source.path, to: target.path)
+                    workspaceApplication.fileRenamed(from: source.path, to: target.path, workspace: nil)
+                }
+                XCTAssertEqual(file.path, target.path)
+                XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+            } else {
+                manager.saveSelectedFile()
+            }
+            let destination = move ? target : source
+            try await wait { (try? Data(contentsOf: destination)) == Data(expected.utf8) && !file.isDirty && !file.hasPendingDelimitedEdit }
+            XCTAssertFalse(manager.canSaveSelectedFile)
+            XCTAssertTrue(file.documentUndoManager.canUndo)
+            XCTAssertEqual(try Data(contentsOf: destination), Data(expected.utf8))
+        }
+    }
+
     func testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers() async throws {
         let previousSnapshots = SessionStore.load()
         let previousHistories = TerminalHistoryStore.load()
