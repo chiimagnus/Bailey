@@ -95,6 +95,8 @@
 
 ## 验证与未覆盖
 
+- 2026-11-25：真实 34 帧 GIF 用例的像素探针只采中央 280 像素。夹具蓝色方块横跨 320 点画布的 x=27…305，在 Retina 下不少帧会完全离开采样带；实际用例在已确认动画菜单正确后取样为 nil。在整幅截图中以蓝色强度区分精灵与边框，仍要求真实运动、暂停、恢复与原文件字节。同期合成双窗 GIF 暂停和原像素平移 GUI 用例均通过。Red：`/private/tmp/bailey-xc-recheck.hgaWdv/focused.log`；Green：`b17e156f`，签名后的隔离 Bailey Dev 实机 1 项通过、0 跳过（31.407 s），见同目录 `gif.log`。原文件字节未变。
+
 - 2026-11-24：冻结提交 `05696bb5` 的 Debug、Release、UI Test Target 构建及签名通过；真实样本、授权 Windows SSH、隔离 APFS 卷与完整宿主 `make test` 1366/1366 通过，0 失败、0 跳过，2007.208 秒。日志：`/tmp/bailey-seven-20261124-svg-final-full.log`。仅核销宿主证据，完整 App GUI 与实体设备条件仍保留原阻塞，不据此改为 Go。
 
 - 本轮独立／Markdown GIF 完整 UI 测试已改为验证实际系统动画偏好，禁用时核对静态首帧及显式恢复入口；新增和改动的 UI 源码 Swift 6 类型检查、实际 `make build:ui` 及 Dev 严格验签均退出 0。F-06 仍 Open，需独立 GUI 会话中的实际运行证据；不修改用户系统偏好或冒称两种设置均经完整 App 实测。

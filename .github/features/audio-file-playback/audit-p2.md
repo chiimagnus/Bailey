@@ -19,13 +19,13 @@
 
 - 任务：`P2-T1`
 - 严重级别：`Medium`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Editor/NativeMediaFileUITests.swift:126`
 - 摘要：`云端首次点击波形实际 seek 和 AX 数值均通过，后续 press thenDragTo 产生 pathType=1 的触摸事件、buttonType=0；录像指针没有移动`
 - 风险：`测试未向 macOS 波形交付真实鼠标拖动，无法核验连续 seek 与后续缩放`
 - 预期修复：`使用项目已验证的 macOS click(forDuration:thenDragTo:) 鼠标拖拽 API，保留实际 AVPlayer 和 AX 时间断言`
 - 验证：`独立云端完整 App 原用例点击、实际鼠标拖拽、缩放、切换及原字节；不放宽时间断言`
-- 解决证据：`e05e3732：45534516603 事件归档及录像证实 press thenDragTo 发送触摸而非鼠标拖动；首次点击9秒及AX断言已通过。改用仓库已验证的 macOS click(forDuration:thenDragTo:) API，保持 seek/缩放断言；UI测试目标及严格验签通过，完整鼠标拖动用例需含新提交的隔离图形会话复验，当前本机被用户使用、远端未包含提交。按已批准环境延期，不声称实际拖动已通过。`
+- 解决证据：`e05e3732：本机独占图形会话实际 testWaveformSeeksTheSameNativeTimelineAndZoomsItsVisibleInterval 通过（29.510s），macOS 鼠标真实拖动、seek/缩放与 AX 时间断言未放宽；NativeMediaFileUITests 5/5（149.935s），无跳过，含真实内嵌字幕与系统全屏。/tmp/bailey-seven-local-ui-e05e3732-20261125.log。`
 
 
 ## 发现 F-01

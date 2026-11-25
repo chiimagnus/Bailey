@@ -15,6 +15,19 @@
 
 ## 发现项
 
+## 发现 F-06
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Resources/Info.plist:35-69`
+- 摘要：`系统混合文件投递缺少音频和视频 UTI 注册`
+- 风险：`Finder、LaunchServices 无法向 Bailey 投递音视频，七格式系统投递直接失败`
+- 预期修复：`注册 public.audio/public.movie 为 Viewer，继续使用 Alternate/None rank；不扩大未知数据类型`
+- 验证：`AppIdentityTests Red→Green；真实七格式混合 NSWorkspace.open 和双窗恢复`
+- 解决证据：`8613305c：AppIdentity 20/20，音频/视频使用 Viewer 和现有 rank；原混合 NSWorkspace 投递 kLSAppDoesNotClaimTypeErr，修复后真实七格式投递成功、七个标签存在且可进入切换验证（12:17:17 xcresult）。完整双窗冷恢复仍独立核销，不以此替代 F-04。`
+
+
 ## 发现 F-05
 
 - 任务：`P1-T1`
@@ -32,13 +45,13 @@
 
 - 任务：`P1-T1`
 - 严重级别：`Medium`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Editor/CSVPreviewUITests.swift:85`
 - 摘要：`完整 App 缺少七种真实复杂格式在双窗口内交叉切换、系统重新投递和正常 Quit 冷恢复的组合回归`
 - 风险：`各格式单独 GUI 和百次宿主切换不能证明跨进程系统菜单、窗口目标、实际 Dock 与会话恢复的集成行为`
 - 预期修复：`补一条独立 Dev 完整 App E2E，使用真实综合样本、同名文件双窗及系统文件投递，逐格式检查实际预览、媒体位置及源字节；正常退出重启验证所有文件标签默认模式和归属`
 - 验证：`make build:ui；独占图形会话中 make test:ui ONLY_TESTING=BaileyUITests/FilePreviewWorkspaceUITests`
-- 解决证据：`d84a65a6：新增完整 App 七格式双窗口、系统投递及正常退出重启用例；443168ca 的 make build:ui 成功，退出 0。实际独占 GUI 会话尚未运行，日志 /tmp/bailey-seven-ui-443168ca-20261125.log。 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
+- 解决证据：`aad56a6b：完整 App 用唯一窗口 ID 核验同名 CSV 归属。Mac Apple Development 签名 Bailey Dev 以真实七格式样本运行，通过系统投递、双窗多轮切换、视频位置、HTML 并排、正常退出冷启动及全部源字节校验。1 项通过 0 跳过，279.037 s。日志 /private/tmp/bailey-xc-recheck.hgaWdv/focused.log。`
 
 
 ## 发现 F-03
@@ -81,6 +94,12 @@
 
 
 ## 验证与未覆盖
+
+- 最新验收：真实七格式的双窗归属、系统重新投递、正常退出与冷启动、关闭标签及源字节检查通过（`aad56a6b`、`2edc31c1`）。物理设备及完整 App 长会话和全部交叉组合仍未核销。
+
+- 2026-11-25：XCTest 授权后，`92b35562` 七格式综合实际通过系统投递、切换、视频定位和 HTML 并排，正常退出后双窗已出现，但索引查询把两个文件所有者读成同一窗口 ID。读取本次隔离会话的持久化快照确认 primary 七个标签、secondary 两个标签分属两个窗口。F-04 尚未核销；需使用稳定窗口查询验证每个窗口的实际标签。不把快照正确等同于 GUI 通过。Red 日志：`/private/tmp/bailey-xc-recheck.hgaWdv/matrix.log`。
+
+- 2026-11-25：针对现有七格式阶段补验本机可执行场景。`f2f35ff3` 在隔离 Dev 清空并保存 CSV 末格，冷启动仍有空行；`b029b857` 在双窗口经 Launch Services 重新投递，取回原窗口及原视频 4.013 秒画面，继续播放正常。`839186db` 通过实际文件模型、TextKit 和 WKWebView 的编辑后滚动与重挂验证。`92b35562` 在隔离 Dev 验证图像标注工具键位、文字焦点、窄栏、保存和原图保护。此轮宿主／UI 目标成功构建，但未执行 XCTest，也未重跑完整七格式双窗冷启动链；F‑04 仍延期，不以分项结果代替。
 
 - 2026-11-25 11:24：新增本地提交 `9b62d36c`、`0a808796`、`e05e3732`。真实CSV编码发布竞态、CSV标准原生Undo/Redo与图片画布焦点/撤销已Red→Green，另修正音频GUI鼠标拖拽测试。最终专项4/4、受影响宿主243/243、零失败零跳过（429.771秒），含真实Windows CSV/旁车、栅格和科研SVG百次、300次滤镜、120秒GIF、工作区及输入法。结果包 `Test-Bailey-2026.11.25_11-14-05-+0800.xcresult`；`make build:ui`、`make build:release` 和Dev/Release严格验签均退出0，Release 57 MiB。日志 `/tmp/bailey-seven-native-undo-and-encoding-green-v2-20261125.log`、`/tmp/bailey-seven-undo-affected-20261125.log`、`/tmp/bailey-seven-native-undo-ui-build-20261125.log`、`/tmp/bailey-seven-native-undo-release-20261125.log`。这是前版完整1422项之后的受影响验证，不冒称新提交再次完成全量或完整GUI。新提交未推送；本机用户使用桌面，完整GUI/实体设备及非协作CAS仍按已批准延期。
 

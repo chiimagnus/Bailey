@@ -15,17 +15,53 @@
 
 ## 发现项
 
+### 画笔与工具单键（P2-T1）
+
+隔离 Bailey Dev 打开科研图 `demo-image.png` 的副本，从真实右键菜单进入标注。修改前有九个工具、无画笔，按 R 后仍为选择；
+修改后十个字母逐项命中，点矩形按钮后能直接按 P。一次拖动保存 24 个中间点；单击落点后逐次撤销、重做并保存，旁车中的笔画分别消失、原样恢复。
+文字框输入 `arp` 并点「添加文字」，旁车保留原文，随后 P 重新选中画笔。按键测试未切换系统输入法。
+原图 SHA-256 为 `31ca370149356115bca7222abbd1917f5ed561f2539ee53205fd561f371f5368`，始终未改。
+`92b35562` 的最终 490pt 窗口中，图面宽 253.5pt，十项按钮按 8＋2 自动换行；实测全部 24×24pt 命中区在图面内，帮助含名称与字母。
+窄栏点击裁剪后按 R 选中矩形。Dev、UI 测试目标及宿主测试目标均构建通过，新增 XCTest 已编译，未启动 XCTest 或实际切换中文输入法。
+构建日志、原图／旁车与完整窗口截图见 `/tmp/bailey-image-keys.zhzd2N/`。上述普通 Dev 操作不冒充 XCTest、跨物理显示器或完整阶段验收。
+
+## 发现 F-09
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/ImageAnnotationSidecar.swift:164; Bailey/Files/FileTreeModel.swift:862,1134; Bailey/Workspace/LocalWorkspaceBackend.swift:432`
+- 摘要：`用户新要求：选中已标注原图也应能同时处理其相邻标注文件，不再只允许操作整目录`
+- 风险：`现有拒绝策略阻断正常原图管理；两个目录项不具备通用原子事务`
+- 预期修复：`复用原有文件操作/保护/路径映射；真实原图与有效 JSON 同一逻辑操作，保护已打开的两文件，结果报告每项实际完成；任何部分失败保留可识别恢复状态，不覆盖/错删`
+- 验证：`本机、实际 Windows SSH 的复制/移动/改名/删除，侧车冲突、损坏/孤立/链接、两者多选、脏稿/跨窗与部分失败、实际目标原字节及重开`
+- 解决证据：`b9a34512：真实 Windows SSH 与本机 APFS 跨卷复制/移动/改名/删除，选中两项去重、目标旁车冲突拒绝、原字节、重开标注核对；FileTree/WindowOwnership 相关回归，182/182 无跳过。完整 App 实际重命名同时迁移两文件和打开标签，原图/旁车字节及图层恢复通过。两个目录项不承诺原子事务，异常报告可恢复路径，非协作 CAS 另见 F-02。`
+
+
+## 发现 F-08
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/ImageInspector.swift:493; FileViewerView.swift:1193`
+- 摘要：`图片导出仅能创建新文件，无法在明确确认后使用已接受的目标版本覆盖已有图片`
+- 风险：`用户无法更新已有导出文件；不能以无条件覆盖解决`
+- 预期修复：`沿现有导出 Sheet 先确定目标真实版本、显式确认，再复用共享条件发布；禁止覆盖原图、其别名以及已有标注配对文件`
+- 验证：`实际本机目标无覆盖、确认取消、已接受版本覆盖、确认后变更/删除/链接替换、原图及旁车不变、权限及取消；真实保存选择器`
+- 解决证据：`b9a34512：本机真实已有目标、版本确认、确认后原子替换冲突、原图及硬链接、配对目标拒绝；导出取消测试通过。完整 App ImageAnnotationUITests 实际系统 Replace、应用版本确认、取消及确认发布通过（12:17:17 xcresult，99.983s）；严格第三方 CAS 另见 F-02。`
+
+
 ## 发现 F-07
 
 - 任务：`P2-T1`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`Bailey/Editor/ImageInspector.swift:357-359,555-610; BaileyUITests/Editor/ImageAnnotationUITests.swift:39-49`
 - 摘要：`RasterScrollView 仅声明 UndoManager，未提供标准 undo:/redo: responder 动作；既有完整 GUI 连续撤销/重做只核对最终图层，不能排除两条动作均无效`
 - 风险：`可能与实际 CSV 键盘撤销失败同根；图片标注 I11 的真实键盘撤销、回到 clean 和重做缺少有效证据`
 - 预期修复：`补足真实挂载原生 selector 的 Red，按实际结果在图片 viewport responder 使用同一标注文档 UndoManager；UI 检查每个动作的中间像素`
 - 验证：`ImageAnnotationTests/testMountedCanvasUsesImageCoordinatesAtDifferentZoomAndNativeUndo；实际隔离完整 App 撤销像素消失、重做恢复、保存及导出原字节`
-- 解决证据：`0a808796：挂载画布 Red 缺标准原生命令；接入 selector 后实际 firstResponder 回退到 NSWindow，追加诊断复现；明确共用预览滚动视图接受原生焦点后，同一标注文档 0.1×/1×/4× 三次真实拖动、重挂载、三次撤销 clean、三次重做 dirty、失焦不消费命令、原图/旁车不改写全部通过。GUI 改为逐次核对可见箭头像素。243/243 真实相关宿主、UI 构建与 Release 严格验签通过；新 GUI 尚未执行，用户使用桌面且远端未包含新提交，按已批准环境延期。`
+- 解决证据：`0a808796：原生画布焦点和标准撤销/重做；本机独占隔离 Bailey Dev 实际 testNativeGestureUndoSaveReopenAndCancelExportLeaveOriginalUntouched 通过（49.863s），逐次核对可见箭头消失/恢复、原字节、保存重开及导出。/tmp/bailey-seven-local-ui-e05e3732-20261125.log。`
 
 
 ## 发现 F-06
@@ -107,6 +143,8 @@
 
 
 ## 验证与未覆盖
+
+- 最新本机隔离 App：键盘撤销／重做、保存、重新打开、复制和确认覆盖导出通过；`92b35562` 的十个单键、真实画笔轨迹与窄窗换行另有真实 App 操作证据。仍需中文 IME、物理设备及严格非协作写入边界验证。
 
 - d52ba2b3：同机独立 ImageIO／Core Image 6组×80次证实无活跃对象时 RSS 可保留大量可回收页。真实 6000×4000 标注300轮开闭 66.10 秒、滤镜 P95 6.26 ms；每轮 FileTab／标注文档／图像对象弱引用全部释放，RSS 248.31→985.56 MiB、峰值1210.72 MiB；实际物理记账82.31→99.80 MiB，暖机至末段最大差5.42 MiB。日志 `/tmp/bailey-image-memory-native-20261124.log`、`/tmp/bailey-seven-annotations-green-20261124.log`。不宣称完整 App、任意时长或所有设备无泄漏。
 - 冻结72006d6b完整回归1403/1404通过；唯一Windows Rebase前置建目录25秒超时，同项原阈值独立复验通过（30.235秒）。新标注专项18/18及新增时序单项均通过；本轮新代码未重新完成全量测试。

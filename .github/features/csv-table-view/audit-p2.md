@@ -15,17 +15,30 @@
 
 ## 发现项
 
+## 发现 F-08
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`DelimitedTableMutation.prepare; DelimitedTablePresentation.copy`
+- 摘要：`清空单列末字段或复制末尾空单格时，裸空字符串无法表示独立记录；混合 CR/LF 在清空后也可能融合。`
+- 风险：`表格编辑或复制粘贴会少一行；外观无异常时仍可能留下旧目标值。`
+- 预期修复：`仅在裸空字段会丢失记录时显式引用，在真实原文及剪贴板往返中保留行列数。`
+- 验证：`DelimitedTablePresentationTests：真实 FileTab 源码、Undo、重读磁盘；复制选区后实际粘贴并检查目标内容。`
+- 解决证据：`f2f35ff3：本机 macOS 27.3 / Xcode 27.2，原生验证器链接实际 Dev 产品；16 种首尾换行组合（无/CR/LF/CRLF）、已引用字段、多列尾格、连续与非连续删行、末尾空单格及多行复制粘贴等 23 组，旧版失败 10 组，修复后 23/23。核对实际 FileTab、Undo 恢复 clean、Redo、保存读回原字节及重解析行数。修复后 dylib SHA-256 867ead5253f75dd2c4915d3f38b3883ceed2c44917b6c77f795d18b935238839；证据 /tmp/bailey-csv-shape.OrF8Dm/{red,green,typecheck}.log，签名构建 /tmp/bailey-image-keys.zhzd2N/build-dev.log。三项新增宿主用例类型检查通过；make test 实际停在 Xcode 枚举，2m27s 定点中止，未执行，不能记为通过。同版签名 Dev 隔离真实 GUI：双击进入单列末格、通过 AX 清空、文件菜单保存，元数据和实际磁盘字节 `4e616d650d0a2222` 核对一致；正常退出并在新进程恢复同一测试会话，仍有一个空单元格及相同磁盘字节。证据 /tmp/bailey-csv-shape.OrF8Dm/gui/{one,field,after-clear,after-save,cold-reopen}.json。后台热键投递未生效，不计为键盘验收；未改写系统剪贴板，复制粘贴由原生验证器覆盖。完整中文 IME、跨窗编辑冲突、GUI 性能及 F-02 原边界不变。`
+
+
 ## 发现 F-07
 
 - 任务：`P2-T1`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`Bailey/Editor/CSVTableView.swift:641-651; BaileyUITests/Editor/CSVPreviewUITests.swift:221`
 - 摘要：`完整 App 原生表格获得键盘焦点且已成功编辑，但系统 undo:/redo: 菜单禁用，实际 Cmd-Z 未撤销`
 - 风险：`原生共享 UndoManager 中的网格编辑无法由系统菜单或键盘访问`
 - 预期修复：`在 DelimitedNativeTable 原生 responder 提供 undo:/redo: 标准命令与验证，复用 FileTab 唯一 UndoManager；不注册第二套快捷键或全局路由`
 - 验证：`真实挂载原生表格，以系统 undo:/redo: selector 执行和校验菜单启用、源字节与原生 Undo；完整 App 复跑 CSV 跨模式快捷键用例`
-- 解决证据：`9b62d36c：45534516603 实际 CSV 键盘聚焦仍禁用系统菜单；本机原生表格 Red 3 断言失败。标准 undo:/redo: selector 与 NSMenuItemValidation 接入 FileTab 唯一 UndoManager，真实挂载原生字段编辑、撤销回原文 clean、重做 dirty、焦点转至另一字段后不消费撤销通过。243/243 宿主、UI目标和Release严格验签通过。修复后独占完整 App 仍未执行；当前远端未包含本地新提交，且用户正在使用本机图形会话。按用户已批准的环境延期保持 Deferred，不能以宿主替代完整快捷键验收。`
+- 解决证据：`9b62d36c：原生表格 Undo/Redo selector 与验证复用 FileTab 的 UndoManager；修复后本机隔离 Bailey Dev 完整 App 真正排序编辑、Cmd-Z/Redo、源码编辑、BOM/混合行尾精确保存及重开通过，CSV 6/6（161.775s），无跳过。/tmp/bailey-seven-local-ui-e05e3732-20261125.log。`
 
 
 ## 发现 F-06
@@ -71,13 +84,13 @@
 
 - 任务：`P2-T1`
 - 严重级别：`Medium`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Editor/CSVPreviewUITests.swift`
 - 摘要：`现有完整App CSV用例只读、排序、查找和模式路由，缺少可写网格与原生源码交错Undo/Redo及精确写盘的实际快捷键验收`
 - 风险：`宿主虽证明共享TextKit和字节模型，不能证明完整App的首响应者及系统快捷键把编辑命令交给同一个文档`
 - 预期修复：`在现有CSV E2E补一条真实排序后编辑、源码编辑、跨模式Undo/Redo、保存与重开；复用现有隔离测试设施`
 - 验证：`实际make build:ui及独占图形会话make test:ui ONLY_TESTING=BaileyUITests/CSVPreviewUITests/testSortedGridAndSourceShareNativeUndoAndExactSave`
-- 解决证据：`已补充真实排序后编辑、源码切换、跨模式 Undo/Redo、BOM 与混合换行完整保存、重开；Swift 6／macOS 15.6 部署目标 typecheck 通过（/tmp/bailey-seven-new-editor-ui-typecheck-20261125.log）。隔离云端 45534516603 已实际执行：网格已成功编辑且键盘聚焦，但 Undo/Redo 菜单禁用、Cmd-Z 断言失败，见 F-07。修复后的完整 GUI 仍待复验；宿主与构建结果不替代 E2E。`
+- 解决证据：`本机隔离 Bailey Dev 实际 testSortedGridAndSourceShareNativeUndoAndExactSave 通过（36.333s）；CSV 6/6，无跳过。真实排序、编辑、跨模式快捷键、保存和重开，非宿主替代。/tmp/bailey-seven-local-ui-e05e3732-20261125.log。`
 
 
 ## 发现 F-02
@@ -107,6 +120,8 @@
 
 
 ## 验证与未覆盖
+
+- 最新本机 CSV XCTest 6/6，无跳过，覆盖跨窗命令归属、原生 Undo／Redo 与精确保存；`f2f35ff3` 实机冷重开保留末尾空记录。中文 IME、GUI 性能和第三方并发写入边界仍待核销。
 
 - 冻结 `3f87e2e8` 完整 Host 1406/1406、无跳过，Dev 严格验签通过；不覆盖之后的保存恢复改动。
 - 100001 条记录、100 次编辑与 Undo／Redo、UTF-8 BOM、混合行尾、宽 Unicode 及未改字段的原字节证据见 todo.toml；实体输入、跨窗口及真实完整 App 组合仍未验收。
