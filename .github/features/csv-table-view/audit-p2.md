@@ -6,16 +6,29 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交暴露连续快捷键焦点缺陷 F-10（已修复且宿主回归通过，待完整 App 连续快捷键复验）；按 VS Code 方案补齐共享保存冲突处理；严格非协作 CAS 边界、P1 无障碍及现有设备门禁独立保留。
+- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交暴露连续快捷键焦点缺陷 F-10（已修复且宿主回归通过，待完整 App 连续快捷键复验）；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH 复验留用户指定的第二项；严格非协作 CAS 边界、P1 无障碍及现有设备门禁独立保留。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
-  保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
+  保存冲突统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
 ## 任务与改动
 
 - **P2-T1 对原文源区间执行原生编辑、复用唯一 Undo**：FileTab、原生表格与 TextKit 共用文档和 Undo；100001 条记录、100 次编辑／切换和 Undo／Redo 有宿主证据，实际中文 IME 提交及十万行 GUI 编辑已验，807fbdee 的连续快捷键仍待完整 App 复验。
-- **P2-T2 严格往返编码、条件保存和外部冲突**：FileTab、DiffTab、TextFileEncoding、WorkspaceFileVersion 共用原字节版本和提交确认；重连保留在途快照，不盲目重复写入。
+- **P2-T2 严格往返编码、条件保存和外部冲突**：FileTab、DiffTab、TextFileEncoding、WorkspaceFileVersion 共用原字节版本和提交确认；重连保留在途快照，不盲目重复写入；e471b25b 共用只读原生 Diff 和一次性版本绑定覆盖，未改变条件发布后端。
 
 ## 发现项
+
+## 发现 F-11
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/FileViewerView.swift:1251; Bailey/Git/DiffViewerView.swift:1144; Bailey/UI/Components/WorkspaceChrome.swift:196`
+- 摘要：`已检测外部冲突但仅显示错误文本，用户无法在同一未保存文档中比较并确认当前磁盘版本`
+- 风险：`被迫借助外部工具恢复旧文件或关闭草稿；简单强制覆盖会绕过已接受版本及目标保护`
+- 预期修复：`共享冲突快照、现有只读原生 Diff、一次性版本与草稿绑定的显式覆盖；继续走原保存队列和有条件写入，复用旁车保护`
+- 验证：`FileTabPersistenceTests、NativeDiffTabTests、ImageAnnotationTests，真实本机双窗口及获授权 SSH，比较/取消/确认/过期版本与草稿/恢复原字节`
+- 解决证据：`e471b25b：共享冲突快照绑定文档、目标代次、路径、原基线、磁盘与草稿 SHA-256；原生 Diff 比较/取消/显式条件覆盖、比较过期拒绝、编码意图、保存中继续编辑、独立进程迟到写入恢复、Git index/HEAD、图片旁车与底图已验。最终新增宿主8/8，真实 GUI 2/2，均零跳过；受影响宿主回归127通过、2项图像样本配置跳过、0失败；最终 make build 和严格验签通过。日志 /tmp/bailey-save-conflict-final-test.SPReHd、/tmp/bailey-save-conflict-final-ui.n6xMZo、/tmp/bailey-save-conflict-regress.1nc20Y、/tmp/bailey-save-conflict-final-build.STnTDk。仅核销本轮实现和本机验收；用户明确第二步远端定点复验暂不做，F-02 严格非协作 CAS Deferred 不变。`
+
 
 ## 发现 F-10
 
