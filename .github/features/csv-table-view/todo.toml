@@ -35,7 +35,7 @@ note = "e471b25b 共享原生 Diff 比较、取消、版本绑定显式覆盖、
 
 [[tasks]]
 id = "P3-T1"
-title = "Markdown 式主题与自适应列宽"
+title = "原型式主题与自适应列宽"
 status = "pending"
 plan = "plan-p3.md#p3-t1"
 commit = ""
