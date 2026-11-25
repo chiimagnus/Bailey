@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：原生编辑、Undo 与有版本保存已有真实字节证据；断线保存恢复专项已通过（443168ca），完整宿主回归待验。非协作外部写入的最终校验／发布竞态与完整 App 验收未核销。
+- **依据**：原生编辑、Undo、有版本保存及断线草稿恢复已通过真实宿主回归；新发现的编辑事务归属与基线证明已修复（8488bb8a），最新全量复验进行中。非协作 CAS 与独占完整 App 按用户决定延期，不替代原验收。
 
 ## 任务与改动
 
@@ -15,17 +15,56 @@
 
 ## 发现项
 
+## 发现 F-05
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/FileViewerView.swift:397,419,1330; Bailey/Editor/CSVTableView.swift:77`
+- 摘要：`保存更新原字节版本但原文代次不变，已挂载网格的索引和旧基线证明被捆绑，普通保存及显式编码保存后无法再次开始编辑`
+- 风险：`保存后网格仍显示正确内容但无法继续修改；进行中的正常保存也可能使已接受编辑失效`
+- 预期修复：`在接受文件加载或确认发布时建立严格往返证明，网格索引只绑定唯一原文编辑代次；修改前读取当前编码与基线证明，准备后验证仍有效`
+- 验证：`同一真实 AppKit 网格在普通保存及UTF16显式保存后无需重新挂载即可编辑、保存实际字节；回归多编码、并发保存、陈旧索引和未往返编码拒绝`
+- 解决证据：`8488bb8a：原字节往返证明属于实际接受的载入或发布基线，原文索引仅绑定文档与展示请求代次。真实挂载同一 AppKit 网格在普通保存与 UTF16 显式保存后继续编辑；Red 4 断言失败，11 项表格展示专项及 26 项联合专项通过。显式 UTF8 解码丢 BOM 时拒绝网格编辑，同文无 BOM 刷新恢复、外部恢复 BOM 再拒绝、显式 UTF16 保存后恢复，保留同一 NSTextStorage 和实际字节；最终专项 3/3。日志 /tmp/bailey-grid-baseline-red-20261125.log、/tmp/bailey-grid-baseline-green-20261125.log、/tmp/bailey-grid-disconnect-green-20261125.log、/tmp/bailey-grid-workspace-green-20261125.log。严格非协作 CAS 为 F-02 独立延期事项。`
+
+
+## 发现 F-04
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/CSVTableView.swift:336,502,524,544; Bailey/Editor/FileViewerView.swift:891,936; Bailey/Workspace/PaneTab.swift:66`
+- 摘要：`原生单格提交及粘贴的后台事务由短生命周期网格持有，网格卸载会取消已接受的编辑；尚未结束的原生字段编辑不进入文件保存及关闭保护`
+- 风险：`立即切源码/切标签/保存/关闭可能丢失已输入数据，未提交字段可被干净刷新覆盖`
+- 预期修复：`提交事务由 FileTab 持有；在原生编辑结束、卸载、保存、关闭与文件变更边界完成/等待该事务，保持现有源区间、版本校验与唯一 Undo，不创建第二份表格正文`
+- 验证：`真实挂载 NSTextField / 系统 field editor 中文组合提交、同步拆除、粘贴与立即保存、项目真实关闭；检查原始磁盘、Undo、源/表格单一所有者及失效事务`
+- 解决证据：`8488bb8a：原生字段／粘贴已接受事务迁移至 FileTab，切换、卸载、关闭、保存、改名先提交或等待；断线立即结束字段编辑，已接受内容在同一文档保留，重连写入仍校验旧版本。原始 Red 2 项／12 断言失败，断线 Red 1 项／4 断言失败，Cmd-S 与断线字段结束 Red 2 项／3 断言失败；26 项联合专项全过，最终工作区保存与实际改名、断线和编码证明 3/3 通过。真实 AppKit NSTextField/field editor、BOM/混合行尾、Unicode、唯一 Undo 和真实本机写盘；断线时序使用可控 backend，非真实连接。日志 /tmp/bailey-grid-owner-red-20261125.log、/tmp/bailey-grid-owner-green-20261125.log、/tmp/bailey-grid-disconnect-red-20261125.log、/tmp/bailey-grid-disconnect-green-20261125.log、/tmp/bailey-grid-workspace-red-20261125.log、/tmp/bailey-grid-workspace-green-20261125.log。完整 App GUI 单独延期，最新完整宿主回归进行中。`
+
+
+## 发现 F-03
+
+- 任务：`P2-T1`
+- 严重级别：`Medium`
+- 状态：`Deferred`
+- 位置：`BaileyUITests/Editor/CSVPreviewUITests.swift`
+- 摘要：`现有完整App CSV用例只读、排序、查找和模式路由，缺少可写网格与原生源码交错Undo/Redo及精确写盘的实际快捷键验收`
+- 风险：`宿主虽证明共享TextKit和字节模型，不能证明完整App的首响应者及系统快捷键把编辑命令交给同一个文档`
+- 预期修复：`在现有CSV E2E补一条真实排序后编辑、源码编辑、跨模式Undo/Redo、保存与重开；复用现有隔离测试设施`
+- 验证：`实际make build:ui及独占图形会话make test:ui ONLY_TESTING=BaileyUITests/CSVPreviewUITests/testSortedGridAndSourceShareNativeUndoAndExactSave`
+- 解决证据：`已补充真实排序后编辑、源码切换、跨模式 Undo/Redo、BOM 与混合换行完整保存、重开；Swift 6／macOS 15.6 部署目标 typecheck 通过（/tmp/bailey-seven-new-editor-ui-typecheck-20261125.log）。未运行完整 App， 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
+
+
 ## 发现 F-02
 
 - 任务：`P2-T2`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`Bailey/Workspace/LocalWorkspaceBackend.swift:279; Bailey/Remote/RemoteCommands.swift:331-336`
 - 摘要：`非协作第三方可在最终版本检查与替换之间发布新版本；本机与 Windows 已实测`
 - 风险：`并发外部内容可能被静默覆盖`
 - 预期修复：`必须在共享写入所有者使用经实际验证的条件原子提交，或明确批准且保留各冲突版本的替代产品契约；不新增 CSV 保存器、不重复校验冒充 CAS`
 - 验证：`受控屏障注入真实外部写入；核对磁盘、双方完整字节、保存错误、原生草稿、重新打开及共享旁车路径`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`尚无满足契约的实现。2026-11-25 独立真实 APFS RENAME_SWAP 与 Windows NTFS ReplaceFileW 实验各覆盖原地写／原子替换、替换后第三方再写四种时序；交换/备份虽可保留已捕获字节，却已经发布旧草稿而非原子拒绝。两平台再实测独立进程在交换前持有旧文件描述符/共享句柄：交换、核对及删除备份后，第三方写入和 flush 成功，但原路径保持 Bailey 草稿、第三方字节随旧对象关闭消失。不能把交换、事后复核或暂存备份当成任意第三方的严格 CAS。测试仅操作并清理专用临时文件；日志 /tmp/bailey-save-exchange-late-writer-20261125.log、/tmp/bailey-save-replacefile-late-writer-20261125.log。保持 Open，不降低产品契约。 补充：实际 macOS 27.3 APFS 专用临时文件上，F_SETLEASE（106）写租约，O_RDONLY/O_RDWR、预期打开数 0/1/2 均返回 EPERM；Apple XNU vfs_subr.c 的 allow_setlease 检查 com.apple.private.vfs.file-leases 私有 entitlement，vnode_setlease 拒绝未获授权进程。故不能以租约私有权限方案作为普通签名应用跨本机／SSH 的保证；保留 Open，不改内核或权限。 用户 2026-11-25 明确允许暂时阻塞平台不可实现的事项、继续其余任务。严格 CAS 延期，不降低现有版本保护，也不把此项称为已实现；待平台能力或经批准的可恢复冲突契约明确后再补验。`
 
 
 ## 发现 F-01
@@ -46,5 +85,5 @@
 - 冻结 `3f87e2e8` 完整 Host 1406/1406、无跳过，Dev 严格验签通过；不覆盖之后的保存恢复改动。
 - 100001 条记录、100 次编辑与 Undo／Redo、UTF-8 BOM、混合行尾、宽 Unicode 及未改字段的原字节证据见 todo.toml；实体输入、跨窗口及真实完整 App 组合仍未验收。
 - C12×C13：本机和 Windows 实测非协作第三方可在最后校验与 rename 之间写入。协作锁、RENAME_SWAP、File.Replace 都不能证明任意第三方的严格 CAS；不将其视作通过。
-- 现行保存机制见 `docs/features/editor.md` 与 `docs/features/ssh.md`；待提交与最终复验。
+- 现行保存机制见 `docs/features/editor.md` 与 `docs/features/ssh.md`；27c2b254 已提交新增跨模式编辑、Undo/Redo 及实际编码字节 UI 验收，make build:ui 和 Dev 严格验签通过；未执行新增完整 App，F-03 延期；F-02 严格非协作 CAS 独立延期。
 

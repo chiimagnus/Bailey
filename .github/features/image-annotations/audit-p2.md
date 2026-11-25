@@ -19,13 +19,13 @@
 
 - 任务：`P2-T2`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`Bailey/Editor/ImageAnnotationDrawing.swift:251`
 - 摘要：`滤镜采样依赖裁剪或视口外像素，当前在裁剪后的 CGContext 上钳位，导致区域预览/导出与全图合成不同`
 - 风险：`模糊/马赛克边缘产生错误颜色或透明度，多个叠加滤镜误差传播`
 - 预期修复：`共用原坐标和输出变换，向后查询 Core Image 所需采样区域，再按原顺序合成，最后裁剪实际输出；限定工作缓冲像素预算`
 - 验证：`实际全图、区域预览、导出逐像素对照，单独及连续滤镜、不同倍率与边界；真实大图长测`
-- 解决证据：`2026-11-25：原坐标采样、反向 ROI 与裁剪候选实现；独立同源像素对照 200 组、11270 次比较零误差超限，8 次 Debug 重复均通过。联合 Host 的首次 sRGB 0.17× 全图像素异常（36 个失败断言）仍待复现和归因，不关闭发现。300 次真实 6000×4000 标注 P95 4.75ms、耗时 64.58s、关闭后物理记账约 190MiB，暖机后波动 1.81MiB；PreviewScrollViewTests 26/26 全过。b1442e88 已提交；最终 ImageAnnotationTests 20/20 通过（含真实 Windows SSH），三项滤镜宿主用例各同进程连续 10 轮全部通过；Release 与 Dev 严格验签通过。首次异常仍未定位根因，保持 Open，等待最新全量回归。日志 /tmp/bailey-filter-combined-native-debug-20261125.log、/tmp/bailey-seven-publication-filter-green-20261125.log、/tmp/bailey-seven-publication-filter-recheck-20261125.log、/tmp/bailey-seven-recovery-filter-repeat-20261125.log。`
+- 解决证据：`2026-11-25：原坐标采样、反向 ROI 与裁剪候选实现；独立同源像素对照 200 组、11270 次比较零误差超限，8 次 Debug 重复均通过。联合 Host 的首次 sRGB 0.17× 全图像素异常（36 个失败断言）仍待复现和归因，不关闭发现。300 次真实 6000×4000 标注 P95 4.75ms、耗时 64.58s、关闭后物理记账约 190MiB，暖机后波动 1.81MiB；PreviewScrollViewTests 26/26 全过。b1442e88 已提交；最终 ImageAnnotationTests 20/20 通过（含真实 Windows SSH），三项滤镜宿主用例各同进程连续 10 轮全部通过；Release 与 Dev 严格验签通过。当时首次异常尚未定位；冻结 443168ca 全量回归中的 testRegionalAnnotationSamplingMatchesWholeImageAcrossColorsAndZooms 已通过（3.699s），整轮最终 1411/1414、3 项跨卷独立补过。日志 /tmp/bailey-filter-combined-native-debug-20261125.log、/tmp/bailey-seven-publication-filter-green-20261125.log、/tmp/bailey-seven-publication-filter-recheck-20261125.log、/tmp/bailey-seven-recovery-filter-repeat-20261125.log。 重新读取首次失败原始日志，36 个断言前确有 IOGPUMetalError／GPU recovery 丢弃 ci_lanczosDown2_affine 指令及 CIRenderTask waitUntilCompletedAndReturnError。b38b5352 统一使用 CIRenderDestination 与可抛错任务完成边界，不接受失败产生的透明位图。实际 CIImageProcessorKernel 抛错证明旧 createCGImage 非空且不抛错，新增 XCTest Red 1/1，Green 通过并验证合法透明图及下一次成功渲染。图像 21/21、音频 5/5、300 轮大图 63.01s／P95 5.21ms，末态物理记账 114.72 MiB，原始字节／真实 Windows SSH 通过；联合 27/27，退出 0。日志 /tmp/bailey-ci-render-processor-failure-20261125.log、/tmp/bailey-ci-render-task-red-20261125.log、/tmp/bailey-ci-render-task-green-20261125.log。未主动触发系统 GPU reset，修复的是原生执行错误边界而不是驱动。`
 
 
 ## 发现 F-05
@@ -71,13 +71,13 @@
 
 - 任务：`P2-T2`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`Bailey/Workspace/LocalWorkspaceBackend.swift:279`
 - 摘要：`本机和 Windows SSH 最终 SHA 校验到 rename 之间的非协作写入能被静默覆盖`
 - 风险：`外部最新版本可能丢失；Bailey 自身的协作锁不足以实现任意写入者的 CAS`
 - 预期修复：`在共享 Backend 确认可行的原子条件提交或保留可恢复冲突版本的设计；不得用重复校验或上层重试冒充原子性`
 - 验证：`实际本机及 Windows SSH 在最终检查与提交间的受控外部写入；底图/旁车与 CSV 都保留冲突数据`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`尚无满足契约的实现。2026-11-25 独立真实 APFS RENAME_SWAP 与 Windows NTFS ReplaceFileW 实验各覆盖原地写／原子替换、替换后第三方再写四种时序；交换/备份虽可保留已捕获字节，却已经发布旧草稿而非原子拒绝。两平台再实测独立进程在交换前持有旧文件描述符/共享句柄：交换、核对及删除备份后，第三方写入和 flush 成功，但原路径保持 Bailey 草稿、第三方字节随旧对象关闭消失。不能把交换、事后复核或暂存备份当成任意第三方的严格 CAS。测试仅操作并清理专用临时文件；日志 /tmp/bailey-save-exchange-late-writer-20261125.log、/tmp/bailey-save-replacefile-late-writer-20261125.log。保持 Open，不降低产品契约。 补充：实际 macOS 27.3 APFS 专用临时文件上，F_SETLEASE（106）写租约，O_RDONLY/O_RDWR、预期打开数 0/1/2 均返回 EPERM；Apple XNU vfs_subr.c 的 allow_setlease 检查 com.apple.private.vfs.file-leases 私有 entitlement，vnode_setlease 拒绝未获授权进程。故不能以租约私有权限方案作为普通签名应用跨本机／SSH 的保证；保留 Open，不改内核或权限。 用户 2026-11-25 明确允许暂时阻塞平台不可实现的事项、继续其余任务。严格 CAS 延期，不降低现有版本保护，也不把此项称为已实现；待平台能力或经批准的可恢复冲突契约明确后再补验。`
 
 
 ## 发现 F-01
@@ -102,4 +102,5 @@
 - b0ccce58：八种 EXIF 取向、中文／emoji 字形实际像素、保存期间编辑、原生关闭失败否决、只读目录及取消、真实 Files 关联保护、百次大图滤镜全部通过。100 次 RSS 176.3→897.6 MiB、峰值 1123 MiB；bdd4c12b 已优化同一测试 P95 至 2.856ms，仍有残余 RSS 增长。
 - 非协作外部进程的检查／发布间竞态已复现；实体 1×、触控板、VoiceOver 及独占完整 App 尚缺环境，不能以宿主动作代替。I13 和 I10/I11/I16 的相关交叉验收未核销。
 - 当前行为见 docs/features/editor.md 图片标注与导出；72006d6b 新增原生复制当前标注合成图；文档同步。
+- 本轮完整 App 用例补充真实原生复制菜单与 NSSavePanel 成功导出，解码 PNG 核对尺寸、标注像素、底图及旁车原字节；共用系统选择器路径验证。Swift 6 typecheck 已通过，独占 GUI 尚未实测。
 

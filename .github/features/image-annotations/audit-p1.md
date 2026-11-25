@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P1-T2 已完成；P1-T1 的实体输入／屏幕及完整 App 验收仍未满足，不进入 P2。
+- **依据**：P1-T2 已完成；P1-T1 的实体输入／屏幕及完整 App 验收仍未满足。用户已批准暂时阻塞该条件并推进独立 P2 实现；门禁不因此转为 Go。
 
 ## 任务与改动
 
@@ -19,13 +19,13 @@
 
 - 任务：`P1-T2`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`BaileyUITests/Editor/RasterFilePreviewUITests.swift:88`
 - 摘要：`系统动画偏好接入后完整 App 的 GIF 测试仍假设默认一定自动播放`
 - 风险：`关闭系统动画时真实产品正确遵循偏好，却会使完整 App 验收误判；也缺少系统禁止自动播放时的 GUI 最终像素和显式恢复路径核验`
 - 预期修复：`完整 App 的文件 GIF 核对真实系统默认菜单并在禁用自动播放时通过原生菜单显式恢复；Markdown 内嵌按实际系统设置验证帧变化或静态首帧，不修改系统设置`
 - 验证：`RasterFilePreviewUITests 与 MarkdownPreviewUITests.testAnimatedGIFChangesVisibleFramesAndSourceBytesStayUntouched，保持原像素、失活、手动控制与文件字节断言`
-- 解决证据：`d84a65a6：两种实际系统偏好路径均已写入 GUI 用例，443168ca 的 make build:ui 成功，退出 0；没有切换用户系统设置，独占 GUI 运行待验，保持 Open。日志 /tmp/bailey-seven-ui-443168ca-20261125.log。`
+- 解决证据：`d84a65a6：两种实际系统偏好路径均已写入 GUI 用例，443168ca 的 make build:ui 成功，退出 0；没有切换用户系统设置，独占 GUI 运行待验，日志 /tmp/bailey-seven-ui-443168ca-20261125.log。 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
 
 
 ## 发现 F-05

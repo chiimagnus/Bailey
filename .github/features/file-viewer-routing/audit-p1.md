@@ -32,13 +32,13 @@
 
 - 任务：`P1-T1`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`BaileyUITests/Editor/CSVPreviewUITests.swift:85`
 - 摘要：`完整 App 缺少七种真实复杂格式在双窗口内交叉切换、系统重新投递和正常 Quit 冷恢复的组合回归`
 - 风险：`各格式单独 GUI 和百次宿主切换不能证明跨进程系统菜单、窗口目标、实际 Dock 与会话恢复的集成行为`
 - 预期修复：`补一条独立 Dev 完整 App E2E，使用真实综合样本、同名文件双窗及系统文件投递，逐格式检查实际预览、媒体位置及源字节；正常退出重启验证所有文件标签默认模式和归属`
 - 验证：`make build:ui；独占图形会话中 make test:ui ONLY_TESTING=BaileyUITests/FilePreviewWorkspaceUITests`
-- 解决证据：`d84a65a6：新增完整 App 七格式双窗口、系统投递及正常退出重启用例；443168ca 的 make build:ui 成功，退出 0。实际独占 GUI 会话尚未运行，保持 Open。日志 /tmp/bailey-seven-ui-443168ca-20261125.log。`
+- 解决证据：`d84a65a6：新增完整 App 七格式双窗口、系统投递及正常退出重启用例；443168ca 的 make build:ui 成功，退出 0。实际独占 GUI 会话尚未运行，日志 /tmp/bailey-seven-ui-443168ca-20261125.log。 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
 
 
 ## 发现 F-03
@@ -81,6 +81,15 @@
 
 
 ## 验证与未覆盖
+
+- 2026-11-25 最新 `8488bb8a`：修复 CSV 编辑事务归属与原字节基线（详见 [CSV P2 审计](../csv-table-view/audit-p2.md)）。新旧联合专项 26/26、最后三项 3/3 通过；UI Test Target、Release 构建与严格签名均通过，退出 0，Release 57 MiB。`27c2b254` 全量 1416/1416；新增六项宿主用例后的冻结全量（预计 1422 项）已于 10:23:05 启动，真 Windows SSH、真实样本及独立 APFS 跨卷配置齐全。当前仍在执行，不以先前全量或部分通过冒充新提交全量完成。构建日志 `/tmp/bailey-seven-build-8488bb8a-20261125.log`，全量日志 `/tmp/bailey-seven-full-8488bb8a-20261125.log`。七份任务表均通过校验，13 个阶段的既定门禁保留；所有现有发现为 Resolved 或用户批准 Deferred（28 / 7），无 Open。
+
+- 2026-11-25 用户明确决定：暂时无法完成的条件（非协作第三方严格 CAS、当前不具备的独占 GUI／实体设备条件）保留 blocked，其他独立实现、审查和可执行验证继续推进。已执行测试与延期条件分别记录，不以延期冒充通过或擅自修改保存契约。当前只有用户正在使用的图形会话，不抢占；尚未推送本地三个提交，远端旧版结果不替代新版 GUI。
+- 冻结 `27c2b2548ac3753c71bc211ecdabdc2bf4421e46` 全量回归最终 1416/1416 通过、0 失败、0 跳过，2134.756 秒，`make test`、Dev 严格签名、隔离 APFS 卸载及完整命令退出均为 0。真实 Windows SSH、实际样本及独立跨卷测试均执行；源码版本开始与结束一致。日志 `/tmp/bailey-seven-full-27c2b254-20261125.log`，结果包 `.build/DerivedData-Dev/Logs/Test/Test-Bailey-2026.11.25_03-17-08-+0800.xcresult`。不覆盖本轮后续源码改动。
+
+- 2026-11-25：bd72f327 修复波形原生 AX，b38b5352 修复 Core Image 执行错误，27c2b254 增补四格式实际编辑和复制／导出 UI。图像标注 21、音频计时 5、真实 300 轮大图 1，联合 27/27、0 失败、0 跳过、退出 0；make build:ui 与 Dev 严格签名、make build:release 与精简后 Release 严格签名全部通过（57 MiB）。日志 `/tmp/bailey-ci-render-task-green-20261125.log`、`/tmp/bailey-seven-ui-b38b5352-20261125.log`、`/tmp/bailey-seven-release-b38b5352-20261125.log`。冻结 `27c2b254` 最新全量已于 03:17:05 启动，实际 Windows SSH、真实样本及隔离 APFS 跨卷已配置；日志 `/tmp/bailey-seven-full-27c2b254-20261125.log`。截至本条记录尚未结束，不据此声称通过。新增 UI 只构建未执行，三次本地提交未推送。
+
+- 2026-11-25：远端 `6102bf3e`（生产源码同 `443168ca`）[Actions 45448818282](https://github.com/chiimagnus/Bailey/actions/runs/45448818282) 实际完整 App 隔离 GUI 20 项：18 通过、2 音频失败、0 跳过（549 秒）；CSV 5/5、HTML 3/3、图像标注 1/1、栅格 2/2、SVG 5/5、媒体 2/4。两项失败从真实 xcresult 及录像定位，音频修复见 bd72f327 与音频 P1/P2 审计。新增七格式综合/编辑/复制导出用例未推送且未执行。冻结 `443168ca` 宿主完整 1414 项：1411 通过、3 跨卷跳过、0 失败（2144.031s）；隔离 APFS 三项单独全部通过、退出 0、镜像已卸载。按用例身份合计 1414/1414，不伪称单次全量无跳过。日志 `/tmp/bailey-seven-full-443168ca-20261125.log`、`/tmp/bailey-seven-final-cross-volume-20261125.log`、`/tmp/bailey-seven-cloud-ui-6102bf3e-20261125.log`。这不覆盖后续 bd72f327、b38b5352 的新代码。
 
 - 2026-11-25：冻结提交 `3f87e2e8` 的完整宿主 XCTest 与 xcresult 一致，1406/1406 通过、0 失败、0 跳过，宿主耗时 2171.755 秒；`** TEST SUCCEEDED **`，Dev 严格签名复核通过。真实 Windows SSH、隔离 APFS 跨卷、真实图像与媒体样本均执行。结果包 `.build/DerivedData-Dev/Logs/Test/Test-Bailey-2026.11.25_00-15-20-+0800.xcresult`，日志 `/tmp/bailey-seven-full-3f87e2e8-20261125.log`。此证据不覆盖之后提交的 b1442e88、443168ca，设备及完整 GUI 仍为 No-Go。
 
