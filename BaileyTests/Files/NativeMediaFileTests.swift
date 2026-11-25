@@ -1250,6 +1250,25 @@ final class NativeMediaFileTests: XCTestCase {
         let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0) / 2
         XCTAssertEqual(Double(base[1080 * stride + 960] >> 6), 384, accuracy: 30)
         XCTAssertEqual(Double(base[1080 * stride + 2880] >> 6), 704, accuracy: 30)
+        // Mount the real HDR item in Bailey’s native video surface as well as decoding it.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: FileViewerView(file: tab))
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.close() }
+        func mounted(_ view: NSView) -> AVPlayerView? {
+            (view as? AVPlayerView) ?? view.subviews.lazy.compactMap(mounted).first
+        }
+        try await waitUntil {
+            host.layoutSubtreeIfNeeded()
+            return mounted(host)?.isReadyForDisplay == true
+        }
+        let native = try XCTUnwrap(mounted(host))
+        XCTAssertTrue(native.player === player)
+        XCTAssertEqual(native.videoBounds.width / native.videoBounds.height, 16.0 / 9, accuracy: 0.01)
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
 
