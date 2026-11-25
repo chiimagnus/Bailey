@@ -206,9 +206,10 @@ final class HTMLFilePreviewTests: XCTestCase {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let path = root.appendingPathComponent("Live.html")
+        try Data("h1 { color: navy }".utf8).write(to: root.appendingPathComponent("theme.css"))
         func source(_ revision: String) -> String {
             """
-            <!doctype html><meta charset="utf-8">
+            <!doctype html><meta charset="utf-8"><link rel="stylesheet" href="theme.css">
             <div style="height:1500px"></div>
             <h1 id="revision">\(revision)</h1>
             <div style="height:3000px"></div>
@@ -249,8 +250,8 @@ final class HTMLFilePreviewTests: XCTestCase {
         _ = try await webView.evaluateJavaScript("window.scrollTo(0, 1520)", contentWorld: .defaultClient)
         try await waitUntil { (await scrollY() ?? 0) > 1000 }
         let initialScroll = await scrollY()
-        let readingPosition = try XCTUnwrap(initialScroll)
-        print("HTML_LIVE initial scroll=\(readingPosition)")
+        XCTAssertEqual(try XCTUnwrap(initialScroll), 1520, accuracy: 2)
+        XCTAssertTrue(preview.hasRefreshableAssets)
         let latest = source("最终版本 🧪")
         for revision in 0..<100 {
             file.nativeTextStorage.replaceCharacters(
@@ -261,11 +262,29 @@ final class HTMLFilePreviewTests: XCTestCase {
         file.nativeTextStorage.replaceCharacters(
             in: NSRange(location: 0, length: file.nativeTextStorage.length), with: latest
         )
+        // The previous page remains readable after its resource requests are cancelled.
+        // Move inside that page while the new draft is being prepared.
+        try await waitUntil { !preview.hasRefreshableAssets }
+        let end = "\u{f72b}"
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .function,
+                                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                context: nil, characters: end, charactersIgnoringModifiers: end,
+                                                isARepeat: false, keyCode: 119))
+        XCTAssertTrue(window.makeFirstResponder(webView))
+        window.sendEvent(key)
+        try await waitUntil {
+            guard await renderedRevision() == "Original" else { return false }
+            return (await scrollY() ?? 0) > 1600
+        }
+        let moved = await scrollY()
+        let readingPosition = try XCTUnwrap(moved)
         try await waitUntil { await renderedRevision() == "最终版本 🧪" && !webView.isLoading }
-        print("HTML_LIVE latest DOM loaded, scroll=\(String(describing: await scrollY()))")
-        // The actual navigation must settle at the original reading position,
-        // not just carry a saved offset in the model.
-        try await waitUntil { abs((await scrollY() ?? 0) - readingPosition) < 2 }
+        do {
+            try await waitUntil { abs((await scrollY() ?? 0) - readingPosition) < 2 }
+        } catch {
+            let actual = await scrollY()
+            return XCTFail("Latest edit restored \(actual as Any), not the reader's new position \(readingPosition)")
+        }
         XCTAssertTrue(file.htmlPreview === preview)
         XCTAssertTrue(file.htmlPreview?.webView === webView)
         XCTAssertTrue(file.isDirty)

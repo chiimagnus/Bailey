@@ -242,26 +242,13 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
             handler.enabled = true
             return
         }
-        var scroll: CGPoint?
+        guard !Task.isCancelled, isCurrent() else { return }
         let sameTarget = self.revision?.sharesReadingPosition(with: revision) == true
         let editing = sameTarget && self.revision?.document != request
-        if sameTarget {
-            let attempt = self.attempt
-            scroll = scrollToRestore
-            if scroll == nil,
-               let offsets = try? await webView.evaluateJavaScript("([window.scrollX, window.scrollY])",
-                                                                 contentWorld: .defaultClient) as? [Double],
-               offsets.count == 2, offsets.allSatisfy(\.isFinite) {
-                scroll = CGPoint(x: offsets[0], y: offsets[1])
-            }
-            guard self.attempt == attempt else { return }
-        }
-        guard !Task.isCancelled, isCurrent() else { return }
+        let pendingScroll = sameTarget ? scrollToRestore : nil
         invalidate()
-        // Keep the reading anchor across superseded preparations, not just
-        // completed navigations. Retiring or rebinding a file clears it.
         self.revision = revision
-        scrollToRestore = scroll
+        scrollToRestore = pendingScroll
         let attempt = self.attempt
         do {
             if editing { try await Task.sleep(for: .milliseconds(120)) }
@@ -270,6 +257,16 @@ final class HTMLPreview: NSObject, WKNavigationDelegate {
             let data = try await Self.documentBytes(text)
             try Task.checkCancellation()
             guard self.attempt == attempt, isCurrent() else { return }
+            // The old page stays readable while edits coalesce. Sample it only
+            // when we are ready to navigate, unless a navigation already owns the anchor.
+            if sameTarget, scrollToRestore == nil {
+                let offsets = try? await webView.evaluateJavaScript("([window.scrollX, window.scrollY])",
+                                                                   contentWorld: .defaultClient) as? [Double]
+                guard !Task.isCancelled, self.attempt == attempt, isCurrent() else { return }
+                if let offsets, offsets.count == 2, offsets.allSatisfy(\.isFinite) {
+                    scrollToRestore = CGPoint(x: offsets[0], y: offsets[1])
+                }
+            }
             let url = try handler.install(document: data, resource: resource)
             webView.configuration.userContentController.removeAllContentRuleLists()
             webView.configuration.userContentController.add(rules)
