@@ -50,3 +50,5 @@
 - 最终 `1bf65468` 源码及音频窄窗修复：`make build` 退出 0，Debug/Dev 严格验签通过（`/tmp/bailey-remaining-final-build.log`）；未替换正式安装的 App。
 
 - 2026-11-26：`f1df034c` 统一独立及 Markdown 原生播放器空间化配置。Apple `afconvert` 自制 APAC MP4（4 声道、48 kHz、ACN/SN3D）实际解码、音频路由、播放时钟、seek 和原字节通过；默认仅多声道的差异 Red 2 项 3 条断言，Green 6/6，零跳过，含嵌入资源隔离、原生控件、实际选轨 PCM、HDR 和系统通知回归。正式 Debug 构建及严格验签通过。日志 `/tmp/bailey-spatial-{red.6SPuRh3M,green.log,build.log}`。实际空间听感受设备与系统设置影响，未冒称实体空间呈现通过。
+
+- 2026-11-26：系统旁白授权生效后，隔离 Dev 中原生播放／暂停切换按钮实际 VoiceOver 播报通过（共享 [P1 记录](../file-viewer-routing/audit-p1.md)）；时间轴、音量、静音及视频专属控件的完整旁白导览尚待核销。

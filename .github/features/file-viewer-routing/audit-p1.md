@@ -188,3 +188,5 @@
 - 2026-11-26：在独立 Bailey Dev 实际尝试 VoiceOver（系统旁白）：快捷键及 LaunchServices 启动均有延迟；最终 `NSWorkspace.isVoiceOverEnabled=true`，在测试图片视图操作焦点／动作，但读取 VoiceOver 实际末句的既有 Apple Events 授权返回 -1744，字幕面板未出现。未取得播报文字或听感，不核销 R01 真实播报；已从系统设置复核关闭（AX 开关 0、系统状态 false）、恢复原输入法、退出隔离 App，未改系统授权。证据 `/tmp/bailey-voiceover-check.hK5aeT/{run.log,active.log,settings-final-confirm.json}`。
 
 - 2026-11-26：用户已提供并授权使用连接的 Beats Studio Pro；真实内置／蓝牙双向切换对独立音视频均通过，第二输出设备不再属于缺配项；详见[音频 P2](../audio-file-playback/audit-p2.md)。
+
+- 2026-11-26：用户明确授权旁白自动化。经旁白实用工具开启 AppleScript 控制，经 macOS 系统同意，真实 Apple Events 权限由 -1744 变为 0。隔离 Bailey Dev 中 M4A 与 MOV 的原生播放／暂停按钮均取得 VoiceOver 实际末句 `play/pause 已选择 切换按钮 在鼠标指针下面`；图片、SVG、CSV 及 HTML 虽有目标 AX 元素，实际旁白仍停留项目列表，前台失焦的追加复验也未核销。仅记录两个控件真实播报通过，不把普通 AX 或点击等同于完整键盘导览。测试源字节不变，隔离 App 已退出，旁白系统开关 AX 值 0、NSWorkspace false、进程退出；用户授权保留。证据 `/tmp/bailey-vo-authorized.o91boWsW/{retry.log,pointer.log,cursor.log,settings-off.json}`。
