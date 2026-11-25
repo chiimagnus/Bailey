@@ -39,11 +39,12 @@ final class DockTabDragCoordinator {
 
     func cancel(_ item: DockItem? = nil) {
         if let item, source?.item != item { return }
+        guard source != nil || position != nil || escapeMonitor != nil else { return }
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
         // Layout preferences may update before project-switch cancellation;
         // preserve their latest frames so the next drag can still hit a target.
-        position = nil
+        if position != nil { position = nil }
         source = nil
         sourceDock = nil
         NSCursor.arrow.set()
