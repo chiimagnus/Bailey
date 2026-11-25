@@ -267,6 +267,85 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), encoded(sourceEdit))
     }
 
+    func testConflictingGridDraftSurvivesTwoActualWindowsAndExplicitRetry() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let baseline = "Name,Value\r\nItem,old\n"
+        let original = Data(baseline.utf8)
+        let external = Data("Name,Value\r\nItem,ext\n".utf8)
+        let secondBytes = Data("Name,Value\r\nItem,second\n".utf8)
+        let draft = Data("Name,Value\r\nItem,draft\n".utf8)
+        let file = try fixture.file("Conflict.csv", text: baseline)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let firstID = app.windows.firstMatch.identifier
+        let first = app.windows.matching(identifier: firstID).firstMatch
+        func grid(_ window: XCUIElement) -> XCUIElement {
+            window.descendants(matching: .any).matching(identifier: "bailey.csv.table").firstMatch
+        }
+        func open(_ window: XCUIElement, expecting value: String) {
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(grid(window).staticTexts[value].waitForExistence(timeout: 10))
+        }
+        func edit(_ window: XCUIElement, from: String, to: String) {
+            let table = grid(window)
+            table.staticTexts[from].doubleClick()
+            app.typeText(to)
+            app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+            XCTAssertTrue(table.staticTexts[to].waitForExistence(timeout: 10))
+        }
+        func conflict(_ window: XCUIElement) -> XCUIElement {
+            let message = "The file changed outside Bailey"
+            return window.descendants(matching: .any).matching(NSPredicate(
+                format: "label CONTAINS %@ OR value CONTAINS %@", message, message
+            )).firstMatch
+        }
+        open(first, expecting: "old")
+        edit(first, from: "old", to: "draft")
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        // XCTest runs in a separate process, outside Bailey's conditional writer.
+        try external.write(to: file, options: .atomic)
+        app.typeKey("s", modifierFlags: .command)
+        XCTAssertTrue(conflict(first).waitForExistence(timeout: 10))
+        XCTAssertTrue(grid(first).staticTexts["draft"].exists)
+        XCTAssertEqual(try Data(contentsOf: file), external)
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let other = app.windows.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
+        XCTAssertTrue(other.waitForExistence(timeout: 15))
+        let second = app.windows.matching(identifier: other.identifier).firstMatch
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app, in: second)
+        second.descendants(matching: .any).matching(identifier: "bailey.dock.files").firstMatch.click()
+        open(second, expecting: "ext")
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: first).exists)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: second).exists)
+        edit(second, from: "ext", to: "second")
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == secondBytes
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+        // Native window cycling, not a coordinate click on an occluded window.
+        app.typeKey("`", modifierFlags: .command)
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.windows.firstMatch.identifier == firstID
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 10), .completed)
+        XCTAssertTrue(grid(first).staticTexts["draft"].waitForExistence(timeout: 10))
+        app.typeKey("s", modifierFlags: .command)
+        XCTAssertTrue(conflict(first).waitForExistence(timeout: 10))
+        XCTAssertEqual(try Data(contentsOf: file), secondBytes)
+        XCTAssertTrue(grid(first).staticTexts["draft"].exists)
+        // Explicitly restore the accepted baseline before retrying the draft.
+        try original.write(to: file, options: .atomic)
+        app.typeKey("s", modifierFlags: .command)
+        let recovered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == draft && !conflict(first).exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [recovered], timeout: 10), .completed)
+        XCTAssertEqual(try Data(contentsOf: file), draft)
+    }
+
     func testMalformedTableShowsLocalizedLineAndKeepsReadableRowsAndSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "名称,值\r\n可读,17\r\n残缺,\"未结束"
