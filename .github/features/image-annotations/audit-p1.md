@@ -131,3 +131,5 @@
 - 5a4f5673：共用原生 AX 类型／实际倍率和值通知，宿主 Red 14 条、Green 8/8；SVG 真实高倍细线和 AX 值 39.789 秒通过；Markdown GIF 15.029 秒、真实 34 帧文件 GIF 31.628 秒通过。JPEG 双向拖动及反向横滚像素断言均通过；整项 GUI 在清理时检测到系统剪贴板计数 3750→3753，写入者未定位，保留失败记录及原断言；同版独立复验 1/1 通过（24.196 秒，/tmp/bailey-raster-final.nv02PU），剪贴板、双向拖动、横滚像素及原字节断言全部满足。日志 /tmp/bailey-viewport-{ax-red.M7OJCZ,ax-green.Kd1ra9,ui.q50NaZ,ui-recheck.8736K0,build.a5ASB2}。构建、严格签名成功。macOS XCTest 不提供实际双指捏合接口；鼠标／滚轮不冒充物理触控板。尝试实际启动 VoiceOver 未成功，服务状态保持原关闭，见 /tmp/bailey-native-ime-auto.dL04QZ/vo.log。
 
 - 2026-11-26：用户亲自验证实体触控板捏合无问题；64782817 将普通鼠标垂直滚轮纳入同一指针锚点缩放路径。合成原生 NSEvent 定点 Red 1 条／Green 4/4，图片、视口、SVG 扩大宿主 85 项中 73 通过、12 项既有环境跳过、零失败，make build 与严格验签退出 0。未声称实体鼠标或 VoiceOver 播报已亲验。
+
+- 2026-11-26：真实 VoiceOver 服务曾启用并在隔离图片预览尝试焦点／动作，但既有 Apple Events 授权不允许读取末句且字幕面板未出现；仍未取得实际播报。共享尝试与系统状态恢复见[文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
