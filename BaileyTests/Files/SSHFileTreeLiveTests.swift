@@ -166,20 +166,38 @@ final class SSHFileTreeLiveTests: XCTestCase {
                 summarize("individual-2-dirs", individualSamples)
                 summarize("batch-2-dirs", batchSamples)
 
+                // Real Windows directory capacity; fixture creation is one command.
+                let capacity = 6_000
+                let created = try await backend.run(
+                    argv: ["/bin/sh", "-c",
+                           "set -e; seq -f 'scale-%06g.txt' 1 6000 | xargs -n 250 touch"],
+                    cwd: one, env: nil, stdin: nil, timeout: 120
+                )
+                XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+                let listing = try await backend.list(directory: one)
+                XCTAssertEqual(listing.count, capacity + 1)
+                let refreshed = await tree.sync(root: root, backend: backend, scope: "ssh:windows-live")
+                XCTAssertTrue(refreshed)
                 var coldSamples: [Double] = []
                 var toggleSamples: [Double] = []
                 var refreshSamples: [Double] = []
                 for _ in 0..<5 {
                     let fresh = FileTreeModel()
                     let start = ProcessInfo.processInfo.systemUptime
-                    await fresh.sync(root: root, backend: backend, scope: "ssh:windows-live")
+                    let loaded = await fresh.sync(root: root, backend: backend, scope: "ssh:windows-live")
+                    XCTAssertTrue(loaded)
+                    let directory = try XCTUnwrap(fresh.items.first { $0.path == one })
+                    await fresh.toggle(directory)
+                    XCTAssertEqual(fresh.items.filter { $0.path.hasPrefix(one + "/") }.count, capacity + 1)
                     coldSamples.append(ProcessInfo.processInfo.systemUptime - start)
                 }
                 let beforeWarmToggle = await runner.calls
                 for _ in 0..<30 {
                     let start = ProcessInfo.processInfo.systemUptime
                     await tree.toggle(folder)
+                    XCTAssertEqual(tree.items.filter { $0.path.hasPrefix(one + "/") }.count, capacity + 1)
                     await tree.toggle(folder)
+                    XCTAssertFalse(tree.items.contains { $0.path.hasPrefix(one + "/") })
                     toggleSamples.append(ProcessInfo.processInfo.systemUptime - start)
                 }
                 let requestsAfterWarmToggle = await runner.calls
@@ -190,10 +208,10 @@ final class SSHFileTreeLiveTests: XCTestCase {
                     refreshSamples.append(ProcessInfo.processInfo.systemUptime - start)
                 }
                 let coldSorted = coldSamples.sorted()
-                print(String(format: "BAILEY_SSH_BENCHMARK cold-tree n=5 median=%.3fs max=%.3fs",
+                print(String(format: "BAILEY_SSH_BENCHMARK cold-6001-file-folder n=5 median=%.3fs max=%.3fs",
                              coldSorted[2], coldSorted[4]))
-                summarize("warm-folder-toggle", toggleSamples)
-                summarize("tree-refresh-14-folders", refreshSamples)
+                summarize("warm-6001-file-folder-toggle", toggleSamples)
+                summarize("large-tree-refresh", refreshSamples)
             }
         } catch {
             await cleanup()

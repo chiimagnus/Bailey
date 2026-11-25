@@ -141,7 +141,8 @@ Files／Git 的异步发布同时核对当前项目许可、`PanelContext.Identi
 `SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取、
 单目录失败隔离、32 MiB 文件上传／下载／原字节保存及超限拒绝，
 以及文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；
-显式 `BAILEY_SSH_BENCHMARK=1` 时再测冷加载与 30 次热路径的中位数/p95。
+显式 `BAILEY_SSH_BENCHMARK=1` 时再测含 6,001 文件的真实目录冷加载、
+30 次热展开／折叠（零额外 SSH 请求）和批量刷新，记录中位数与 p95。
 `SSHGitRecoveryLiveTests` 使用另一个专用 master 和 Windows 临时仓库，模拟仅该测试传输失联，
 验证 Git Graph 保留、写操作拒绝、恢复后重新允许暂存；
 显式开启 `BAILEY_SSH_BENCHMARK=1` 时测首次 Git 核心/详情耗时和 30 次热刷新。
