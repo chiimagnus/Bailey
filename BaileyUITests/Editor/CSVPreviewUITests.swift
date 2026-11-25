@@ -267,6 +267,74 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), encoded(sourceEdit))
     }
 
+    func testLargeRealTableFindEditAndSaveRetainAllOtherBytes() throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_PREVIEW_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_PREVIEW_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = URL(fileURLWithPath: root).appending(path: "tables/100000行.csv")
+        let original = try Data(contentsOf: source)
+        let text = try XCTUnwrap(String(data: original, encoding: .utf8))
+        let lastRecord = try XCTUnwrap(text.split(whereSeparator: \.isNewline).last)
+        XCTAssertTrue(lastRecord.hasPrefix("100000,"))
+        let expected = text.replacingOccurrences(of: String(lastRecord), with: "100001," + lastRecord.dropFirst(7))
+        let edited = Data(expected.utf8)
+        let file = fixture.root.appending(path: "100000行.csv")
+        try FileManager.default.copyItem(at: source, to: file)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        let opened = Date()
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        let first = table.staticTexts["000001"]
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        let firstVisible = Date()
+        first.click()
+        app.typeKey("f", modifierFlags: .command)
+        let find = app.textFields["bailey.csv.find"]
+        XCTAssertTrue(find.waitForExistence(timeout: 5))
+        let searching = Date()
+        find.typeText("100000")
+        let count = app.staticTexts["bailey.csv.match-count"]
+        let matched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            String(describing: count.value ?? "") == "1"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [matched], timeout: 15), .completed)
+        XCTAssertEqual(find.value as? String, "100000")
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(find.waitForNonExistence(timeout: 5))
+        // The macOS AX snapshot enumerates only the first 1000 rows even
+        // after NSTableView has revealed row 99999. Use the actual scroll
+        // offset/row stride to address the last visible cell, not an AX query
+        // that can never reach it. The saved bytes prove the exact row edited.
+        let rows = table.descendants(matching: .tableRow)
+        let rowStride = rows.element(boundBy: 1).frame.minY - rows.element(boundBy: 0).frame.minY
+        XCTAssertGreaterThan(rowStride, 0)
+        let firstFrame = first.frame
+        let target = CGPoint(x: firstFrame.midX, y: firstFrame.midY + rowStride * 99_999)
+        XCTAssertTrue(table.frame.contains(target), "Find must reveal the actual last row: \(target), table \(table.frame)")
+        let lastVisible = Date()
+        let lastCell = table.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: target.x - table.frame.minX, dy: target.y - table.frame.minY)
+        )
+        lastCell.doubleClick()
+        app.typeText("100001")
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        let editVisible = Date()
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == edited
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 12), .completed)
+        print("CSV_REAL_LARGE bytes=\(original.count) firstVisible=\(firstVisible.timeIntervalSince(opened)) search=\(lastVisible.timeIntervalSince(searching)) edit=\(editVisible.timeIntervalSince(lastVisible)) save=\(Date().timeIntervalSince(editVisible))")
+        XCTAssertEqual(try Data(contentsOf: file), edited)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+    }
+
     func testConflictingGridDraftSurvivesTwoActualWindowsAndExplicitRetry() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)
