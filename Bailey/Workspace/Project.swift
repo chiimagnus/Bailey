@@ -108,15 +108,17 @@ final class Project: nonisolated Identifiable {
     /// session trail in strip order, so the sequence covers every tab even
     /// before any switching has happened.
     var tabsByRecency: [PaneTab] {
+        let tabsByID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var seen = Set<UUID>()
         var ordered: [PaneTab] = []
+        ordered.reserveCapacity(tabs.count)
         func add(_ tab: PaneTab) {
             guard seen.insert(tab.id).inserted else { return }
             ordered.append(tab)
         }
         if let selectedTab { add(selectedTab) }
         for id in recentTabIDs {
-            guard let tab = tabs.first(where: { $0.id == id }) else { continue }
+            guard let tab = tabsByID[id] else { continue }
             add(tab)
         }
         tabs.forEach(add)

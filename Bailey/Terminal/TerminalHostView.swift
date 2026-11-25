@@ -141,6 +141,7 @@ final class TerminalParkingContainerView: NSView {
 
         for session in sessions {
             let terminal = session.surface
+            guard terminal.superview !== self else { continue }
             terminal.onBecomeFirstResponder = nil
             terminal.openMenuTarget.onNewBrowserTab = nil
             terminal.openMenuTarget.onNewFileTab = nil
@@ -150,7 +151,6 @@ final class TerminalParkingContainerView: NSView {
             // (~20 MB each) while its wakeup check — gated on attachment,
             // not visibility — keeps title/bell/exit events draining.
             terminal.setSurfaceVisible(false)
-            guard terminal.superview !== self else { continue }
             let parkedSize = terminal.frame.size
             if terminal.window?.firstResponder === terminal {
                 terminal.window?.makeFirstResponder(nil)
