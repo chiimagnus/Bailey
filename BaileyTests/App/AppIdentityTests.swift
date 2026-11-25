@@ -18,7 +18,7 @@ final class AppIdentityTests: XCTestCase {
         let declarations = try XCTUnwrap(Bundle.main.object(
             forInfoDictionaryKey: "CFBundleDocumentTypes"
         ) as? [[String: Any]])
-        XCTAssertEqual(declarations.count, 3, "Text, image, and folder each have a distinct role")
+        XCTAssertEqual(declarations.count, 4, "Text, image, media, and folder each have a distinct role")
         var types = Set<String>()
         for entry in declarations {
             XCTAssertEqual(entry["LSHandlerRank"] as? String,
@@ -29,10 +29,15 @@ final class AppIdentityTests: XCTestCase {
             XCTAssertNil(entry["CFBundleTypeExtensions"])
             let utis = try XCTUnwrap(entry["LSItemContentTypes"] as? [String])
             XCTAssertFalse(utis.isEmpty)
+            if utis.contains("public.audio") || utis.contains("public.movie") {
+                XCTAssertEqual(entry["CFBundleTypeRole"] as? String, "Viewer")
+            }
             types.formUnion(utis)
         }
         XCTAssertTrue(types.contains("public.text"))
         XCTAssertTrue(types.contains("public.image"))
+        XCTAssertTrue(types.contains("public.audio"))
+        XCTAssertTrue(types.contains("public.movie"))
         XCTAssertTrue(types.contains("public.folder"))
         XCTAssertFalse(types.contains("public.data"),
                        "A broad data handler is not an implicit binary editor")
