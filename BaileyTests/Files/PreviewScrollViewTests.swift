@@ -1817,6 +1817,52 @@ final class PreviewScrollViewTests: XCTestCase {
         }
     }
 
+    func testMouseWheelZoomsAtThePointerWithoutTakingAwayPreciseScrolling() throws {
+        let viewport = CGRect(x: 0, y: 0, width: 480, height: 360)
+        let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = PreviewScrollView(frame: viewport)
+        scroll.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 4097, height: 2800))
+        window.contentView = scroll
+        scroll.layoutSubtreeIfNeeded()
+        let pointer = CGPoint(x: 147, y: 132)
+        func wheel(_ units: CGScrollEventUnit, x: Int32 = 0, y: Int32 = 0,
+                   flags: CGEventFlags = []) throws -> NSEvent {
+            let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: units,
+                                          wheelCount: 2, wheel1: y, wheel2: x, wheel3: 0))
+            cg.flags = flags
+            cg.location = CGPoint(x: pointer.x, y: CGFloat(CGDisplayPixelsHigh(CGMainDisplayID())) - pointer.y)
+            let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+            XCTAssertEqual(event.hasPreciseScrollingDeltas, units == .pixel)
+            return event
+        }
+        scroll.setZoom(1, at: CGPoint(x: 2048, y: 1400))
+        let inward = try wheel(.line, y: 1)
+        let anchor = scroll.contentView.convert(inward.locationInWindow, from: nil)
+        XCTAssertTrue(scroll.contentView.bounds.contains(anchor))
+        scroll.scrollWheel(with: inward)
+        XCTAssertGreaterThan(scroll.pixelScale, 1)
+        let kept = scroll.contentView.convert(inward.locationInWindow, from: nil)
+        XCTAssertEqual(kept.x, anchor.x, accuracy: 3)
+        XCTAssertEqual(kept.y, anchor.y, accuracy: 3)
+        scroll.scrollWheel(with: try wheel(.line, y: -1))
+        XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
+        for event in [try wheel(.line, x: 1), try wheel(.line, y: 1, flags: .maskShift),
+                      try wheel(.pixel, y: 15), try wheel(.pixel, x: 15)] {
+            scroll.scrollWheel(with: event)
+            XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001, "Pan must not change magnification")
+        }
+        scroll.scrollWheel(with: try wheel(.pixel, y: 15, flags: .maskCommand))
+        XCTAssertGreaterThan(scroll.pixelScale, 1, "Command + precise scrolling still zooms")
+        scroll.setZoom(4, at: anchor)
+        scroll.scrollWheel(with: inward)
+        XCTAssertEqual(scroll.pixelScale, 4, accuracy: 0.001)
+        scroll.setZoom(0.1, at: anchor)
+        scroll.scrollWheel(with: try wheel(.line, y: -1))
+        XCTAssertEqual(scroll.pixelScale, 0.1, accuracy: 0.001)
+    }
+
     func testNativeZoomKeepsItsAnchorAndUsesBackingPixels() {
         let viewport = CGRect(x: 0, y: 0, width: 480, height: 360)
         let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)

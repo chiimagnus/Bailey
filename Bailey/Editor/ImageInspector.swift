@@ -318,7 +318,10 @@ class PreviewScrollView: NSScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard event.modifierFlags.contains(.command) else {
+        let mouseWheelZoom = !event.hasPreciseScrollingDeltas
+            && event.modifierFlags.intersection([.shift, .option, .control]).isEmpty
+            && abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
+        guard event.modifierFlags.contains(.command) || mouseWheelZoom else {
             super.scrollWheel(with: event)
             return
         }
