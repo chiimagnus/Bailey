@@ -15,6 +15,12 @@ nonisolated struct NativeMedia: Sendable {
     let kind: Kind
     let videoAspectRatio: CGFloat?
 
+    @MainActor func makePlayer() -> AVPlayer {
+        let item = AVPlayerItem(asset: asset)
+        item.allowedAudioSpatializationFormats = .monoStereoAndMultichannel
+        return AVPlayer(playerItem: item)
+    }
+
     static func candidate(_ pathExtension: String) -> Kind? {
         switch pathExtension.lowercased() {
         case "mp4", "mov", "m4v": .video

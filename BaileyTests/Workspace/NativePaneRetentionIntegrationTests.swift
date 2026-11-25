@@ -980,6 +980,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             let embedded = try XCTUnwrap(nativePlayers(in: host).compactMap(\.player).first { $0 !== independent })
             let independentItem = try XCTUnwrap(independent.currentItem)
             let embeddedItem = try XCTUnwrap(embedded.currentItem)
+            XCTAssertEqual(independentItem.allowedAudioSpatializationFormats, .monoStereoAndMultichannel)
+            XCTAssertEqual(embeddedItem.allowedAudioSpatializationFormats, .monoStereoAndMultichannel)
             let independentAsset = try XCTUnwrap(independentItem.asset as? AVURLAsset)
             let embeddedAsset = try XCTUnwrap(embeddedItem.asset as? AVURLAsset)
             XCTAssertEqual(try Data(contentsOf: independentAsset.url), bytes)

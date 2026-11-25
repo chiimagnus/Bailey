@@ -55,6 +55,50 @@ final class NativeMediaFileTests: XCTestCase {
         }
     }
 
+    func testNativeAPACAudioUsesSystemSpatializationAndPlaysTheActualFile() async throws {
+        guard #available(macOS 26.0, *) else {
+            throw XCTSkip("APAC is a system codec on macOS 26 and newer")
+        }
+        // Synthetic first-order Ambisonics (ACN/SN3D), 48 kHz, four different tones.
+        // Encoded using Apple's own afconvert APAC encoder, not an AAC lookalike.
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: ".github/features/audio-file-playback/demo-spatial-audio.mp4")
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "Spatial audio.mp4")
+        try FileManager.default.copyItem(at: fixture, to: url)
+        let bytes = try Data(contentsOf: url)
+        let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { tab.retireContent() }
+        try await load(tab)
+        guard case .media(let media) = tab.content else { return XCTFail("Native APAC playback is unavailable") }
+        XCTAssertEqual(media.kind, .audio, "An audio-only MP4 must not mount video controls")
+        let tracks = try await media.asset.loadTracks(withMediaType: .audio)
+        let track = try XCTUnwrap(tracks.first)
+        let formats = try await track.load(.formatDescriptions)
+        let description = try XCTUnwrap(formats.first.flatMap(CMAudioFormatDescriptionGetStreamBasicDescription))
+        XCTAssertEqual(description.pointee.mFormatID, kAudioFormatAPAC)
+        XCTAssertEqual(description.pointee.mChannelsPerFrame, 4)
+        XCTAssertEqual(description.pointee.mSampleRate, 48_000)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(item.asset === media.asset)
+        XCTAssertEqual(item.allowedAudioSpatializationFormats, .monoStereoAndMultichannel)
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        player.isMuted = true
+        player.play()
+        try await waitUntil { player.currentTime().seconds > 0.2 }
+        player.pause()
+        let sought = await player.seek(to: CMTime(seconds: 0.8, preferredTimescale: 600),
+                                       toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(sought)
+        XCTAssertEqual(player.currentTime().seconds, 0.8, accuracy: 0.06)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
     func testFourHourPCMRecordingSeeksToActualEndSamplesWithoutWholeFileLoading() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)

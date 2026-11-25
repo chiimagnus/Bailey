@@ -212,7 +212,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func installMedia(_ media: NativeMedia) {
-        let player = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
+        let player = media.makePlayer()
         mediaPlayer = player
         mediaEnvironmentObservation = NativeMediaEnvironmentObservation { [weak self, weak player] event in
             guard let self, let player, self.mediaPlayer === player else { return }

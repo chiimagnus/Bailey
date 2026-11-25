@@ -65,7 +65,7 @@ struct MarkdownMediaView: View {
                 let media = try await NativeMedia.open(localFile.path)
                 try Task.checkCancellation()
                 stagedFile = localFile
-                player = AVPlayer(playerItem: AVPlayerItem(asset: media.asset))
+                player = media.makePlayer()
                 failed = false
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at: temporary.deletingLastPathComponent()) }
