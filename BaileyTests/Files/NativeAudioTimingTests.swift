@@ -120,6 +120,48 @@ final class NativeAudioTimingTests: XCTestCase {
             }
             XCTAssertEqual(player.rate, 0)
         }
+        // AVKit's floating timeline AXValue can remain at the last seek while
+        // the native elapsed-time label and actual player time keep advancing.
+        // Verify both directions of the transport separately, without inventing
+        // a replacement timeline or treating the requested seek as playback.
+        func elapsedTime() -> Double? {
+            // AVKit's local AX objects do not expose the English external AX
+            // label. This 12-second fixture has an elapsed clock, a negative
+            // remaining clock, and the fixed duration. Require a unique
+            // nonnegative clock strictly below duration, not an arbitrary label.
+            let candidates = controls().compactMap { element -> Double? in
+                guard attribute(element, "accessibilityRole") as? String == "AXStaticText",
+                      let value = attribute(element, "accessibilityValue") as? String else { return nil }
+                let fields = value.split(separator: ":")
+                let parts = fields.compactMap { Double($0) }
+                guard (fields.count == 2 || fields.count == 3), parts.count == fields.count,
+                      parts.allSatisfy({ $0 >= 0 }) else { return nil }
+                let seconds = parts.reduce(0) { $0 * 60 + $1 }
+                return seconds < duration.rounded() ? seconds : nil
+            }
+            return candidates.count == 1 ? candidates.first : nil
+        }
+        player.isMuted = true
+        let accepted = await player.seek(to: CMTime(seconds: 4, preferredTimescale: 600),
+                                         toleranceBefore: .zero, toleranceAfter: .zero)
+        XCTAssertTrue(accepted)
+        try await wait("The native elapsed-time label reflects the paused seek") {
+            elapsedTime() == 4
+        }
+        player.play()
+        defer { player.pause() }
+        try await wait("Actual audio playback and its native elapsed time both advance") {
+            guard let elapsed = elapsedTime() else { return false }
+            let actual = player.currentTime().seconds
+            return player.rate == 1 && actual >= 6 && elapsed >= 6 && abs(elapsed - actual) <= 1.1
+        }
+        print("AUDIO_CLOCK playing=\(player.currentTime().seconds) elapsed=\(String(describing: elapsedTime())) slider=\(String(describing: timeline().flatMap { attribute($0, "accessibilityValue") }))")
+        player.pause()
+        let pausedAt = player.currentTime().seconds
+        try await Task.sleep(for: .milliseconds(1100))
+        XCTAssertEqual(player.currentTime().seconds, pausedAt, accuracy: 0.05)
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try XCTUnwrap(elapsedTime()), pausedAt.rounded(.down), accuracy: 1)
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
 

@@ -101,20 +101,42 @@ final class NativeMediaFileUITests: XCTestCase {
             in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
         )
         let window = app.windows.firstMatch
+        open(text, in: window, app: app)
+        XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        let textTab = WorkspaceUITestSupport.fileTab(text, in: window)
+        XCTAssertTrue(textTab.exists)
         open(audio, in: window, app: app)
         let play = window.checkBoxes["play/pause"]
         let position = window.sliders["timeline"]
         XCTAssertTrue(play.waitForExistence(timeout: 10))
         XCTAssertTrue(position.waitForExistence(timeout: 10))
         let paused = String(describing: play.value ?? "")
-        let initial = String(describing: position.value ?? "")
+        func sliderTime() -> Double? { Double(String(describing: position.value ?? "")) }
+        let initial = try XCTUnwrap(sliderTime())
         position.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5)).click()
         let sought = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            String(describing: position.value ?? "") != initial
+            guard let current = sliderTime() else { return false }
+            return current > initial + 0.5
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [sought], timeout: 5), .completed)
         XCTAssertEqual(String(describing: play.value ?? ""), paused)
-        let startTime = String(describing: position.value ?? "")
+        let elapsed = window.staticTexts["elapsed time"]
+        XCTAssertTrue(elapsed.waitForExistence(timeout: 5))
+        func elapsedSeconds() -> Double? {
+            guard let value = elapsed.value as? String else { return nil }
+            let fields = value.split(separator: ":")
+            let parts = fields.compactMap { Double($0) }
+            guard (fields.count == 2 || fields.count == 3), parts.count == fields.count,
+                  parts.allSatisfy({ $0 >= 0 }) else { return nil }
+            return parts.reduce(0) { $0 * 60 + $1 }
+        }
+        let soughtAt = try XCTUnwrap(sliderTime())
+        let clockReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let current = elapsedSeconds() else { return false }
+            return abs(current - soughtAt) <= 1
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [clockReady], timeout: 5), .completed)
+        let startTime = try XCTUnwrap(elapsedSeconds())
         let volume = window.sliders["volume"]
         XCTAssertTrue(volume.waitForExistence(timeout: 5))
         func volumeLevel() -> Double? { Double(String(describing: volume.value ?? "")) }
@@ -140,17 +162,33 @@ final class NativeMediaFileUITests: XCTestCase {
         mute.click()
         XCTAssertEqual(volumeLevel(), 0)
         play.click()
+        // The floating AVKit slider's AXValue reflects the last seek on some
+        // macOS versions, even while its native elapsed-time label advances.
         let playing = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            String(describing: play.value ?? "") != paused && String(describing: position.value ?? "") != startTime
+            guard let current = elapsedSeconds() else { return false }
+            return String(describing: play.value ?? "") != paused && current >= startTime + 1
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [playing], timeout: 6), .completed)
 
-        open(text, in: window, app: app)
+        let beforeSwitch = try XCTUnwrap(elapsedSeconds())
+        textTab.click()
         XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(textTab.isSelected)
         XCTAssertFalse(play.exists)
         WorkspaceUITestSupport.fileTab(audio, in: window).click()
         XCTAssertTrue(play.waitForExistence(timeout: 10))
         XCTAssertEqual(String(describing: play.value ?? ""), paused)
+        XCTAssertTrue(elapsed.waitForExistence(timeout: 5))
+        let retainedTime = try XCTUnwrap(elapsedSeconds())
+        XCTAssertGreaterThanOrEqual(retainedTime, beforeSwitch)
+        XCTAssertGreaterThan(retainedTime, startTime)
+        XCTAssertLessThan(retainedTime, 12, "The fixture must not have ended before the tab switch")
+        let notPaused = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let current = elapsedSeconds() else { return true }
+            return current != retainedTime
+        }, object: nil)
+        notPaused.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [notPaused], timeout: 1.5), .completed)
         XCTAssertTrue(volume.waitForExistence(timeout: 5))
         XCTAssertEqual(volumeLevel(), 0)
         XCTAssertEqual(try Data(contentsOf: audio), original)
