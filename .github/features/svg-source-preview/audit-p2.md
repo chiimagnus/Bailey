@@ -23,3 +23,5 @@
 - 最新共享构建、冻结宿主与完整 App 结果以 [文件路由审计](../file-viewer-routing/audit-p1.md) 为准；现行行为归 [文件编辑器](../../../docs/features/editor.md)。
 
 - 2026-11-25：`bd6e74a2` 改进共享本机条件保存冲突恢复，未改变 SVG 渲染和缩放；严格非协作 CAS 与真实输入／物理显示器／长会话仍未核销，见 [CSV P2](../csv-table-view/audit-p2.md)。原 `48bbbd5d` 接缝回归证据保留。
+
+- 5d216abe：SVG 源码共用 FileTab 保存错误及可换行提示；共享保存与资源回归 16/16 通过。严格 CAS 和设备/完整 App 门禁不变。 共享验证证据见 [CSV P2 F-09](../csv-table-view/audit-p2.md#发现-f-09)。

@@ -15,6 +15,19 @@
 
 ## 发现项
 
+## 发现 F-09
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`FileViewerView.swift; DiffViewerView.swift`
+- 摘要：`共享条件保存冲突恢复路径在重复保存失败后被普通错误覆盖，单行提示可截断实际恢复地址。`
+- 风险：`用户无法找到已保留的第三方版本，降低冲突恢复能力。`
+- 预期修复：`保留结构化恢复错误直到保存成功；共享可阅读、可复制的错误提示。`
+- 验证：`CSV、旁车、Diff 三入口真实独立进程竞态、重试和恢复，窄窗提示布局。`
+- 解决证据：`5d216abe：三入口真子进程原位写及原子替换，重试路径 Red 6 断言，Green 8/8；CSV 两次竞态保留两个位置及两份原始版本，扩大宿主 16/16、零跳过。实际 SwiftUI 原生宿主 920/480/220 点、中英文深浅 12 组尺寸全通过；不等于 VoiceOver 或完整 App GUI。正式 Debug 与 Dev 严格验签通过。日志 /tmp/bailey-recovery-notice-red.Zda2K5f3、/tmp/bailey-recovery-notice-green.yDck3vps、/tmp/bailey-recovery-notice-expanded.ttYRLK1Q、/tmp/bailey-recovery-notice-build.Hklrh1XN。严格 CAS 仍归 F-02。`
+
+
 ## 发现 F-08
 
 - 任务：`P2-T1`
@@ -129,3 +142,5 @@
 - 现行保存机制见 `docs/features/editor.md` 与 `docs/features/ssh.md`；27c2b254 已提交新增跨模式编辑、Undo/Redo 及实际编码字节 UI 验收，make build:ui 和 Dev 严格验签通过；未执行新增完整 App，F-03 延期；F-02 严格非协作 CAS 独立延期。
 
 - 2026-11-25 F-02 部分缓解（`bd6e74a2`）：独立子进程在最终校验后原位写入／原子替换，原实现 2 项测试 12 条断言失败；APFS 交换后验证被替换入口，冲突保留完整外部版本及恢复路径，目标可能已是本地草稿，保留 dirty 且旧基线重试被拒，恢复基线后显式重试可保存。不自动回滚覆盖后续写入。定点 5/5、零跳过；日志 `/tmp/bailey-late-publication-red.jDU5Is3V`、`/tmp/bailey-late-publication-green-v2.5gJvMfiG`、`/tmp/bailey-save-recovery-build.S9RL3c5U`。独立进程仍可通过旧文件描述符在核对及清理后写入已解除链接的 inode，SSH 非协作边界也未改变；F-02 继续 Deferred，不称严格 CAS。不支持交换的文件系统拒绝覆盖；独立 exFAT 镜像创建被系统拒绝，未实测该文件系统，未修改权限。恢复路径已验证模型错误字符串，窄窗单行错误栏完整可见性未验，真实 IME／跨窗长会话继续 blocked。
+
+- 5d216abe：三入口真实竞态、两次冲突恢复位置跨重试保留、窄窗错误提示和 16 项相关宿主通过；F-09 已解决。严格 CAS 和完整 App/实体门禁不变。
