@@ -14,8 +14,11 @@ Markdown AST 的 `Document` 未公开声明 `Sendable`；跨 actor 时在解析�
 不再复制 Textual 的富文本、附件、布局引擎。
 
 Front Matter 仅限文件开头（可带 BOM）由 Yams 解析；元数据和正文分离，源码字节不变。
-相对资源只允许由现有 `MarkdownResource` 经 `WorkspaceBackend` 与 `LocalPathScope` 访问当前项目／机器；
+相对资源只允许由现有 `PreviewResource`（已由原 MarkdownResource 收敛为公共文件预览资源）经
+`WorkspaceBackend` 与 `LocalPathScope` 访问当前项目／机器；
 原生 SVG、图片和 HTML 沿当前 `swift-markdown` 分支的实现演进，不恢复旧 Textual 渲染路径。
+
+静态 HTML 完整性、额外 GitHub 语义与源码导航的后续扩展以 [P3](plan-p3.md) 为准。
 
 真实位置：`Bailey/Editor/FileViewerView.swift`、`Bailey/Workspace/Project.swift`、
 `Bailey/Editor/SourceTextEditor.swift`、`Bailey/App/BaileyApp.swift`、
