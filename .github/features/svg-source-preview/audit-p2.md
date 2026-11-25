@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P2-T2 独立完成，48bbbd5d 后的三项 PNG／独占发布宿主与真实 App 复制／新目标导出均通过，普通源码保存接线通过。P2-T1 并排连续输入、现有设备／VoiceOver、共享磁盘错误与保存冲突回归、P1 阶段门禁仍待；未执行实际磁盘满。
+- **依据**：P2-T2 独立完成，48bbbd5d 后的三项 PNG／独占发布宿主与真实 App 复制／新目标导出均通过，普通源码保存接线通过。P2-T1 并排真实拼音／Undo／Redo、最终可见中文矢量和原字节已通过；现有设备／VoiceOver、跨条件滚动组合、共享磁盘错误与最终整合、P1 阶段门禁仍待；未执行实际磁盘满。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -31,3 +31,5 @@
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 本机隔离 Dev 原生中文拼音输入（非剪贴板）：`zhong wen` 候选期间磁盘保持旧源码，空格确认 `中文` 后显式保存，切回原生 SVG 验证中文字形及精确 UTF-8。证据 `/tmp/bailey-ime-native.VZLk2z/{20,21,22}.json`、`22.png` 与 `Bailey-UITest-IME/project/Composition.svg`。仅核销单窗真实输入、保存与渲染；并排快速组合输入及物理设备交叉项仍待补。
+
+- 隔离完整 Dev 自动化真实系统拼音（非粘贴）：并排编辑、候选确认、连续 Undo／Redo、精确保存，核对最终 SVG 中文字形。证据 /tmp/bailey-native-ime-auto.dL04QZ/run5.log、remaining-019 至 025 的 AX 和截图。未要求人工输入；独立会话结束恢复原输入源。真实滚动交叉组合及物理设备、屏幕阅读器留阶段。

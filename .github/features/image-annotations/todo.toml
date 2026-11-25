@@ -4,10 +4,10 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "用同一图片视口完成高精度缩放与资源按需解码"
-status = "pending"
+status = "blocked"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "93c29eab／249a4efb 共用视口；9a7d6835 区域解码、e4267d71 精确容量、d768f481 原生 AX 动作、35503954 真实双窗与最新宿主通过。下一步共用视口真实 VoiceOver 与触控板验收（物理手势需真实输入，非鼠标模拟）；缺配屏已延期。详见 P1 审计。"
+note = "93c29eab／249a4efb共用视口；9a7d6835区域解码、e4267d71容量、35503954双窗；5a4f5673补本地化预览名/实际倍率/原生值通知，Red14条，Green8/8，SVG/真实GIF完整App通过；图片双向拖动、横滚细像素通过。实体触控板捏合和VoiceOver实际播报未验（系统快捷键未启动服务）；缺配1×延期。详见P1审计。"
 
 [[tasks]]
 id = "P1-T2"
@@ -20,10 +20,10 @@ note = "9d167113 的真实 120 秒 GIF 连播、边界、百次开闭与同版 W
 [[tasks]]
 id = "P2-T1"
 title = "画布标注、光标命中和标签级撤销"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = "92b35562 十工具单键、自由笔画与窄窗；0a808796 原生撤销／重做；300 轮滤镜和真实图层保存证据见 P2 审计。剩实际中文标注候选确认、焦点与 VoiceOver；之前人工测试受并行输入污染，使用新复制夹具独立复验。"
+note = "92b35562十工具单键、自由笔画与窄窗；0a808796原生Undo/Redo及300轮滤镜。无人参与真实拼音文字标注、候选确认、撤销消失/重做恢复截图、旁车仅一个中文图层及底图字节不变通过（/tmp/bailey-native-ime-auto.dL04QZ/runimage.log、image-013/014/015截图）；独立图面明确点击文字框后成功，多个窄窗格未自动获焦的组合仍需定位。标注VoiceOver实际播报未验；不要求人工输入。"
 
 [[tasks]]
 id = "P2-T2"

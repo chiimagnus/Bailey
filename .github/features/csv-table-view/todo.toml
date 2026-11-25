@@ -20,10 +20,10 @@ note = "共享入口 24019b00；排序、筛选、查找和多格复制 49a9e09d
 [[tasks]]
 id = "P2-T1"
 title = "对原文源区间执行原生编辑、复用唯一 Undo"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = "807fbdee 修复实际中文提交后原生表格重建丢焦点：Red 2，Green 真实 SwiftUI/AppKit 首响应者／Return/Tab/Shift-Tab、Undo/Redo、标记文字、空表及其它输入框焦点；154/154＋定点1/1。8800266d 实机十万行查找末行、精确保存通过（63.726秒）。下一步仅补最新版本完整 App 不重新点击的连续快捷键、确认 F-10；不用重做编码或十万行。"
+commit = "807fbdee"
+note = "807fbdee 原生网格焦点、键盘导航与唯一 Undo；154/154＋定点1/1，8800266d 十万行实机末行编辑精确保存。隔离真实 App 自动拼音候选中文→Return→连续撤销/重做（无额外点击）→BOM/混合换行精确保存通过，F-10 核销；/tmp/bailey-native-ime-auto.dL04QZ/run4.log。共用实体设备及最终整合仍留阶段。"
 
 [[tasks]]
 id = "P2-T2"

@@ -6,13 +6,13 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交暴露连续快捷键焦点缺陷 F-10（已修复且宿主回归通过，待完整 App 连续快捷键复验）；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH CSV 比较、版本绑定覆盖及重连已通过；严格非协作 CAS 边界、P1 无障碍及现有设备门禁独立保留。
+- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交的连续快捷键焦点缺陷 F-10 已通过自动化完整 App 复验；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH CSV 比较、版本绑定覆盖及重连已通过；严格非协作 CAS 边界、P1 无障碍及现有设备门禁独立保留。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
 ## 任务与改动
 
-- **P2-T1 对原文源区间执行原生编辑、复用唯一 Undo**：FileTab、原生表格与 TextKit 共用文档和 Undo；100001 条记录、100 次编辑／切换和 Undo／Redo 有宿主证据，实际中文 IME 提交及十万行 GUI 编辑已验，807fbdee 的连续快捷键仍待完整 App 复验。
+- **P2-T1 对原文源区间执行原生编辑、复用唯一 Undo**：FileTab、原生表格与 TextKit 共用文档和 Undo；100001 条记录、100 次编辑／切换和 Undo／Redo 有宿主证据，实际中文 IME 提交及十万行 GUI 编辑已验，807fbdee 的真实拼音确认后连续撤销／重做及原字节保存已通过完整 App 无人复验。
 - **P2-T2 严格往返编码、条件保存和外部冲突**：FileTab、DiffTab、TextFileEncoding、WorkspaceFileVersion 共用原字节版本和提交确认；重连保留在途快照，不盲目重复写入；e471b25b 共用只读原生 Diff 和一次性版本绑定覆盖，未改变条件发布后端。
 
 ## 发现项
@@ -34,13 +34,13 @@
 
 - 任务：`P2-T1`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`CSVTableView.surface; NativeDelimitedGrid; DelimitedGrid.control`
 - 摘要：`真实中文候选提交后表格因新解析代次卸载，原生首响应者丢失；撤销后重做亦需重新点击`
 - 风险：`连续原生快捷键与导航失效，真实表格编辑流程被打断`
 - 预期修复：`保持同一原生表格，失效时仅清除数据投影；键盘显式提交归还表格焦点，普通失焦不抢焦点`
 - 验证：`真实 SwiftUI/AppKit 挂载 Red/Green；原生标记输入、Return/Tab/Shift-Tab、取消、失焦、连续 Undo/Redo、保存及完整 App 快捷键`
-- 解决证据：`807fbdee：真实 SwiftUI/AppKit 挂载，Red 2 条（表格更换、首响应者丢失）；Green 保持同一原生表格，标记文字确认、Return/Tab/Shift-Tab、取消、失焦、连续 Undo/Redo、其他输入框焦点和空表清除/恢复均核对实际对象、文档和磁盘。受影响宿主 154/154，零失败零跳过；追加空表与键盘导航最终定点 1/1（0.838s）；正式 Debug、UI Target 构建、Dev/Debug 严格验签通过。日志 /tmp/bailey-grid-focus-regress.opOyf6、/tmp/bailey-grid-final.QxPIeA。已删除完整 App 用例中用于重新获焦的额外点击，尚待执行该版实际快捷键；不冒称完整 GUI 验收。`
+- 解决证据：`807fbdee 的宿主焦点修复在隔离完整 Dev 无人参与复验通过：TIS 选实际拼音，保持前台不重新激活，物理字母键形成组合，空格确认中文，Return 提交后不重新点击连续 Cmd-Z/Cmd-Shift-Z，精确保存 UTF-8 BOM/混合换行，其余字节不变；/tmp/bailey-native-ime-auto.dL04QZ/run4.log、005-csv-marked.json、006-csv-candidate.json 及提交/撤销/重做记录。退出恢复原输入源；非 Unicode 粘贴。`
 
 
 ## 发现 F-09

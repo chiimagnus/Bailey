@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P1-T2 已完成；双窗长会话与宿主资源回收通过，P1-T1 的物理触控板与 VoiceOver 等仍未满足；缺配 1× 显示延期。用户已批准暂时阻塞并推进独立 P2 实现。
+- **依据**：P1-T2 已完成；双窗长会话与宿主资源回收通过，P1-T1 的实际图形辅助功能名称及倍率已修复；物理触控板捏合与 VoiceOver 播报仍未满足；缺配 1× 显示延期。用户已批准暂时阻塞并推进独立 P2 实现。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -16,17 +16,30 @@
 
 ## 发现项
 
+## 发现 F-07
+
+- 任务：`P1-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/ImageInspector.swift:135; Bailey/Editor/SVGFilePreview.swift:224`
+- 摘要：`共用视口已有原生缩放动作但实际AX树只有scroll area，无可辨认的图形类型或当前缩放值`
+- 风险：`VoiceOver无法辨认当前图形表面及确认缩放反馈`
+- 预期修复：`共用NSScrollView提供本地化label与实际fit/倍率value，沿现有位置状态派发必要的原生value变化`
+- 验证：`PreviewScrollViewTests实际挂载/动作/重挂载及完整App外部AX树与VoiceOver`
+- 解决证据：`5a4f5673：真实挂载 Red 14 条、Green 8/8（/tmp/bailey-viewport-ax-{red.M7OJCZ,green.Kd1ra9}）；完整 App SVG 高倍率真实细线、AX 名称及 Fit/100%/745% 值通过，图片名称/倍率及双向像素通过；make build 严格验签通过。实际 VoiceOver 服务未成功启动，不能冒充播报验收，留 P1-T1。`
+
+
 ## 发现 F-06
 
 - 任务：`P1-T2`
 - 严重级别：`Medium`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Editor/RasterFilePreviewUITests.swift:88`
 - 摘要：`系统动画偏好接入后完整 App 的 GIF 测试仍假设默认一定自动播放`
 - 风险：`关闭系统动画时真实产品正确遵循偏好，却会使完整 App 验收误判；也缺少系统禁止自动播放时的 GUI 最终像素和显式恢复路径核验`
 - 预期修复：`完整 App 的文件 GIF 核对真实系统默认菜单并在禁用自动播放时通过原生菜单显式恢复；Markdown 内嵌按实际系统设置验证帧变化或静态首帧，不修改系统设置`
 - 验证：`RasterFilePreviewUITests 与 MarkdownPreviewUITests.testAnimatedGIFChangesVisibleFramesAndSourceBytesStayUntouched，保持原像素、失活、手动控制与文件字节断言`
-- 解决证据：`d84a65a6：两种实际系统偏好路径均已写入 GUI 用例，443168ca 的 make build:ui 成功，退出 0；没有切换用户系统设置，独占 GUI 运行待验，日志 /tmp/bailey-seven-ui-443168ca-20261125.log。 2026-11-25 用户批准暂时阻塞无法执行的验收。独占图形会话缺失，最新完整 App 用例延期，宿主与构建结果不替代 E2E。`
+- 解决证据：`当前真实系统偏好下 Markdown GIF（/tmp/bailey-viewport-ui.q50NaZ，15.029 秒）与真实34帧文件GIF（/tmp/bailey-viewport-ui-recheck.8736K0，31.628 秒）均通过；两种偏好模型契约既有宿主通过。未修改系统偏好，不声称两种物理系统设置均已实际切换。`
 
 
 ## 发现 F-05
@@ -114,3 +127,5 @@
 - d768f481：真实 GIF／SVG 原生文件视图的四个 AX 缩放动作、菜单一致性、像素倍率、中心位置及重挂载恢复、源字节均验证通过；不替代物理输入或 VoiceOver 实际语音播报。
 
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+
+- 5a4f5673：共用原生 AX 类型／实际倍率和值通知，宿主 Red 14 条、Green 8/8；SVG 真实高倍细线和 AX 值 39.789 秒通过；Markdown GIF 15.029 秒、真实 34 帧文件 GIF 31.628 秒通过。JPEG 双向拖动及反向横滚像素断言均通过；整项 GUI 在清理时检测到系统剪贴板计数 3750→3753，写入者未定位，保留失败记录及原断言；同版独立复验 1/1 通过（24.196 秒，/tmp/bailey-raster-final.nv02PU），剪贴板、双向拖动、横滚像素及原字节断言全部满足。日志 /tmp/bailey-viewport-{ax-red.M7OJCZ,ax-green.Kd1ra9,ui.q50NaZ,ui-recheck.8736K0,build.a5ASB2}。构建、严格签名成功。macOS XCTest 不提供实际双指捏合接口；鼠标／滚轮不冒充物理触控板。尝试实际启动 VoiceOver 未成功，服务状态保持原关闭，见 /tmp/bailey-native-ime-auto.dL04QZ/vo.log。

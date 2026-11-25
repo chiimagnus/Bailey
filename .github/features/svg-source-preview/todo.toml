@@ -20,10 +20,10 @@ note = "325ed5a6／76330ab4／48bbbd5d：同一视口、矢量 fit 和高倍细�
 [[tasks]]
 id = "P2-T1"
 title = "同步源文字节与矢量图形、保持滚动状态"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = "a3502b7a／273 份真实图及连续100次编辑、非法XML恢复、实际单窗拼音提交和字节保存、35503954双窗通过。下一步与 HTML 共用 TextKit 连续并排 IME／Undo、阅读位置及矢量最终像素；远端受影响时使用公共 R10 证据。"
+commit = "a3502b7a"
+note = "a3502b7a／273份真实图、连续100次编辑及非法XML恢复，真实App 117次双窗；5a4f5673 共用原生AX与高倍真实细线。完整App并排自动真实拼音→中文→连续Undo/Redo→精确UTF-8保存，最终中文矢量字形截图已核对（/tmp/bailey-native-ime-auto.dL04QZ/run5.log、remaining-025-Composition.svg-preview.png）；阅读位置与视口既有宿主证据保留。实体触控板/VoiceOver与跨条件滚动组合留公共阶段。"
 
 [[tasks]]
 id = "P2-T2"

@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 尚需并排连续 IME／滚动组合；VoiceOver、共享保存后续回归与 P1 门禁留阶段。
+- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 并排真实中文 IME、Undo／Redo、最终 WebKit 中文与源字节已通过；IME 和滚动完整交叉、VoiceOver、最终整合与 P1 门禁留阶段。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -47,3 +47,5 @@ Dev 构建／严格验签、回归测试文件编译通过。正式宿主 XCTest
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 本机隔离 Dev 真实拼音组合 `zhong wen`，确认 `中文` 前磁盘未改；显式保存后切预览，实际 DOM 可访问文字与屏幕显示中文，源字节为 `<h1>\n中文\n</h1>\n`。证据 `/tmp/bailey-ime-native.VZLk2z/{15,16,17}.json`、`17.png` 与 `Bailey-UITest-IME/project/Composition.html`。单窗真实输入与渲染通过，不代替并排连续 IME／滚动交叉验收。
+
+- 隔离完整 Dev 自动化真实系统拼音（非粘贴）：并排组合、候选中文、连续 Undo／Redo，DOM 实际可见中文，精确保存。证据 /tmp/bailey-native-ime-auto.dL04QZ/run5.log、remaining-*.json／截图。退出恢复原输入源；不冒称完成所有滚动／设备交叉。
