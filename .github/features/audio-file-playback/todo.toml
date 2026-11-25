@@ -15,7 +15,7 @@ title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "4c304e53原生AVKit；dd7ab6dc完整App原生播放/定位/音量/静音/切标签通过。9f6ab1c6修复窄窗原生控件消失，五档窗宽实际音量、seek、播放暂停及身份全部通过，关联3/3。后续完整App窄窗交叉及VoiceOver待有效会话；物理听感和睡眠共享P2。"
+note = "4c304e53原生AVKit；dd7ab6dc完整App原生播放/定位/音量/静音/切标签通过。9f6ab1c6修复窄窗原生控件消失，五档窗宽实际音量、seek、播放暂停及身份全部通过，关联3/3。完整App极窄Dock滚动/裁切限制F-04由用户明确接受，不再修复或阻塞；VoiceOver待有效会话；物理听感和睡眠共享P2。"
 
 [[tasks]]
 id = "P2-T2"
