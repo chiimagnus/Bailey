@@ -660,7 +660,7 @@ final class FileTab: nonisolated Identifiable {
         guard version.matches(bytes), LocalFileIdentity.read(resolved.path) == resolved.identity else {
             throw WorkspaceError.changedExternally
         }
-        return resolved
+        return (resolved.path, resolved.identity)
     }
 
     /// The explicit "open saved version" action is not an ordinary focus-save

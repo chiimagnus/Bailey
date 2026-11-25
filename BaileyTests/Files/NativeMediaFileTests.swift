@@ -1333,6 +1333,80 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: text), original)
     }
 
+    func testMediaRefreshKeepsPositionAfterMetadataChangesButRejectsRewrittenBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".github/features")
+        for name in ["video-file-playback/demo-video.mp4", "audio-file-playback/demo-audio.m4a"] {
+            let original = try Data(contentsOf: fixtures.appending(path: name))
+            let url = directory.appending(path: (name as NSString).lastPathComponent)
+            try original.write(to: url)
+            let tab = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { tab.retireContent() }
+            try await load(tab)
+            let player = try XCTUnwrap(tab.mediaPlayer)
+            let item = try XCTUnwrap(player.currentItem)
+            try await waitUntil { item.status == .readyToPlay }
+            let sought: Bool = await player.seek(to: CMTime(seconds: 2, preferredTimescale: 600),
+                                                 toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(sought)
+            var before = stat()
+            XCTAssertEqual(stat(url.path, &before), 0)
+            var value: UInt8 = 1
+            XCTAssertEqual(setxattr(url.path, "com.example.BaileyTest", &value, 1, 0, 0), 0)
+            var tagged = stat()
+            XCTAssertEqual(stat(url.path, &tagged), 0)
+            XCTAssertNotEqual([before.st_ctimespec.tv_sec, before.st_ctimespec.tv_nsec],
+                              [tagged.st_ctimespec.tv_sec, tagged.st_ctimespec.tv_nsec])
+            XCTAssertEqual(try Data(contentsOf: url), original)
+            tab.refreshWhenSelected()
+            // Join the FileTab's pending read. A media tab has no text to return.
+            _ = try? await tab.waitForText()
+            XCTAssertTrue(tab.mediaPlayer === player)
+            XCTAssertTrue(player.currentItem === item)
+            XCTAssertEqual(tab.mediaPlayer?.currentTime().seconds ?? -1, 2, accuracy: 0.05)
+
+            // Preserve inode, byte count and nanosecond mtime even as the content becomes invalid.
+            let writer = try FileHandle(forWritingTo: url)
+            try writer.write(contentsOf: Data(repeating: 0, count: original.count))
+            try writer.close()
+            var times = [before.st_atimespec, before.st_mtimespec]
+            XCTAssertEqual(utimensat(AT_FDCWD, url.path, &times, 0), 0)
+            var rewritten = stat()
+            XCTAssertEqual(stat(url.path, &rewritten), 0)
+            XCTAssertEqual(rewritten.st_ino, before.st_ino)
+            XCTAssertEqual(rewritten.st_size, before.st_size)
+            XCTAssertEqual(rewritten.st_mtimespec.tv_sec, before.st_mtimespec.tv_sec)
+            XCTAssertEqual(rewritten.st_mtimespec.tv_nsec, before.st_mtimespec.tv_nsec)
+            tab.refreshWhenSelected()
+            try await waitUntil { if case .unavailable = tab.content { true } else { false } }
+            XCTAssertNil(tab.mediaPlayer)
+            XCTAssertNil(player.currentItem)
+        }
+    }
+
+    func testMediaMetadataChangeWhileTheFileIsMappedRequiresFreshValidation() async throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID()).wav")
+        try Self.createWAV(url, payloadBytes: 96_000)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let media = try await NativeMedia.open(url.path)
+        let handle = try FileHandle(forUpdating: url)
+        defer { try? handle.close() }
+        let page = try XCTUnwrap(mmap(nil, 4096, PROT_READ, MAP_SHARED, handle.fileDescriptor, 0))
+        guard page != MAP_FAILED else { return XCTFail("mmap failed: \(errno)") }
+        defer { _ = munmap(page, 4096) }
+        XCTAssertEqual(page.load(as: UInt8.self), 0x52) // Fault the RIFF header into the mapping.
+        XCTAssertNil(try LocalWorkspaceBackend.readableFile(at: url.path, includingDataGeneration: true).dataGeneration)
+        var value: UInt8 = 1
+        XCTAssertEqual(setxattr(url.path, "com.example.BaileyTest", &value, 1, 0, 0), 0)
+        let identifies = await NativeMedia.stillIdentifies(url.path, media: media)
+        XCTAssertFalse(identifies)
+        let reopened = try await NativeMedia.open(url.path, reusing: media)
+        XCTAssertFalse(reopened.asset === media.asset)
+    }
+
     func testMediaRefreshAndProjectCloseRetireTheObsoleteAVPlayerItem() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)

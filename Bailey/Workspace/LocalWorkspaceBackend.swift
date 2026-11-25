@@ -178,12 +178,43 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         return String(cString: resolved)
     }
 
-    static func readableFile(at path: String) throws -> (path: String, identity: LocalFileIdentity) {
+    struct ReadableFile: Sendable {
+        let path: String
+        let identity: LocalFileIdentity
+        let dataGeneration: UInt32?
+
+        func hasSameData(as other: Self) -> Bool {
+            guard path == other.path else { return false }
+            guard let dataGeneration, let next = other.dataGeneration else {
+                return identity == other.identity
+            }
+            return dataGeneration == next && identity.refersToSameEntry(as: other.identity)
+                && identity.mode == other.identity.mode && identity.size == other.identity.size
+                && identity.modifiedSeconds == other.identity.modifiedSeconds
+                && identity.modifiedNanoseconds == other.identity.modifiedNanoseconds
+        }
+    }
+
+    static func readableFile(at path: String, includingDataGeneration: Bool = false) throws -> ReadableFile {
         try Task.checkCancellation()
         let handle = try openForReading(path)
         defer { try? handle.close() }
         let info = try regularFileStat(handle)
-        return (try pathOfOpenFile(handle), LocalFileIdentity(info))
+        return ReadableFile(path: try pathOfOpenFile(handle), identity: LocalFileIdentity(info),
+                            dataGeneration: includingDataGeneration ? dataGeneration(of: handle) : nil)
+    }
+
+    private static func dataGeneration(of handle: FileHandle) -> UInt32? {
+        // getattrlist(2): a nonzero generation tracks data changes to this entry, not its xattrs.
+        // Unsupported filesystems and mapped files can return no usable generation.
+        var attrs = attrlist()
+        attrs.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
+        attrs.commonattr = attrgroup_t(ATTR_CMN_GEN_COUNT)
+        var result = (length: UInt32(0), generation: UInt32(0))
+        guard fgetattrlist(handle.fileDescriptor, &attrs, &result, MemoryLayout.size(ofValue: result),
+                           UInt32(FSOPT_ATTR_CMN_EXTENDED)) == 0,
+              result.length == MemoryLayout.size(ofValue: result), result.generation != 0 else { return nil }
+        return result.generation
     }
 
     private static func openForReading(_ path: String) throws -> FileHandle {

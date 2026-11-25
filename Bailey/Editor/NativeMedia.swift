@@ -10,7 +10,8 @@ nonisolated struct NativeMedia: Sendable {
     enum Failure: Error { case unsupported }
 
     let asset: AVURLAsset
-    let identity: LocalFileIdentity
+    private let source: LocalWorkspaceBackend.ReadableFile
+    var identity: LocalFileIdentity { source.identity }
     let kind: Kind
     let videoAspectRatio: CGFloat?
 
@@ -23,14 +24,14 @@ nonisolated struct NativeMedia: Sendable {
     }
 
     @concurrent static func stillIdentifies(_ path: String, media: Self) async -> Bool {
-        guard let source = try? LocalWorkspaceBackend.readableFile(at: path) else { return false }
-        return source.path == media.asset.url.path && source.identity == media.identity
+        guard let source = try? LocalWorkspaceBackend.readableFile(at: path, includingDataGeneration: true) else { return false }
+        return source.hasSameData(as: media.source)
     }
 
     @concurrent static func open(_ path: String, reusing current: Self? = nil) async throws -> Self {
-        let source = try LocalWorkspaceBackend.readableFile(at: path)
+        let source = try LocalWorkspaceBackend.readableFile(at: path, includingDataGeneration: true)
         let url = URL(fileURLWithPath: source.path)
-        if let current, current.identity == source.identity, current.asset.url == url { return current }
+        if let current, source.hasSameData(as: current.source) { return current }
         let asset = AVURLAsset(url: url, options: [
             AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue,
         ])
@@ -57,11 +58,11 @@ nonisolated struct NativeMedia: Sendable {
                     throw Failure.unsupported
                 }
                 try Task.checkCancellation()
-                let accepted = try LocalWorkspaceBackend.readableFile(at: path)
-                guard accepted.path == source.path, accepted.identity == source.identity else {
+                let accepted = try LocalWorkspaceBackend.readableFile(at: path, includingDataGeneration: true)
+                guard accepted.hasSameData(as: source) else {
                     throw WorkspaceError.changedExternally
                 }
-                return Self(asset: asset, identity: source.identity, kind: kind,
+                return Self(asset: asset, source: accepted, kind: kind,
                             videoAspectRatio: videoAspectRatio)
             } catch is AVError {
                 try Task.checkCancellation()
