@@ -28,7 +28,7 @@ note = "92b35562 十工具单键、自由笔画与窄窗；0a808796 原生撤销
 [[tasks]]
 id = "P2-T2"
 title = "sidecar 条件保存、关联文件操作与像素导出"
-status = "blocked"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "b9a34512／bd6e74a2／5d216abe 本机配对、确认导出、两进程冲突恢复和重试均通过；e471b25b 共享冲突比较/显式覆盖已通过本机真实旁车和底图版本回归，详见 CSV P2 审计 F-11。当前真实 Windows 旁车夹具创建超时；稳定 Tailscale 后复验独有旁车/原图版本和远端写入，严格非协作 CAS 仍 Deferred。不在标注层另造写入。"
+commit = "86602be8"
+note = "b9a34512／bd6e74a2／5d216abe 本机配对、确认导出、两进程冲突恢复及重试已验；e471b25b 共用原生比较与条件覆盖；86602be8 真实 Windows Tailscale 双连接旁车冲突/底图保护/重开通过50.712秒，既有并发创建更新/丢回执/配对复制改名移动删除通过151.434秒；原图、旁车及本机同路径字节正确。严格非协作CAS F-02 Deferred 不变；P2-T1中文输入/焦点/VoiceOver及阶段整合另验。"

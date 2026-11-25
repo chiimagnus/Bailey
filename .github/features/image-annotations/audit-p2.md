@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：核心标注、保存与导出已有真实宿主证据；复制入口已核销；共享保存竞态、真实中文标注 IME 与现有设备／完整 App 验收仍未完成。
+- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME、焦点及 VoiceOver 仍待验，阶段 No-Go；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -145,6 +145,8 @@
 
 
 ## 验证与未覆盖
+
+- 2026-11-25 恢复网络后，`86602be8` 新增真实 Windows 双 SSH 连接旁车冲突回归通过（50.712 秒）：首次创建冲突、只读比较、过期图层及底图保护、重新确认、重开与精确字节、本机同路径隔离。既有完整旁车用例通过（151.434 秒）：并发创建／更新、丢回执恢复、配对复制／改名／移动／删除和原图、旁车字节核对。实际测试日志 `/tmp/bailey-tailscale-recovery.rGaTVk`；前次连接超时见 `/tmp/bailey-tailscale-routing.DnjOhC`、`/tmp/bailey-tailscale-image-review.dCu5KX`。未修改生产 SSH 时限，不将回执模拟等同于物理断网，不改变 F-02 的严格 CAS 边界。
 
 - 最新本机隔离 App：键盘撤销／重做、保存、重新打开、复制和确认覆盖导出通过；`92b35562` 的十个单键、真实画笔轨迹与窄窗换行另有真实 App 操作证据。仍需中文 IME、物理设备及严格非协作写入边界验证。
 
