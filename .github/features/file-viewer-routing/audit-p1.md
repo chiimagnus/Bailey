@@ -149,3 +149,5 @@
 - `92625c02`：双窗分别 100 次切换与 100 次打开／关闭，真实样本原字节一致，宿主 1/1 通过。恢复 AVKit 后 `4c304e53` 再验 5/5、零跳过；双窗 100+100 耗时 12.059s，RSS 294→370 MiB（峰值 374.7 MiB），footprint 151.9→146.4 MiB，live_owners=0、retained_empty_players=[]。此为宿主证据。完整 App 104 次新增压测未通过，用户确认此前人工操作干扰测试，撤销未验证的压测修改；原完整 App 冷启动通过证据不变。
 
 - 5d216abe：共享冲突错误恢复路径跨重试、错误栏尺寸、关闭保护及七格式双窗 100+100（12.237 秒，追踪对象与播放器残留均为 0）通过；完整 App 长会话及实体设备门禁不变。 共享验证证据见 [CSV P2 F-09](../csv-table-view/audit-p2.md#发现-f-09)。
+
+- `35503954`：按用户授权使用本机图形会话，实际隔离 Bailey Dev，真实 Downloads/test 样本拷贝，两窗9个标签；13轮共117次格式/窗口切换，第二窗同名 CSV／HTML 保持独立，音视频暂停位置每次匹配（±0.1s），随后正常退出、冷启动、关闭所有文件及源字节核对。`make test:ui ONLY_TESTING=BaileyUITests/FilePreviewWorkspaceUITests/testSevenRealFormatsKeepWindowOwnershipAcrossSwitchesAndNormalRelaunch` 1/1、零失败零跳过，747.190秒，退出0；日志 `/tmp/bailey-routing-ui-long.vPv7txF1`。此项核销完整 App 双窗长会话，不宣称 GUI RSS 回到基线或硬件／输入门禁完成。此前宿主100+100对象退役证据单独保留。

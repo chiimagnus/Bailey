@@ -40,3 +40,5 @@
 - 文档见 [文件编辑器](../../../docs/features/editor.md)，不另建保存路径或专属工具条。
 - 最终 e4267d71：NativeMediaFileTests 20 项及 NativePaneRetentionIntegrationTests 28 项全部通过；真实加载时改名、旧路径被音频替换及关闭重开各 10 次均在 loading 状态触发，未发布旧资产，源文件字节一致。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+
+- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。

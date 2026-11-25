@@ -212,3 +212,5 @@
 - 2026-11-25：`76330ab4`、`67c3c302`。Quick Look 正常的 Fig3-5c 在同一 620×480 点视口由 136.26×114.28 点扩大至 572.33×480 点；直接链接实际 Debug 产品的隔离原生诊断遍历 shale_shpb/data 全部 273 份，fit、可见墨迹及原字节不变 273/273 通过，400%／1600%／6400% 细线像素检查通过。总耗时 115.90 秒，峰值 RSS 约 276 MiB；另 20 项边界诊断及 8191 圆形像素通过。节点预算由 4096 提升至 8192，1 MiB 与其他预算保留。Debug 严格签名、宿主/UI测试目标构建通过，XCTest 会话握手阻塞（非断言失败），未运行正式用例或完整 GUI，未替换正式 App。诊断日志见 `/tmp/bailey-shale-native-diagnostic.LRfuQ8/node-fit/result.log`、`boundary.log`；构建日志 `/tmp/bailey-shale-svg-node-build-20261125.log` 与 `/tmp/bailey-shale-svg-node-host-build-20261125.log`。阶段仍 No-Go。
 
 - 2026-11-25 `2f8482e0`：跨格式实际净化诊断及外链剔除回归与 SVG pattern 专项 2/2，零失败零跳过；见 [HTML P1](../html-live-preview/audit-p1.md)。不替代物理缩放验收。
+
+- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
