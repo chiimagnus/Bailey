@@ -5,6 +5,8 @@ import CryptoKit
 import CoreVideo
 import Darwin
 import Foundation
+import MediaToolbox
+import os
 import SwiftUI
 import VideoToolbox
 import XCTest
@@ -1249,6 +1251,186 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertEqual(Double(base[1080 * stride + 960] >> 6), 384, accuracy: 30)
         XCTAssertEqual(Double(base[1080 * stride + 2880] >> 6), 704, accuracy: 30)
         XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    // A test-only tap on the AVPlayer's audio mix observes what the active
+    // player actually decodes, rather than re-reading the fixture separately.
+    nonisolated private final class AudioTapProbe: Sendable {
+        struct Measurement: Sendable {
+            var sampleRate = 0.0
+            var stride = 0
+            var frames = 0
+            var lowPower = 0.0
+            var highPower = 0.0
+            var peak: Float = 0
+        }
+        let measurement = OSAllocatedUnfairLock(initialState: Measurement())
+
+        @available(macOS 27.0, *)
+        func makeTap() throws -> MTAudioProcessingTap {
+            let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+            let retained = Unmanaged.passRetained(self)
+            var callbacks = MTAudioProcessingTapCallbacks(
+                version: kMTAudioProcessingTapCallbacksVersion_0,
+                clientInfo: retained.toOpaque(),
+                init: { _, info, storage in storage.pointee = info },
+                finalize: { tap in
+                    Unmanaged<AudioTapProbe>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).release()
+                },
+                prepare: { tap, _, format in
+                    let probe = Unmanaged<AudioTapProbe>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).takeUnretainedValue()
+                    let asbd = format.pointee
+                    probe.measurement.withLock {
+                        $0.sampleRate = asbd.mSampleRate
+                        $0.stride = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+                            && asbd.mBitsPerChannel == 32
+                            ? Int(asbd.mBytesPerFrame) / MemoryLayout<Float>.stride : 0
+                    }
+                },
+                unprepare: nil,
+                process: { tap, frames, _, buffers, delivered, flags in
+                    guard MTAudioProcessingTapGetSourceAudio(tap, frames, buffers, flags, nil, delivered) == noErr,
+                          delivered.pointee > 1 else { return }
+                    let probe = Unmanaged<AudioTapProbe>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).takeUnretainedValue()
+                    let format = probe.measurement.withLock { $0 }
+                    guard format.stride > 0, format.sampleRate > 0,
+                          let buffer = UnsafeMutableAudioBufferListPointer(buffers).first,
+                          let data = buffer.mData else { return }
+                    let count = min(delivered.pointee, Int(buffer.mDataByteSize) / MemoryLayout<Float>.stride / format.stride)
+                    guard count >= 256 else { return }
+                    let samples = data.assumingMemoryBound(to: Float.self)
+                    // Compare spectral energy, not zero-crossings through
+                    // silent padding at the ends of decoded audio buffers.
+                    func power(_ frequency: Double) -> Double {
+                        let coefficient = 2 * cos(2 * .pi * frequency / format.sampleRate)
+                        var previous = 0.0, older = 0.0
+                        for index in 0..<count {
+                            let next = Double(samples[index * format.stride]) + coefficient * previous - older
+                            older = previous
+                            previous = next
+                        }
+                        return max(0, previous * previous + older * older - coefficient * previous * older)
+                    }
+                    let low = power(440), high = power(880)
+                    let peak = (0..<count).reduce(Float(0)) { max($0, abs(samples[$1 * format.stride])) }
+                    guard peak > 0.001 else { return }
+                    probe.measurement.withLock {
+                        $0.frames += count
+                        $0.lowPower += low
+                        $0.highPower += high
+                        $0.peak = max($0.peak, peak)
+                    }
+                }
+            )
+            var tap: MTAudioProcessingTap?
+            let status = MTAudioProcessingTapCreateWithPreferredFormat(kCFAllocatorDefault, &callbacks,
+                kMTAudioProcessingTapCreationFlag_PostEffects, format.formatDescription, &tap)
+            guard status == noErr, let tap else {
+                retained.release()
+                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+            }
+            return tap
+        }
+    }
+
+    func testSelectableNativeAudioTracksDeliverTheChosenPCM() async throws {
+        guard #available(macOS 27.0, *) else {
+            throw XCTSkip("Mixed PCM output observation requires the macOS 27 audio tap API")
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "Alternate languages.mov")
+        try FileManager.default.copyItem(at: root.appending(path: ".github/features/video-file-playback/demo-audio-tracks.mov"), to: url)
+        let bytes = try Data(contentsOf: url)
+        let project = Project(fallbackName: "Alternate audio", workspaceConfiguration: .standard)
+        project.openLocalFile(url.path)
+        guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing video") }
+        defer { project.closeContent(.file(tab)) }
+        let tabID = try XCTUnwrap(project.selectedTabID)
+        try await load(tab)
+        let player = try XCTUnwrap(tab.mediaPlayer)
+        let item = try XCTUnwrap(player.currentItem)
+        try await waitUntil { item.status != .unknown }
+        XCTAssertEqual(item.status, .readyToPlay)
+        let group = try await item.asset.loadMediaSelectionGroup(for: .audible)
+        let audio = try XCTUnwrap(group)
+        let tracks = try await item.asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(tracks.count, 2)
+        XCTAssertEqual(Set(audio.options.compactMap(\.extendedLanguageTag)), ["en", "fr"])
+        let probe = AudioTapProbe()
+        let parameters = AVMutableAudioMixInputParameters()
+        parameters.audioTapProcessor = try probe.makeTap()
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = [parameters]
+        item.audioMix = mix
+        player.volume = 0.05
+        defer { player.pause(); item.audioMix = nil }
+        for (language, seek) in [("en", 1.0), ("fr", 3.0), ("en", 5.0)] {
+            player.pause()
+            let option = try XCTUnwrap(audio.options.first { $0.extendedLanguageTag == language })
+            item.select(option, in: audio)
+            try await waitUntil { item.currentMediaSelection.selectedMediaOption(in: audio) == option }
+            let accepted = await player.seek(to: CMTime(seconds: seek, preferredTimescale: 600),
+                                             toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(accepted)
+            XCTAssertEqual(player.currentTime().seconds, seek, accuracy: 0.05)
+            XCTAssertEqual(player.rate, 0)
+            probe.measurement.withLock { $0.frames = 0; $0.lowPower = 0; $0.highPower = 0; $0.peak = 0 }
+            player.play()
+            try await waitUntil { probe.measurement.withLock { $0.frames >= 24_000 } }
+            player.pause()
+            let signal = probe.measurement.withLock { $0 }
+            print("AUDIO_SELECTION language=\(language) frames=\(signal.frames) sampleRate=\(signal.sampleRate) low=\(signal.lowPower) high=\(signal.highPower)")
+            XCTAssertGreaterThan(signal.peak, 0.001)
+            let wanted = language == "en" ? signal.lowPower : signal.highPower
+            let unwanted = language == "en" ? signal.highPower : signal.lowPower
+            XCTAssertGreaterThan(wanted, 16 * unwanted, "The selected tone must dominate the actual audio mix")
+            XCTAssertGreaterThan(player.currentTime().seconds, seek)
+            XCTAssertTrue(tab.mediaPlayer === player)
+            XCTAssertTrue(player.currentItem === item)
+            XCTAssertEqual(item.currentMediaSelection.selectedMediaOption(in: audio), option)
+        }
+        // Switch without pausing; discard queued PCM from the old selection
+        // only after the actual playback clock has advanced.
+        let french = try XCTUnwrap(audio.options.first { $0.extendedLanguageTag == "fr" })
+        let switchTime = player.currentTime().seconds
+        player.play()
+        try await waitUntil { player.currentTime().seconds > switchTime + 0.1 }
+        let selectedAt = player.currentTime().seconds
+        item.select(french, in: audio)
+        try await waitUntil {
+            item.currentMediaSelection.selectedMediaOption(in: audio) == french
+                && player.currentTime().seconds > selectedAt + 0.5
+        }
+        probe.measurement.withLock { $0.frames = 0; $0.lowPower = 0; $0.highPower = 0; $0.peak = 0 }
+        try await waitUntil { probe.measurement.withLock { $0.frames >= 24_000 } }
+        let switched = probe.measurement.withLock { $0 }
+        XCTAssertGreaterThan(switched.peak, 0.001)
+        XCTAssertGreaterThan(switched.highPower, 16 * switched.lowPower)
+        XCTAssertEqual(player.rate, 1)
+        print("AUDIO_SELECTION playing-switch fr frames=\(switched.frames) low=\(switched.lowPower) high=\(switched.highPower)")
+
+        // Another file must not take over this selected track or player.
+        let otherURL = directory.appending(path: "Other.wav")
+        try Self.createWAV(otherURL, payloadBytes: 96_000)
+        project.openLocalFile(otherURL.path)
+        XCTAssertEqual(player.rate, 0)
+        let paused = player.currentTime().seconds
+        guard case .file(let other)? = project.focusedContent else { return XCTFail("Missing other file") }
+        defer { project.closeContent(.file(other)) }
+        try await load(other)
+        let otherPlayer = try XCTUnwrap(other.mediaPlayer)
+        XCTAssertFalse(otherPlayer === player)
+        project.selectTab(tabID)
+        XCTAssertTrue(tab.mediaPlayer === player)
+        XCTAssertTrue(player.currentItem === item)
+        XCTAssertEqual(item.currentMediaSelection.selectedMediaOption(in: audio), french)
+        XCTAssertEqual(player.currentTime().seconds, paused, accuracy: 0.12)
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
     func testVideoWithTwoActualAudioTracksKeepsBothTracksAndSourceBytes() async throws {
