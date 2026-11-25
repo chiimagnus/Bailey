@@ -123,7 +123,7 @@ final class NativeMediaFileUITests: XCTestCase {
         expectTime(9)
         let right = waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
         let left = waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
-        right.press(forDuration: 0.1, thenDragTo: left)
+        right.click(forDuration: 0.1, thenDragTo: left)
         expectTime(3)
         XCTAssertEqual(String(describing: play.value ?? ""), paused)
 
