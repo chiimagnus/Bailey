@@ -25,7 +25,7 @@
 - 风险：`偏离原生播放器需求，并重复维护系统已有的按钮、进度、音量和观察逻辑。`
 - 预期修复：`复用 NativePlayerView 的 AVPlayerView，删除 FileAudioControls 及专用字符串；不恢复波形。核查紧凑系统布局及原有播放器生命周期。`
 - 验证：`真实音频窗口截图/实际控制和轴线，窄/宽/深浅窗口，seek/播放/音量/速率/焦点，Markdown 音频。`
-- 解决证据：`7bbfd8ab：复核 4c304e53 完整 App 原始 AX/系统日志，浮动 timeline AXValue 保持在 4.070605s，但原生 elapsed time 从 00:04 连续推进至 00:10，播放队列启动；不能据旧断言超时认定播放停滞。新增真实挂载宿主以实际 AVPlayer 时间和原生计时双证据验证 4→6.009239s、显示 6s、暂停保持、原字节不变。音频及嵌入媒体专项 3/3，零跳过；UI 目标构建和 Dev 严格验签通过。完整 App 修正后的播放、切标签、暂停与窄窗复验未执行，无独占会话；设备、睡眠及 VoiceOver 门禁不变。日志 /tmp/bailey-native-audio-play.s0PZ5MBP、/tmp/bailey-audio-clock-verified.KeRSQ2BZ、/tmp/bailey-audio-clock-ui-build.f7jlDIdR。`
+- 解决证据：`7bbfd8ab：复核 4c304e53 完整 App 原始 AX/系统日志，浮动 timeline AXValue 保持在 4.070605s，但原生 elapsed time 从 00:04 连续推进至 00:10，播放队列启动；不能据旧断言超时认定播放停滞。新增真实挂载宿主以实际 AVPlayer 时间和原生计时双证据验证 4→6.009239s、显示 6s、暂停保持、原字节不变。音频及嵌入媒体专项 3/3，零跳过；UI 目标构建和 Dev 严格验签通过。后续 dd7ab6dc 的完整 App 实际原生定位、播放、音量／静音、切标签及暂停恢复 1/1（40.454s），原字节一致，日志 /tmp/bailey-audio-clock-full-ui.BUPl9tbn；窄窗逐个控件与实体设备、睡眠及 VoiceOver 门禁不变。宿主日志 /tmp/bailey-native-audio-play.s0PZ5MBP、/tmp/bailey-audio-clock-verified.KeRSQ2BZ、/tmp/bailey-audio-clock-ui-build.f7jlDIdR。`
 
 
 ## 发现 F-01
