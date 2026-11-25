@@ -190,3 +190,11 @@
 - 2026-11-26：用户已提供并授权使用连接的 Beats Studio Pro；真实内置／蓝牙双向切换对独立音视频均通过，第二输出设备不再属于缺配项；详见[音频 P2](../audio-file-playback/audit-p2.md)。
 
 - 2026-11-26：用户明确授权旁白自动化。经旁白实用工具开启 AppleScript 控制，经 macOS 系统同意，真实 Apple Events 权限由 -1744 变为 0。隔离 Bailey Dev 中 M4A 与 MOV 的原生播放／暂停按钮均取得 VoiceOver 实际末句 `play/pause 已选择 切换按钮 在鼠标指针下面`；图片、SVG、CSV 及 HTML 虽有目标 AX 元素，实际旁白仍停留项目列表，前台失焦的追加复验也未核销。仅记录两个控件真实播报通过，不把普通 AX 或点击等同于完整键盘导览。测试源字节不变，隔离 App 已退出，旁白系统开关 AX 值 0、NSWorkspace false、进程退出；用户授权保留。证据 `/tmp/bailey-vo-authorized.o91boWsW/{retry.log,pointer.log,cursor.log,settings-off.json}`。
+
+- 2026-11-26：基于 `8f2610fa` 重新构建正式 Debug 与隔离 Bailey Dev，两个 build 及各自验签退出 0。
+  VoiceOver 自身的光标导航准确进入图片预览；真实末句为 `Image preview scroll area`。
+  经官方 AppleScript commander `actions` 打开旁白操作菜单，实际播报 11 项及其中 Fit、100%、Zoom in、Zoom out、Annotate Image。
+  菜单中的 VO cursor text 仍为底层视口，真实末句才是当前菜单项目；修正选择策略后复验前，SaltlineRealityKit 的独立 App 多次抢占共享前台，
+  随后用户实际操作 Helium/其他窗口。未终止其他项目进程、不再争抢焦点；隔离 Dev 已退出、VoiceOver 状态 false，原有授权保留。
+  没有核销缩放实际执行／倍率播报或其余控件；没有新产品代码改动，也未执行全量测试。
+  证据 `/tmp/bailey-vo-matrix.WtyZTlsV/{image-retry.log,commander.log,direct.log,final-matrix.py}`，构建日志 `/tmp/bailey-vo-{baseline,dev}-build.log`。

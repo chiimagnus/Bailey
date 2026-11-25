@@ -7,7 +7,7 @@ title = "用同一图片视口完成高精度缩放与资源按需解码"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "93c29eab/249a4efb共用视口；真实区域解码、117次双窗、原生AX、GIF与SVG实际缩放通过。2026-11-26用户亲验实体触控板捏合无问题；64782817普通鼠标滚轮指针锚点缩放，定点4/4、扩大85项73通过12环境跳过、构建验签通过。VoiceOver实际播报待有效验收；缺配1×延期。"
+note = "93c29eab/249a4efb共用视口；真实区域解码、117次双窗、原生AX、GIF与SVG实际缩放通过。2026-11-26用户亲验实体触控板捏合无问题；64782817普通鼠标滚轮指针锚点缩放，定点4/4、扩大85项73通过12环境跳过、构建验签通过。真实VoiceOver已播报Image preview scroll area与Fit/100%/Zoom in/Zoom out/Annotate Image动作菜单，动作执行与倍率播报待独占图形会话；缺配1×延期。"
 
 [[tasks]]
 id = "P1-T2"
