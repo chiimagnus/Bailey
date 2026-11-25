@@ -852,7 +852,10 @@ final class HTMLFilePreviewTests: XCTestCase {
         XCTAssertThrowsError(try SVGArtwork.parse(entity))
         let vector = try SVGArtwork.parse(bytes)
         XCTAssertEqual(vector.image.size, CGSize(width: 48, height: 24))
-        XCTAssertEqual(Set(vector.omitted), ["@onload", "image", "include", "foreignObject", "style", "script"])
+        XCTAssertEqual(Set(vector.omitted), ["@onload", "@href", "image", "include", "foreignObject", "style", "script"])
+        let sanitized = try SVGArtwork.sanitizedXML(bytes)
+        XCTAssertFalse(sanitized.xml.contains(endpoint))
+        XCTAssertFalse(sanitized.xml.contains("private.png"))
         let markdownResource = PreviewResource(path: project.appendingPathComponent("README.md").path,
                                                directory: project.path, backend: LocalWorkspaceBackend.shared)
         let markdown = try await markdownResource.picture(XCTUnwrap(URL(string: "shared.svg")))
