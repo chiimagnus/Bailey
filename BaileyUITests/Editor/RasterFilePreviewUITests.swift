@@ -174,24 +174,33 @@ final class RasterFilePreviewUITests: XCTestCase {
             guard viewer.exists, let bitmap = NSBitmapImageRep(data: viewer.screenshot().pngRepresentation) else {
                 return nil
             }
-            let center = bitmap.pixelsWide / 2
             let row = bitmap.pixelsHigh / 2
-            let extent = min(140, center - 1)
-            guard extent > 0, row > 0 else { return nil }
-            let blue = stride(from: center - extent, through: center + extent, by: 2).filter { column in
+            guard row > 0 else { return nil }
+            // The sprite traverses the full image. Its blue channel is
+            // brighter than the stationary outline at either edge.
+            let blue = stride(from: 0, to: bitmap.pixelsWide, by: 2).filter { column in
                 guard let color = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) else { return false }
-                return color.blueComponent > 0.69 && color.greenComponent < 0.54
+                return color.blueComponent > 0.80 && color.greenComponent < 0.48
             }
-            guard let first = blue.first, let last = blue.last, last - first >= 12 else { return nil }
+            guard let first = blue.first, let last = blue.last, blue.count >= 7,
+                  (last - first) / 2 + 1 == blue.count else { return nil }
             return (first + last) / 2
         }
-        let firstFrame = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in spriteCenter() != nil }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [firstFrame], timeout: 8), .completed)
+        func waitForSprite() throws -> Int {
+            var position: Int?
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                position = spriteCenter()
+                return position != nil
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 8), .completed)
+            return try XCTUnwrap(position)
+        }
+        _ = try waitForSprite()
         startAnimation(viewer, in: app)
-        let initial = try XCTUnwrap(spriteCenter())
+        let initial = try waitForSprite()
         func expectMovement(from center: Int, inverted: Bool = false) {
             let moves = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                spriteCenter().map { abs($0 - center) > 4 } ?? false
+                spriteCenter().map { abs($0 - center) > 4 } ?? inverted
             }, object: nil)
             moves.isInverted = inverted
             XCTAssertEqual(XCTWaiter.wait(for: [moves], timeout: inverted ? 0.8 : 5), .completed)
@@ -201,14 +210,14 @@ final class RasterFilePreviewUITests: XCTestCase {
         let pause = WorkspaceUITestSupport.menuItem("Pause Animation", in: app)
         XCTAssertTrue(pause.waitForExistence(timeout: 5))
         pause.click()
-        let paused = try XCTUnwrap(spriteCenter())
+        let paused = try waitForSprite()
         expectMovement(from: paused, inverted: true)
 
         WorkspaceUITestSupport.fileRow(other, in: window).doubleClick()
         XCTAssertTrue(viewer.waitForNonExistence(timeout: 10))
         WorkspaceUITestSupport.fileTab(file, in: window).click()
         XCTAssertTrue(viewer.waitForExistence(timeout: 10))
-        XCTAssertLessThanOrEqual(abs(try XCTUnwrap(spriteCenter()) - paused), 4)
+        XCTAssertLessThanOrEqual(abs(try waitForSprite() - paused), 4)
         viewer.rightClick()
         let resume = WorkspaceUITestSupport.menuItem("Resume Animation", in: app)
         XCTAssertTrue(resume.waitForExistence(timeout: 5))
