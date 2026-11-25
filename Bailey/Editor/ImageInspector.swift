@@ -168,6 +168,7 @@ class PreviewScrollView: NSScrollView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    var isScalableVector: Bool { false }
     var pixelScale: CGFloat { magnification * backingScale }
     fileprivate var hasViewportLayout: Bool { viewportSize != .zero }
     private var minimumManualMagnification: CGFloat { 0.1 / backingScale }
@@ -199,12 +200,12 @@ class PreviewScrollView: NSScrollView {
         let oldPixelScale = pixelScale
         viewportSize = size
         backingScale = scale
-        if !fitting { minMagnification = minimumManualMagnification }
-        maxMagnification = 4 / scale
         if fitting {
             fit()
-        } else if pixelScale != oldPixelScale {
-            setZoom(oldPixelScale, at: center)
+        } else {
+            minMagnification = minimumManualMagnification
+            updateMaximumMagnification(preserving: oldPixelScale)
+            if pixelScale != oldPixelScale { setZoom(oldPixelScale, at: center) }
         }
     }
 
@@ -227,17 +228,32 @@ class PreviewScrollView: NSScrollView {
 
     private func restorePositionWhenReady() {
         guard let saved = positionToRestore, window != nil, viewportSize != .zero else { return }
+        updateMaximumMagnification(preserving: saved.pixelScale)
         setZoom(saved.pixelScale, at: center)
         let bounds = contentView.bounds
         positionToRestore = nil
         scroll(to: CGPoint(x: saved.center.x - bounds.width / 2, y: saved.center.y - bounds.height / 2))
     }
 
+    private var fitMagnification: CGFloat? {
+        guard let size = documentView?.frame.size, size.width > 0, size.height > 0,
+              viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+        let scale = min(viewportSize.width / size.width, viewportSize.height / size.height)
+        return isScalableVector ? scale : min(1 / backingScale, scale)
+    }
+
+    private func updateMaximumMagnification(preserving pixelScale: CGFloat = 0) {
+        // Vector documents are not constrained by their intrinsic pixel size.
+        // Very small SVGs still need room to zoom beyond their fitted scale.
+        maxMagnification = isScalableVector
+            ? max(64 / backingScale, (fitMagnification ?? 0) * 4, pixelScale / backingScale)
+            : 4 / backingScale
+    }
+
     @objc func fit() {
         fitting = true
-        guard let size = documentView?.frame.size, size.width > 0, size.height > 0,
-              viewportSize.width > 0, viewportSize.height > 0 else { return }
-        let scale = min(1 / backingScale, viewportSize.width / size.width, viewportSize.height / size.height)
+        guard let size = documentView?.frame.size, let scale = fitMagnification else { return }
+        updateMaximumMagnification()
         minMagnification = min(minimumManualMagnification, scale)
         magnification = scale
         let bounds = contentView.bounds

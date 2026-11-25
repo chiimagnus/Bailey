@@ -227,6 +227,20 @@ final class SVGPreviewScrollView: PreviewScrollView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    override var isScalableVector: Bool { true }
+
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        // Repaint visible vectors at the new device scale/position instead
+        // of reusing AppKit's previously drawn scroll contents.
+        if let content { content.setNeedsDisplay(content.visibleRect) }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if let content { content.setNeedsDisplay(content.visibleRect) }
+    }
+
     override func becomeFirstResponder() -> Bool {
         guard super.becomeFirstResponder() else { return false }
         onFocused()

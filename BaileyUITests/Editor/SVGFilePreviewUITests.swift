@@ -82,7 +82,7 @@ final class SVGFilePreviewUITests: XCTestCase {
             let sx = CGFloat(bitmap.pixelsWide) / frame.width
             let sy = CGFloat(bitmap.pixelsHigh) / frame.height
             let visible = preview.frame
-            let width = min(1400, visible.width * sx, visible.height * sy * 1400 / 620)
+            let width = min(visible.width * sx, visible.height * sy * 1400 / 620)
             let height = width * 620 / 1400
             let center = CGPoint(x: (visible.midX - frame.minX) * sx,
                                  y: (visible.midY - frame.minY) * sy)
@@ -142,7 +142,11 @@ final class SVGFilePreviewUITests: XCTestCase {
         row.doubleClick()
         let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 12))
-        for _ in 0..<7 {
+        preview.rightClick()
+        let actual = WorkspaceUITestSupport.menuItem("100%", in: app)
+        XCTAssertTrue(actual.waitForExistence(timeout: 5))
+        actual.click()
+        for _ in 0..<9 {
             preview.rightClick()
             let zoom = WorkspaceUITestSupport.menuItem("Zoom in", in: app)
             XCTAssertTrue(zoom.waitForExistence(timeout: 5))
@@ -153,18 +157,20 @@ final class SVGFilePreviewUITests: XCTestCase {
             let frame = window.frame
             let centerX = (preview.frame.midX - frame.minX) * CGFloat(bitmap.pixelsWide) / frame.width
             let y = Int((preview.frame.midY - frame.minY) * CGFloat(bitmap.pixelsHigh) / frame.height)
-            let left = Int(centerX - 160 + 12 * 4)
-            guard (0..<bitmap.pixelsHigh).contains(y), left >= 0, left + 64 <= bitmap.pixelsWide else { return false }
-            let channels = (left..<(left + 64)).compactMap {
+            let scale = CGFloat(pow(1.25 as Double, 9 as Double))
+            let left = Int(centerX + (12 - 40) * scale)
+            let right = Int(centerX + (28 - 40) * scale)
+            guard (0..<bitmap.pixelsHigh).contains(y), left >= 0, right <= bitmap.pixelsWide else { return false }
+            let channels = (left..<right).compactMap {
                 bitmap.colorAt(x: $0, y: y)?.usingColorSpace(.sRGB)?.redComponent
             }
             let transitions = zip(channels, channels.dropFirst()).filter { abs($0 - $1) > 0.5 }.count
-            return channels.count == 64 && transitions > 30
+            return channels.count == right - left && transitions > 30
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed,
-                       "The actual window must resolve quarter-unit vector bands at 400%, not enlarge a cached fit bitmap")
+                       "The actual window must resolve quarter-unit vector bands above 400%, not enlarge a cached fit bitmap")
         let attachment = XCTAttachment(screenshot: window.screenshot())
-        attachment.name = "fine-vector-400-percent"
+        attachment.name = "fine-vector-above-400-percent"
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))

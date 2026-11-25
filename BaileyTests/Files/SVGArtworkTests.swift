@@ -847,6 +847,175 @@ final class SVGArtworkTests: XCTestCase {
         }
     }
 
+    func testSmallPrintSizedSVGUsesTheAvailableViewportAndSupportsDeepVectorZoom() throws {
+        let stripes = (0..<40).map { column in
+            "<rect x=\"\(10 + Double(column) * 0.5)\" width=\"0.25\" height=\"40\" fill=\"black\"/>"
+        }.joined()
+        // Real PDF-extracted research SVGs use pt units and nonzero viewBoxes.
+        let svg = try SVGArtwork.parse(Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="60pt" height="30pt" viewBox="100 200 80 40">
+              <g transform="translate(100 200)">
+                <rect width="80" height="40" fill="white"/>\(stripes)
+              </g>
+            </svg>
+            """.utf8)).image
+        let window = NSWindow(contentRect: CGRect(x: -2000, y: -2000, width: 480, height: 360),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = SVGPreviewScrollView()
+        window.contentView = scroll
+        window.orderBack(nil)
+        scroll.install(svg, request: "small-print-sized-svg")
+        for size in [CGSize(width: 480, height: 360), CGSize(width: 200, height: 360),
+                     CGSize(width: 720, height: 260)] {
+            window.setContentSize(size)
+            scroll.layoutSubtreeIfNeeded()
+            scroll.fit()
+            scroll.layoutSubtreeIfNeeded()
+            let canvas = try XCTUnwrap(scroll.documentView)
+            let actual = canvas.convert(canvas.bounds, to: scroll)
+            let expected = min(scroll.contentView.frame.width / svg.size.width,
+                               scroll.contentView.frame.height / svg.size.height)
+            XCTAssertEqual(scroll.magnification, expected, accuracy: 0.01)
+            XCTAssertEqual(actual.width, svg.size.width * expected, accuracy: 1)
+            XCTAssertEqual(actual.height, svg.size.height * expected, accuracy: 1)
+        }
+        scroll.actualSize()
+        XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
+        for scale: CGFloat in [4, 16, 64] {
+            scroll.setZoom(scale, at: CGPoint(x: 20, y: 20))
+            scroll.layoutSubtreeIfNeeded()
+            XCTAssertEqual(scroll.pixelScale, scale, accuracy: 0.001)
+            let canvas = try XCTUnwrap(scroll.documentView)
+            let clip = scroll.contentView
+            clip.scroll(to: clip.constrainBoundsRect(CGRect(x: 20 - clip.bounds.width / 2,
+                y: 20 - clip.bounds.height / 2, width: clip.bounds.width, height: clip.bounds.height)).origin)
+            scroll.reflectScrolledClipView(clip)
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+            scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+            let sx = CGFloat(bitmap.pixelsWide) / scroll.bounds.width
+            let sy = CGFloat(bitmap.pixelsHigh) / scroll.bounds.height
+            let start = canvas.convert(CGPoint(x: 19, y: 20), to: scroll)
+            let end = canvas.convert(CGPoint(x: 21, y: 20), to: scroll)
+            let y = Int(start.y * sy)
+            let left = Int(start.x * sx), right = Int(end.x * sx)
+            guard left >= 0, right < bitmap.pixelsWide, y >= 0, y < bitmap.pixelsHigh else {
+                XCTFail("Deep zoom must preserve the selected vector region")
+                continue
+            }
+            let colors = try (left..<right).map { x in
+                try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)).redComponent
+            }
+            let transitions = zip(colors, colors.dropFirst()).filter { abs($0 - $1) > 0.5 }.count
+            XCTAssertGreaterThanOrEqual(transitions, 5, "The actual fine vector bands must resolve at \(scale)x")
+        }
+    }
+
+    func testTinySVGFitAndManualZoomSurviveViewportResizeAndRemount() throws {
+        let svg = try SVGArtwork.parse(Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="1" height="2">
+              <rect width="1" height="2" fill="red"/>
+            </svg>
+            """.utf8)).image
+        let window = NSWindow(contentRect: CGRect(x: -2000, y: -2000, width: 400, height: 320),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let first = SVGPreviewScrollView()
+        window.contentView = first
+        window.orderBack(nil)
+        first.install(svg, request: "tiny")
+        first.layoutSubtreeIfNeeded()
+        let fitted = first.pixelScale
+        XCTAssertGreaterThan(fitted, 64)
+        first.zoomIn()
+        XCTAssertEqual(first.pixelScale, fitted * 1.25, accuracy: 0.001)
+        let saved = try XCTUnwrap(first.position)
+        window.setContentSize(CGSize(width: 100, height: 120))
+        first.layoutSubtreeIfNeeded()
+        XCTAssertEqual(first.pixelScale, saved.pixelScale, accuracy: 0.001)
+        let second = SVGPreviewScrollView()
+        window.contentView = second
+        second.install(svg, request: "tiny", position: saved)
+        second.layoutSubtreeIfNeeded()
+        XCTAssertEqual(second.pixelScale, saved.pixelScale, accuracy: 0.001)
+        second.fit()
+        let expected = min(second.contentView.frame.width / svg.size.width,
+                           second.contentView.frame.height / svg.size.height)
+        XCTAssertEqual(second.magnification, expected, accuracy: 0.01)
+    }
+
+    func testShaleResearchSVGsFitTheViewportAtReadableSize() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_SHALE_SVG_ROOT"] else {
+            throw XCTSkip("Set BAILEY_SHALE_SVG_ROOT to the research data directory")
+        }
+        let directory = URL(fileURLWithPath: root)
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey])).compactMap { $0 as? URL }
+            .filter { $0.pathExtension.lowercased() == "svg" && $0.pathComponents.contains("原图") }
+            .sorted { $0.path < $1.path }
+        XCTAssertFalse(files.isEmpty)
+        let window = NSWindow(contentRect: CGRect(x: -2000, y: -2000, width: 620, height: 480),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = SVGPreviewScrollView()
+        window.contentView = scroll
+        window.orderBack(nil)
+        var passed = 0
+        var failures = [String]()
+        for file in files {
+            do {
+                let bytes = try Data(contentsOf: file)
+                let artwork = try await SVGPreviewSnapshot.parse(String(decoding: bytes, as: UTF8.self))
+                scroll.install(artwork.image, request: file.path)
+                scroll.layoutSubtreeIfNeeded()
+                scroll.fit()
+                scroll.layoutSubtreeIfNeeded()
+                let canvas = try XCTUnwrap(scroll.documentView)
+                let actual = canvas.convert(canvas.bounds, to: scroll)
+                let expected = min(scroll.contentView.frame.width / artwork.image.size.width,
+                                   scroll.contentView.frame.height / artwork.image.size.height)
+                guard abs(scroll.magnification - expected) < 0.01,
+                      abs(actual.width - artwork.image.size.width * expected) < 1,
+                      abs(actual.height - artwork.image.size.height * expected) < 1 else {
+                    failures.append("\(file.lastPathComponent): fit=\(scroll.magnification), expected=\(expected), size=\(artwork.image.size)")
+                    continue
+                }
+                // Verify rendered visible pixels rather than merely accepting XML.
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+                scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+                let image = try XCTUnwrap(bitmap.cgImage)
+                let samples = try sRGBBitmap(image)
+                var ink = 0
+                let sx = CGFloat(samples.pixelsWide) / scroll.bounds.width
+                let sy = CGFloat(samples.pixelsHigh) / scroll.bounds.height
+                let xRange = max(0, Int(actual.minX * sx))..<min(samples.pixelsWide, Int(actual.maxX * sx))
+                let top = scroll.isFlipped ? actual.minY : scroll.bounds.maxY - actual.maxY
+                let yRange = max(0, Int(top * sy))..<min(samples.pixelsHigh, Int((top + actual.height) * sy))
+                for y in stride(from: yRange.lowerBound, to: yRange.upperBound, by: 9) {
+                    for x in stride(from: xRange.lowerBound, to: xRange.upperBound, by: 9) {
+                        if let color = samples.colorAt(x: x, y: y),
+                           color.alphaComponent > 0.5,
+                           min(color.redComponent, color.greenComponent, color.blueComponent) < 0.65 { ink += 1 }
+                    }
+                }
+                guard ink > 4 else { failures.append("\(file.lastPathComponent): no visible graph ink"); continue }
+                XCTAssertEqual(try Data(contentsOf: file), bytes)
+                passed += 1
+            } catch {
+                failures.append("\(file.path.replacingOccurrences(of: root + "/", with: "")): \(error)")
+            }
+            scroll.clear()
+        }
+        print("SHALE_SVG_FIT passed=\(passed)/\(files.count) failures=\(failures.count)")
+        for failure in failures.prefix(20) { print("SHALE_SVG_FAILURE \(failure)") }
+        XCTAssertEqual(failures.count, 0, "Every real research SVG must be readable and fill the viewport")
+    }
+
     func testFitPresentsEveryCornerOfLargeNativeSVGAcrossPaneSizes() async throws {
         let bytes = Data("""
             <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="620">
