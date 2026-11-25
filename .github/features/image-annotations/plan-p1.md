@@ -47,7 +47,7 @@
 - **位置**：`ImageInspector`、`PreviewScrollView`、`RasterPreview`、`MarkdownNativeImage`、
   `PreviewResource`、`FileTab.readContent / originalImageRequest` 及相关宿主测试。
 - **实施**：替换现有查看实现，不增加 `ImageViewerView` 平行路径；
-  触控板双指平移／捏合、鼠标滚轮与 Shift 横移、⌘＋滚轮光标锚点、
+  触控板双指平移／捏合、普通鼠标垂直滚轮与 ⌘＋滚轮光标锚点缩放、Shift＋滚轮横移、
   拖拽平移及双击 fit／原像素。手动倍率为 10%～400%，fit 可低于下限以完整显示极端长宽比；
   窗口与屏幕倍率变化不跳顶／重新居中。
   控件尽量使用原生系统手势，缩放入口放右键／辅助功能动作，不保留永久底部工具栏。
