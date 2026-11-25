@@ -3,6 +3,9 @@
 交付默认表格、排序、筛选与源码切换；P1 不修改数据。
 CSV 不复用 Markdown 的 GFM 表格解析器，因为二者的字段、引号和原文结构不同。
 
+本页保留 P1 的基础交付与验收；后续表格视觉、列头选择与排序的入口调整以
+[P3](plan-p3.md) 为准，原有解析及只读不变量继续有效。
+
 ## 当前文件链与实现边界
 
 - `FileTab.readContent → TextFileEncoding.decode → nativeTextStorage` 已提供

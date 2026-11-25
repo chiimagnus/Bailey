@@ -32,3 +32,51 @@ status = "completed"
 plan = "plan-p2.md#p2-t2"
 commit = "e471b25b"
 note = "e471b25b 共享原生 Diff 比较、取消、版本绑定显式覆盖、草稿保护；本机专项宿主8/8、完整 App 2/2、相关127通过/2样本跳过/0失败，Debug验签通过。e697efb5 真实Windows Tailscale同大小同mtime改写、旧磁盘确认与旧连接确认拒绝、新确认保存、BOM/混合换行及本机隔离通过（44.056秒）；既有真实CSV丢回执/重连通过（29.949秒）。F-02 严格非协作CAS继续Deferred，不冒称平台提供严格CAS；阶段P2-T1及后续整合仍待验。"
+
+[[tasks]]
+id = "P3-T1"
+title = "Markdown 式主题与自适应列宽"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "行号、整行／整列选区与表头操作"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "插入、删除、移动列与直接重命名表头"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "完整长字段和原生多行编辑"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "批量填充、清空与原生查找替换"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "按需列统计与空值检查"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
