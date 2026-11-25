@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，窄窗格焦点组合及 VoiceOver 仍待验，阶段 No-Go；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
+- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 多 Dock 交叉组合及 VoiceOver 尚待复验，阶段 No-Go；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -168,3 +168,5 @@
 - 实际隔离 Dev 标注中文 IME 试验到达文字编辑器，但期间有其他桌面输入，产生额外非试验图层；本轮数据不可用于验收。仅修改隔离夹具，已核对原始 PNG 与副本底图字节一致、退出隔离 Dev、恢复原输入源。证据 `/tmp/bailey-ime-native.VZLk2z/`；不据此增加产品缺陷，文字输入仍待独占图形复验。
 
 - 隔离完整 Dev 无人参与真实系统拼音，选文字工具、显式点击实际文字框、字母键组合、空格候选中文、添加文字；撤销消失、重做恢复截图，保存仅一个中文文字图层且底图原字节不变。证据 /tmp/bailey-native-ime-auto.dL04QZ/runimage.log、image-009 至 015 的 AX 及截图。前一多窗格试验的窄文字框未自动获焦，候选未形成，保留该未通过组合，不冒称任意窄窗格焦点已验。原输入源已恢复。
+
+- 2026-11-26：`4c7290d8` 在真实原生宿主以 360／260／220／150 点窗宽进入标注、点击可视画布、验证文字 field editor 取得焦点，原生 marked text 组合及中文确认、取消后编辑器退役、底图字节不变，定点通过（`/tmp/bailey-narrow-native-red.Pw7kXN`）。最窄输入框可用宽度 42 点。结合既有隔离完整 App 系统拼音证据；不将宿主 marked text 冒称窄窗完整 App 系统候选，后者及 VoiceOver 为后续可执行验收，任务 pending。

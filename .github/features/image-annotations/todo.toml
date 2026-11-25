@@ -20,10 +20,10 @@ note = "9d167113 的真实 120 秒 GIF 连播、边界、百次开闭与同版 W
 [[tasks]]
 id = "P2-T1"
 title = "画布标注、光标命中和标签级撤销"
-status = "blocked"
+status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = "92b35562十工具单键、自由笔画与窄窗；0a808796原生Undo/Redo及300轮滤镜。无人参与真实拼音文字标注、候选确认、撤销消失/重做恢复截图、旁车仅一个中文图层及底图字节不变通过（/tmp/bailey-native-ime-auto.dL04QZ/runimage.log、image-013/014/015截图）；独立图面明确点击文字框后成功，多个窄窗格未自动获焦的组合仍需定位。标注VoiceOver实际播报未验；不要求人工输入。"
+note = "92b35562十工具、0a808796原生Undo/Redo及长测；完整 App 系统拼音文字确认、撤销重做与实际旁车通过；4c7290d8 真实宿主360/260/220/150点原生焦点、marked text、中文确认与取消全部通过。仅待完整 App 多窄Dock系统候选交叉及VoiceOver有效运行；未把宿主组合冒称系统候选。"
 
 [[tasks]]
 id = "P2-T2"

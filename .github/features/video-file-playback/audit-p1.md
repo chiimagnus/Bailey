@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：已验证实际轨道、解码帧、源字节、画幅、HDR 元数据、CENC 拒绝／恢复、原生系统全屏和双窗 117 次长会话。实际音轨输出的软件链已确认；内置 XDR 物理 HDR 呈现、物理听感及 VoiceOver 等仍未核销；缺配外接屏和第二输出设备延期。
+- **依据**：已验证实际轨道、解码帧、源字节、画幅、HDR 元数据、CENC 拒绝／恢复、原生系统全屏和双窗 117 次长会话。实际音轨输出的软件链已确认；内置 XDR 的 EDR 软件合成已实际核验；物理光学呈现、物理听感及 VoiceOver 等仍未核销；缺配外接屏和第二输出设备延期。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -45,3 +45,6 @@
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 2026-11-25：c7840ffa 实际 4K Main10 HDR 解码、横竖屏原生 AVPlayerView 控件布局和快速 seek 最终帧复验均通过；完整隔离 Dev 原生音轨菜单出现 English/French，操作法语选项成功，Core Audio 实际内置输出通路启动。物理 XDR 亮度呈现、VoiceOver 仍未取得独占会话证据。P1-T2 blocked；未修改生产播放器。
+
+- 2026-11-26：`1bf65468` 扩展原生回归，实际挂载 4K HEVC Main10／BT.2020／PQ 测试片并保持同一 AVPlayer、正确画幅及源字节。测试宿主录屏权限检查失败（`/tmp/bailey-hdr-window-retry.log`），改用已有录屏权限的独立 ScreenCaptureKit 采样器，仅捕获专用测试窗口，不修改系统权限。`captureHDRScreenshotCanonicalDisplay` 得到 1280×864、16-bit Extended Display P3；转换至 extendedLinearSRGB，左右两组 16×16 像素均值分别 0.122114 和 1.444777（高于 SDR 白 1），内置 XDR 当前 EDR 3.96755、潜在 16；宿主实验 1/1、最终关联定点 5/5 均通过，零跳过（`/tmp/bailey-remaining-final-tests.log`）。证据 `/tmp/bailey-hdr-window-external-pixels.log`、`/tmp/bailey-physical-acceptance.veEc5t/hdr-pixels.log`。核销可执行 HDR 软件链，不声称已测屏幕出光亮度。后续 VoiceOver 等可执行验收仍 pending。
+- 最终 `1bf65468` 源码及音频窄窗修复：`make build` 退出 0，Debug/Dev 严格验签通过（`/tmp/bailey-remaining-final-build.log`）；未替换正式安装的 App。

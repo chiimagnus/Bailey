@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：真实格式、读取预算、定位及播放器隔离已有原生和部分完整 GUI 证据；真实 CENC 保护判定及拒绝／恢复已通过；本轮原生计时、音量、内置扬声器软件输出通路已核验；物理听感、窄窗操作、睡眠与 VoiceOver 尚未完成；第二输出设备切换延期。
+- **依据**：真实格式、读取预算、定位及播放器隔离已有原生和部分完整 GUI 证据；真实 CENC 保护判定及拒绝／恢复已通过；本轮原生计时、音量、内置扬声器软件输出通路已核验；窄窗原生控制缺陷已修复并验收；完整 App 窄窗交叉组合、物理听感、睡眠与 VoiceOver 尚未完成；第二输出设备切换延期。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -15,6 +15,19 @@
 - **P1-T2 文件标签所有的 AVPlayer 和可用的紧凑控件**：FileTab、NativePlayerView、MarkdownMediaView；原生 AVPlayerView 样式，标签切换暂停、重挂载复用；关闭、刷新和改名退役旧 item。紧凑控件实际隔离 GUI 与宿主结果见 919d2c41、a85ed10f、d5698ca3。
 
 ## 发现项
+
+## 发现 F-03
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/FileViewerView.swift:1940`
+- 摘要：`AVKit floating 播放器宽 220 点时隐藏音量，150 点时隐藏播放按钮且进度轨道仅 1 点。`
+- 风险：`可实际出现的窄 Dock 无法完成基本播放控制。`
+- 预期修复：`保留同一 AVKit，维持原生必需控件的最小可用内容宽度，窄窗可横向访问，普通窗宽保持现有原生布局。`
+- 验证：`实际挂载 FileViewerView 520/360/320/220/150 点，确认播放器宽、可见性、原生 AX 逐项操作及横向滚动后真实时间/音量/播放状态。`
+- 解决证据：`9f6ab1c6：真实 AVKit 520/360/320/220/150 点宿主。Red 6 条（/tmp/bailey-narrow-audio-red.gkfAIy）；固定原生 520 点内容宽度、窄窗水平访问，五档实际播放/暂停、seek、音量与 player identity 全通过；关联视频画幅及标签退役 3/3，零跳过（/tmp/bailey-narrow-audio-pass.AmZpZS）。完整 App 窄窗交叉验收仍需另行执行。`
+
 
 ## 发现 F-02
 
@@ -70,3 +83,5 @@
 - `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 2026-11-25：c7840ffa 本轮针对性宿主 8 项中 7 通过、1 项字幕因 Runner 环境变量缺失跳过；字幕另行正确传入变量后与新增轨道测试 2/2 通过、零跳过。原生 AVKit 音频时间、音量与暂停再次通过。完整隔离 Dev 实际打开媒体，Core Audio 进程输出状态从 0 到 1，默认输出 device 77、transport 为 built-in、设备运行状态从 0 到 1（PID 96766）；这只证明软件输出通路，不证明扬声器的声学听感。窄窗补验遇临时 Sheet，未完成；当前用户在共享桌面操作，不强行继续前台测试。日志 /tmp/bailey-media-final.YMDYjJ、/tmp/bailey-media-tracks-final.AhtZ6j、/tmp/bailey-media-track.TQKMOs/{gui2,compact}.log。
+
+- 2026-11-26：`9f6ab1c6` 核销 F-03，原生五档窗宽宿主与关联回归 3/3；仅在窄窗使用可水平滚动的同一原生浮动播放器，保留宽窗、既有进度及生命周期，无自建控件。完整 App 窄窗交叉验收与 VoiceOver 尚待有效图形会话，任务 pending；不重复计入已经修复的布局缺陷。
