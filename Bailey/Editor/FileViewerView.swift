@@ -180,6 +180,7 @@ final class FileTab: nonisolated Identifiable {
 
     func retireContent() {
         isRetired = true
+        saveError = nil
         htmlPreview = nil
         targetGeneration &+= 1
         gifPlayback = nil
@@ -720,6 +721,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func reopen(using encoding: TextFileEncoding?) {
+        guard !hasSaveConflict else { return }
         guard !isMediaFile else { return }
         guard !isDirty, !isSaving, !hasPendingDelimitedEdit, !fileMutationHeld, pendingTextPublication == nil else {
             saveError = String(localized: "Save or discard edits before changing encoding.", table: "Editor")
@@ -968,11 +970,54 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
+    private var saveConflictContext: WorkspaceSaveConflict.Context? {
+        guard !isRetired, !fileMutationHeld, readOnlyReason == nil, reloadError == nil,
+              let failure = saveFailure.conflict, let source = savedSourceVersion else { return nil }
+        switch content {
+        case .text:
+            return .init(owner: id, generation: targetGeneration, failure: failure,
+                         path: path, baseline: source)
+        case .image:
+            guard let document = imageAnnotations else { return nil }
+            return .init(owner: id, generation: targetGeneration, failure: failure,
+                         path: ImageAnnotationSidecar.path(for: path), baseline: document.sidecarVersion)
+        default:
+            return nil
+        }
+    }
+
+    var hasSaveConflict: Bool { saveFailure.conflict != nil }
+    var canCompareSaveConflict: Bool { !isSaving && saveConflictContext != nil }
+
+    func compareSaveConflict() async throws -> WorkspaceSaveConflict {
+        if hasPendingDelimitedEdit, !(await finishPendingDelimitedEdit()) { throw WorkspaceError.changedExternally }
+        guard !isSaving, let context = saveConflictContext else { throw WorkspaceError.changedExternally }
+        let review: WorkspaceSaveConflict
+        if case .image = content, let document = imageAnnotations, let version = savedSourceVersion {
+            review = try await .annotations(context: context, image: path, backend: backend, version: version,
+                                            size: document.size, draft: document.state)
+        } else {
+            review = try await .text(context: context, backend: backend, draft: text, encoding: fileEncoding,
+                                     preferred: preferredEncoding, maxBytes: Self.maxTextBytes)
+        }
+        try Task.checkCancellation()
+        guard !isSaving, context == saveConflictContext else { throw WorkspaceError.changedExternally }
+        return review
+    }
+
+    func resolveSaveConflict(_ review: WorkspaceSaveConflict) async throws {
+        guard !isSaving, review.context == saveConflictContext else { throw WorkspaceError.changedExternally }
+        await save(as: review.context.failure.encoding, resolving: review)
+        guard saveError == nil, !isRetired, targetGeneration == review.context.generation else {
+            throw WorkspaceError.changedExternally
+        }
+    }
+
     /// A focus transition schedules one save, never a timed file-write loop.
     func autoSaveOnFocusLoss() {
         guard !autoSaveSuspendedForClose, !openingSavedHTML else { return }
         delimitedEditingGrid?.finishEditing()
-        guard isDirty || hasPendingDelimitedEdit else { return }
+        guard saveFailure.conflict == nil, isDirty || hasPendingDelimitedEdit else { return }
         if lastSaveTask != nil {
             saveLatestRequested = true
         } else {
@@ -1019,7 +1064,12 @@ final class FileTab: nonisolated Identifiable {
 
     /// One owned writer drains requests. Repeated ordinary saves only request
     /// the latest edit; explicit encoding changes retain their own intent.
-    func save(as encoding: TextFileEncoding? = nil) async {
+    func save(as encoding: TextFileEncoding? = nil, resolving review: WorkspaceSaveConflict? = nil) async {
+        // A reviewed overwrite is an explicit, one-shot intent, never queued or
+        // merged with ordinary autosaves. The original byte baseline stays put.
+        if let review {
+            guard lastSaveTask == nil, review.context == saveConflictContext else { return }
+        }
         if fileMutationHeld {
             if encoding != nil {
                 saveError = String(localized: "Cannot change encoding during a file operation.", table: "Editor")
@@ -1037,8 +1087,10 @@ final class FileTab: nonisolated Identifiable {
         let task = Task { [weak self] in
             guard let self else { return }
             var intent = encoding
+            var approval = review
             while true {
-                await self.writeCurrentContent(as: intent)
+                await self.writeCurrentContent(as: intent, resolving: approval)
+                approval = nil
                 if !self.pendingEncodingSaves.isEmpty {
                     intent = self.pendingEncodingSaves.removeFirst()
                     self.saveLatestRequested = false
@@ -1055,12 +1107,14 @@ final class FileTab: nonisolated Identifiable {
         await task.value
     }
 
-    private func writeCurrentContent(as encoding: TextFileEncoding? = nil) async {
+    private func writeCurrentContent(as encoding: TextFileEncoding? = nil,
+                                     resolving review: WorkspaceSaveConflict? = nil) async {
         if hasPendingDelimitedEdit, !(await finishPendingDelimitedEdit()) { return }
+        if let review, review.context != saveConflictContext { return }
         if case .image = content, encoding == nil {
-            await writeCurrentAnnotations()
+            await writeCurrentAnnotations(resolving: review)
         } else {
-            await writeCurrentText(as: encoding)
+            await writeCurrentText(as: encoding, resolving: review)
         }
     }
 
@@ -1107,8 +1161,8 @@ final class FileTab: nonisolated Identifiable {
         imageAnnotations = document
     }
 
-    private func writeCurrentAnnotations() async {
-        guard let document = imageAnnotations, isDirty else { return }
+    private func writeCurrentAnnotations(resolving review: WorkspaceSaveConflict? = nil) async {
+        guard let document = imageAnnotations, isDirty || review != nil else { return }
         guard !isRetired, readOnlyReason == nil, reloadError == nil,
               let version = savedSourceVersion else {
             saveError = readOnlyReason ?? String(localized: "The original image is unavailable.", table: "Editor")
@@ -1119,7 +1173,7 @@ final class FileTab: nonisolated Identifiable {
         let generation = targetGeneration
         invalidateReload()
         do {
-            if let pending = pendingAnnotationPublication {
+            if review == nil, let pending = pendingAnnotationPublication {
                 let confirmed = try await ImageAnnotationSidecar.confirmsPublication(
                     image: savedPath, backend: target, version: version, written: pending.version)
                 guard generation == targetGeneration, imageAnnotations === document,
@@ -1132,13 +1186,16 @@ final class FileTab: nonisolated Identifiable {
                 }
                 saveError = nil
             }
-            guard document.isDirty else { return }
+            guard document.isDirty || review != nil else { return }
             let snapshot = document.state
-            let previous = document.sidecarVersion
+            let previous = review?.diskVersion ?? document.sidecarVersion
             let bytes = try await ImageAnnotationSidecar.encode(snapshot, version: version, size: document.size)
             guard generation == targetGeneration, imageAnnotations === document, path == savedPath,
                   readOnlyReason == nil else { throw WorkspaceError.changedExternally }
             let written = WorkspaceFileVersion(data: bytes)
+            if let review, !review.authorizes(context: saveConflictContext, draft: written) {
+                throw WorkspaceError.changedExternally
+            }
             pendingAnnotationPublication = AnnotationPublication(state: snapshot, version: written)
             do {
                 try await ImageAnnotationSidecar.publish(bytes, image: savedPath, backend: target,
@@ -1248,7 +1305,7 @@ final class FileTab: nonisolated Identifiable {
         return status
     }
 
-    private func reportTextPublicationError(_ error: Error, generation: UInt) {
+    private func reportTextPublicationError(_ error: Error, generation: UInt, encoding: TextFileEncoding? = nil) {
         guard !isRetired else { return }
         if generation != targetGeneration {
             if pendingTextPublication != nil {
@@ -1256,17 +1313,20 @@ final class FileTab: nonisolated Identifiable {
             }
             return
         }
+        let intent = encoding ?? (pendingTextPublication?.snapshot.explicit == true ? pendingTextPublication?.snapshot.encoding : nil)
+        let message: String
         if case WorkspaceError.changedExternally = error {
-            saveError = String(localized: "The file changed outside Bailey. Your edits remain unsaved.",
-                               table: "Editor")
+            message = String(localized: "The file changed outside Bailey. Your edits remain unsaved.", table: "Editor")
         } else {
-            saveFailure.record(error, message: error.localizedDescription)
+            message = error.localizedDescription
         }
+        saveFailure.record(error, message: message, encoding: intent)
     }
 
-    private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
+    private func writeCurrentText(as encoding: TextFileEncoding? = nil,
+                                  resolving review: WorkspaceSaveConflict? = nil) async {
         guard case .text = content, !isRetired,
-              pendingTextPublication != nil || isDirty || (encoding != nil && encoding != fileEncoding) else { return }
+              pendingTextPublication != nil || isDirty || (encoding != nil && encoding != fileEncoding) || review != nil else { return }
         if let readOnlyReason {
             saveError = readOnlyReason
             return
@@ -1277,7 +1337,7 @@ final class FileTab: nonisolated Identifiable {
         let savedPath = path
         // Reconnect does not change the document's accepted version. Resolve
         // the actual previous attempt on this machine before any new write.
-        if pendingTextPublication != nil {
+        if review == nil, pendingTextPublication != nil {
             do {
                 guard let status = try await resolveTextPublication(
                     path: savedPath, target: target, generation: generation,
@@ -1287,12 +1347,12 @@ final class FileTab: nonisolated Identifiable {
                     return
                 }
             } catch {
-                reportTextPublicationError(error, generation: generation)
+                reportTextPublicationError(error, generation: generation, encoding: encoding)
                 return
             }
         }
-        guard isDirty || (encoding != nil && encoding != fileEncoding) else { return }
-        guard let expected = savedSourceVersion else {
+        guard isDirty || (encoding != nil && encoding != fileEncoding) || review != nil else { return }
+        guard let baseline = savedSourceVersion else {
             saveError = String(localized: "Original file bytes are unknown. Reopen before saving.",
                                table: "Editor")
             return
@@ -1307,8 +1367,8 @@ final class FileTab: nonisolated Identifiable {
         )
         guard generation == targetGeneration, path == savedPath, !isRetired,
               readOnlyReason == nil else { return }
-        guard savedSourceVersion == expected else {
-            reportTextPublicationError(WorkspaceError.changedExternally, generation: generation)
+        guard savedSourceVersion == baseline else {
+            reportTextPublicationError(WorkspaceError.changedExternally, generation: generation, encoding: encoding)
             return
         }
         let payload: TextFileEncoding.EncodedSave
@@ -1330,6 +1390,11 @@ final class FileTab: nonisolated Identifiable {
                 "Text exceeds the 32 MiB file limit. Reduce its size before saving.", table: "Editor")
             return
         }
+        if let review, !review.authorizes(context: saveConflictContext, draft: payload.version) {
+            reportTextPublicationError(WorkspaceError.changedExternally, generation: generation, encoding: encoding)
+            return
+        }
+        let expected = review?.diskVersion ?? baseline
         invalidateReload()
         pendingTextPublication = (.init(path: savedPath, text: written, encoding: chosen, explicit: encoding != nil,
                                         changesText: changedText, previous: expected, version: payload.version),
@@ -1344,7 +1409,7 @@ final class FileTab: nonisolated Identifiable {
             if !WorkspaceError.publicationUncertain(error) {
                 pendingTextPublication = nil
                 refreshDirtyState()
-                reportTextPublicationError(error, generation: targetGeneration)
+                reportTextPublicationError(error, generation: targetGeneration, encoding: encoding)
                 return
             }
             if generation == targetGeneration {
@@ -1355,11 +1420,11 @@ final class FileTab: nonisolated Identifiable {
                         return
                     }
                 } catch {
-                    reportTextPublicationError(error, generation: generation)
+                    reportTextPublicationError(error, generation: generation, encoding: encoding)
                     return
                 }
             }
-            reportTextPublicationError(error, generation: generation)
+            reportTextPublicationError(error, generation: generation, encoding: encoding)
             return
         }
         guard generation == targetGeneration, !isRetired else {
@@ -1406,7 +1471,7 @@ final class FileTab: nonisolated Identifiable {
         // replacing the content with "Could not read file" would throw away
         // what the user was looking at. The banner already says why.
         guard !isRetired, readOnlyReason == nil, !isDirty, !hasPendingDelimitedEdit,
-              pendingTextPublication == nil else { return }
+              pendingTextPublication == nil, saveFailure.conflict == nil else { return }
         hasReadDemand = true
         refreshPending = false
         reloadTask?.cancel()
@@ -1793,7 +1858,7 @@ struct FileViewerView: View {
                         errorBar(error)
                     }
                     if let error = file.saveError {
-                        errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
+                        saveErrorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     } else if let error = file.delimitedTable.editError {
                         errorBar(error)
                     }
@@ -1851,7 +1916,7 @@ struct FileViewerView: View {
                         errorBar(error)
                     }
                     if let error = file.annotationError { errorBar(error) }
-                    if let error = file.saveError { errorBar(error) }
+                    if let error = file.saveError { saveErrorBar(error) }
                     ImageInspector(image: image, loadOriginal: file.originalImageRequest(),
                                    playback: file.gifPlayback, loadAnimation: file.gifFramesRequest(),
                                    resourceRevision: file.fileContentRevision,
@@ -1925,7 +1990,7 @@ struct FileViewerView: View {
                     Button(encoding.name) { file.reopen(using: encoding) }
                 }
             }
-            .disabled(file.isDirty || file.hasPendingDelimitedEdit)
+            .disabled(file.isDirty || file.hasPendingDelimitedEdit || file.hasSaveConflict)
             if case .text = file.content {
                 Menu(String(localized: "Save with Encoding", table: "Editor")) {
                     ForEach(TextFileEncoding.choices, id: \.self) { encoding in
@@ -1943,6 +2008,11 @@ struct FileViewerView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+    }
+
+    private func saveErrorBar(_ message: String) -> some View {
+        WorkspaceSaveErrorBanner(message: message, canCompare: file.canCompareSaveConflict,
+                                 compare: file.compareSaveConflict, overwrite: file.resolveSaveConflict)
     }
 
     private func errorBar(_ message: String) -> some View {

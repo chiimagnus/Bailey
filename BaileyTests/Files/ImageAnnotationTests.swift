@@ -791,6 +791,56 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertFalse(replaced.canAnnotateImage)
     }
 
+    func testReviewedSidecarConflictRequiresSameOriginalAndReviewedLayers() async throws {
+        let root = try makeRoot()
+        let path = root.appendingPathComponent("same.png")
+        let original = try png()
+        try original.write(to: path)
+        let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
+        let first = try await open(path)
+        let second = try await open(path)
+        defer { first.retireContent(); second.retireContent() }
+        let a = try XCTUnwrap(first.imageAnnotations), b = try XCTUnwrap(second.imageAnnotations)
+        add(.rectangle, to: a, from: CGPoint(x: 20, y: 20), to: CGPoint(x: 90, y: 90))
+        add(.ellipse, to: b, from: CGPoint(x: 30, y: 30), to: CGPoint(x: 100, y: 100))
+        await first.save()
+        await second.save()
+        XCTAssertTrue(second.canCompareSaveConflict)
+        let disk = try Data(contentsOf: sidecar)
+        let review = try await second.compareSaveConflict()
+        XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: disk))
+        XCTAssertTrue(review.review.rows.contains { $0.kind == .added })
+        XCTAssertTrue(review.review.rows.contains { $0.kind == .removed })
+        XCTAssertEqual(try Data(contentsOf: sidecar), disk)
+        add(.arrow, to: a, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 50, y: 50))
+        await first.save()
+        let newer = try Data(contentsOf: sidecar)
+        do {
+            try await second.resolveSaveConflict(review)
+            XCTFail("Reviewed layers are stale")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: sidecar), newer)
+        let next = try await second.compareSaveConflict()
+        let replacement = try png(offset: 1)
+        try replacement.write(to: path, options: .atomic)
+        do {
+            try await second.resolveSaveConflict(next)
+            XCTFail("An annotation approval cannot apply to a different image")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), replacement)
+        XCTAssertEqual(try Data(contentsOf: sidecar), newer)
+        XCTAssertTrue(second.isDirty)
+        try original.write(to: path, options: .atomic)
+        let last = try await second.compareSaveConflict()
+        try await second.resolveSaveConflict(last)
+        XCTAssertFalse(second.isDirty)
+        XCTAssertNil(second.saveError)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(Data(contentsOf: sidecar),
+                                                         version: WorkspaceFileVersion(data: original),
+                                                         size: b.size), b.state)
+    }
+
     func testLateIndependentSidecarPublicationRetainsDisplacedLayersAndDraft() async throws {
         for replacing in [false, true] {
             let root = try makeRoot()

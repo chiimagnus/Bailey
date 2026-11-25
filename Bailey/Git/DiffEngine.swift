@@ -1291,6 +1291,15 @@ nonisolated struct DiffComputation {
     /// emphasis, and read-only deletion ghost blocks.
     let editState: DiffEditState
 
+    /// Read-only save conflict comparison uses the same rows and emphasis,
+    /// without allocating the split and editable projections it never shows.
+    static func unifiedReview(core: DiffCore) -> DiffSideDocument {
+        buildUnified(blocks: DiffBlocks(ops: core.ops, oldLines: core.oldLines, newLines: core.newLines),
+                     oldLines: core.oldLines, newLines: core.newLines,
+                     oldMissingNewline: core.oldMissingNewline, newMissingNewline: core.newMissingNewline,
+                     revealedLines: nil)
+    }
+
     /// Revealed ranges are anchored to the immutable original file.
     /// Pass nil to disable folding entirely.
     static func build(core: DiffCore, revealedLines: [Range<Int>]?) -> DiffComputation {

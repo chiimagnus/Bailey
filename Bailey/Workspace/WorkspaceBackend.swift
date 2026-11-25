@@ -99,33 +99,6 @@ nonisolated struct DisplacedSaveError: LocalizedError, Equatable, Sendable {
     }
 }
 
-/// Keep recovery locations independent of transient retry failures. Clearing the
-/// document's save failure also clears its notice, never the recovered files.
-nonisolated struct WorkspaceSaveFailure {
-    private var latest: String?
-    private var recoveries: [DisplacedSaveError] = []
-
-    var message: String? {
-        get {
-            let messages = [latest].compactMap { $0 } + recoveries.map(\.localizedDescription)
-            return messages.isEmpty ? nil : messages.joined(separator: "\n")
-        }
-        set {
-            latest = newValue
-            if newValue == nil { recoveries.removeAll() }
-        }
-    }
-
-    mutating func record(_ error: Error, message: String) {
-        if let recovery = error as? DisplacedSaveError {
-            if !recoveries.contains(recovery) { recoveries.append(recovery) }
-            latest = nil
-        } else {
-            latest = message
-        }
-    }
-}
-
 /// The workspace a project's panels, editor and diff viewer operate on:
 /// the Mac's disk or a machine reached over SSH.
 ///

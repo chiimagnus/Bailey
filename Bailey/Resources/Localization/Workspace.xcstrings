@@ -1,6 +1,106 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "The comparison is too large to display safely. Your draft is unchanged." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "比较内容过大，无法安全显示。草稿保持不变。"
+          }
+        }
+      }
+    },
+    "Compare with Disk…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与磁盘版本比较…"
+          }
+        }
+      }
+    },
+    "Resolve Save Conflict" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解决保存冲突"
+          }
+        }
+      }
+    },
+    "Review the disk version and your draft. Overwrite checks the reviewed bytes again before saving." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "比较磁盘版本与草稿。覆盖前会再次校验已比较的原始字节。"
+          }
+        }
+      }
+    },
+    "Disk (removed)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磁盘版本（删除项）"
+          }
+        }
+      }
+    },
+    "Draft (added)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿（新增项）"
+          }
+        }
+      }
+    },
+    "Compare Again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新比较"
+          }
+        }
+      }
+    },
+    "Overwrite" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "覆盖"
+          }
+        }
+      }
+    },
+    "The file or draft changed, or the save failed. Compare again before overwriting." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件或草稿已变化，或保存失败。覆盖前请重新比较。"
+          }
+        }
+      }
+    },
+    "Unable to compare the current disk version. Your draft is unchanged." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法比较当前磁盘版本。草稿保持不变。"
+          }
+        }
+      }
+    },
     "The file changed during save or its previous version could not be verified. The destination may contain your draft. The displaced entry is preserved at: %@" : {
       "localizations" : {
         "zh-Hans" : {

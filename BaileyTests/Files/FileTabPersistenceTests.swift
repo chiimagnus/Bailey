@@ -323,6 +323,243 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertNotNil(file.saveError)
     }
 
+    func testReviewedSaveConflictBindsDiskDraftAndOwnerAcrossTextFormats() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encoding = TextFileEncoding.utf8BOM
+        for suffix in ["csv", "html", "svg", "txt"] {
+            let path = root.appendingPathComponent("document." + suffix)
+            let base = "Name,Value\r\nItem,old 中文\n"
+            let external = "Name,Value\r\nItem,ext 中文\n"
+            let newer = "Name,Value\r\nItem,two 中文\n"
+            let draft = "Name,Value\r\nItem,new 中文\n"
+            let latest = "Name,Value\r\nItem,end 中文\n"
+            let original = try XCTUnwrap(encoding.encoded(base))
+            let disk = try XCTUnwrap(encoding.encoded(external))
+            let disk2 = try XCTUnwrap(encoding.encoded(newer))
+            try original.write(to: path)
+            let first = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            let other = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { first.retireContent(); other.retireContent() }
+            try await first.waitForText()
+            try await other.waitForText()
+            first.autoSaveSuspendedForClose = true
+            other.autoSaveSuspendedForClose = true
+            first.text = draft
+            other.text = draft
+            try disk.write(to: path, options: .atomic)
+            await first.save()
+            await other.save()
+            XCTAssertTrue(first.canCompareSaveConflict, suffix)
+            let review = try await first.compareSaveConflict()
+            XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: disk))
+            XCTAssertEqual(review.draftVersion, WorkspaceFileVersion(data: try XCTUnwrap(encoding.encoded(draft))))
+            XCTAssertTrue(review.review.text.contains("Item,ext 中文"))
+            XCTAssertTrue(review.review.text.contains("Item,new 中文"))
+            XCTAssertEqual(try Data(contentsOf: path), disk, "Comparison/cancel never writes")
+            do {
+                try await other.resolveSaveConflict(review)
+                XCTFail("A review must not authorize another document")
+            } catch WorkspaceError.changedExternally {}
+            try disk2.write(to: path, options: .atomic)
+            do {
+                try await first.resolveSaveConflict(review)
+                XCTFail("A stale disk revision must not be overwritten")
+            } catch WorkspaceError.changedExternally {}
+            XCTAssertEqual(try Data(contentsOf: path), disk2)
+            XCTAssertTrue(first.isDirty)
+            XCTAssertEqual(first.text, draft)
+            let second = try await first.compareSaveConflict()
+            first.text = latest
+            do {
+                try await first.resolveSaveConflict(second)
+                XCTFail("A changed draft needs another comparison")
+            } catch WorkspaceError.changedExternally {}
+            XCTAssertEqual(try Data(contentsOf: path), disk2)
+            XCTAssertEqual(first.text, latest)
+            let final = try await first.compareSaveConflict()
+            try await first.resolveSaveConflict(final)
+            XCTAssertEqual(try Data(contentsOf: path), try XCTUnwrap(encoding.encoded(latest)))
+            XCTAssertFalse(first.isDirty)
+            XCTAssertNil(first.saveError)
+            XCTAssertFalse(first.canCompareSaveConflict)
+            XCTAssertTrue(other.isDirty)
+            do {
+                try await first.resolveSaveConflict(final)
+                XCTFail("Successful confirmation cannot be replayed")
+            } catch WorkspaceError.changedExternally {}
+        }
+    }
+
+    func testReviewedEncodingOnlyConflictRetainsExplicitIntentAcrossRefresh() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let original = "draft 中文🙂\r\n"
+        try Data(original.utf8).write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let external = Data("disk 中文🙂\r\n".utf8)
+        try external.write(to: path, options: .atomic)
+        await file.save(as: .utf16LEBOM)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertTrue(file.canCompareSaveConflict)
+        file.refreshWhenSelected()
+        file.reopen(using: .latin1)
+        let review = try await file.compareSaveConflict()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(review.diskEncoding, TextFileEncoding.utf8.name)
+        XCTAssertTrue(review.review.text.contains("disk 中文🙂"))
+        XCTAssertEqual(review.draftEncoding, TextFileEncoding.utf16LEBOM.name)
+        XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: external))
+        try await file.resolveSaveConflict(review)
+        XCTAssertEqual(try Data(contentsOf: path), try XCTUnwrap(TextFileEncoding.utf16LEBOM.encoded(original)))
+        XCTAssertEqual(file.fileEncoding, .utf16LEBOM)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+    }
+
+    func testReviewedOverwritePreservesEditsMadeDuringPublication() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("Name,Value\nItem,old\n".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let reviewed = "Name,Value\nItem,new\n"
+        let newest = "Name,Value\nItem,end\n"
+        file.text = reviewed
+        await backend.replace(path: path, with: Data("Name,Value\nItem,ext\n".utf8))
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        let publishing = Task { try await file.resolveSaveConflict(review) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        file.text = newest
+        await backend.finishWrite(transportTimedOut: true)
+        try await publishing.value
+        let published = await backend.data(at: path)
+        XCTAssertEqual(published, Data(reviewed.utf8))
+        XCTAssertEqual(file.text, newest)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let retry = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await retry.value
+        let final = await backend.data(at: path)
+        XCTAssertEqual(final, Data(newest.utf8))
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+    }
+
+    func testReviewedComparisonHandlesLargeCSVAndRefusesUnboundedLineModel() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let base = "Name,Value\n" + String(repeating: "row,12345678901234567890123456789012345678901234567890\n", count: 100_000)
+        let external = base + "disk,external\n"
+        let draft = base + "draft,local\n"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data(base.utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = draft
+        await backend.replace(path: path, with: Data(external.utf8))
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: Data(external.utf8)))
+        XCTAssertTrue(review.review.text.contains("disk,external"))
+        XCTAssertTrue(review.review.text.contains("draft,local"))
+        await backend.replace(path: path, with: Data(repeating: 10, count: 500_001))
+        do {
+            _ = try await file.compareSaveConflict()
+            XCTFail("Excessive row allocation must be refused without writing")
+        } catch WorkspaceError.tooLarge {}
+        let actual = await backend.data(at: path)
+        XCTAssertEqual(actual, Data(repeating: 10, count: 500_001))
+        XCTAssertEqual(file.text, draft)
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testReviewedOverwriteStillPreservesLateIndependentWriterAndRecovery() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("table.csv")
+        let rival = root.appendingPathComponent("rival.csv")
+        let base = Data("Name,Value\nItem,old\n".utf8)
+        let external = Data("Name,Value\nItem,ext\n".utf8)
+        let late = Data("Name,Value\nItem,end\n".utf8)
+        let draft = "Name,Value\nItem,new\n"
+        try base.write(to: path)
+        let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+            try publishIndependentFile(rival, to: $0, replacing: true)
+        })
+        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = draft
+        try external.write(to: path, options: .atomic)
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        try late.write(to: rival)
+        do {
+            try await file.resolveSaveConflict(review)
+            XCTFail("Explicit approval must retain the exchange verification and recovery")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, draft)
+        let recovery = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") })
+            .appendingPathComponent(path.lastPathComponent)
+        XCTAssertEqual(try Data(contentsOf: recovery), late)
+        XCTAssertTrue(file.saveError?.contains(recovery.path) == true)
+        XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+        let next = try await file.compareSaveConflict()
+        try await file.resolveSaveConflict(next)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: recovery), late, "Explicit resolution must not delete recovery files")
+    }
+
+    func testReviewedConflictCannotFollowRenamedTargetOrCompareBinaryDisk() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("old.txt")
+        let renamed = root.appendingPathComponent("new.txt")
+        try Data("base".utf8).write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "draft"
+        let external = Data("external".utf8)
+        try external.write(to: path, options: .atomic)
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        try FileManager.default.moveItem(at: path, to: renamed)
+        try external.write(to: path)
+        file.updatePath(renamed.path)
+        do {
+            try await file.resolveSaveConflict(review)
+            XCTFail("A prior target's review must expire")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), external)
+        XCTAssertEqual(try Data(contentsOf: renamed), external)
+        let binary = Data([0, 1, 2, 0])
+        try binary.write(to: renamed, options: .atomic)
+        do {
+            _ = try await file.compareSaveConflict()
+            XCTFail("A binary replacement cannot be blindly approved as text")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: renamed), binary)
+        XCTAssertEqual(file.text, "draft")
+        XCTAssertTrue(file.isDirty)
+    }
+
     func testCSVLateIndependentPublicationRetainsDisplacedBytesAndDraft() async throws {
         for replacing in [false, true] {
             let root = FileManager.default.temporaryDirectory

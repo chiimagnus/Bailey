@@ -409,6 +409,69 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), draft)
     }
 
+    func testNativeConflictReviewCancelAndVersionBoundOverwrite() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "Name,Value\r\nItem,old\n"
+        let external = Data("Name,Value\r\nItem,ext\n".utf8)
+        let newer = Data("Name,Value\r\nItem,two\n".utf8)
+        let draft = Data("Name,Value\r\nItem,draft\n".utf8)
+        let file = try fixture.file("Review.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.staticTexts["old"].waitForExistence(timeout: 10))
+        table.staticTexts["old"].doubleClick()
+        app.typeText("draft")
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        XCTAssertTrue(table.staticTexts["draft"].waitForExistence(timeout: 10))
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+        try external.write(to: file, options: .atomic)
+        app.typeKey("s", modifierFlags: .command)
+        let compare = app.buttons["bailey.saveConflict.compare"].firstMatch
+        XCTAssertTrue(compare.waitForExistence(timeout: 10))
+        func openReview(containing disk: String) -> XCUIElement {
+            compare.click()
+            let review = app.textViews["bailey.saveConflict.review"].firstMatch
+            XCTAssertTrue(review.waitForExistence(timeout: 15))
+            XCTAssertTrue((review.value as? String)?.contains(disk) == true)
+            XCTAssertTrue((review.value as? String)?.contains("Item,draft") == true)
+            return review
+        }
+        let initial = openReview(containing: "Item,ext")
+        XCTAssertEqual(try Data(contentsOf: file), external)
+        app.buttons["Cancel"].firstMatch.click()
+        XCTAssertTrue(initial.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(table.staticTexts["draft"].exists)
+        XCTAssertEqual(try Data(contentsOf: file), external)
+        _ = openReview(containing: "Item,ext")
+        try newer.write(to: file, options: .atomic)
+        let overwrite = app.buttons["bailey.saveConflict.overwrite"].firstMatch
+        XCTAssertTrue(overwrite.isEnabled)
+        overwrite.click()
+        let again = app.buttons["Compare Again"].firstMatch
+        XCTAssertTrue(again.waitForExistence(timeout: 10))
+        XCTAssertFalse(overwrite.isEnabled)
+        XCTAssertEqual(try Data(contentsOf: file), newer)
+        again.click()
+        let review = app.textViews["bailey.saveConflict.review"].firstMatch
+        let refreshed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (review.value as? String)?.contains("Item,two") == true && overwrite.isEnabled
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [refreshed], timeout: 15), .completed)
+        overwrite.click()
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == draft && !overwrite.exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+        XCTAssertEqual(try Data(contentsOf: file), draft)
+        XCTAssertTrue(table.staticTexts["draft"].exists)
+        XCTAssertFalse(compare.exists)
+    }
+
     func testMalformedTableShowsLocalizedLineAndKeepsReadableRowsAndSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "名称,值\r\n可读,17\r\n残缺,\"未结束"

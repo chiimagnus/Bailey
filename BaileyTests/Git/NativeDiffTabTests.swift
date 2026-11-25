@@ -5554,6 +5554,48 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
     }
 
+    func testReviewedWorktreeConflictWritesOnlyReviewedDraftAndKeepsGitIndex() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let relative = "reviewed.txt"
+        let path = directory.appendingPathComponent(relative)
+        try Data("base\n".utf8).write(to: path)
+        for args in [["add", "--", relative], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let head = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path).stdout
+        let index = GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout
+        let diff = DiffTab(repoRoot: directory.path, path: relative, source: .worktree,
+                           untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        diff.autoSaveSuspendedForClose = true
+        try replaceNativeDiffText(diff, with: "draft 中文\n")
+        let external = Data("disk\n".utf8)
+        try external.write(to: path, options: .atomic)
+        await diff.save()
+        XCTAssertTrue(diff.canCompareSaveConflict)
+        let first = try await diff.compareSaveConflict()
+        XCTAssertEqual(first.diskVersion, WorkspaceFileVersion(data: external))
+        XCTAssertTrue(first.review.text.contains("disk"))
+        XCTAssertTrue(first.review.text.contains("draft 中文"))
+        let newer = Data("second disk\n".utf8)
+        try newer.write(to: path, options: .atomic)
+        do {
+            try await diff.resolveSaveConflict(first)
+            XCTFail("Stale confirmation")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), newer)
+        XCTAssertTrue(diff.isDirty)
+        let second = try await diff.compareSaveConflict()
+        try await diff.resolveSaveConflict(second)
+        XCTAssertEqual(try Data(contentsOf: path), Data("draft 中文\n".utf8))
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertNil(diff.saveError)
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path).stdout, head)
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
+    }
+
     func testLateIndependentDiffPublicationKeepsRecoveryLocationOnRetry() async throws {
         for replacing in [false, true] {
             let directory = try repository()
