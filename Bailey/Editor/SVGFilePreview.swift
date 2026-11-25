@@ -110,16 +110,41 @@ private struct NativeSVGViewport: NSViewRepresentable {
     }
 }
 
-private struct NativeSVGDrawing: View {
-    let svg: SVG
+private final class NativeSVGDrawing: NSView {
+    private let svg: SVG
 
-    var body: some View {
-        // Draw at the current device scale without SVGView's shared filter
-        // cache, which retained buffers after complex documents were closed.
-        Canvas(opaque: false, colorMode: .linear, rendersAsynchronously: true) { context, size in
-            context.draw(svg, in: CGRect(origin: .zero, size: size))
-        }
-        .frame(width: svg.size.width, height: svg.size.height)
+    init(svg: SVG) {
+        self.svg = svg
+        super.init(frame: CGRect(origin: .zero, size: svg.size))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        // Draw the visible region at the current device resolution, not the
+        // SVG's intrinsic size. A separate bitmap has a known pattern origin
+        // and avoids AppKit's differing base transforms for layers and snapshots.
+        let visible = bounds.intersection(dirtyRect).intersection(context.boundingBoxOfClipPath)
+        guard !visible.isEmpty else { return }
+        let pixels = context.convertToDeviceSpace(visible).standardized.integral
+        guard !pixels.isEmpty, !pixels.isInfinite else { return }
+        let region = context.convertToUserSpace(pixels).standardized
+        let scale = CGAffineTransform(scaleX: pixels.width / region.width,
+                                      y: pixels.height / region.height)
+        guard let space = CGColorSpace(name: CGColorSpace.displayP3),
+              let drawing = CGContext(data: nil, width: Int(pixels.width), height: Int(pixels.height),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        let destination = bounds.offsetBy(dx: -region.minX, dy: -region.minY).applying(scale)
+        drawing.draw(SVGArtwork.drawing(svg, in: destination))
+        guard let image = drawing.makeImage() else { return }
+        context.saveGState()
+        context.clip(to: bounds)
+        context.interpolationQuality = .none
+        context.draw(image, in: region)
+        context.restoreGState()
     }
 }
 
@@ -186,7 +211,7 @@ private struct SVGPNGOptionsView: View {
 final class SVGPreviewScrollView: PreviewScrollView {
     private let canvas = PreviewCanvasView()
     private var request: String?
-    private var content: NSHostingView<NativeSVGDrawing>?
+    private var content: NativeSVGDrawing?
     var onFocused: () -> Void = {}
     private weak var outputFile: FileTab?
     private var outputRequest: String?
@@ -214,8 +239,7 @@ final class SVGPreviewScrollView: PreviewScrollView {
             onViewportPositionChange = nil
             self.request = request
             content?.removeFromSuperview()
-            let content = NSHostingView(rootView: NativeSVGDrawing(svg: svg))
-            content.frame = CGRect(origin: .zero, size: svg.size)
+            let content = NativeSVGDrawing(svg: svg)
             canvas.setFrameSize(svg.size)
             canvas.addSubview(content)
             self.content = content

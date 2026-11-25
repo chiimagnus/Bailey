@@ -676,7 +676,7 @@ final class SVGArtworkTests: XCTestCase {
         XCTAssertTrue(vector.omitted.isEmpty, "The real research plot now retains its supported grid pattern")
         let raster = try SVGArtwork.render(bytes)
         XCTAssertEqual(raster.pointSize, vector.image.size)
-        let bitmap = NSBitmapImageRep(cgImage: raster.image)
+        let bitmap = try sRGBBitmap(raster.image)
         XCTAssertEqual(bitmap.pixelsWide, 2048)
 
         func pixel(at point: CGPoint) throws -> NSColor {
@@ -716,6 +716,303 @@ final class SVGArtworkTests: XCTestCase {
         }
         XCTAssertGreaterThan(glyphPixels.filter { $0.redComponent < 0.45 }.count, 12,
                              "The Chinese heading must render dark glyph strokes, not just its background")
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+    }
+
+    /// Sample color-managed RGBA bytes directly. NSBitmapImageRep.colorAt can
+    /// reinterpret even tagged sRGB components as device RGB on this host.
+    private struct SRGBBitmap {
+        let pixelsWide: Int
+        let pixelsHigh: Int
+        let bytesPerRow: Int
+        let bytes: Data
+
+        func colorAt(x: Int, y: Int) -> NSColor? {
+            guard (0..<pixelsWide).contains(x), (0..<pixelsHigh).contains(y) else { return nil }
+            let offset = y * bytesPerRow + x * 4
+            let alpha = CGFloat(bytes[offset + 3])
+            guard alpha > 0 else { return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0) }
+            return NSColor(srgbRed: min(1, CGFloat(bytes[offset]) / alpha),
+                           green: min(1, CGFloat(bytes[offset + 1]) / alpha),
+                           blue: min(1, CGFloat(bytes[offset + 2]) / alpha),
+                           alpha: alpha / 255)
+        }
+    }
+
+    private func sRGBBitmap(_ image: CGImage) throws -> SRGBBitmap {
+        let context = try XCTUnwrap(CGContext(data: nil, width: image.width, height: image.height,
+            bitsPerComponent: 8, bytesPerRow: 0, space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return SRGBBitmap(pixelsWide: image.width, pixelsHigh: image.height,
+                          bytesPerRow: context.bytesPerRow,
+                          bytes: Data(bytes: try XCTUnwrap(context.data), count: context.bytesPerRow * image.height))
+    }
+
+    private func sRGBBitmap(_ data: Data) throws -> SRGBBitmap {
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        return try sRGBBitmap(XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil)))
+    }
+
+    func testAsymmetricPatternKeepsDocumentCoordinatesAcrossRasterAndNativeOutput() async throws {
+        // Neither the viewBox origin nor the output height is a multiple of
+        // the tile period. A symmetric checkerboard would hide a flipped tile.
+        let bytes = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="140" height="94" viewBox="-17 -13 140 94">
+              <defs>
+                <pattern id="tile" width="20" height="24" patternUnits="userSpaceOnUse" patternTransform="translate(3 5)">
+                  <rect width="20" height="24" fill="#e02020"/>
+                  <rect y="7" width="20" height="17" fill="#209030"/>
+                  <rect x="11" y="7" width="9" height="17" fill="#2030e0"/>
+                </pattern>
+              </defs>
+              <rect x="-17" y="-13" width="140" height="94" fill="url(#tile)"/>
+            </svg>
+            """.utf8)
+        let vector = try SVGArtwork.parse(bytes)
+        let coordinates = [[5, 20], [5, 29], [15, 29], [25, 44], [25, 53], [35, 53],
+                           [65, 68], [65, 77], [75, 77]]
+        let expected = try await referencePixels(bytes, coordinates: coordinates)
+        XCTAssertEqual(Set(expected.map { pixel in pixel.prefix(3).enumerated().max { $0.element < $1.element }!.offset }),
+                       Set([0, 1, 2]), "The reference must exercise all three asymmetric regions")
+        func verify(_ bitmap: SRGBBitmap, name: String,
+                    destination: CGRect, allowClipping: Bool = false) throws {
+            var checked = 0
+            for (point, expected) in zip(coordinates, expected) {
+                let x = Int(destination.minX + (CGFloat(point[0]) + 0.5) * destination.width / 140)
+                let y = Int(destination.minY + (CGFloat(point[1]) + 0.5) * destination.height / 94)
+                if allowClipping && (!(1..<(bitmap.pixelsWide - 1)).contains(x) ||
+                                     !(1..<(bitmap.pixelsHigh - 1)).contains(y)) { continue }
+                checked += 1
+                let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y))
+                let actual = [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
+                for (channel, value) in zip(actual, expected) {
+                    XCTAssertEqual(channel, Double(value) / 255, accuracy: 0.12, "\(name) pattern at \(point)")
+                }
+            }
+            XCTAssertGreaterThanOrEqual(checked, allowClipping ? 3 : coordinates.count)
+        }
+        for (width, height) in [(140, 94), (280, 188), (280, 240), (400, 188)] {
+            let png = try await SVGArtwork.png(vector, options: .init(width: width, height: height))
+            let bitmap = try sRGBBitmap(png)
+            let scale = min(CGFloat(width) / 140, CGFloat(height) / 94)
+            let size = CGSize(width: 140 * scale, height: 94 * scale)
+            try verify(bitmap, name: "export \(width)x\(height)",
+                       destination: CGRect(x: (CGFloat(width) - size.width) / 2,
+                                           y: (CGFloat(height) - size.height) / 2,
+                                           width: size.width, height: size.height))
+        }
+        let raster = try SVGArtwork.render(bytes)
+        let bitmap = try sRGBBitmap(raster.image)
+        try verify(bitmap, name: "Markdown raster",
+                   destination: CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 360, height: 300),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = SVGPreviewScrollView()
+        window.contentView = scroll
+        window.orderBack(nil)
+        scroll.install(vector.image, request: "asymmetric-pattern")
+        for (zoom, pan): (CGFloat, CGPoint?) in [(0.5, nil), (1, nil), (2, nil),
+                                                    (4, CGPoint(x: 0, y: 0)),
+                                                    (4, CGPoint(x: 30, y: 20))] {
+            if pan != nil { window.setContentSize(CGSize(width: 220, height: 160)) }
+            scroll.layoutSubtreeIfNeeded()
+            scroll.setZoom(zoom, at: CGPoint(x: scroll.bounds.midX, y: scroll.bounds.midY))
+            if let pan {
+                scroll.contentView.scroll(to: scroll.contentView.constrainBoundsRect(
+                    CGRect(origin: pan, size: scroll.contentView.bounds.size)).origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            scroll.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let canvas = try XCTUnwrap(scroll.documentView)
+            let drawing = try XCTUnwrap(canvas.subviews.first)
+            let destination = drawing.convert(drawing.bounds, to: scroll)
+            let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+            scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = "pattern-\(zoom)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let sx = CGFloat(bitmap.pixelsWide) / scroll.bounds.width
+            let sy = CGFloat(bitmap.pixelsHigh) / scroll.bounds.height
+            try verify(sRGBBitmap(png), name: "native \(zoom)",
+                       destination: CGRect(x: destination.minX * sx,
+                                           y: (scroll.isFlipped ? destination.minY : scroll.bounds.maxY - destination.maxY) * sy,
+                                           width: destination.width * sx, height: destination.height * sy),
+                       allowClipping: pan != nil)
+        }
+    }
+
+    func testFitPresentsEveryCornerOfLargeNativeSVGAcrossPaneSizes() async throws {
+        let bytes = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="620">
+              <rect width="700" height="310" fill="#ff0000"/>
+              <rect x="700" width="700" height="310" fill="#00ff00"/>
+              <rect y="310" width="700" height="310" fill="#0000ff"/>
+              <rect x="700" y="310" width="700" height="310" fill="#ffff00"/>
+            </svg>
+            """.utf8)
+        let svg = try SVGArtwork.parse(bytes).image
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 440, height: 400),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = SVGPreviewScrollView()
+        window.contentView = scroll
+        window.orderBack(nil)
+        scroll.install(svg, request: "all-corners")
+        for size in [CGSize(width: 440, height: 400), CGSize(width: 770, height: 360),
+                     CGSize(width: 260, height: 450), CGSize(width: 620, height: 480)] {
+            window.setContentSize(size)
+            scroll.layoutSubtreeIfNeeded()
+            scroll.fit()
+            scroll.layoutSubtreeIfNeeded()
+            let canvas = try XCTUnwrap(scroll.documentView)
+            let drawing = try XCTUnwrap(canvas.subviews.first)
+            let destination = drawing.convert(drawing.bounds, to: scroll)
+            XCTAssertEqual(destination.width / destination.height, 1400.0 / 620, accuracy: 0.01)
+            XCTAssertGreaterThanOrEqual(destination.minX, scroll.bounds.minX - 1)
+            XCTAssertGreaterThanOrEqual(destination.minY, scroll.bounds.minY - 1)
+            XCTAssertLessThanOrEqual(destination.maxX, scroll.bounds.maxX + 1)
+            XCTAssertLessThanOrEqual(destination.maxY, scroll.bounds.maxY + 1)
+            func check() throws -> [Bool] {
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+                scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                attachment.name = "fit-\(Int(size.width))-\(Int(size.height))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                let samples: [(CGFloat, CGFloat, (NSColor) -> Bool)] = [
+                    (0.25, 0.25, { $0.redComponent - max($0.greenComponent, $0.blueComponent) > 0.5 }),
+                    (0.75, 0.25, { $0.greenComponent - max($0.redComponent, $0.blueComponent) > 0.35 }),
+                    (0.25, 0.75, { $0.blueComponent - max($0.redComponent, $0.greenComponent) > 0.5 }),
+                    (0.75, 0.75, { min($0.redComponent, $0.greenComponent) - $0.blueComponent > 0.5 }),
+                ]
+                let pixels = try sRGBBitmap(png)
+                let matches = try samples.map { fx, fy, matches in
+                    let x = destination.minX + fx * destination.width
+                    let y = scroll.isFlipped ? destination.minY + fy * destination.height
+                                             : scroll.bounds.maxY - destination.maxY + fy * destination.height
+                    let color = try XCTUnwrap(pixels.colorAt(
+                        x: Int(x * CGFloat(pixels.pixelsWide) / scroll.bounds.width),
+                        y: Int(y * CGFloat(pixels.pixelsHigh) / scroll.bounds.height)
+                    ))
+                    return color.alphaComponent > 0.95 && matches(color)
+                }
+                return matches
+            }
+            XCTAssertEqual(try check(), [true, true, true, true],
+                           "All four actual fit quadrants must be visible at \(size)")
+        }
+    }
+
+    func testResearchPlotWholeImageMatchesReference() async throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_SVG_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Requires the real research SVG")
+        }
+        let file = URL(fileURLWithPath: root).appending(path: "graphics/复杂科研图.svg")
+        let bytes = try Data(contentsOf: file)
+        let vector = try SVGArtwork.parse(bytes)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let reference = WKWebView(frame: CGRect(x: 0, y: 0, width: 1400, height: 620), configuration: configuration)
+        reference.loadHTMLString("""
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:">
+            <title>Research SVG reference</title>
+            """, baseURL: nil)
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            reference.title == "Research SVG reference" && !reference.isLoading
+        }, object: nil)
+        await fulfillment(of: [loaded], timeout: 8)
+        let result = try await reference.callAsyncJavaScript("""
+            const image = new Image();
+            image.src = 'data:image/svg+xml;base64,' + encoded;
+            await image.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            canvas.getContext('2d').drawImage(image, 0, 0);
+            return canvas.toDataURL('image/png').split(',')[1];
+            """, arguments: ["encoded": bytes.base64EncodedString()], in: nil, contentWorld: .defaultClient)
+        let expected = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(result as? String)))
+        let actual = try await SVGArtwork.png(vector, options: .init(width: 1400, height: 620))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1400, height: 620),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scroll = SVGPreviewScrollView()
+        window.contentView = scroll
+        window.orderBack(nil)
+        scroll.install(vector.image, request: "research-visual")
+        scroll.layoutSubtreeIfNeeded()
+        scroll.setZoom(1, at: CGPoint(x: 700, y: 310))
+        let canvas = try XCTUnwrap(scroll.documentView)
+        window.displayIfNeeded()
+        let rep = try XCTUnwrap(canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds))
+        canvas.cacheDisplay(in: canvas.bounds, to: rep)
+        let displayed = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        for (name, data) in [("reference", expected), ("export", actual), ("canvas", displayed)] {
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        let ref = try sRGBBitmap(expected)
+        for (name, data) in [("export", actual), ("viewport", displayed)] {
+            let candidate = try sRGBBitmap(data)
+            // Explicitly check the thin grid, whose low contrast could pass
+            // the whole-image tolerance even when displaced by half a cell.
+            for row in [360, 400] {
+                func intensity(_ bitmap: SRGBBitmap, x: Int, y: Int) throws -> CGFloat {
+                    try XCTUnwrap(bitmap.colorAt(x: x * bitmap.pixelsWide / 1400,
+                                                y: y * bitmap.pixelsHigh / 620)?.usingColorSpace(.sRGB)).redComponent
+                }
+                let referenceContrast = try intensity(ref, x: 450, y: row - 4) - intensity(ref, x: 450, y: row)
+                XCTAssertGreaterThan(referenceContrast, 0.05)
+                let line = try (row-1...row+1).map { try intensity(candidate, x: 450, y: $0) }.min()!
+                let nearby = try intensity(candidate, x: 450, y: row - 4)
+                XCTAssertGreaterThan(nearby - line, referenceContrast * 0.65, "\(name) grid at \(row)")
+            }
+            // Compare the complete scientific plot, not a few hand-picked points.
+            // Exclude subpixel antialiasing through a two-pixel local neighbourhood,
+            // and check meaningful disagreement in every region of the figure.
+            var mismatches = 0
+            var total = 0
+            for y in stride(from: 2, to: 618, by: 2) {
+                for x in stride(from: 2, to: 1398, by: 2) {
+                    let target = try XCTUnwrap(ref.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    total += 1
+                    var agrees = false
+                    for dy in -1...1 {
+                        for dx in -1...1 {
+                            guard let pixel = candidate.colorAt(
+                                x: (x + dx) * candidate.pixelsWide / ref.pixelsWide,
+                                y: (y + dy) * candidate.pixelsHigh / ref.pixelsHigh
+                            )?.usingColorSpace(.sRGB) else { continue }
+                            if max(abs(pixel.redComponent - target.redComponent),
+                                   abs(pixel.greenComponent - target.greenComponent),
+                                   abs(pixel.blueComponent - target.blueComponent),
+                                   abs(pixel.alphaComponent - target.alphaComponent)) <= 0.15 {
+                                agrees = true
+                                break
+                            }
+                        }
+                        if agrees { break }
+                    }
+                    if !agrees { mismatches += 1 }
+                }
+            }
+            let ratio = Double(mismatches) / Double(total)
+            print("RESEARCH_SVG_VISUAL \(name) mismatch=\(mismatches)/\(total) ratio=\(ratio)")
+            XCTAssertLessThan(ratio, 0.01, "\(name): whole-image geometry and color must agree with the independent reference")
+        }
         XCTAssertEqual(try Data(contentsOf: file), bytes)
     }
 
@@ -772,7 +1069,7 @@ final class SVGArtworkTests: XCTestCase {
         let vector = try SVGArtwork.parse(bytes)
         XCTAssertTrue(vector.omitted.isEmpty)
         let raster = try SVGArtwork.render(bytes)
-        let bitmap = NSBitmapImageRep(cgImage: raster.image)
+        let bitmap = try sRGBBitmap(raster.image)
         XCTAssertEqual(bitmap.pixelsWide, 256)
         XCTAssertEqual(bitmap.pixelsHigh, 200)
         let geometry: [[Int]] = [[15, 18], [40, 22], [56, 22], [45, 55], [-4, 55], [95, 55]]

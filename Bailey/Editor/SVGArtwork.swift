@@ -39,8 +39,9 @@ nonisolated enum SVGArtwork {
         let scale = min(2, 2048 / max(svg.size.width, svg.size.height))
         let width = max(1, Int(ceil(svg.size.width * scale)))
         let height = max(1, Int(ceil(svg.size.height * scale)))
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { throw CocoaError(.fileReadCorruptFile) }
         let image = try rasterize(svg, width: width, height: height,
-                                  space: CGColorSpaceCreateDeviceRGB(), background: .transparent)
+                                  space: space, background: .transparent)
         return Raster(image: image, pointSize: svg.size)
     }
 
@@ -96,18 +97,27 @@ nonisolated enum SVGArtwork {
             context.setFillColor(red: component, green: component, blue: component, alpha: 1)
             context.fill(bounds)
         }
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
+        let destination: CGRect
         if aspectFit {
             let scale = min(CGFloat(width) / svg.size.width, CGFloat(height) / svg.size.height)
             let size = CGSize(width: svg.size.width * scale, height: svg.size.height * scale)
-            context.draw(svg, in: CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
-                                         width: size.width, height: size.height))
+            destination = CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                                 width: size.width, height: size.height)
         } else {
-            context.draw(svg, in: bounds)
+            destination = bounds
         }
+        context.draw(drawing(svg, in: destination))
         guard let image = context.makeImage() else { throw CocoaError(.fileReadCorruptFile) }
         return image
+    }
+
+    /// Keep the Core Graphics context in its native space. SwiftDraw captures
+    /// the initial CTM as the pattern's base space, so flipping the context
+    /// before entering its renderer displaces or reflects asymmetric tiles.
+    /// Apply the SVG's top-left orientation in its own vector commands instead.
+    static func drawing(_ svg: SVG, in destination: CGRect) -> SVG {
+        svg.scaled(x: destination.width / svg.size.width, y: -destination.height / svg.size.height)
+            .translated(tx: destination.minX, ty: destination.maxY)
     }
 
     static func sanitizedXML(_ data: Data) throws -> Sanitized {

@@ -55,6 +55,121 @@ final class SVGFilePreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
     }
 
+    func testLargeSVGFitShowsAllFourCornersAfterSourceRemount() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="620">
+              <rect width="700" height="310" fill="#ff0000"/>
+              <rect x="700" width="700" height="310" fill="#00ff00"/>
+              <rect y="310" width="700" height="310" fill="#0000ff"/>
+              <rect x="700" y="310" width="700" height="310" fill="#ffff00"/>
+            </svg>
+            """
+        let file = try fixture.file("Large.svg", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
+
+        func showsWholeImage() -> Bool {
+            guard preview.exists,
+                  let bitmap = NSBitmapImageRep(data: window.screenshot().pngRepresentation) else { return false }
+            let frame = window.frame
+            let sx = CGFloat(bitmap.pixelsWide) / frame.width
+            let sy = CGFloat(bitmap.pixelsHigh) / frame.height
+            let visible = preview.frame
+            let width = min(1400, visible.width * sx, visible.height * sy * 1400 / 620)
+            let height = width * 620 / 1400
+            let center = CGPoint(x: (visible.midX - frame.minX) * sx,
+                                 y: (visible.midY - frame.minY) * sy)
+            let samples: [(CGFloat, CGFloat, (NSColor) -> Bool)] = [
+                (-0.25, -0.25, { $0.redComponent - max($0.greenComponent, $0.blueComponent) > 0.5 }),
+                (0.25, -0.25, { $0.greenComponent - max($0.redComponent, $0.blueComponent) > 0.35 }),
+                (-0.25, 0.25, { $0.blueComponent - max($0.redComponent, $0.greenComponent) > 0.5 }),
+                (0.25, 0.25, { min($0.redComponent, $0.greenComponent) - $0.blueComponent > 0.5 }),
+            ]
+            return samples.allSatisfy { dx, dy, matches in
+                let x = Int(center.x + dx * width), y = Int(center.y + dy * height)
+                guard (0..<bitmap.pixelsWide).contains(x), (0..<bitmap.pixelsHigh).contains(y),
+                      let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+                return matches(color)
+            }
+        }
+
+        for remounted in [false, true] {
+            if remounted {
+                preview.click()
+                app.typeKey("v", modifierFlags: [.command, .shift])
+                XCTAssertTrue(window.textViews.firstMatch.waitForExistence(timeout: 10))
+                window.textViews.firstMatch.click()
+                app.typeKey("v", modifierFlags: [.command, .shift])
+            }
+            XCTAssertTrue(preview.waitForExistence(timeout: 12))
+            let painted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                showsWholeImage()
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed,
+                           "Fit must display the complete document, including the right and bottom halves")
+            let attachment = XCTAttachment(screenshot: window.screenshot())
+            attachment.name = remounted ? "large-fit-remounted" : "large-fit"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+    }
+
+    func testNativeZoomResolvesFineVectorDetailInTheActualWindow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let stripes = (0..<40).map { column in
+            "<rect x=\"\(10 + Double(column) * 0.5)\" width=\"0.25\" height=\"40\" fill=\"black\"/>"
+        }.joined()
+        let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="80" height="40">
+              <rect width="80" height="40" fill="white"/>\(stripes)
+            </svg>
+            """
+        let file = try fixture.file("Fine detail.svg", text: source)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root, clipboardIsReadOnly: true
+        )
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let preview = WorkspaceUITestSupport.element("bailey.svg.preview", in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 12))
+        for _ in 0..<7 {
+            preview.rightClick()
+            let zoom = WorkspaceUITestSupport.menuItem("Zoom in", in: app)
+            XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+            zoom.click()
+        }
+        let painted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let bitmap = NSBitmapImageRep(data: window.screenshot().pngRepresentation) else { return false }
+            let frame = window.frame
+            let centerX = (preview.frame.midX - frame.minX) * CGFloat(bitmap.pixelsWide) / frame.width
+            let y = Int((preview.frame.midY - frame.minY) * CGFloat(bitmap.pixelsHigh) / frame.height)
+            let left = Int(centerX - 160 + 12 * 4)
+            guard (0..<bitmap.pixelsHigh).contains(y), left >= 0, left + 64 <= bitmap.pixelsWide else { return false }
+            let channels = (left..<(left + 64)).compactMap {
+                bitmap.colorAt(x: $0, y: y)?.usingColorSpace(.sRGB)?.redComponent
+            }
+            let transitions = zip(channels, channels.dropFirst()).filter { abs($0 - $1) > 0.5 }.count
+            return channels.count == 64 && transitions > 30
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [painted], timeout: 10), .completed,
+                       "The actual window must resolve quarter-unit vector bands at 400%, not enlarge a cached fit bitmap")
+        let attachment = XCTAttachment(screenshot: window.screenshot())
+        attachment.name = "fine-vector-400-percent"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(try Data(contentsOf: file), Data(source.utf8))
+    }
+
     func testInvalidSVGOffersItsUnchangedSource() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let invalid = "<svg><g>"
