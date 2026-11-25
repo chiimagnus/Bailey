@@ -1,6 +1,5 @@
 import AppKit
 import AVFoundation
-import AVKit
 import Darwin
 import ImageIO
 import Observation
@@ -71,7 +70,6 @@ final class FileTab: nonisolated Identifiable {
 
     private(set) var content: Content
     private(set) var mediaPlayer: AVPlayer?
-    private(set) var mediaEnvironmentRevision: UInt = 0
     private(set) var mediaSleeping = false
     @ObservationIgnored private var mediaEnvironmentObservation: NativeMediaEnvironmentObservation?
     private(set) var htmlPreview: HTMLPreview? {
@@ -196,7 +194,6 @@ final class FileTab: nonisolated Identifiable {
         guard !isRetired, let player = mediaPlayer else { return }
         player.pause()
         player.currentItem?.cancelPendingSeeks()
-        mediaEnvironmentRevision &+= 1
         switch event {
         case .sleep:
             mediaSleeping = true
@@ -221,7 +218,6 @@ final class FileTab: nonisolated Identifiable {
         mediaEnvironmentObservation?.invalidate()
         mediaEnvironmentObservation = nil
         mediaSleeping = false
-        mediaEnvironmentRevision &+= 1
         if case .media(let media) = content { media.asset.cancelLoading() }
         mediaPlayer?.pause()
         mediaPlayer?.currentItem?.cancelPendingSeeks()
@@ -1864,24 +1860,22 @@ struct FileViewerView: View {
                 }
             case .media(let media):
                 if let player = file.mediaPlayer {
-                    let isAudio = media.kind == .audio
-                    let surface = NativePlayerView(player: player, allowsFullScreen: !isAudio,
-                                                   controlsStyle: isAudio ? .floating : .inline,
-                                                   isDockActive: isFocused && appearsActive && !file.mediaSleeping)
+                    let active = isFocused && appearsActive && !file.mediaSleeping
                     Group {
-                        if isAudio {
-                            VStack(spacing: 8) {
-                                NativeAudioWaveformView(file: file, media: media, player: player,
-                                                        active: isFocused && appearsActive && !file.mediaSleeping)
-                                    .frame(height: 72)
-                                    .padding(.horizontal, 12)
-                                surface.frame(height: 112)
-                            }
-                            .frame(maxWidth: 520)
-                        } else if let aspectRatio = media.videoAspectRatio {
-                            surface.aspectRatio(aspectRatio, contentMode: .fit)
+                        if media.kind == .audio {
+                            FileAudioControls(player: player)
+                                .frame(maxWidth: 520).frame(height: 32)
+                                .padding(.horizontal, 12)
+                                .onChange(of: active, initial: true) { _, active in
+                                    if !active { player.pause() }
+                                }
                         } else {
-                            surface
+                            let surface = NativePlayerView(player: player, allowsFullScreen: true, isDockActive: active)
+                            if let aspectRatio = media.videoAspectRatio {
+                                surface.aspectRatio(aspectRatio, contentMode: .fit)
+                            } else {
+                                surface
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

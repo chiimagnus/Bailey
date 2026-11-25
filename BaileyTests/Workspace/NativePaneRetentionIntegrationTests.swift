@@ -944,7 +944,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                     && file.markdownSourceIndex?.request == file.textPreviewRequestID
             }
             let independent = try XCTUnwrap(media.mediaPlayer)
-            XCTAssertEqual(nativePlayers(in: host).compactMap(\.player).count, 1,
+            XCTAssertEqual(nativePlayers(in: host).compactMap(\.player).count, tag == "audio" ? 0 : 1,
                            "Markdown must not stage or create a player until requested")
             // Exercise the real accessible control from this mounted host,
             // as the other native component tests do. Window-server enumeration
@@ -1119,6 +1119,10 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 case 4:
                     return mounted(PreviewScrollView.self, in: host) { $0.accessibilityIdentifier() == "bailey.image.inspector" } != nil
                         && file.gifPlayback != nil
+                case 5:
+                    guard let player = file.mediaPlayer else { return false }
+                    return mounted(FileAudioControls.Bar.self, in: host)?.player === player
+                        && player.currentItem?.status == .readyToPlay
                 default:
                     guard let player = file.mediaPlayer else { return false }
                     return mounted(AVPlayerView.self, in: host) { $0.player === player } != nil
@@ -1181,7 +1185,9 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                         let moved = await player.seek(to: CMTime(seconds: 2, preferredTimescale: 600),
                                                       toleranceBefore: .zero, toleranceAfter: .zero)
                         XCTAssertTrue(moved)
-                        cachedPlayerViews[index] = try XCTUnwrap(mounted(AVPlayerView.self, in: host) { $0.player === player })
+                        if index == 6 {
+                            cachedPlayerViews[index] = try XCTUnwrap(mounted(AVPlayerView.self, in: host) { $0.player === player })
+                        }
                         player.playImmediately(atRate: 1)
                     } else {
                         XCTAssertEqual(player.rate, 0)

@@ -651,62 +651,62 @@
         }
       }
     },
-    "Zoom Out" : {
+    "Playback position" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "缩小"
+            "value" : "播放进度"
           }
         }
       }
     },
-    "Zoom In" : {
+    "Volume" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "放大"
+            "value" : "音量"
           }
         }
       }
     },
-    "Next Waveform Section" : {
+    "Play" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下一段波形"
+            "value" : "播放"
           }
         }
       }
     },
-    "Previous Waveform Section" : {
+    "Pause" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "上一段波形"
+            "value" : "暂停"
           }
         }
       }
     },
-    "Waveform Unavailable" : {
+    "Mute" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法显示波形"
+            "value" : "静音"
           }
         }
       }
     },
-    "Waveform" : {
+    "Unmute" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "波形"
+            "value" : "取消静音"
           }
         }
       }
