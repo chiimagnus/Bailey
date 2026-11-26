@@ -138,9 +138,12 @@ class NativeCodeTextView: NSTextView {
     func retireNativeDocument() {
         guard !nativeDocumentRetired else { return }
         nativeDocumentRetired = true
+        composition = nil
         isEditable = false
         isSelectable = false
-        undoManager?.removeAllActions()
+        breakUndoCoalescing()
+        allowsUndo = false
+        documentUndoManager.removeAllActions()
         syntaxCoordinator?.deactivate()
         syntaxCoordinator = nil
         delegate = nil
@@ -154,7 +157,7 @@ class NativeCodeTextView: NSTextView {
         // of when the view object itself is eventually deallocated.
         textStorage?.setAttributedString(NSAttributedString(string: ""))
         resetDocumentIndex("")
-        undoManager?.removeAllActions()
+        documentUndoManager.removeAllActions()
     }
 
     var overrideContentHeight: CGFloat? {
@@ -257,6 +260,7 @@ class NativeCodeTextView: NSTextView {
     /// a different region from the marked text, without copying intervening text.
     override func setMarkedText(_ string: Any, selectedRange: NSRange,
                                 replacementRange: NSRange) {
+        guard !nativeDocumentRetired else { return }
         if !hasMarkedText(), composition == nil {
             composition = CompositionTransaction(
                 originalSelection: self.selectedRange(),
@@ -268,6 +272,7 @@ class NativeCodeTextView: NSTextView {
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard !nativeDocumentRetired else { return }
         if replacementRange.location == NSNotFound, composition == nil, !hasMarkedText(),
            let replacement = (string as? NSAttributedString)?.string ?? (string as? String),
            insertAcrossSelections(replacement) {
