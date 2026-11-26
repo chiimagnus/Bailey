@@ -6,7 +6,8 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 并排真实中文 IME、Undo／Redo、最终 WebKit 中文与源字节已通过；IME 和滚动完整交叉、VoiceOver、最终整合与 P1 门禁留阶段。
+- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 并排真实中文 IME、Undo／Redo、最终 WebKit 中文与源字节已通过；IME 和滚动完整交叉、最终整合与 P1 门禁留阶段。
+- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 

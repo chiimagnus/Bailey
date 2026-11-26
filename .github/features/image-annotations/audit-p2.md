@@ -6,7 +6,8 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 360/260/220/150 点 Dock 真实系统拼音、保存、撤销与重做已通过，VoiceOver 尚待复验，阶段 No-Go；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
+- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 360/260/220/150 点 Dock 真实系统拼音、保存、撤销与重做已通过，P2-T1 已独立核销；阶段仍待共享整合及共享写入失败（含隔离空间不足）验收；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
+- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
 
@@ -172,3 +173,7 @@
 - 2026-11-26：`4c7290d8` 在真实原生宿主以 360／260／220／150 点窗宽进入标注、点击可视画布、验证文字 field editor 取得焦点，原生 marked text 组合及中文确认、取消后编辑器退役、底图字节不变，定点通过（`/tmp/bailey-narrow-native-red.Pw7kXN`）。最窄输入框可用宽度 42 点。结合既有隔离完整 App 系统拼音证据；不将宿主 marked text 冒称窄窗完整 App 系统候选，后者及 VoiceOver 为后续可执行验收，任务 pending。
 
 - 2026-11-26：隔离 Bailey Dev 实体 Dock 360.5/260.5/220.5/150.5 点四档，实际系统拼音 `zhongwen` 的 marked text → 中文候选 → 添加文字 → ⌘S → ⌘Z/⌘S（实际旁车无图层）→ ⇧⌘Z/⌘S（恢复单一中文文字层），每档原图字节不变，输入源恢复为启动时状态，Dev 正常退出，4/4、零失败。日志 `/tmp/bailey-final-narrow-ime.3Qkodm/run3.log`、逐步 AX 与截图在同目录；不把早期自动化定位失败或宿主覆盖冒称实机通过。
+
+- 2026-11-26：主分支 `f5fa4b05` 的实际 VoiceOver Annotate Image 进入标注态，
+  Text 工具实际读出并激活；另一组 Bailey 测试导致坐标目标不匹配，未完成文字录入和旁车保存。
+  原图字节不变；P2-T1 仍 pending，见[共享 P1 证据](../file-viewer-routing/audit-p1.md)。

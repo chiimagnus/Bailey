@@ -12,10 +12,10 @@ note = "cdf773a3 共用读取、ddf88857 真 Windows 隔离、7452b16d 核销 HE
 [[tasks]]
 id = "P1-T2"
 title = "原生 AVPlayerView 画面内操控与文件生命周期"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = "原生控件、画幅、全屏、4K Main10/PQ解码、实际音轨菜单及内置输出通路通过；1bf65468实际原生挂载与2026-11-26实测HDR窗口16-bit Extended P3，线性亮区1.445>SDR白1，内置XDR当前EDR 3.97，软件合成链已核销。未声称光学测量；VoiceOver等可执行交叉验收待有效运行，物理音频/睡眠共享P2。"
+commit = "1bf65468"
+note = "原生控件、画幅、全屏、真实音轨及字幕、4K Main10/PQ解码、内置输出通路和基础AX控件/实际操作已有证据；1bf65468原生挂载与16-bit Extended P3窗口采样线性亮区1.445>SDR白1，内置XDR当前EDR 3.97，定点5/5。2026-11-26用户取消VoiceOver专项；HDR实际解码及EDR软件链已有证据，不要求物理光学测量；真实声音输出见P2，真实睡眠延期。"
 
 [[tasks]]
 id = "P2-T1"
@@ -23,7 +23,7 @@ title = "系统轨道选择、准确播放位置与全屏恢复"
 status = "completed"
 plan = "plan-p2.md#p2-t1"
 commit = "c7840ffa"
-note = "c7840ffa：16 秒真实 MOV 含英语 440 Hz、法语 880 Hz 可切 AAC 轨；原生 AVKit 菜单实见 English/French 并操作法语，宿主实际混合 PCM 验证暂停切换 en→fr→en、播放中切 fr、换标签保持所选轨及 player/item/位置、源字节不变。实际中文字幕 cue 复验通过，定点 2/2 零跳过；既有 65c602e8 全屏半速与恒定/可变帧率最终帧证据继续有效。实体听感、显示与设备交叉项归共享阶段门禁，不冒充物理验收。"
+note = "c7840ffa：16 秒真实 MOV 含英语 440 Hz、法语 880 Hz 可切 AAC 轨；原生 AVKit 菜单实见 English/French 并操作法语，宿主实际混合 PCM 验证暂停切换 en→fr→en、播放中切 fr、换标签保持所选轨及 player/item/位置、源字节不变。实际中文字幕 cue 复验通过，定点 2/2 零跳过；既有 65c602e8 全屏半速与恒定/可变帧率最终帧证据继续有效。已有真实选轨PCM和全屏画面证据；不要求主观听感或无关设备组合。"
 
 [[tasks]]
 id = "P2-T2"
@@ -31,4 +31,4 @@ title = "外部更换、睡眠恢复和全链路资源收尾"
 status = "completed"
 plan = "plan-p2.md#p2-t2"
 commit = "a2d9f21d"
-note = "换源/退役、百次宿主、117次双窗、睡眠/唤醒通知、实际选轨PCM及真实Beats/内置双向切换通过。2026-11-26真实挂载FileViewerView的H.264/AAC播放至13.515s，内置扬声器/麦克风交替440/880Hz与静音频谱实际吻合，源字节不变、宿主1/1退出0、原设备恢复。真实睡眠用户延期，HDR物理光学归P1阶段独立验收。"
+note = "换源/退役、百次宿主、117次双窗、睡眠/唤醒通知、实际选轨PCM及真实Beats/内置双向切换通过。2026-11-26真实挂载FileViewerView的H.264/AAC播放至13.515s，内置扬声器/麦克风交替440/880Hz与静音频谱实际吻合，源字节不变、宿主1/1退出0、原设备恢复。真实睡眠用户延期，HDR实际解码及EDR软件链见P1，不要求物理光学测量。"

@@ -5,9 +5,10 @@
 
 ## 结论
 
-- **结果**：No-Go（P1 实现与已执行验证通过，仍有计划要求的无障碍与环境未核销；用户已批准暂时阻塞该条件，独立 P2 实现见对应审计）。
-- **依据**：实际表格、查找、选区、剪贴板、系统投递、冷恢复、双窗和窄 Dock 均通过；四项发现均关闭。
-  仍需按现有环境与无障碍条件补验，不能以已绿的宿主测试代替。
+- **结果**：No-Go（P1 两项任务已完成，共享最终整合仍待核销）。
+- **依据**：实际表格、查找、选区、剪贴板、系统投递、冷恢复、双窗和窄 Dock 均通过；原生表格 AX 行列／表头／值及选中态已有实测证据；四项发现均关闭。
+- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
+  已有实际表格和基础 AX 证据可复用，发现新的相关缺陷时再定点核验。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
 
 ## 任务与改动
@@ -95,3 +96,6 @@
 - 真实 Windows Tailscale 和本机路径已测。
 - 最终 e4267d71：共享读取、文件归属、原生生命周期与 330 项受影响宿主回归全过（含 JPEG 边界补测）；此前 CSV 专项及隔离 GUI 证据不变。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+
+- 2026-11-26：最终版 d542f533 的隔离 Dev 中真实 VoiceOver 进入原生表格第 1 行（共 2 行），读出表头 Name、单元格 SampleAlpha、同一行数值 12345 及选中态。CSV 源字节一致；其余交叉条件仍按阶段验收。
+  证据 `/tmp/bailey-final-vo-exclusive.sOoDThsY/vo.log`。

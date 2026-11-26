@@ -49,7 +49,7 @@ Front Matter 仅限文件开头（可带 BOM）由 Yams 解析；元数据和正
 
 - 对照 [Primer Markdown 样式](https://github.com/primer/css/tree/main/src/markdown) 调整 `MarkdownPreview`／`MarkdownHTMLContent` 的字号、行高、标题／引用、列表、表格、代码片段及响应式内边距；复用当前 `MarkdownGitHubColors`，不复制 CSS 引擎。此任务只负责基础视觉，复杂嵌套与 GFM Alerts 见 P2-T8。
 - 链接保留 AST 嵌套强调语义；原生系统链接处理真正的文字范围，图片、HTML 交互和标题锚点仅在可点击区域使用 `.pointerStyle(.link)`。正文不要整段显示手形指针。
-- 代码围栏使用 GitHub 风格悬停复制控件；键盘和 VoiceOver 仍可发现操作。错误资源、超长代码、内联图片混排和深浅主题真实复验。
+- 代码围栏使用 GitHub 风格悬停复制控件；键盘和基础 AX 仍可发现并执行操作。错误资源、超长代码、内联图片混排和深浅主题真实复验。
 - 宿主核验嵌套链接与完整源码；隔离 Bailey Dev 以真实 README／`SKILL.md` 和复杂混排文档验证点击跳转、指针形状、Hover／焦点、截图、窄 Dock、选择复制及样式回归。
   简短专项用例只定位缺陷；跨结构连续选择归 P2-T6，跨环境极端覆盖按 P2 共同验收执行。
 
@@ -57,6 +57,6 @@ Front Matter 仅限文件开头（可带 BOM）由 Yams 解析；元数据和正
 
 - **语义**：CommonMark／GFM 规范样例、Front Matter／MDX、嵌套引用／列表／表格、代码围栏、链接、题注与超长行；未支持语义不得无声丢失。
 - **安全**：真实受控项目目录、符号链接逃逸、`../`、百分号编码、`file:`／`http:`／`https:`、SSH 断线和同路径不同机器；观测实际资源读取与网络请求。
-- **体验**：双窗口、多 Dock、窄布局、原生键盘、深浅主题、VoiceOver、跨段落拖选/复制与标题跳转。选区跨块是否成立需真实 GUI 记录，不以组件构造代替。
+- **体验**：双窗口、多 Dock、窄布局、原生键盘、深浅主题、基础 AX、跨段落拖选/复制与标题跳转。选区跨块是否成立需真实 GUI 记录，不以组件构造代替。
 - **性能**：500／5,000／20,000 行和已有 32 MiB 文件边界，分别量化解析、首屏、滚动、内存、输入时主 actor 停顿；不把纯 AST 基准冒充渲染性能。
 - **命令**：按 `AGENTS.md` 由根 `Makefile` 执行隔离 `build:dev`、所需 `BaileyTests`、`build:ui` 和必要的 `BaileyUITests`。真实 GUI 验收使用独立 Bailey Dev，绝不替换正式 App。

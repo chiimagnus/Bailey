@@ -55,6 +55,7 @@ App 默认使用 MainActor 隔离；`async`、`await` 或在界面中创建 `Tas
   不规定 Unit／Integration 的数量比例或中间目录。仍须尽可能核销受影响功能的全部适用条件和重要组合；
   可测试缺陷先 Red→Green→Refactor，必须验证真实副作用，未测条件说明原因与影响。
   组件测试不能冒充 E2E；完整 GUI 自动化仅使用隔离 Bailey Dev，仍须独占键盘焦点。
+  保留原生基础无障碍语义，不为 VoiceOver 新增专项适配或播报验收。
   详见 [testing.md](docs/testing.md#测试层次)。
 - **保护用户环境**：不退出、启动、替换或重启正在使用的正式 Bailey，不借用用户 SSH master、
   不结束其后台任务。正式 `Bailey.app`／`chiimagnus.bailey` 不变；

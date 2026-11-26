@@ -7,6 +7,13 @@
 
 - **结果**：No-Go
 - **依据**：公共读取、窗口归属、生命周期及真实 Windows Tailscale 读写复验通过；P1 两项任务均独立核销。最新冻结全量因工具时限中断，阶段最终整合留第六项统一执行；格式专属输入／设备验收各归其主，缺配外设延期。
+- **现行无障碍范围**：2026-11-26 用户决定保留基础 AX 语义与自动化可操作性，取消 VoiceOver 专项适配／语音导览及播报门禁。
+  下文旧语音记录仅为历史实测，不再作为待办或阻塞。真实键盘、焦点、动作、像素、磁盘及环境回归不变。
+  依 [共享验收环境](plan-p1.md#acceptance-environment) 核销；三个剩余任务按已有直接证据独立完成，
+  不改变尚未取得证据的阶段门禁。
+- **现行阶段范围**：依[共享验收环境](plan-p1.md#acceptance-environment)，取消减弱动态效果专项、主观听感、
+  物理 HDR 光学测量及无关设备组合；此前相关未测记录仅为历史，不再构成待办。
+  当前仍须完成最新整合回归、完整 App 资源测量、SVG／HTML 编辑滚动组合及共享写入失败验收。
 
 ## 当前阶段验收（2026-11-25）
 
@@ -15,17 +22,17 @@
 
 | 条件 | 实际结果与剩余限制 |
 | --- | --- |
-| R01 环境 | macOS 27.3／Xcode 27.2／M1 Pro；内置屏实际 2×，`NSScreen` 当前 EDR 1.2、潜在 16。CSV／HTML／SVG 中文候选提交、英文输入、深浅宿主及实际 App 多窗口有证据；触控板、VoiceOver 播报、系统减弱动态与现有屏幕的真实组合仍待验；缺配 1×／外接 HDR、多屏延期。 |
+| R01 环境 | macOS 27.3／Xcode 27.2／M1 Pro；内置屏实际 2×，`NSScreen` 当前 EDR 1.2、潜在 16。CSV／HTML／SVG 中文候选提交、英文输入、深浅宿主及实际 App 多窗口有证据；实体触控板捏合已由用户验收，图形、表格、HTML 与媒体基础 AX 语义和动作已有直接证据；不要求无关设备组合。缺配 1×／外接 HDR、多屏延期。 |
 | R02 入口 | Finder／Launch Services、项目及双窗同名文件、冷恢复已通过；最新全量中 FinderDeliveryIntegrationTests 17/17、DockWorkspaceTests 39/39。 |
 | R03 路径 | 既有真实本机／Windows 路径、特殊字符、符号链接与作用域回归保留；FileTreeTests 114/114，真实远端资源与普通重命名定点复验通过。Windows 当前原生符号链接创建不可用，相关条件子分支未执行，不修改系统权限。 |
 | R04 类型 | FileTabPersistenceTests 83/83，含伪后缀、损坏图像、普通文件与真实类型路由；HTMLFilePreviewTests 18/18。 |
 | R05 容量 | 真实远端 32 MiB 文本上传、下载、修改保存、重开、超限与二进制拒绝通过（39.155 秒）；JPEG 精确字节预算、PNG 像素上限与既有大媒体／区域解码证据保留。 |
-| R06 版本 | 本机真实双窗及 VS Code 式共享比较、版本绑定覆盖通过；真实 Windows CSV／旁车冲突、丢回执重连、原字节保存及相邻 Git Diff 保存通过。证据归 [CSV P2](../csv-table-view/audit-p2.md) 与 [图片 P2](../image-annotations/audit-p2.md)；严格非协作 CAS 继续 Deferred。 |
+| R06 版本 | 本机真实双窗及 VS Code 式共享比较、版本绑定覆盖通过；真实 Windows CSV／旁车冲突、丢回执重连、原字节保存及相邻 Git Diff 保存通过。证据归 [CSV P2](../csv-table-view/audit-p2.md) 与 [图片 P2](../image-annotations/audit-p2.md)；严格非协作 CAS 继续 Deferred；隔离空间不足等写入失败的共享验证仍待。 |
 | R07 竞态 | FileTabPersistenceTests 83/83 包含加载／保存／重命名／关闭竞态；DelimitedTableIndexTests 14/14；没有旧读取覆盖新标签的新增失败。 |
-| R08 界面 | 实际 117 次切换、HTML 并排、双窗窗口归属及关闭通过；原生中文输入及 CSV 焦点修复另见各格式审计。现有输入及可执行显示倍率交叉仍未验；缺配外设组合延期。 |
+| R08 界面 | 实际 117 次切换、HTML 并排、双窗窗口归属及关闭通过；原生中文输入及 CSV 焦点修复另见各格式审计。真实输入及显示几何的直接证据见各格式；不另做无关设备全排列。缺配外设组合延期。 |
 | R09 生命周期 | `807fbdee` 相关宿主 154/154（零失败零跳过），其中双窗 100+100、12.185 秒；所有跟踪资源释放、空壳播放器 0、文件字节不变。`35503954` 完整 App 117 次切换、退出／冷启动／关闭通过。 |
 | R10 远端 | 恢复网络后真实 Windows Tailscale 资源读取／跨机器隔离／断线恢复、32 MiB 文件读写、普通改名及共享保存相关专项通过；此前超时未再出现。仅定点核销，不将其冒称最新全量通过或断言所有网络故障已消失。 |
-| R11 视觉与性能 | 原生百次生命周期含 RSS／footprint，最新 154 项中双窗循环后跟踪资源为 0；十万行 CSV 的实际末行保存通过。不能将宿主内存结果冒称完整 App 的 RSS 回归；现有显示／输入、实际内存压力组合仍待核销；缺配外设组合延期。 |
+| R11 视觉与性能 | 原生百次生命周期含 RSS／footprint，最新 154 项中双窗循环后跟踪资源为 0；十万行 CSV 的实际末行保存通过。不能将宿主内存结果冒称完整 App 的 RSS 回归；仍需以实际产品负载补齐完整 App 的资源与内存对照，不人为制造整机内存压力；缺配外设组合延期。 |
 
 - 本轮相关宿主日志：`/tmp/bailey-grid-focus-regress.opOyf6`，154 项（83 文件、28 生命周期、16 表格展示、14 表格索引、13 原生输入），`TEST SUCCEEDED`；Dev 严格验签退出 0。
   生命周期该次末值 RSS 1299.05 MiB、footprint 259.94 MiB、`live_owners=0 retained_empty_players=[]`；同进程初始已承载其它测试，不直接将 RSS 差值归因于预览。较小的单项进程证据见下文 `92625c02`。
@@ -198,3 +205,25 @@
   随后用户实际操作 Helium/其他窗口。未终止其他项目进程、不再争抢焦点；隔离 Dev 已退出、VoiceOver 状态 false，原有授权保留。
   没有核销缩放实际执行／倍率播报或其余控件；没有新产品代码改动，也未执行全量测试。
   证据 `/tmp/bailey-vo-matrix.WtyZTlsV/{image-retry.log,commander.log,direct.log,final-matrix.py}`，构建日志 `/tmp/bailey-vo-{baseline,dev}-build.log`。
+
+- 2026-11-26：主分支 `f5fa4b05`（#102–#104 合并后），`make build:dev` 完整退出 0，
+  Dev 严格验签退出 0。隔离 Dev 实际 VoiceOver 的操作菜单选择改用真实 Return 键：
+  图片视口播报成功、Zoom in 实际使 AX 倍率由 Fit 变为 125%；末句及再次描述仍只读出视口，
+  未取得 125% 播报，不核销倍率反馈。Annotate Image 动作进入标注态，Text 工具被读出并激活；
+  画布坐标点击因同时运行的另一组 Bailey 测试出现窗口归属不匹配，未生成旁车。
+  HTML 网页内容实际播报一级标题 Sample Heading；M4A、MOV 分别实际读出播放／暂停、
+  时间轴（zero seconds）、音量（100%）、静音四项，共八个媒体控件。
+  此次没有执行媒体滑块／静音的旁白动作及视频专属控件，SVG、CSV 受焦点冲突未核销。
+  六个隔离样本独立复核原字节一致，脚本退出 0、隔离 Dev 退出、系统设置开关 AX=0、
+  NSWorkspace=false、VoiceOver 进程退出；正式 App 未更换。其他 Git 工作及测试未修改或终止。
+  证据 `/tmp/bailey-main-acceptance.62bJLXyJ/{head,build.log,vo.log,settings-final.json}`、
+  同目录实际 AX／截图；构建与产品测试分开记录。不改变 4 个 pending 或 13 个 No-Go，
+  新 CSV P3/P4、Markdown P3 未实施。最新全量尚未执行。
+
+- 2026-11-26：`d542f533` 统一主动播报为 `AccessibilityNotification.Announcement`，共享图形视口
+  名称与 AX 值由实际倍率共同生成。实机 Red：仅迁移通知后放大／缩小的末句缺少新倍率；
+  Green：隔离 Dev 中图片和 SVG 从 Fit 到 100%、125%，动作后的实际旁白及重新定位均读出新值。
+  端口转发表单按 Return 提交缺失端口的无效表单，实际旁白读出错误，配置未改。
+  宿主迁移版 60 项（51 通过、9 项既有条件跳过）、最终版定点 3/3，正式 Debug 和 Dev 严格验签通过。
+  日志 `/tmp/bailey-ax-modern.d7jEoUd7` 与 `/tmp/bailey-ax-readable-retry.IWw1uNaH/vo.log`。
+  最终版缩小／Fit 动作的实际语音、既有专项与阶段其他门禁未核销，未改变任务完成状态。
