@@ -700,7 +700,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
 
-    func testReadOnlyGridOffersColumnStatisticsWithoutAnyEdit() async throws {
+    func testReadOnlyGridRetainsColumnControlsAndLiteralFindWithoutStatistics() async throws {
         let original = "Name,Value\r\nItem,\nOther,7\nThird,\"\"\nBad,\"open"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         try Data(original.utf8).write(to: url)
@@ -732,8 +732,10 @@ final class DelimitedGridInteractionTests: XCTestCase {
                                                           timestamp: 0, windowNumber: window.windowNumber,
                                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
         let menu = try XCTUnwrap(header.menu(for: headerClick))
-        let stats = try XCTUnwrap(menu.item(withTitle: String(localized: "Column Statistics…", table: "Editor")))
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(stats.action), to: stats.target, from: stats))
+        XCTAssertFalse(menu.items.contains { $0.action.map(NSStringFromSelector) == "columnStatistics:" })
+        XCTAssertNotNil(menu.item(withTitle: String(localized: "Sort Ascending", table: "Editor")))
+        XCTAssertNotNil(menu.item(withTitle: String(localized: "Filter Column…", table: "Editor")))
+        XCTAssertNil(menu.item(withTitle: String(localized: "Insert Column Left", table: "Editor")))
 
         let pid = ProcessInfo.processInfo.processIdentifier
         let access = await Task.detached {
@@ -759,80 +761,15 @@ final class DelimitedGridInteractionTests: XCTestCase {
         func label(_ element: NSObject) -> String? {
             attribute(element, "accessibilityLabel") as? String
         }
-        func statisticsValues() -> [String] {
-            elements().compactMap {
-                guard attribute($0, "accessibilityRole") as? String == "AXStaticText" else { return nil }
-                return attribute($0, "accessibilityValue") as? String
-            }
-        }
-        let expected = [("Fields", "3"), ("Empty", "2"), ("Numeric", "1"),
-                        ("Other or Out of Range", "0"), ("Minimum", "7"), ("Maximum", "7"),
-                        ("Sum", "7"), ("Average", "7")]
-            .flatMap { [String(localized: String.LocalizationValue($0.0), table: "Editor"), $0.1] }
-        func statisticsArePublished() -> Bool {
-            let values = statisticsValues()
-            return values.indices.contains { values.dropFirst($0).starts(with: expected) }
-        }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !statisticsArePublished(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(statisticsArePublished(), "Actual statistics: \(statisticsValues())")
-        let selected = grid.table.selection
-        let revision = file.textPreviewRequestID
-        let previousLight = Theme.terminal(dark: false).name
-        let previousDark = Theme.terminal(dark: true).name
-        defer { Theme.reloadSelection(light: previousLight, dark: previousDark) }
-        for dark in [false, true] {
-            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            Theme.reloadSelection(light: "Rose Pine Dawn", dark: "Dracula")
-            let expectedColor = Theme.terminal(dark: dark).backgroundNSColor
-            let repaint = ContinuousClock.now.advanced(by: .seconds(2))
-            while grid.scrollView.backgroundColor != expectedColor, ContinuousClock.now < repaint {
-                host.layoutSubtreeIfNeeded()
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            XCTAssertEqual(grid.scrollView.backgroundColor, expectedColor)
-            XCTAssertTrue(statisticsArePublished(), "Changing the theme must preserve the result")
-            XCTAssertEqual(grid.table.selection, selected)
-            XCTAssertEqual(file.textPreviewRequestID, revision)
-        }
-        let buttonLabel = String(localized: "Find Visible Empty Fields", table: "Editor")
-        let find = try XCTUnwrap(elements().first {
-            (label($0) == buttonLabel || attribute($0, "accessibilityTitle") as? String == buttonLabel)
-                && attribute($0, "accessibilityRole") as? String == "AXButton"
-        })
-        let press = NSSelectorFromString("accessibilityPerformPress")
-        guard find.responds(to: press) else { return XCTFail("The empty-search button has no native action") }
-        typealias Press = @convention(c) (AnyObject, Selector) -> Bool
-        let invoke = unsafeBitCast(find.method(for: press), to: Press.self)
-        XCTAssertTrue(invoke(find, press))
-        func matchCountIsPublished(_ count: String = "2") -> Bool {
+        let controls = file.delimitedTable
+        controls.perform(.show)
+        func matchCountIsPublished(_ count: String) -> Bool {
             elements().contains {
                 attribute($0, "accessibilityIdentifier") as? String == "bailey.csv.match-count"
                     && (attribute($0, "accessibilityValue") as? String == count || label($0) == count)
             }
         }
-        let searchDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !matchCountIsPublished(), ContinuousClock.now < searchDeadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
         XCTAssertTrue(file.delimitedTable.showsFind)
-        XCTAssertTrue(matchCountIsPublished(), "Find must report the two real empty fields in the partial table")
-        let matches: Set<DelimitedTablePresentation.Cell> = [.init(row: 0, column: 1), .init(row: 2, column: 1)]
-        let first = try XCTUnwrap(grid.table.selection.caret)
-        XCTAssertTrue(matches.contains(first))
-        file.delimitedTable.perform(.next)
-        let navigationDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while grid.table.selection.caret == first, ContinuousClock.now < navigationDeadline {
-            host.layoutSubtreeIfNeeded()
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let next = try XCTUnwrap(grid.table.selection.caret)
-        XCTAssertEqual(Set([first, next]), matches)
-
-        // A literal query replaces the empty-field predicate and its pinned scope.
-        let controls = file.delimitedTable
         controls.query = "Other"
         let literalDeadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !matchCountIsPublished("1") || grid.table.selection.caret != .init(row: 1, column: 0) {
@@ -847,7 +784,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         while !matchCountIsPublished("0"), ContinuousClock.now < clearedDeadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(matchCountIsPublished("0"), "Clearing the literal query must not restore the empty-field predicate")
+        XCTAssertTrue(matchCountIsPublished("0"), "An empty literal query has no matches")
 
         XCTAssertFalse(file.hasPendingDelimitedEdit)
         XCTAssertFalse(file.isDirty)

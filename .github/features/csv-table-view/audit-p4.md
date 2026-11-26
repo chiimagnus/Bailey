@@ -43,6 +43,16 @@
 - CSV 核心宿主 53 项：52 项首次通过；列统计新增范围控件后旧窄高夹具未显示最后一项数值，三个断言失败。调整统计用例窗口尺寸后该项 1/1 通过，完整数值、主题与只读原字节均核对。日志 `/tmp/bailey-csv-natural-host.bZGsz0vR`、`/tmp/bailey-csv-natural-host-retest.Lq4b0sw0`。
 - 正式 Debug 构建与严格验签通过（`/tmp/bailey-csv-natural-build.1dKj554P`）；未重启正式 App。未穷举所有 GUI 组合、未重新测试真实 SSH，不改变 F-12 的 Open 与阶段 No-Go。
 
+## 2026-11-26 范围调整
+
+用户决定不再提供数据统计。P4-T4 及 C21 从当前范围移除；历史实现和验收证据仍保留于上文。
+列统计、专用空值查找及其聚合实现均删除，普通查找替换与数值高亮保留。
+CSV 核心宿主 52/52、真实表头菜单及替换／排序筛选查找复制两项分别通过；
+替换用例首轮输入焦点异常，独立复验通过。正式 Debug 构建及严格验签通过。
+日志 `/tmp/bailey-csv-remove-statistics-host.H5uBWP7l`、`/tmp/bailey-csv-remove-statistics-ui.hiOgnmev`、
+`/tmp/bailey-csv-remove-statistics-ui-recheck.Atvz5aLp`、`/tmp/bailey-csv-remove-statistics-build.hBQuorM3`。
+本轮未重新验证 SSH，不改变 F-12 的 Open 与阶段 No-Go。
+
 ## 发现项
 
 ## 发现 F-02

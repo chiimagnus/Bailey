@@ -431,7 +431,7 @@ final class CSVPreviewUITests: XCTestCase {
         }
     }
 
-    func testColumnStatisticsAndReplaceThroughActualControls() throws {
+    func testColumnMenuWithoutStatisticsAndReplaceThroughActualControls() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "Name,Value,Note\nAlpha,12,old old\nBeta,,old\nGamma,3,hidden\nDelta,7,keep\n"
@@ -446,22 +446,14 @@ final class CSVPreviewUITests: XCTestCase {
         let value = table.buttons.matching(NSPredicate(format: "title == %@", "Value")).firstMatch
         XCTAssertTrue(value.exists)
         value.rightClick()
-        let stats = WorkspaceUITestSupport.menuItem("Column Statistics…", in: app)
-        XCTAssertTrue(stats.waitForExistence(timeout: 5))
-        stats.click()
-        let empty = app.buttons["Find Visible Empty Fields"].firstMatch
-        XCTAssertTrue(empty.waitForExistence(timeout: 5))
-        let total = app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", "22", "22")).firstMatch
-        XCTAssertTrue(total.waitForExistence(timeout: 5), app.debugDescription)
-        empty.click()
-        let find = app.textFields["bailey.csv.find"]
-        XCTAssertTrue(find.waitForExistence(timeout: 5))
-        let count = app.staticTexts["bailey.csv.match-count"]
-        let emptyFound = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ OR label == %@", "1", "1"), object: count)
-        XCTAssertEqual(XCTWaiter.wait(for: [emptyFound], timeout: 5), .completed)
+        let filter = WorkspaceUITestSupport.menuItem("Filter Column…", in: app)
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        XCTAssertFalse(WorkspaceUITestSupport.menuItem("Column Statistics…", in: app).exists)
+        XCTAssertFalse(WorkspaceUITestSupport.menuItem("Find Visible Empty Fields", in: app).exists)
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        XCTAssertTrue(find.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(filter.waitForNonExistence(timeout: 5))
         XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+        let find = app.textFields["bailey.csv.find"]
 
         table.staticTexts["old old"].click()
         app.typeKey("f", modifierFlags: [.command, .option])
