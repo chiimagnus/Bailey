@@ -16,7 +16,7 @@
 
 保留 `9d8fa6f9` 的 swift-markdown＋原生 SwiftUI 路线、
 `d5d145d5` 的统一阅读选区、`ed83419d` 的 SwiftSoup 原文映射、
-`877429d3` 的媒体坐标、`0743dd15`／`dce36f98` 的真实阅读锚点及 `3028bd65` 的代码行尾显示修复。
+`877429d3` 的媒体坐标、`0743dd15`／`dce36f98` 的真实阅读锚点及 `47af65cb` 的代码行尾显示修复。
 不恢复 Textual、MarkdownView 或 Markdown WebKit；不增加第二个可写正文、全局 LinkManager、HTML/CSS/JS 引擎或通用 DOM。
 
 以 [GFM 规范](https://github.github.com/gfm/)、
