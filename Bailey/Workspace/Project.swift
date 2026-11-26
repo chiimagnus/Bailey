@@ -147,8 +147,7 @@ final class Project: nonisolated Identifiable {
 
     func setFilePreviewMode(_ mode: FilePreviewMode, for tab: PaneTab) {
         guard tabs.contains(where: { $0 === tab }), case .file(let file) = tab.content,
-              file.canPreviewFile else { return }
-        file.setFilePreview(mode == .preview)
+              file.canPreviewFile, file.setFilePreview(mode == .preview) else { return }
         dock.setFilePreview(of: tab.id, visible: mode == .sideBySide)
     }
 
@@ -771,7 +770,14 @@ final class Project: nonisolated Identifiable {
         }
         closeBatch(contents) { [weak self] accepted in
             guard accepted, let self else { return }
-            for item in items { self.dock.removeTool(item) }
+            for item in items {
+                // Closing only a companion must not discard an active native input session.
+                if case .filePreview(let id) = item,
+                   let tab = self.tabs.first(where: { $0.id == id }),
+                   case .file(let file) = tab.content,
+                   !file.finishDelimitedInput() { continue }
+                self.dock.removeTool(item)
+            }
         }
     }
 

@@ -100,12 +100,15 @@ nonisolated struct DelimitedTableIndex: Sendable {
         if selected == nil {
             let sample = units.prefix(sampleLimit + 1)
             let hasMore = sample.count > sampleLimit
-            let candidates = try Separator.allCases.filter { candidate in
-                let scanned = try scan(sample.prefix(sampleLimit), separator: candidate)
-                return scanned.records.contains {
-                    $0.fieldIndices.count > 1 && (!hasMore || $0.lineEndingLength > 0)
-                }
+            var candidates: [Separator] = []
+            var consistent: [Separator] = []
+            for candidate in Separator.allCases {
+                let scanned = try scan(sample.prefix(sampleLimit), separator: candidate, completesInput: !hasMore)
+                guard scanned.records.contains(where: { $0.fieldCount > 1 }) else { continue }
+                candidates.append(candidate)
+                if scanned.issue == nil { consistent.append(candidate) }
             }
+            if !consistent.isEmpty { candidates = consistent }
             if candidates.count == 1, let detected = candidates.first { separator = detected }
             needsSeparatorChoice = candidates.count > 1 || (candidates.isEmpty && hasMore)
             if needsSeparatorChoice, !candidates.contains(separator), let candidate = candidates.first {
@@ -118,8 +121,9 @@ nonisolated struct DelimitedTableIndex: Sendable {
                     issue: scanned.issue, fields: scanned.fields)
     }
 
-    private static func scan<Units: Sequence>(_ units: Units, separator: Separator) throws -> Scanner
-        where Units.Element == UInt16 {
+    private static func scan<Units: Sequence>(
+        _ units: Units, separator: Separator, completesInput: Bool = true
+    ) throws -> Scanner where Units.Element == UInt16 {
         var iterator = units.makeIterator()
         var current = iterator.next()
         var scanner = Scanner()
@@ -138,6 +142,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
             guard scanner.consume(unit, length: length, separator: separator.rawValue) else { return scanner }
         }
         try Task.checkCancellation()
+        guard completesInput else { return scanner }
         if scanner.phase == .quoted {
             scanner.fail(.unclosedQuote)
         } else if scanner.offset > scanner.recordStart {

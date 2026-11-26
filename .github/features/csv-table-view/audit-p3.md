@@ -5,19 +5,39 @@
 
 ## 结论
 
-- **结果**：Go（本轮授权范围）
-- **依据**：P3 两项已经交付；实际挂载宿主验证配色、原生输入、行列选择和原记录写入。
-  按本轮用户范围不运行完整 App GUI，不占用前台键鼠。此前平台级严格 CAS 延期不改变现有保存契约。
+- **结果**：Go（本轮授权范围）。
+- **依据**：独立复审两项任务及真实调用链；F-01 经 Red/Green 修复于 `96caf548`，十万行退役同步清空原生投影。最新核心宿主 52/52，真实文件切换和资源释放通过；不运行完整 App GUI。
 
 ## 任务与改动
 
-- **P3-T1 原型式主题与自适应列宽**：`4031d1bc`。当前主题经 `CSVTableView → NativeDelimitedGrid → DelimitedGrid`
+- **P3-T1 原型式主题与自适应列宽**：`82f0070d`。当前主题经 `CSVTableView → NativeDelimitedGrid → DelimitedGrid`
   只更新实际样式，不触发重新索引或替换编辑器。删除固定 140 pt、系统交替行背景以及重复传入的控件状态。
-- **P3-T2 行号、整行／整列选区与表头操作**：`c61f0f54`。文件控件持有当前解析快照；
+- **P3-T2 行号、整行／整列选区与表头操作**：`e177ec30`。文件控件持有当前解析快照；
   展示租用完整请求，原生菜单与事件在消费时校验。固定行号与数据共用一个滚动位置；
   独立表头排序移除了 `sortDescriptors` 双轨，查找按动作读取真实选区。
 
+## 2026-11-26 独立逐提交复审
+
+重新核对 `82f0070d`、`e177ec30` 的真实实现与现有调用，不依赖历史验收结论。
+- P3-T1 `82f0070d`：`CSVTableView` → `NativeDelimitedGrid` → `DelimitedGrid.applyTheme`／`installColumns`，按主题更新颜色与有限样本初始列宽，不重置原生编辑、选区、原文。主题/输入身份、极值表、100 次挂载回归通过。
+- P3-T2 `e177ec30`：`DelimitedTableControls`、`DisplayRequest`、`DelimitedNativeTable` 与固定记录 gutter 共享物理行映射；实际网格菜单、选区、粘贴拒绝旧投影。F-01 Red 显示真关闭后保留网格仍有十万行；`96caf548` 在 FileTab 退役时调用已有 `clearProjection()`，不等待 SwiftUI 卸载；Green 确认原生行与选区清空、正文释放、磁盘原字节不变。
+- 实测 100000 行网格末格揭示约 7.1 ms；4095 列新增安装约 3.34 s（仍有原生宽表首屏成本）；100 次挂载 0.49 s，进程峰值 RSS 前后相同。证据 `/tmp/bailey-csv-audit-green.b8rGMPOC`。
+- 清理核对：`sortDescriptors` 旧排序轨已不存在；新增退役修复复用既有清理入口，不另加生命周期状态。当前投影身份校验防止用户排序、筛选或变更分隔符后向旧物理格写入，保留。
+
 ## 发现项
+
+## 发现 F-01
+
+- 任务：`P3-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Editor/CSVTableView.swift:88,834-846; Bailey/Editor/FileViewerView.swift:155-180`
+- 摘要：`FileTab 退役仅清空 controls.parsed，仍被 AppKit 缓存的原生 grid 保留 snapshot/source/presentation/选区和复制任务`
+- 风险：`实际关闭或外部替换后旧大表继续占用内存并留有过期原生行；依赖 SwiftUI 延迟卸载才释放`
+- 预期修复：`在文件所有者退役时复用已有 grid.clearProjection()，同步释放不可变源快照、展示和复制任务；不增加生命周期状态`
+- 验证：`真实项目关闭前保留已挂载十万行 grid，关闭后立即检查行数、选区、旧文档清空且磁盘不变；复用现有重挂载回归`
+- 解决证据：`96caf548755a13faaee2aeab41bee35c6397b161；Red /tmp/bailey-csv-audit-red.mPfINPoJ，3 条退役断言失败；Green /tmp/bailey-csv-audit-green.b8rGMPOC，保留原生网格的十万行真关闭、选区和磁盘字节通过。`
+
 
 ## 验证与未覆盖
 
@@ -50,4 +70,3 @@
   P3 不改保存后端，P4 最终宿主整合承接受影响共享回归；本阶段不以历史全量结果为当前全量通过。
 - 获授权 `windows-tailscale` 的重新连接、已发布原字节、同长同 mtime 修改和过期覆盖确认两项
   实际 SSH 回归通过，退出 0、零跳过：`/tmp/bailey-csv-p3-ssh.p7onRDf4`。
-

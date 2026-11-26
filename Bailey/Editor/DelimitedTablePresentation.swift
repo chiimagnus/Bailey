@@ -331,7 +331,8 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         let previousDisplay = previous.flatMap { occurrence in
             rows.firstIndex(of: occurrence.cell.row).map { Cell(row: $0, column: occurrence.cell.column) }
         }
-        let starting = (previousDisplay ?? caret).flatMap { cell in
+        let continuation = caret == nil || caret == previousDisplay ? previous : nil
+        let starting = (caret ?? previousDisplay).flatMap { cell in
             matches.firstIndex { $0.row > cell.row || $0.row == cell.row && $0.column >= cell.column }
         } ?? 0
         for step in 0..<matches.count {
@@ -340,7 +341,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             guard rows.indices.contains(visible.row), selection?.contains(visible) != false else { continue }
             let actual = Cell(row: rows[visible.row], column: visible.column)
             guard let field = index.field(record: actual.row, column: actual.column) else { continue }
-            let offset = previous.flatMap { $0.cell == actual ? NSMaxRange($0.range) : nil } ?? 0
+            let offset = continuation.flatMap { $0.cell == actual ? NSMaxRange($0.range) : nil } ?? 0
             if let match = Self.firstMatch(query, in: field.value(in: text) as NSString, from: offset) {
                 return Occurrence(cell: actual, range: match)
             }

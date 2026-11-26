@@ -21,6 +21,7 @@ File Manager、Git Manager、Projects，以及连接设置（端口转发、手�
 
 Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和面板字号。
 Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史。
+系统字体家族仅在首次展示 Terminal 字体选择器时枚举，其他页面和 App 启动不预载该列表。
 Git Manager 保留既有文件布局和工具栏选项，仅新增自部署 Git 托管域名映射。
 File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
 

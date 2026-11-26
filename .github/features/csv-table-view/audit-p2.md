@@ -5,8 +5,8 @@
 
 ## 结论
 
-- **结果**：No-Go
-- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交的连续快捷键焦点缺陷 F-10 已通过自动化完整 App 复验；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH CSV 比较、版本绑定覆盖及重连已通过；严格非协作 CAS 按已决定边界处理，共享写入失败验收已通过（见[共享验收](../file-viewer-routing/audit-p1.md)），最终整合独立保留，不另做无关设备组合。
+- **结果**：No-Go（F-12 未复现的远端保存失败；平台严格非协作 CAS 依既定边界延期）。
+- **依据**：独立复审两个任务及共享原文、Undo、编码、版本与发布确认链；文件持久化 87 通过/2 无关图片样本跳过，原生输入 13/13，实际 Git Diff 3/3，真实远端冲突保护通过。真实 Windows SSH 首轮移列 Undo 后磁盘字节不符，补强断言后累计 8 次真实复验通过；受控三种发布失败恢复通过，32 MiB 远端读写边界通过。无充分证据定位首次失败，保持 F-12 Open。
 - **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
@@ -16,7 +16,28 @@
 - **P2-T1 对原文源区间执行原生编辑、复用唯一 Undo**：FileTab、原生表格与 TextKit 共用文档和 Undo；100001 条记录、100 次编辑／切换和 Undo／Redo 有宿主证据，实际中文 IME 提交及十万行 GUI 编辑已验，807fbdee 的真实拼音确认后连续撤销／重做及原字节保存已通过完整 App 无人复验。
 - **P2-T2 严格往返编码、条件保存和外部冲突**：FileTab、DiffTab、TextFileEncoding、WorkspaceFileVersion 共用原字节版本和提交确认；重连保留在途快照，不盲目重复写入；e471b25b 共用只读原生 Diff 和一次性版本绑定覆盖，未改变条件发布后端。
 
+## 2026-11-26 独立逐提交复审
+
+以 `788a46a6` 为起点重新检查计划和提交差异，不继承历史审查结论。
+- P2-T1 `aa65af7b`、`8488bb8a`、`9b62d36c`、`f2f35ff3`、`807fbdee`：`DelimitedGrid` → `FileTab.begin/commit/submitDelimitedEdit` → `DelimitedTableMutation.prepare` → `applyDocumentReplacements`；实际 NSTextStorage、同一 Undo、输入保留及保存等待均接入主路径。十万行 100 次编辑，主线程 edit p95 0.074 s、Undo p95 0.0037 s（修复后独立宿主实测）。
+- P2-T2 `e471b25b`、`e697efb5`：`FileTab`／`DiffTab` → `WorkspaceSaveConflict` → `WorkspaceBackend`；核对实际编码后字节、唯一版本确认、外部变更、失败草稿及重连。比较不写入，旧确认不得替换新磁盘版本；本机 staged exchange 保留被位移写入者内容，平台严格非协作 CAS 不是现有后端承诺。
+- 重新检查文件持久化 89 项（87 通过、2 无关图片样本跳过、0 失败）、原生输入 13 项、窗口所有权及会话状态；见 `/tmp/bailey-csv-audit-green.b8rGMPOC`。本机跨作用域输入及保存未发现新的实现缺口；真实远端 F-12 另行追踪。
+- 清理核对：`FileTab.editDelimited` 旧测试旁路已不存在；入口准入、后台 prepare 的输入有效性、提交前正文身份和磁盘版本验证属于不同边界，删除将允许过期字段或冲突写入，不作无证据删减。
+
 ## 发现项
+
+## 发现 F-12
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Open`
+- 位置：`BaileyTests/Files/SSHFileTreeLiveTests.swift:499`
+- 摘要：`实际 Windows SSH：移列后 Undo 再保存，远端 44 字节与预期不一致`
+- 风险：`撤销后的保存可能未成功发布，或保存基线/缓冲区不一致；当前证据不足以判断原因`
+- 预期修复：`区分 Undo 缓冲区、dirty、保存错误、发布确认及远端字节，定位真实原因，不盲目重试或放宽断言`
+- 验证：`独立 CSV Dev 真实 Windows SSH 定点复验，保留精确字节断言`
+- 解决证据：`首轮 /tmp/bailey-csv-audit-final.kSRdvSR2：58 项，57 通过、1 失败，SSHFileTreeLiveTests.swift:499；dfd91631 补强原文、dirty、saveError、远端原字节断言；定点实机复验 /tmp/bailey-csv-audit-ssh.rdB05Ew3 1/1；混合文件百次切换与真实远端同进程复验 /tmp/bailey-csv-audit-mixed-ssh.Yw37oemG 2/2，远端两次均通过，无跳过。本轮新增同一真实 SSH 用例独立连续 5 次及扩大整合中 1 次通过，累计首次失败后 8 次通过；/tmp/bailey-csv-ssh-repeat.fcD223vj/{1..5}.log、/tmp/bailey-csv-audit-expanded-full.I56TByip。dd42430d 受控后端验证明确拒绝、发布前超时、发布后回执丢失三种撤销保存恢复，精确缓冲/dirty/错误/重试/Redo/字节均通过。扩大真实 SSH 3/3 含 32 MiB 文件读写/重开/超限拒绝。未复现不等于根因解决，保持 Open。`
+
 
 ## 发现 F-11
 

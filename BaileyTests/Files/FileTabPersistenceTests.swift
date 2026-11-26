@@ -3122,6 +3122,65 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(confirmed, attemptedData)
     }
 
+    func testUndoOfPublishedCSVColumnMoveSurvivesRejectedAndUncertainPublication() async throws {
+        for (rejectBeforePublication, timedOut) in [(true, false), (true, true), (false, true)] {
+            let path = "/fixture/\(UUID().uuidString).csv"
+            let source = "Name,Value\r\n中文,111\nOther,\"next,field\""
+            let original = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(source))
+            let moved = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("Value,Name\r\n111,中文\n\"next,field\",Other"))
+            let backend = EditorWorkspaceFixture(path: path, contents: original)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+            defer { file.retireContent() }
+            try await file.waitForText()
+
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            try await requireDelimitedEdit(file, .columns([1, 0]), using: XCTUnwrap(loaded))
+            let publishMove = Task { await file.save() }
+            try await waitForFileTabState { await backend.writingPath == path }
+            await backend.finishWrite()
+            await publishMove.value
+            let published = await backend.data(at: path)
+            XCTAssertEqual(published, moved)
+            XCTAssertFalse(file.isDirty)
+
+            file.documentUndoManager.undo()
+            XCTAssertEqual(Data(file.text.utf8), Data(source.utf8))
+            XCTAssertTrue(file.isDirty)
+            let publishUndo = Task { await file.save() }
+            try await waitForFileTabState { await backend.writingPath == path }
+            await backend.finishWrite(failing: rejectBeforePublication, transportTimedOut: timedOut)
+            await publishUndo.value
+            XCTAssertEqual(Data(file.text.utf8), Data(source.utf8))
+            let actual = await backend.data(at: path)
+            XCTAssertEqual(actual, rejectBeforePublication ? moved : original)
+            XCTAssertEqual(file.isDirty, rejectBeforePublication)
+            if rejectBeforePublication {
+                XCTAssertNotNil(file.saveError)
+                XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave)
+                let retry = Task { await file.save() }
+                try await waitForFileTabState { await backend.writingPath == path }
+                await backend.finishWrite()
+                await retry.value
+            }
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            let restored = await backend.data(at: path)
+            XCTAssertEqual(restored, original)
+
+            file.documentUndoManager.redo()
+            XCTAssertEqual(TextFileEncoding.utf8BOM.encoded(file.text), moved)
+            XCTAssertTrue(file.isDirty)
+            let publishRedo = Task { await file.save() }
+            try await waitForFileTabState { await backend.writingPath == path }
+            await backend.finishWrite()
+            await publishRedo.value
+            let redone = await backend.data(at: path)
+            XCTAssertEqual(redone, moved)
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+        }
+    }
+
     func testDisconnectedCleanEncodingPublicationIsNotSilentlyDiscarded() async throws {
         let path = "/fixture/\(UUID().uuidString).csv"
         let source = "Name,Value\n中文,001"

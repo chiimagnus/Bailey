@@ -535,8 +535,14 @@ final class FileTab: nonisolated Identifiable {
         return task
     }
 
-    private func finishPendingDelimitedEdit() async -> Bool {
+    /// Accepted edits belong to the file, but marked input still belongs to its mounted editor.
+    func finishDelimitedInput() -> Bool {
         delimitedEditingGrid?.finishEditing()
+        return delimitedEditingGrid == nil
+    }
+
+    private func finishPendingDelimitedEdit() async -> Bool {
+        guard finishDelimitedInput() else { return false }
         if let task = delimitedEditTask, !(await task.value) {
             saveError = delimitedTable.editError
             return false
@@ -609,13 +615,14 @@ final class FileTab: nonisolated Identifiable {
         return true
     }
 
-    func setFilePreview(_ enabled: Bool) {
-        guard previewKind != nil else { return }
-        delimitedEditingGrid?.finishEditing()
-        guard delimitedEditingGrid == nil else { return }
+    @discardableResult
+    func setFilePreview(_ enabled: Bool) -> Bool {
+        guard previewKind != nil, finishDelimitedInput() else { return false }
         switch content {
-        case .text, .loading: previewOverride = enabled
-        case .image, .media, .unavailable: break
+        case .text, .loading:
+            previewOverride = enabled
+            return true
+        case .image, .media, .unavailable: return false
         }
     }
 

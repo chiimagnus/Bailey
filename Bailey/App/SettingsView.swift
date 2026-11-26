@@ -49,6 +49,7 @@ struct SettingsView: View {
     @Bindable private var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedPage: SettingsPage? = .common
+    @State private var terminalFontFamilies: [String]?
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
     @State private var barkURLInput = ""
@@ -65,8 +66,6 @@ struct SettingsView: View {
         self.application = application
         self.settings = settings
     }
-
-    private let families = TerminalFont.selectableFamilies()
 
     private var themeAccent: Color {
         Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
@@ -257,12 +256,18 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var terminalSettings: some View {
+        let families = terminalFontFamilies ?? [settings.fontFamily].filter { !$0.isEmpty }
         Section(String(localized: "Font", table: "Settings")) {
             Picker(String(localized: "Family", table: "Settings"), selection: $settings.fontFamily) {
                 Text(String(localized: "\(TerminalFont.bundledFamily) (Bundled)", table: "Settings")).tag("")
                 Divider()
-                ForEach(families.dropFirst(), id: \.self) { family in
+                ForEach(families, id: \.self) { family in
                     Text(family).tag(family)
+                }
+            }
+            .onAppear {
+                if terminalFontFamilies == nil {
+                    terminalFontFamilies = Array(TerminalFont.selectableFamilies().dropFirst())
                 }
             }
 

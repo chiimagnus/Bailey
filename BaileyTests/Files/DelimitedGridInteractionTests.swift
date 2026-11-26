@@ -14,6 +14,127 @@ func csvFullFieldEditor() -> NSTextView? {
 
 @MainActor
 final class DelimitedGridInteractionTests: XCTestCase {
+    func testPreviewModeTransitionDoesNotSplitOrUnmountMarkedCSVInput() async throws {
+        let original = "Name,Value\r\nItem,old\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let project = Project(fallbackName: "CSV composition", workspaceConfiguration: .standard)
+        project.openLocalFile(url.path)
+        let tab = try XCTUnwrap(project.tabs.first)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected CSV file") }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 500, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+
+        let storage = file.nativeTextStorage
+        let grid = try await self.grid(in: host, showing: "Item")
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        grid.table.onEdit(.init(row: 0, column: 1))
+        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                             replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertTrue(file.hasPendingDelimitedEdit)
+
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .preview)
+        XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.showsFilePreview)
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,中文\n".utf8))
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+        XCTAssertFalse(file.showsFilePreview)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertEqual(project.tabs.count, 1)
+
+        host.rootView = FileViewerView(file: file, rendersOnlyPreview: true)
+        let companion = try await self.grid(in: host, showing: "Item")
+        XCTAssertTrue(window.makeFirstResponder(companion.table))
+        companion.table.onEdit(.init(row: 0, column: 1))
+        let secondField = try XCTUnwrap(companion.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let secondEditor = try XCTUnwrap(secondField.currentEditor() as? NSTextView)
+        secondEditor.setMarkedText("xin", selectedRange: NSRange(location: 3, length: 0),
+                                  replacementRange: NSRange(location: 0, length: secondEditor.string.utf16.count))
+        XCTAssertTrue(secondEditor.hasMarkedText())
+        project.setFilePreviewMode(.source, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(secondEditor.hasMarkedText())
+
+        project.closePanels([.filePreview(tab.id)])
+        XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(secondEditor.hasMarkedText())
+        XCTAssertTrue(window.firstResponder === secondEditor)
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,中文\n".utf8))
+
+        secondEditor.insertText("新", replacementRange: NSRange(location: NSNotFound, length: 0))
+        secondEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,新\n".utf8))
+        project.closePanels([.filePreview(tab.id)])
+        XCTAssertEqual(project.filePreviewMode(for: tab), .source)
+        XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, "Name,Value\r\nItem,中文\n")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,中文\n".utf8))
+    }
+
+    func testClosingFileRetiresRetainedNativeGridBeforeSwiftUIUnmount() async throws {
+        let original = "Name,Value\n" + String(repeating: "Item,42\n", count: 100_000)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let bytes = Data(original.utf8)
+        try bytes.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let project = Project(fallbackName: "CSV retirement", workspaceConfiguration: .standard)
+        project.openLocalFile(url.path)
+        let tab = try XCTUnwrap(project.tabs.first)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected CSV file") }
+        try await file.waitForText()
+        defer { project.terminateAll() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 500, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Item")
+        XCTAssertEqual(grid.table.numberOfRows, 100_000)
+        XCTAssertNotNil(file.delimitedTable.parsed)
+        grid.table.select(.init(row: 99_999, column: 1), reveal: true)
+        XCTAssertEqual(grid.table.selection.caret, .init(row: 99_999, column: 1))
+
+        project.close(tab)
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(file.delimitedTable.parsed)
+        XCTAssertEqual(file.nativeTextStorage.length, 0)
+        XCTAssertEqual(grid.table.numberOfRows, 0, "A retained native view must release the retired projection synchronously")
+        XCTAssertTrue(grid.table.selection.blocks.isEmpty)
+        XCTAssertNil(grid.table.selection.caret)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
     func testDisplayChangesRejectStaleNativePasteBeforeSwiftUIUpdates() async throws {
         let original = "Name,Value\r\nBeta,old\nAlpha,keep"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
@@ -446,6 +567,64 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(file.delimitedTable.query, "cafe")
     }
 
+    func testHiddenFindPreservesSelectionAndNavigationStartsAtActualCaret() async throws {
+        let original = "Name,Value\nAlpha,needle\nBeta,other\nGamma,needle"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 320, height: 210),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Alpha")
+        let controls = file.delimitedTable
+        typealias Cell = DelimitedTablePresentation.Cell
+        func expectCaret(_ expected: Cell) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while grid.table.selection.caret != expected, ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(grid.table.selection.caret, expected)
+        }
+        controls.query = "needle"
+        controls.perform(.show)
+        try await expectCaret(.init(row: 0, column: 1))
+        controls.perform(.hide)
+        let selected = Cell(row: 1, column: 0)
+        grid.table.select(selected, reveal: true)
+        controls.configuration.sort = [.init(column: 0, ascending: false)]
+        let sorted = try await self.grid(in: host, showing: "Gamma")
+        XCTAssertTrue(sorted === grid)
+        let settle = ContinuousClock.now.advanced(by: .milliseconds(500))
+        while ContinuousClock.now < settle {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+            guard grid.table.selection.caret == selected else {
+                XCTFail("Hidden Find stole the user's selection after sorting")
+                break
+            }
+        }
+        XCTAssertEqual(grid.table.selection.caret, selected)
+        controls.perform(.next)
+        try await expectCaret(.init(row: 2, column: 1))
+        controls.perform(.previous)
+        try await expectCaret(.init(row: 0, column: 1))
+        grid.table.select(selected, reveal: true)
+        controls.perform(.previous)
+        try await expectCaret(.init(row: 0, column: 1))
+        XCTAssertFalse(controls.showsFind)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+    }
+
     func testReadOnlyGridOffersSelectionStatisticsWithoutAnyEdit() async throws {
         let original = "Name,Value\r\nItem,\nOther,7\nThird,\"\"\nBad,\"open"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
@@ -547,10 +726,10 @@ final class DelimitedGridInteractionTests: XCTestCase {
         typealias Press = @convention(c) (AnyObject, Selector) -> Bool
         let invoke = unsafeBitCast(find.method(for: press), to: Press.self)
         XCTAssertTrue(invoke(find, press))
-        func matchCountIsPublished() -> Bool {
+        func matchCountIsPublished(_ count: String = "2") -> Bool {
             elements().contains {
                 attribute($0, "accessibilityIdentifier") as? String == "bailey.csv.match-count"
-                    && (attribute($0, "accessibilityValue") as? String == "2" || label($0) == "2")
+                    && (attribute($0, "accessibilityValue") as? String == count || label($0) == count)
             }
         }
         let searchDeadline = ContinuousClock.now.advanced(by: .seconds(5))
@@ -570,6 +749,25 @@ final class DelimitedGridInteractionTests: XCTestCase {
         }
         let next = try XCTUnwrap(grid.table.selection.caret)
         XCTAssertEqual(Set([first, next]), matches)
+
+        // A literal query replaces the empty-field predicate and its pinned scope.
+        let controls = file.delimitedTable
+        controls.query = "Other"
+        let literalDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !matchCountIsPublished("1") || grid.table.selection.caret != .init(row: 1, column: 0) {
+            guard ContinuousClock.now < literalDeadline else { break }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(matchCountIsPublished("1"))
+        XCTAssertEqual(grid.table.selection.caret, .init(row: 1, column: 0))
+        controls.query = ""
+        let clearedDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !matchCountIsPublished("0"), ContinuousClock.now < clearedDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(matchCountIsPublished("0"), "Clearing the literal query must not restore the empty-field predicate")
+
         XCTAssertFalse(file.hasPendingDelimitedEdit)
         XCTAssertFalse(file.isDirty)
         XCTAssertFalse(file.documentUndoManager.canUndo)
