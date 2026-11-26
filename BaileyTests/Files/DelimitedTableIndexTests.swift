@@ -201,6 +201,38 @@ final class DelimitedTableIndexTests: XCTestCase {
         XCTAssertNil(corrected.issue)
     }
 
+    func testIncidentalDelimitersDoNotMakeRectangularTablesReadOnly() async throws {
+        let fixtures: [(String, String, DelimitedTableIndex.Separator, String)] = [
+            ("csv", "Name,Note\nalpha,hello; world\nbeta,plain", .comma, "hello; world"),
+            ("csv", "Name,Note\nalpha,hello\tworld\nbeta,plain", .comma, "hello\tworld"),
+            ("csv", "Name;Value\nalpha;12,5\nbeta;7", .semicolon, "12,5"),
+            ("tsv", "Name\tNote\nalpha\thello, world\nbeta\tplain; text", .tab, "hello, world"),
+            ("csv", "Name,Note\nalpha,\"quoted; note\"\nbeta,plain", .comma, "quoted; note"),
+            ("csv", "Name,Note\nalpha,hello; world\nbeta,\"" + String(repeating: "x", count: 17_000) + "\"", .comma, "hello; world")
+        ]
+        for (ext, original, separator, firstValue) in fixtures {
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "." + ext)
+            try Data(original.utf8).write(to: path)
+            defer { try? FileManager.default.removeItem(at: path) }
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            try await file.waitForText()
+            let loaded = try await file.delimitedSnapshot()
+            let snapshot = try XCTUnwrap(loaded)
+            XCTAssertEqual(snapshot.index.separator, separator, original.prefix(80).description)
+            XCTAssertFalse(snapshot.index.needsSeparatorChoice, original.prefix(80).description)
+            XCTAssertNil(snapshot.index.issue)
+            XCTAssertEqual(snapshot.index.field(record: 1, column: 1)?.value(in: original as NSString), firstValue)
+            XCTAssertTrue(file.canEditDelimited(snapshot))
+            guard file.canEditDelimited(snapshot) else { continue }
+            try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 0): "edited"]), using: snapshot)
+            let expected = original.replacingOccurrences(of: "alpha", with: "edited")
+            XCTAssertEqual(file.text, expected)
+            await file.save()
+            XCTAssertEqual(try Data(contentsOf: path), Data(expected.utf8))
+        }
+    }
+
     func testEmptyTrailingQuotedAndInvalidFieldsHaveDistinctRangesAndIssues() async throws {
         for (text, values) in [
             ("", []),
