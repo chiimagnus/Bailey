@@ -178,6 +178,49 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertEqual(Data(file.text.utf8), Data(expected.utf8))
     }
 
+    func testSingleReplaceUsesCurrentCellAfterManuallyMovingAwayFromPreviousOccurrence() async throws {
+        let original = "Name,Value\nA,café café\nB,café\nC,café\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let firstLoad = try await file.delimitedSnapshot(using: .comma)
+        let first = try XCTUnwrap(firstLoad)
+        let scope = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1,
+                                                           columns: IndexSet(integer: 1), selection: nil)
+        let initial = DelimitedTablePresentation.Occurrence(cell: .init(row: 1, column: 1),
+                                                            range: NSRange(location: 0, length: 4))
+        try await requireDelimitedEdit(file, .replace(scope, query: "cafe", with: "café!", single: initial), using: first)
+        let afterFirst = "Name,Value\nA,café! café\nB,café\nC,café\n"
+        XCTAssertEqual(file.text, afterFirst)
+        let load = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(load)
+        let active = try await DelimitedTablePresentation.evaluate(source: snapshot.source, index: snapshot.index,
+                                                                    configuration: .init())
+        let matches = try await active.find("cafe", source: snapshot.source, index: snapshot.index, columnCount: 2)
+        let previous = DelimitedTablePresentation.Occurrence(cell: initial.cell, range: NSRange(location: 0, length: 5))
+        let continued = try await active.nextVisibleOccurrence("cafe", from: matches, at: .init(row: 0, column: 1),
+                                                                after: previous, selection: nil, source: snapshot.source, index: snapshot.index)
+        XCTAssertEqual(continued?.cell, initial.cell)
+        XCTAssertEqual(continued?.range, NSRange(location: 6, length: 4))
+        let moved = try await active.nextVisibleOccurrence("cafe", from: matches, at: .init(row: 2, column: 1),
+                                                            after: previous, selection: nil, source: snapshot.source, index: snapshot.index)
+        let hit = try XCTUnwrap(moved)
+        XCTAssertEqual(hit.cell, .init(row: 3, column: 1))
+        XCTAssertEqual(hit.range, NSRange(location: 0, length: 4))
+        try await requireDelimitedEdit(file, .replace(scope, query: "cafe", with: "done", single: hit), using: snapshot)
+        let expected = "Name,Value\nA,café! café\nB,café\nC,done\n"
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, afterFirst)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(afterFirst.utf8))
+    }
+
     func testLargeFillUsesOneUndoAndLeavesTheOtherFieldsAndDiskIntactUntilSave() async throws {
         let rows = 100_000
         let original = "Keep,Value\r\n" + String(repeating: "\"001\",a\n", count: rows)
