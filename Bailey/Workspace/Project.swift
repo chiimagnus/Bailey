@@ -313,16 +313,11 @@ final class Project: nonisolated Identifiable {
     }
 
     func terminateAll() {
-        for tab in tabs {
-            switch tab.content {
-            case .file(let file): file.retireContent()
-            case .diff(let diff): diff.retireNativeSurface()
-            case .session, .browser: break
-            }
-        }
-        for session in sessions {
-            session.terminate()
-        }
+        for tab in tabs { retire(tab) }
+        for session in sessions { session.terminate() }
+        tabs.removeAll()
+        selectedTabID = nil
+        recentTabIDs.removeAll()
     }
 
     // MARK: - Files
@@ -895,6 +890,18 @@ final class Project: nonisolated Identifiable {
     private func remove(tabID: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let tab = tabs[index]
+        retire(tab)
+        recentTabIDs.removeAll { $0 == tabID }
+        tabs.remove(at: index)
+        if selectedTabID == tabID {
+            let neighbor = min(index, tabs.count - 1)
+            selectedTabID = neighbor >= 0 ? tabs[neighbor].id : nil
+        }
+        // Emptying the project does not close it — the project row stays in the
+        // sidebar until the user explicitly closes it.
+    }
+
+    private func retire(_ tab: PaneTab) {
         tab.onSnapshotChange = nil
         switch tab.content {
         case .session(let session):
@@ -907,13 +914,5 @@ final class Project: nonisolated Identifiable {
             diff.onSnapshotChange = nil
             diff.retireNativeSurface()
         }
-        recentTabIDs.removeAll { $0 == tabID }
-        tabs.remove(at: index)
-        if selectedTabID == tabID {
-            let neighbor = min(index, tabs.count - 1)
-            selectedTabID = neighbor >= 0 ? tabs[neighbor].id : nil
-        }
-        // Emptying the project does not close it — the project row stays in the
-        // sidebar until the user explicitly closes it.
     }
 }

@@ -176,11 +176,11 @@ WebKit 分别服务浏览器和隔离的 HTML 文件预览；
 
 `DockNode` 是外层布局真源。一个标签不再拥有第二套分屏。
 窗口关闭、项目关闭和应用退出都要先处理未保存内容；视图的临时消失不能成为结束后台任务的理由。
-真关闭后由 `Project.remove/terminateAll` 通知 `FileTab`／`DiffTab` 释放各自原生正文，
-不能由 SwiftUI 的 `dismantleNSView` 代劳。共同的 TextKit 退休入口禁止新编辑、
-清空 Undo 和语法任务；Diff 真关闭并解除视图绑定之后才从旧存储解绑布局管理器，
-以免 AppKit 缓存的旧段落及相关内存滞留。
-普通 FileTab 重新加载时旧原生宿主仍可能布局，不能对尚存活的布局视图提前解绑。
+真关闭后由 `Project` 的统一退役路径通知 `FileTab`／`DiffTab` 释放各自原生正文，
+不能由 SwiftUI 的 `dismantleNSView` 代劳。项目或窗口关闭均先完成保存保护及必要恢复快照，
+再解除窗口的项目所有权，由 `terminateAll` 退役内容并清空标签和选中／近期状态。
+共同的 TextKit 退休入口禁止新编辑、清空 Undo 和语法任务；
+文件和 Diff 均在旧滚动宿主解除文档视图绑定后解绑布局管理器，不能提前解绑仍在布局的视图。
 原生对象身份与关闭协调由最小 AppKit 组件验证，系统窗口、键盘和关闭后重启由独立 App 验证，
 不用完整 SwiftUI 宿主模拟用户操作。
 详见 [dock](features/dock.md)、[editor](features/editor.md) 与 [testing](testing.md#测试层次)。

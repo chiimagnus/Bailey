@@ -108,6 +108,51 @@ final class SessionStoreTests: XCTestCase {
                        "An isolated XCTest instance must never change previous test fixtures")
     }
 
+    func testWindowCloseReleasesTabsOfRetainedProjectsAfterSavingSnapshot() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let savedWindows = SessionStore.load()
+        let savedHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(savedWindows)
+            TerminalHistoryStore.save(savedHistories)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("retained.txt")
+        try Data("saved text".utf8).write(to: url)
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.openFile(url.path)
+        weak var owner: FileTab?
+        do {
+            guard case .file(let file) = try XCTUnwrap(project.selectedTab).content else {
+                return XCTFail("Expected a file")
+            }
+            try await file.waitForText()
+            owner = file
+        }
+
+        // Retain the project as a dismissed native host can do. Closing the
+        // final window must save its reopen snapshot before retiring content.
+        manager.windowClosed()
+        XCTAssertTrue(manager.projects.isEmpty)
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(project.selectedTabID)
+        let restored = try XCTUnwrap(SessionStore.load().first?.projects.first)
+        XCTAssertEqual(restored.tabs.count, 1)
+        if case .file(let path, _) = restored.tabs.first?.content {
+            XCTAssertEqual(path, url.path)
+        } else {
+            XCTFail("Expected the saved file in the reopen snapshot")
+        }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved text")
+        XCTAssertNil(owner)
+    }
+
     func testClosedOwnerCannotReRegisterOrReceiveNewWindowIdentity() {
         let savedWindows = SessionStore.load()
         let savedHistories = TerminalHistoryStore.load()

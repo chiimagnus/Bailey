@@ -516,7 +516,6 @@ final class WorkspaceWindowModel {
               !project.tabs.contains(where: { $0.content.isClosing }) else { return }
         let unresolved = project.tabs.map(\.content).filter(\.hasUnresolvedSave)
         guard !unresolved.isEmpty else {
-            project.terminateAll()
             remove(project)
             return
         }
@@ -537,7 +536,6 @@ final class WorkspaceWindowModel {
                 unresolved.forEach { $0.suspendAutoSaveForClose(false) }
                 return
             }
-            project.terminateAll()
             self.remove(project)
         }
     }
@@ -545,9 +543,7 @@ final class WorkspaceWindowModel {
     private func remove(_ project: Project) {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
-        // A dismissed SwiftUI host may still cache this Project; its retired
-        // editors must no longer be owned by the removed project's tab array.
-        project.tabs.removeAll()
+        project.terminateAll()
         if selectedProjectID == project.id {
             let neighbor = min(index, projects.count - 1)
             selectedProjectID = neighbor >= 0 ? projects[neighbor].id : nil
@@ -1510,11 +1506,10 @@ final class WorkspaceWindowModel {
         window = nil
         application.windowClosed(self)
         guard !application.isQuitting else { return }
-        for project in projects {
-            project.terminateAll()
-        }
+        let closingProjects = projects
         projects.removeAll()
         selectedProjectID = nil
+        for project in closingProjects { project.terminateAll() }
     }
 
     // MARK: - Persistence
