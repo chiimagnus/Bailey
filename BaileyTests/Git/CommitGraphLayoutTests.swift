@@ -580,7 +580,7 @@ final class CommitGraphLayoutTests: XCTestCase {
     }
 
     func testCachedGraphLayoutReusesGeometryWhenHEADAndDecorationsChange() {
-        let cache = CommitGraphLayoutCache()
+        var cache = CommitGraphLayoutCache()
         let original = [
             commit("head", parents: ["base"], current: true),
             commit("side", parents: ["base"]),
@@ -695,7 +695,7 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertEqual(graph.rows.map(\.node), repeated.rows.map(\.node))
         XCTAssertEqual(graph.laneCount, repeated.laneCount)
 
-        let cache = CommitGraphLayoutCache()
+        var cache = CommitGraphLayoutCache()
         let first = cache.layout(for: history)
         var reuseTimes: [Double] = []
         for _ in 0..<30 {

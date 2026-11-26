@@ -750,6 +750,7 @@ final class GitStatusModel {
         let changedRows: [ChangeItem]
         let navigation: [ChangeItem]
         let selections: [ChangeSelection]
+        let pathFlags: [ChangeSection: [String: Bool]]
 
         var filteredCount: Int { mergeCount + stagedCount + changedCount }
     }
@@ -780,6 +781,7 @@ final class GitStatusModel {
             var entries: [Entry]
             let tree: TreeDisplayModel.PathTree
             let positions: [String: Int]
+            let pathFlags: [String: Bool]
             var membership: Set<Entry>
 
             init(_ entries: [Entry], section: ChangeSection) {
@@ -790,7 +792,25 @@ final class GitStatusModel {
                 )
                 positions = Dictionary(entries.enumerated().map { ($0.element.path, $0.offset) },
                                        uniquingKeysWith: { first, _ in first })
+                pathFlags = Self.summarizePaths(entries)
                 membership = Set(entries)
+            }
+
+            // Exact subtree membership and untracked status are source properties,
+            // not computations to repeat while constructing a directory menu.
+            static func summarizePaths(_ entries: [Entry]) -> [String: Bool] {
+                var result: [String: Bool] = [:]
+                for entry in entries {
+                    var path = entry.path[...]
+                    let untracked = entry.staged == "?"
+                    while true {
+                        let key = String(path)
+                        result[key] = untracked || result[key] == true
+                        guard let slash = path.lastIndex(of: "/") else { break }
+                        path = path[..<slash]
+                    }
+                }
+                return result
             }
         }
 
@@ -866,6 +886,7 @@ final class GitStatusModel {
     private struct ChangeSectionSource {
         let entries: [Entry]
         let section: ChangeSection
+        let pathFlags: [String: Bool]
         private var tree: TreeDisplayModel.PathTree?
         private var positions: [String: Int] = [:]
         private var projection: (mode: GitViewMode, folders: Set<String>, rows: [ChangeItem])?
@@ -875,6 +896,7 @@ final class GitStatusModel {
             self.section = section
             tree = prepared?.tree
             positions = prepared?.positions ?? [:]
+            pathFlags = prepared?.pathFlags ?? StatusPresentation.Section.summarizePaths(entries)
         }
 
         mutating func rows(mode: GitViewMode, collapsed: Set<String>) -> [ChangeItem] {
@@ -961,7 +983,8 @@ final class GitStatusModel {
             revision: changeDisplayRevision,
             mergeCount: mergeCount, stagedCount: stagedCount, changedCount: changedCount,
             mergeRows: mergeRows, stagedRows: stagedRows, changedRows: changedRows,
-            navigation: navigation, selections: selections
+            navigation: navigation, selections: selections,
+            pathFlags: changeSourceCache!.sections.mapValues(\.pathFlags)
         )
         changeDisplayCache = (key, display)
         return display

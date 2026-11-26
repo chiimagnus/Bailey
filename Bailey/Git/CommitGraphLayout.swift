@@ -1,7 +1,7 @@
 import Foundation
 
 /// Commit rails use the loaded Git DAG; stash rails use their existing base-commit display link.
-nonisolated struct CommitGraphLayout {
+nonisolated struct CommitGraphLayout: Sendable {
     /// An uncommitted checkout with no visible HEAD has no known branch color.
     static let unconnectedWorktreeColor = -1
 

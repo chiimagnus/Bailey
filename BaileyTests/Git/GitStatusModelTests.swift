@@ -205,10 +205,18 @@ final class GitStatusModelTests: XCTestCase {
         }
         model.sync(root: root.path)
         try await wait { model.changedEntries.count == count && model.hasResolvedStatus }
+        let initial = model.displayChanges(filter: "", mode: .tree, closed: [])
+        XCTAssertEqual(initial.changedCount, count)
+        XCTAssertEqual(initial.changedRows.compactMap(\.entry).count, count)
+        XCTAssertEqual(initial.navigation.count, initial.selections.count)
+        XCTAssertEqual(initial.pathFlags[.unstaged]?["src"], true)
+        XCTAssertEqual(initial.pathFlags[.unstaged]?["src/group-0"], true)
+        XCTAssertNil(initial.pathFlags[.unstaged]?["src/group-00"])
+        let filtered = model.displayChanges(filter: "file-5700.txt", mode: .tree, closed: [])
+        XCTAssertEqual(filtered.changedCount, 1)
+        XCTAssertEqual(filtered.pathFlags[.unstaged]?["src/group-57"], true)
+        XCTAssertNil(filtered.pathFlags[.unstaged]?["src/group-0"])
         let first = model.displayChanges(filter: "", mode: .tree, closed: [])
-        XCTAssertEqual(first.changedCount, count)
-        XCTAssertEqual(first.changedRows.compactMap(\.entry).count, count)
-        XCTAssertEqual(first.navigation.count, first.selections.count)
 
         let start = CFAbsoluteTimeGetCurrent()
         for index in 0..<250 {
@@ -3796,7 +3804,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNil(model.detailError)
         let initial = model.graphCommits
         XCTAssertEqual(initial.count, 30)
-        let cache = CommitGraphLayoutCache()
+        var cache = CommitGraphLayoutCache()
         let first = cache.layout(for: initial)
         for branch in ["feature", "zebra", "main"] {
             try git(["switch", "-q", branch])
@@ -3881,7 +3889,7 @@ final class GitStatusModelTests: XCTestCase {
             let backend: any WorkspaceBackend = remote
                 ? DiscardRemoteWorkspaceFixture() : LocalWorkspaceBackend.shared
             let model = GitStatusModel()
-            let cache = CommitGraphLayoutCache()
+            var cache = CommitGraphLayoutCache()
             model.sync(root: main.path, backend: backend, scope: remote ? "ssh:graph-order" : "local")
             try await wait { model.hasResolvedStatus && !model.isRefreshing }
             XCTAssertNil(model.detailError)

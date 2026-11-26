@@ -136,7 +136,7 @@ final class DockWorkspaceTests: XCTestCase {
         let target = try XCTUnwrap(dock.group(containing: .files))
         let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
         let dragging = DockTabDragCoordinator()
-        dragging.setFrames(groups: [target.id: frame])
+        dragging.setGroupFrame(frame, for: target.id)
         let before = dock.root
         for invalidation in 0..<4 {
             dragging.begin(items[0], dock: dock)
@@ -144,8 +144,8 @@ final class DockWorkspaceTests: XCTestCase {
             XCTAssertEqual(dragging.position?.items, items)
             switch invalidation {
             case 0: dragging.cancel()
-            case 1: dragging.setFrames(groups: [target.id: frame.offsetBy(dx: 1, dy: 0)])
-            case 2: dragging.setFrames(tabs: [items[0]: frame])
+            case 1: dragging.setGroupFrame(frame.offsetBy(dx: 1, dy: 0), for: target.id)
+            case 2: dragging.setTabFrame(frame, for: items[0], in: target.id)
             default:
                 let other = Project(fallbackName: "other window", workspaceConfiguration: .standard)
                 dragging.finish(project: other)
@@ -909,8 +909,8 @@ final class DockWorkspaceTests: XCTestCase {
         let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
         let positionChanged = expectation(description: "Only real drag preview changes are observed")
         withObservationTracking({ _ = dragging.position }) { positionChanged.fulfill() }
-        dragging.setFrames(groups: [moved.id: frame])
-        dragging.setFrames(tabs: [.tab(pane.id): CGRect(x: 100, y: 100, width: 120, height: 38)])
+        dragging.setGroupFrame(frame, for: moved.id)
+        dragging.setTabFrame(CGRect(x: 100, y: 100, width: 120, height: 38), for: .tab(pane.id), in: moved.id)
         XCTAssertNil(dragging.position)
         dragging.begin(.files, dock: dock)
         dragging.update(.files, at: CGPoint(x: 101, y: 300), dock: dock)

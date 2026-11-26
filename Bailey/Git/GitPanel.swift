@@ -2394,6 +2394,10 @@ struct GitPanel: View {
                 }
             }
         }
+        // Every change row uses the shared fixed tree height. An offscreen
+        // section must not ask SwiftUI to discover its full height before Graph.
+        .frame(height: CGFloat(rows.count) * TreeRowStyle.rowHeight(panelFontScale),
+               alignment: .topLeading)
     }
 
     private func directoryRow(
@@ -2677,8 +2681,11 @@ struct GitPanel: View {
         stageTrigger: OperationTrigger, unstageTrigger: OperationTrigger
     ) -> some View {
         let multiple = isGroupContext(target)
-        let available = !selectedEntries(for: target, kind: kind).isEmpty
-        if !multiple || canOperateSelectedChanges(target, kind: kind) {
+        let keys = contextChanges(for: target)
+        let valid = !keys.isEmpty && keys.allSatisfy { $0.section == kind.rawValue }
+        let flags = changesDisplay.pathFlags[kind] ?? [:]
+        let available = valid && keys.contains { flags[$0.path] != nil }
+        if !multiple || valid {
             if kind == .staged {
                 Button(String(localized: "Unstage Changes", table: "Sidebar")) {
                     performOperation(unstageTrigger) {
@@ -2697,7 +2704,7 @@ struct GitPanel: View {
                         requestDiscard(selectedEntries(for: target, kind: kind),
                                        trigger: .entry(path: path, operation: .discard))
                     }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
-                    if !multiple && selectedEntries(for: target, kind: kind).contains(where: { $0.staged == "?" }) {
+                    if !multiple && valid && flags[path] == true {
                         Button(String(localized: "Add to .gitignore", table: "Git")) {
                             ignorePaths([path], isDirectory: true)
                         }.disabled(model.isBusy)

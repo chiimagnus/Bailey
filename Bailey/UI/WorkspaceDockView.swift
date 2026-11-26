@@ -30,7 +30,7 @@ final class DockTabDragCoordinator {
     @ObservationIgnored private var source: Source?
     @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
-    @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
+    @ObservationIgnored private var tabs: [UUID: [DockItem: CGRect]] = [:]
     @ObservationIgnored private var escapeMonitor: Any?
 
     isolated deinit {
@@ -50,13 +50,17 @@ final class DockTabDragCoordinator {
         NSCursor.arrow.set()
     }
 
-    func setFrames(groups: [UUID: CGRect]) {
-        if source != nil, self.groups != groups { cancel() }
-        self.groups = groups
+    func setGroupFrame(_ frame: CGRect?, for group: UUID) {
+        guard groups[group] != frame else { return }
+        if source != nil { cancel() }
+        groups[group] = frame
+        if frame == nil { tabs.removeValue(forKey: group) }
     }
-    func setFrames(tabs: [DockItem: CGRect]) {
-        if source != nil, self.tabs != tabs { cancel() }
-        self.tabs = tabs
+
+    func setTabFrame(_ frame: CGRect?, for item: DockItem, in group: UUID) {
+        guard tabs[group]?[item] != frame else { return }
+        if source != nil { cancel() }
+        tabs[group, default: [:]][item] = frame
     }
 
     func begin(_ item: DockItem, dock: DockWorkspaceModel) {
@@ -82,14 +86,14 @@ final class DockTabDragCoordinator {
               position.location.y >= frame.minY, position.location.y < frame.minY + 38,
               let index = position.index, !group.items.isEmpty else { return nil }
         let item = index < group.items.count ? group.items[index] : group.items[group.items.count - 1]
-        guard let bounds = tabs[item] else { return nil }
+        guard let bounds = tabs[group.id]?[item] else { return nil }
         return index < group.items.count ? bounds.minX : bounds.maxX
     }
 
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
         guard let source, sourceDock === dock, source.item == item,
               source.sourceLayout == dock.root else { cancel(); return }
-        let hit = groups.first { $0.value.contains(location) }
+        let hit = groups.first { $0.value.contains(location) && dock.root.group(id: $0.key) != nil }
         var edge: DockEdge?
         var insertIndex: Int?
         if let hit, let target = dock.root.group(id: hit.key) {
@@ -100,7 +104,7 @@ final class DockTabDragCoordinator {
             )
             if edge == nil {
                 insertIndex = target.items.firstIndex { tab in
-                    guard let bounds = tabs[tab] else { return false }
+                    guard let bounds = tabs[target.id]?[tab] else { return false }
                     return location.x < bounds.midX && location.y <= frame.minY + 38
                 } ?? target.items.count
             }
@@ -123,20 +127,6 @@ final class DockTabDragCoordinator {
     }
 }
 
-private struct DockGroupFrames: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-        value.merge(nextValue()) { $1 }
-    }
-}
-
-private struct DockTabFrames: PreferenceKey {
-    static let defaultValue: [DockItem: CGRect] = [:]
-    static func reduce(value: inout [DockItem: CGRect], nextValue: () -> [DockItem: CGRect]) {
-        value.merge(nextValue()) { $1 }
-    }
-}
-
 struct WorkspaceDockView: View {
     private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
@@ -156,12 +146,6 @@ struct WorkspaceDockView: View {
                 .background {
                     let _ = themeChanges.revision
                     Color(nsColor: Theme.terminal(dark: colorScheme == .dark).backgroundNSColor)
-                }
-                .onPreferenceChange(DockGroupFrames.self) {
-                    dragging.setFrames(groups: $0)
-                }
-                .onPreferenceChange(DockTabFrames.self) {
-                    dragging.setFrames(tabs: $0)
                 }
                 .onChange(of: manager.selectedProjectID) { dragging.cancel() }
                 .onDisappear { manager.attachedWindow?.isMovable = true }
@@ -415,12 +399,12 @@ struct DockTabGroupView: View {
             onPrimaryClick: { project.dock.clearContextTarget() }
         ).id(group.id))
         .background {
-            GeometryReader { geometry in
-                Color.clear.preference(
-                    key: DockGroupFrames.self,
-                    value: [group.id: geometry.frame(in: .global)]
-                )
-            }
+            Color.clear
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+                    dragging.setGroupFrame($0, for: group.id)
+                }
+                .onDisappear { dragging.setGroupFrame(nil, for: group.id) }
+                .id(group.id)
         }
         .popover(isPresented: Binding(
             get: { markdownPopover != nil },
@@ -573,12 +557,14 @@ struct DockTabGroupView: View {
                             .id(item)
                             .opacity(draggedItems.contains(item) ? 0.6 : 1)
                             .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: DockTabFrames.self,
-                                        value: [item: geometry.frame(in: .global)]
-                                    )
-                                }
+                                Color.clear
+                                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+                                        dragging.setTabFrame($0, for: item, in: group.id)
+                                    }
+                                    .onDisappear {
+                                        dragging.setTabFrame(nil, for: item, in: group.id)
+                                    }
+                                    .id(group.id)
                             }
                             .highPriorityGesture(
                                 DragGesture(minimumDistance: 4, coordinateSpace: .global)
