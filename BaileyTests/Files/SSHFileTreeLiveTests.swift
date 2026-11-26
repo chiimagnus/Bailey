@@ -457,7 +457,7 @@ final class SSHFileTreeLiveTests: XCTestCase {
             func edit(_ row: Int, _ value: String) async throws {
                 let result = try await file.delimitedSnapshot(using: .comma)
                 let snapshot = try XCTUnwrap(result)
-                try await file.editDelimited(.cells([.init(row: row, column: 1): value]), using: snapshot)
+                try await requireDelimitedEdit(file, .cells([.init(row: row, column: 1): value]), using: snapshot)
             }
             try await edit(1, "111")
             let written = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(file.text))
@@ -486,6 +486,27 @@ final class SSHFileTreeLiveTests: XCTestCase {
             try await reopened.waitForText()
             XCTAssertEqual(reopened.fileEncoding, .utf8BOM)
             XCTAssertEqual(reopened.text, file.text)
+            let structure = try await file.delimitedSnapshot(using: .comma)
+            try await requireDelimitedEdit(file, .columns([1, 0]), using: XCTUnwrap(structure))
+            await file.save()
+            let moved = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("Value,Name\r\n111,中文\n\"next,field\",Other"))
+            let movedRemote = try await live.read(path: path, maxBytes: moved.count)
+            XCTAssertEqual(movedRemote, moved)
+            XCTAssertEqual(try Data(contentsOf: local), sentinel)
+            file.documentUndoManager.undo()
+            await file.save()
+            let undoRemote = try await live.read(path: path, maxBytes: expected.count)
+            XCTAssertEqual(undoRemote, expected)
+            let replacementSnapshot = try await file.delimitedSnapshot(using: .comma)
+            let dataFields = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1,
+                                                                   columns: IndexSet(integer: 1), selection: nil)
+            try await requireDelimitedEdit(file, .replace(dataFields, query: "NEXT", with: "remote", single: nil),
+                                           using: XCTUnwrap(replacementSnapshot))
+            await file.save()
+            let replaced = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("Name,Value\r\n中文,111\nOther,\"remote,field\""))
+            let replacedRemote = try await live.read(path: path, maxBytes: replaced.count)
+            XCTAssertEqual(replacedRemote, replaced)
+            XCTAssertEqual(try Data(contentsOf: local), sentinel)
         }
     }
 
@@ -522,7 +543,7 @@ final class SSHFileTreeLiveTests: XCTestCase {
             file.autoSaveSuspendedForClose = true
             XCTAssertEqual(file.fileEncoding, encoding)
             let loaded = try await file.delimitedSnapshot(using: .comma)
-            try await file.editDelimited(.cells([.init(row: 1, column: 1): "new"]), using: XCTUnwrap(loaded))
+            try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 1): "new"]), using: XCTUnwrap(loaded))
             XCTAssertEqual(file.text, draft)
 
             // This shell deliberately does not use Bailey's publication lock.

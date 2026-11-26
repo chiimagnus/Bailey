@@ -23,15 +23,10 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         let column: Int
     }
 
-    struct Selection: Sendable {
-        struct Block: Sendable {
-            let rows: ClosedRange<Int>
-            let columns: ClosedRange<Int>
-
-            init(from first: Cell, to last: Cell) {
-                rows = min(first.row, last.row)...max(first.row, last.row)
-                columns = min(first.column, last.column)...max(first.column, last.column)
-            }
+    struct Selection: Hashable, Sendable {
+        struct Block: Hashable, Sendable {
+            var rows: IndexSet
+            var columns: IndexSet
 
             func contains(_ cell: Cell) -> Bool { rows.contains(cell.row) && columns.contains(cell.column) }
         }
@@ -40,26 +35,205 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         private(set) var anchor: Cell?
         private(set) var caret: Cell?
 
-        mutating func select(_ cell: Cell, extending: Bool = false, adding: Bool = false) {
+        mutating func select(_ cell: Cell, extending: Bool = false, adding: Bool = false,
+                             rows: Range<Int>? = nil, columns: Range<Int>? = nil) {
             let origin = extending ? anchor ?? cell : cell
             if extending, !blocks.isEmpty { blocks.removeLast() }
             else if !adding { blocks.removeAll(keepingCapacity: true) }
-            blocks.append(Block(from: origin, to: cell))
+            blocks.append(Block(rows: IndexSet(integersIn: rows ?? min(origin.row, cell.row)..<(max(origin.row, cell.row) + 1)),
+                                columns: IndexSet(integersIn: columns ?? min(origin.column, cell.column)..<(max(origin.column, cell.column) + 1))))
             anchor = origin
             caret = cell
         }
 
         func contains(_ cell: Cell) -> Bool { blocks.contains { $0.contains(cell) } }
+
+        var rows: IndexSet {
+            blocks.reduce(into: IndexSet()) { $0.formUnion($1.rows) }
+        }
+
+        var columns: IndexSet {
+            blocks.reduce(into: IndexSet()) { $0.formUnion($1.columns) }
+        }
+
+        func columns(in row: Int) -> IndexSet {
+            blocks.reduce(into: IndexSet()) { columns, block in
+                if block.rows.contains(row) { columns.formUnion(block.columns) }
+            }
+        }
+
+        mutating func remapRows(from previous: [Int], to current: [Int]) {
+            guard !blocks.isEmpty else { return }
+            let positions = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element, $0.offset) })
+            func project(_ cell: Cell?) -> Cell? {
+                guard let cell, previous.indices.contains(cell.row), let row = positions[previous[cell.row]] else { return nil }
+                return Cell(row: row, column: cell.column)
+            }
+            blocks = blocks.compactMap { block in
+                var rows = IndexSet()
+                for row in block.rows where previous.indices.contains(row) {
+                    if let next = positions[previous[row]] { rows.insert(next) }
+                }
+                return rows.isEmpty ? nil : Block(rows: rows, columns: block.columns)
+            }
+            let first = blocks.first.flatMap { block in
+                block.rows.first.flatMap { row in block.columns.first.map { Cell(row: row, column: $0) } }
+            }
+            caret = project(caret) ?? first
+            anchor = project(anchor) ?? caret
+        }
+
+        mutating func remapColumns(_ indexes: [Int: Int]) {
+            func project(_ cell: Cell?) -> Cell? {
+                guard let cell, let column = indexes[cell.column] else { return nil }
+                return Cell(row: cell.row, column: column)
+            }
+            blocks = blocks.compactMap { block in
+                let columns = IndexSet(block.columns.compactMap { indexes[$0] })
+                return columns.isEmpty ? nil : Block(rows: block.rows, columns: columns)
+            }
+            caret = project(caret) ?? blocks.first.flatMap { block in
+                block.rows.first.flatMap { row in block.columns.first.map { Cell(row: row, column: $0) } }
+            }
+            anchor = project(anchor) ?? caret
+        }
+    }
+
+    struct FieldScope: Sendable {
+        let rows: [Int]?
+        let firstRecord: Int
+        let columns: IndexSet
+        let selection: Selection?
+
+        func visit(in index: DelimitedTableIndex, _ visit: (Int, IndexSet) throws -> Void) throws {
+            let count = rows?.count ?? max(0, index.records.count - firstRecord)
+            let offsets = selection?.rows ?? IndexSet(integersIn: 0..<count)
+            for offset in offsets {
+                try Task.checkCancellation()
+                guard (0..<count).contains(offset) else { continue }
+                let record = rows?[offset] ?? firstRecord + offset
+                let selected = selection.map { $0.columns(in: offset).intersection(columns) } ?? columns
+                if !selected.isEmpty { try visit(record, selected) }
+            }
+        }
+
+        func contains(_ cell: Cell, in index: DelimitedTableIndex) -> Bool {
+            guard index.records.indices.contains(cell.row), columns.contains(cell.column) else { return false }
+            let offset: Int
+            if let rows {
+                guard let displayed = rows.firstIndex(of: cell.row) else { return false }
+                offset = displayed
+            } else {
+                guard cell.row >= firstRecord else { return false }
+                offset = cell.row - firstRecord
+            }
+            return selection?.contains(Cell(row: offset, column: cell.column)) ?? true
+        }
+    }
+
+    struct Occurrence: Sendable, Equatable {
+        let cell: Cell
+        let range: NSRange
+    }
+
+    struct ColumnStatistics: Sendable, Equatable {
+        let column: Int
+        let total: Int
+        let empty: Int
+        let numeric: Int
+        var other: Int { total - empty - numeric }
+        let minimum: Double?
+        let maximum: Double?
+        let sum: Double?
+        let average: Double?
+    }
+
+    private struct CompensatedSum {
+        var sum = 0.0
+        var correction = 0.0
+        var value: Double { sum + correction }
+
+        mutating func add(_ value: Double) {
+            let next = sum + value
+            correction += abs(sum) >= abs(value) ? (sum - next) + value : (value - next) + sum
+            sum = next
+        }
+    }
+
+    private struct ColumnAccumulator {
+        var total = 0
+        var empty = 0
+        var numeric = 0
+        var minimum: Double?
+        var maximum: Double?
+        var bands: [Int: CompensatedSum] = [:]
+
+        private func scale(_ band: Int) -> Double {
+            Double(sign: .plus, exponent: band * 64 - 1074, significand: 1)
+        }
+
+        mutating func add(_ text: String) {
+            total += 1
+            if text.isEmpty { empty += 1; return }
+            guard let value = DelimitedTablePresentation.finiteNumber(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+            numeric += 1
+            minimum = min(minimum ?? value, value)
+            maximum = max(maximum ?? value, value)
+            if value != 0 {
+                let band = (value.exponent + 1074) / 64
+                bands[band, default: CompensatedSum()].add(value / scale(band))
+            }
+        }
+
+        func statistics(column: Int) -> ColumnStatistics {
+            var combined = CompensatedSum()
+            var magnitude = 1.0
+            for band in bands.keys.sorted(by: >) {
+                guard let partial = bands[band], partial.value != 0 else { continue }
+                let power = scale(band)
+                if combined.value == 0 {
+                    combined = partial
+                    magnitude = power
+                } else {
+                    let factor = power / magnitude
+                    combined.add(partial.sum * factor)
+                    combined.add(partial.correction * factor)
+                }
+            }
+            func represent(_ normalized: Double) -> Double? {
+                let result = normalized * magnitude
+                return result.isFinite && (result != 0 || combined.value == 0) ? result : nil
+            }
+            return .init(column: column, total: total, empty: empty, numeric: numeric, minimum: minimum, maximum: maximum,
+                         sum: numeric == 0 ? nil : represent(combined.value),
+                         average: numeric == 0 ? nil : represent(combined.value / Double(numeric)))
+        }
+    }
+
+    @concurrent static func statistics(
+        in scope: FieldScope, source: String, index: DelimitedTableIndex
+    ) async throws -> [ColumnStatistics] {
+        let text = source as NSString
+        var accumulators: [Int: ColumnAccumulator] = [:]
+        try scope.visit(in: index) { row, columns in
+            for column in columns {
+                guard let field = index.field(record: row, column: column) else { continue }
+                accumulators[column, default: ColumnAccumulator()].add(field.value(in: text))
+            }
+        }
+        try Task.checkCancellation()
+        return scope.columns.map { (accumulators[$0] ?? ColumnAccumulator()).statistics(column: $0) }
     }
 
     let id = UUID()
-    let header: Bool
+    let configuration: Configuration
+    var header: Bool { configuration.header }
     let rows: [Int]
 
     @concurrent static func evaluate(
-        source: String, index: DelimitedTableIndex, configuration: Configuration
+        source: String, index: DelimitedTableIndex, configuration requested: Configuration
     ) async throws -> Self {
-        let configuration = configuration.restricted(to: index.columnCount)
+        let configuration = requested.restricted(to: index.columnCount)
         let text = source as NSString
         let start = configuration.header && !index.records.isEmpty ? 1 : 0
         var rows: [Int] = []
@@ -95,52 +269,105 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             rows = decorated.map(\.row)
         }
         try Task.checkCancellation()
-        return Self(header: configuration.header, rows: rows)
+        return Self(configuration: requested, rows: rows)
     }
 
     @concurrent func find(
-        _ query: String, source: String, index: DelimitedTableIndex, columnCount: Int
+        _ query: String, source: String, index: DelimitedTableIndex, columnCount: Int, empty: Bool = false,
+        columns: IndexSet? = nil, selection: Selection? = nil
     ) async throws -> [Cell] {
-        guard !query.isEmpty else { return [] }
+        guard empty || !query.isEmpty else { return [] }
         let text = source as NSString
         var matches: [Cell] = []
         for (row, original) in rows.enumerated() {
             if row.isMultiple(of: 256) { try Task.checkCancellation() }
             let fields = index.fields(in: index.records[original])
             for (column, field) in fields.prefix(columnCount).enumerated() {
-                if field.value(in: text).range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
-                    matches.append(Cell(row: row, column: column))
-                }
+                let cell = Cell(row: row, column: column)
+                guard columns?.contains(column) != false, selection?.contains(cell) != false else { continue }
+                let found = empty ? field.contentRange(in: text).length == 0
+                    : Self.firstMatch(query, in: field.value(in: text) as NSString) != nil
+                if found { matches.append(cell) }
             }
         }
         try Task.checkCancellation()
         return matches
     }
 
+    static func firstMatch(_ query: String, in value: NSString, from offset: Int = 0) -> NSRange? {
+        guard !query.isEmpty, (0..<value.length).contains(offset) else { return nil }
+        let found = value.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
+                                range: NSRange(location: offset, length: value.length - offset))
+        return found.location == NSNotFound || found.length == 0 ? nil : found
+    }
+
+    @concurrent static func countOccurrences(
+        _ query: String, in scope: FieldScope, source: String, index: DelimitedTableIndex
+    ) async throws -> Int {
+        guard !query.isEmpty else { return 0 }
+        let source = source as NSString
+        var count = 0
+        try scope.visit(in: index) { row, columns in
+            for column in columns {
+                guard let field = index.field(record: row, column: column) else { continue }
+                let value = field.value(in: source) as NSString
+                var offset = 0
+                while let match = firstMatch(query, in: value, from: offset) {
+                    if count.isMultiple(of: 1024) { try Task.checkCancellation() }
+                    count += 1
+                    offset = NSMaxRange(match)
+                }
+            }
+        }
+        return count
+    }
+
+    @concurrent func nextVisibleOccurrence(
+        _ query: String, from matches: [Cell], at caret: Cell?, after previous: Occurrence?,
+        selection: Selection?, source: String, index: DelimitedTableIndex
+    ) async throws -> Occurrence? {
+        guard !matches.isEmpty else { return nil }
+        let text = source as NSString
+        let previousDisplay = previous.flatMap { occurrence in
+            rows.firstIndex(of: occurrence.cell.row).map { Cell(row: $0, column: occurrence.cell.column) }
+        }
+        let starting = (previousDisplay ?? caret).flatMap { cell in
+            matches.firstIndex { $0.row > cell.row || $0.row == cell.row && $0.column >= cell.column }
+        } ?? 0
+        for step in 0..<matches.count {
+            try Task.checkCancellation()
+            let visible = matches[(starting + step) % matches.count]
+            guard rows.indices.contains(visible.row), selection?.contains(visible) != false else { continue }
+            let actual = Cell(row: rows[visible.row], column: visible.column)
+            guard let field = index.field(record: actual.row, column: actual.column) else { continue }
+            let offset = previous.flatMap { $0.cell == actual ? NSMaxRange($0.range) : nil } ?? 0
+            if let match = Self.firstMatch(query, in: field.value(in: text) as NSString, from: offset) {
+                return Occurrence(cell: actual, range: match)
+            }
+        }
+        return nil
+    }
+
     @concurrent func copy(
         _ selection: Selection, source: String, index: DelimitedTableIndex
     ) async throws -> String? {
-        var selectedRows = IndexSet()
-        var selectedColumns = IndexSet()
-        for block in selection.blocks {
-            selectedRows.insert(integersIn: block.rows.lowerBound..<(block.rows.upperBound + 1))
-            selectedColumns.insert(integersIn: block.columns.lowerBound..<(block.columns.upperBound + 1))
-        }
+        let selectedRows = selection.rows
+        let selectedColumns = selection.columns
         guard !selectedRows.isEmpty, !selectedColumns.isEmpty,
               let finalRow = selectedRows.last, rows.indices.contains(finalRow),
-              selectedRows.count <= 1_000_000 / selectedColumns.count else { return nil }
+              selectedRows.count <= DelimitedTableIndex.maximumFields / selectedColumns.count else { return nil }
         let text = source as NSString
         var output = ""
         var size = 0
         for row in selectedRows {
             try Task.checkCancellation()
+            let columns = selection.columns(in: row)
             for column in selectedColumns {
                 if column != selectedColumns.first { output.append("\t"); size += 1 }
-                guard selection.contains(Cell(row: row, column: column)) else { continue }
+                guard columns.contains(column) else { continue }
                 let value = Self.value(in: text, index: index, record: rows[row], column: column)
                 let emptyFinalRecord = value.isEmpty && row == finalRow && selectedColumns.count == 1
-                let encoded = emptyFinalRecord || value.utf8.contains(where: { $0 == 9 || $0 == 10 || $0 == 13 || $0 == 34 })
-                    ? "\"" + value.replacingOccurrences(of: "\"", with: "\"\"", options: .literal) + "\"" : value
+                let encoded = DelimitedTableMutation.escape(value, separator: .tab, quoted: emptyFinalRecord)
                 size += encoded.utf8.count
                 guard size <= 64 << 20 else { return nil }
                 output.append(encoded)
@@ -154,8 +381,21 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     static func value(
         in text: NSString, index: DelimitedTableIndex, record: Int, column: Int, limit: Int? = nil
     ) -> String {
-        let fields = index.fields(in: index.records[record])
-        guard column >= 0, column < fields.count else { return "" }
-        return fields[fields.startIndex + column].value(in: text, limit: limit)
+        index.field(record: record, column: column)?.value(in: text, limit: limit) ?? ""
+    }
+
+    static func finiteNumber(_ value: String) -> Double? {
+        var nonzeroMantissa = false
+        var inExponent = false
+        for byte in value.utf8 {
+            switch byte {
+            case 69, 101: inExponent = true
+            case 49...57: nonzeroMantissa = nonzeroMantissa || !inExponent
+            case 43, 45, 46, 48: break
+            default: return nil
+            }
+        }
+        guard let result = Double(value), result.isFinite, result != 0 || !nonzeroMantissa else { return nil }
+        return result
     }
 }

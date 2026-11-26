@@ -5,7 +5,94 @@ import XCTest
 @testable import Bailey
 
 @MainActor
+func requireDelimitedEdit(_ file: FileTab, _ change: DelimitedTableMutation.Change, using snapshot: FileTab.DelimitedSnapshot,
+                          file path: StaticString = #filePath, line: UInt = #line) async throws {
+    let task = try XCTUnwrap(file.submitDelimitedEdit(change, using: snapshot), file: path, line: line)
+    let success = await task.value
+    XCTAssertTrue(success, file.delimitedTable.editError ?? "", file: path, line: line)
+}
+
+@MainActor
 final class DelimitedTableIndexTests: XCTestCase {
+    func testColumnStructureKeepsOriginalTokensAndEveryRecordBoundary() async throws {
+        let tokens = [
+            ["Name", "\"Label\"", "Tail"],
+            ["001", "\"line\r\npart\"", ""],
+            ["", "\"q\"\"q\"", "末尾"],
+            ["", "", ""],
+        ]
+        let endings = ["\r\n", "\r", "\n", ""]
+        let source = zip(tokens, endings).map { $0.0.joined(separator: ",") + $0.1 }.joined()
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+        XCTAssertNil(index.issue)
+        let orders: [[Int?]] = [
+            [nil, 0, 1, 2], [0, nil, 1, 2], [0, 1, nil, 2], [0, 1, 2, nil],
+            [1, 2], [0, 2], [0, 1], [1],
+            [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
+        ]
+        for order in orders {
+            let expected = zip(tokens.indices, tokens).map { row, fields in
+                var body = order.map { $0.map { fields[$0] } ?? "" }.joined(separator: ",")
+                if body.isEmpty && (row == tokens.count - 1 || endings[row - 1] == "\r" && endings[row] == "\n") {
+                    body = "\"\""
+                }
+                return body + endings[row]
+            }.joined()
+            let edits = try await DelimitedTableMutation.prepare(.columns(order), source: source, index: index, encoding: .utf8BOM)
+            let actual = NSMutableString(string: source)
+            for edit in edits {
+                XCTAssertEqual(actual.substring(with: edit.range), edit.old)
+                actual.replaceCharacters(in: edit.range, with: edit.new)
+            }
+            XCTAssertEqual(Data((actual as String).utf8), Data(expected.utf8), "\(order)")
+        }
+
+        for order: [Int?] in [[], [0, 0], [3], [-1]] {
+            do {
+                _ = try await DelimitedTableMutation.prepare(.columns(order), source: source, index: index, encoding: .utf8BOM)
+                XCTFail("Invalid column order \(order)")
+            } catch DelimitedTableMutation.Failure.invalidSelection {}
+        }
+        for (text, order, expected) in [
+            ("one\r\ntwo", [nil, 0] as [Int?], ",one\r\n,two"),
+            ("other,\rnext,\nother,", [1] as [Int?], "\r\"\"\n\"\""),
+            ("head,", [1] as [Int?], "\"\""),
+        ] {
+            let index = try await DelimitedTableIndex.parse(text, preferred: .comma, selected: .comma)
+            let edits = try await DelimitedTableMutation.prepare(.columns(order), source: text, index: index, encoding: .utf8)
+            let actual = NSMutableString(string: text)
+            for edit in edits { actual.replaceCharacters(in: edit.range, with: edit.new) }
+            XCTAssertEqual(Data((actual as String).utf8), Data(expected.utf8))
+        }
+    }
+
+    func testColumnStructureRejectsHiddenColumnsAndPreservesTheFieldBudget() async throws {
+        let limit = DelimitedTableIndex.maximumColumns
+        for count in [limit - 1, limit, limit + 1] {
+            let source = String(repeating: ",", count: count - 1)
+            let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+            var order = (0..<count).map(Optional.some)
+            order.append(nil)
+            do {
+                let edits = try await DelimitedTableMutation.prepare(.columns(order), source: source, index: index, encoding: .utf8)
+                XCTAssertEqual(count, limit - 1)
+                XCTAssertEqual(edits.count, 1)
+                XCTAssertEqual(edits.first?.new, ",")
+            } catch DelimitedTableMutation.Failure.invalidSelection {
+                XCTAssertGreaterThanOrEqual(count, limit)
+            }
+        }
+        let source = String(repeating: String(repeating: ",", count: 99) + "\n", count: 9_901)
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+        XCTAssertEqual(index.records.count * index.columnCount, 990_100)
+        XCTAssertNil(index.issue)
+        do {
+            _ = try await DelimitedTableMutation.prepare(.columns((0..<100).map(Optional.some) + [nil]),
+                                                          source: source, index: index, encoding: .utf8)
+            XCTFail("1,000,001 fields must be refused before touching the document")
+        } catch DelimitedTableMutation.Failure.invalidSelection {}
+    }
+
     func testDelimitedFileUsesTheExistingPreviewCompanionAndSourceRoute() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -232,7 +319,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             configuration: .init(filters: [1: "g"], sort: [.init(column: 0, ascending: true)])
         )
         XCTAssertEqual(displayed.rows, [2, 1])
-        try await file.editDelimited(.cells([
+        try await requireDelimitedEdit(file, .cells([
             .init(row: displayed.rows[0], column: 2): "青🧪,\nline",
             .init(row: displayed.rows[1], column: 2): "new\"value",
         ]), using: snapshot)
@@ -264,7 +351,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let sourceEdited = "Title" + String(expected.dropFirst(4))
         XCTAssertEqual(file.text, sourceEdited)
         let fresh = try await file.delimitedSnapshot(using: .comma)
-        try await file.editDelimited(.deleteRows([1, 2]), using: try XCTUnwrap(fresh))
+        try await requireDelimitedEdit(file, .deleteRows([1, 2]), using: try XCTUnwrap(fresh))
         XCTAssertEqual(file.text, "Title,Group,Value\r\nOther,h,\"literal\"")
         undo.undo()
         XCTAssertEqual(file.text, sourceEdited, "Contiguous deletions undo in physical record order")
@@ -285,10 +372,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         await file.save()
         XCTAssertEqual(try Data(contentsOf: path), encoding.encoded(expected))
         XCTAssertFalse(file.isDirty)
-        do {
-            try await file.editDelimited(.cells([.init(row: 1, column: 2): "stale"]), using: snapshot)
-            XCTFail("An outdated projection must not write to a changed document")
-        } catch WorkspaceError.changedExternally {}
+        XCTAssertNil(file.submitDelimitedEdit(.cells([.init(row: 1, column: 2): "stale"]), using: snapshot))
         XCTAssertEqual(file.text, expected)
     }
 
@@ -328,7 +412,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             XCTAssertEqual(snapshot.index.records.count, 100_001)
             let value = String(format: "last-%03d", iteration)
             let editStart = clock.now
-            try await file.editDelimited(.cells([.init(row: 100_000, column: 1): value]), using: snapshot)
+            try await requireDelimitedEdit(file, .cells([.init(row: 100_000, column: 1): value]), using: snapshot)
             editTimes.append(editStart.duration(to: clock.now))
             XCTAssertTrue(file.isDirty)
             XCTAssertTrue(file.nativeTextStorage === storage)
@@ -376,14 +460,15 @@ final class DelimitedTableIndexTests: XCTestCase {
         let loaded = try await file.delimitedSnapshot(using: .comma)
         let snapshot = try XCTUnwrap(loaded)
         do {
-            try await file.editDelimited(.cells([.init(row: 1, column: 0): "😀",
-                                                 .init(row: 1, column: 1): "new"]), using: snapshot)
+            _ = try await DelimitedTableMutation.prepare(.cells([.init(row: 1, column: 0): "😀",
+                                                                 .init(row: 1, column: 1): "new"]),
+                                                         source: snapshot.source, index: snapshot.index, encoding: .latin1)
             XCTFail("The entire transaction must be refused if its encoding cannot round-trip")
         } catch DelimitedTableMutation.Failure.cannotEncode {}
         XCTAssertEqual(file.text, original)
         XCTAssertFalse(file.isDirty)
         XCTAssertFalse(file.documentUndoManager.canUndo)
-        try await file.editDelimited(.insertRows(before: 2, count: 2), using: snapshot)
+        try await requireDelimitedEdit(file, .insertRows(before: 2, count: 2), using: snapshot)
         XCTAssertEqual(file.text, original + "\r\n,\r\n,")
         file.documentUndoManager.undo()
         XCTAssertEqual(file.text, original)
@@ -426,7 +511,7 @@ final class DelimitedTableIndexTests: XCTestCase {
                 let result = try await file.delimitedSnapshot(using: .comma)
                 let snapshot = try XCTUnwrap(result)
                 XCTAssertTrue(file.canEditDelimited(snapshot), encoding.name)
-                try await file.editDelimited(.cells([.init(row: 1, column: 2): replacement]), using: snapshot)
+                try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 2): replacement]), using: snapshot)
                 XCTAssertTrue(file.isDirty)
                 XCTAssertEqual(try Data(contentsOf: path), bytes)
             }
@@ -466,10 +551,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let malformed = try XCTUnwrap(initial)
         XCTAssertNotNil(malformed.index.issue)
         XCTAssertFalse(file.canEditDelimited(malformed))
-        do {
-            try await file.editDelimited(.cells([.init(row: 1, column: 1): "overwrite"]), using: malformed)
-            XCTFail("Malformed input must stay read-only in the grid")
-        } catch WorkspaceError.changedExternally {}
+        XCTAssertNil(file.submitDelimitedEdit(.cells([.init(row: 1, column: 1): "overwrite"]), using: malformed))
         XCTAssertEqual(file.text, original)
         XCTAssertFalse(file.isDirty)
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: file.nativeTextStorage.length, length: 0), with: "\"")
@@ -477,7 +559,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let snapshot = try XCTUnwrap(repaired)
         XCTAssertNil(snapshot.index.issue)
         XCTAssertTrue(file.canEditDelimited(snapshot))
-        try await file.editDelimited(.cells([.init(row: 1, column: 1): "repaired"]), using: snapshot)
+        try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 1): "repaired"]), using: snapshot)
         XCTAssertEqual(file.text, "Name,Value\r\nItem,\"repaired\"")
         XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
         await file.save()

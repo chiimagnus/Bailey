@@ -226,6 +226,9 @@ private struct FileTreeScrollView: View {
                             focusKeyboard: {
                                 if canFocusKeyboard() { keyboardOwner.focus() }
                             },
+                            pointerSelectionModifiers: {
+                                TreePointerSelection.modifiers(event: NSApp.currentEvent, window: keyboardOwner.view?.window)
+                            },
                             renameFile: renameFile, onCommand: onCommand,
                             refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
                             beginDrag: beginDrag, endDrag: endDrag,
@@ -409,6 +412,7 @@ private struct FileTreeRow: View {
     let openFile: (String, Bool) -> Void
     let listFocused: Bool
     let focusKeyboard: () -> Void
+    let pointerSelectionModifiers: () -> NSEvent.ModifierFlags
     let renameFile: (FileTreeModel.Item, String) async -> String?
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
@@ -441,7 +445,7 @@ private struct FileTreeRow: View {
     }
 
     private func selectForClick(componentPath: String? = nil) -> Bool {
-        let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+        let modifiers = pointerSelectionModifiers()
         let extending = modifiers.contains(.shift)
         let toggling = modifiers.contains(.command) && !extending
         model.select(item, extending: extending, toggling: toggling, componentPath: componentPath)
@@ -746,7 +750,7 @@ private struct FileTreeRow: View {
                     if !selectForClick() { openFile(item.path, false) }
                 },
                 activate: {
-                    let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+                    let modifiers = pointerSelectionModifiers()
                     guard isCurrentTarget(), !modifiers.contains(.command),
                           !modifiers.contains(.shift) else { return }
                     openFile(item.path, true)

@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P4-T4"
 
 [[tasks]]
 id = "P1-T1"
@@ -36,47 +36,47 @@ note = "e471b25b 共享原生 Diff 比较、取消、版本绑定显式覆盖、
 [[tasks]]
 id = "P3-T1"
 title = "原型式主题与自适应列宽"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "4031d1bcf93926f6e00121651f368f635637e394"
+note = "宿主 34/34，最终绘制复验 3/3；60 主题、活动组合、2× 截图、十万行、列上限与 100 次挂载。日志 /tmp/bailey-csv-p3-theme.5ziGDvpP、/tmp/bailey-csv-p3-confirm.yqEhngvN、/tmp/bailey-csv-p3-debug-final.XKOUy5Lt。按用户要求不做完整 GUI。"
 
 [[tasks]]
 id = "P3-T2"
 title = "行号、整行／整列选区与表头操作"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "c61f0f5416bb517c9df7d30f3db70bae23c1cb40"
+note = "50/50 宿主，macOS 27.3、Xcode 27.2；实际行号轴、AX 坐标、旧投影拒绝、排序后保存/Undo、六档宽度、4097 列。/tmp/bailey-csv-p3-recheck.5enxtoOj 和 /tmp/bailey-csv-p3-build-verified.pKvBQuog。"
 
 [[tasks]]
 id = "P4-T1"
 title = "插入、删除、移动列与直接重命名表头"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "33bb173"
+note = "隔离宿主40/40、原生表头与编码失败保稿、隐藏行与百万字段边界通过；Windows Tailscale真列移动、Undo、重连与冲突2/2；Debug验签。日志 /tmp/bailey-csv-p4-columns-final.eUJdV0MZ、/tmp/bailey-csv-p4-structure-ssh.qW5mPo0L。"
 
 [[tasks]]
 id = "P4-T2"
 title = "完整长字段和原生多行编辑"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "059881c77aade714f75b22916b7ad6d13c6f865a"
+note = "隔离宿主38/38；长字段Red/Green、混合换行和原始Unicode字节、换色保持同一个编辑器、只读无写入。/tmp/bailey-csv-p4-long-final.pzprxYIS。"
 
 [[tasks]]
 id = "P4-T3"
 title = "批量填充、清空与原生查找替换"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "fa0fe92"
+note = "隔离宿主47/47，真实 Delete、三范围计数、Unicode单次/全部替换、唯一Undo及HTML/Diff路由；十万行0.37 s、Undo/Redo 0.46 s。Windows真实替换及冲突2/2，Debug验签。/tmp/bailey-csv-p4-batch-final.DHlmqb1h、/tmp/bailey-csv-p4-batch-ssh.E1QF31n2。"
 
 [[tasks]]
 id = "P4-T4"
 title = "按需列统计与空值检查"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t4"
 commit = ""
 note = ""

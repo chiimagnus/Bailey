@@ -212,7 +212,8 @@ HTMLFilePreviewTests、NativeDiffTabTests、SSHFileTreeLiveTests 及 FilePreview
 `testAuthorizedWindowsCSVRebindConfirmsActualPublishedBytes`、
 `testAuthorizedWindowsReviewedCSVConflictRejectsExternalRevisionAndOldChannel`，并增加结构与批量真实字节检查。
 按仓库 Makefile 执行受影响宿主／GUI 定点测试、make build 与 make build:dev；
-正式整合 make test。用户此前暂停 GUI／全量测试仍有效，需恢复授权及独占图形会话。
+正式整合 make test。本轮按用户要求不运行完整 App GUI 测试；
+可验证的交互、菜单路由及实际写入在挂载宿主和真实后端核对，完整 App 专有路径单列未测。
 记录实际环境、命令、失败／跳过、最终字节、Undo、像素、性能与资源证据；
 逐项记录不能实测的前置条件、具体原因、尝试及替代证据、潜在影响、补验方式和 Gate 限制，
 不将不可用的物理 1×／外接显示器、旧系统、系统真实睡眠或共享桌面冲突冒称通过。

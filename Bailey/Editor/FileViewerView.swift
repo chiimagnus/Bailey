@@ -155,6 +155,7 @@ final class FileTab: nonisolated Identifiable {
     func retireNativeEditor() {
         delimitedEditingGrid?.cancelEditing()
         delimitedEditTask?.cancel()
+        delimitedTable.retire()
         svgPreview = nil
         retireImageAnnotations()
         originalImageTask?.cancel()
@@ -180,6 +181,7 @@ final class FileTab: nonisolated Identifiable {
 
     func retireContent() {
         isRetired = true
+        delimitedDraft = nil
         saveError = nil
         htmlPreview = nil
         targetGeneration &+= 1
@@ -346,7 +348,8 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored lazy var delimitedTable = DelimitedTableControls()
     private weak var delimitedEditingGrid: DelimitedGrid?
     private(set) var delimitedEditTask: Task<Bool, Never>?
-    var hasPendingDelimitedEdit: Bool { delimitedEditingGrid != nil || delimitedEditTask != nil }
+    private(set) var delimitedDraft: DelimitedDraft?
+    var hasPendingDelimitedEdit: Bool { delimitedEditingGrid != nil || delimitedEditTask != nil || delimitedDraft != nil }
     private var textEditRevision: UInt = 0
     @ObservationIgnored var markdownReadingOffset: Int?
     @ObservationIgnored var markdownReadingViewportY: CGFloat = 0
@@ -397,10 +400,22 @@ final class FileTab: nonisolated Identifiable {
         let source: String
         let requestID: String
         let documentRevision: String
+        var selectedSeparator: DelimitedTableIndex.Separator? = nil
+
+        var parseRequest: DelimitedTableControls.ParseRequest {
+            .init(source: requestID, separator: selectedSeparator)
+        }
+    }
+
+    struct DelimitedDraft {
+        let cell: DelimitedTablePresentation.Cell
+        let value: String
+        let snapshot: DelimitedSnapshot
+        let selection: DelimitedTableControls.PendingSelection?
     }
 
     func delimitedSnapshot(using selected: DelimitedTableIndex.Separator? = nil) async throws -> DelimitedSnapshot? {
-        guard case .text = content, savedSourceVersion != nil,
+        guard !isRetired, case .text = content, savedSourceVersion != nil,
               let preferred = DelimitedTableIndex.Separator.preferred(for: path) else { return nil }
         let request = textPreviewRequestID
         let source = text
@@ -408,7 +423,7 @@ final class FileTab: nonisolated Identifiable {
         try Task.checkCancellation()
         guard request == textPreviewRequestID else { return nil }
         return DelimitedSnapshot(index: index, source: source, requestID: request,
-                                 documentRevision: documentEditRevision)
+                                 documentRevision: documentEditRevision, selectedSeparator: selected)
     }
 
     private func matchesDelimitedDocument(_ snapshot: DelimitedSnapshot) -> Bool {
@@ -434,49 +449,87 @@ final class FileTab: nonisolated Identifiable {
         if delimitedEditingGrid === grid { delimitedEditingGrid = nil }
     }
 
-    func commitDelimitedEditing(in grid: DelimitedGrid, change: DelimitedTableMutation.Change,
-                                using snapshot: DelimitedSnapshot, selecting cell: DelimitedTablePresentation.Cell) {
+    func commitDelimitedEditing(in grid: DelimitedGrid, draft: DelimitedDraft) {
         guard delimitedEditingGrid === grid else { return }
         delimitedEditingGrid = nil
-        enqueueDelimitedEdit(change, using: snapshot, selecting: cell)
+        enqueueDelimitedEdit(.cells([draft.cell: draft.value]), using: draft.snapshot, selecting: nil, draft: draft)
     }
 
+    func retainDelimitedEditing(in grid: DelimitedGrid, draft: DelimitedDraft) {
+        guard delimitedEditingGrid === grid else { return }
+        delimitedEditingGrid = nil
+        delimitedDraft = draft
+    }
+
+    var canRetryDelimitedDraft: Bool {
+        guard let draft = delimitedDraft, delimitedEditTask == nil else { return false }
+        return canEditDelimited(draft.snapshot) && draft.snapshot.parseRequest == delimitedTable.request(for: self)
+    }
+
+    func retryDelimitedDraft() {
+        guard canRetryDelimitedDraft, let draft = delimitedDraft else { return }
+        enqueueDelimitedEdit(.cells([draft.cell: draft.value]), using: draft.snapshot, selecting: nil, draft: draft)
+    }
+
+    func discardDelimitedDraft() {
+        guard delimitedEditTask == nil, delimitedDraft != nil else { return }
+        delimitedDraft = nil
+        if saveError == delimitedTable.editError { saveError = nil }
+        delimitedTable.editError = nil
+    }
+
+    @discardableResult
     func submitDelimitedEdit(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot,
-                             selecting cell: DelimitedTablePresentation.Cell?) {
-        guard !hasPendingDelimitedEdit, canEditDelimited(snapshot) else { return }
-        enqueueDelimitedEdit(change, using: snapshot, selecting: cell)
+                             selecting cell: DelimitedTablePresentation.Cell? = nil) -> Task<Bool, Never>? {
+        guard !hasPendingDelimitedEdit, canEditDelimited(snapshot) else { return nil }
+        return enqueueDelimitedEdit(change, using: snapshot, selecting: cell)
     }
 
     /// An accepted native input belongs to the document, not to the view or
     /// connection. Transport loss prevents new input and writes, but cannot
     /// discard an input transaction already accepted by this document.
+    @discardableResult
     private func enqueueDelimitedEdit(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot,
-                                      selecting cell: DelimitedTablePresentation.Cell?) {
+                                      selecting cell: DelimitedTablePresentation.Cell?,
+                                      draft: DelimitedDraft? = nil) -> Task<Bool, Never> {
         let message = if case .paste = change {
             String(localized: "Could not paste into the table.", table: "Editor")
         } else {
             String(localized: "Could not edit the table.", table: "Editor")
         }
         let encoding = fileEncoding
+        let selectedSeparator = delimitedTable.separator
         invalidateReload()
-        delimitedEditTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return false }
             defer { delimitedEditTask = nil }
             do {
-                delimitedTable.pendingCell = cell
+                delimitedTable.pendingSelection = draft?.selection ?? cell.map(DelimitedTableControls.PendingSelection.cell)
                 try await applyAcceptedDelimitedEdit(change, using: snapshot, encoding: encoding)
-                if documentEditRevision == snapshot.documentRevision { delimitedTable.pendingCell = nil }
+                if documentEditRevision == snapshot.documentRevision {
+                    delimitedTable.pendingSelection = nil
+                } else if delimitedTable.separator == selectedSeparator {
+                    delimitedTable.separator = snapshot.index.separator
+                    delimitedTable.acceptEdit(change, from: snapshot.documentRevision, to: documentEditRevision)
+                }
                 if case .insertRows = change, snapshot.index.records.isEmpty {
                     delimitedTable.configuration.header = false
                 }
+                if draft != nil { delimitedDraft = nil }
+                if saveError == delimitedTable.editError { saveError = nil }
                 delimitedTable.editError = nil
                 return true
             } catch {
-                delimitedTable.pendingCell = nil
-                if !Task.isCancelled { delimitedTable.editError = message }
+                delimitedTable.pendingSelection = nil
+                if !Task.isCancelled {
+                    if let draft { delimitedDraft = draft }
+                    delimitedTable.editError = message
+                }
                 return false
             }
         }
+        delimitedEditTask = task
+        return task
     }
 
     private func finishPendingDelimitedEdit() async -> Bool {
@@ -486,13 +539,6 @@ final class FileTab: nonisolated Identifiable {
             return false
         }
         return !hasPendingDelimitedEdit
-    }
-
-    /// Prepare and check encoding away from the main actor, then commit one
-    /// transaction to the very same NSTextStorage and UndoManager as typing.
-    func editDelimited(_ change: DelimitedTableMutation.Change, using snapshot: DelimitedSnapshot) async throws {
-        guard canEditDelimited(snapshot) else { throw WorkspaceError.changedExternally }
-        try await applyAcceptedDelimitedEdit(change, using: snapshot, encoding: fileEncoding)
     }
 
     private func applyAcceptedDelimitedEdit(_ change: DelimitedTableMutation.Change,
@@ -523,21 +569,23 @@ final class FileTab: nonisolated Identifiable {
     @discardableResult
     private func applyDocumentReplacements(_ replacements: [DelimitedTableMutation.Replacement]) -> Bool {
         let storage = nativeTextStorage
+        let characters = storage.mutableString
         // Validate every original range before making any change.
         guard replacements.allSatisfy({ edit in
-            NSMaxRange(edit.range) <= storage.length &&
-                storage.attributedSubstring(from: edit.range).string.utf16.elementsEqual(edit.old.utf16)
+            NSMaxRange(edit.range) <= characters.length &&
+                characters.substring(with: edit.range).utf16.elementsEqual(edit.old.utf16)
         }) else { return false }
 
         // Compute inverse ranges in the final document, so Undo and Redo
         // also apply all replacements in descending order.
         var shift = 0
         let undo = replacements.reversed().map { edit in
+            let length = edit.new.utf16.count
             let inverse = DelimitedTableMutation.Replacement(
-                range: NSRange(location: edit.range.location + shift, length: edit.new.utf16.count),
+                range: NSRange(location: edit.range.location + shift, length: length),
                 old: edit.new, new: edit.old
             )
-            shift += edit.new.utf16.count - edit.range.length
+            shift += length - edit.range.length
             return inverse
         }.reversed()
 
@@ -561,6 +609,7 @@ final class FileTab: nonisolated Identifiable {
     func setFilePreview(_ enabled: Bool) {
         guard previewKind != nil else { return }
         delimitedEditingGrid?.finishEditing()
+        guard delimitedEditingGrid == nil else { return }
         switch content {
         case .text, .loading: previewOverride = enabled
         case .image, .media, .unavailable: break
@@ -1862,6 +1911,9 @@ struct FileViewerView: View {
                     } else if let error = file.delimitedTable.editError {
                         errorBar(error)
                     }
+                    if let draft = file.delimitedDraft {
+                        DelimitedDraftNotice(file: file, draft: draft)
+                    }
                     if (file.showsFilePreview || rendersOnlyPreview), let kind = file.previewKind {
                         switch kind {
                         case .markdown:
@@ -2025,5 +2077,52 @@ struct FileViewerView: View {
 
     private func errorBar(_ message: String) -> some View {
         WorkspaceErrorBanner(message: message)
+    }
+}
+
+private struct DelimitedDraftNotice: View {
+    let file: FileTab
+    let draft: FileTab.DelimitedDraft
+    @State private var reviewing = false
+
+    var body: some View {
+        HStack {
+            Text("A table field still has unapplied input.", tableName: "Editor")
+                .lineLimit(1)
+            Spacer()
+            Button(String(localized: "Review Field Draft…", table: "Editor")) { reviewing = true }
+                .popover(isPresented: $reviewing) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Unapplied Field", tableName: "Editor").font(.headline)
+                        ScrollView {
+                            Text(verbatim: draft.value)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        HStack {
+                            Button(String(localized: "Copy Field Draft", table: "Editor")) {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(draft.value, forType: .string)
+                            }
+                            Spacer()
+                            Button(String(localized: "Discard Field Draft", table: "Editor"), role: .destructive) {
+                                reviewing = false
+                                file.discardDelimitedDraft()
+                            }
+                            .disabled(file.delimitedEditTask != nil)
+                            Button(String(localized: "Retry Field Edit", table: "Editor")) {
+                                reviewing = false
+                                file.retryDelimitedDraft()
+                            }
+                            .disabled(!file.canRetryDelimitedDraft)
+                        }
+                    }
+                    .padding(12)
+                    .frame(width: 420, height: 230)
+                }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 }

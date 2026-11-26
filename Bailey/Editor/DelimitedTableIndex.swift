@@ -1,6 +1,10 @@
 import Foundation
 
 nonisolated struct DelimitedTableIndex: Sendable {
+    static let maximumColumns = 4096
+    static let maximumFields = 1_000_000
+    static let maximumSourceUnits = 32 << 20
+
     enum Separator: UInt16, CaseIterable, Sendable {
         case comma = 44
         case semicolon = 59
@@ -26,10 +30,15 @@ nonisolated struct DelimitedTableIndex: Sendable {
 
         var source: NSRange { NSRange(location: Int(start), length: Int(length)) }
 
+        func contentRange(in text: NSString) -> NSRange {
+            let range = source
+            return range.length >= 2 && text.character(at: range.location) == 34
+                ? NSRange(location: range.location + 1, length: range.length - 2) : range
+        }
+
         func value(in text: NSString, limit: Int? = nil) -> String {
-            var range = source
-            let quoted = range.length >= 2 && text.character(at: range.location) == 34
-            if quoted { range = NSRange(location: range.location + 1, length: range.length - 2) }
+            var range = contentRange(in: text)
+            let quoted = range.location != Int(start)
             let truncated = limit.map { range.length > $0 } ?? false
             if truncated, let limit {
                 range.length = limit
@@ -74,6 +83,12 @@ nonisolated struct DelimitedTableIndex: Sendable {
 
     func fields(in record: Record) -> ArraySlice<Field> { fields[record.fieldIndices] }
 
+    func field(record: Int, column: Int) -> Field? {
+        guard records.indices.contains(record), column >= 0 else { return nil }
+        let fields = fields(in: records[record])
+        return column < fields.count ? fields[fields.startIndex + column] : nil
+    }
+
     @concurrent static func parse(
         _ text: String, preferred: Separator, selected: Separator? = nil
     ) async throws -> Self {
@@ -116,7 +131,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
                 try Task.checkCancellation()
                 scanner.nextCancellationCheck = scanner.offset + 65_536
             }
-            guard scanner.offset <= (32 << 20) - length else {
+            guard scanner.offset <= maximumSourceUnits - length else {
                 scanner.fail(.sourceLimit)
                 return scanner
             }
@@ -178,7 +193,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
         }
 
         private mutating func finishField() -> Bool {
-            guard fields.count < 1_000_000 else { fail(.fieldLimit); return false }
+            guard fields.count < maximumFields else { fail(.fieldLimit); return false }
             fields.append(Field(fieldStart, endingAt: offset))
             return true
         }

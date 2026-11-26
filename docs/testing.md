@@ -239,12 +239,10 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
-同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，
-编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `.build/.bailey-dev-test.lock` 原子互斥；
-已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。
-若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，
-再用 `rmdir .build/.bailey-dev-test.lock` 清理。
-其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。
+同一用户的 Bailey Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同工作树或 DerivedData：
+它们共用 Bundle ID 和系统 XCTest 会话。四个 Makefile 入口通过用户临时目录中的原生文件锁互斥；
+已有操作时立即报错，不等待或终止其他进程。持锁进程退出后系统自动释放，不需要删除锁文件。
+绕过 Makefile 或使用旧版构建入口的操作仍须人工协调；其他 GUI 测试也不得争用桌面焦点。
 `automationmodetool` 在 GUI 测试结束后可能显示 Automation Mode 已关闭；
 **不要仅凭状态就判定无法测试**，
 先直接运行受影响的 `make test:ui ONLY_TESTING=...` 重新发起系统授权，再根据实际运行结果判断。
@@ -507,7 +505,12 @@ Files 容量由 `FileTreeTests` 在真实 1k／10k／100k 本机文件目录中�
 6,000 项远端目录选择器的连续导航。
 多项目压力验收挂载独立 Files／Git 面板及真实源码编辑器：双仓库各 24 个标签与 3,000 项变更，
 四仓库各 30 个标签、10,000 项暂存／未暂存变更与 301 个提交；每组分别执行展开／折叠切换及历史展开，
-核对可见原生编辑器、文档身份和磁盘字节。
+核对可见原生编辑器、文档身份和磁盘字节；展开／折叠以原生 Graph 高度及身份为准，关闭后核验正文清空、
+原生视图退役和全部 FileTab 所有者释放。
+可选长会话用例扩至 20 个实际仓库、200 个真实源码编辑器、100,000 项资源文件变更及 10,020 个提交；
+逐仓库加载全部历史，重复切换、展开和折叠，共 500 次操作；记录阶段物理内存和原生界面耗时，最后关闭所有项目核验文档及视图退役。
+运行：`BAILEY_WORKSPACE_LONG_SESSION=1 TEST_RUNNER_BAILEY_WORKSPACE_LONG_SESSION=1 make test ONLY_TESTING=BaileyTests/GitPanelVisibilityTests/testTwentyProjectsWithTwoHundredMountedSourceEditorsAndRepeatedResourceRelease`。
+该用例在原生宿主内执行，不替代完整 App GUI 长时间运行测量。
 Git Changes 另以 2,001 项真实变更核对树／列表、暂存与未暂存同路径、跨区游标、窄／宽面板与字号组合的原生滚动定位。
 
 编辑器回归必须覆盖下列实际结果，不能只检查状态字段：

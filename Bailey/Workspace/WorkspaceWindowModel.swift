@@ -692,7 +692,11 @@ final class WorkspaceWindowModel {
 
     var canReplace: Bool {
         switch selectedProject?.focusedContent {
-        case .file: return canFind && focusedDelimitedTable == nil && focusedHTMLPreview == nil
+        case .file(let file) where focusedDelimitedTable != nil:
+            guard let snapshot = file.delimitedTable.parsed, !file.hasPendingDelimitedEdit,
+                  snapshot.parseRequest == file.delimitedTable.request(for: file) else { return false }
+            return file.canEditDelimited(snapshot)
+        case .file: return canFind && focusedHTMLPreview == nil
         case .diff(let diff): return diff.isEditing && diff.isEditableNow
         case .session, .browser, .none: return false
         }

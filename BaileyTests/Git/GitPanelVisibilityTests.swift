@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 import XCTest
 @testable import Bailey
@@ -10,6 +11,20 @@ final class GitPanelVisibilityTests: XCTestCase {
     }
 
     func testFourProjectsWithRealLongSourceFilesAndLargeGitHistories() async throws {
+        try await exerciseLoadedProjects(projectCount: 4, tabCount: 30, historyCount: 10_000,
+                                         earlierCommits: 300, realSources: realSourceFiles())
+    }
+
+    func testTwentyProjectsWithTwoHundredMountedSourceEditorsAndRepeatedResourceRelease() async throws {
+        guard ProcessInfo.processInfo.environment["BAILEY_WORKSPACE_LONG_SESSION"] == "1" else {
+            throw XCTSkip("Set BAILEY_WORKSPACE_LONG_SESSION=1 for the large workspace stress test")
+        }
+        try await exerciseLoadedProjects(projectCount: 20, tabCount: 10, historyCount: 5_000,
+                                         earlierCommits: 500, realSources: realSourceFiles(),
+                                         longSession: true)
+    }
+
+    private func realSourceFiles() throws -> [(String, Data)] {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let paths = [
@@ -22,19 +37,17 @@ final class GitPanelVisibilityTests: XCTestCase {
             "Bailey/Workspace/LocalWorkspaceBackend.swift", "Bailey/UI/WorkspaceDockView.swift",
             "Bailey/Editor/MarkdownDocument.swift"
         ]
-        let realSources = try paths.map { path -> (String, Data) in
+        return try paths.map { path -> (String, Data) in
             let url = repository.appendingPathComponent(path)
             let bytes = try Data(contentsOf: url)
             XCTAssertGreaterThan(bytes.filter { $0 == 10 }.count, 1_000)
             return (url.lastPathComponent, bytes)
         }
-        try await exerciseLoadedProjects(projectCount: 4, tabCount: 30, historyCount: 10_000,
-                                         earlierCommits: 300, realSources: realSources)
     }
 
     private func exerciseLoadedProjects(
         projectCount: Int, tabCount: Int, historyCount: Int,
-        earlierCommits: Int = 0, realSources: [(String, Data)] = []
+        earlierCommits: Int = 0, realSources: [(String, Data)] = [], longSession: Bool = false
     ) async throws {
         let hasStagedResources = !realSources.isEmpty
         let base = FileManager.default.temporaryDirectory
@@ -73,7 +86,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             }
             guard condition() else {
                 throw NSError(domain: "LoadedProjects", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: label])
+                    userInfo: [NSLocalizedDescriptionKey: "\(label); commits=\(model.recentCommits.count), refreshing=\(model.isRefreshing), history=\(model.canUseCurrentHistory)"])
             }
         }
         func views(_ view: NSView) -> [NSView] {
@@ -85,6 +98,21 @@ final class GitPanelVisibilityTests: XCTestCase {
                 userInfo: [NSLocalizedDescriptionKey: result.stderr]) }
         }
 
+        func memory(_ stage: String) {
+            guard longSession else { return }
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+                }
+            }
+            XCTAssertEqual(result, KERN_SUCCESS)
+            print("WORKSPACE_MEMORY stage=\(stage) rss_mib=\(Double(info.resident_size)/1_048_576) footprint_mib=\(Double(info.phys_footprint)/1_048_576)")
+        }
+        let cycles = longSession ? 100 : 30
+        let sessionStarted = ProcessInfo.processInfo.systemUptime
+        memory("initial")
         var fixtures: [(project: Project, files: [(FileTab, NSScrollView)], root: URL)] = []
         for projectIndex in 0..<projectCount {
             let root = base.appendingPathComponent("project-\(projectIndex)")
@@ -105,12 +133,18 @@ final class GitPanelVisibilityTests: XCTestCase {
             try git(["config", "user.email", "fixture@invalid"], in: root)
             try git(["config", "commit.gpgsign", "false"], in: root)
             if earlierCommits > 0 {
-                let seed = root.appendingPathComponent("history.txt")
+                var script = ""
                 for revision in 0..<earlierCommits {
-                    try Data("revision \(revision)\n".utf8).write(to: seed)
-                    try git(["add", "--", "history.txt"], in: root)
-                    try git(["commit", "-qm", "History \(revision)"], in: root)
+                    let subject = "History \(revision)"
+                    let content = "revision \(revision)\n"
+                    script += "commit refs/heads/main\ncommitter Test <test@invalid> \(1_700_000_000 + revision) +0000\n"
+                    script += "data \(subject.utf8.count)\n" + subject + "\n"
+                    script += "M 100644 inline history.txt\ndata \(content.utf8.count)\n" + content + "\n\n"
                 }
+                let imported = GitCommandExecution.runData(["fast-import", "--quiet"], in: root.path,
+                    timeout: 60, stdin: Data(script.utf8))
+                XCTAssertEqual(imported.status, 0, imported.stderr)
+                try git(["reset", "--hard", "main"], in: root)
             }
             var paths: [URL] = []
             for index in 0..<tabCount {
@@ -152,6 +186,19 @@ final class GitPanelVisibilityTests: XCTestCase {
             manager.selectProject(id: project.id)
             manager.syncGitStatus(model)
             try await waitFor { model.hasResolvedStatus && !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
+            if longSession {
+                while model.hasMoreRecentCommits {
+                    let previous = model.recentCommits.count
+                    XCTAssertTrue(model.loadMoreCommits())
+                    try await waitFor("Full history must progress") { !model.isRefreshing && !model.isLoadingMoreCommits }
+                    guard model.recentCommits.count > previous else {
+                        throw NSError(domain: "LoadedProjectHistory", code: 1)
+                    }
+                    XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+                }
+                XCTAssertEqual(model.recentCommits.count, earlierCommits + 1)
+                print("WORKSPACE_HISTORY project=\(projectIndex) commits=\(model.recentCommits.count)")
+            }
             var files: [(FileTab, NSScrollView)] = []
             for path in paths {
                 project.openFile(path.path)
@@ -167,11 +214,12 @@ final class GitPanelVisibilityTests: XCTestCase {
             }
             XCTAssertEqual(project.tabs.count, tabCount)
             fixtures.append((project, files, root))
+            memory("loaded-\(projectIndex + 1)")
         }
         print("LOADED_PROJECTS_READY projects=\(projectCount) tabs=\(tabCount * projectCount) changes_per_repo=\(historyCount) earlier_commits=\(earlierCommits) actual_source=\(!realSources.isEmpty)")
         // Measure switching separately from disclosure and accessibility enumeration.
         for pass in 0..<2 {
-            for cycle in 0..<30 {
+            for cycle in 0..<cycles {
                 let fixture = fixtures[cycle % projectCount]
                 let start = ProcessInfo.processInfo.systemUptime
                 manager.selectProject(id: fixture.project.id)
@@ -187,10 +235,11 @@ final class GitPanelVisibilityTests: XCTestCase {
                 XCTAssertTrue(fixture.files.last?.0.editorView === fixture.files.last?.1)
                 XCTAssertTrue(fixture.files.last?.1.window === window)
                 print("SWITCH_MATRIX pass=\(pass) cycle=\(cycle) ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) views=\(views(host).count)")
+                if cycle.isMultiple(of: 20) { memory("switch-\(pass)-\(cycle)") }
                 try await Task.sleep(for: .milliseconds(20))
             }
         }
-        for cycle in 0..<30 {
+        for cycle in 0..<cycles {
             let fixture = fixtures[cycle % projectCount]
             let start = ProcessInfo.processInfo.systemUptime
             manager.selectProject(id: fixture.project.id)
@@ -222,27 +271,44 @@ final class GitPanelVisibilityTests: XCTestCase {
             // Exercise the same disclosure binding as the commit row. Keep the
             // native rendering/scroll assertions here; keyboard and pointer
             // activation are covered separately in the interaction tests.
-            layout()
-            try await waitFor("Collapsed graph did not settle") {
-                (scroll.documentView?.frame.height ?? 0) >= CGFloat(model.changedEntries.count) * 18
+            let scale = CGFloat(AppSettings.shared.panelFontSize / AppSettings.defaultPanelFontSize)
+            let detailHeight = TreeRowStyle.rowHeight(scale)
+            let directoryCount = AppSettings.shared.gitViewMode == .tree ? (hasStagedResources ? 3 : 2) : 0
+            func graphView() -> TreeKeyboardView? {
+                views(host).compactMap { $0 as? TreeKeyboardView }.first { $0.enclosingScrollView === scroll }
             }
+            func collapsedGraphHeight() -> CGFloat {
+                CGFloat(model.graphCommits.count) * max(36, ceil(38 * scale))
+                    + (model.hasMoreRecentCommits ? 1 : 0)
+            }
+            func graphHeightMatches(extraRows: Int) -> Bool {
+                guard !model.isRefreshing, let graph = graphView() else { return false }
+                let expected = collapsedGraphHeight() + CGFloat(extraRows) * detailHeight
+                return abs(graph.bounds.height - expected) < 2
+            }
+            layout()
+            try await waitFor("Collapsed graph did not settle, cycle \(cycle)") { graphHeightMatches(extraRows: 0) }
+            let graph = try XCTUnwrap(graphView())
             let beforeHeight = try XCTUnwrap(scroll.documentView?.frame.height)
-            let detailHeight = TreeRowStyle.rowHeight(CGFloat(AppSettings.shared.panelFontSize / AppSettings.defaultPanelFontSize))
             let began = ProcessInfo.processInfo.systemUptime
             model.expandedCommitIDs.insert(commit.id)
             layout()
             let mounted = ProcessInfo.processInfo.systemUptime
-            try await waitFor {
-                (scroll.documentView?.frame.height ?? 0) >= beforeHeight + CGFloat(historyCount + tabCount) * detailHeight - 2
+            try await waitFor("Commit did not expand, cycle \(cycle)") {
+                graphHeightMatches(extraRows: historyCount + tabCount + directoryCount)
             }
             print("LOADED_GRAPH_EXPAND cycle=\(cycle) main_layout_ms=\((mounted-began)*1000) shown_ms=\((ProcessInfo.processInfo.systemUptime-began)*1000)")
+            XCTAssertTrue(graphView() === graph)
             XCTAssertTrue(model.expandedCommitIDs.contains(commit.id))
             XCTAssertEqual(model.historicalFiles(for: commit)?.count, historyCount + tabCount)
             model.expandedCommitIDs.remove(commit.id)
             XCTAssertTrue(model.historicalFilesByOID.isEmpty)
-            try await waitFor("Commit did not collapse") { abs((scroll.documentView?.frame.height ?? 0) - beforeHeight) < 2 }
+            try await waitFor("Commit did not collapse, cycle \(cycle)") { graphHeightMatches(extraRows: 0) }
+            XCTAssertTrue(graphView() === graph)
+            XCTAssertEqual(scroll.documentView?.frame.height ?? 0, beforeHeight, accuracy: 2)
             if let last = fixture.project.tabs.last { fixture.project.selectTab(last.id, extending: .preserve) }
             layout()
+            if cycle.isMultiple(of: 20) { memory("disclosure-\(cycle)") }
         }
         for fixture in fixtures {
             for (file, scroll) in fixture.files {
@@ -250,6 +316,33 @@ final class GitPanelVisibilityTests: XCTestCase {
                 XCTAssertFalse(file.isDirty)
                 XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: file.path)), Data(file.nativeTextStorage.string.utf8))
             }
+        }
+        memory("before-close")
+        final class WeakFileOwner {
+            weak var file: FileTab?
+            init(_ file: FileTab) { self.file = file }
+        }
+        let owners = fixtures.flatMap { $0.files.map { WeakFileOwner($0.0) } }
+        for fixture in fixtures {
+            manager.close(fixture.project)
+            XCTAssertTrue(fixture.project.tabs.isEmpty)
+            for (file, scroll) in fixture.files {
+                XCTAssertEqual(file.nativeTextStorage.length, 0)
+                XCTAssertNil(file.editorCoordinator)
+                XCTAssertNil(scroll.documentView)
+            }
+        }
+        fixtures.removeAll()
+        XCTAssertTrue(manager.projects.isEmpty)
+        manager.syncGitStatus(model)
+        XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+        XCTAssertTrue(model.recentCommits.isEmpty)
+        layout()
+        try await waitFor("Closed source editor owners remain retained") { owners.allSatisfy { $0.file == nil } }
+        print("WORKSPACE_RELEASED editors=\(owners.count)")
+        memory("after-close")
+        if longSession {
+            print("WORKSPACE_LONG_SESSION_DONE seconds=\(ProcessInfo.processInfo.systemUptime-sessionStarted) cycles=\(cycles * 5)")
         }
     }
 

@@ -307,19 +307,20 @@ struct RecentCommitsView: View {
         let _ = themeChanges.revision
         let key = displayKey
         let presentation = displayCache.presentation(for: key)
-        let display = presentation?.display ?? .empty
         VStack(alignment: .leading, spacing: 0) {
-            if let graph = presentation?.layout {
+            if let presentation {
+                let graph = presentation.layout
                 let spacing = CommitGraphRails.spacing(
                     lanes: graph.laneCount, viewportWidth: viewportWidth, scale: fontScale
                 )
                 let gutter = CommitGraphRails.gutter(
                     lanes: graph.laneCount, spacing: spacing, scale: fontScale
                 )
-                ForEach(display.runs) { run in
+                ForEach(presentation.display.runs) { run in
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(run.rows) { row in
-                            graphRow(row, graph: graph, gutter: gutter, spacing: spacing)
+                            graphRow(row, commit: presentation.key.commits[row.commitIndex],
+                                     graph: graph, gutter: gutter, spacing: spacing)
                         }
                     }
                     .frame(height: CGFloat(run.rows.count) * (run.isCommit
@@ -419,7 +420,7 @@ struct RecentCommitsView: View {
         .tint(Color(nsColor: currentTheme.accentNSColor))
     }
 
-    private nonisolated struct GraphRow: Identifiable, Sendable {
+    nonisolated struct GraphRow: Identifiable, Sendable {
         enum Content: Sendable {
             case commit(expanded: Bool)
             case folder(TreeDisplayModel.Row, key: String)
@@ -463,18 +464,19 @@ struct RecentCommitsView: View {
         }
     }
 
-    private nonisolated struct GraphRun: Identifiable, Sendable {
+    nonisolated struct GraphRun: Identifiable, Sendable {
         let rows: ArraySlice<GraphRow>
         let isCommit: Bool
-        var id: String { rows.first!.id }
+        let id: UUID
     }
 
-    private nonisolated struct GraphDisplay: Sendable {
+    nonisolated struct GraphDisplay: Sendable {
         static let empty = GraphDisplay(rows: [])
         struct Position {
             let index: Int
             let precedingCommits: Int
             let navigationIndex: Int
+            let runIndex: Int
             let isCommit: Bool
         }
 
@@ -483,35 +485,53 @@ struct RecentCommitsView: View {
         let navigationIDs: [String]
         let positions: [String: Position]
 
-        init(rows: [GraphRow]) {
+        init(rows: [GraphRow], previous: Self? = nil) {
             var runs: [GraphRun] = []
+            var reusedRunIDs: Set<UUID> = []
+            var navigation: [GraphRow] = []
+            var positions: [String: Position] = [:]
+            var precedingCommits = 0
             var start = rows.startIndex
             while start < rows.endIndex {
                 let isCommit = rows[start].isCommit
                 var end = start + 1
                 while end < rows.endIndex, rows[end].isCommit == isCommit { end += 1 }
-                runs.append(GraphRun(rows: rows[start..<end], isCommit: isCommit))
+                let slice = rows[start..<end]
+                // Preserve the lazy stack when a surviving run gains or loses
+                // its first row. Split/merged runs may reuse an old ID only once.
+                var reusedID: UUID?
+                if let previous {
+                    for row in slice {
+                        guard let position = previous.positions[row.id] else { continue }
+                        let oldRun = previous.runs[position.runIndex]
+                        if oldRun.isCommit == isCommit, reusedRunIDs.insert(oldRun.id).inserted {
+                            reusedID = oldRun.id
+                            break
+                        }
+                    }
+                }
+                let runIndex = runs.count
+                runs.append(GraphRun(rows: slice, isCommit: isCommit, id: reusedID ?? UUID()))
+                for index in slice.indices {
+                    let row = slice[index]
+                    if row.isNavigable {
+                        positions[row.id] = Position(index: index, precedingCommits: precedingCommits,
+                                                     navigationIndex: navigation.count, runIndex: runIndex,
+                                                     isCommit: row.isCommit)
+                        navigation.append(row)
+                    }
+                    if row.isCommit { precedingCommits += 1 }
+                }
                 start = end
             }
             self.runs = runs
-            var navigation: [GraphRow] = []
-            var positions: [String: Position] = [:]
-            var precedingCommits = 0
-            for (index, row) in rows.enumerated() {
-                if row.isNavigable {
-                    positions[row.id] = Position(index: index, precedingCommits: precedingCommits,
-                                                 navigationIndex: navigation.count, isCommit: row.isCommit)
-                    navigation.append(row)
-                }
-                if row.isCommit { precedingCommits += 1 }
-            }
             self.navigation = navigation
             navigationIDs = navigation.map(\.id)
             self.positions = positions
         }
     }
 
-    private nonisolated struct GraphDisplayKey: Equatable, Sendable {
+    nonisolated struct GraphDisplayKey: Equatable, Sendable {
         let scope: String
         let repository: String
         let commits: [Commit]
@@ -523,21 +543,12 @@ struct RecentCommitsView: View {
 
         var prefix: String { "graph:\(scope)\u{0}\(repository)\u{0}" }
 
-        // An outstanding disclosure calculation can keep its previous rows.
-        // Never pair indices from a different repository or commit snapshot.
-        func sameSource(as other: Self) -> Bool {
-            guard scope == other.scope, repository == other.repository else { return false }
-            if commits == other.commits { return true }
-            // A newly fetched page may append rows; retain the already visible prefix.
-            // Reference changes do not invalidate the identity of historical file rows.
-            return commits.count <= other.commits.count && zip(commits, other.commits).allSatisfy {
-                $0.id == $1.id && $0.parentHashes == $1.parentHashes
-                    && $0.stash == $1.stash && $0.worktree == $1.worktree
-            }
+        func sameRepository(as other: Self) -> Bool {
+            scope == other.scope && repository == other.repository
         }
     }
 
-    private nonisolated struct GraphDisplayCache: Sendable {
+    nonisolated struct GraphDisplayCache: Sendable {
         private struct FileIndex<Value: Equatable & Sendable>: Sendable {
             let files: [Value]
             let byPath: [String: Value]
@@ -566,7 +577,9 @@ struct RecentCommitsView: View {
         func isPrepared(for key: GraphDisplayKey) -> Bool { cached?.key == key }
 
         func presentation(for key: GraphDisplayKey) -> Presentation? {
-            guard let cached, cached.key.sameSource(as: key) else { return nil }
+            // The old rows, commits and rails are one coherent presentation.
+            // Keep it visible until the replacement is ready, even after a rewrite.
+            guard let cached, cached.key.sameRepository(as: key) else { return nil }
             return cached
         }
 
@@ -577,7 +590,8 @@ struct RecentCommitsView: View {
         }
 
         private mutating func update(for key: GraphDisplayKey) {
-            if cached?.key.scope != key.scope || cached?.key.repository != key.repository {
+            let previous = presentation(for: key)?.display
+            if previous == nil {
                 historical.removeAll()
                 worktrees.removeAll()
                 layoutCache = CommitGraphLayoutCache()
@@ -603,7 +617,7 @@ struct RecentCommitsView: View {
             guard let rows = buildRows(for: key), !Task.isCancelled else { return }
             let layout = layoutCache.layout(for: key.commits)
             guard !Task.isCancelled else { return }
-            cached = Presentation(key: key, display: GraphDisplay(rows: rows), layout: layout)
+            cached = Presentation(key: key, display: GraphDisplay(rows: rows, previous: previous), layout: layout)
         }
 
         mutating func historyRows(
@@ -792,17 +806,20 @@ struct RecentCommitsView: View {
         )
     }
 
+    private var graphPresentation: GraphDisplayCache.Presentation? {
+        displayCache.presentation(for: displayKey)
+    }
+
     private var graphDisplay: GraphDisplay {
-        displayCache.presentation(for: displayKey)?.display ?? .empty
+        graphPresentation?.display ?? .empty
     }
 
     private var keyboardRows: [GraphRow] { graphDisplay.navigation }
 
     @ViewBuilder
     private func graphRow(
-        _ row: GraphRow, graph: CommitGraphLayout, gutter: CGFloat, spacing: CGFloat
+        _ row: GraphRow, commit: Commit, graph: CommitGraphLayout, gutter: CGFloat, spacing: CGFloat
     ) -> some View {
-        let commit = commits[row.commitIndex]
         let layout = graph.rows[row.commitIndex]
         let inset = gutter + 8 * fontScale
         switch row.content {
@@ -885,12 +902,13 @@ struct RecentCommitsView: View {
     /// Shift uses the rendered commit order, never the HEAD ancestry.
     @discardableResult
     private func selectRow(_ id: String, commit: Bool = false) -> Bool {
-        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        let flags = TreePointerSelection.modifiers(event: NSApp.currentEvent, window: keyboardOwner.view?.window)
         let extending = flags.contains(.shift)
         let toggling = flags.contains(.command) && !extending
-        let visible = commit ? commits.filter {
+        guard let presentation = graphPresentation else { return true }
+        let visible = commit ? presentation.key.commits.filter {
             $0.stash == nil && $0.worktree == nil
-        }.map(commitRowID) : graphDisplay.navigationIDs
+        }.map(commitRowID) : presentation.display.navigationIDs
         selection.select(id, visible: visible, extending: extending, toggling: toggling,
                          fallbackAnchor: focusedRowID)
         focusRow(id)
@@ -966,16 +984,15 @@ struct RecentCommitsView: View {
         }
     }
 
-    private func isRequestedExpanded(_ row: GraphRow) -> Bool {
+    private func isRequestedExpanded(_ row: GraphRow, commit: Commit) -> Bool {
         switch row.content {
-        case .commit: expandedCommitIDs.contains(commits[row.commitIndex].id)
+        case .commit: expandedCommitIDs.contains(commit.id)
         case .folder(_, let key): !collapsedFolders.contains(key)
         default: false
         }
     }
 
-    private func activate(_ row: GraphRow) {
-        let commit = commits[row.commitIndex]
+    private func activate(_ row: GraphRow, commit: Commit) {
         switch row.content {
         case .commit:
             toggle(commit)
@@ -992,23 +1009,25 @@ struct RecentCommitsView: View {
 
     private func handleGraphKey(_ event: NSEvent) -> Bool {
         guard isKeyboardActive, keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
-              event.modifierFlags.intersection([.control, .option]).isEmpty
+              event.modifierFlags.intersection([.control, .option]).isEmpty,
+              let presentation = graphPresentation
         else { return false }
-        let display = graphDisplay
+        let display = presentation.display
         let rows = display.navigation
         guard !rows.isEmpty else { return false }
         let current = focusedRowID.flatMap { display.positions[$0]?.navigationIndex }
         if event.modifierFlags.contains(.command) {
             guard let current, event.keyCode == 125 || event.keyCode == 126,
                   case .commit = rows[current].content,
-                  let presentation = displayCache.presentation(for: displayKey),
                   let next = Self.navigationTarget(
                     commits: presentation.key.commits, current: presentation.key.commits[rows[current].commitIndex], parent: event.keyCode == 125,
                     alternate: event.modifierFlags.contains(.shift),
                     layout: presentation.layout
                   ) else { return false }
             moveKeyboardCursor(to: commitRowID(next), direction: event.keyCode == 125 ? 1 : -1)
-            expandedCommitIDs.insert(next.id)
+            if commits.contains(where: { $0.id == next.id }) {
+                expandedCommitIDs.insert(next.id)
+            }
             return true
         }
         let extending = event.modifierFlags.contains(.shift)
@@ -1025,20 +1044,23 @@ struct RecentCommitsView: View {
         case 49, 36, 76: // Space / Return / Enter: same action as clicking the current row
             guard !extending, let current else { return false }
             selection.select(rows[current].id, visible: display.navigationIDs)
-            activate(rows[current])
+            let row = rows[current]
+            activate(row, commit: presentation.key.commits[row.commitIndex])
         case 124: // Right expands or enters the first visible child
             guard !extending, let current else { return false }
             let row = rows[current]
-            if row.isExpandable && !isRequestedExpanded(row) {
-                activate(row)
+            let commit = presentation.key.commits[row.commitIndex]
+            if row.isExpandable && !isRequestedExpanded(row, commit: commit) {
+                activate(row, commit: commit)
             } else if rows.indices.contains(current + 1), rows[current + 1].parent == row.id {
                 moveKeyboardCursor(to: rows[current + 1].id, direction: 1)
             } else { return false }
         case 123: // Left collapses or selects the parent
             guard !extending, let current else { return false }
             let row = rows[current]
-            if row.isExpandable && isRequestedExpanded(row) {
-                activate(row)
+            let commit = presentation.key.commits[row.commitIndex]
+            if row.isExpandable && isRequestedExpanded(row, commit: commit) {
+                activate(row, commit: commit)
             } else if let parent = row.parent {
                 moveKeyboardCursor(to: parent, direction: -1)
             } else { return false }
@@ -1089,7 +1111,7 @@ struct RecentCommitsView: View {
     }
 
     private var selectedHistoryCommits: [Commit] {
-        commits.filter {
+        (graphPresentation?.key.commits ?? []).filter {
             $0.stash == nil && $0.worktree == nil && selection.ids.contains(commitRowID($0))
         }
     }
@@ -1099,11 +1121,12 @@ struct RecentCommitsView: View {
     }
 
     private func selectedClipboardText(for ids: Set<String>) -> String {
-        keyboardRows.compactMap { row -> String? in
+        guard let presentation = graphPresentation else { return "" }
+        return presentation.display.navigation.compactMap { row -> String? in
             guard ids.contains(row.id) else { return nil }
             switch row.content {
             case .commit:
-                let commit = commits[row.commitIndex]
+                let commit = presentation.key.commits[row.commitIndex]
                 return commit.worktree?.path ?? commit.stash?.selector ?? commit.hash
             case .folder(let node, _):
                 return node.path
@@ -1118,6 +1141,7 @@ struct RecentCommitsView: View {
     }
 
     private func toggle(_ commit: Commit) {
+        guard commits.contains(where: { $0.id == commit.id }) else { return }
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
         }
@@ -1442,8 +1466,9 @@ struct RecentCommitsView: View {
     }
 
     private var worktreePaths: [String] {
-        Array(Set([repoRoot] + commits.flatMap { $0.checkedOutWorktrees.map(\.path) }
-            + commits.compactMap { $0.worktree?.path }))
+        let displayed = graphPresentation?.key.commits ?? []
+        return Array(Set([repoRoot] + displayed.flatMap { $0.checkedOutWorktrees.map(\.path) }
+            + displayed.compactMap { $0.worktree?.path }))
     }
 
     private func checkedOutWorktreeIndicator(
