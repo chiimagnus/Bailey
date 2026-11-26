@@ -333,11 +333,15 @@ struct DockTabGroupView: View {
     @State private var dragGestureItem: DockItem?
     @State private var markdownPopover: MarkdownPopover?
     @GestureState private var isTabDragging = false
-    @Environment(\.appearsActive) private var windowAppearsActive
+    @Environment(\.controlActiveState) private var controlActiveState
 
     private var active: DockItem? { group.selected }
+    // Appearance follows reactive window and Dock state; permission to take
+    // native input is checked independently by canFocusGroup at execution.
     private var isFocused: Bool {
-        windowAppearsActive && canFocusGroup()
+        controlActiveState == .key && manager.selectedProject === project
+            && project.dock.activeGroupID == group.id
+            && !manager.isCommandPaletteVisible && !manager.isSSHFolderPickerVisible
     }
 
     private var canFocusGroup: () -> Bool {
@@ -345,13 +349,14 @@ struct DockTabGroupView: View {
             guard let manager, let project else { return false }
             return manager.selectedProject === project && project.dock.activeGroupID == groupID
                 && manager.attachedWindow?.isKeyWindow == true && NSApp.isActive
-                && !manager.isCommandPaletteVisible && manager.attachedWindow?.attachedSheet == nil
+                && !manager.isCommandPaletteVisible && !manager.isSSHFolderPickerVisible
+                && manager.attachedWindow?.attachedSheet == nil
         }
     }
 
     private func focusGroup() {
         guard manager.selectedProject === project, !manager.isCommandPaletteVisible,
-              manager.attachedWindow?.attachedSheet == nil else { return }
+              !manager.isSSHFolderPickerVisible, manager.attachedWindow?.attachedSheet == nil else { return }
         project.dock.activate(group.id)
         if case .tab(let id)? = project.dock.root.group(id: group.id)?.selected,
            project.selectedTabID != id {

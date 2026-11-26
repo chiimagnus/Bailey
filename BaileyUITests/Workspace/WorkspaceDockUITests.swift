@@ -1411,6 +1411,90 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.exists)
     }
 
+    func testActiveDockAccentRestoresAcrossNativeInputAndWindows() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let csv = try fixture.file("Accent workspace/table.csv", text: "Name,Value\nAlpha,25\nBeta,30\n")
+        let source = try fixture.file("Accent workspace/source.swift", text: "let value = 1\n")
+        _ = try fixture.file(".config/bailey-dev/config.toml", text: "theme = \"dark\"\ntheme-dark = \"Adwaita Dark\"\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", configurationHome: fixture.root,
+                                                    project: csv.deletingLastPathComponent(), clipboardIsReadOnly: true)
+        // Pin the actual workspace, not the first window (which changes when a
+        // second workspace or the Settings scene becomes key).
+        let window = app.windows["Accent workspace"]
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let csvTab = WorkspaceUITestSupport.fileTab(csv, in: window)
+        let sourceTab = WorkspaceUITestSupport.fileTab(source, in: window)
+        let files = window.descendants(matching: .any).matching(identifier: "bailey.dock.files").firstMatch
+        let projects = window.descendants(matching: .any).matching(identifier: "bailey.dock.projects").firstMatch
+        func open(_ url: URL) {
+            let row = WorkspaceUITestSupport.fileRow(url, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 12))
+            row.doubleClick()
+        }
+        func tint(_ tab: XCUIElement) -> Double? {
+            guard tab.exists, tab.frame.width > 14, tab.frame.height > 8,
+                  let data = tab.screenshot().image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: data) else { return nil }
+            let y = bitmap.pixelsHigh - max(4, Int(2.5 * CGFloat(bitmap.pixelsHigh) / tab.frame.height))
+            let samples = (bitmap.pixelsWide / 3..<2 * bitmap.pixelsWide / 3).compactMap { x -> Double? in
+                guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return nil }
+                return Double(c.blueComponent - c.redComponent)
+            }.sorted()
+            return samples.dropFirst(samples.count / 2).first
+        }
+        func expect(_ tab: XCUIElement, inactive: [XCUIElement], _ name: String) {
+            let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let color = tint(tab), color > 0.14 else { return false }
+                return inactive.allSatisfy { (tint($0) ?? 1) < color - 0.08 }
+            }, object: nil)
+            let result = XCTWaiter.wait(for: [settled], timeout: 5)
+            print("DOCK_ACCENT \(name) active=\(String(describing: tint(tab))) others=\(inactive.map(tint))")
+            XCTAssertEqual(result, .completed, name)
+        }
+        open(source)
+        open(csv)
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        let cell = table.staticTexts["Alpha"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 15))
+        cell.click()
+        expect(csvTab, inactive: [files, projects], "CSV native cell input")
+        files.click()
+        expect(files, inactive: [csvTab, projects], "Files is the only active group")
+        projects.click()
+        expect(projects, inactive: [files, csvTab], "Projects is the only active group")
+        sourceTab.click()
+        expect(sourceTab, inactive: [files, projects], "Source uses the shared Dock appearance")
+        csvTab.click()
+        cell.doubleClick()
+        expect(csvTab, inactive: [files, projects], "Native field editing retains active CSV")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let outline = try contextOutlinePixels(of: sourceTab)
+        sourceTab.rightClick()
+        XCTAssertTrue(app.menuItems["Close Others"].waitForExistence(timeout: 8))
+        XCTAssertNotEqual(try contextOutlinePixels(of: sourceTab), outline)
+        XCTAssertTrue(csvTab.isSelected)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        expect(csvTab, inactive: [files, projects], "Context menu dismissed")
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let other = app.windows.matching(NSPredicate(format: "title != %@", "Accent workspace")).firstMatch
+        XCTAssertTrue(other.waitForExistence(timeout: 12))
+        app.menuBarItems["Window"].click()
+        let original = app.menuItems["Accent workspace"]
+        XCTAssertTrue(original.waitForExistence(timeout: 8))
+        original.click()
+        XCTAssertEqual(app.windows.firstMatch.title, "Accent workspace")
+        expect(csvTab, inactive: [files, projects], "Restored via native Window menu without clicking a tab")
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.buttons[XCUIIdentifierCloseWindow].click()
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 10))
+        expect(csvTab, inactive: [files, projects], "Restored from Settings without clicking a tab")
+        XCTAssertEqual(try String(contentsOf: csv, encoding: .utf8), "Name,Value\nAlpha,25\nBeta,30\n")
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "let value = 1\n")
+    }
+
     func testDockFocusHandoffNeverSendsKeysToHiddenEditor() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("project/a-first.swift", text: "first file\n")
