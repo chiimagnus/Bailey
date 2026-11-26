@@ -671,12 +671,12 @@
         }
       }
     },
-    "The current encoding cannot preserve the original bytes. Edit the source instead.": {
+    "The current encoding cannot preserve the original bytes.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "当前编码无法保留原始字节，请改用源码编辑。"
+            "value": "当前编码无法保留原始字节。"
           }
         }
       }
@@ -837,56 +837,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法显示表格。"
-          }
-        }
-      }
-    },
-    "Choose the table delimiter." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请选择表格分隔符。"
-          }
-        }
-      }
-    },
-    "Delimiter" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "分隔符"
-          }
-        }
-      }
-    },
-    "Comma" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "逗号"
-          }
-        }
-      }
-    },
-    "Semicolon" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "分号"
-          }
-        }
-      }
-    },
-    "Tab" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "制表符"
           }
         }
       }
@@ -1081,42 +1031,12 @@
         }
       }
     },
-    "Rename Header…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名表头…"
-          }
-        }
-      }
-    },
     "Changes All Records" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "作用于全部记录"
-          }
-        }
-      }
-    },
-    "Full Field" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完整字段"
-          }
-        }
-      }
-    },
-    "Apply Field" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用字段"
           }
         }
       }
@@ -1311,16 +1231,6 @@
         }
       }
     },
-    "Fit Column Width" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "适应列宽"
-          }
-        }
-      }
-    },
     "Apply Filter" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1337,16 +1247,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除列筛选"
-          }
-        }
-      }
-    },
-    "Use First Row as Header" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用首行作表头"
           }
         }
       }

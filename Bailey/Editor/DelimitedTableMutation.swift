@@ -31,7 +31,7 @@ nonisolated enum DelimitedTableMutation {
         _ change: Change, source: String, index: DelimitedTableIndex,
         encoding: TextFileEncoding
     ) async throws -> [Replacement] {
-        guard index.issue == nil, !index.needsSeparatorChoice else { throw Failure.invalidTable }
+        guard index.issue == nil, !index.hasAmbiguousSeparator else { throw Failure.invalidTable }
         try Task.checkCancellation()
         let text = source as NSString
         let replacements: [Replacement]

@@ -8,6 +8,29 @@ import XCTest
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
+    func testFirstRecordAlwaysRemainsHeader() async throws {
+        for separator in DelimitedTableIndex.Separator.allCases {
+            let delimiter = String(UnicodeScalar(separator.rawValue)!)
+            for (source, rows) in [("", [] as [Int]), ("needle", []), ("needle\nneedle\nother", [1, 2])] {
+                let index = try await DelimitedTableIndex.parse(source, preferred: separator, selected: separator)
+                let display = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
+                XCTAssertEqual(display.rows, rows)
+                let scope = DelimitedTablePresentation.FieldScope(rows: nil, columns: IndexSet(integer: 0), selection: nil)
+                XCTAssertFalse(scope.contains(.init(row: 0, column: 0), in: index))
+                let matches = try await DelimitedTablePresentation.countOccurrences("needle", in: scope, source: source, index: index)
+                XCTAssertEqual(matches, rows.isEmpty ? 0 : 1)
+                let changes = try await DelimitedTableMutation.prepare(.replace(scope, query: "needle", with: "changed", single: nil), source: source, index: index, encoding: .utf8)
+                let edited = NSMutableString(string: source)
+                for change in changes { edited.replaceCharacters(in: change.range, with: change.new) }
+                XCTAssertEqual(edited as String, rows.isEmpty ? source : "needle\nchanged\nother")
+            }
+            let source = ["Name", "Value"].joined(separator: delimiter)
+            let index = try await DelimitedTableIndex.parse(source, preferred: separator, selected: separator)
+            let display = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init(sort: [.init(column: 0, ascending: false)]))
+            XCTAssertTrue(display.rows.isEmpty)
+        }
+    }
+
     func testEmptyFindQueryDoesNotMatchEmptyFieldsAcrossDelimiters() async throws {
         for separator in DelimitedTableIndex.Separator.allCases {
             let delimiter = String(UnicodeScalar(separator.rawValue)!)
@@ -34,7 +57,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
-        let parsed = try await file.delimitedSnapshot(using: .comma)
+        let parsed = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(parsed)
         let presentation = try await DelimitedTablePresentation.evaluate(
             source: original, index: snapshot.index, configuration: .init(filters: [0: "Shown"]))
@@ -44,11 +67,11 @@ final class DelimitedTablePresentationTests: XCTestCase {
         selected.select(.init(row: 1, column: 3), adding: true)
         selected.select(.init(row: 1, column: 3), adding: true)
         let columns = IndexSet(integersIn: 0..<4)
-        let selection = DelimitedTablePresentation.FieldScope(rows: presentation.rows, firstRecord: 1,
+        let selection = DelimitedTablePresentation.FieldScope(rows: presentation.rows,
                                                                columns: columns, selection: selected)
-        let visible = DelimitedTablePresentation.FieldScope(rows: presentation.rows, firstRecord: 1,
+        let visible = DelimitedTablePresentation.FieldScope(rows: presentation.rows,
                                                              columns: columns, selection: nil)
-        let all = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1, columns: columns, selection: nil)
+        let all = DelimitedTablePresentation.FieldScope(rows: nil, columns: columns, selection: nil)
         for (scope, expected) in [(selection, 3), (visible, 4), (all, 6)] {
             let count = try await DelimitedTablePresentation.countOccurrences("cafe", in: scope, source: original, index: snapshot.index)
             XCTAssertEqual(count, expected)
@@ -66,7 +89,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertEqual(file.text, original.replacingOccurrences(of: "Café CAFÉ", with: " CAFÉ"))
         file.documentUndoManager.undo()
         XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
-        let refreshed = try await file.delimitedSnapshot(using: .comma)
+        let refreshed = try await file.delimitedSnapshot()
         try await requireDelimitedEdit(file, .replace(selection, query: "cafe", with: "café!", single: nil), using: XCTUnwrap(refreshed))
         let expected = original.replacingOccurrences(of: "Café CAFÉ", with: "café! café!")
             .replacingOccurrences(of: "\"Cafe\u{301}\"", with: "\"café!\"")
@@ -88,16 +111,16 @@ final class DelimitedTablePresentationTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
-        let firstLoad = try await file.delimitedSnapshot(using: .comma)
+        let firstLoad = try await file.delimitedSnapshot()
         let first = try XCTUnwrap(firstLoad)
-        let scope = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1,
+        let scope = DelimitedTablePresentation.FieldScope(rows: nil,
                                                            columns: IndexSet(integer: 1), selection: nil)
         let initial = DelimitedTablePresentation.Occurrence(cell: .init(row: 1, column: 1),
                                                             range: NSRange(location: 0, length: 4))
         try await requireDelimitedEdit(file, .replace(scope, query: "cafe", with: "café!", single: initial), using: first)
         let afterFirst = "Name,Value\nA,café! café\nB,café\nC,café\n"
         XCTAssertEqual(file.text, afterFirst)
-        let load = try await file.delimitedSnapshot(using: .comma)
+        let load = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(load)
         let active = try await DelimitedTablePresentation.evaluate(source: snapshot.source, index: snapshot.index,
                                                                     configuration: .init())
@@ -133,9 +156,9 @@ final class DelimitedTablePresentationTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
-        let parsed = try await file.delimitedSnapshot(using: .comma)
+        let parsed = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(parsed)
-        let target = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1, columns: IndexSet(integer: 1), selection: nil)
+        let target = DelimitedTablePresentation.FieldScope(rows: nil, columns: IndexSet(integer: 1), selection: nil)
         let started = ContinuousClock.now
         try await requireDelimitedEdit(file, .fill(target, "longer,value"), using: snapshot)
         let applied = ContinuousClock.now
@@ -167,10 +190,10 @@ final class DelimitedTablePresentationTests: XCTestCase {
             try await file.waitForText()
             file.autoSaveSuspendedForClose = true
             defer { file.retireContent() }
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             try await requireDelimitedEdit(file, .cells([.init(row: row, column: column): ""]), using: snapshot)
-            let refreshed = try await file.delimitedSnapshot(using: .comma)
+            let refreshed = try await file.delimitedSnapshot()
             XCTAssertEqual(refreshed?.index.records.count, snapshot.index.records.count, original.debugDescription)
             XCTAssertEqual(Data(file.text.utf8), Data(expected.utf8))
             file.documentUndoManager.undo()
@@ -192,9 +215,9 @@ final class DelimitedTablePresentationTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
-        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let loaded = try await file.delimitedSnapshot()
         try await requireDelimitedEdit(file, .deleteRows([1, 2, 5]), using: try XCTUnwrap(loaded))
-        let refreshed = try await file.delimitedSnapshot(using: .comma)
+        let refreshed = try await file.delimitedSnapshot()
         XCTAssertEqual(refreshed?.index.records.count, 5)
         XCTAssertEqual(file.text, expected)
         file.documentUndoManager.undo()
@@ -224,7 +247,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             try await file.waitForText()
             file.autoSaveSuspendedForClose = true
             defer { file.retireContent() }
-            let loaded = try await file.delimitedSnapshot(using: .tab)
+            let loaded = try await file.delimitedSnapshot()
             try await requireDelimitedEdit(file, .paste(clipboard, rows: [0, 1],
                                                 origin: .init(row: onlyEmpty ? 1 : 0, column: 0), columns: 2),
                                          using: try XCTUnwrap(loaded))
@@ -249,7 +272,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         controls.configuration.sort = [.init(column: 0, ascending: true)]
         controls.configuration.filters = [1: "g"]
         let grid = DelimitedGrid()
-        file.delimitedTable.separator = .comma
+
         grid.file = file
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 350),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -259,7 +282,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         defer { grid.detach(); window.close() }
 
         func refresh() async throws {
-            let result = try await file.delimitedSnapshot(using: .comma)
+            let result = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(result)
             let projection = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: controls.configuration
@@ -300,16 +323,16 @@ final class DelimitedTablePresentationTests: XCTestCase {
         grid.table.onEdit(.init(row: 0, column: 2))
         let field = try XCTUnwrap(grid.table.view(atColumn: 2, row: 0, makeIfNecessary: true) as? NSTextField)
         XCTAssertFalse(field.isEditable)
-        XCTAssertEqual(field.stringValue, "青🧪 ↵ line")
-        let fieldEditor = try XCTUnwrap(csvFullFieldEditor())
+        XCTAssertEqual(field.stringValue, "青🧪\nline")
+        let fieldEditor = try XCTUnwrap(grid.activeEditor)
         XCTAssertEqual(fieldEditor.string, "青🧪\nline")
         fieldEditor.insertText("discarded draft", replacementRange: NSRange(location: 0, length: fieldEditor.string.utf16.count))
         fieldEditor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
         XCTAssertEqual(file.text, expected)
         XCTAssertFalse(field.isEditable)
-        XCTAssertNil(csvFullFieldEditor())
+        XCTAssertNil(grid.activeEditor)
         grid.table.onEdit(.init(row: 0, column: 2))
-        let nextEditor = try XCTUnwrap(csvFullFieldEditor())
+        let nextEditor = try XCTUnwrap(grid.activeEditor)
         nextEditor.insertText("edited,field", replacementRange: NSRange(location: 0, length: nextEditor.string.utf16.count))
         grid.finishEditing()
         try await waitUntil { file.text.contains("\"edited,field\"") }
@@ -332,7 +355,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
         let grid = DelimitedGrid()
-        file.delimitedTable.separator = .comma
+
         grid.file = file
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -346,7 +369,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         window.orderBack(nil)
         defer { grid.detach(); window.close() }
         func refresh() async throws {
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
@@ -355,8 +378,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         }
         try await refresh()
         grid.table.onEdit(.init(row: 0, column: 1))
-        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        let editor = try XCTUnwrap(grid.activeEditor)
         editor.insertText("a,b", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         XCTAssertTrue(window.makeFirstResponder(grid.table))
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
@@ -433,18 +455,21 @@ final class DelimitedTablePresentationTests: XCTestCase {
         }
         let grid = try XCTUnwrap(mountedGrid(hosted))
         XCTAssertEqual(grid.table.numberOfRows, 3)
-        XCTAssertEqual(grid.table.rowHeight, 30)
-        XCTAssertEqual(grid.table.headerView?.bounds.height, 30)
-        XCTAssertEqual(grid.table.tableColumns[0].width, 110)
-        XCTAssertGreaterThan(grid.table.tableColumns[5].width, 110)
+        let scale = CGFloat(AppSettings.shared.tableFontSize / FontSizeRole.table.defaultSize)
+        XCTAssertEqual(grid.table.rowHeight, expectedCompactCSVRowHeight(CGFloat(AppSettings.shared.tableFontSize)))
+        XCTAssertEqual(grid.table.headerView?.bounds.height, grid.table.rowHeight)
+        XCTAssertLessThan(grid.table.tableColumns[0].width, 110 * scale)
+        let font = NSFont.monospacedSystemFont(ofSize: CGFloat(AppSettings.shared.tableFontSize), weight: .regular)
+        let longest = ("axial, lateral" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertEqual(grid.table.tableColumns[5].width, ceil(longest + 8 * scale + 1))
         let notes = try XCTUnwrap(grid.table.view(atColumn: 5, row: 2, makeIfNecessary: true) as? NSTextField)
-        XCTAssertEqual(notes.stringValue, "interrupted ↵ loading")
+        XCTAssertEqual(notes.stringValue, "interrupted\nloading")
+        XCTAssertGreaterThan(grid.table.rect(ofRow: 2).height, grid.table.rect(ofRow: 1).height)
         let selected = DelimitedTablePresentation.Cell(row: 0, column: 4)
         grid.table.select(selected, reveal: true)
         grid.table.tableColumns[4].width = 194
         grid.table.onEdit(selected)
-        let field = try XCTUnwrap(grid.table.view(atColumn: 4, row: 0, makeIfNecessary: true) as? NSTextField)
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        let editor = try XCTUnwrap(grid.activeEditor)
         editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
                              replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         let revision = file.textPreviewRequestID
@@ -458,13 +483,28 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let bitmap = try XCTUnwrap(grid.bitmapImageRepForCachingDisplay(in: grid.bounds))
             grid.cacheDisplay(in: grid.bounds, to: bitmap)
             let reference = try XCTUnwrap(expected.usingColorSpace(bitmap.colorSpace))
-            let canvasCount = stride(from: 4, to: bitmap.pixelsHigh - 4, by: 8).filter { height in
-                guard let color = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: height) else { return false }
+            func matchesCanvas(x: Int, y: Int) -> Bool {
+                guard let color = bitmap.colorAt(x: x, y: y) else { return false }
                 return max(abs(color.redComponent - reference.redComponent),
                            abs(color.greenComponent - reference.greenComponent),
-                           abs(color.blueComponent - reference.blueComponent)) < 0.04
+                           abs(color.blueComponent - reference.blueComponent)) < 0.025
+            }
+            let canvasCount = stride(from: 4, to: bitmap.pixelsHigh - 4, by: 8).filter {
+                matchesCanvas(x: bitmap.pixelsWide / 2, y: $0)
             }.count
             XCTAssertGreaterThan(canvasCount, bitmap.pixelsHigh / 16, name)
+            // The fixed axes, including their unused space, must use the data canvas.
+            let header = try XCTUnwrap(grid.table.headerView)
+            let headerRect = grid.convert(header.bounds, from: header).intersection(grid.bounds)
+            XCTAssertGreaterThan(headerRect.height, 4)
+            let headerY = Int((grid.bounds.maxY - headerRect.maxY + 2) * CGFloat(bitmap.pixelsHigh) / grid.bounds.height)
+            let headerSamples = Array(stride(from: 4, to: bitmap.pixelsWide - 4, by: 8))
+            let matchingHeader = headerSamples.filter { matchesCanvas(x: $0, y: headerY) }.count
+            XCTAssertGreaterThan(Double(matchingHeader) / Double(headerSamples.count), 0.8, "\(name): header background")
+            let gutterX = Int(1.5 * CGFloat(bitmap.pixelsWide) / grid.bounds.width)
+            let gutterSamples = Array(stride(from: 4, to: bitmap.pixelsHigh - 4, by: 4))
+            let matchingGutter = gutterSamples.filter { matchesCanvas(x: gutterX, y: $0) }.count
+            XCTAssertGreaterThan(Double(matchingGutter) / Double(gutterSamples.count), 0.8, "\(name): row-number background")
             let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
                                            uniformTypeIdentifier: UTType.png.identifier)
             attachment.name = "CSV Native - \(name)"
@@ -485,7 +525,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
                 XCTAssertEqual(grid.scrollView.backgroundColor, expected, name)
                 XCTAssertEqual(grid.table.backgroundColor, expected, name)
                 XCTAssertTrue(mountedGrid(hosted) === grid)
-                XCTAssertTrue(field.currentEditor() === editor)
+                XCTAssertTrue(grid.activeEditor === editor)
                 XCTAssertEqual(editor.string, "zhong")
                 XCTAssertEqual(editor.markedRange(), marked)
                 XCTAssertEqual(editor.selectedRange(), selectedRange)
@@ -527,7 +567,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         window.isReleasedWhenClosed = false
         let container = NSView(frame: window.contentView!.bounds)
         let hosted = NSHostingView(rootView: CSVTableView(file: file, canFocus: { true },
-                                                         onFocused: {}, onShowSource: {}))
+                                                         onFocused: {}))
         hosted.frame = CGRect(x: 0, y: 30, width: 500, height: 230)
         let other = NSTextField(frame: CGRect(x: 0, y: 0, width: 100, height: 24))
         container.addSubview(hosted)
@@ -557,12 +597,11 @@ final class DelimitedTablePresentationTests: XCTestCase {
         let grid = try await gridShowing("old")
         XCTAssertTrue(window.makeFirstResponder(grid.table))
         grid.table.onEdit(.init(row: 0, column: 1))
-        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        let editor = try XCTUnwrap(grid.activeEditor)
         editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
                              replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         XCTAssertTrue(editor.hasMarkedText())
-        XCTAssertFalse(grid.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertFalse(grid.textView(editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
         XCTAssertTrue(window.firstResponder === editor)
         XCTAssertEqual(file.text, original)
         editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -607,8 +646,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(grid.table))
         func begin(_ column: Int) throws -> NSTextView {
             grid.table.onEdit(.init(row: 0, column: column))
-            let cell = try XCTUnwrap(grid.table.view(atColumn: column, row: 0, makeIfNecessary: true) as? NSTextField)
-            return try XCTUnwrap(cell.currentEditor() as? NSTextView)
+            return try XCTUnwrap(grid.activeEditor)
         }
         let nameEditor = try begin(0)
         nameEditor.insertText("Row", replacementRange: NSRange(location: 0, length: nameEditor.string.utf16.count))
@@ -675,14 +713,14 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
             try await file.waitForText()
             defer { file.retireContent() }
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 1): "first"]), using: XCTUnwrap(loaded))
-            let current = try await file.delimitedSnapshot(using: .comma)
+            let current = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(current)
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
             let grid = DelimitedGrid()
-            file.delimitedTable.separator = .comma
+
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -697,8 +735,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             XCTAssertEqual(file.textPreviewRequestID, snapshot.requestID)
             XCTAssertTrue(file.canEditDelimited(snapshot), "Publishing a baseline must not invalidate the same source index")
             grid.table.onEdit(.init(row: 0, column: 1))
-            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-            guard let editor = field.currentEditor() as? NSTextView else {
+            guard let editor = grid.activeEditor else {
                 XCTFail("The same mounted cell must remain editable after Save")
                 continue
             }
@@ -723,7 +760,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let controls = file.delimitedTable
             controls.configuration.sort = [.init(column: 0, ascending: true)]
             let grid = DelimitedGrid()
-            file.delimitedTable.separator = .comma
+
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -731,7 +768,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             window.contentView = grid
             window.orderBack(nil)
             defer { grid.detach(); window.close() }
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: controls.configuration)
@@ -743,8 +780,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
                 grid.paste("\"中文,值\"")
             } else {
                 grid.table.onEdit(cell)
-                let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-                let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+                let editor = try XCTUnwrap(grid.activeEditor)
                 editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
                 XCTAssertTrue(editor.hasMarkedText())
                 editor.insertText("中文,值", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -783,7 +819,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             defer { project.terminateAll() }
             let controls = file.delimitedTable
             let grid = DelimitedGrid()
-            file.delimitedTable.separator = .comma
+
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -791,17 +827,16 @@ final class DelimitedTablePresentationTests: XCTestCase {
             window.contentView = grid
             window.orderBack(nil)
             defer { grid.detach(); window.close() }
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: controls.configuration)
             grid.install(snapshot, presentation: presentation)
             grid.layoutSubtreeIfNeeded()
             grid.table.onEdit(.init(row: 0, column: 1))
-            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            let editor = try XCTUnwrap(grid.activeEditor)
             editor.insertText("新值🧪", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
-            XCTAssertTrue(field.isEditable)
+            XCTAssertTrue(editor.isEditable)
             XCTAssertEqual(file.text, original)
             // The native field still owns first responder when the user invokes
             // Save or closes the file tab through the project's real entry point.
@@ -842,11 +877,9 @@ final class DelimitedTablePresentationTests: XCTestCase {
         controls.accept(.init(index: narrower, source: "A,B\n1,2", requestID: "narrower", documentRevision: "narrower"))
         XCTAssertEqual(controls.configuration.filters, [0: "1"])
         XCTAssertTrue(controls.configuration.sort.isEmpty)
-        controls.configuration.header = false
         let different = try await DelimitedTableIndex.parse("A;B\n1;2", preferred: .comma)
         controls.accept(.init(index: different, source: "A;B\n1;2", requestID: "delimiter", documentRevision: "delimiter"))
         XCTAssertTrue(controls.configuration.filters.isEmpty)
-        XCTAssertFalse(controls.configuration.header)
     }
 
     func testRepeatedNativeTableMountsClearRowsAndSelectionInBothAppearances() async throws {
@@ -942,9 +975,9 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertEqual(original.substring(with: index.records[2].source),
                        "Item 2,equipe,\"blue\r\nred\"\r\n")
         let reset = try await DelimitedTablePresentation.evaluate(
-            source: source, index: index, configuration: .init(header: false)
+            source: source, index: index, configuration: .init()
         )
-        XCTAssertEqual(reset.rows, [0, 1, 2, 3])
+        XCTAssertEqual(reset.rows, [1, 2, 3])
     }
 
     func testCopyUsesSelectedCellsInDisplayOrderWithoutLosingQuotesOrLineBreaks() async throws {

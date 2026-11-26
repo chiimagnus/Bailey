@@ -157,6 +157,7 @@ final class FileTab: nonisolated Identifiable {
         delimitedEditingGrid?.cancelEditing()
         delimitedEditTask?.cancel()
         delimitedTable.retire()
+        delimitedSeparator = nil
         svgPreview = nil
         retireImageAnnotations()
         originalImageTask?.cancel()
@@ -351,6 +352,9 @@ final class FileTab: nonisolated Identifiable {
     let workspaceIdentity: String?
     private var previewOverride: Bool?
     @ObservationIgnored lazy var delimitedTable = DelimitedTableControls()
+    // A grid transaction (including its Undo/Redo) knows its exact dialect.
+    // Arbitrary source edits and fresh file contents must detect it again.
+    @ObservationIgnored private var delimitedSeparator: (revision: String, value: DelimitedTableIndex.Separator)?
     private weak var delimitedEditingGrid: DelimitedGrid?
     private(set) var delimitedEditTask: Task<Bool, Never>?
     private(set) var delimitedDraft: DelimitedDraft?
@@ -405,10 +409,9 @@ final class FileTab: nonisolated Identifiable {
         let source: String
         let requestID: String
         let documentRevision: String
-        var selectedSeparator: DelimitedTableIndex.Separator? = nil
 
         var parseRequest: DelimitedTableControls.ParseRequest {
-            .init(source: requestID, separator: selectedSeparator)
+            .init(source: requestID)
         }
     }
 
@@ -419,22 +422,24 @@ final class FileTab: nonisolated Identifiable {
         let selection: DelimitedTableControls.PendingSelection?
     }
 
-    func delimitedSnapshot(using selected: DelimitedTableIndex.Separator? = nil) async throws -> DelimitedSnapshot? {
+    func delimitedSnapshot() async throws -> DelimitedSnapshot? {
         guard !isRetired, case .text = content, savedSourceVersion != nil,
               let preferred = DelimitedTableIndex.Separator.preferred(for: path) else { return nil }
         let request = textPreviewRequestID
         let source = text
+        let revision = documentEditRevision
+        let selected = delimitedSeparator.flatMap { $0.revision == revision ? $0.value : nil }
         let index = try await DelimitedTableIndex.parse(source, preferred: preferred, selected: selected)
         try Task.checkCancellation()
         guard request == textPreviewRequestID else { return nil }
         return DelimitedSnapshot(index: index, source: source, requestID: request,
-                                 documentRevision: documentEditRevision, selectedSeparator: selected)
+                                 documentRevision: revision)
     }
 
     private func matchesDelimitedDocument(_ snapshot: DelimitedSnapshot) -> Bool {
         guard !isRetired, case .text = content else { return false }
         return snapshot.documentRevision == documentEditRevision && savedTextPreservesOriginalBytes &&
-            snapshot.index.issue == nil && !snapshot.index.needsSeparatorChoice
+            snapshot.index.issue == nil && !snapshot.index.hasAmbiguousSeparator
     }
 
     func canEditDelimited(_ snapshot: DelimitedSnapshot) -> Bool {
@@ -503,7 +508,6 @@ final class FileTab: nonisolated Identifiable {
             String(localized: "Could not edit the table.", table: "Editor")
         }
         let encoding = fileEncoding
-        let selectedSeparator = delimitedTable.separator
         invalidateReload()
         let task = Task { [weak self] in
             guard let self else { return false }
@@ -513,12 +517,8 @@ final class FileTab: nonisolated Identifiable {
                 try await applyAcceptedDelimitedEdit(change, using: snapshot, encoding: encoding)
                 if documentEditRevision == snapshot.documentRevision {
                     delimitedTable.pendingSelection = nil
-                } else if delimitedTable.separator == selectedSeparator {
-                    delimitedTable.separator = snapshot.index.separator
+                } else {
                     delimitedTable.acceptEdit(change, from: snapshot.documentRevision, to: documentEditRevision)
-                }
-                if case .insertRows = change, snapshot.index.records.isEmpty {
-                    delimitedTable.configuration.header = false
                 }
                 if draft != nil { delimitedDraft = nil }
                 if saveError == delimitedTable.editError { saveError = nil }
@@ -572,13 +572,14 @@ final class FileTab: nonisolated Identifiable {
             documentUndoManager.endUndoGrouping()
         }
         documentUndoManager.beginUndoGrouping()
-        let applied = applyDocumentReplacements(replacements)
+        let applied = applyDocumentReplacements(replacements, separator: snapshot.index.separator)
         documentUndoManager.endUndoGrouping()
         guard applied else { throw WorkspaceError.changedExternally }
     }
 
     @discardableResult
-    private func applyDocumentReplacements(_ replacements: [DelimitedTableMutation.Replacement]) -> Bool {
+    private func applyDocumentReplacements(_ replacements: [DelimitedTableMutation.Replacement],
+                                           separator: DelimitedTableIndex.Separator) -> Bool {
         let storage = nativeTextStorage
         let characters = storage.mutableString
         // Validate every original range before making any change.
@@ -609,9 +610,10 @@ final class FileTab: nonisolated Identifiable {
         documentUndoManager.registerUndo(withTarget: storage) { [weak self] target in
             MainActor.assumeIsolated {
                 guard let self, self.nativeTextStorage === target, !self.isRetired else { return }
-                self.applyDocumentReplacements(inverse)
+                self.applyDocumentReplacements(inverse, separator: separator)
             }
         }
+        delimitedSeparator = (documentEditRevision, separator)
         nativeTextChangedWithoutReplacement()
         refreshDirtyState()
         return true
@@ -1945,8 +1947,7 @@ struct FileViewerView: View {
                                 }
                             )
                         case .delimited:
-                            CSVTableView(file: file, canFocus: canFocus, onFocused: onFocused,
-                                         onShowSource: revealSource)
+                            CSVTableView(file: file, canFocus: canFocus, onFocused: onFocused)
                         case .svg:
                             SVGFilePreview(file: file, onFocused: onFocused, onShowSource: revealSource)
                         case .html:

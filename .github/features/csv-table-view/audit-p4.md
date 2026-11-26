@@ -53,6 +53,15 @@ CSV 核心宿主 52/52、真实表头菜单及替换／排序筛选查找复制�
 `/tmp/bailey-csv-remove-statistics-ui-recheck.Atvz5aLp`、`/tmp/bailey-csv-remove-statistics-build.hBQuorM3`。
 本轮未重新验证 SSH，不改变 F-12 的 Open 与阶段 No-Go。
 
+## 2026-11-27 表格交互收敛
+
+取消手工分隔符、源码提示、重命名表头和适应列宽菜单。分隔符自动识别；表格事务及 Undo／Redo 保留已确认的分隔符，任意源码修改后重新识别。
+普通表头双击原位编辑，长／多行表头复用完整字段编辑器；自动列宽随原文更新，人工宽度保留，行号栏按实际数字宽度布局。
+核心宿主 54 项中 51 项首轮通过，3 项按实际字号修正几何断言后复验通过；另 5 项保存、重连和撤销宿主通过。真实 GUI 两项、正式 Debug 构建及严格验签通过。
+日志 `/tmp/bailey-csv-natural-layout-host-retest.tYExR9TW`、`/tmp/bailey-csv-natural-layout-final-host.MY7MQ9KG`、
+`/tmp/bailey-csv-natural-layout-ui.iGXFYk3D`、`/tmp/bailey-csv-natural-layout-build.T5RsD6eD`。
+未重测真实 SSH，F-12 的 Open 与阶段 No-Go 不变。
+
 ## 发现项
 
 ## 发现 F-02

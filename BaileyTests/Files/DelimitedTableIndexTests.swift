@@ -106,10 +106,10 @@ final class DelimitedTableIndexTests: XCTestCase {
                         return body + endings[row]
                     }.joined()
                     let bytes = try XCTUnwrap(encoding.encoded(expected))
-                    let loaded = try await file.delimitedSnapshot(using: separator)
+                    let loaded = try await file.delimitedSnapshot()
                     try await requireDelimitedEdit(file, .columns(order), using: XCTUnwrap(loaded))
                     XCTAssertTrue(TextFileEncoding.hasIdenticalCodeUnits(file.text, expected), context)
-                    let parsed = try await file.delimitedSnapshot(using: separator)
+                    let parsed = try await file.delimitedSnapshot()
                     XCTAssertNil(parsed?.index.issue, context)
                     XCTAssertEqual(parsed?.index.records.count, tokens.count, context)
                     XCTAssertEqual(parsed?.index.columnCount, order.count, context)
@@ -245,23 +245,57 @@ final class DelimitedTableIndexTests: XCTestCase {
         ] {
             let index = try await DelimitedTableIndex.parse(text, preferred: .comma)
             XCTAssertEqual(index.separator, expected)
-            XCTAssertFalse(index.needsSeparatorChoice)
+            XCTAssertFalse(index.hasAmbiguousSeparator)
             XCTAssertEqual(index.records.count, 2)
             XCTAssertNil(index.issue)
         }
         let source = "a,b;c\n=1,+2;@4"
         let automatic = try await DelimitedTableIndex.parse(source, preferred: .tab)
-        XCTAssertTrue(automatic.needsSeparatorChoice)
+        XCTAssertTrue(automatic.hasAmbiguousSeparator)
         let selected = try await DelimitedTableIndex.parse(source, preferred: .tab, selected: .semicolon)
-        XCTAssertFalse(selected.needsSeparatorChoice)
+        XCTAssertFalse(selected.hasAmbiguousSeparator)
         XCTAssertEqual(selected.fields(in: selected.records[1]).map { $0.value(in: source as NSString) },
                        ["=1,+2", "@4"])
         let longFirstField = "\"" + String(repeating: "a", count: 16_384) + "\";second"
         let bounded = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma)
-        XCTAssertTrue(bounded.needsSeparatorChoice, "Do not guess outside the sample")
+        XCTAssertTrue(bounded.hasAmbiguousSeparator, "Do not guess outside the sample")
         let corrected = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma, selected: .semicolon)
         XCTAssertEqual(corrected.fields(in: corrected.records[0]).count, 2)
         XCTAssertNil(corrected.issue)
+    }
+
+    func testAutomaticSeparatorSurvivesGridTransactionsButNotUnrelatedSourceEdits() async throws {
+        let original = "Name;Value\nItem;old\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let loaded = try await file.delimitedSnapshot()
+        let snapshot = try XCTUnwrap(loaded)
+        XCTAssertEqual(snapshot.index.separator, .semicolon)
+        try await requireDelimitedEdit(file, .columns([1]), using: snapshot)
+        let after = try await file.delimitedSnapshot()
+        XCTAssertEqual(after?.index.separator, .semicolon)
+        XCTAssertEqual(after?.index.columnCount, 1)
+        file.documentUndoManager.undo()
+        let undone = try await file.delimitedSnapshot()
+        XCTAssertEqual(undone?.index.separator, .semicolon)
+        XCTAssertEqual(file.text, original)
+        file.documentUndoManager.redo()
+        let redone = try await file.delimitedSnapshot()
+        XCTAssertEqual(redone?.index.separator, .semicolon)
+        XCTAssertEqual(redone?.index.columnCount, 1)
+        let converted = "Name,Value\nRow,42\n"
+        file.nativeTextStorage.replaceCharacters(in: NSRange(location: 0, length: file.nativeTextStorage.length), with: converted)
+        let fresh = try await file.delimitedSnapshot()
+        XCTAssertEqual(fresh?.index.separator, .comma)
+        XCTAssertEqual(fresh?.index.columnCount, 2)
+        XCTAssertNil(fresh?.index.issue)
+        XCTAssertFalse(file.canEditDelimited(snapshot))
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
 
     func testIncidentalDelimitersDoNotMakeRectangularTablesReadOnly() async throws {
@@ -283,7 +317,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             XCTAssertEqual(snapshot.index.separator, separator, original.prefix(80).description)
-            XCTAssertFalse(snapshot.index.needsSeparatorChoice, original.prefix(80).description)
+            XCTAssertFalse(snapshot.index.hasAmbiguousSeparator, original.prefix(80).description)
             XCTAssertNil(snapshot.index.issue)
             XCTAssertEqual(snapshot.index.field(record: 1, column: 1)?.value(in: original as NSString), firstValue)
             XCTAssertTrue(file.canEditDelimited(snapshot))
@@ -406,7 +440,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         defer { file.retireContent() }
         let storage = file.nativeTextStorage
         let undo = file.documentUndoManager
-        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let loaded = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(loaded)
         XCTAssertNil(file.editorView, "Grid editing must not construct a hidden editor")
         let displayed = try await DelimitedTablePresentation.evaluate(
@@ -445,7 +479,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         editor.breakUndoCoalescing()
         let sourceEdited = "Title" + String(expected.dropFirst(4))
         XCTAssertEqual(file.text, sourceEdited)
-        let fresh = try await file.delimitedSnapshot(using: .comma)
+        let fresh = try await file.delimitedSnapshot()
         try await requireDelimitedEdit(file, .deleteRows([1, 2]), using: try XCTUnwrap(fresh))
         XCTAssertEqual(file.text, "Title,Group,Value\r\nOther,h,\"literal\"")
         undo.undo()
@@ -501,7 +535,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             file.setFilePreview(false)
             file.setFilePreview(true)
             let snapshotStart = clock.now
-            let result = try await file.delimitedSnapshot(using: .comma)
+            let result = try await file.delimitedSnapshot()
             snapshotTimes.append(snapshotStart.duration(to: clock.now))
             let snapshot = try XCTUnwrap(result)
             XCTAssertEqual(snapshot.index.records.count, 100_001)
@@ -536,7 +570,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         await file.save()
         XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.utf8BOM.encoded(final))
         XCTAssertFalse(file.isDirty)
-        let reopen = try await file.delimitedSnapshot(using: .comma)
+        let reopen = try await file.delimitedSnapshot()
         XCTAssertEqual(reopen?.index.records.count, 100_001)
         func p95(_ times: [Duration]) -> Duration { times.sorted()[94] }
         print("CSV_EDIT_SESSION edits=100 records=100001 elapsed=\(started.duration(to: clock.now)) snapshot_p95=\(p95(snapshotTimes)) edit_p95=\(p95(editTimes)) undo_main_p95=\(p95(undoTimes)) redo_main_p95=\(p95(redoTimes))")
@@ -552,7 +586,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         file.reopen(using: .latin1)
         try await file.waitForText()
         defer { file.retireContent() }
-        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let loaded = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(loaded)
         do {
             _ = try await DelimitedTableMutation.prepare(.cells([.init(row: 1, column: 0): "😀",
@@ -603,7 +637,7 @@ final class DelimitedTableIndexTests: XCTestCase {
             for (file, replacement) in [(first, "111"), (second, "222")] {
                 file.reopen(using: encoding)
                 try await file.waitForText()
-                let result = try await file.delimitedSnapshot(using: .comma)
+                let result = try await file.delimitedSnapshot()
                 let snapshot = try XCTUnwrap(result)
                 XCTAssertTrue(file.canEditDelimited(snapshot), encoding.name)
                 try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 2): replacement]), using: snapshot)
@@ -642,7 +676,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         defer { file.retireContent() }
         try await file.waitForText()
-        let initial = try await file.delimitedSnapshot(using: .comma)
+        let initial = try await file.delimitedSnapshot()
         let malformed = try XCTUnwrap(initial)
         XCTAssertNotNil(malformed.index.issue)
         XCTAssertFalse(file.canEditDelimited(malformed))
@@ -650,7 +684,7 @@ final class DelimitedTableIndexTests: XCTestCase {
         XCTAssertEqual(file.text, original)
         XCTAssertFalse(file.isDirty)
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: file.nativeTextStorage.length, length: 0), with: "\"")
-        let repaired = try await file.delimitedSnapshot(using: .comma)
+        let repaired = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(repaired)
         XCTAssertNil(snapshot.index.issue)
         XCTAssertTrue(file.canEditDelimited(snapshot))

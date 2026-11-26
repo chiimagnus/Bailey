@@ -431,6 +431,148 @@ final class CSVPreviewUITests: XCTestCase {
         }
     }
 
+    func testEmptyCSVInsertCreatesHeaderAndEditableDataRow() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("Empty.csv", text: "")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let insert = app.buttons["Insert Row"]
+        XCTAssertTrue(insert.waitForExistence(timeout: 10))
+        insert.click()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.waitForExistence(timeout: 10))
+        let rows = table.descendants(matching: .tableRow)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(rows.count, 1)
+        app.typeKey("s", modifierFlags: .command)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: file, encoding: .utf8)) == "\"\"\n\"\"\n"
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+    }
+
+    func testMultilineFieldsRenderAndEditInTheTableWithoutPopover() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "编号,文本,值\n001,含\tTab 字段,1\n002,\"包含\n换行\",=1+1\n003,中文🛰️11,11131\n"
+        let file = try fixture.file("Multiline.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        let first = table.staticTexts["001"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        let multi = table.staticTexts.matching(NSPredicate(format: "value == %@", "包含\n换行")).firstMatch
+        XCTAssertTrue(multi.exists, app.debugDescription)
+        XCTAssertGreaterThan(multi.frame.height, first.frame.height)
+        let before = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        before.name = "CSV actual multiline display"
+        before.lifetime = .keepAlways
+        add(before)
+        first.doubleClick()
+        let editor = WorkspaceUITestSupport.element("bailey.csv.cell.editor", in: app)
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let initialWidth = editor.frame.width
+        let value = "Expanded1234567890123456789012345"
+        app.typeText(value)
+        XCTAssertGreaterThan(editor.frame.width, initialWidth + 30)
+        XCTAssertFalse(app.buttons["Apply Field"].exists)
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: .option)
+        app.typeText("second")
+        XCTAssertTrue(editor.exists)
+        XCTAssertEqual(editor.value as? String, value + "\nsecond")
+        let during = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        during.name = "CSV expanding in-cell editor"
+        during.lifetime = .keepAlways
+        add(during)
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 8))
+        app.typeKey("s", modifierFlags: .command)
+        let expected = original.replacingOccurrences(of: "001,", with: "\"\(value)\nsecond\",")
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(expected.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(first.waitForExistence(timeout: 8))
+        app.typeKey("s", modifierFlags: .command)
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(original.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 10), .completed)
+    }
+
+    func testCompactColumnsAndDirectHeaderEditingWithoutRedundantMenus() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "A;B;C;材料;加载方式;应变率(s⁻¹);备注\n"
+            + "1;2;3;天然页岩;SHPB 单轴动态压缩;82.4;baseline\n"
+            + "4;5;6;泥页岩;巴西劈裂;116.3;轴向加载\n"
+            + "7;8;9;页岩;循环冲击;1.20e2;测量值\n"
+        let file = try fixture.file("Layout.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.staticTexts["1"].waitForExistence(timeout: 12))
+        func header(_ title: String) -> XCUIElement {
+            table.buttons.matching(NSPredicate(format: "title == %@", title)).firstMatch
+        }
+        let first = header("A")
+        XCTAssertTrue(first.exists)
+        let narrow = first.frame.width
+        XCTAssertTrue((23...30).contains(narrow))
+        XCTAssertTrue((17...21).contains(first.frame.height))
+        XCTAssertTrue(table.staticTexts["天然页岩"].exists)
+        let compact = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        compact.name = "CSV compact - mixed Chinese English and numeric"
+        compact.lifetime = .keepAlways
+        add(compact)
+        let gutter = WorkspaceUITestSupport.element("bailey.csv.records", in: app)
+        XCTAssertTrue(gutter.exists)
+        XCTAssertLessThan(gutter.frame.width, 30)
+        first.rightClick()
+        let filter = WorkspaceUITestSupport.menuItem("Filter Column…", in: app)
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        for title in ["Delimiter", "Rename Header…", "Fit Column Width", "Column Statistics…", "Use First Row as Header"] {
+            XCTAssertFalse(WorkspaceUITestSupport.menuItem(title, in: app).exists, title)
+        }
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(filter.waitForNonExistence(timeout: 5))
+        first.doubleClick()
+        app.typeText("Measured")
+        app.typeKey(" ", modifierFlags: [])
+        app.typeText("strain")
+        app.typeKey(" ", modifierFlags: [])
+        app.typeText("rate")
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+        let renamed = header("Measured strain rate")
+        XCTAssertTrue(renamed.waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertGreaterThan(renamed.frame.width, narrow + 30)
+        app.typeKey("s", modifierFlags: .command)
+        let expected = original.replacingOccurrences(of: "A;", with: "Measured strain rate;")
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(expected.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(first.waitForExistence(timeout: 8))
+        XCTAssertEqual(first.frame.width, narrow, accuracy: 1)
+        app.typeKey("s", modifierFlags: .command)
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(original.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 10), .completed)
+    }
+
     func testColumnMenuWithoutStatisticsAndReplaceThroughActualControls() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

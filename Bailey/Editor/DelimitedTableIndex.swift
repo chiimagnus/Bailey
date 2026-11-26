@@ -4,6 +4,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
     static let maximumColumns = 4096
     static let maximumFields = 1_000_000
     static let maximumSourceUnits = 32 << 20
+    static let displayLimit = 4096
 
     enum Separator: UInt16, CaseIterable, Sendable {
         case comma = 44
@@ -54,6 +55,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
         let source: NSRange
         let physicalLine: Int
         let lineEndingLength: Int
+        let displayLineCount: Int
         fileprivate let fieldIndices: Range<Int>
         var fieldCount: Int { fieldIndices.count }
     }
@@ -75,7 +77,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
     }
 
     let separator: Separator
-    let needsSeparatorChoice: Bool
+    let hasAmbiguousSeparator: Bool
     let records: [Record]
     let columnCount: Int
     let issue: Issue?
@@ -96,7 +98,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
         let units = text.utf16
         let sampleLimit = 16_384
         var separator = selected ?? preferred
-        var needsSeparatorChoice = false
+        var hasAmbiguousSeparator = false
         if selected == nil {
             let sample = units.prefix(sampleLimit + 1)
             let hasMore = sample.count > sampleLimit
@@ -110,13 +112,13 @@ nonisolated struct DelimitedTableIndex: Sendable {
             }
             if !consistent.isEmpty { candidates = consistent }
             if candidates.count == 1, let detected = candidates.first { separator = detected }
-            needsSeparatorChoice = candidates.count > 1 || (candidates.isEmpty && hasMore)
-            if needsSeparatorChoice, !candidates.contains(separator), let candidate = candidates.first {
+            hasAmbiguousSeparator = candidates.count > 1 || (candidates.isEmpty && hasMore)
+            if hasAmbiguousSeparator, !candidates.contains(separator), let candidate = candidates.first {
                 separator = candidate
             }
         }
         let scanned = try scan(units, separator: separator)
-        return Self(separator: separator, needsSeparatorChoice: needsSeparatorChoice,
+        return Self(separator: separator, hasAmbiguousSeparator: hasAmbiguousSeparator,
                     records: scanned.records, columnCount: scanned.columnCount,
                     issue: scanned.issue, fields: scanned.fields)
     }
@@ -167,15 +169,24 @@ nonisolated struct DelimitedTableIndex: Sendable {
         private var recordLine = 1
         private var line = 1
         private var lineStart = 0
+        private var fieldDisplayLines = 1
+        private var recordDisplayLines = 1
 
         mutating func consume(_ unit: UInt16, length: Int, separator: UInt16) -> Bool {
             if unit == 0 { fail(.nul); return false }
+            // Count visible explicit line breaks while scanning; CRLF is one unit here.
             if unit == 10 || unit == 13 {
+                if phase == .quoted, offset - fieldStart <= displayLimit { fieldDisplayLines += 1 }
                 if phase != .quoted, !finishRecord(endingLength: length) { return false }
                 offset += length
                 line += 1
                 lineStart = offset
                 return true
+            }
+            switch unit {
+            case 11, 12, 133, 0x2028, 0x2029:
+                if offset - fieldStart < displayLimit + (phase == .quoted ? 1 : 0) { fieldDisplayLines += 1 }
+            default: break
             }
             switch phase {
             case .quoted:
@@ -199,7 +210,11 @@ nonisolated struct DelimitedTableIndex: Sendable {
 
         private mutating func finishField() -> Bool {
             guard fields.count < maximumFields else { fail(.fieldLimit); return false }
+            if fields.count - recordFirstField < maximumColumns {
+                recordDisplayLines = max(recordDisplayLines, fieldDisplayLines)
+            }
             fields.append(Field(fieldStart, endingAt: offset))
+            fieldDisplayLines = 1
             return true
         }
 
@@ -214,7 +229,9 @@ nonisolated struct DelimitedTableIndex: Sendable {
                               line: recordLine, column: 1)
             }
             records.append(Record(source: NSRange(location: recordStart, length: end - recordStart),
-                                  physicalLine: recordLine, lineEndingLength: endingLength, fieldIndices: indices))
+                                  physicalLine: recordLine, lineEndingLength: endingLength,
+                                  displayLineCount: recordDisplayLines, fieldIndices: indices))
+            recordDisplayLines = 1
             recordStart = end
             fieldStart = end
             recordFirstField = fields.count

@@ -7,13 +7,11 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     }
 
     struct Configuration: Hashable, Sendable {
-        var header = true
         var filters: [Int: String] = [:]
         var sort: [Sort] = []
 
         func restricted(to columnCount: Int) -> Self {
-            Self(header: header,
-                 filters: filters.filter { (0..<columnCount).contains($0.key) },
+            Self(filters: filters.filter { (0..<columnCount).contains($0.key) },
                  sort: sort.filter { (0..<columnCount).contains($0.column) })
         }
     }
@@ -101,31 +99,30 @@ nonisolated struct DelimitedTablePresentation: Sendable {
 
     struct FieldScope: Sendable {
         let rows: [Int]?
-        let firstRecord: Int
         let columns: IndexSet
         let selection: Selection?
 
         func visit(in index: DelimitedTableIndex, _ visit: (Int, IndexSet) throws -> Void) throws {
-            let count = rows?.count ?? max(0, index.records.count - firstRecord)
+            let count = rows?.count ?? max(0, index.records.count - 1)
             let offsets = selection?.rows ?? IndexSet(integersIn: 0..<count)
             for offset in offsets {
                 try Task.checkCancellation()
                 guard (0..<count).contains(offset) else { continue }
-                let record = rows?[offset] ?? firstRecord + offset
+                let record = rows?[offset] ?? offset + 1
+                guard record > 0, index.records.indices.contains(record) else { continue }
                 let selected = selection.map { $0.columns(in: offset).intersection(columns) } ?? columns
                 if !selected.isEmpty { try visit(record, selected) }
             }
         }
 
         func contains(_ cell: Cell, in index: DelimitedTableIndex) -> Bool {
-            guard index.records.indices.contains(cell.row), columns.contains(cell.column) else { return false }
+            guard cell.row > 0, index.records.indices.contains(cell.row), columns.contains(cell.column) else { return false }
             let offset: Int
             if let rows {
                 guard let displayed = rows.firstIndex(of: cell.row) else { return false }
                 offset = displayed
             } else {
-                guard cell.row >= firstRecord else { return false }
-                offset = cell.row - firstRecord
+                offset = cell.row - 1
             }
             return selection?.contains(Cell(row: offset, column: cell.column)) ?? true
         }
@@ -138,7 +135,6 @@ nonisolated struct DelimitedTablePresentation: Sendable {
 
     let id = UUID()
     let configuration: Configuration
-    var header: Bool { configuration.header }
     let rows: [Int]
 
     @concurrent static func evaluate(
@@ -146,7 +142,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     ) async throws -> Self {
         let configuration = requested.restricted(to: index.columnCount)
         let text = source as NSString
-        let start = configuration.header && !index.records.isEmpty ? 1 : 0
+        let start = min(1, index.records.count)
         var rows: [Int] = []
         rows.reserveCapacity(index.records.count - start)
         for row in start..<index.records.count {

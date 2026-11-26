@@ -1422,7 +1422,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             try await file.waitForText()
             let controls = file.delimitedTable
             let grid = DelimitedGrid()
-            controls.separator = .comma
+
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: -900, y: -900, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -1430,15 +1430,14 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             window.contentView = grid
             window.orderBack(nil)
             defer { grid.detach(); window.close() }
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: controls.configuration)
             grid.install(snapshot, presentation: presentation)
             grid.layoutSubtreeIfNeeded()
             grid.table.onEdit(.init(row: 0, column: 1))
-            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            let editor = try XCTUnwrap(grid.activeEditor)
             editor.insertText("新值🧪", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
             XCTAssertEqual(file.text, original)
             XCTAssertTrue(manager.canSaveSelectedFile, "Cmd-S must be enabled while the native field owns input")

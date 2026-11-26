@@ -4,18 +4,20 @@ import XCTest
 @testable import Bailey
 
 @MainActor
-func csvFullFieldEditor() -> NSTextView? {
-    func find(_ view: NSView) -> NSTextView? {
-        if let editor = view as? NSTextView, editor.accessibilityIdentifier() == "bailey.csv.full-field" { return editor }
-        return view.subviews.lazy.compactMap(find).first
-    }
-    return NSApp.windows.filter(\.isVisible).compactMap(\.contentView).lazy.compactMap(find).first
+func expectedCompactCSVRowHeight(_ size: CGFloat) -> CGFloat {
+    let layout = NSLayoutManager()
+    let line = max(layout.defaultLineHeight(for: .monospacedSystemFont(ofSize: size, weight: .regular)),
+                   layout.defaultLineHeight(for: .systemFont(ofSize: size, weight: .medium)),
+                   layout.defaultLineHeight(for: .monospacedSystemFont(ofSize: size * 10 / 11, weight: .regular)))
+    return ceil(line + 4 * size / 11 + 1)
 }
 
 @MainActor
 final class DelimitedGridInteractionTests: XCTestCase {
     func testLiveTableFontResizePreservesGridProjectionSelectionAndDraft() async throws {
-        let original = "Name,Value,Note\r\nAlpha,old,one\nBeta,2,two\n"
+        let original = "Name,Value,Note,材料,加载方式,备注\r\n"
+            + "Alpha,old,one,天然页岩,SHPB 单轴动态压缩,baseline\n"
+            + "Beta,2,two,泥页岩,循环冲击,á😀\n"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         try Data(original.utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -38,8 +40,27 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let table = grid.table
         let first = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField)
         XCTAssertEqual(first.font?.pointSize, 11)
-        let originalHeight = table.rowHeight
+        XCTAssertTrue((17...21).contains(table.rowHeight), "Default rows must be compact but not clip the font")
+        func assertFits(_ field: NSTextField, size: CGFloat) throws {
+            let cell = try XCTUnwrap(field.cell)
+            let font = try XCTUnwrap(field.font)
+            let intrinsicText = (field.stringValue as NSString).size(withAttributes: [.font: font])
+            let rect = cell.drawingRect(forBounds: field.bounds)
+            XCTAssertEqual(rect.minX - field.bounds.minX, 4 * size / 11, accuracy: 0.5)
+            XCTAssertEqual(field.bounds.maxX - rect.maxX, 4 * size / 11, accuracy: 0.5)
+            XCTAssertGreaterThanOrEqual(rect.width + 1, intrinsicText.width, field.stringValue)
+            XCTAssertGreaterThanOrEqual(rect.height + 1, intrinsicText.height, field.stringValue)
+        }
+        for row in 0..<table.numberOfRows {
+            for column in 0..<table.numberOfColumns {
+                let field = try XCTUnwrap(table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField)
+                try assertFits(field, size: 11)
+            }
+        }
+        XCTAssertEqual(table.rowHeight, expectedCompactCSVRowHeight(11))
         let width = table.tableColumns[0].width
+        let contentWidth = ("Alpha" as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)]).width
+        XCTAssertEqual(width, ceil(contentWidth + 9))
         table.select(.init(row: 0, column: 0))
         table.select(.init(row: 1, column: 1), extending: true)
         let selection = table.selection
@@ -56,8 +77,11 @@ final class DelimitedGridInteractionTests: XCTestCase {
             }
             let field = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField)
             XCTAssertEqual(field.font?.pointSize, CGFloat(size))
-            XCTAssertEqual(table.rowHeight, ceil(originalHeight * CGFloat(size / 11)))
-            XCTAssertEqual(table.tableColumns[0].width, width * CGFloat(size / 11), accuracy: 1)
+            let scale = CGFloat(size / 11)
+            XCTAssertEqual(table.rowHeight, expectedCompactCSVRowHeight(CGFloat(size)))
+            let expectedWidth = ("Alpha" as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: CGFloat(size), weight: .regular)]).width
+            XCTAssertEqual(table.tableColumns[0].width, ceil(expectedWidth + 8 * scale + 1))
+            try assertFits(field, size: CGFloat(size))
             XCTAssertTrue(file.delimitedTable.grid === grid)
             XCTAssertTrue(grid.table === table)
             XCTAssertEqual(file.textPreviewRequestID, revision)
@@ -71,8 +95,14 @@ final class DelimitedGridInteractionTests: XCTestCase {
         }
         XCTAssertTrue(window.makeFirstResponder(table))
         table.onEdit(.init(row: 0, column: 1))
-        let field = try XCTUnwrap(table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        let editor = try XCTUnwrap(grid.activeEditor)
+        let overlay = try XCTUnwrap(editor.enclosingScrollView)
+        XCTAssertTrue(overlay.superview === grid)
+        XCTAssertEqual(editor.textContainer?.lineFragmentPadding, 0)
+        XCTAssertEqual(editor.textContainerInset, NSSize(width: 4, height: 2))
+        let cellRect = grid.convert(table.frameOfCell(atColumn: 1, row: 0), from: table)
+        XCTAssertEqual(overlay.frame.minX, cellRect.minX, accuracy: 1)
+        XCTAssertEqual(overlay.frame.maxY, cellRect.maxY, accuracy: 1)
         editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
                              replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         XCTAssertTrue(editor.hasMarkedText())
@@ -84,6 +114,56 @@ final class DelimitedGridInteractionTests: XCTestCase {
         editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
         await file.save()
         XCTAssertEqual(try Data(contentsOf: url), Data(original.replacingOccurrences(of: "old", with: "中文").utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+    }
+
+    func testMultilineRowsAndExpandingInlineEditorRetainPhysicalFields() async throws {
+        let original = "编号,文本,值\r\n001,含\tTab 字段,1\n002,\"包含\r\n换行\",=1+1\r\n003,中文🛰️11,11131\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 650, height: 250),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "001")
+        let table = grid.table
+        XCTAssertEqual(table.rect(ofRow: 0).height, table.rowHeight)
+        XCTAssertGreaterThan(table.rect(ofRow: 1).height, table.rowHeight)
+        XCTAssertEqual(table.rect(ofRow: 2).height, table.rowHeight)
+        let multiline = try XCTUnwrap(table.view(atColumn: 1, row: 1, makeIfNecessary: true) as? NSTextField)
+        XCTAssertEqual(multiline.stringValue, "包含\r\n换行")
+        let widths = table.tableColumns.map(\.width)
+        table.onEdit(.init(row: 0, column: 0))
+        let editor = try XCTUnwrap(grid.activeEditor)
+        let overlay = try XCTUnwrap(editor.enclosingScrollView)
+        let initial = overlay.frame
+        let replacement = "编号" + String(repeating: "extended ", count: 8)
+        editor.insertText(replacement, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertGreaterThan(overlay.frame.width, initial.width)
+        XCTAssertEqual(overlay.frame.minX, initial.minX, accuracy: 1)
+        XCTAssertEqual(overlay.frame.maxY, initial.maxY, accuracy: 1)
+        XCTAssertTrue(grid.bounds.contains(overlay.frame))
+        XCTAssertEqual(table.tableColumns.map(\.width), widths)
+        editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
+        editor.insertText("第二行", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertGreaterThan(overlay.frame.height, initial.height)
+        XCTAssertTrue(editor.window === window)
+        XCTAssertTrue(grid.activeEditor === editor)
+        XCTAssertEqual(file.text, original)
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertNil(grid.activeEditor)
+        await file.save()
+        let expected = original.replacingOccurrences(of: "001,", with: "\"\(replacement)\n第二行\",")
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
         file.documentUndoManager.undo()
         XCTAssertEqual(file.text, original)
     }
@@ -112,8 +192,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let grid = try await self.grid(in: host, showing: "Item")
         XCTAssertTrue(window.makeFirstResponder(grid.table))
         grid.table.onEdit(.init(row: 0, column: 1))
-        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        let editor = try XCTUnwrap(grid.activeEditor)
         editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
                              replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         XCTAssertTrue(editor.hasMarkedText())
@@ -143,8 +222,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let companion = try await self.grid(in: host, showing: "Item")
         XCTAssertTrue(window.makeFirstResponder(companion.table))
         companion.table.onEdit(.init(row: 0, column: 1))
-        let secondField = try XCTUnwrap(companion.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-        let secondEditor = try XCTUnwrap(secondField.currentEditor() as? NSTextView)
+        let secondEditor = try XCTUnwrap(companion.activeEditor)
         secondEditor.setMarkedText("xin", selectedRange: NSRange(location: 3, length: 0),
                                   replacementRange: NSRange(location: 0, length: secondEditor.string.utf16.count))
         XCTAssertTrue(secondEditor.hasMarkedText())
@@ -247,17 +325,19 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertFalse(file.hasPendingDelimitedEdit)
         _ = try await self.grid(in: host, showing: "Beta")
         grid.table.select(target)
-        controls.configuration.header = false
         controls.configuration.filters.removeAll()
         controls.configuration.sort.removeAll()
-        grid.paste("stale header")
+        grid.paste("stale reset")
         XCTAssertFalse(file.hasPendingDelimitedEdit)
-        _ = try await self.grid(in: host, showing: "Name")
+        _ = try await self.grid(in: host, showing: "Beta")
         grid.table.select(target)
-        controls.separator = .semicolon
+        let converted = original.replacingOccurrences(of: ",", with: ";")
+        file.nativeTextStorage.replaceCharacters(in: NSRange(location: 0, length: file.nativeTextStorage.length), with: converted)
         grid.paste("stale delimiter")
         XCTAssertFalse(file.hasPendingDelimitedEdit)
-        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(file.text, converted)
+        let next = try await file.delimitedSnapshot()
+        XCTAssertEqual(next?.index.separator, .semicolon)
         XCTAssertFalse(file.documentUndoManager.canUndo)
         XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
@@ -284,12 +364,15 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let grid = try await self.grid(in: host, showing: "Zulu")
         let gutter = try XCTUnwrap(grid.subviews.first { $0.accessibilityIdentifier() == "bailey.csv.records" })
         let headerView = try XCTUnwrap(grid.table.headerView)
+        let scale = CGFloat(AppSettings.shared.tableFontSize / FontSizeRole.table.defaultSize)
         for width: CGFloat in [920, 480, 360, 260, 220, 150, 260] {
             window.setContentSize(NSSize(width: width, height: 160))
             host.layoutSubtreeIfNeeded()
             let nativeHeader = headerView.convert(headerView.bounds, to: nil)
-            XCTAssertEqual(nativeHeader.height, 30)
-            XCTAssertEqual(gutter.frame.width, 46)
+            XCTAssertEqual(nativeHeader.height, expectedCompactCSVRowHeight(CGFloat(AppSettings.shared.tableFontSize)))
+            let numberWidth = ("00" as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 10 * scale, weight: .regular)]).width
+            XCTAssertEqual(gutter.frame.width, ceil(numberWidth + 8 * scale))
+            XCTAssertLessThan(gutter.frame.width, max(46, ceil(numberWidth) + 20))
             XCTAssertEqual(grid.scrollView.frame.minX, gutter.frame.maxX)
             XCTAssertEqual(grid.scrollView.frame.maxX, grid.bounds.maxX)
         }
@@ -351,7 +434,8 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let write = try XCTUnwrap(file.delimitedEditTask)
         let accepted = await write.value
         XCTAssertTrue(accepted)
-        XCTAssertEqual(file.delimitedTable.separator, .comma)
+        let next = try await file.delimitedSnapshot()
+        XCTAssertEqual(next?.index.separator, .comma)
         await file.save()
         let edited = header + first.replacingOccurrences(of: "Zulu,old", with: "Zulu,semi;colon") + others
         XCTAssertEqual(try Data(contentsOf: url), Data(edited.utf8))
@@ -393,7 +477,8 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let inserted = await task.value
         XCTAssertTrue(inserted)
         XCTAssertEqual(file.delimitedTable.configuration.filters, [2: "keep"])
-        XCTAssertEqual(file.delimitedTable.columnWidths[2], 190)
+        XCTAssertEqual(try XCTUnwrap(file.delimitedTable.columnWidths[2]),
+                       190 / CGFloat(AppSettings.shared.tableFontSize / FontSizeRole.table.defaultSize), accuracy: 0.01)
         await file.save()
         XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
         file.documentUndoManager.undo()
@@ -402,6 +487,127 @@ final class DelimitedGridInteractionTests: XCTestCase {
         file.documentUndoManager.redo()
         XCTAssertEqual(file.text, expected)
         XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
+    }
+
+    func testInlineHeaderEditingAndAutomaticColumnWidthsUseTheSameDocument() async throws {
+        let original = "A,B,C\r\n1,2,3\n4,5,6\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 500, height: 220),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "1")
+        let table = grid.table
+        let header = try XCTUnwrap(table.headerView)
+        let narrow = table.tableColumns[0].width
+        let scale = CGFloat(AppSettings.shared.tableFontSize / FontSizeRole.table.defaultSize)
+        XCTAssertLessThan(narrow, 60 * scale)
+        table.tableColumns[1].width = 137
+        func begin() throws -> NSTextView {
+            let point = header.convert(NSPoint(x: header.headerRect(ofColumn: 0).midX, y: header.bounds.midY), to: nil)
+            let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                                                            timestamp: 0, windowNumber: window.windowNumber,
+                                                            context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+            let menu = try XCTUnwrap(header.menu(for: menuEvent))
+            for action in ["renameHeaderItem:", "chooseDelimiter:", "fitColumnWidth:", "toggleHeader:"] {
+                XCTAssertFalse(menu.items.contains { $0.action.map(NSStringFromSelector) == action })
+            }
+            XCTAssertFalse(menu.items.contains { $0.submenu != nil })
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+                                                        timestamp: 0, windowNumber: window.windowNumber,
+                                                        context: nil, eventNumber: 0, clickCount: 2, pressure: 1))
+            header.mouseDown(with: event)
+            let editor = try XCTUnwrap(grid.activeEditor)
+            let input = try XCTUnwrap(editor.enclosingScrollView)
+            XCTAssertTrue(window.firstResponder === editor)
+            XCTAssertTrue(file.hasPendingDelimitedEdit)
+            let cell = grid.convert(header.headerRect(ofColumn: 0), from: header)
+            XCTAssertEqual(input.frame.minX, cell.minX, accuracy: 1)
+            XCTAssertEqual(input.frame.maxY, cell.maxY, accuracy: 1)
+            XCTAssertTrue(input.superview === grid)
+            XCTAssertEqual(editor.textContainer?.lineFragmentPadding, 0)
+            XCTAssertEqual(editor.textContainerInset.width, 4 * scale, accuracy: 0.01)
+            XCTAssertEqual(editor.textContainerInset.height, 2 * scale, accuracy: 0.01)
+            return editor
+        }
+        func waitForHeader(_ title: String) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                if table.tableColumns[0].title == title, !file.hasPendingDelimitedEdit { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(table.tableColumns[0].title, title)
+            XCTAssertFalse(file.hasPendingDelimitedEdit)
+        }
+        let cancelled = try begin()
+        cancelled.insertText("cancelled", replacementRange: NSRange(location: 0, length: cancelled.string.utf16.count))
+        cancelled.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.hasPendingDelimitedEdit)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        let title = "Strain rate " + String(repeating: "W", count: 48)
+        let editor = try begin()
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                             replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(editor.hasMarkedText())
+        await file.save()
+        XCTAssertTrue(file.hasPendingDelimitedEdit)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+        editor.insertText(title, replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        await file.save()
+        try await waitForHeader(title)
+        XCTAssertEqual(try Data(contentsOf: url), Data((title + String(original.dropFirst())).utf8))
+        XCTAssertGreaterThan(table.tableColumns[0].width, 290)
+        XCTAssertEqual(table.tableColumns[1].width, 137, accuracy: 1)
+        XCTAssertTrue(grid.table === table)
+        file.documentUndoManager.undo()
+        try await waitForHeader("A")
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(table.tableColumns[0].width, narrow, accuracy: 1)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+
+        table.tableColumns[1].width = 137
+        let unrelatedWidth = table.tableColumns[2].width
+        file.delimitedTable.configuration.sort = [.init(column: 0, ascending: true)]
+        let sortDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while table.tableColumns[0].headerCell.accessibilitySortDirection() != .ascending,
+              ContinuousClock.now < sortDeadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(table.tableColumns[1].width, 137, accuracy: 1)
+        XCTAssertEqual(table.tableColumns[2].width, unrelatedWidth, accuracy: 1)
+        file.delimitedTable.configuration.sort.removeAll()
+        let resetDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while table.tableColumns[0].headerCell.accessibilitySortDirection() != .unknown,
+              ContinuousClock.now < resetDeadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(table.tableColumns[0].width, narrow, accuracy: 1)
+        let initial = try await file.delimitedSnapshot()
+        let snapshot = try XCTUnwrap(initial)
+        let value = String(repeating: "x", count: 62)
+        try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 2): value]), using: snapshot)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while table.tableColumns[2].width <= 290, ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThan(table.tableColumns[2].width, 290)
+        XCTAssertEqual(table.tableColumns[0].width, narrow, accuracy: 1)
     }
 
     func testNativeHeaderEditorKeepsFullRawValueAndRetainsUnrepresentableInput() async throws {
@@ -431,10 +637,13 @@ final class DelimitedGridInteractionTests: XCTestCase {
                                                         timestamp: 0, windowNumber: window.windowNumber,
                                                         context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
             let menu = try XCTUnwrap(header.menu(for: click))
-            let rename = try XCTUnwrap(menu.item(withTitle: String(localized: "Rename Header…", table: "Editor")))
-            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(rename.action), to: rename.target, from: rename))
+            XCTAssertFalse(menu.items.contains { $0.title == "Rename Header…" })
+            let double = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: origin, modifierFlags: [],
+                                                        timestamp: 0, windowNumber: window.windowNumber,
+                                                        context: nil, eventNumber: 0, clickCount: 2, pressure: 1))
+            header.mouseDown(with: double)
 
-            let native = try XCTUnwrap(csvFullFieldEditor())
+            let native = try XCTUnwrap(grid.activeEditor)
             XCTAssertEqual(Data(native.string.utf8), Data(title.utf8))
             let end = NSRange(location: native.string.utf16.count, length: 0)
             native.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: end)
@@ -502,19 +711,12 @@ final class DelimitedGridInteractionTests: XCTestCase {
             let grid = try await self.grid(in: host, showing: "Item")
             grid.table.onEdit(.init(row: 0, column: 1))
 
-            if !readOnly && !multiline && value.utf16.count <= 4096 {
-                let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-                XCTAssertNil(csvFullFieldEditor())
-                XCTAssertEqual((field.currentEditor() as? NSTextView)?.string, value)
-                grid.cancelEditing()
-                XCTAssertFalse(file.hasPendingDelimitedEdit)
-                continue
-            }
-
-            let editor = try XCTUnwrap(csvFullFieldEditor())
+            let editor = try XCTUnwrap(grid.activeEditor)
             XCTAssertEqual(Data(editor.string.utf8), Data(value.utf8))
             XCTAssertEqual(editor.isEditable, !readOnly)
             XCTAssertTrue(editor.isSelectable)
+            XCTAssertTrue(editor.enclosingScrollView?.superview === grid)
+            XCTAssertTrue(editor.window === window)
             if readOnly {
                 XCTAssertFalse(file.hasPendingDelimitedEdit)
                 editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
@@ -522,7 +724,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
                 continue
             }
             editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
-            editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
             editor.insertText("新增", replacementRange: NSRange(location: NSNotFound, length: 0))
             let typed = value + "\n新增"
             XCTAssertEqual(Data(editor.string.utf8), Data(typed.utf8))
@@ -535,7 +737,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(10))
             }
             XCTAssertNotEqual(editor.backgroundColor, initialBackground)
-            XCTAssertTrue(csvFullFieldEditor() === editor)
+            XCTAssertTrue(grid.activeEditor === editor)
             XCTAssertEqual(editor.selectedRange(), selection)
             XCTAssertEqual(file.text, original)
             await file.save()
