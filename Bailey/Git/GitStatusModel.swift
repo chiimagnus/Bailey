@@ -32,6 +32,7 @@ final class GitStatusModel {
         statusRefreshTask?.cancel()
         statusTimeoutTask?.cancel()
         for task in binaryDetailTasks.values { task.cancel() }
+        for task in historicalFileTasks.values { task.cancel() }
         for task in stashFileTasks.values { task.cancel() }
     }
 
@@ -152,7 +153,32 @@ final class GitStatusModel {
     var changeCursor: ChangeSelection?
     private(set) var selectedChanges: Set<ChangeSelection> = []
     private(set) var changeAnchor: ChangeSelection?
-    var expandedCommitIDs: Set<String> = []
+    var expandedCommitIDs: Set<String> = [] {
+        didSet {
+            let closed = oldValue.subtracting(expandedCommitIDs)
+            for oid in closed { releaseHistoricalFiles(oid) }
+            for stash in stashes where closed.contains(stash.id) {
+                if !stashes.contains(where: { $0.oid == stash.oid && expandedCommitIDs.contains($0.id) }) {
+                    stashFileTasks.removeValue(forKey: stash.oid)?.cancel()
+                    stashFilesByOID.removeValue(forKey: stash.oid)
+                }
+            }
+            let opened = expandedCommitIDs.subtracting(oldValue)
+            loadHistoryFiles(for: opened)
+        }
+    }
+
+    func loadExpandedHistoryFiles() { loadHistoryFiles(for: expandedCommitIDs) }
+
+    private func loadHistoryFiles(for ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        for commit in recentCommits where ids.contains(commit.id) {
+            loadHistoricalFiles(for: commit)
+        }
+        for stash in stashes where ids.contains(stash.id) {
+            loadStashFiles(for: stash)
+        }
+    }
 
     /// Git resource selection is independent of the keyboard cursor and Graph disclosure.
     /// Mouse Shift replaces only the anchor's current contiguous range; other islands survive.
@@ -711,7 +737,6 @@ final class GitStatusModel {
         let date: Date
         let parentHashes: [String]
         let references: [Reference]
-        let files: [FileChange]
         var stash: Stash? = nil
         var worktree: WorktreeChanges? = nil
         var checkedOutWorktrees: [WorktreeLocation] = []
@@ -1062,11 +1087,67 @@ final class GitStatusModel {
         let verification: Verification
     }
 
+    /// Commit history contains only metadata. File changes are read for
+    /// expanded commits and discarded on collapse or Graph disappearance.
+    func historicalFiles(for commit: RecentCommit) -> [RecentCommit.FileChange]? {
+        if case .loaded(let files) = historicalFilesByOID[commit.hash] { return files }
+        return nil
+    }
+
+    func loadHistoricalFiles(for commit: RecentCommit) {
+        let oid = commit.hash
+        guard isRepo, recentCommits.contains(where: {
+            $0.hash == oid && $0.parentHashes == commit.parentHashes
+        }) else { return }
+        if let cached = historicalFilesByOID[oid] {
+            switch cached {
+            case .loading, .loaded: return
+            case .failed: break
+            }
+        }
+        historicalFilesByOID[oid] = .loading
+        let generation = contextGeneration
+        let root = repoRoot
+        let backend = backend
+        historicalFileTasks[oid] = Task(priority: .userInitiated) { [weak self] in
+            let state = await Self.readHistoricalFiles(oid: oid, root: root, backend: backend)
+            guard !Task.isCancelled, let self, self.contextGeneration == generation,
+                  self.repoRoot == root else { return }
+            self.historicalFileTasks[oid] = nil
+            self.historicalFilesByOID[oid] = state
+            if case .loaded(let files) = state, !files.isEmpty {
+                self.loadHistoricalBinaryPaths(for: commit)
+            }
+        }
+    }
+
+    @concurrent private static func readHistoricalFiles(
+        oid: String, root: String, backend: WorkspaceBackend
+    ) async -> HistoryFilesState {
+        let result = await GitCommandExecution.runData(
+            ["show", "--format=", "--name-status", "-z", "--diff-merges=first-parent", oid, "--"],
+            in: root, backend: backend
+        )
+        guard result.status == 0, let files = parseGitFileChanges(result.stdout) else {
+            return .failed(result.stderr.isEmpty
+                ? String(localized: "Unable to read commit changes", table: "Git")
+                : result.stderr)
+        }
+        return .loaded(files)
+    }
+
+    private func releaseHistoricalFiles(_ oid: String) {
+        historicalFileTasks.removeValue(forKey: oid)?.cancel()
+        historicalFilesByOID.removeValue(forKey: oid)
+        binaryDetailTasks.removeValue(forKey: oid)?.cancel()
+        historicalBinaryPaths.removeValue(forKey: oid)
+    }
+
     /// Each expanded commit is queried once, not each file or each hover.
     func loadHistoricalBinaryPaths(for commit: RecentCommit) {
         let oid = commit.hash
-        guard isRepo, recentCommits.contains(where: { $0.hash == oid }),
-              historicalBinaryPaths[oid] == nil, binaryDetailTasks[oid] == nil else { return }
+        guard historicalBinaryPaths[oid] == nil, binaryDetailTasks[oid] == nil,
+              isRepo, recentCommits.contains(where: { $0.hash == oid }) else { return }
         let generation = contextGeneration
         let root = repoRoot
         let backend = backend
@@ -1266,13 +1347,15 @@ final class GitStatusModel {
             && !worktreeLocations.contains { $0.branch == branchName }
     }
 
-    nonisolated enum StashFilesState: Equatable, Sendable {
+    nonisolated enum HistoryFilesState: Equatable, Sendable {
         case loading
         case loaded([RecentCommit.FileChange])
         case failed(String)
     }
 
-    private(set) var stashFilesByOID: [String: StashFilesState] = [:]
+    private(set) var historicalFilesByOID: [String: HistoryFilesState] = [:]
+    @ObservationIgnored private var historicalFileTasks: [String: Task<Void, Never>] = [:]
+    private(set) var stashFilesByOID: [String: HistoryFilesState] = [:]
     @ObservationIgnored private var stashFileTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var graphCommitsCache: (
         commits: [RecentCommit], stashes: [Stash], worktrees: [WorktreeChanges],
@@ -1322,7 +1405,7 @@ final class GitStatusModel {
             graph.insert(RecentCommit(
                 hash: stash.oid, shortHash: String(stash.oid.prefix(7)),
                 subject: stash.message, author: stash.author, date: stash.date,
-                parentHashes: [stash.baseHash], references: [], files: [], stash: stash
+                parentHashes: [stash.baseHash], references: [], stash: stash
             ), at: entry.position)
         }
         for worktree in worktrees.filter({ !$0.entries.isEmpty })
@@ -1335,7 +1418,7 @@ final class GitStatusModel {
                 subject: String(localized: "Uncommitted Changes", table: "Git"),
                 author: "", date: .distantPast,
                 parentHashes: worktree.headOID.map { [$0] } ?? [],
-                references: [], files: [], worktree: worktree
+                references: [], worktree: worktree
             ), at: at)
         }
         return graph
@@ -1524,8 +1607,7 @@ final class GitStatusModel {
         if panelTargetIdentity != context.identity {
             clearPanelNavigation()
             contextGeneration &+= 1
-            cancelOptionalReads()
-            stashFilesByOID = [:]
+            releaseHistoryDetails()
             invalidateStatusRefresh()
         }
         sync(root: context.cwd, backend: context.backend, scope: context.scope)
@@ -1573,8 +1655,7 @@ final class GitStatusModel {
             hasCurrentHistory = false
             hasCurrentStashes = false
             hasCurrentWorktrees = false
-            cancelOptionalReads()
-            stashFilesByOID = [:]
+            releaseHistoryDetails()
             invalidateStatusRefresh()
             needsCoreVerification = true
         }
@@ -1763,11 +1844,7 @@ final class GitStatusModel {
                        history.refsByName == self.refsByName,
                        latest.worktreeLocations == self.worktreeLocations,
                        self.canUseCurrentReferences {
-                        if self.recentCommits != history.commits { self.recentCommits = history.commits }
-                        if self.hasMoreRecentCommits != history.hasMore {
-                            self.hasMoreRecentCommits = history.hasMore
-                        }
-                        if !self.hasCurrentHistory { self.hasCurrentHistory = true }
+                        self.applyHistory(history)
                         self.historyPageError = nil
                         if case .repository(let cached, let cachedPresentation) = self.cachedStatusByRoot[self.scopedRoot] {
                             var updated = cached
@@ -3074,7 +3151,7 @@ final class GitStatusModel {
     ) {
         guard isCurrent(target), !path.isEmpty,
               recentCommits.contains(where: { $0.hash == commit.hash }),
-              commit.files.contains(where: { $0.path == path && $0.status != "D" }) else {
+              historicalFiles(for: commit)?.contains(where: { $0.path == path && $0.status != "D" }) == true else {
             failImmediately(String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git"),
                             completion: completion)
             return
@@ -3885,11 +3962,16 @@ final class GitStatusModel {
         let failure: String?
     }
 
-    private func cancelOptionalReads() {
+    func releaseHistoryDetails() {
         for task in binaryDetailTasks.values { task.cancel() }
         binaryDetailTasks.removeAll()
+        for task in historicalFileTasks.values { task.cancel() }
+        historicalFileTasks.removeAll()
         for task in stashFileTasks.values { task.cancel() }
         stashFileTasks.removeAll()
+        if !historicalFilesByOID.isEmpty { historicalFilesByOID = [:] }
+        if !historicalBinaryPaths.isEmpty { historicalBinaryPaths = [:] }
+        if !stashFilesByOID.isEmpty { stashFilesByOID = [:] }
     }
 
     private func invalidateStatusRefresh() {
@@ -4000,7 +4082,7 @@ final class GitStatusModel {
 
     @concurrent private static func readStashFiles(
         _ stash: Stash, root: String, backend: WorkspaceBackend
-    ) async -> StashFilesState {
+    ) async -> HistoryFilesState {
         let tracked = await GitCommandExecution.runData([
             "diff", "--name-status", "-z", "--no-ext-diff", stash.baseHash, stash.oid, "--"
         ], in: root, backend: backend)
@@ -4083,9 +4165,7 @@ final class GitStatusModel {
         defaultBranch = nil
         remotes = []
         recentCommits = []
-        cancelOptionalReads()
-        stashFilesByOID = [:]
-        historicalBinaryPaths = [:]
+        releaseHistoryDetails()
         hasMoreRecentCommits = false
         isLoadingMoreCommits = false
         stashes = []
@@ -4126,6 +4206,27 @@ final class GitStatusModel {
                 to: contextGeneration, verified: !fromCache
             ))
         }
+    }
+
+    private func applyHistory(_ history: StatusHistory) {
+        if recentCommits != history.commits {
+            let oldParents = Dictionary(uniqueKeysWithValues: recentCommits.map { ($0.hash, $0.parentHashes) })
+            let newParents = Dictionary(uniqueKeysWithValues: history.commits.map { ($0.hash, $0.parentHashes) })
+            let details = Set(historicalFilesByOID.keys).union(binaryDetailTasks.keys)
+                .union(historicalBinaryPaths.keys)
+            let invalid = details.filter { newParents[$0] == nil || oldParents[$0] != newParents[$0] }
+            for oid in invalid { releaseHistoricalFiles(oid) }
+            recentCommits = history.commits
+            let removed = Set(oldParents.keys).subtracting(newParents.keys)
+            if !expandedCommitIDs.isDisjoint(with: removed) {
+                expandedCommitIDs.subtract(removed)
+            }
+            // If a shallow boundary changes a still-expanded commit, reread
+            // only its displayed details, not every historical file.
+            loadHistoryFiles(for: Set(invalid).intersection(expandedCommitIDs))
+        }
+        if hasMoreRecentCommits != history.hasMore { hasMoreRecentCommits = history.hasMore }
+        if !hasCurrentHistory { hasCurrentHistory = true }
     }
 
     private func applyRepository(_ result: StatusResult, presentation: StatusPresentation) {
@@ -4183,19 +4284,10 @@ final class GitStatusModel {
             if defaultBranch != core.defaultBranch { defaultBranch = core.defaultBranch }
             if !hasCurrentReferences { hasCurrentReferences = true }
         }
-        if let history = result.history {
-            let liveCommits = Set(history.commits.map(\.hash))
-            for oid in binaryDetailTasks.keys.filter({ !liveCommits.contains($0) }) {
-                binaryDetailTasks.removeValue(forKey: oid)?.cancel()
-            }
-            if historicalBinaryPaths.keys.contains(where: { !liveCommits.contains($0) }) {
-                historicalBinaryPaths = historicalBinaryPaths.filter { liveCommits.contains($0.key) }
-            }
-            if recentCommits != history.commits { recentCommits = history.commits }
-            if hasMoreRecentCommits != history.hasMore { hasMoreRecentCommits = history.hasMore }
-            if !hasCurrentHistory { hasCurrentHistory = true }
-        }
+        if let history = result.history { applyHistory(history) }
         if let freshStashes = result.stashes {
+            let removed = Set(stashes.map(\.id)).subtracting(freshStashes.map(\.id))
+            if !expandedCommitIDs.isDisjoint(with: removed) { expandedCommitIDs.subtract(removed) }
             if stashes != freshStashes { stashes = freshStashes }
             if !hasCurrentStashes { hasCurrentStashes = true }
             let liveStashOIDs = Set(freshStashes.map(\.oid))
@@ -5056,7 +5148,7 @@ final class GitStatusModel {
         ] + heads + [
             "--date-order", "--diff-merges=first-parent", "--decorate=full",
             "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
-            "--name-status", "-z",
+            "--no-patch", "-z",
         ]
     }
 
@@ -5091,49 +5183,9 @@ final class GitStatusModel {
         _ output: String, refsByName: [String: GitRef] = [:]
     ) -> [RecentCommit] {
         output.split(separator: "\u{1e}").compactMap { record in
-            var chunks = record.split(separator: "\u{0}", omittingEmptySubsequences: false)
-                .map(String.init)
-            guard !chunks.isEmpty else { return nil }
-
-            // With --name-status -z, the first status follows the pretty
-            // header after a newline; subsequent statuses are their own NUL
-            // fields. Rename/copy records carry both old and new paths.
-            let headerAndStatus = chunks.removeFirst()
-            let boundary = headerAndStatus.lastIndex(of: "\n")
-            let header = boundary.map { String(headerAndStatus[..<$0]) } ?? headerAndStatus
-            var statusToken = boundary.map {
-                String(headerAndStatus[headerAndStatus.index(after: $0)...])
-            } ?? ""
+            guard let header = record.split(separator: "\0").first else { return nil }
             let fields = header.split(separator: "\u{1f}", omittingEmptySubsequences: false)
-            guard fields.count == 7, let timestamp = TimeInterval(fields[4]) else {
-                return nil
-            }
-
-            var files: [RecentCommit.FileChange] = []
-            var index = 0
-            while !statusToken.isEmpty, index < chunks.count {
-                guard let status = statusToken.first else { break }
-                if status == "R" || status == "C" {
-                    guard index + 1 < chunks.count else { break }
-                    files.append(.init(
-                        status: status,
-                        path: chunks[index + 1],
-                        originalPath: chunks[index]
-                    ))
-                    index += 2
-                } else {
-                    files.append(.init(
-                        status: status,
-                        path: chunks[index],
-                        originalPath: nil
-                    ))
-                    index += 1
-                }
-                guard index < chunks.count else { break }
-                statusToken = chunks[index]
-                index += 1
-            }
-
+            guard fields.count == 7, let timestamp = TimeInterval(fields[4]) else { return nil }
             return RecentCommit(
                 hash: String(fields[0]), shortHash: String(fields[1]),
                 subject: String(fields[2]), author: String(fields[3]),
@@ -5151,8 +5203,7 @@ final class GitStatusModel {
                         return reference
                     }
                     return .init(kind: .remoteAlias, name: reference.name)
-                },
-                files: files
+                }
             )
         }
     }

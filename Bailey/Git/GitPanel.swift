@@ -1273,7 +1273,7 @@ struct GitPanel: View {
               manager.selectedProject === project,
               let context = project.panelContext,
               model.matchesPanelTarget(context.identity),
-              commit.files.contains(where: { $0.path == file.path }) else { return }
+              model.historicalFiles(for: commit)?.contains(file) == true else { return }
         let target = model.actionTarget()
         let current: @MainActor () -> Bool = {
             manager.selectedProject === project && manager.attachedWindow === window
@@ -1933,6 +1933,7 @@ struct GitPanel: View {
                                 model.openInBrowser(remote: remote, commit: commit,
                                                     hostProviders: settings.gitHostProviders)
                             },
+                            historicalFilesByOID: model.historicalFilesByOID,
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             selectionScope: model.currentScope,
@@ -1940,14 +1941,6 @@ struct GitPanel: View {
                             fileAction: { commit, file, action in
                                 guard model.canBrowse(graphTarget) else { return }
                                 handleHistoricalFile(commit, file: file, action: action)
-                            },
-                            loadBinaryStatus: { commit in
-                                guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
-                                if let stash = commit.stash {
-                                    model.loadStashFiles(for: stash)
-                                } else {
-                                    model.loadHistoricalBinaryPaths(for: commit)
-                                }
                             },
                             isBinaryFile: { commit, file in
                                 model.isHistoricalBinaryFile(commit: commit, path: file.path)
@@ -2038,6 +2031,16 @@ struct GitPanel: View {
                             onKeyboardAttached: focusGitChanges
                         )
                             .frame(maxWidth: .infinity)
+                            .onAppear {
+                                if hasCurrentPanelTarget, model.canBrowse(graphTarget) {
+                                    model.loadExpandedHistoryFiles()
+                                }
+                            }
+                            .onDisappear {
+                                if hasCurrentPanelTarget, model.canBrowse(graphTarget) {
+                                    model.releaseHistoryDetails()
+                                }
+                            }
                         }
                     }
                 }

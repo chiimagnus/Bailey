@@ -166,12 +166,12 @@ struct RecentCommitsView: View {
     let knownRemotesByCommit: [String: Set<String>]
     let hostProviders: [String: GitHostedRemoteURL.Provider]
     let openHosted: (String, String) -> Void
-    let stashFilesByOID: [String: GitStatusModel.StashFilesState]
+    let historicalFilesByOID: [String: GitStatusModel.HistoryFilesState]
+    let stashFilesByOID: [String: GitStatusModel.HistoryFilesState]
     let repoRoot: String
     let selectionScope: String
     let displayedDiff: DiffTab?
     let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
-    let loadBinaryStatus: (Commit) -> Void
     let isBinaryFile: (Commit, Commit.FileChange) -> Bool
     let viewMode: GitViewMode
     let fontScale: CGFloat
@@ -210,12 +210,12 @@ struct RecentCommitsView: View {
         knownRemotesByCommit: [String: Set<String>],
         hostProviders: [String: GitHostedRemoteURL.Provider],
         openHosted: @escaping (String, String) -> Void,
-        stashFilesByOID: [String: GitStatusModel.StashFilesState],
+        historicalFilesByOID: [String: GitStatusModel.HistoryFilesState],
+        stashFilesByOID: [String: GitStatusModel.HistoryFilesState],
         repoRoot: String,
         selectionScope: String,
         displayedDiff: DiffTab?,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
-        loadBinaryStatus: @escaping (Commit) -> Void,
         isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
         expandedCommitIDs: Binding<Set<String>>,
         collapsedFolders: Binding<Set<String>>,
@@ -259,12 +259,12 @@ struct RecentCommitsView: View {
         self.knownRemotesByCommit = knownRemotesByCommit
         self.hostProviders = hostProviders
         self.openHosted = openHosted
+        self.historicalFilesByOID = historicalFilesByOID
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.selectionScope = selectionScope
         self.displayedDiff = displayedDiff
         self.fileAction = fileAction
-        self.loadBinaryStatus = loadBinaryStatus
         self.isBinaryFile = isBinaryFile
         _expandedCommitIDs = expandedCommitIDs
         _collapsedFolders = collapsedFolders
@@ -515,7 +515,8 @@ struct RecentCommitsView: View {
         let scope: String
         let repository: String
         let commits: [Commit]
-        let stashFiles: [String: GitStatusModel.StashFilesState]
+        let historicalFiles: [String: GitStatusModel.HistoryFilesState]
+        let stashFiles: [String: GitStatusModel.HistoryFilesState]
         let expanded: Set<String>
         let collapsed: Set<String>
         let mode: GitViewMode
@@ -531,7 +532,7 @@ struct RecentCommitsView: View {
             // Reference changes do not invalidate the identity of historical file rows.
             return commits.count <= other.commits.count && zip(commits, other.commits).allSatisfy {
                 $0.id == $1.id && $0.parentHashes == $1.parentHashes
-                    && $0.files == $1.files && $0.stash == $1.stash && $0.worktree == $1.worktree
+                    && $0.stash == $1.stash && $0.worktree == $1.worktree
             }
         }
     }
@@ -580,13 +581,24 @@ struct RecentCommitsView: View {
                 historical.removeAll()
                 worktrees.removeAll()
                 layoutCache = CommitGraphLayoutCache()
-            } else if cached?.key.commits != key.commits {
-                let historySections = Set(key.commits.filter { $0.worktree == nil }.map { "commit:" + $0.id })
-                let worktreeSections = Set(key.commits.compactMap(\.worktree).flatMap { worktree in
+            }
+            if key.mode == .tree {
+                let expanded = key.commits.filter { key.expanded.contains($0.id) }
+                let historySections = Set(expanded.compactMap { commit -> String? in
+                    let state = commit.stash == nil
+                        ? key.historicalFiles[commit.hash]
+                        : commit.stash.flatMap { key.stashFiles[$0.oid] }
+                    guard case .loaded = state else { return nil }
+                    return "commit:" + commit.id
+                })
+                let worktreeSections = Set(expanded.compactMap(\.worktree).flatMap { worktree in
                     ["merge", "staged", "changes"].map { "worktree:" + worktree.path + ":" + $0 }
                 })
                 historical = historical.filter { historySections.contains($0.key) }
                 worktrees = worktrees.filter { worktreeSections.contains($0.key) }
+            } else {
+                historical.removeAll()
+                worktrees.removeAll()
             }
             guard let rows = buildRows(for: key), !Task.isCancelled else { return }
             let layout = layoutCache.layout(for: key.commits)
@@ -630,19 +642,26 @@ struct RecentCommitsView: View {
                 guard expanded else { continue }
                 if let worktree = commit.worktree {
                     appendWorktreeRows(worktree, commit: commit, index: index, key: key, to: &rows)
-                } else if let stash = commit.stash {
-                    switch key.stashFiles[stash.oid] {
+                } else {
+                    let state: GitStatusModel.HistoryFilesState?
+                    if let stash = commit.stash {
+                        state = key.stashFiles[stash.oid]
+                    } else {
+                        state = key.historicalFiles[commit.hash]
+                    }
+                    switch state {
                     case .loaded(let files):
                         appendHistoricalRows(files, commit: commit, index: index, key: key, to: &rows)
                     case .failed(let message):
                         rows.append(GraphRow(id: id + "\u{0}detail", commitIndex: index,
                                              content: .placeholder(message, secondary: true)))
                     default:
+                        let message = commit.stash == nil
+                            ? String(localized: "Loading commit changes…", table: "Git")
+                            : String(localized: "Loading stash changes…", table: "Git")
                         rows.append(GraphRow(id: id + "\u{0}detail", commitIndex: index,
-                            content: .placeholder(String(localized: "Loading stash changes…", table: "Git"), secondary: true)))
+                            content: .placeholder(message, secondary: true)))
                     }
-                } else {
-                    appendHistoricalRows(commit.files, commit: commit, index: index, key: key, to: &rows)
                 }
             }
             return rows
@@ -765,7 +784,8 @@ struct RecentCommitsView: View {
 
     private var displayKey: GraphDisplayKey {
         GraphDisplayKey(
-            scope: selectionScope, repository: repoRoot, commits: commits, stashFiles: stashFilesByOID,
+            scope: selectionScope, repository: repoRoot, commits: commits,
+            historicalFiles: historicalFilesByOID, stashFiles: stashFilesByOID,
             expanded: expandedCommitIDs,
             collapsed: Set(collapsedFolders.filter { $0.hasPrefix("commit:") || $0.hasPrefix("worktree:") }),
             mode: viewMode
@@ -988,7 +1008,7 @@ struct RecentCommitsView: View {
                     layout: presentation.layout
                   ) else { return false }
             moveKeyboardCursor(to: commitRowID(next), direction: event.keyCode == 125 ? 1 : -1)
-            if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
+            expandedCommitIDs.insert(next.id)
             return true
         }
         let extending = event.modifierFlags.contains(.shift)
@@ -1100,8 +1120,6 @@ struct RecentCommitsView: View {
     private func toggle(_ commit: Commit) {
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
-        } else if commit.worktree == nil {
-            loadBinaryStatus(commit)
         }
     }
 

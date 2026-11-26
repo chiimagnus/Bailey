@@ -10,8 +10,7 @@ final class CommitGraphLayoutTests: XCTestCase {
         .init(
             hash: hash, shortHash: hash, subject: hash, author: "Test",
             date: .distantPast, parentHashes: parents,
-            references: current ? [.init(kind: .currentBranch, name: "main")] : [],
-            files: []
+            references: current ? [.init(kind: .currentBranch, name: "main")] : []
         )
     }
 
@@ -608,7 +607,7 @@ final class CommitGraphLayoutTests: XCTestCase {
         let detached = GitStatusModel.RecentCommit(
             hash: "side", shortHash: "side", subject: "side", author: "Test",
             date: .distantPast, parentHashes: ["base"],
-            references: [.init(kind: .detachedHead, name: "HEAD"), .init(kind: .tag, name: "v1")], files: []
+            references: [.init(kind: .detachedHead, name: "HEAD"), .init(kind: .tag, name: "v1")]
         )
         let annotated = [updated[0], detached, updated[2]]
         let reusedAnnotations = cache.layout(for: annotated)
@@ -738,7 +737,7 @@ final class CommitGraphLayoutTests: XCTestCase {
         let detached = GitStatusModel.RecentCommit(
             hash: "detached", shortHash: "detached", subject: "Detached",
             author: "Test", date: .distantPast, parentHashes: ["root"],
-            references: [.init(kind: .detachedHead, name: "HEAD")], files: []
+            references: [.init(kind: .detachedHead, name: "HEAD")]
         )
         let graph = CommitGraphLayout(commits: [
             detached, commit("unrelated"), commit("root"),

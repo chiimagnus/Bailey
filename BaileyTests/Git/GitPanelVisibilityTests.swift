@@ -151,7 +151,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             manager.projects.append(project)
             manager.selectProject(id: project.id)
             manager.syncGitStatus(model)
-            try await waitFor { model.hasResolvedStatus && !model.isRefreshing && model.recentCommits.first?.files.count == historyCount + tabCount }
+            try await waitFor { model.hasResolvedStatus && !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
             var files: [(FileTab, NSScrollView)] = []
             for path in paths {
                 project.openFile(path.path)
@@ -213,7 +213,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             XCTAssertEqual(fixture.project.tabs.count, tabCount)
             XCTAssertTrue(fixture.files.last?.0.editorView === fixture.files.last?.1)
             XCTAssertEqual(views(host).compactMap { $0 as? FocusReportingTextView }.count, 1)
-            try await waitFor { !model.isRefreshing && model.recentCommits.first?.files.count == historyCount + tabCount }
+            try await waitFor { !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
             let commit = try XCTUnwrap(model.recentCommits.first)
             let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
                 $0.convert($0.bounds, to: host).minX > host.bounds.width * 0.75
@@ -237,7 +237,9 @@ final class GitPanelVisibilityTests: XCTestCase {
             }
             print("LOADED_GRAPH_EXPAND cycle=\(cycle) main_layout_ms=\((mounted-began)*1000) shown_ms=\((ProcessInfo.processInfo.systemUptime-began)*1000)")
             XCTAssertTrue(model.expandedCommitIDs.contains(commit.id))
+            XCTAssertEqual(model.historicalFiles(for: commit)?.count, historyCount + tabCount)
             model.expandedCommitIDs.remove(commit.id)
+            XCTAssertTrue(model.historicalFilesByOID.isEmpty)
             try await waitFor("Commit did not collapse") { abs((scroll.documentView?.frame.height ?? 0) - beforeHeight) < 2 }
             if let last = fixture.project.tabs.last { fixture.project.selectTab(last.id, extending: .preserve) }
             layout()
@@ -321,7 +323,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         func views(_ root: NSView) -> [NSView] {
             [root] + root.subviews.flatMap(views)
         }
-        try await waitFor { !model.isRefreshing && model.recentCommits.first?.files.count == count }
+        try await waitFor { !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
         layout()
         let commit = try XCTUnwrap(model.recentCommits.first)
         let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
@@ -335,6 +337,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         model.expandedCommitIDs.insert(commit.id)
         try await waitFor { (scroll.documentView?.frame.height ?? 0) > CGFloat(count * 16) }
         let elapsed = start.duration(to: .now)
+        XCTAssertEqual(model.historicalFiles(for: commit)?.count, count)
         let expandedHeight = try XCTUnwrap(scroll.documentView?.frame.height)
         let nativeViews = views(host).count
         print("GIT_GRAPH_SCALE files=\(count) first_expand=\(elapsed) native_views=\(nativeViews)")

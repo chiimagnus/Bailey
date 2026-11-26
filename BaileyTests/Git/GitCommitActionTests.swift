@@ -403,7 +403,7 @@ final class GitCommitActionTests: XCTestCase {
         func commit(_ hash: String, parents: [String]) -> GitStatusModel.RecentCommit {
             .init(hash: hash, shortHash: hash, subject: hash,
                   author: "Tester", date: .now, parentHashes: parents,
-                  references: [], files: [])
+                  references: [])
         }
         let commits = [
             commit("side2", parents: ["side1"]), commit("main2", parents: ["main1"]),
