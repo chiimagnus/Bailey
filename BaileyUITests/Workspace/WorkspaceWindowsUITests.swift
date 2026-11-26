@@ -52,6 +52,75 @@ final class WorkspaceWindowsUITests: XCTestCase {
         }
     }
 
+    func testNativeWindowListNamesAllProjectsAndSwitchesTheActualWindow() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("Alpha/readme.txt", text: "alpha\n").deletingLastPathComponent()
+        let bravo = try fixture.file("Bravo 中文/readme.txt", text: "bravo\n").deletingLastPathComponent()
+        let charlie = try fixture.file("Charlie/readme.txt", text: "charlie\n").deletingLastPathComponent()
+        let delta = try fixture.file("Delta/readme.txt", text: "delta\n").deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: alpha,
+                                                    clipboardIsReadOnly: true)
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        XCTAssertTrue(bundle.path.contains("DerivedData-Dev/Build/Products/Debug/"))
+        func openProjects(_ urls: [URL]) {
+            let opened = expectation(description: "Native folder-open event")
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.open(urls, withApplicationAt: bundle, configuration: configuration) { _, error in
+                XCTAssertNil(error)
+                opened.fulfill()
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 15), .completed)
+        }
+        let firstTitle = "Alpha · Bravo 中文"
+        let secondTitle = "Charlie · Delta"
+        openProjects([bravo])
+        XCTAssertTrue(app.windows[firstTitle].waitForExistence(timeout: 15))
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15))
+        openProjects([charlie, delta])
+        XCTAssertTrue(app.windows[secondTitle].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.windows.count, 2)
+        func openWindowMenu() throws -> XCUIElement {
+            app.menuBarItems["Window"].click()
+            let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+                $0.menuItems["Bring All to Front"].exists
+            })
+            XCTAssertTrue(menu.menuItems["Move & Resize"].exists)
+            XCTAssertTrue(menu.menuItems["Full Screen Tile"].exists)
+            XCTAssertTrue(menu.menuItems[firstTitle].exists)
+            XCTAssertTrue(menu.menuItems[secondTitle].exists)
+            return menu
+        }
+        func capture(_ name: String) {
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            shot.name = name
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+        let secondMenu = try openWindowMenu()
+        capture("Window menu - second selected")
+        secondMenu.menuItems[firstTitle].click()
+        XCTAssertEqual(app.windows.firstMatch.title, firstTitle)
+        app.typeKey("1", modifierFlags: .command)
+        let firstMenu = try openWindowMenu()
+        capture("Window menu - first selected after project switch")
+        firstMenu.menuItems[secondTitle].click()
+        XCTAssertEqual(app.windows.firstMatch.title, secondTitle)
+        let reopened = try openWindowMenu()
+        reopened.menuItems[firstTitle].click()
+        XCTAssertEqual(app.windows.firstMatch.title, firstTitle)
+        XCTAssertEqual(app.windows.count, 2)
+        app.windows[firstTitle].buttons[XCUIIdentifierCloseWindow].click()
+        XCTAssertTrue(app.windows[firstTitle].waitForNonExistence(timeout: 12))
+        app.menuBarItems["Window"].click()
+        XCTAssertFalse(app.menuItems[firstTitle].exists)
+        XCTAssertTrue(app.menuItems[secondTitle].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    }
+
     func testCancelingFolderPickerDoesNotCreateAnEmptyProject() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
 

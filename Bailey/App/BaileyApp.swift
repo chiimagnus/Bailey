@@ -55,6 +55,7 @@ struct WindowRootView: View {
 
     var body: some View {
         ContentView(manager: manager)
+            .navigationTitle(manager.windowTitle)
             .focusedSceneValue(\.baileyManager, manager)
             // Each field is an actual terminal configuration input. Reading
             // them here lets Observation notify the existing native surface

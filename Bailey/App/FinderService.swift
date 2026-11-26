@@ -8,6 +8,7 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     let workspace = WorkspaceApplication(loadSavedState: true)
     let menuPresentation = MainMenuPresentation()
     private weak var trackedPresentationMenu: NSMenu?
+    private var windowMenuRestorations: [() -> Void] = []
     private var preparingToQuit = false
 
     /// Let AppKit finish quitting only after all edited files were written.
@@ -75,6 +76,9 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         menuPresentation.beginTracking(
             project: owner?.selectedProject, projects: owner?.projects ?? []
         )
+        if let windowMenu = NSApp.windowsMenu {
+            windowMenuRestorations.append(decorateWindowMenu(windowMenu.items, currentWindow: NSApp.mainWindow ?? NSApp.keyWindow))
+        }
         if let tracked = menuPresentation.tracked {
             syncMenuTitles(
                 tracked.panels.map(\.title),
@@ -85,6 +89,61 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
                 in: mainMenu, named: String(localized: "Project", table: "Interface")
             )
         }
+    }
+
+    /// Decorate only AppKit's existing window-list rows, retaining their targets,
+    /// native selection state, and menu ordering. Presentation lasts one tracking.
+    func decorateWindowMenu(_ items: [NSMenuItem], currentWindow: NSWindow?) -> () -> Void {
+        var restore: [() -> Void] = []
+        for item in items {
+            guard let window = item.target as? NSWindow,
+                  let owner = workspace.owner(of: window) else { continue }
+            let originalTitle = item.attributedTitle
+            let originalPlainTitle = item.title
+            let title = NSMutableAttributedString()
+            if owner.projects.isEmpty {
+                title.append(NSAttributedString(string: owner.windowTitle))
+            } else {
+                for (index, project) in owner.projects.enumerated() {
+                    if index > 0 { title.append(NSAttributedString(string: " · ")) }
+                    let attributes: [NSAttributedString.Key: Any] = project.id == owner.selectedProjectID
+                        ? [.foregroundColor: NSColor.controlAccentColor] : [:]
+                    title.append(NSAttributedString(string: project.name, attributes: attributes))
+                }
+            }
+            item.attributedTitle = title
+            restore.append {
+                item.attributedTitle = originalTitle
+                if originalTitle == nil, item.title != originalPlainTitle { item.title = originalPlainTitle }
+            }
+
+            guard window === currentWindow,
+                  let glyph = owner.windowMenuEmoji,
+                  let font = NSFont(name: "AppleColorEmoji", size: 15) else { continue }
+            let originalImage = item.image
+            let originalStateImage = item.onStateImage
+            let emoji = NSAttributedString(string: glyph, attributes: [.font: font])
+            let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+                let size = emoji.size()
+                emoji.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2))
+                return true
+            }
+            image.isTemplate = false
+            item.image = image
+            // Keep the native state for switching/accessibility, but use the
+            // colored window icon as its visual indicator instead of a checkmark.
+            item.onStateImage = NSImage(size: NSSize(width: 1, height: 1))
+            restore.append {
+                item.image = originalImage
+                item.onStateImage = originalStateImage
+            }
+            if #available(macOS 27.0, *) {
+                let visibility = item.preferredImageVisibility
+                item.preferredImageVisibility = .visible
+                restore.append { item.preferredImageVisibility = visibility }
+            }
+        }
+        return { restore.forEach { $0() } }
     }
 
     private func syncMenuTitles(_ titles: [String], in mainMenu: NSMenu, named name: String) {
@@ -103,12 +162,21 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuDidEndTracking(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
         guard menu === trackedPresentationMenu else { return }
+        windowMenuRestorations.reversed().forEach { $0() }
+        windowMenuRestorations.removeAll()
         trackedPresentationMenu = nil
         menuPresentation.endTracking()
     }
 
     @objc private func mainMenuItemAdded(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
+        // SwiftUI may regenerate the native Window list during menu tracking.
+        // Decorate the newly inserted window row, never rebuild the system menu.
+        if trackedPresentationMenu != nil, menu === NSApp.windowsMenu,
+           let index = notification.userInfo?["NSMenuItemIndex"] as? Int,
+           let item = menu.item(at: index), item.target is NSWindow {
+            windowMenuRestorations.append(decorateWindowMenu([item], currentWindow: NSApp.mainWindow ?? NSApp.keyWindow))
+        }
         if menu === NSApp.mainMenu {
             removeUnusedViewMenu()
             configureDeleteShortcut()

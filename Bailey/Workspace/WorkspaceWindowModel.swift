@@ -121,6 +121,26 @@ final class WorkspaceWindowModel {
         application.requestSave(from: self)
     }
 
+    var windowTitle: String {
+        projects.isEmpty ? AppIdentity.displayName : projects.map(\.name).joined(separator: " · ")
+    }
+
+    // Use the installed system font's repertoire, restricted to nature and animals.
+    private static let windowEmojiCandidates: [String] = {
+        guard let font = NSFont(name: "AppleColorEmoji", size: 15) else { return [] }
+        let covered = font.coveredCharacterSet
+        let ranges: [ClosedRange<UInt32>] = [0x1F331...0x1F353, 0x1F400...0x1F43E, 0x1F980...0x1F9AB]
+        return ranges.flatMap { range in
+            range.compactMap { value in
+                guard let scalar = Unicode.Scalar(value), scalar.properties.isEmojiPresentation,
+                      covered.contains(scalar) else { return nil }
+                return String(scalar)
+            }
+        }
+    }()
+
+    @ObservationIgnored private(set) lazy var windowMenuEmoji = Self.windowEmojiCandidates.randomElement()
+
     var selectedProject: Project? {
         projects.first { $0.id == selectedProjectID }
     }

@@ -161,6 +161,121 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeWindowMenuPresentsEveryProjectAndKeepsWindowActions() throws {
+        let delegate = try XCTUnwrap(NSApp.servicesProvider as? BaileyApplicationDelegate)
+        let application = delegate.workspace
+        let menu = try XCTUnwrap(NSApp.windowsMenu)
+        let savedSnapshots = SessionStore.load()
+        let savedHistories = TerminalHistoryStore.load()
+        let first = application.makeWindow()
+        let second = application.makeWindow()
+        func project(_ name: String) -> Project {
+            Project(fallbackName: name, workspaceConfiguration: .standard)
+        }
+        let alpha = project("Alpha 🌷")
+        let duplicate = project("Alpha 🌷")
+        let bravo = project("Bravo 中文")
+        first.projects = [alpha, duplicate, bravo]
+        first.selectedProjectID = duplicate.id
+        let charlie = project("Charlie")
+        second.projects = [charlie]
+        second.selectedProjectID = charlie.id
+        func window(_ owner: WorkspaceWindowModel, title: String) -> NSWindow {
+            let window = NSWindow(contentRect: .init(x: -800, y: -800, width: 360, height: 240),
+                                  styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.title = title
+            owner.attach(to: window)
+            window.orderBack(nil)
+            NSApp.addWindowsItem(window, title: title, filename: false)
+            return window
+        }
+        let a = window(first, title: "Window menu test A")
+        let b = window(second, title: "Window menu test B")
+        defer {
+            NSApp.removeWindowsItem(a)
+            NSApp.removeWindowsItem(b)
+            a.close(); b.close()
+            first.windowClosed(); second.windowClosed()
+            SessionStore.save(savedSnapshots)
+            TerminalHistoryStore.save(savedHistories)
+        }
+        let font = try XCTUnwrap(NSFont(name: "AppleColorEmoji", size: 15))
+        let glyph = try XCTUnwrap(first.windowMenuEmoji)
+        let scalar = try XCTUnwrap(glyph.unicodeScalars.first)
+        XCTAssertEqual(glyph.unicodeScalars.count, 1)
+        XCTAssertTrue(scalar.properties.isEmojiPresentation)
+        XCTAssertTrue(font.coveredCharacterSet.contains(scalar))
+        XCTAssertEqual(first.windowMenuEmoji, glyph)
+        let rowA = try XCTUnwrap(menu.items.first { ($0.target as? NSWindow) === a })
+        let rowB = try XCTUnwrap(menu.items.first { ($0.target as? NSWindow) === b })
+        let actionA = rowA.action
+        let actionB = rowB.action
+        let originalImageA = rowA.image
+        let originalImageB = rowB.image
+        let count = menu.items.count
+        func inspect(_ current: WorkspaceWindowModel, row: NSMenuItem, colorRange: NSRange,
+                     inactiveOffset: Int? = nil) throws {
+            let title = try XCTUnwrap(row.attributedTitle)
+            let expected = current.projects.map(\.name).joined(separator: " · ")
+            XCTAssertEqual(title.string, expected)
+            var actualRange = NSRange()
+            let accent = title.attribute(.foregroundColor, at: colorRange.location, effectiveRange: &actualRange) as? NSColor
+            XCTAssertEqual(accent, .controlAccentColor)
+            XCTAssertEqual(actualRange, colorRange)
+            if let inactiveOffset {
+                XCTAssertNotEqual(title.attribute(.foregroundColor, at: inactiveOffset, effectiveRange: nil) as? NSColor,
+                                  .controlAccentColor)
+            }
+        }
+        // Host tests do not own desktop focus. Exercise the same native menu
+        // decoration with an explicit current-window identity; the UI test
+        // verifies that AppKit supplies it when the actual menu is opened.
+        func track(current: NSWindow?, _ body: () throws -> Void) rethrows {
+            let restore = delegate.decorateWindowMenu(menu.items, currentWindow: current)
+            defer { restore() }
+            try body()
+        }
+        try track(current: a) {
+            try inspect(first, row: rowA, colorRange: NSRange(location: ("Alpha 🌷 · " as NSString).length,
+                                                             length: ("Alpha 🌷" as NSString).length), inactiveOffset: 0)
+            try inspect(second, row: rowB, colorRange: NSRange(location: 0, length: 7))
+            XCTAssertEqual(rowA.action, actionA)
+            XCTAssertEqual(rowB.action, actionB)
+            XCTAssertTrue(rowA.target === a)
+            XCTAssertTrue(rowB.target === b)
+            XCTAssertEqual(menu.items.count, count)
+            XCTAssertNotNil(rowA.image)
+            XCTAssertFalse(rowA.image?.isTemplate ?? true)
+            XCTAssertEqual(rowA.onStateImage.size, NSSize(width: 1, height: 1))
+            XCTAssertTrue(rowB.image === originalImageB)
+        }
+        XCTAssertTrue(rowA.image === originalImageA)
+        XCTAssertTrue(rowB.image === originalImageB)
+        XCTAssertEqual(rowA.title, "Window menu test A")
+        XCTAssertEqual(rowB.title, "Window menu test B")
+        first.selectedProjectID = bravo.id
+        first.moveProject(bravo.id, to: alpha.id)
+        try track(current: b) {
+            try inspect(first, row: rowA, colorRange: NSRange(location: 0, length: ("Bravo 中文" as NSString).length),
+                        inactiveOffset: ("Bravo 中文 · " as NSString).length)
+            try inspect(second, row: rowB, colorRange: NSRange(location: 0, length: 7))
+            XCTAssertTrue(rowA.image === originalImageA)
+            XCTAssertNotNil(rowB.image)
+            XCTAssertFalse(rowB.image?.isTemplate ?? true)
+        }
+        try track(current: nil) {
+            XCTAssertTrue(rowA.image === originalImageA)
+            XCTAssertTrue(rowB.image === originalImageB)
+        }
+        second.close(charlie)
+        try track(current: b) {
+            XCTAssertEqual(rowB.attributedTitle?.string, AppIdentity.displayName)
+            XCTAssertFalse(rowB.image?.isTemplate ?? true)
+        }
+    }
+
+    @MainActor
     func testFilePathShortcutsRemainUniqueWithinMainMenu() throws {
         let main = try XCTUnwrap(NSApp.mainMenu)
         let file = try XCTUnwrap(main.items.first {
