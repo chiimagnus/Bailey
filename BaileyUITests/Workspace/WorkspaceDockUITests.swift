@@ -319,6 +319,10 @@ final class WorkspaceDockUITests: XCTestCase {
             $0.menuItems[files[0].lastPathComponent].exists
         })
         let originalCount = menu.menuItems.count
+        let initialAppearance = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        initialAppearance.name = "Panel menu - current file accent"
+        initialAppearance.lifetime = .keepAlways
+        add(initialAppearance)
         for file in files + Array(files.reversed()) {
             let item = menu.menuItems[file.lastPathComponent]
             XCTAssertTrue(item.exists)
@@ -356,6 +360,22 @@ final class WorkspaceDockUITests: XCTestCase {
         for file in files {
             XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).exists)
         }
+        app.typeKey("1", modifierFlags: .control)
+        panel.click()
+        XCTAssertTrue(menu.menuItems[files[0].lastPathComponent].exists)
+        let changedAppearance = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        changedAppearance.name = "Panel menu - after Control-1"
+        changedAppearance.lifetime = .keepAlways
+        add(changedAppearance)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        panel.click()
+        XCTAssertTrue(menu.menuItems["File Manager"].exists)
+        let toolAppearance = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        toolAppearance.name = "Panel menu - active File Manager"
+        toolAppearance.lifetime = .keepAlways
+        add(toolAppearance)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
     }
 
     func testSystemPanelMenuRemainsStableWhileTerminalTitleAnimates() throws {
@@ -1161,14 +1181,24 @@ final class WorkspaceDockUITests: XCTestCase {
     }
 
     func testSystemProjectMenuSelectsCurrentProjectAndCommandTwo() throws {
+        continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha-project/readme.txt", text: "alpha stays intact\n")
         let second = try fixture.file("bravo-project/readme.txt", text: "bravo stays intact\n")
         let folders = [first, second].map { $0.deletingLastPathComponent() }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: folders[0])
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: folders[0],
+                                                    clipboardIsReadOnly: true)
         let window = app.windows.firstMatch
-        app.typeKey("a", modifierFlags: [.command, .shift])
-        try WorkspaceUITestSupport.choose(folders[1], in: app, window: window)
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open second folder through native application event")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open([folders[1]], withApplicationAt: bundle, configuration: configuration) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 15), .completed)
 
         let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
         XCTAssertTrue(projects.waitForExistence(timeout: 12))
@@ -1187,13 +1217,32 @@ final class WorkspaceDockUITests: XCTestCase {
             $0.menuItems[folders[0].lastPathComponent].exists
                 && $0.menuItems[folders[1].lastPathComponent].exists
         })
+        let initialAppearance = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        initialAppearance.name = "Project menu - current second project"
+        initialAppearance.lifetime = .keepAlways
+        add(initialAppearance)
         let firstEntry = menu.menuItems[folders[0].lastPathComponent]
         firstEntry.hover()
         XCTAssertTrue(firstEntry.isHittable)
         firstEntry.click()
         XCTAssertTrue(row(0).isSelected, "Project command must resolve the actual project ID")
+        app.menuBarItems["Project"].click()
+        XCTAssertTrue(menu.menuItems[folders[0].lastPathComponent].exists)
+        let changedAppearance = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        changedAppearance.name = "Project menu - after selecting first project"
+        changedAppearance.lifetime = .keepAlways
+        add(changedAppearance)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !firstEntry.exists || !firstEntry.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         app.typeKey("2", modifierFlags: .command)
-        XCTAssertTrue(row(1).isSelected, "Command-2 must select the second project")
+        let switched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            row(1).exists && row(1).isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [switched], timeout: 5), .completed,
+                       "Command-2 must select the second project")
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "alpha stays intact\n")
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "bravo stays intact\n")
     }

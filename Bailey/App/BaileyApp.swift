@@ -137,7 +137,10 @@ extension FocusedValues {
 @Observable
 final class MainMenuPresentation {
     // Only menu rows refresh during tracking; rebuilding Commands would drop native Window items.
-    @ObservationIgnored private(set) var tracked: (panels: [PanelMenuEntry], projects: [ProjectMenuEntry])?
+    @ObservationIgnored private(set) var tracked: (
+        panels: [PanelMenuEntry], projects: [ProjectMenuEntry],
+        activePanel: DockItem?, activeProjectID: UUID?
+    )?
     private var completedTrackings = 0
     private(set) var trackingEpoch = 0
 
@@ -153,8 +156,31 @@ final class MainMenuPresentation {
 
     func beginTracking(project: Project?, projects: [Project]) {
         tracked = (PanelMenuEntry.entries(for: project, captureDisplay: true),
-                   ProjectMenuEntry.entries(for: projects, captureDisplay: true))
+                   ProjectMenuEntry.entries(for: projects, captureDisplay: true),
+                   project?.dock.activeGroup?.selected, project?.id)
         trackingEpoch &+= 1
+    }
+
+    func activePanel(for project: Project?) -> DockItem? {
+        if let tracked { return tracked.activePanel }
+        return project?.dock.activeGroup?.selected
+    }
+
+    func activeProjectID(for manager: WorkspaceWindowModel?) -> UUID? {
+        if let tracked { return tracked.activeProjectID }
+        return manager?.selectedProjectID
+    }
+
+    func panelDisplay(for item: PanelMenuEntry) -> PanelMenuEntry {
+        guard let panels = tracked?.panels else { return item }
+        if panels.indices.contains(item.index), panels[item.index].id == item.id { return panels[item.index] }
+        return panels.first { $0.id == item.id } ?? item
+    }
+
+    func projectDisplay(for item: ProjectMenuEntry) -> ProjectMenuEntry {
+        guard let projects = tracked?.projects else { return item }
+        if projects.indices.contains(item.index), projects[item.index].id == item.id { return projects[item.index] }
+        return projects.first { $0.id == item.id } ?? item
     }
 
     func endTracking() {
@@ -269,21 +295,21 @@ private struct BaileyCommands: Commands {
             Button {
                 manager?.showPanel(.projects)
             } label: {
-                Label(String(localized: "Projects", table: "Interface"), systemImage: DockItem.projects.symbol)
-                    .labelStyle(.titleAndIcon)
+                ToolMenuLabel(item: .projects, title: String(localized: "Projects", table: "Interface"),
+                              project: manager?.selectedProject, presentation: menuPresentation)
             }
             .disabled(manager?.selectedProject == nil)
 
             Button(action: { manager?.showPanel(.files) }) {
-                Label(String(localized: "File Manager", table: "Sidebar"), systemImage: DockItem.files.symbol)
-                    .labelStyle(.titleAndIcon)
+                ToolMenuLabel(item: .files, title: String(localized: "File Manager", table: "Sidebar"),
+                              project: manager?.selectedProject, presentation: menuPresentation)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
             Button(action: { manager?.showPanel(.git) }) {
-                Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
-                    .labelStyle(.titleAndIcon)
+                ToolMenuLabel(item: .git, title: String(localized: "Git Manager", table: "Sidebar"),
+                              project: manager?.selectedProject, presentation: menuPresentation)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
@@ -327,7 +353,7 @@ private struct BaileyCommands: Commands {
 
                 ForEach(entries) { item in
                     Button(action: { manager?.selectPanel(item.id) }) {
-                        PanelMenuLabel(item: item, presentation: menuPresentation)
+                        PanelMenuLabel(item: item, presentation: menuPresentation, project: manager?.selectedProject)
                     }
                     .keyboardShortcut(item.index < 9
                         ? KeyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .control)
@@ -377,7 +403,7 @@ private struct BaileyCommands: Commands {
                             manager?.selectProject(index: index)
                         }
                     }) {
-                        ProjectMenuLabel(item: item, presentation: menuPresentation)
+                        ProjectMenuLabel(item: item, presentation: menuPresentation, manager: manager)
                     }
                     .keyboardShortcut(item.index < 9
                         ? KeyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
@@ -560,17 +586,20 @@ private struct BaileyCommands: Commands {
     }
 }
 
-private struct PanelMenuLabel: View {
-    let item: PanelMenuEntry
-    let presentation: MainMenuPresentation
+private struct ContentMenuLabel: View {
+    let title: String
+    let icon: NSImage
+    let isSelected: Bool
 
     var body: some View {
-        let _ = presentation.trackingEpoch
-        let display = presentation.tracked?.panels.first(where: { $0.id == item.id }) ?? item
-        Label {
-            Text(verbatim: display.title)
+        var text = AttributedString(title)
+        if isSelected { text.foregroundColor = Color(nsColor: .controlAccentColor) }
+        let image = isSelected && icon.isTemplate
+            ? icon.withSymbolConfiguration(.init(paletteColors: [.controlAccentColor])) ?? icon : icon
+        return Label {
+            Text(text)
         } icon: {
-            Image(nsImage: display.icon)
+            Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 16, height: 16)
@@ -579,19 +608,44 @@ private struct PanelMenuLabel: View {
     }
 }
 
-private struct ProjectMenuLabel: View {
-    let item: ProjectMenuEntry
+private struct ToolMenuLabel: View {
+    let item: DockItem
+    let title: String
+    let project: Project?
     let presentation: MainMenuPresentation
 
     var body: some View {
         let _ = presentation.trackingEpoch
-        let display = presentation.tracked?.projects.first(where: { $0.id == item.id }) ?? item
-        Label {
-            Text(verbatim: display.title)
-        } icon: {
-            Image(nsImage: display.icon)
-        }
-        .labelStyle(.titleAndIcon)
+        ContentMenuLabel(title: title,
+                         icon: NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil) ?? NSImage(),
+                         isSelected: presentation.activePanel(for: project) == item)
+    }
+}
+
+private struct PanelMenuLabel: View {
+    let item: PanelMenuEntry
+    let presentation: MainMenuPresentation
+    let project: Project?
+
+    var body: some View {
+        let _ = presentation.trackingEpoch
+        let display = presentation.panelDisplay(for: item)
+        let active = presentation.activePanel(for: project)
+        ContentMenuLabel(title: display.title, icon: display.icon,
+                         isSelected: active?.contentTabID == item.id.tabID)
+    }
+}
+
+private struct ProjectMenuLabel: View {
+    let item: ProjectMenuEntry
+    let presentation: MainMenuPresentation
+    let manager: WorkspaceWindowModel?
+
+    var body: some View {
+        let _ = presentation.trackingEpoch
+        let display = presentation.projectDisplay(for: item)
+        let active = presentation.activeProjectID(for: manager)
+        ContentMenuLabel(title: display.title, icon: display.icon, isSelected: active == item.id)
     }
 }
 

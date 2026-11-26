@@ -2087,6 +2087,41 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(terminal.title, "Final title")
     }
 
+    func testMenuSelectionTracksActiveDockContentAndFreezesOnlyWhileOpen() throws {
+        let project = Project(fallbackName: "same", workspaceConfiguration: .standard)
+        let other = Project(fallbackName: "same", workspaceConfiguration: .standard)
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let shell = PaneTab(content: .session(terminal))
+        project.append(shell)
+        let browser = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        project.append(browser)
+        let presentation = MainMenuPresentation()
+        project.selectTab(shell.id)
+        XCTAssertEqual(presentation.activePanel(for: project), .tab(shell.id))
+        presentation.beginTracking(project: project, projects: [other, project])
+        XCTAssertEqual(presentation.activeProjectID(for: nil), project.id)
+        XCTAssertEqual(presentation.activePanel(for: project), .tab(shell.id))
+        project.selectTab(browser.id)
+        XCTAssertEqual(presentation.activePanel(for: project), .tab(shell.id))
+        let oldOrder = ProjectMenuEntry.entries(for: [project, other])
+        XCTAssertEqual(presentation.projectDisplay(for: oldOrder[0]).id, project.id)
+        XCTAssertEqual(presentation.projectDisplay(for: oldOrder[0]).index, 1)
+        presentation.endTracking()
+        XCTAssertEqual(presentation.activePanel(for: project), .tab(browser.id))
+        project.dock.select(.files)
+        XCTAssertEqual(presentation.activePanel(for: project), .files)
+        presentation.beginTracking(project: project, projects: [other, project])
+        project.dock.select(.git)
+        XCTAssertEqual(presentation.activePanel(for: project), .files)
+        presentation.endTracking()
+        XCTAssertEqual(presentation.activePanel(for: project), .git)
+        presentation.beginTracking(project: nil, projects: [])
+        XCTAssertNil(presentation.activePanel(for: project))
+        XCTAssertNil(presentation.activeProjectID(for: nil))
+        presentation.endTracking()
+    }
+
     func testProjectMenuPresentationPinsOrderOnlyWhileTracked() {
         let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
         let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
