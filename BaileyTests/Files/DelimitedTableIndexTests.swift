@@ -66,6 +66,69 @@ final class DelimitedTableIndexTests: XCTestCase {
         }
     }
 
+    func testColumnOperationsRoundTripEverySupportedEncodingAndDelimiter() async throws {
+        let orders: [[Int?]] = [
+            [nil, 0, 1, 2], [0, nil, 1, 2], [0, 1, nil, 2], [0, 1, 2, nil],
+            [1, 2], [0, 2], [0, 1], [0], [1], [2],
+            [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
+        ]
+        for separator in DelimitedTableIndex.Separator.allCases {
+            let delimiter = String(UnicodeScalar(separator.rawValue)!)
+            for encoding in TextFileEncoding.choices {
+                let tail = try XCTUnwrap(["😀", "中文", "é", "tail"].first { encoding.encoded($0) != nil })
+                let tokens = [
+                    ["", "", ""],
+                    ["001", "\"x\(delimiter)y\r\nz\"", ""],
+                    ["", "\"q\"\"q\"", tail],
+                    ["", "", ""],
+                ]
+                let endings = ["\r\n", "\r", "\n", ""]
+                let source = zip(tokens, endings).map { $0.0.joined(separator: delimiter) + $0.1 }.joined()
+                let original = try XCTUnwrap(encoding.encoded(source))
+                let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+                try original.write(to: path)
+                defer { try? FileManager.default.removeItem(at: path) }
+                let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                defer { file.retireContent() }
+                file.autoSaveSuspendedForClose = true
+                file.reopen(using: encoding)
+                try await file.waitForText()
+                XCTAssertEqual(file.fileEncoding, encoding)
+                XCTAssertEqual(TextFileEncoding.hasIdenticalCodeUnits(file.text, source), true)
+
+                for order in orders {
+                    let context = "\(encoding.name) / \(separator) / \(order)"
+                    let expected = tokens.enumerated().map { row, fields in
+                        var body = order.map { $0.map { fields[$0] } ?? "" }.joined(separator: delimiter)
+                        if body.isEmpty && (row == tokens.count - 1 || row > 0 && endings[row - 1] == "\r" && endings[row] == "\n") {
+                            body = "\"\""
+                        }
+                        return body + endings[row]
+                    }.joined()
+                    let bytes = try XCTUnwrap(encoding.encoded(expected))
+                    let loaded = try await file.delimitedSnapshot(using: separator)
+                    try await requireDelimitedEdit(file, .columns(order), using: XCTUnwrap(loaded))
+                    XCTAssertTrue(TextFileEncoding.hasIdenticalCodeUnits(file.text, expected), context)
+                    let parsed = try await file.delimitedSnapshot(using: separator)
+                    XCTAssertNil(parsed?.index.issue, context)
+                    XCTAssertEqual(parsed?.index.records.count, tokens.count, context)
+                    XCTAssertEqual(parsed?.index.columnCount, order.count, context)
+                    await file.save()
+                    XCTAssertEqual(try Data(contentsOf: path), bytes, context)
+                    XCTAssertFalse(file.isDirty, context)
+                    file.documentUndoManager.undo()
+                    XCTAssertTrue(TextFileEncoding.hasIdenticalCodeUnits(file.text, source), context)
+                    XCTAssertTrue(file.isDirty, context)
+                    XCTAssertFalse(file.documentUndoManager.canUndo, context)
+                    await file.save()
+                    XCTAssertEqual(try Data(contentsOf: path), original, context)
+                    XCTAssertFalse(file.isDirty, context)
+                    XCTAssertNil(file.saveError, context)
+                }
+            }
+        }
+    }
+
     func testColumnStructureRejectsHiddenColumnsAndPreservesTheFieldBudget() async throws {
         let limit = DelimitedTableIndex.maximumColumns
         for count in [limit - 1, limit, limit + 1] {
