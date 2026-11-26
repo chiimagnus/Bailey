@@ -1888,6 +1888,25 @@ final class FileTreeTests: XCTestCase {
                 let selected = tree.selectedPaths
                 XCTAssertTrue(try key(115))
                 XCTAssertEqual(tree.selectedPath, rows[0].path)
+                // Pure focus movement within the visible range must not
+                // invalidate the scroll extent or move the viewport.
+                for _ in 0..<4 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                let stableHeight = try XCTUnwrap(scroll.documentView?.frame.height)
+                let stableOffset = scroll.contentView.bounds.minY
+                for index in 1...min(3, page - 1) {
+                    XCTAssertTrue(try key(125))
+                    XCTAssertEqual(tree.selectedPath, rows[index].path)
+                    for _ in 0..<4 {
+                        host.layoutSubtreeIfNeeded()
+                        try await Task.sleep(for: .milliseconds(25))
+                    }
+                    XCTAssertEqual(scroll.documentView?.frame.height ?? 0, stableHeight, accuracy: 1)
+                    XCTAssertEqual(scroll.contentView.bounds.minY, stableOffset, accuracy: 1)
+                }
+                XCTAssertTrue(try key(115))
                 let startOffset = scroll.contentView.bounds.origin.y
                 XCTAssertTrue(try key(121))
                 XCTAssertEqual(tree.selectedPath, rows[page].path, "font=\(fontSize), height=\(height)")

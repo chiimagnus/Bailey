@@ -2039,20 +2039,7 @@ struct GitPanel: View {
                                     manager.registerTreeResponder(tree, for: .git, in: project)
                                 }
                             },
-                            onKeyboardAttached: focusGitChanges,
-                            scrollToKeyboardRow: { target in
-                                GitGraphScrollLog.record(
-                                    "scroll-request", owner: graphKeyboardOwner, row: target
-                                )
-                                proxy.scrollTo(target)
-                                if GitGraphScrollLog.enabled {
-                                    DispatchQueue.main.async {
-                                        GitGraphScrollLog.record(
-                                            "scroll-next-turn", owner: graphKeyboardOwner, row: target
-                                        )
-                                    }
-                                }
-                            }
+                            onKeyboardAttached: focusGitChanges
                         )
                             .frame(maxWidth: .infinity)
                         }

@@ -188,7 +188,6 @@ struct RecentCommitsView: View {
     private let isKeyboardActive: Bool
     private let onKeyboardFocused: () -> Void
     private let onKeyboardAttached: () -> Void
-    private let scrollToKeyboardRow: (String) -> Void
 
     private var keyboardOwner: TreeKeyboardOwner {
         providedKeyboardOwner ?? localKeyboardOwner
@@ -296,8 +295,7 @@ struct RecentCommitsView: View {
         keyboardOwner: TreeKeyboardOwner? = nil,
         isKeyboardActive: Bool = true,
         onKeyboardFocused: @escaping () -> Void = {},
-        onKeyboardAttached: @escaping () -> Void = {},
-        scrollToKeyboardRow: @escaping (String) -> Void = { _ in }
+        onKeyboardAttached: @escaping () -> Void = {}
     ) {
         self.commits = commits
         self.remotes = remotes
@@ -348,7 +346,6 @@ struct RecentCommitsView: View {
         self.isKeyboardActive = isKeyboardActive
         self.onKeyboardFocused = onKeyboardFocused
         self.onKeyboardAttached = onKeyboardAttached
-        self.scrollToKeyboardRow = scrollToKeyboardRow
     }
 
     var body: some View {
@@ -362,17 +359,25 @@ struct RecentCommitsView: View {
         )
 
         let display = graphDisplay
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(display.rows) { row in
-                graphRow(row, graph: graph, gutter: gutter, spacing: spacing)
-                    .id(row.id)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(display.runs) { run in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(run.rows) { row in
+                        graphRow(row, graph: graph, gutter: gutter, spacing: spacing)
+                            .id(row.id)
+                    }
+                }
+                // The projection, not a sample of measured lazy rows, owns
+                // the extent. Each lazy run contains exactly one row height.
+                .frame(height: CGFloat(run.rows.count) * (run.isCommit
+                    ? Self.commitRowHeight(fontScale) : TreeRowStyle.rowHeight(fontScale)),
+                       alignment: .topLeading)
             }
-            if hasMoreCommits {
+            if hasMoreCommits, let last = commits.last(where: { $0.stash == nil })?.id {
                 Color.clear.frame(height: 1)
-                    .onAppear {
-                        if let id = commits.last(where: { $0.stash == nil })?.id {
-                            requestMoreIfNeeded(after: id)
-                        }
+                    .id(last)
+                    .onScrollVisibilityChange(threshold: 0.1) { visible in
+                        if visible { requestMoreIfNeeded(after: last) }
                     }
             }
         }
@@ -452,10 +457,10 @@ struct RecentCommitsView: View {
                         + "index=\(index) focused=\(keyboardFocused) active=\(isKeyboardActive)"
                 )
             }
-            if keyboardFocused, let id { scrollToKeyboardRow(id) }
+            if keyboardFocused, let id { revealKeyboardRow(id) }
         }
         .onChange(of: keyboardFocused) { _, focused in
-            if focused, let focusedRowID { scrollToKeyboardRow(focusedRowID) }
+            if focused, let focusedRowID { revealKeyboardRow(focusedRowID) }
         }
         .onAppear {
             GitGraphScrollLog.record("graph-appear", owner: keyboardOwner)
@@ -482,6 +487,11 @@ struct RecentCommitsView: View {
         var parent: String? = nil
         let content: Content
 
+        var isCommit: Bool {
+            if case .commit = content { return true }
+            return false
+        }
+
         var isNavigable: Bool {
             switch content {
             case .section, .placeholder: false
@@ -505,10 +515,50 @@ struct RecentCommitsView: View {
         }
     }
 
+    private struct GraphRun: Identifiable {
+        let rows: ArraySlice<GraphRow>
+        let isCommit: Bool
+        var id: String { rows.first!.id }
+    }
+
     private struct GraphDisplay {
-        let rows: [GraphRow]
+        struct Position {
+            let index: Int
+            let precedingCommits: Int
+            let isCommit: Bool
+        }
+
+        let runs: [GraphRun]
         let navigation: [GraphRow]
         let navigationIDs: [String]
+        let positions: [String: Position]
+
+        init(rows: [GraphRow]) {
+            var runs: [GraphRun] = []
+            var start = rows.startIndex
+            while start < rows.endIndex {
+                let isCommit = rows[start].isCommit
+                var end = start + 1
+                while end < rows.endIndex, rows[end].isCommit == isCommit { end += 1 }
+                runs.append(GraphRun(rows: rows[start..<end], isCommit: isCommit))
+                start = end
+            }
+            self.runs = runs
+            var navigation: [GraphRow] = []
+            var positions: [String: Position] = [:]
+            var precedingCommits = 0
+            for (index, row) in rows.enumerated() {
+                if row.isNavigable {
+                    navigation.append(row)
+                    positions[row.id] = Position(index: index, precedingCommits: precedingCommits,
+                                                 isCommit: row.isCommit)
+                }
+                if row.isCommit { precedingCommits += 1 }
+            }
+            self.navigation = navigation
+            navigationIDs = navigation.map(\.id)
+            self.positions = positions
+        }
     }
 
     private struct GraphDisplayKey: Equatable {
@@ -553,9 +603,7 @@ struct RecentCommitsView: View {
                 historical = historical.filter { historySections.contains($0.key) }
                 worktrees = worktrees.filter { worktreeSections.contains($0.key) }
             }
-            let rows = build()
-            let navigation = rows.filter(\.isNavigable)
-            let display = GraphDisplay(rows: rows, navigation: navigation, navigationIDs: navigation.map(\.id))
+            let display = GraphDisplay(rows: build())
             cached = (key, display)
             return display
         }
@@ -832,6 +880,31 @@ struct RecentCommitsView: View {
         return extending || toggling
     }
 
+    /// Reveal the actual row rect in the shared native vertical scroll view.
+    /// A lazy target's estimated position is not a reliable scroll coordinate.
+    private func revealKeyboardRow(_ id: String) {
+        guard isKeyboardActive, let view = keyboardOwner.view,
+              view.window?.firstResponder === view,
+              let scroll = view.enclosingScrollView, let document = scroll.documentView,
+              let position = graphDisplay.positions[id] else { return }
+        let detailHeight = TreeRowStyle.rowHeight(fontScale)
+        let commitHeight = Self.commitRowHeight(fontScale)
+        let offset = CGFloat(position.index - position.precedingCommits) * detailHeight
+            + CGFloat(position.precedingCommits) * commitHeight
+        let height = position.isCommit ? commitHeight : detailHeight
+        // The keyboard host fills the Graph, not the Changes sections above it.
+        let top = view.convert(NSPoint(x: view.bounds.minX,
+                                      y: view.isFlipped ? view.bounds.minY : view.bounds.maxY),
+                               to: document)
+        let y = document.isFlipped ? top.y + offset : top.y - offset - height
+        let visible = scroll.documentVisibleRect
+        guard y < visible.minY || y + height > visible.maxY else { return }
+        GitGraphScrollLog.record("scroll-request", owner: keyboardOwner, row: id)
+        document.scrollToVisible(NSRect(x: visible.minX, y: y,
+                                            width: min(1, visible.width), height: height))
+        GitGraphScrollLog.record("scroll-finished", owner: keyboardOwner, row: id)
+    }
+
     private func focusRow(_ id: String) {
         focusedRowID = id
         if isKeyboardActive {
@@ -1040,6 +1113,10 @@ struct RecentCommitsView: View {
         return lines.joined(separator: "\n")
     }
 
+    private static func commitRowHeight(_ scale: CGFloat) -> CGFloat {
+        max(36, ceil(38 * scale))
+    }
+
     @ViewBuilder
     private func commitRow(
         _ commit: Commit, graph: CommitGraphLayout.Row, gutter: CGFloat,
@@ -1053,7 +1130,7 @@ struct RecentCommitsView: View {
             contextRing: contextRowID == commitRowID(commit),
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
-            height: max(36, ceil(38 * fontScale))
+            height: Self.commitRowHeight(fontScale)
         ) { hovering, layout in
             GeometryReader { bounds in
                 VStack(alignment: .leading, spacing: 2 * fontScale) {
@@ -1164,7 +1241,7 @@ struct RecentCommitsView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(height: max(36, ceil(38 * fontScale)))
+            .frame(height: Self.commitRowHeight(fontScale))
         }
         .background {
             CommitGraphRails(
@@ -1187,7 +1264,7 @@ struct RecentCommitsView: View {
             .buttonStyle(.plain)
             .offset(
                 x: (8 + CGFloat(graph.node.lane) * spacing - 7) * fontScale,
-                y: max(36, ceil(38 * fontScale)) / 2 - 7 * fontScale
+                y: Self.commitRowHeight(fontScale) / 2 - 7 * fontScale
             )
             .help(Self.nodeHelp(commit, inHeadHistory: inHeadHistory))
             .accessibilityLabel(commit.worktree.map { $0.branch ?? $0.path } ?? commit.shortHash + ": " + commit.subject)
