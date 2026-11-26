@@ -719,10 +719,10 @@ final class DelimitedGridInteractionTests: XCTestCase {
         typealias Press = @convention(c) (AnyObject, Selector) -> Bool
         let invoke = unsafeBitCast(find.method(for: press), to: Press.self)
         XCTAssertTrue(invoke(find, press))
-        func matchCountIsPublished() -> Bool {
+        func matchCountIsPublished(_ count: String = "2") -> Bool {
             elements().contains {
                 attribute($0, "accessibilityIdentifier") as? String == "bailey.csv.match-count"
-                    && (attribute($0, "accessibilityValue") as? String == "2" || label($0) == "2")
+                    && (attribute($0, "accessibilityValue") as? String == count || label($0) == count)
             }
         }
         let searchDeadline = ContinuousClock.now.advanced(by: .seconds(5))
@@ -742,6 +742,25 @@ final class DelimitedGridInteractionTests: XCTestCase {
         }
         let next = try XCTUnwrap(grid.table.selection.caret)
         XCTAssertEqual(Set([first, next]), matches)
+
+        // A literal query replaces the empty-field predicate and its pinned scope.
+        let controls = file.delimitedTable
+        controls.query = "Other"
+        let literalDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !matchCountIsPublished("1") || grid.table.selection.caret != .init(row: 1, column: 0) {
+            guard ContinuousClock.now < literalDeadline else { break }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(matchCountIsPublished("1"))
+        XCTAssertEqual(grid.table.selection.caret, .init(row: 1, column: 0))
+        controls.query = ""
+        let clearedDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !matchCountIsPublished("0"), ContinuousClock.now < clearedDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(matchCountIsPublished("0"), "Clearing the literal query must not restore the empty-field predicate")
+
         XCTAssertFalse(file.hasPendingDelimitedEdit)
         XCTAssertFalse(file.isDirty)
         XCTAssertFalse(file.documentUndoManager.canUndo)
