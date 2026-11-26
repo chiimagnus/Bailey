@@ -362,6 +362,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
 }
 
 final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    private static let displayLimit = 4096
     let table = DelimitedNativeTable()
     let scrollView = NSScrollView()
     private lazy var gutter = DelimitedRecordGutter(grid: self)
@@ -471,7 +472,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         table.onCopy = { [weak self] in self?.copySelection() }
         table.onEdit = { [weak self] cell in self?.beginEditing(cell) }
         table.onPaste = { [weak self] text in self?.paste(text) }
-        table.onMenu = { [weak self] cell in self?.recordMenu(at: cell?.row) }
+        table.onMenu = { [weak self] cell in self?.recordMenu(at: cell) }
         table.acceptsGridActions = { [weak self] in self?.projectionIsCurrent == true }
         table.onSelectionChanged = { [weak self] in self?.gutter.needsDisplay = true }
         scrollView.documentView = table
@@ -646,7 +647,9 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         guard projectionIsCurrent, let column = Int(tableColumn.identifier.rawValue) else { return }
         table.window?.makeFirstResponder(table)
         table.selectColumn(column, modifiers: NSApp.currentEvent?.modifierFlags ?? [])
-        if NSApp.currentEvent?.clickCount == 2 { renameHeader(column) }
+        if let event = NSApp.currentEvent,
+           event.type == .leftMouseDown || event.type == .leftMouseUp,
+           event.clickCount == 2 { renameHeader(column) }
     }
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
@@ -676,8 +679,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     private func displayValue(in label: DelimitedCellField, at cell: DelimitedTablePresentation.Cell) {
         let field = physicalCell(cell).flatMap { snapshot?.index.field(record: $0.row, column: $0.column) }
-        let value = field?.value(in: source, limit: 4096) ?? ""
-        label.isNumeric = field.map { $0.contentRange(in: source).length <= 4096 } == true &&
+        let value = field?.value(in: source, limit: Self.displayLimit) ?? ""
+        label.isNumeric = field.map { $0.contentRange(in: source).length <= Self.displayLimit } == true &&
             DelimitedTablePresentation.finiteNumber(value) != nil
         label.stringValue = Self.singleLine(value)
     }
@@ -719,8 +722,14 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     private func beginEditing(_ cell: DelimitedTablePresentation.Cell) {
         guard projectionIsCurrent, editing == nil, let file, let snapshot, let physical = physicalCell(cell),
-              let window, snapshot.index.field(record: physical.row, column: physical.column) != nil,
-              file.beginDelimitedEditing(in: self, using: snapshot) else { return }
+              let field = snapshot.index.field(record: physical.row, column: physical.column) else { return }
+        let content = field.contentRange(in: source)
+        if content.length > Self.displayLimit ||
+            source.rangeOfCharacter(from: .newlines, options: [], range: content).location != NSNotFound {
+            openFullCell(cell)
+            return
+        }
+        guard let window, file.beginDelimitedEditing(in: self, using: snapshot) else { return }
         table.select(cell, reveal: true)
         table.layoutSubtreeIfNeeded()
         guard let field = table.view(atColumn: cell.column, row: cell.row, makeIfNecessary: true) as? DelimitedCellField else {
@@ -743,6 +752,17 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             if let edit = editing { styleEditor(edit) }
             editor.selectAll(nil)
         }
+    }
+
+    private func openFullCell(_ cell: DelimitedTablePresentation.Cell) {
+        guard projectionIsCurrent, editing == nil, let file, let snapshot, let physical = physicalCell(cell),
+              snapshot.index.field(record: physical.row, column: physical.column) != nil else { return }
+        let editable = file.canEditDelimited(snapshot)
+        guard !editable || !file.hasPendingDelimitedEdit else { return }
+        table.select(cell, reveal: true)
+        table.layoutSubtreeIfNeeded()
+        guard let anchor = table.view(atColumn: cell.column, row: cell.row, makeIfNecessary: true) else { return }
+        beginFullField(physical, selecting: .cell(physical), from: anchor.bounds, in: anchor, editable: editable)
     }
 
     private func styleEditor(_ edit: CellEdit) {
@@ -790,15 +810,20 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         let edit = CellEdit(input: .full(panel), snapshot: snapshot, physical: physical,
                             original: original, selection: selection)
         editing = edit
-        panel.confirm = { [weak self] in self?.finishEditing() }
+        panel.confirm = { [weak self] in
+            guard let self else { return }
+            finishEditing()
+            window?.makeFirstResponder(table)
+        }
         panel.dismiss = { [weak self, weak panel] in
             guard let self, let panel, let edit = editing,
                   case .full(let current) = edit.input, current === panel else { return }
-            completeEditing(edit, value: panel.editor.string)
+            endEditingForProjectionChange()
         }
         panel.cancel = { [weak self] in self?.cancelEditing() }
         styleEditor(edit)
         panel.show(from: rect, in: anchor)
+        if !panel.popover.isShown { cancelEditing() }
     }
 
     func finishEditing() {
@@ -914,13 +939,13 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     private struct RecordMenuTarget {
         let projection: UUID
-        let row: Int?
+        let cell: DelimitedTablePresentation.Cell?
         let selectedRows: IndexSet
     }
 
-    fileprivate func recordMenu(at row: Int?) -> NSMenu? {
+    fileprivate func recordMenu(at cell: DelimitedTablePresentation.Cell?) -> NSMenu? {
         guard projectionIsCurrent, let file, let snapshot, let presentation else { return nil }
-        let target = RecordMenuTarget(projection: presentation.id, row: row ?? table.selection.caret?.row,
+        let target = RecordMenuTarget(projection: presentation.id, cell: cell ?? table.selection.caret,
                                       selectedRows: table.selection.rows)
         let menu = NSMenu()
         func item(_ title: String, action: Selector) -> NSMenuItem {
@@ -929,7 +954,13 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             item.representedObject = target
             return item
         }
-        if target.row != nil {
+        if let cell = target.cell {
+            if let physical = physicalCell(cell), snapshot.index.field(record: physical.row, column: physical.column) != nil {
+                let title = file.canEditDelimited(snapshot)
+                    ? String(localized: "Edit Full Field…", table: "Editor")
+                    : String(localized: "View Full Field…", table: "Editor")
+                menu.addItem(item(title, action: #selector(openFullCellItem(_:))))
+            }
             menu.addItem(item(String(localized: "Select Row", table: "Editor"), action: #selector(selectRow(_:))))
         }
         if file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit {
@@ -948,13 +979,17 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     @objc private func selectRow(_ sender: NSMenuItem) {
-        guard let row = recordTarget(sender)?.row else { return }
+        guard let row = recordTarget(sender)?.cell?.row else { return }
         table.selectRecord(row, modifiers: [])
+    }
+
+    @objc private func openFullCellItem(_ sender: NSMenuItem) {
+        if let cell = recordTarget(sender)?.cell { openFullCell(cell) }
     }
 
     @objc private func insertRow(_ sender: NSMenuItem) {
         guard let target = recordTarget(sender), let snapshot else { return }
-        let row = target.row.flatMap(recordNumber) ?? snapshot.index.records.count
+        let row = target.cell.flatMap { recordNumber($0.row) } ?? snapshot.index.records.count
         file?.submitDelimitedEdit(.insertRows(before: row, count: 1), using: snapshot,
                                   selecting: .init(row: row, column: 0))
     }
@@ -1372,7 +1407,8 @@ private final class DelimitedRecordGutter: NSView {
         if grid.table.selection.columns(in: row).count != grid.table.numberOfColumns {
             activate(row, modifiers: [])
         }
-        return grid.recordMenu(at: row)
+        let column = grid.table.selection.caret?.column ?? 0
+        return grid.recordMenu(at: .init(row: row, column: column))
     }
 
     @discardableResult

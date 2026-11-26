@@ -1111,6 +1111,26 @@
         }
       }
     },
+    "Edit Full Field…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑完整字段…"
+          }
+        }
+      }
+    },
+    "View Full Field…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看完整字段…"
+          }
+        }
+      }
+    },
     "Full Field" : {
       "localizations" : {
         "zh-Hans" : {

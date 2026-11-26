@@ -4,6 +4,15 @@ import XCTest
 @testable import Bailey
 
 @MainActor
+func csvFullFieldEditor() -> NSTextView? {
+    func find(_ view: NSView) -> NSTextView? {
+        if let editor = view as? NSTextView, editor.accessibilityIdentifier() == "bailey.csv.full-field" { return editor }
+        return view.subviews.lazy.compactMap(find).first
+    }
+    return NSApp.windows.filter(\.isVisible).compactMap(\.contentView).lazy.compactMap(find).first
+}
+
+@MainActor
 final class DelimitedGridInteractionTests: XCTestCase {
     func testDisplayChangesRejectStaleNativePasteBeforeSwiftUIUpdates() async throws {
         let original = "Name,Value\r\nBeta,old\nAlpha,keep"
@@ -230,11 +239,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
             let rename = try XCTUnwrap(menu.item(withTitle: String(localized: "Rename Header…", table: "Editor")))
             XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(rename.action), to: rename.target, from: rename))
 
-            func currentEditor(_ view: NSView) -> NSTextView? {
-                if let editor = view as? NSTextView, editor.accessibilityIdentifier() == "bailey.csv.full-field" { return editor }
-                return view.subviews.lazy.compactMap(currentEditor).first
-            }
-            let native = try XCTUnwrap(NSApp.windows.compactMap(\.contentView).lazy.compactMap(currentEditor).first)
+            let native = try XCTUnwrap(csvFullFieldEditor())
             XCTAssertEqual(Data(native.string.utf8), Data(title.utf8))
             let end = NSRange(location: native.string.utf16.count, length: 0)
             native.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: end)
@@ -265,6 +270,83 @@ final class DelimitedGridInteractionTests: XCTestCase {
                 file.documentUndoManager.undo()
                 XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
             }
+        }
+    }
+
+    func testGridOpensWholeLongAndMultilineFieldsAndKeepsReadOnlyValuesCopyable() async throws {
+        let previousLight = Theme.terminal(dark: false).name
+        let previousDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: previousLight, dark: previousDark) }
+        for (value, multiline, readOnly) in [
+            (String(repeating: "a", count: 4093) + "🧪", false, false),
+            (String(repeating: "a", count: 4094) + "🧪", false, false),
+            (String(repeating: "a", count: 4095) + "🧪", false, false),
+            (String(repeating: "字", count: 18_000), false, false),
+            ("e\u{301}\rA\nB\r\nC", true, false),
+            ("read-only\r\ncomplete", true, true),
+        ] {
+            let raw = multiline ? "\"\(value)\"" : value
+            let original = "Name,Value\r\nItem,\(raw)\n" + (readOnly ? "Bad,\"open" : "")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+            try Data(original.utf8).write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            defer { file.retireContent() }
+            let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 220, height: 155),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            defer { window.close() }
+            let host = NSHostingView(rootView: FileViewerView(file: file))
+            window.contentView = host
+            window.orderBack(nil)
+            Theme.reloadSelection(light: "Default Light", dark: previousDark)
+            let grid = try await self.grid(in: host, showing: "Item")
+            grid.table.onEdit(.init(row: 0, column: 1))
+
+            if !multiline && value.utf16.count <= 4096 {
+                let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+                XCTAssertNil(csvFullFieldEditor())
+                XCTAssertEqual((field.currentEditor() as? NSTextView)?.string, value)
+                grid.cancelEditing()
+                XCTAssertFalse(file.hasPendingDelimitedEdit)
+                continue
+            }
+
+            let editor = try XCTUnwrap(csvFullFieldEditor())
+            XCTAssertEqual(Data(editor.string.utf8), Data(value.utf8))
+            XCTAssertEqual(editor.isEditable, !readOnly)
+            XCTAssertTrue(editor.isSelectable)
+            if readOnly {
+                XCTAssertFalse(file.hasPendingDelimitedEdit)
+                editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+                XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+                continue
+            }
+            editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+            editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            editor.insertText("新增", replacementRange: NSRange(location: NSNotFound, length: 0))
+            let typed = value + "\n新增"
+            XCTAssertEqual(Data(editor.string.utf8), Data(typed.utf8))
+            let selection = editor.selectedRange()
+            let initialBackground = editor.backgroundColor
+            Theme.reloadSelection(light: "Rose Pine Dawn", dark: previousDark)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while editor.backgroundColor == initialBackground, ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertNotEqual(editor.backgroundColor, initialBackground)
+            XCTAssertTrue(csvFullFieldEditor() === editor)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(file.text, original)
+            await file.save()
+            let expected = "Name,Value\r\nItem,\"\(typed)\"\n"
+            XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+            file.documentUndoManager.undo()
+            XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
         }
     }
 
