@@ -1422,6 +1422,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             try await file.waitForText()
             let controls = file.delimitedTable
             let grid = DelimitedGrid()
+            controls.separator = .comma
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: -900, y: -900, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)

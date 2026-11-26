@@ -155,6 +155,7 @@ final class FileTab: nonisolated Identifiable {
     func retireNativeEditor() {
         delimitedEditingGrid?.cancelEditing()
         delimitedEditTask?.cancel()
+        delimitedTable.retire()
         svgPreview = nil
         retireImageAnnotations()
         originalImageTask?.cancel()
@@ -397,10 +398,15 @@ final class FileTab: nonisolated Identifiable {
         let source: String
         let requestID: String
         let documentRevision: String
+        var selectedSeparator: DelimitedTableIndex.Separator? = nil
+
+        var parseRequest: DelimitedTableControls.ParseRequest {
+            .init(source: requestID, separator: selectedSeparator)
+        }
     }
 
     func delimitedSnapshot(using selected: DelimitedTableIndex.Separator? = nil) async throws -> DelimitedSnapshot? {
-        guard case .text = content, savedSourceVersion != nil,
+        guard !isRetired, case .text = content, savedSourceVersion != nil,
               let preferred = DelimitedTableIndex.Separator.preferred(for: path) else { return nil }
         let request = textPreviewRequestID
         let source = text
@@ -408,7 +414,7 @@ final class FileTab: nonisolated Identifiable {
         try Task.checkCancellation()
         guard request == textPreviewRequestID else { return nil }
         return DelimitedSnapshot(index: index, source: source, requestID: request,
-                                 documentRevision: documentEditRevision)
+                                 documentRevision: documentEditRevision, selectedSeparator: selected)
     }
 
     private func matchesDelimitedDocument(_ snapshot: DelimitedSnapshot) -> Bool {
@@ -458,6 +464,7 @@ final class FileTab: nonisolated Identifiable {
             String(localized: "Could not edit the table.", table: "Editor")
         }
         let encoding = fileEncoding
+        let selectedSeparator = delimitedTable.separator
         invalidateReload()
         delimitedEditTask = Task { [weak self] in
             guard let self else { return false }
@@ -465,7 +472,11 @@ final class FileTab: nonisolated Identifiable {
             do {
                 delimitedTable.pendingCell = cell
                 try await applyAcceptedDelimitedEdit(change, using: snapshot, encoding: encoding)
-                if documentEditRevision == snapshot.documentRevision { delimitedTable.pendingCell = nil }
+                if documentEditRevision == snapshot.documentRevision {
+                    delimitedTable.pendingCell = nil
+                } else if delimitedTable.separator == selectedSeparator {
+                    delimitedTable.separator = snapshot.index.separator
+                }
                 if case .insertRows = change, snapshot.index.records.isEmpty {
                     delimitedTable.configuration.header = false
                 }

@@ -5,6 +5,16 @@ import SwiftUI
 
 @Observable
 final class DelimitedTableControls {
+    struct ParseRequest: Hashable {
+        let source: String
+        let separator: DelimitedTableIndex.Separator?
+    }
+
+    struct DisplayRequest: Hashable {
+        let parse: ParseRequest
+        let configuration: DelimitedTablePresentation.Configuration
+    }
+
     var separator: DelimitedTableIndex.Separator?
     var configuration = DelimitedTablePresentation.Configuration()
     var query = ""
@@ -12,23 +22,30 @@ final class DelimitedTableControls {
     var findFocus = 0
     var findStep = 0
     var editError: String?
+    private(set) var parsed: FileTab.DelimitedSnapshot?
     @ObservationIgnored var pendingCell: DelimitedTablePresentation.Cell?
-    @ObservationIgnored var selectedValue = ""
-    @ObservationIgnored private var displayedSeparator: DelimitedTableIndex.Separator?
+    @ObservationIgnored weak var grid: DelimitedGrid?
     @ObservationIgnored var columnWidths: [Int: CGFloat] = [:]
 
-    func accept(_ index: DelimitedTableIndex) {
+    func request(for file: FileTab) -> ParseRequest {
+        ParseRequest(source: file.textPreviewRequestID, separator: separator)
+    }
+
+    func accept(_ snapshot: FileTab.DelimitedSnapshot) {
+        let index = snapshot.index
         let next: DelimitedTablePresentation.Configuration
-        if let displayedSeparator, displayedSeparator != index.separator {
+        if let previous = parsed?.index.separator, previous != index.separator {
             next = .init(header: configuration.header)
             columnWidths.removeAll()
         } else {
             next = configuration.restricted(to: min(index.columnCount, DelimitedGrid.maximumColumns))
             columnWidths = columnWidths.filter { $0.key < index.columnCount }
         }
-        displayedSeparator = index.separator
+        parsed = snapshot
         if next != configuration { configuration = next }
     }
+
+    func retire() { parsed = nil }
 
     func perform(_ action: FindAction) {
         switch action {
@@ -39,22 +56,15 @@ final class DelimitedTableControls {
         case .next: findStep &+= 1
         case .previous: findStep &-= 1
         case .useSelection:
-            if !selectedValue.isEmpty { query = selectedValue }
+            if let value = grid?.selectedFieldValue(), !value.isEmpty { query = value }
         case .replace: break
         }
     }
 }
 
 struct CSVTableView: View {
-    private struct ParseRequest: Hashable {
-        let source: String
-        let separator: DelimitedTableIndex.Separator?
-    }
-
-    private struct DisplayRequest: Hashable {
-        let parse: ParseRequest
-        let configuration: DelimitedTablePresentation.Configuration
-    }
+    private typealias ParseRequest = DelimitedTableControls.ParseRequest
+    private typealias DisplayRequest = DelimitedTableControls.DisplayRequest
 
     private struct SearchRequest: Hashable {
         let display: UUID
@@ -67,11 +77,11 @@ struct CSVTableView: View {
     let canFocus: () -> Bool
     let onFocused: () -> Void
     let onShowSource: () -> Void
-    @State private var parsed: (ParseRequest, FileTab.DelimitedSnapshot)?
-    @State private var displayed: (ParseRequest, DelimitedTablePresentation)?
+    @State private var displayed: (DisplayRequest, DelimitedTablePresentation)?
     @State private var search: (SearchRequest, [DelimitedTablePresentation.Cell])?
-    @State private var failed: ParseRequest?
-    @State private var filterColumn: Int?
+    @State private var parseFailed: ParseRequest?
+    @State private var displayFailed: DisplayRequest?
+    @State private var filterTarget: (column: Int, request: DisplayRequest)?
     @State private var filterDraft = ""
     @FocusState private var focusedInput: Input?
     @Environment(\.colorScheme) private var colorScheme
@@ -81,62 +91,69 @@ struct CSVTableView: View {
     var body: some View {
         let _ = Theme.changes.revision
         let theme = Theme.terminal(dark: colorScheme == .dark)
-        let parse = ParseRequest(source: file.textPreviewRequestID, separator: controls.separator)
+        let parse = controls.request(for: file)
         let display = DisplayRequest(parse: parse, configuration: controls.configuration)
-        let active = displayed.flatMap { $0.0 == parse ? $0.1 : nil }
+        let snapshot = controls.parsed.flatMap { $0.parseRequest == parse ? $0 : nil }
+        let active = displayed.flatMap { $0.0 == display ? $0.1 : nil }
         let query = active.map { SearchRequest(display: $0.id, query: controls.query) }
         let matches = search.flatMap { $0.0 == query ? $0.1 : nil } ?? []
-        surface(parse, active: active, matches: matches, theme: theme)
-            .overlay(alignment: .topTrailing) { overlay(matches: matches.count, theme: theme) }
+        surface(snapshot: active == nil ? nil : snapshot, active: active, matches: matches, theme: theme,
+                failed: parseFailed == parse || displayFailed == display)
+            .overlay(alignment: .topTrailing) { overlay(display: display, matches: matches.count, theme: theme) }
             .task(id: parse) {
+                guard snapshot == nil else { return }
+                parseFailed = nil
                 do {
                     guard let result = try await file.delimitedSnapshot(using: parse.separator),
-                          !Task.isCancelled, parse.source == file.textPreviewRequestID else { return }
-                    controls.accept(result.index)
-                    parsed = (parse, result)
+                          !Task.isCancelled, controls.request(for: file) == parse else { return }
+                    controls.accept(result)
                 } catch is CancellationError {
                     return
                 } catch {
-                    failed = parse
+                    if !Task.isCancelled, controls.request(for: file) == parse { parseFailed = parse }
                 }
             }
-            .task(id: parsed?.0 == parse ? display : nil) {
-                guard let parsed, parsed.0 == parse else { return }
+            .task(id: snapshot == nil ? nil : display) {
+                guard let snapshot else { return }
+                displayFailed = nil
                 do {
                     let result = try await DelimitedTablePresentation.evaluate(
-                        source: parsed.1.source, index: parsed.1.index, configuration: display.configuration
+                        source: snapshot.source, index: snapshot.index, configuration: display.configuration
                     )
-                    guard !Task.isCancelled, parse.source == file.textPreviewRequestID else { return }
-                    displayed = (parse, result)
+                    guard !Task.isCancelled, controls.request(for: file) == parse,
+                          controls.configuration == display.configuration else { return }
+                    displayed = (display, result)
                 } catch is CancellationError {
                     return
                 } catch {
-                    failed = parse
+                    if !Task.isCancelled, controls.request(for: file) == parse,
+                       controls.configuration == display.configuration { displayFailed = display }
                 }
             }
             .task(id: query) {
-                guard let query, let active, let parsed, parsed.0 == parse else { return }
+                guard let query, let active, let snapshot else { return }
                 do {
                     let found = try await active.find(
-                        query.query, source: parsed.1.source, index: parsed.1.index,
+                        query.query, source: snapshot.source, index: snapshot.index,
                         columnCount: DelimitedGrid.maximumColumns
                     )
-                    guard !Task.isCancelled, parse.source == file.textPreviewRequestID else { return }
+                    guard !Task.isCancelled, controls.request(for: file) == parse,
+                          controls.configuration == display.configuration, controls.query == query.query else { return }
                     search = (query, found)
                 } catch {}
             }
             .onChange(of: controls.findFocus) {
-                filterColumn = nil
+                filterTarget = nil
                 focus(.find)
             }
+            .onChange(of: display) { if filterTarget?.request != display { filterTarget = nil } }
     }
 
     @ViewBuilder
     private func surface(
-        _ request: ParseRequest, active: DelimitedTablePresentation?, matches: [DelimitedTablePresentation.Cell],
-        theme: GhosttyThemeDefinition
+        snapshot: FileTab.DelimitedSnapshot?, active: DelimitedTablePresentation?,
+        matches: [DelimitedTablePresentation.Cell], theme: GhosttyThemeDefinition, failed: Bool
     ) -> some View {
-        let snapshot = parsed.flatMap { $0.0 == request && active != nil ? $0.1 : nil }
         let hasRows = snapshot.map { !$0.index.records.isEmpty } ?? false
         VStack(spacing: 0) {
             if let snapshot {
@@ -154,9 +171,9 @@ struct CSVTableView: View {
                 NativeDelimitedGrid(
                     file: file, snapshot: snapshot, presentation: active, theme: theme,
                     findStep: controls.findStep, matches: matches, onFocused: onFocused,
-                    onFilter: { column in
+                    onFilter: { column, request in
                         filterDraft = controls.configuration.filters[column] ?? ""
-                        filterColumn = column
+                        filterTarget = (column, request)
                     }
                 )
                 .opacity(hasRows ? 1 : 0)
@@ -169,6 +186,8 @@ struct CSVTableView: View {
                         Text("No table rows to display.", tableName: "Editor").foregroundStyle(.secondary)
                         if file.canEditDelimited(snapshot) {
                             Button(String(localized: "Insert Row", table: "Editor")) {
+                                guard let active, controls.request(for: file) == snapshot.parseRequest,
+                                      controls.configuration == active.configuration else { return }
                                 file.submitDelimitedEdit(.insertRows(before: 0, count: 1), using: snapshot, selecting: nil)
                             }
                             .disabled(file.hasPendingDelimitedEdit)
@@ -176,7 +195,7 @@ struct CSVTableView: View {
                         Spacer()
                     }
                 } else if snapshot == nil {
-                    if failed == request {
+                    if failed {
                         notice(String(localized: "Could not display the table.", table: "Editor"))
                     } else {
                         ProgressView().controlSize(.small)
@@ -201,18 +220,18 @@ struct CSVTableView: View {
     }
 
     @ViewBuilder
-    private func overlay(matches: Int, theme: GhosttyThemeDefinition) -> some View {
-        if let column = filterColumn {
+    private func overlay(display: DisplayRequest, matches: Int, theme: GhosttyThemeDefinition) -> some View {
+        if let target = filterTarget, target.request == display {
             HStack {
                 TextField(String(localized: "Filter Column", table: "Editor"), text: $filterDraft)
                     .accessibilityIdentifier("bailey.csv.filter")
                     .focused($focusedInput, equals: .filter)
-                    .onSubmit { applyFilter(column) }
-                Button(String(localized: "Apply Filter", table: "Editor")) { applyFilter(column) }
-                Button { filterColumn = nil } label: { Image(systemName: "xmark") }
+                    .onSubmit { applyFilter() }
+                Button(String(localized: "Apply Filter", table: "Editor")) { applyFilter() }
+                Button { filterTarget = nil } label: { Image(systemName: "xmark") }
                     .accessibilityLabel(Text("Close"))
             }
-            .onKeyPress(.escape) { filterColumn = nil; return .handled }
+            .onKeyPress(.escape) { filterTarget = nil; return .handled }
             .padding(6).frame(maxWidth: 350)
             .modifier(DelimitedOverlayStyle(theme: theme))
             .onAppear { focus(.filter) }
@@ -241,15 +260,17 @@ struct CSVTableView: View {
         }
     }
 
-    private func applyFilter(_ column: Int) {
-        controls.configuration.filters[column] = filterDraft.isEmpty ? nil : filterDraft
-        filterColumn = nil
+    private func applyFilter() {
+        guard let target = filterTarget, controls.request(for: file) == target.request.parse,
+              controls.configuration == target.request.configuration else { filterTarget = nil; return }
+        controls.configuration.filters[target.column] = filterDraft.isEmpty ? nil : filterDraft
+        filterTarget = nil
     }
 
     private func focus(_ input: Input) {
         DispatchQueue.main.async {
             guard canFocus(),
-                  input == .filter ? filterColumn != nil : controls.showsFind && filterColumn == nil else { return }
+                  input == .filter ? filterTarget != nil : controls.showsFind && filterTarget == nil else { return }
             focusedInput = input
         }
     }
@@ -285,7 +306,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     let findStep: Int
     let matches: [DelimitedTablePresentation.Cell]
     let onFocused: () -> Void
-    let onFilter: (Int) -> Void
+    let onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void
 
     func makeNSView(context: Context) -> DelimitedGrid { DelimitedGrid() }
 
@@ -297,7 +318,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
         if let snapshot, let presentation, !snapshot.index.records.isEmpty {
             grid.install(snapshot, presentation: presentation)
             grid.showMatch(matches, step: findStep)
-        } else {
+        } else if let snapshot, snapshot.index.records.isEmpty {
             grid.clearProjection()
         }
     }
@@ -310,17 +331,24 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     }
 }
 
-final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     static let maximumColumns = 4096
     let table = DelimitedNativeTable()
+    let scrollView = NSScrollView()
+    private lazy var gutter = DelimitedRecordGutter(grid: self)
     weak var file: FileTab? {
-        didSet { table.file = file }
+        didSet {
+            guard file !== oldValue else { return }
+            if oldValue?.delimitedTable.grid === self { oldValue?.delimitedTable.grid = nil }
+            table.file = file
+            controls?.grid = self
+        }
     }
     private var controls: DelimitedTableControls? { file?.delimitedTable }
     private var theme: GhosttyThemeDefinition?
-    private var palette: DelimitedPalette { table.palette }
+    fileprivate var palette: DelimitedPalette { table.palette }
     private var installingColumns = false
-    var onFilter: (Int) -> Void = { _ in }
+    var onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void = { _, _ in }
     private var snapshot: FileTab.DelimitedSnapshot?
     private var presentation: DelimitedTablePresentation?
     private var source: NSString = ""
@@ -360,11 +388,27 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     private var previousMatches: [DelimitedTablePresentation.Cell] = []
     private var previousStep = 0
     private var matchIndex = 0
+    fileprivate var projectionIsCurrent: Bool {
+        guard let file, let controls, let snapshot, let presentation else { return false }
+        return controls.request(for: file) == snapshot.parseRequest &&
+            presentation.configuration == controls.configuration
+    }
+    fileprivate var projectionID: UUID? { presentation?.id }
+    fileprivate var recordCount: Int { snapshot?.index.records.count ?? 0 }
+
+    fileprivate func recordNumber(_ row: Int) -> Int? {
+        guard let presentation, presentation.rows.indices.contains(row) else { return nil }
+        return presentation.rows[row] + 1
+    }
 
     init() {
         super.init(frame: .zero)
-        hasVerticalScroller = true
-        hasHorizontalScroller = true
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(viewportChanged(_:)),
+                                               name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
         let header = DelimitedHeader(frame: NSRect(x: 0, y: 0, width: 0, height: 30))
         header.onMenu = { [weak self] column in self?.columnMenu(column) }
         table.headerView = header
@@ -382,26 +426,41 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         table.onCopy = { [weak self] in self?.copySelection() }
         table.onEdit = { [weak self] cell in self?.beginEditing(cell) }
         table.onPaste = { [weak self] text in self?.paste(text) }
-        table.onMenu = { [weak self] in self?.recordMenu() }
-        table.onSelection = { [weak self] cell in
-            guard let self else { return }
-            controls?.selectedValue = cell.map { value($0, limit: 4096) } ?? ""
-        }
-        documentView = table
+        table.onMenu = { [weak self] cell in self?.recordMenu(at: cell?.row) }
+        table.acceptsGridActions = { [weak self] in self?.projectionIsCurrent == true }
+        table.onSelectionChanged = { [weak self] in self?.gutter.needsDisplay = true }
+        scrollView.documentView = table
+        addSubview(scrollView)
+        addSubview(gutter)
         applyTheme(Theme.terminal(dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua))
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    override func layout() {
+        super.layout()
+        let width = min(gutter.preferredWidth, max(0, bounds.width - 36))
+        gutter.frame = CGRect(x: bounds.minX, y: bounds.minY, width: width, height: bounds.height)
+        scrollView.frame = CGRect(x: bounds.minX + width, y: bounds.minY,
+                                  width: bounds.width - width, height: bounds.height)
+        gutter.needsDisplay = true
+    }
+
+    @objc private func viewportChanged(_ notification: Notification) {
+        gutter.needsDisplay = true
+        table.refreshHover()
+    }
+
     func applyTheme(_ theme: GhosttyThemeDefinition) {
         guard self.theme != theme else { return }
         self.theme = theme
         table.palette = DelimitedPalette(theme)
-        backgroundColor = palette.background
-        contentView.backgroundColor = palette.background
+        scrollView.backgroundColor = palette.background
+        scrollView.contentView.backgroundColor = palette.background
         table.backgroundColor = palette.background
         table.headerView?.needsDisplay = true
+        gutter.needsDisplay = true
         table.refreshSelection()
         if let edit = editing { styleEditor(edit) }
     }
@@ -424,18 +483,21 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         source = ""
         previousMatches = []
         table.reloadData()
+        needsLayout = true
     }
 
     func detach() {
         clearProjection()
         file = nil
         table.onFocused = {}
-        onFilter = { _ in }
+        onFilter = { _, _ in }
     }
 
     func install(_ snapshot: FileTab.DelimitedSnapshot, presentation: DelimitedTablePresentation) {
         guard presentation.id != self.presentation?.id else { return }
         finishEditing()
+        let previousRows = self.snapshot?.documentRevision == snapshot.documentRevision &&
+            self.snapshot?.index.separator == snapshot.index.separator ? self.presentation?.rows : nil
         let oldHeader = self.presentation?.header
         let needsFit = self.snapshot?.index.separator != snapshot.index.separator ||
             oldHeader != presentation.header
@@ -449,9 +511,19 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
             installColumns(index: snapshot.index, header: presentation.header, fitExisting: needsFit)
         }
         self.presentation = presentation
-        table.clearSelection()
+        for (column, item) in table.tableColumns.enumerated() {
+            let sorted = presentation.configuration.sort.first { $0.column == column }
+            item.headerCell.setAccessibilitySortDirection(sorted.map { $0.ascending ? .ascending : .descending } ?? .unknown)
+        }
         previousMatches = []
         table.reloadData()
+        if let previousRows {
+            table.remapRows(from: previousRows, to: presentation.rows)
+        } else {
+            table.clearSelection()
+        }
+        table.headerView?.needsDisplay = true
+        needsLayout = true
         if let cell = controls?.pendingCell {
             controls?.pendingCell = nil
             if let row = presentation.rows.firstIndex(of: cell.row) {
@@ -475,11 +547,10 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
                 column = NSTableColumn(identifier: .init(String(columnIndex)))
                 column.minWidth = 44
                 column.headerCell = DelimitedColumnHeader(textCell: "")
-                column.sortDescriptorPrototype = NSSortDescriptor(key: column.identifier.rawValue, ascending: true)
             }
             let title = header && !index.records.isEmpty
                 ? DelimitedTablePresentation.value(in: source, index: index, record: 0, column: columnIndex, limit: 128) : ""
-            let displayTitle = title.isEmpty ? String(columnIndex + 1) : Self.singleLine(title)
+            let displayTitle = header ? Self.singleLine(title) : String(columnIndex + 1)
             if column.title != displayTitle { column.title = displayTitle }
             if let width = controls?.columnWidths[columnIndex] {
                 column.width = width
@@ -488,9 +559,6 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
                                            header: header, samplesPerColumn: 4096 / count)
             }
             if isNewColumn { table.addTableColumn(column) }
-        }
-        table.sortDescriptors = (controls?.configuration.sort ?? []).map {
-            NSSortDescriptor(key: String($0.column), ascending: $0.ascending)
         }
     }
 
@@ -526,12 +594,10 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
 
     func numberOfRows(in tableView: NSTableView) -> Int { presentation?.rows.count ?? 0 }
 
-    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-        let order = tableView.sortDescriptors.compactMap { entry -> DelimitedTablePresentation.Sort? in
-            guard let key = entry.key, let column = Int(key) else { return nil }
-            return .init(column: column, ascending: entry.ascending)
-        }
-        if controls?.configuration.sort != order { controls?.configuration.sort = order }
+    func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        guard projectionIsCurrent, let column = Int(tableColumn.identifier.rawValue) else { return }
+        table.window?.makeFirstResponder(table)
+        table.selectColumn(column, modifiers: NSApp.currentEvent?.modifierFlags ?? [])
     }
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
@@ -574,7 +640,13 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         )
     }
 
+    func selectedFieldValue() -> String? {
+        guard projectionIsCurrent, let cell = table.selection.caret else { return nil }
+        return value(cell)
+    }
+
     func showMatch(_ matches: [DelimitedTablePresentation.Cell], step: Int) {
+        guard projectionIsCurrent else { return }
         if matches != previousMatches {
             previousMatches = matches
             previousStep = step
@@ -597,7 +669,7 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     }
 
     private func beginEditing(_ cell: DelimitedTablePresentation.Cell) {
-        guard editing == nil, let file, !file.hasPendingDelimitedEdit, let snapshot,
+        guard projectionIsCurrent, editing == nil, let file, !file.hasPendingDelimitedEdit, let snapshot,
               file.canEditDelimited(snapshot), let physical = physicalCell(cell),
               let window else { return }
         table.select(cell, reveal: true)
@@ -715,7 +787,7 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     /// Read a rectangular TSV clipboard using the same parser as file data.
     /// Literal text (including formulas) is never evaluated or reformatted.
     func paste(_ text: String) {
-        guard let file, !file.hasPendingDelimitedEdit, let snapshot, let presentation,
+        guard projectionIsCurrent, let file, !file.hasPendingDelimitedEdit, let snapshot, let presentation,
               let origin = table.selection.caret, presentation.rows.indices.contains(origin.row),
               file.canEditDelimited(snapshot) else { return }
         file.submitDelimitedEdit(.paste(text, rows: presentation.rows, origin: origin,
@@ -724,44 +796,69 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
                                  selecting: .init(row: presentation.rows[origin.row], column: origin.column))
     }
 
-    private func recordMenu() -> NSMenu? {
-        guard let file, let snapshot, file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit else { return nil }
+    private struct RecordMenuTarget {
+        let projection: UUID
+        let row: Int?
+        let selectedRows: IndexSet
+    }
+
+    fileprivate func recordMenu(at row: Int?) -> NSMenu? {
+        guard projectionIsCurrent, let file, let snapshot, let presentation else { return nil }
+        let target = RecordMenuTarget(projection: presentation.id, row: row ?? table.selection.caret?.row,
+                                      selectedRows: table.selection.rows)
         let menu = NSMenu()
         func item(_ title: String, action: Selector) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
+            item.representedObject = target
             return item
         }
-        menu.addItem(item(String(localized: "Insert Row", table: "Editor"), action: #selector(insertRow)))
-        if table.selection.caret != nil {
-            menu.addItem(item(String(localized: "Delete Rows", table: "Editor"), action: #selector(deleteRows)))
+        if target.row != nil {
+            menu.addItem(item(String(localized: "Select Row", table: "Editor"), action: #selector(selectRow(_:))))
+        }
+        if file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit {
+            menu.addItem(item(String(localized: "Insert Row After", table: "Editor"), action: #selector(insertRow(_:))))
+            if !target.selectedRows.isEmpty {
+                menu.addItem(item(String(localized: "Delete Rows", table: "Editor"), action: #selector(deleteRows(_:))))
+            }
         }
         return menu
     }
 
-    @objc private func insertRow() {
-        guard let snapshot else { return }
-        let row = table.selection.caret.flatMap(physicalCell)?.row ?? snapshot.index.records.count
+    private func recordTarget(_ sender: NSMenuItem) -> RecordMenuTarget? {
+        guard projectionIsCurrent, let target = sender.representedObject as? RecordMenuTarget,
+              target.projection == presentation?.id else { return nil }
+        return target
+    }
+
+    @objc private func selectRow(_ sender: NSMenuItem) {
+        guard let row = recordTarget(sender)?.row else { return }
+        table.selectRecord(row, modifiers: [])
+    }
+
+    @objc private func insertRow(_ sender: NSMenuItem) {
+        guard let target = recordTarget(sender), let snapshot else { return }
+        let row = target.row.flatMap(recordNumber) ?? snapshot.index.records.count
         apply(.insertRows(before: row, count: 1), snapshot: snapshot, selecting: .init(row: row, column: 0))
     }
 
-    @objc private func deleteRows() {
-        guard let snapshot, let presentation else { return }
-        let rows = Set(table.selection.blocks.flatMap { block in block.rows.compactMap { row in
+    @objc private func deleteRows(_ sender: NSMenuItem) {
+        guard let target = recordTarget(sender), let snapshot, let presentation else { return }
+        let rows = Set(target.selectedRows.compactMap { row in
             presentation.rows.indices.contains(row) ? presentation.rows[row] : nil
-        } })
+        })
         guard !rows.isEmpty else { return }
         apply(.deleteRows(rows), snapshot: snapshot, selecting: nil)
     }
 
     private func copySelection() {
-        guard let presentation, let snapshot, !table.selection.blocks.isEmpty else { return }
+        guard projectionIsCurrent, let presentation, let snapshot, !table.selection.blocks.isEmpty else { return }
         copyTask?.cancel()
         let selection = table.selection
         let changeCount = NSPasteboard.general.changeCount
         copyTask = Task { [weak self] in
             guard let value = try? await presentation.copy(selection, source: snapshot.source, index: snapshot.index),
-                  !Task.isCancelled, let self, self.presentation?.id == presentation.id,
+                  !Task.isCancelled, let self, self.presentation?.id == presentation.id, self.projectionIsCurrent,
                   self.window?.isKeyWindow == true, NSPasteboard.general.changeCount == changeCount else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(value, forType: .string)
@@ -769,20 +866,28 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
     }
 
     private func columnMenu(_ column: Int) -> NSMenu? {
-        guard let controls, table.tableColumns.indices.contains(column) else { return nil }
+        guard projectionIsCurrent, let controls, let presentation,
+              table.tableColumns.indices.contains(column) else { return nil }
         let menu = NSMenu()
         func item(_ title: String, action: Selector, tag: Int = 0) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.tag = tag
+            item.representedObject = presentation.id
             return item
         }
+        menu.addItem(item(String(localized: "Sort Ascending", table: "Editor"), action: #selector(sortAscending(_:)), tag: column))
+        menu.addItem(item(String(localized: "Sort Descending", table: "Editor"), action: #selector(sortDescending(_:)), tag: column))
+        if controls.configuration.sort.contains(where: { $0.column == column }) {
+            menu.addItem(item(String(localized: "Clear Column Sort", table: "Editor"), action: #selector(clearSort(_:)), tag: column))
+        }
+        menu.addItem(.separator())
         menu.addItem(item(String(localized: "Filter Column…", table: "Editor"), action: #selector(filter(_:)), tag: column))
         menu.addItem(item(String(localized: "Fit Column Width", table: "Editor"), action: #selector(fitColumnWidth(_:)), tag: column))
         if controls.configuration.filters[column] != nil {
             menu.addItem(item(String(localized: "Clear Column Filter", table: "Editor"), action: #selector(clearFilter(_:)), tag: column))
         }
-        let header = item(String(localized: "Use First Row as Header", table: "Editor"), action: #selector(toggleHeader))
+        let header = item(String(localized: "Use First Row as Header", table: "Editor"), action: #selector(toggleHeader(_:)))
         header.state = controls.configuration.header ? .on : .off
         menu.addItem(header)
         let delimiter = NSMenuItem(title: String(localized: "Delimiter", table: "Editor"), action: nil, keyEquivalent: "")
@@ -797,18 +902,209 @@ final class DelimitedGrid: NSScrollView, NSTableViewDataSource, NSTableViewDeleg
         return menu
     }
 
-    @objc private func filter(_ sender: NSMenuItem) { onFilter(sender.tag) }
+    private func accepts(_ sender: NSMenuItem) -> Bool {
+        guard let id = sender.representedObject as? UUID else { return false }
+        return projectionIsCurrent && presentation?.id == id
+    }
+
+    @objc private func filter(_ sender: NSMenuItem) {
+        guard accepts(sender), let snapshot, let presentation else { return }
+        onFilter(sender.tag, .init(parse: snapshot.parseRequest, configuration: presentation.configuration))
+    }
+
+    @objc private func sortAscending(_ sender: NSMenuItem) { sort(sender, ascending: true) }
+    @objc private func sortDescending(_ sender: NSMenuItem) { sort(sender, ascending: false) }
+
+    private func sort(_ sender: NSMenuItem, ascending: Bool) {
+        guard accepts(sender), let controls else { return }
+        let rest = controls.configuration.sort.filter { $0.column != sender.tag }
+        controls.configuration.sort = [.init(column: sender.tag, ascending: ascending)] + rest
+    }
+
+    @objc private func clearSort(_ sender: NSMenuItem) {
+        guard accepts(sender) else { return }
+        controls?.configuration.sort.removeAll { $0.column == sender.tag }
+    }
+
     @objc private func fitColumnWidth(_ sender: NSMenuItem) {
-        guard snapshot != nil, presentation != nil, table.tableColumns.indices.contains(sender.tag) else { return }
+        guard accepts(sender), table.tableColumns.indices.contains(sender.tag) else { return }
         installingColumns = true
         defer { installingColumns = false }
         controls?.columnWidths.removeValue(forKey: sender.tag)
         table.tableColumns[sender.tag].width = tableView(table, sizeToFitWidthOfColumn: sender.tag)
     }
-    @objc private func clearFilter(_ sender: NSMenuItem) { controls?.configuration.filters.removeValue(forKey: sender.tag) }
-    @objc private func toggleHeader() { controls?.configuration.header.toggle() }
+    @objc private func clearFilter(_ sender: NSMenuItem) {
+        guard accepts(sender) else { return }
+        controls?.configuration.filters.removeValue(forKey: sender.tag)
+    }
+
+    @objc private func toggleHeader(_ sender: NSMenuItem) {
+        guard accepts(sender) else { return }
+        finishEditing()
+        controls?.configuration.header.toggle()
+    }
+
     @objc private func chooseDelimiter(_ sender: NSMenuItem) {
+        guard accepts(sender) else { return }
+        finishEditing()
         controls?.separator = DelimitedTableIndex.Separator(rawValue: UInt16(sender.tag))
+    }
+}
+
+private final class DelimitedRecordGutter: NSView {
+    private weak var grid: DelimitedGrid?
+    private static let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+    override var isFlipped: Bool { true }
+
+    init(grid: DelimitedGrid) {
+        self.grid = grid
+        super.init(frame: .zero)
+        clipsToBounds = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(String(localized: "Record Numbers", table: "Editor"))
+        setAccessibilityIdentifier("bailey.csv.records")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    var preferredWidth: CGFloat {
+        let digits = String(grid?.recordCount ?? 0).count
+        return max(46, ceil(("0" as NSString).size(withAttributes: [.font: Self.font]).width) * CGFloat(digits) + 20)
+    }
+
+    private var headerRect: NSRect {
+        guard let header = grid?.table.headerView else { return .zero }
+        let geometry = convert(header.bounds, from: header)
+        return NSRect(x: 0, y: geometry.minY, width: bounds.width, height: geometry.height)
+    }
+
+    private var viewport: NSRect {
+        guard let clip = grid?.scrollView.contentView else { return .zero }
+        let geometry = convert(clip.bounds, from: clip)
+        return NSRect(x: 0, y: geometry.minY, width: bounds.width, height: geometry.height).intersection(bounds)
+    }
+
+    private func rowRect(_ row: Int, in table: NSTableView) -> NSRect {
+        let geometry = convert(table.rect(ofRow: row), from: table)
+        return NSRect(x: 0, y: geometry.minY, width: bounds.width, height: geometry.height)
+    }
+
+    private func visibleRows(in table: NSTableView) -> Range<Int> {
+        let range = table.rows(in: table.visibleRect)
+        return range.location == NSNotFound ? 0..<0 : range.location..<NSMaxRange(range)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let grid else { return }
+        let palette = grid.palette
+        let table = grid.table
+        let pixel = 1 / (window?.backingScaleFactor ?? 1)
+        palette.header.setFill()
+        dirtyRect.intersection(bounds).fill()
+        func label(_ title: String, in rect: NSRect, color: NSColor) {
+            let attributes: [NSAttributedString.Key: Any] = [.font: Self.font, .foregroundColor: color]
+            let size = (title as NSString).size(withAttributes: attributes)
+            (title as NSString).draw(at: NSPoint(x: max(0, rect.maxX - size.width - 10),
+                                                 y: floor(rect.midY - size.height / 2)),
+                                     withAttributes: attributes)
+            palette.grid.setFill()
+            NSRect(x: 0, y: rect.maxY - pixel, width: rect.width, height: pixel).fill()
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: viewport).addClip()
+        for row in visibleRows(in: table) {
+            guard let number = grid.recordNumber(row) else { continue }
+            let rect = rowRect(row, in: table)
+            guard rect.intersects(dirtyRect) else { continue }
+            let selected = table.selection.columns(in: row).count == table.numberOfColumns
+            if selected {
+                (window?.isKeyWindow == true ? palette.selection : palette.inactiveSelection).setFill()
+                rect.fill()
+            }
+            label(String(number), in: rect, color: selected ? palette.selectedText : palette.recordText)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        label("#", in: headerRect, color: palette.recordText)
+        palette.grid.setFill()
+        NSRect(x: bounds.maxX - pixel, y: bounds.minY, width: pixel, height: bounds.height).fill()
+    }
+
+    private func row(at point: NSPoint, in table: NSTableView) -> Int? {
+        guard viewport.contains(point) else { return nil }
+        let point = table.convert(point, from: self)
+        let row = table.row(at: NSPoint(x: table.visibleRect.midX, y: point.y))
+        return row >= 0 ? row : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let grid, grid.projectionIsCurrent else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        if headerRect.contains(point) {
+            activate(nil, modifiers: event.modifierFlags)
+        } else if let row = row(at: point, in: grid.table) {
+            activate(row, modifiers: event.modifierFlags)
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let grid, grid.projectionIsCurrent,
+              let row = row(at: convert(event.locationInWindow, from: nil), in: grid.table) else { return nil }
+        if grid.table.selection.columns(in: row).count != grid.table.numberOfColumns {
+            activate(row, modifiers: [])
+        }
+        return grid.recordMenu(at: row)
+    }
+
+    @discardableResult
+    private func activate(_ row: Int?, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard let grid, grid.projectionIsCurrent, grid.table.numberOfRows > 0 else { return false }
+        if let row, !visibleRows(in: grid.table).contains(row) { return false }
+        window?.makeFirstResponder(grid.table)
+        if let row { grid.table.selectRecord(row, modifiers: modifiers) } else { grid.table.selectAll(nil) }
+        return true
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        guard let grid, let window, grid.projectionIsCurrent else { return [] }
+        let selected = grid.table.selection
+        let projection = grid.projectionID
+        func element(_ title: String, frame: NSRect, row: Int?) -> DelimitedRecordAXElement {
+            let button = DelimitedRecordAXElement { [weak self] in
+                guard let self, self.grid?.projectionID == projection else { return false }
+                return self.activate(row, modifiers: [])
+            }
+            button.setAccessibilityRole(.button)
+            button.setAccessibilityLabel(title)
+            button.setAccessibilityParent(self)
+            button.setAccessibilityFrame(window.convertToScreen(convert(frame, to: nil)))
+            button.setAccessibilityEnabled(grid.table.numberOfRows > 0)
+            if let row {
+                button.setAccessibilitySelected(selected.columns(in: row).count == grid.table.numberOfColumns)
+            }
+            return button
+        }
+        let all = element(String(localized: "Select All Cells", table: "Editor"), frame: headerRect, row: nil)
+        return [all] + visibleRows(in: grid.table).compactMap { row in
+            guard let number = grid.recordNumber(row) else { return nil }
+            let frame = rowRect(row, in: grid.table).intersection(viewport)
+            guard !frame.isEmpty else { return nil }
+            return element(String(localized: "Record \(number)", table: "Editor"), frame: frame, row: row)
+        }
+    }
+}
+
+private nonisolated final class DelimitedRecordAXElement: NSAccessibilityElement {
+    private let press: @MainActor @Sendable () -> Bool
+
+    init(press: @escaping @MainActor @Sendable () -> Bool) {
+        self.press = press
+        super.init()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        MainActor.assumeIsolated(press)
     }
 }
 
@@ -846,9 +1142,19 @@ private final class DelimitedColumnHeader: NSTableHeaderCell {
         let title = NSAttributedString(string: stringValue, attributes: [
             .font: Self.titleFont, .foregroundColor: palette.text, .paragraphStyle: paragraph
         ])
+        let column = table.column(at: NSPoint(x: frame.midX, y: 0))
+        let sorts = table.file?.delimitedTable.configuration.sort ?? []
+        let direction = sorts.first { $0.column == column }
+        if let direction {
+            let symbol = NSImage(systemSymbolName: direction.ascending ? "chevron.up" : "chevron.down",
+                                 accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(paletteColors: [palette.focus]))
+            symbol?.draw(in: NSRect(x: frame.maxX - 19, y: controlView.bounds.midY - 4, width: 9, height: 8))
+        }
         let height = ceil(title.size().height)
+        let trailing = direction == nil ? 22.0 : 33.0
         title.draw(with: NSRect(x: frame.minX + 11, y: floor(controlView.bounds.midY - height / 2),
-                                width: max(0, frame.width - 22), height: height),
+                                width: max(0, frame.width - trailing), height: height),
                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 }
@@ -913,6 +1219,7 @@ fileprivate struct DelimitedPalette {
     let background: NSColor
     let text: NSColor
     let numeric: NSColor
+    let recordText: NSColor
     let header: NSColor
     let grid: NSColor
     let hover: NSColor
@@ -931,6 +1238,7 @@ fileprivate struct DelimitedPalette {
         let green = theme.paletteNSColor(2).flatMap { $0.blended(withFraction: 0.32, of: foreground) } ?? foreground
         numeric = Self.readable(green, on: canvas, toward: foreground, ratio: 4.5)
         header = theme.surfaceNSColor(elevation: 0.08)
+        recordText = Self.readable(theme.surfaceNSColor(elevation: 0.57), on: header, toward: foreground, ratio: 4.5)
         grid = theme.surfaceNSColor(elevation: 0.2)
         hover = theme.surfaceNSColor(elevation: 0.06)
         focus = Self.readable(accent, on: canvas, toward: foreground, ratio: 3)
@@ -971,11 +1279,12 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
 
     private(set) var selection = DelimitedTablePresentation.Selection()
     var onFocused: () -> Void = {}
-    var onSelection: (Cell?) -> Void = { _ in }
+    var acceptsGridActions: () -> Bool = { false }
+    var onSelectionChanged: () -> Void = {}
     var onCopy: () -> Void = {}
     var onEdit: (Cell) -> Void = { _ in }
     var onPaste: (String) -> Void = { _ in }
-    var onMenu: () -> NSMenu? = { nil }
+    var onMenu: (Cell?) -> NSMenu? = { _ in nil }
     weak var file: FileTab?
     override var undoManager: UndoManager? { file?.documentUndoManager ?? super.undoManager }
 
@@ -1003,8 +1312,10 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        if let cell = cell(at: event), !selection.contains(cell) { select(cell) }
-        return onMenu()
+        guard acceptsGridActions() else { return nil }
+        let target = cell(at: event)
+        if let target, !selection.contains(target) { select(target) }
+        return onMenu(target)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -1043,6 +1354,12 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     override func mouseMoved(with event: NSEvent) { hover(cell(at: event)) }
     override func mouseExited(with event: NSEvent) { hover(nil) }
 
+    fileprivate func refreshHover() {
+        guard hoveredCell != nil, let window, window.isKeyWindow else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        hover(visibleRect.contains(point) ? cell(at: point) : nil)
+    }
+
     private func hover(_ cell: Cell?) {
         guard cell != hoveredCell else { return }
         let previous = hoveredCell
@@ -1056,6 +1373,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard acceptsGridActions() else { return }
         guard let cell = cell(at: event) else { super.mouseDown(with: event); return }
         window?.makeFirstResponder(self)
         select(cell, extending: event.modifierFlags.contains(.shift), adding: event.modifierFlags.contains(.command))
@@ -1063,19 +1381,23 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard acceptsGridActions() else { return }
         _ = autoscroll(with: event)
         if let cell = cell(at: event) { select(cell, extending: true) }
     }
 
     private func cell(at event: NSEvent) -> Cell? {
-        let point = convert(event.locationInWindow, from: nil)
+        cell(at: convert(event.locationInWindow, from: nil))
+    }
+
+    private func cell(at point: NSPoint) -> Cell? {
         let row = row(at: point)
         let column = column(at: point)
         return row >= 0 && column >= 0 ? Cell(row: row, column: column) : nil
     }
 
     override func keyDown(with event: NSEvent) {
-        guard numberOfRows > 0, numberOfColumns > 0,
+        guard acceptsGridActions(), numberOfRows > 0, numberOfColumns > 0,
               let key = event.charactersIgnoringModifiers?.unicodeScalars.first?.value else {
             super.keyDown(with: event)
             return
@@ -1103,9 +1425,9 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     }
 
     override func selectAll(_ sender: Any?) {
-        guard numberOfRows > 0, numberOfColumns > 0 else { return }
-        selection.select(Cell(row: 0, column: 0))
-        select(Cell(row: numberOfRows - 1, column: numberOfColumns - 1), extending: true)
+        guard acceptsGridActions(), numberOfRows > 0, numberOfColumns > 0 else { return }
+        selection.select(selection.caret ?? Cell(row: 0, column: 0), rows: 0..<numberOfRows, columns: 0..<numberOfColumns)
+        syncSelection()
     }
 
     @objc func copy(_ sender: Any?) { onCopy() }
@@ -1123,25 +1445,52 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     func select(_ cell: Cell, extending: Bool = false, adding: Bool = false, reveal: Bool = false) {
         guard (0..<numberOfRows).contains(cell.row), (0..<numberOfColumns).contains(cell.column) else { return }
         selection.select(cell, extending: extending, adding: adding)
-        var rows = IndexSet()
-        for block in selection.blocks {
-            rows.insert(integersIn: block.rows.lowerBound..<(block.rows.upperBound + 1))
-        }
-        selectRowIndexes(rows, byExtendingSelection: false)
         if reveal {
             scrollRowToVisible(cell.row)
             scrollColumnToVisible(cell.column)
         }
+        syncSelection()
+    }
+
+    func selectRecord(_ row: Int, modifiers: NSEvent.ModifierFlags) {
+        guard (0..<numberOfRows).contains(row), numberOfColumns > 0 else { return }
+        selection.select(Cell(row: row, column: selection.caret?.column ?? 0),
+                         extending: modifiers.contains(.shift), adding: modifiers.contains(.command),
+                         columns: 0..<numberOfColumns)
+        syncSelection()
+    }
+
+    func selectColumn(_ column: Int, modifiers: NSEvent.ModifierFlags) {
+        guard numberOfRows > 0, (0..<numberOfColumns).contains(column) else { return }
+        selection.select(Cell(row: selection.caret?.row ?? 0, column: column),
+                         extending: modifiers.contains(.shift), adding: modifiers.contains(.command),
+                         rows: 0..<numberOfRows)
+        syncSelection()
+    }
+
+    func remapRows(from previous: [Int], to current: [Int]) {
+        if previous != current { selection.remapRows(from: previous, to: current) }
+        syncSelection()
+    }
+
+    override func accessibilitySelectedColumns() -> [Any]? {
+        guard numberOfRows > 0, let columns = accessibilityColumns() else { return [] }
+        let indexes = selection.blocks.reduce(into: IndexSet()) { indexes, block in
+            if block.rows.count == numberOfRows { indexes.formUnion(block.columns) }
+        }
+        return indexes.compactMap { columns.indices.contains($0) ? columns[$0] : nil }
+    }
+
+    private func syncSelection() {
+        selectRowIndexes(selection.rows, byExtendingSelection: false)
         refreshSelection()
-        onSelection(cell)
+        onSelectionChanged()
     }
 
     func clearSelection() {
         selection = .init()
         hoveredCell = nil
-        deselectAll(nil)
-        refreshSelection()
-        onSelection(nil)
+        syncSelection()
     }
 
     fileprivate func refreshSelection() {

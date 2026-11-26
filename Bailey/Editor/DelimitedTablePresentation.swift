@@ -25,13 +25,8 @@ nonisolated struct DelimitedTablePresentation: Sendable {
 
     struct Selection: Sendable {
         struct Block: Sendable {
-            let rows: ClosedRange<Int>
-            let columns: ClosedRange<Int>
-
-            init(from first: Cell, to last: Cell) {
-                rows = min(first.row, last.row)...max(first.row, last.row)
-                columns = min(first.column, last.column)...max(first.column, last.column)
-            }
+            var rows: IndexSet
+            var columns: IndexSet
 
             func contains(_ cell: Cell) -> Bool { rows.contains(cell.row) && columns.contains(cell.column) }
         }
@@ -40,26 +35,64 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         private(set) var anchor: Cell?
         private(set) var caret: Cell?
 
-        mutating func select(_ cell: Cell, extending: Bool = false, adding: Bool = false) {
+        mutating func select(_ cell: Cell, extending: Bool = false, adding: Bool = false,
+                             rows: Range<Int>? = nil, columns: Range<Int>? = nil) {
             let origin = extending ? anchor ?? cell : cell
             if extending, !blocks.isEmpty { blocks.removeLast() }
             else if !adding { blocks.removeAll(keepingCapacity: true) }
-            blocks.append(Block(from: origin, to: cell))
+            blocks.append(Block(rows: IndexSet(integersIn: rows ?? min(origin.row, cell.row)..<(max(origin.row, cell.row) + 1)),
+                                columns: IndexSet(integersIn: columns ?? min(origin.column, cell.column)..<(max(origin.column, cell.column) + 1))))
             anchor = origin
             caret = cell
         }
 
         func contains(_ cell: Cell) -> Bool { blocks.contains { $0.contains(cell) } }
+
+        var rows: IndexSet {
+            blocks.reduce(into: IndexSet()) { $0.formUnion($1.rows) }
+        }
+
+        var columns: IndexSet {
+            blocks.reduce(into: IndexSet()) { $0.formUnion($1.columns) }
+        }
+
+        func columns(in row: Int) -> IndexSet {
+            blocks.reduce(into: IndexSet()) { columns, block in
+                if block.rows.contains(row) { columns.formUnion(block.columns) }
+            }
+        }
+
+        mutating func remapRows(from previous: [Int], to current: [Int]) {
+            guard !blocks.isEmpty else { return }
+            let positions = Dictionary(uniqueKeysWithValues: current.enumerated().map { ($0.element, $0.offset) })
+            func project(_ cell: Cell?) -> Cell? {
+                guard let cell, previous.indices.contains(cell.row), let row = positions[previous[cell.row]] else { return nil }
+                return Cell(row: row, column: cell.column)
+            }
+            blocks = blocks.compactMap { block in
+                var rows = IndexSet()
+                for row in block.rows where previous.indices.contains(row) {
+                    if let next = positions[previous[row]] { rows.insert(next) }
+                }
+                return rows.isEmpty ? nil : Block(rows: rows, columns: block.columns)
+            }
+            let first = blocks.first.flatMap { block in
+                block.rows.first.flatMap { row in block.columns.first.map { Cell(row: row, column: $0) } }
+            }
+            caret = project(caret) ?? first
+            anchor = project(anchor) ?? caret
+        }
     }
 
     let id = UUID()
-    let header: Bool
+    let configuration: Configuration
+    var header: Bool { configuration.header }
     let rows: [Int]
 
     @concurrent static func evaluate(
-        source: String, index: DelimitedTableIndex, configuration: Configuration
+        source: String, index: DelimitedTableIndex, configuration requested: Configuration
     ) async throws -> Self {
-        let configuration = configuration.restricted(to: index.columnCount)
+        let configuration = requested.restricted(to: index.columnCount)
         let text = source as NSString
         let start = configuration.header && !index.records.isEmpty ? 1 : 0
         var rows: [Int] = []
@@ -95,7 +128,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             rows = decorated.map(\.row)
         }
         try Task.checkCancellation()
-        return Self(header: configuration.header, rows: rows)
+        return Self(configuration: requested, rows: rows)
     }
 
     @concurrent func find(
@@ -120,12 +153,8 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     @concurrent func copy(
         _ selection: Selection, source: String, index: DelimitedTableIndex
     ) async throws -> String? {
-        var selectedRows = IndexSet()
-        var selectedColumns = IndexSet()
-        for block in selection.blocks {
-            selectedRows.insert(integersIn: block.rows.lowerBound..<(block.rows.upperBound + 1))
-            selectedColumns.insert(integersIn: block.columns.lowerBound..<(block.columns.upperBound + 1))
-        }
+        let selectedRows = selection.rows
+        let selectedColumns = selection.columns
         guard !selectedRows.isEmpty, !selectedColumns.isEmpty,
               let finalRow = selectedRows.last, rows.indices.contains(finalRow),
               selectedRows.count <= 1_000_000 / selectedColumns.count else { return nil }
@@ -134,9 +163,10 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         var size = 0
         for row in selectedRows {
             try Task.checkCancellation()
+            let columns = selection.columns(in: row)
             for column in selectedColumns {
                 if column != selectedColumns.first { output.append("\t"); size += 1 }
-                guard selection.contains(Cell(row: row, column: column)) else { continue }
+                guard columns.contains(column) else { continue }
                 let value = Self.value(in: text, index: index, record: rows[row], column: column)
                 let emptyFinalRecord = value.isEmpty && row == finalRow && selectedColumns.count == 1
                 let encoded = emptyFinalRecord || value.utf8.contains(where: { $0 == 9 || $0 == 10 || $0 == 13 || $0 == 34 })

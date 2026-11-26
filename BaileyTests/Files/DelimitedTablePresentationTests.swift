@@ -106,6 +106,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         controls.configuration.sort = [.init(column: 0, ascending: true)]
         controls.configuration.filters = [1: "g"]
         let grid = DelimitedGrid()
+        file.delimitedTable.separator = .comma
         grid.file = file
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 350),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -186,6 +187,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
         let grid = DelimitedGrid()
+        file.delimitedTable.separator = .comma
         grid.file = file
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -303,7 +305,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         let revision = file.textPreviewRequestID
         let marked = editor.markedRange()
         let selectedRange = editor.selectedRange()
-        let origin = grid.contentView.bounds.origin
+        let origin = grid.scrollView.contentView.bounds.origin
 
         func capture(expected: NSColor, name: String) throws {
             hosted.layoutSubtreeIfNeeded()
@@ -331,11 +333,11 @@ final class DelimitedTablePresentationTests: XCTestCase {
                 Theme.reloadSelection(light: dark ? "Rose Pine Dawn" : name, dark: dark ? name : "Dracula")
                 let expected = Theme.terminal(dark: dark).backgroundNSColor
                 let repaint = ContinuousClock.now.advanced(by: .milliseconds(120))
-                while grid.backgroundColor != expected, ContinuousClock.now < repaint {
+                while grid.scrollView.backgroundColor != expected, ContinuousClock.now < repaint {
                     hosted.layoutSubtreeIfNeeded()
                     try await Task.sleep(for: .milliseconds(5))
                 }
-                XCTAssertEqual(grid.backgroundColor, expected, name)
+                XCTAssertEqual(grid.scrollView.backgroundColor, expected, name)
                 XCTAssertEqual(grid.table.backgroundColor, expected, name)
                 XCTAssertTrue(mountedGrid(hosted) === grid)
                 XCTAssertTrue(field.currentEditor() === editor)
@@ -345,7 +347,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
                 XCTAssertTrue(window.firstResponder === editor)
                 XCTAssertEqual(grid.table.selection.caret, selected)
                 XCTAssertEqual(grid.table.tableColumns[4].width, 194)
-                XCTAssertEqual(grid.contentView.bounds.origin, origin)
+                XCTAssertEqual(grid.scrollView.contentView.bounds.origin, origin)
                 XCTAssertEqual(file.textPreviewRequestID, revision)
                 if name == "Default Light" || name == "Dracula" { try capture(expected: expected, name: name) }
             }
@@ -509,7 +511,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertTrue(mountedGrid(hosted) === grid)
         XCTAssertEqual(grid.table.numberOfRows, 0)
         XCTAssertNil(grid.table.selection.caret)
-        XCTAssertEqual(file.delimitedTable.selectedValue, "")
+        XCTAssertNil(grid.selectedFieldValue())
         grid.paste("must not edit an obsolete row")
         XCTAssertEqual(file.text, "")
         XCTAssertTrue(window.firstResponder === blurredResponder)
@@ -535,6 +537,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
             let grid = DelimitedGrid()
+            file.delimitedTable.separator = .comma
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -575,6 +578,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let controls = file.delimitedTable
             controls.configuration.sort = [.init(column: 0, ascending: true)]
             let grid = DelimitedGrid()
+            file.delimitedTable.separator = .comma
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -634,6 +638,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             defer { project.terminateAll() }
             let controls = file.delimitedTable
             let grid = DelimitedGrid()
+            file.delimitedTable.separator = .comma
             grid.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -684,16 +689,16 @@ final class DelimitedTablePresentationTests: XCTestCase {
     func testAcceptedColumnLayoutClearsOnlySettingsForDifferentFields() async throws {
         let controls = DelimitedTableControls()
         let original = try await DelimitedTableIndex.parse("A,B,C\n1,2,3", preferred: .comma)
-        controls.accept(original)
+        controls.accept(.init(index: original, source: "A,B,C\n1,2,3", requestID: "original", documentRevision: "original"))
         controls.configuration.filters = [0: "1", 2: "3"]
         controls.configuration.sort = [.init(column: 2, ascending: true)]
         let narrower = try await DelimitedTableIndex.parse("A,B\n1,2", preferred: .comma)
-        controls.accept(narrower)
+        controls.accept(.init(index: narrower, source: "A,B\n1,2", requestID: "narrower", documentRevision: "narrower"))
         XCTAssertEqual(controls.configuration.filters, [0: "1"])
         XCTAssertTrue(controls.configuration.sort.isEmpty)
         controls.configuration.header = false
         let different = try await DelimitedTableIndex.parse("A;B\n1;2", preferred: .comma)
-        controls.accept(different)
+        controls.accept(.init(index: different, source: "A;B\n1;2", requestID: "delimiter", documentRevision: "delimiter"))
         XCTAssertTrue(controls.configuration.filters.isEmpty)
         XCTAssertFalse(controls.configuration.header)
     }

@@ -911,6 +911,86 @@
         }
       }
     },
+    "Sort Ascending" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "升序排列"
+          }
+        }
+      }
+    },
+    "Sort Descending" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "降序排列"
+          }
+        }
+      }
+    },
+    "Clear Column Sort" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除此列排序"
+          }
+        }
+      }
+    },
+    "Select Row" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择此行"
+          }
+        }
+      }
+    },
+    "Insert Row After" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在此行后插入"
+          }
+        }
+      }
+    },
+    "Record Numbers" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记录行号"
+          }
+        }
+      }
+    },
+    "Record %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记录 %lld"
+          }
+        }
+      }
+    },
+    "Select All Cells" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择所有可见单元格"
+          }
+        }
+      }
+    },
     "Fit Column Width" : {
       "localizations" : {
         "zh-Hans" : {

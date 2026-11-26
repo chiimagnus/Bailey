@@ -139,6 +139,11 @@ final class CSVPreviewUITests: XCTestCase {
         let name = header("Name")
         XCTAssertTrue(name.exists, table.debugDescription)
         name.click()
+        XCTAssertGreaterThan(two.frame.minY, ten.frame.minY, "Selecting a heading must not sort the data")
+        name.rightClick()
+        let sort = WorkspaceUITestSupport.menuItem("Sort Ascending", in: app)
+        XCTAssertTrue(sort.waitForExistence(timeout: 5))
+        sort.click()
         let sorted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             two.exists && ten.exists && two.frame.minY < ten.frame.minY
         }, object: nil)
@@ -205,7 +210,10 @@ final class CSVPreviewUITests: XCTestCase {
         let two = table.staticTexts["Item 2"], ten = table.staticTexts["Item 10"]
         let name = table.buttons.matching(NSPredicate(format: "title == %@", "Name")).firstMatch
         XCTAssertTrue(name.exists)
-        name.click()
+        name.rightClick()
+        let sort = WorkspaceUITestSupport.menuItem("Sort Ascending", in: app)
+        XCTAssertTrue(sort.waitForExistence(timeout: 5))
+        sort.click()
         let sorted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             two.exists && ten.exists && two.frame.minY < ten.frame.minY
         }, object: nil)

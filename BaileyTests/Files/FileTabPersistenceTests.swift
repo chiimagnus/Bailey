@@ -2867,6 +2867,7 @@ final class FileTabPersistenceTests: XCTestCase {
             let loaded = try await file.delimitedSnapshot(using: .comma)
             let snapshot = try XCTUnwrap(loaded)
             let grid = DelimitedGrid()
+            file.delimitedTable.separator = .comma
             grid.file = file
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
