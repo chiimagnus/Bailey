@@ -8977,6 +8977,15 @@ final class NativeDiffTabTests: XCTestCase {
         window.orderFront(nil)
         try await wait { self.findNativeTextView(in: window.contentView!, editable: true) != nil }
         let editor = try XCTUnwrap(findNativeTextView(in: window.contentView!, editable: true))
+        let undo = try XCTUnwrap(editor.undoManager)
+        editor.insertText("saved ", replacementRange: NSRange(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        try await wait { diff.isDirty }
+        XCTAssertTrue(undo.canUndo)
+        await diff.save()
+        try await wait { !diff.isDirty && !diff.isLoading }
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "saved before\n")
+        XCTAssertTrue(undo.canUndo, "An identical accepted save must keep native Undo")
         try Data("after Git\n".utf8).write(to: file)
         diff.reload()
         try await wait {
@@ -8984,7 +8993,15 @@ final class NativeDiffTabTests: XCTestCase {
                 && self.findNativeTextView(in: window.contentView!, editable: true) === editor
         }
         XCTAssertTrue(findNativeTextView(in: window.contentView!, editable: true) === editor)
+        XCTAssertFalse(undo.canUndo, "Accepting different content invalidates the previous document's ranges")
+        XCTAssertFalse(undo.canRedo)
         editor.insertText("draft ", replacementRange: .init(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(undo.canUndo)
+        XCTAssertTrue(NSApp.sendAction(#selector(UndoManager.undo), to: undo, from: nil))
+        XCTAssertEqual(editor.text, "after Git\n")
+        XCTAssertFalse(undo.canUndo, "No older generation may remain below the current edit")
+        XCTAssertTrue(NSApp.sendAction(#selector(UndoManager.redo), to: undo, from: nil))
         try await wait { diff.isDirty }
         try Data("external\n".utf8).write(to: file)
         diff.reload()

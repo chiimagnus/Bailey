@@ -1751,9 +1751,11 @@ final class DiffCodePaneView: NSView {
         appliedGhostCounts = [:]
     }
 
-    /// A new source owns its own folds, deletion ghosts and row decorations.
-    /// Retire the old presentation before installing the new editable bytes.
+    /// A new source owns its own undo history, folds, ghosts and decorations.
+    /// Invalidate old edit ranges before installing the new editable bytes.
     func setEditBufferText(_ text: String) {
+        textView.breakUndoCoalescing()
+        textView.undoManager?.removeAllActions()
         appliedFoldRevision = nil
         if !decorations.rows.isEmpty || !decorations.ghostsByAnchor.isEmpty {
             decorations = .empty
