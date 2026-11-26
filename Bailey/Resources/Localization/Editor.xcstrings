@@ -1211,6 +1211,146 @@
         }
       }
     },
+    "Fill Selection…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "填充选区…"
+          }
+        }
+      }
+    },
+    "Clear Selected Fields" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空所选字段"
+          }
+        }
+      }
+    },
+    "Fill Selected Fields" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "填充所选字段"
+          }
+        }
+      }
+    },
+    "Only selected visible fields will change." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只修改选中的可见字段。"
+          }
+        }
+      }
+    },
+    "Fill" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "填充"
+          }
+        }
+      }
+    },
+    "Visible Records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可见记录"
+          }
+        }
+      }
+    },
+    "Current Selection" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前选区"
+          }
+        }
+      }
+    },
+    "All Data Records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部数据记录"
+          }
+        }
+      }
+    },
+    "Replace With" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换为"
+          }
+        }
+      }
+    },
+    "Replace In" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换范围"
+          }
+        }
+      }
+    },
+    "Set Range from Grid Selection" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用当前表格选区"
+          }
+        }
+      }
+    },
+    "Only displayed columns are included." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅包括当前显示列。"
+          }
+        }
+      }
+    },
+    "Matches: %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匹配数：%lld"
+          }
+        }
+      }
+    },
+    "Replace All" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部替换"
+          }
+        }
+      }
+    },
     "Fit Column Width" : {
       "localizations" : {
         "zh-Hans" : {

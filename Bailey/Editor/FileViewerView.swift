@@ -569,21 +569,23 @@ final class FileTab: nonisolated Identifiable {
     @discardableResult
     private func applyDocumentReplacements(_ replacements: [DelimitedTableMutation.Replacement]) -> Bool {
         let storage = nativeTextStorage
+        let characters = storage.mutableString
         // Validate every original range before making any change.
         guard replacements.allSatisfy({ edit in
-            NSMaxRange(edit.range) <= storage.length &&
-                storage.attributedSubstring(from: edit.range).string.utf16.elementsEqual(edit.old.utf16)
+            NSMaxRange(edit.range) <= characters.length &&
+                characters.substring(with: edit.range).utf16.elementsEqual(edit.old.utf16)
         }) else { return false }
 
         // Compute inverse ranges in the final document, so Undo and Redo
         // also apply all replacements in descending order.
         var shift = 0
         let undo = replacements.reversed().map { edit in
+            let length = edit.new.utf16.count
             let inverse = DelimitedTableMutation.Replacement(
-                range: NSRange(location: edit.range.location + shift, length: edit.new.utf16.count),
+                range: NSRange(location: edit.range.location + shift, length: length),
                 old: edit.new, new: edit.old
             )
-            shift += edit.new.utf16.count - edit.range.length
+            shift += length - edit.range.length
             return inverse
         }.reversed()
 

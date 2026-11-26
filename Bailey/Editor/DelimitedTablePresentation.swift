@@ -23,8 +23,8 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         let column: Int
     }
 
-    struct Selection: Sendable {
-        struct Block: Sendable {
+    struct Selection: Hashable, Sendable {
+        struct Block: Hashable, Sendable {
             var rows: IndexSet
             var columns: IndexSet
 
@@ -99,6 +99,43 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         }
     }
 
+    struct FieldScope: Sendable {
+        let rows: [Int]?
+        let firstRecord: Int
+        let columns: IndexSet
+        let selection: Selection?
+
+        func visit(in index: DelimitedTableIndex, _ visit: (Int, IndexSet) throws -> Void) throws {
+            let count = rows?.count ?? max(0, index.records.count - firstRecord)
+            let offsets = selection?.rows ?? IndexSet(integersIn: 0..<count)
+            for offset in offsets {
+                try Task.checkCancellation()
+                guard (0..<count).contains(offset) else { continue }
+                let record = rows?[offset] ?? firstRecord + offset
+                let selected = selection.map { $0.columns(in: offset).intersection(columns) } ?? columns
+                if !selected.isEmpty { try visit(record, selected) }
+            }
+        }
+
+        func contains(_ cell: Cell, in index: DelimitedTableIndex) -> Bool {
+            guard index.records.indices.contains(cell.row), columns.contains(cell.column) else { return false }
+            let offset: Int
+            if let rows {
+                guard let displayed = rows.firstIndex(of: cell.row) else { return false }
+                offset = displayed
+            } else {
+                guard cell.row >= firstRecord else { return false }
+                offset = cell.row - firstRecord
+            }
+            return selection?.contains(Cell(row: offset, column: cell.column)) ?? true
+        }
+    }
+
+    struct Occurrence: Sendable, Equatable {
+        let cell: Cell
+        let range: NSRange
+    }
+
     let id = UUID()
     let configuration: Configuration
     var header: Bool { configuration.header }
@@ -156,13 +193,67 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             if row.isMultiple(of: 256) { try Task.checkCancellation() }
             let fields = index.fields(in: index.records[original])
             for (column, field) in fields.prefix(columnCount).enumerated() {
-                if field.value(in: text).range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                if Self.firstMatch(query, in: field.value(in: text) as NSString) != nil {
                     matches.append(Cell(row: row, column: column))
                 }
             }
         }
         try Task.checkCancellation()
         return matches
+    }
+
+    static func firstMatch(_ query: String, in value: NSString, from offset: Int = 0) -> NSRange? {
+        guard !query.isEmpty, (0..<value.length).contains(offset) else { return nil }
+        let found = value.range(of: query, options: [.caseInsensitive, .diacriticInsensitive],
+                                range: NSRange(location: offset, length: value.length - offset))
+        return found.location == NSNotFound || found.length == 0 ? nil : found
+    }
+
+    @concurrent static func countOccurrences(
+        _ query: String, in scope: FieldScope, source: String, index: DelimitedTableIndex
+    ) async throws -> Int {
+        guard !query.isEmpty else { return 0 }
+        let source = source as NSString
+        var count = 0
+        try scope.visit(in: index) { row, columns in
+            for column in columns {
+                guard let field = index.field(record: row, column: column) else { continue }
+                let value = field.value(in: source) as NSString
+                var offset = 0
+                while let match = firstMatch(query, in: value, from: offset) {
+                    if count.isMultiple(of: 1024) { try Task.checkCancellation() }
+                    count += 1
+                    offset = NSMaxRange(match)
+                }
+            }
+        }
+        return count
+    }
+
+    @concurrent func nextVisibleOccurrence(
+        _ query: String, from matches: [Cell], at caret: Cell?, after previous: Occurrence?,
+        selection: Selection?, source: String, index: DelimitedTableIndex
+    ) async throws -> Occurrence? {
+        guard !matches.isEmpty else { return nil }
+        let text = source as NSString
+        let previousDisplay = previous.flatMap { occurrence in
+            rows.firstIndex(of: occurrence.cell.row).map { Cell(row: $0, column: occurrence.cell.column) }
+        }
+        let starting = (previousDisplay ?? caret).flatMap { cell in
+            matches.firstIndex { $0.row > cell.row || $0.row == cell.row && $0.column >= cell.column }
+        } ?? 0
+        for step in 0..<matches.count {
+            try Task.checkCancellation()
+            let visible = matches[(starting + step) % matches.count]
+            guard rows.indices.contains(visible.row), selection?.contains(visible) != false else { continue }
+            let actual = Cell(row: rows[visible.row], column: visible.column)
+            guard let field = index.field(record: actual.row, column: actual.column) else { continue }
+            let offset = previous.flatMap { $0.cell == actual ? NSMaxRange($0.range) : nil } ?? 0
+            if let match = Self.firstMatch(query, in: field.value(in: text) as NSString, from: offset) {
+                return Occurrence(cell: actual, range: match)
+            }
+        }
+        return nil
     }
 
     @concurrent func copy(
@@ -184,8 +275,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
                 guard columns.contains(column) else { continue }
                 let value = Self.value(in: text, index: index, record: rows[row], column: column)
                 let emptyFinalRecord = value.isEmpty && row == finalRow && selectedColumns.count == 1
-                let encoded = emptyFinalRecord || value.utf8.contains(where: { $0 == 9 || $0 == 10 || $0 == 13 || $0 == 34 })
-                    ? "\"" + value.replacingOccurrences(of: "\"", with: "\"\"", options: .literal) + "\"" : value
+                let encoded = DelimitedTableMutation.escape(value, separator: .tab, quoted: emptyFinalRecord)
                 size += encoded.utf8.count
                 guard size <= 64 << 20 else { return nil }
                 output.append(encoded)

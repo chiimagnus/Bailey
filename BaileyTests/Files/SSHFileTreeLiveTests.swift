@@ -497,6 +497,16 @@ final class SSHFileTreeLiveTests: XCTestCase {
             await file.save()
             let undoRemote = try await live.read(path: path, maxBytes: expected.count)
             XCTAssertEqual(undoRemote, expected)
+            let replacementSnapshot = try await file.delimitedSnapshot(using: .comma)
+            let dataFields = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1,
+                                                                   columns: IndexSet(integer: 1), selection: nil)
+            try await requireDelimitedEdit(file, .replace(dataFields, query: "NEXT", with: "remote", single: nil),
+                                           using: XCTUnwrap(replacementSnapshot))
+            await file.save()
+            let replaced = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded("Name,Value\r\n中文,111\nOther,\"remote,field\""))
+            let replacedRemote = try await live.read(path: path, maxBytes: replaced.count)
+            XCTAssertEqual(replacedRemote, replaced)
+            XCTAssertEqual(try Data(contentsOf: local), sentinel)
         }
     }
 

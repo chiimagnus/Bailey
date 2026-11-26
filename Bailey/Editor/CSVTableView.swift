@@ -24,6 +24,7 @@ final class DelimitedTableControls {
     var configuration = DelimitedTablePresentation.Configuration()
     var query = ""
     var showsFind = false
+    var showsReplace = false
     var findFocus = 0
     var findStep = 0
     var editError: String?
@@ -81,13 +82,17 @@ final class DelimitedTableControls {
         switch action {
         case .show:
             showsFind = true
+            showsReplace = false
             findFocus &+= 1
         case .hide: showsFind = false
         case .next: findStep &+= 1
         case .previous: findStep &-= 1
         case .useSelection:
             if let value = grid?.selectedFieldValue(), !value.isEmpty { query = value }
-        case .replace: break
+        case .replace:
+            showsFind = true
+            showsReplace = true
+            findFocus &+= 1
         }
     }
 }
@@ -99,6 +104,31 @@ struct CSVTableView: View {
     private struct SearchRequest: Hashable {
         let display: UUID
         let query: String
+    }
+
+    private enum ReplaceScope: CaseIterable, Hashable {
+        case visible, selection, all
+
+        var title: String {
+            switch self {
+            case .visible: String(localized: "Visible Records", table: "Editor")
+            case .selection: String(localized: "Current Selection", table: "Editor")
+            case .all: String(localized: "All Data Records", table: "Editor")
+            }
+        }
+    }
+
+    private struct ReplaceRequest: Hashable {
+        let display: UUID
+        let query: String
+        let range: ReplaceScope
+        let selection: DelimitedTablePresentation.Selection?
+    }
+
+    private struct ReplaceCursor {
+        let source: String
+        let query: String
+        let previous: DelimitedTablePresentation.Occurrence
     }
 
     private enum Input: Hashable { case find, filter }
@@ -113,6 +143,12 @@ struct CSVTableView: View {
     @State private var displayFailed: DisplayRequest?
     @State private var filterTarget: (column: Int, request: DisplayRequest)?
     @State private var filterDraft = ""
+    @State private var replacement = ""
+    @State private var replaceScope = ReplaceScope.visible
+    @State private var pinnedSelection: (UUID, DelimitedTablePresentation.Selection)?
+    @State private var occurrenceCount: (ReplaceRequest, Int)?
+    @State private var replaceCursor: ReplaceCursor?
+    @State private var replaceTask: Task<Void, Never>?
     @FocusState private var focusedInput: Input?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -129,7 +165,9 @@ struct CSVTableView: View {
         let matches = search.flatMap { $0.0 == query ? $0.1 : nil } ?? []
         surface(snapshot: active == nil ? nil : snapshot, active: active, matches: matches, theme: theme,
                 failed: parseFailed == parse || displayFailed == display)
-            .overlay(alignment: .topTrailing) { overlay(display: display, matches: matches.count, theme: theme) }
+            .overlay(alignment: .topTrailing) {
+                overlay(display: display, snapshot: snapshot, active: active, matches: matches, theme: theme)
+            }
             .task(id: parse) {
                 guard snapshot == nil else { return }
                 parseFailed = nil
@@ -176,7 +214,14 @@ struct CSVTableView: View {
                 filterTarget = nil
                 focus(.find)
             }
-            .onChange(of: display) { if filterTarget?.request != display { filterTarget = nil } }
+            .onChange(of: display) {
+                if filterTarget?.request != display { filterTarget = nil }
+                pinnedSelection = nil
+            }
+            .onChange(of: controls.query) { replaceCursor = nil; replaceTask?.cancel() }
+            .onChange(of: controls.findStep) { replaceCursor = nil }
+            .onChange(of: controls.showsFind) { if !controls.showsFind { replaceTask?.cancel() } }
+            .onDisappear { replaceTask?.cancel() }
     }
 
     @ViewBuilder
@@ -250,7 +295,9 @@ struct CSVTableView: View {
     }
 
     @ViewBuilder
-    private func overlay(display: DisplayRequest, matches: Int, theme: GhosttyThemeDefinition) -> some View {
+    private func overlay(display: DisplayRequest, snapshot: FileTab.DelimitedSnapshot?,
+                         active: DelimitedTablePresentation?, matches: [DelimitedTablePresentation.Cell],
+                         theme: GhosttyThemeDefinition) -> some View {
         if let target = filterTarget, target.request == display {
             HStack {
                 TextField(String(localized: "Filter Column", table: "Editor"), text: $filterDraft)
@@ -267,26 +314,133 @@ struct CSVTableView: View {
             .onAppear { focus(.filter) }
         } else if controls.showsFind {
             @Bindable var controls = controls
-            HStack(spacing: 6) {
-                TextField(String(localized: "Find", table: "Terminal"), text: $controls.query)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("bailey.csv.find")
-                    .focused($focusedInput, equals: .find)
-                    .onSubmit { controls.perform(.next) }
-                Text(verbatim: "\(matches)").monospacedDigit().foregroundStyle(.secondary)
-                    .accessibilityIdentifier("bailey.csv.match-count")
-                Button { controls.perform(.previous) } label: { Image(systemName: "chevron.up") }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    TextField(String(localized: "Find", table: "Terminal"), text: $controls.query)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("bailey.csv.find")
+                        .focused($focusedInput, equals: .find)
+                        .onSubmit { controls.perform(.next) }
+                    Text(verbatim: "\(matches.count)").monospacedDigit().foregroundStyle(.secondary)
+                        .accessibilityIdentifier("bailey.csv.match-count")
+                    Button { controls.perform(.previous) } label: { Image(systemName: "chevron.up") }
                     .accessibilityLabel(Text("Previous match", tableName: "Terminal"))
-                Button { controls.perform(.next) } label: { Image(systemName: "chevron.down") }
+                    Button { controls.perform(.next) } label: { Image(systemName: "chevron.down") }
                     .accessibilityLabel(Text("Next match", tableName: "Terminal"))
-                Button { controls.perform(.hide) } label: { Image(systemName: "xmark") }
+                    Button { controls.perform(.hide) } label: { Image(systemName: "xmark") }
                     .accessibilityLabel(Text("Close"))
+                }
+                .buttonStyle(.borderless)
+                if controls.showsReplace, let snapshot, let active {
+                    replacementControls(snapshot: snapshot, active: active, matches: matches)
+                }
             }
-            .buttonStyle(.borderless)
-            .padding(6).frame(maxWidth: 320)
+            .padding(6).frame(maxWidth: controls.showsReplace ? 380 : 320)
             .modifier(DelimitedOverlayStyle(theme: theme))
             .onKeyPress(.escape) { controls.perform(.hide); return .handled }
             .onAppear { focus(.find) }
+        }
+    }
+
+    private func replaceRequest(_ active: DelimitedTablePresentation) -> ReplaceRequest? {
+        guard !controls.query.isEmpty else { return nil }
+        let selection: DelimitedTablePresentation.Selection?
+        if replaceScope == .selection {
+            guard let pinnedSelection, pinnedSelection.0 == active.id else { return nil }
+            selection = pinnedSelection.1
+        } else {
+            selection = nil
+        }
+        return ReplaceRequest(display: active.id, query: controls.query, range: replaceScope, selection: selection)
+    }
+
+    private func scope(for request: ReplaceRequest, active: DelimitedTablePresentation,
+                       snapshot: FileTab.DelimitedSnapshot) -> DelimitedTablePresentation.FieldScope {
+        .init(rows: request.range == .all ? nil : active.rows, firstRecord: active.header ? 1 : 0,
+              columns: IndexSet(integersIn: 0..<min(snapshot.index.columnCount, DelimitedTableIndex.maximumColumns)),
+              selection: request.selection)
+    }
+
+    private func pinGridSelection(_ active: DelimitedTablePresentation) {
+        guard let grid = controls.grid, grid.acceptsProjection(active.id),
+              !grid.table.selection.blocks.isEmpty else { pinnedSelection = nil; return }
+        pinnedSelection = (active.id, grid.table.selection)
+    }
+
+    private func replacementControls(snapshot: FileTab.DelimitedSnapshot, active: DelimitedTablePresentation,
+                                     matches: [DelimitedTablePresentation.Cell]) -> some View {
+        let request = replaceRequest(active)
+        let count = occurrenceCount.flatMap { $0.0 == request ? $0.1 : nil }
+        let canWrite = file.canEditDelimited(snapshot) && !file.hasPendingDelimitedEdit && (count ?? 0) > 0
+        return VStack(alignment: .leading, spacing: 6) {
+            TextField(String(localized: "Replace With", table: "Editor"), text: $replacement)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("bailey.csv.replacement")
+            Picker(String(localized: "Replace In", table: "Editor"), selection: Binding(get: { replaceScope }, set: { next in
+                replaceScope = next
+                if next == .selection { pinGridSelection(active) }
+            })) {
+                ForEach(ReplaceScope.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            if replaceScope == .selection {
+                Button(String(localized: "Set Range from Grid Selection", table: "Editor")) { pinGridSelection(active) }
+                    .controlSize(.small)
+            }
+            if snapshot.index.columnCount > DelimitedTableIndex.maximumColumns {
+                Text("Only displayed columns are included.", tableName: "Editor").font(.caption)
+            }
+            HStack {
+                Text("Matches: \(count ?? 0)", tableName: "Editor")
+                    .font(.caption)
+                    .accessibilityIdentifier("bailey.csv.replace-match-count")
+                Spacer(minLength: 0)
+                Button(String(localized: "Replace", table: "Editor")) {
+                    replace(snapshot: snapshot, active: active, matches: matches, all: false)
+                }.disabled(!canWrite || matches.isEmpty)
+                Button(String(localized: "Replace All", table: "Editor")) {
+                    replace(snapshot: snapshot, active: active, matches: matches, all: true)
+                }.disabled(!canWrite)
+            }
+            .controlSize(.small)
+        }
+        .task(id: request) {
+            guard let request else { return }
+            let target = scope(for: request, active: active, snapshot: snapshot)
+            guard let count = try? await DelimitedTablePresentation.countOccurrences(
+                request.query, in: target, source: snapshot.source, index: snapshot.index
+            ), !Task.isCancelled, replaceRequest(active) == request else { return }
+            occurrenceCount = (request, count)
+        }
+    }
+
+    private func replace(snapshot: FileTab.DelimitedSnapshot, active: DelimitedTablePresentation,
+                         matches: [DelimitedTablePresentation.Cell], all: Bool) {
+        guard let request = replaceRequest(active), let count = occurrenceCount,
+              count.0 == request, count.1 > 0,
+              let grid = controls.grid, grid.acceptsProjection(active.id) else { return }
+        replaceTask?.cancel()
+        let target = scope(for: request, active: active, snapshot: snapshot)
+        let value = replacement
+        if all {
+            file.submitDelimitedEdit(.replace(target, query: request.query, with: value, single: nil), using: snapshot)
+            return
+        }
+        let caret = grid.table.selection.caret
+        let previous = replaceCursor.flatMap { cursor in
+            cursor.source == snapshot.requestID && cursor.query == request.query ? cursor.previous : nil
+        }
+        replaceTask = Task { [weak grid] in
+            guard let hit = try? await active.nextVisibleOccurrence(
+                request.query, from: matches, at: caret, after: previous, selection: request.selection,
+                source: snapshot.source, index: snapshot.index
+            ), !Task.isCancelled, grid?.acceptsProjection(active.id) == true,
+               controls.showsReplace, controls.showsFind, replaceRequest(active) == request, replacement == value,
+               let operation = file.submitDelimitedEdit(.replace(target, query: request.query, with: value, single: hit),
+                                                       using: snapshot, selecting: hit.cell),
+               await operation.value, !Task.isCancelled else { return }
+            replaceCursor = ReplaceCursor(source: file.textPreviewRequestID, query: request.query,
+                                          previous: .init(cell: hit.cell, range: NSRange(location: hit.range.location,
+                                                                                         length: value.utf16.count)))
         }
     }
 
@@ -472,6 +626,10 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         table.onCopy = { [weak self] in self?.copySelection() }
         table.onEdit = { [weak self] cell in self?.beginEditing(cell) }
         table.onPaste = { [weak self] text in self?.paste(text) }
+        table.onClear = { [weak self] in
+            guard let self else { return }
+            fillSelection(with: "", selection: table.selection)
+        }
         table.onMenu = { [weak self] cell in self?.recordMenu(at: cell) }
         table.acceptsGridActions = { [weak self] in self?.projectionIsCurrent == true }
         table.onSelectionChanged = { [weak self] in self?.gutter.needsDisplay = true }
@@ -697,12 +855,16 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         return value(cell)
     }
 
+    func acceptsProjection(_ id: UUID) -> Bool { projectionIsCurrent && presentation?.id == id }
+
     func showMatch(_ matches: [DelimitedTablePresentation.Cell], step: Int) {
         guard projectionIsCurrent else { return }
         if matches != previousMatches {
             previousMatches = matches
             previousStep = step
-            matchIndex = 0
+            matchIndex = table.selection.caret.flatMap { cell in
+                matches.firstIndex { $0.row > cell.row || $0.row == cell.row && $0.column >= cell.column }
+            } ?? 0
         } else if !matches.isEmpty, step != previousStep {
             let delta = (step &- previousStep) % matches.count
             matchIndex = (matchIndex + delta + matches.count) % matches.count
@@ -940,13 +1102,13 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     private struct RecordMenuTarget {
         let projection: UUID
         let cell: DelimitedTablePresentation.Cell?
-        let selectedRows: IndexSet
+        let selection: DelimitedTablePresentation.Selection
     }
 
     fileprivate func recordMenu(at cell: DelimitedTablePresentation.Cell?) -> NSMenu? {
         guard projectionIsCurrent, let file, let snapshot, let presentation else { return nil }
         let target = RecordMenuTarget(projection: presentation.id, cell: cell ?? table.selection.caret,
-                                      selectedRows: table.selection.rows)
+                                      selection: table.selection)
         let menu = NSMenu()
         func item(_ title: String, action: Selector) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -964,8 +1126,13 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             menu.addItem(item(String(localized: "Select Row", table: "Editor"), action: #selector(selectRow(_:))))
         }
         if file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit {
+            if !target.selection.blocks.isEmpty {
+                menu.addItem(item(String(localized: "Fill Selection…", table: "Editor"), action: #selector(chooseFillValue(_:))))
+                menu.addItem(item(String(localized: "Clear Selected Fields", table: "Editor"), action: #selector(clearSelectedFields(_:))))
+                menu.addItem(.separator())
+            }
             menu.addItem(item(String(localized: "Insert Row After", table: "Editor"), action: #selector(insertRow(_:))))
-            if !target.selectedRows.isEmpty {
+            if !target.selection.blocks.isEmpty {
                 menu.addItem(item(String(localized: "Delete Rows", table: "Editor"), action: #selector(deleteRows(_:))))
             }
         }
@@ -996,11 +1163,39 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     @objc private func deleteRows(_ sender: NSMenuItem) {
         guard let target = recordTarget(sender), let snapshot, let presentation else { return }
-        let rows = Set(target.selectedRows.compactMap { row in
+        let rows = Set(target.selection.rows.compactMap { row in
             presentation.rows.indices.contains(row) ? presentation.rows[row] : nil
         })
         guard !rows.isEmpty else { return }
         file?.submitDelimitedEdit(.deleteRows(rows), using: snapshot, selecting: nil)
+    }
+
+    @objc private func clearSelectedFields(_ sender: NSMenuItem) {
+        if let target = recordTarget(sender) { fillSelection(with: "", selection: target.selection) }
+    }
+
+    @objc private func chooseFillValue(_ sender: NSMenuItem) {
+        guard recordTarget(sender) != nil, let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Fill Selected Fields", table: "Editor")
+        alert.informativeText = String(localized: "Only selected visible fields will change.", table: "Editor")
+        let input = NSTextField(string: "")
+        input.frame = NSRect(x: 0, y: 0, width: 270, height: 26)
+        alert.accessoryView = input
+        alert.addButton(withTitle: String(localized: "Fill", table: "Editor"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.window.initialFirstResponder = input
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self, let target = recordTarget(sender) else { return }
+            fillSelection(with: input.stringValue, selection: target.selection)
+        }
+    }
+
+    private func fillSelection(with value: String, selection: DelimitedTablePresentation.Selection) {
+        guard projectionIsCurrent, !selection.blocks.isEmpty, let snapshot, let presentation else { return }
+        let scope = DelimitedTablePresentation.FieldScope(rows: presentation.rows, firstRecord: 0,
+                                                          columns: selection.columns, selection: selection)
+        file?.submitDelimitedEdit(.fill(scope, value), using: snapshot)
     }
 
     private func copySelection() {
@@ -1638,6 +1833,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     var onCopy: () -> Void = {}
     var onEdit: (Cell) -> Void = { _ in }
     var onPaste: (String) -> Void = { _ in }
+    var onClear: () -> Void = {}
     var onMenu: (Cell?) -> NSMenu? = { _ in nil }
     weak var file: FileTab?
     override var undoManager: UndoManager? { file?.documentUndoManager ?? super.undoManager }
@@ -1760,6 +1956,9 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
         var row = previous.row
         var column = previous.column
         switch key {
+        case 8, 127, UInt32(NSDeleteFunctionKey):
+            if window?.firstResponder === self { onClear() } else { super.keyDown(with: event) }
+            return
         case 13, 3:
             onEdit(previous)
             return

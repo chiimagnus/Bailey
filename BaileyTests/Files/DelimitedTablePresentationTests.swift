@@ -8,6 +8,90 @@ import XCTest
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
+    func testLiteralReplaceUsesNonOverlappingOccurrencesAndPinnedFields() async throws {
+        let original = "Name,Left,Keep,Right\r\nShown,Café CAFÉ,\" K \",\"left\r\nright\"\n"
+            + "Hidden,CAFÉ,do not touch,CAFÉ\rShown,Cafe,wider,\"Cafe\u{301}\""
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let parsed = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(parsed)
+        let presentation = try await DelimitedTablePresentation.evaluate(
+            source: original, index: snapshot.index, configuration: .init(filters: [0: "Shown"]))
+        XCTAssertEqual(presentation.rows, [1, 3])
+        var selected = DelimitedTablePresentation.Selection()
+        selected.select(.init(row: 0, column: 1))
+        selected.select(.init(row: 1, column: 3), adding: true)
+        selected.select(.init(row: 1, column: 3), adding: true)
+        let columns = IndexSet(integersIn: 0..<4)
+        let selection = DelimitedTablePresentation.FieldScope(rows: presentation.rows, firstRecord: 1,
+                                                               columns: columns, selection: selected)
+        let visible = DelimitedTablePresentation.FieldScope(rows: presentation.rows, firstRecord: 1,
+                                                             columns: columns, selection: nil)
+        let all = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1, columns: columns, selection: nil)
+        for (scope, expected) in [(selection, 3), (visible, 4), (all, 6)] {
+            let count = try await DelimitedTablePresentation.countOccurrences("cafe", in: scope, source: original, index: snapshot.index)
+            XCTAssertEqual(count, expected)
+        }
+        let matches = try await presentation.find("cafe", source: original, index: snapshot.index, columnCount: 4)
+        let first = try await presentation.nextVisibleOccurrence("cafe", from: matches, at: .init(row: 0, column: 1),
+                                                                  after: nil, selection: selected, source: original, index: snapshot.index)
+        let hit = try XCTUnwrap(first)
+        XCTAssertEqual(hit.cell, .init(row: 1, column: 1))
+        XCTAssertEqual(hit.range, NSRange(location: 0, length: 4))
+        let next = try await presentation.nextVisibleOccurrence("cafe", from: matches, at: .init(row: 0, column: 1),
+                                                                 after: hit, selection: selected, source: original, index: snapshot.index)
+        XCTAssertEqual(next?.range, NSRange(location: 5, length: 4))
+        try await requireDelimitedEdit(file, .replace(selection, query: "cafe", with: "", single: hit), using: snapshot)
+        XCTAssertEqual(file.text, original.replacingOccurrences(of: "Café CAFÉ", with: " CAFÉ"))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
+        let refreshed = try await file.delimitedSnapshot(using: .comma)
+        try await requireDelimitedEdit(file, .replace(selection, query: "cafe", with: "café!", single: nil), using: XCTUnwrap(refreshed))
+        let expected = original.replacingOccurrences(of: "Café CAFÉ", with: "café! café!")
+            .replacingOccurrences(of: "\"Cafe\u{301}\"", with: "\"café!\"")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        file.documentUndoManager.redo()
+        XCTAssertEqual(Data(file.text.utf8), Data(expected.utf8))
+    }
+
+    func testLargeFillUsesOneUndoAndLeavesTheOtherFieldsAndDiskIntactUntilSave() async throws {
+        let rows = 100_000
+        let original = "Keep,Value\r\n" + String(repeating: "\"001\",a\n", count: rows)
+        let expected = "Keep,Value\r\n" + String(repeating: "\"001\",\"longer,value\"\n", count: rows)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let parsed = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(parsed)
+        let target = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1, columns: IndexSet(integer: 1), selection: nil)
+        let started = ContinuousClock.now
+        try await requireDelimitedEdit(file, .fill(target, "longer,value"), using: snapshot)
+        let applied = ContinuousClock.now
+        XCTAssertEqual(file.text, expected)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, expected)
+        print("CSV_BATCH rows=\(rows) prepare_apply=\(started.duration(to: applied)) undo_redo=\(applied.duration(to: .now))")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+    }
+
     func testClearingAFieldPreservesRowsAndUneditedBytes() async throws {
         let cases = [
             ("text", 0, 0, "\"\""), ("head\r\nold", 1, 0, "head\r\n\"\""),

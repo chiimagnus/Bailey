@@ -350,6 +350,102 @@ final class DelimitedGridInteractionTests: XCTestCase {
         }
     }
 
+    func testDeleteClearsOnlySelectedVisibleFieldsInOneNativeUndoStep() async throws {
+        let original = "Name,Keep,Note\r\nItem,g,\"old\"\nHidden,h,untouched\rLast,g,stay"
+        let expected = "Name,Keep,Note\r\n,g,\"\"\nHidden,h,untouched\rLast,g,stay"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        file.delimitedTable.configuration.filters[1] = "g"
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 420, height: 190),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Item")
+        XCTAssertEqual(grid.table.numberOfRows, 2)
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        grid.table.select(.init(row: 0, column: 0))
+        grid.table.select(.init(row: 0, column: 2), adding: true)
+        grid.table.select(.init(row: 0, column: 2), adding: true)
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                                 timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                 characters: "\u{7f}", charactersIgnoringModifiers: "\u{7f}",
+                                                 isARepeat: false, keyCode: 51))
+        grid.table.keyDown(with: key)
+        let task = try XCTUnwrap(file.delimitedEditTask)
+        let accepted = await task.value
+        XCTAssertTrue(accepted)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, expected)
+    }
+
+    func testFindReplaceMenuTargetsOnlyTheCurrentWritableCSV() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let valid = root.appendingPathComponent("valid.csv")
+        let malformed = root.appendingPathComponent("malformed.csv")
+        try Data("Name,Value\nItem,café CAFÉ\n".utf8).write(to: valid)
+        try Data("Name,Value\nOther,readable\nBad,\"open".utf8).write(to: malformed)
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(valid.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let first = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = first.content else { return XCTFail("Expected CSV FileTab") }
+        try await file.waitForText()
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 320, height: 190),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file, canFocus: { false })))
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderBack(nil)
+        _ = try await grid(in: host, showing: "Item")
+        XCTAssertTrue(manager.canFind)
+        XCTAssertTrue(manager.canReplace)
+        manager.performFindAction(.replace)
+        XCTAssertTrue(file.delimitedTable.showsReplace)
+        file.delimitedTable.query = "cafe"
+        func editableFields(in view: NSView) -> Int {
+            if let field = view as? NSTextField, field.isEditable, !field.isHiddenOrHasHiddenAncestor { return 1 }
+            return view.subviews.reduce(0) { $0 + editableFields(in: $1) }
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+        while editableFields(in: host) < 2, ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertGreaterThanOrEqual(editableFields(in: host), 2)
+        manager.openFile(malformed.path)
+        let second = try XCTUnwrap(project.selectedTab)
+        guard case .file(let readOnly) = second.content else { return XCTFail("Expected CSV FileTab") }
+        try await readOnly.waitForText()
+        host.rootView = AnyView(FileViewerView(file: readOnly, canFocus: { false }).id(readOnly.id))
+        _ = try await grid(in: host, showing: "Other")
+        XCTAssertTrue(manager.canFind)
+        XCTAssertFalse(manager.canReplace)
+        manager.performFindAction(.show)
+        XCTAssertTrue(readOnly.delimitedTable.showsFind)
+        XCTAssertFalse(readOnly.delimitedTable.showsReplace)
+        XCTAssertEqual(file.delimitedTable.query, "cafe")
+    }
+
     private func grid(in host: NSView, showing value: String) async throws -> DelimitedGrid {
         func find(_ view: NSView) -> DelimitedGrid? {
             if let grid = view as? DelimitedGrid { return grid }
