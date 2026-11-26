@@ -31,16 +31,14 @@ final class DelimitedTablePresentationTests: XCTestCase {
 
         let active = try await DelimitedTablePresentation.evaluate(
             source: source, index: index, configuration: .init(filters: [0: "Item"]))
-        var selection = DelimitedTablePresentation.Selection()
-        selection.select(.init(row: 0, column: 3))
-        selection.select(.init(row: 0, column: 3), adding: true)
-        let selected = DelimitedTablePresentation.FieldScope(rows: active.rows, firstRecord: 1,
-                                                              columns: selection.columns, selection: selection)
-        let selectedStats = try await DelimitedTablePresentation.statistics(in: selected, source: source, index: index)
-        XCTAssertEqual(selectedStats.map(\.total), [1])
-        XCTAssertEqual(selectedStats.map(\.empty), [1])
+        let selectedColumn = IndexSet(integer: 3)
+        let visible = DelimitedTablePresentation.FieldScope(rows: active.rows, firstRecord: 1,
+                                                             columns: selectedColumn, selection: nil)
+        let visibleStats = try await DelimitedTablePresentation.statistics(in: visible, source: source, index: index)
+        XCTAssertEqual(visibleStats.map(\.total), [1])
+        XCTAssertEqual(visibleStats.map(\.empty), [1])
         let empty = try await active.find("", source: source, index: index, columnCount: 5,
-                                          empty: true, columns: selection.columns, selection: selection)
+                                          empty: true, columns: selectedColumn)
         XCTAssertEqual(empty, [.init(row: 0, column: 3)])
         let all = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
         let allEmpty = try await all.find("", source: source, index: index, columnCount: 5, empty: true)

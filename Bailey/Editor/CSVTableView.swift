@@ -6,7 +6,6 @@ import SwiftUI
 private struct DelimitedAnalysisTarget: Hashable {
     let display: UUID
     let columns: IndexSet
-    let selection: DelimitedTablePresentation.Selection?
 }
 
 @Observable
@@ -231,7 +230,7 @@ struct CSVTableView: View {
                     let found = try await active.find(
                         query.query, source: snapshot.source, index: snapshot.index,
                         columnCount: DelimitedTableIndex.maximumColumns, empty: query.empty != nil,
-                        columns: query.empty?.columns, selection: query.empty?.selection
+                        columns: query.empty?.columns
                     )
                     guard !Task.isCancelled, controls.request(for: file) == parse,
                           controls.configuration == display.configuration, controls.query == query.query else { return }
@@ -286,12 +285,6 @@ struct CSVTableView: View {
                         filterTarget = nil
                         controls.perform(.hide)
                         statisticsTarget = target
-                    },
-                    onSelectionChanged: { selection in
-                        guard let target = statisticsTarget, let original = target.selection, original != selection else { return }
-                        DispatchQueue.main.async {
-                            if statisticsTarget == target { statisticsTarget = nil }
-                        }
                     }
                 )
                 .opacity(hasRows ? 1 : 0)
@@ -343,10 +336,7 @@ struct CSVTableView: View {
                          theme: GhosttyThemeDefinition) -> some View {
         if let target = statisticsTarget, let active, target.display == active.id, let snapshot {
             DelimitedStatisticsView(target: target, snapshot: snapshot, active: active, theme: theme,
-                                    isCurrent: {
-                                        guard let grid = controls.grid, grid.acceptsProjection(target.display) else { return false }
-                                        return target.selection.map { $0 == grid.table.selection } ?? true
-                                    },
+                                    isCurrent: { controls.grid?.acceptsProjection(target.display) == true },
                                     onClose: { statisticsTarget = nil },
                                     onFind: {
                                         guard controls.grid?.acceptsProjection(active.id) == true else { return }
@@ -537,15 +527,11 @@ private struct DelimitedStatisticsView: View {
                     .buttonStyle(.borderless)
                     .accessibilityLabel(Text("Close"))
             }
-            if target.selection == nil {
-                Picker(String(localized: "Statistics Range", table: "Editor"), selection: $all) {
-                    Text("Visible Records", tableName: "Editor").tag(false)
-                    Text("All Data Records", tableName: "Editor").tag(true)
-                }
-                .controlSize(.small)
-            } else {
-                Text("Selected Visible Fields", tableName: "Editor").font(.caption)
+            Picker(String(localized: "Statistics Range", table: "Editor"), selection: $all) {
+                Text("Visible Records", tableName: "Editor").tag(false)
+                Text("All Data Records", tableName: "Editor").tag(true)
             }
+            .controlSize(.small)
             if snapshot.index.issue != nil {
                 Text("Partial table — only indexed fields are counted.", tableName: "Editor")
                     .font(.caption)
@@ -583,7 +569,7 @@ private struct DelimitedStatisticsView: View {
             let includeHidden = all
             let scope = DelimitedTablePresentation.FieldScope(
                 rows: includeHidden ? nil : active.rows, firstRecord: active.header ? 1 : 0,
-                columns: target.columns, selection: target.selection
+                columns: target.columns, selection: nil
             )
             guard let values = try? await DelimitedTablePresentation.statistics(in: scope, source: snapshot.source,
                                                                                  index: snapshot.index),
@@ -640,7 +626,6 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     let onFocused: () -> Void
     let onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void
     let onStatistics: (DelimitedAnalysisTarget) -> Void
-    let onSelectionChanged: (DelimitedTablePresentation.Selection) -> Void
 
     func makeNSView(context: Context) -> DelimitedGrid { DelimitedGrid() }
 
@@ -650,7 +635,6 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
         grid.table.onFocused = onFocused
         grid.onFilter = onFilter
         grid.onStatistics = onStatistics
-        grid.onSelectionChanged = onSelectionChanged
         if let snapshot, let presentation, !snapshot.index.records.isEmpty {
             grid.install(snapshot, presentation: presentation)
             if let matches { grid.showMatch(matches, step: findStep) }
@@ -687,7 +671,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     private var installingColumns = false
     var onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void = { _, _ in }
     fileprivate var onStatistics: (DelimitedAnalysisTarget) -> Void = { _ in }
-    var onSelectionChanged: (DelimitedTablePresentation.Selection) -> Void = { _ in }
     private var snapshot: FileTab.DelimitedSnapshot?
     private var presentation: DelimitedTablePresentation?
     private var source: NSString = ""
@@ -789,7 +772,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         table.onSelectionChanged = { [weak self] in
             guard let self else { return }
             gutter.needsDisplay = true
-            onSelectionChanged(table.selection)
         }
         scrollView.documentView = table
         addSubview(scrollView)
@@ -854,7 +836,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         table.onFocused = {}
         onFilter = { _, _ in }
         onStatistics = { _ in }
-        onSelectionChanged = { _ in }
     }
 
     func install(_ snapshot: FileTab.DelimitedSnapshot, presentation: DelimitedTablePresentation) {
@@ -1052,7 +1033,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         guard projectionIsCurrent, editing == nil, let file, let snapshot, let physical = physicalCell(cell),
               let field = snapshot.index.field(record: physical.row, column: physical.column) else { return }
         let content = field.contentRange(in: source)
-        if content.length > Self.displayLimit ||
+        if !file.canEditDelimited(snapshot) || content.length > Self.displayLimit ||
             source.rangeOfCharacter(from: .newlines, options: [], range: content).location != NSNotFound {
             openFullCell(cell)
             return
@@ -1272,7 +1253,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     fileprivate func recordMenu(at cell: DelimitedTablePresentation.Cell?) -> NSMenu? {
-        guard projectionIsCurrent, let file, let snapshot, let presentation else { return nil }
+        guard projectionIsCurrent, let file, let snapshot, let presentation,
+              file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit else { return nil }
         let target = RecordMenuTarget(projection: presentation.id, cell: cell ?? table.selection.caret,
                                       selection: table.selection)
         let menu = NSMenu()
@@ -1282,28 +1264,13 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             item.representedObject = target
             return item
         }
-        if let cell = target.cell {
-            if let physical = physicalCell(cell), snapshot.index.field(record: physical.row, column: physical.column) != nil {
-                let title = file.canEditDelimited(snapshot)
-                    ? String(localized: "Edit Full Field…", table: "Editor")
-                    : String(localized: "View Full Field…", table: "Editor")
-                menu.addItem(item(title, action: #selector(openFullCellItem(_:))))
-            }
-            menu.addItem(item(String(localized: "Select Row", table: "Editor"), action: #selector(selectRow(_:))))
+        if target.selection.rows.count > 1 || target.selection.columns.count > 1 {
+            menu.addItem(item(String(localized: "Fill Selected Cells…", table: "Editor"), action: #selector(chooseFillValue(_:))))
+            menu.addItem(.separator())
         }
+        menu.addItem(item(String(localized: "Insert Row After", table: "Editor"), action: #selector(insertRow(_:))))
         if !target.selection.blocks.isEmpty {
-            menu.addItem(item(String(localized: "Selection Statistics…", table: "Editor"), action: #selector(selectionStatistics(_:))))
-        }
-        if file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit {
-            if !target.selection.blocks.isEmpty {
-                menu.addItem(item(String(localized: "Fill Selection…", table: "Editor"), action: #selector(chooseFillValue(_:))))
-                menu.addItem(item(String(localized: "Clear Selected Fields", table: "Editor"), action: #selector(clearSelectedFields(_:))))
-                menu.addItem(.separator())
-            }
-            menu.addItem(item(String(localized: "Insert Row After", table: "Editor"), action: #selector(insertRow(_:))))
-            if !target.selection.blocks.isEmpty {
-                menu.addItem(item(String(localized: "Delete Rows", table: "Editor"), action: #selector(deleteRows(_:))))
-            }
+            menu.addItem(item(String(localized: "Delete Rows", table: "Editor"), action: #selector(deleteRows(_:))))
         }
         return menu
     }
@@ -1312,20 +1279,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         guard projectionIsCurrent, let target = sender.representedObject as? RecordMenuTarget,
               target.projection == presentation?.id else { return nil }
         return target
-    }
-
-    @objc private func selectRow(_ sender: NSMenuItem) {
-        guard let row = recordTarget(sender)?.cell?.row else { return }
-        table.selectRecord(row, modifiers: [])
-    }
-
-    @objc private func selectionStatistics(_ sender: NSMenuItem) {
-        guard let target = recordTarget(sender) else { return }
-        onStatistics(.init(display: target.projection, columns: target.selection.columns, selection: target.selection))
-    }
-
-    @objc private func openFullCellItem(_ sender: NSMenuItem) {
-        if let cell = recordTarget(sender)?.cell { openFullCell(cell) }
     }
 
     @objc private func insertRow(_ sender: NSMenuItem) {
@@ -1344,15 +1297,11 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         file?.submitDelimitedEdit(.deleteRows(rows), using: snapshot, selecting: nil)
     }
 
-    @objc private func clearSelectedFields(_ sender: NSMenuItem) {
-        if let target = recordTarget(sender) { fillSelection(with: "", selection: target.selection) }
-    }
-
     @objc private func chooseFillValue(_ sender: NSMenuItem) {
         guard recordTarget(sender) != nil, let window else { return }
         let alert = NSAlert()
-        alert.messageText = String(localized: "Fill Selected Fields", table: "Editor")
-        alert.informativeText = String(localized: "Only selected visible fields will change.", table: "Editor")
+        alert.messageText = String(localized: "Fill Selected Cells", table: "Editor")
+        alert.informativeText = String(localized: "Set every selected cell to the same value.", table: "Editor")
         let input = NSTextField(string: "")
         input.frame = NSRect(x: 0, y: 0, width: 270, height: 26)
         alert.accessoryView = input
@@ -1463,7 +1412,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         guard accepts(sender), let projection = projectionID else { return }
         let selection = table.wholeColumns
         let columns = selection.contains(sender.tag) ? selection : IndexSet(integer: sender.tag)
-        onStatistics(.init(display: projection, columns: columns, selection: nil))
+        onStatistics(.init(display: projection, columns: columns))
     }
 
     private struct ColumnDeletion {

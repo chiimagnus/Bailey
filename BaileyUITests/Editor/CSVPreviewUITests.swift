@@ -270,6 +270,168 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), encoded(sourceEdit))
     }
 
+    func testRealContextMenuBatchAndStructuralEditsSaveExactBytes() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "Name,Value,Note\nAlpha,1,one\nBeta,2,two\nGamma,3,three\n"
+        let file = try fixture.file("Context.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.staticTexts["Alpha"].waitForExistence(timeout: 12))
+        func menu(_ title: String, at element: XCUIElement) {
+            element.rightClick()
+            let item = WorkspaceUITestSupport.menuItem(title, in: app)
+            XCTAssertTrue(item.waitForExistence(timeout: 5), title)
+            XCTAssertTrue(item.isEnabled, title)
+            item.click()
+        }
+        func save(_ expected: String) {
+            app.typeKey("s", modifierFlags: .command)
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (try? Data(contentsOf: file)) == Data(expected.utf8)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed,
+                           "Expected \(expected); actual \((try? String(contentsOf: file, encoding: .utf8)) ?? "unreadable")")
+        }
+        func undo() {
+            app.typeKey("z", modifierFlags: .command)
+            save(original)
+        }
+        func header(_ title: String) -> XCUIElement {
+            table.buttons.matching(NSPredicate(format: "title == %@", title)).firstMatch
+        }
+
+        // Only structure actions are useful when a single ordinary cell is selected.
+        table.staticTexts["1"].click()
+        table.staticTexts["1"].rightClick()
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Insert Row After", in: app).waitForExistence(timeout: 5))
+        for title in ["Edit Full Field…", "View Full Field…", "Select Row", "Selection Statistics…",
+                      "Clear Selected Fields", "Fill Selection…", "Fill Selected Cells…"] {
+            XCTAssertFalse(WorkspaceUITestSupport.menuItem(title, in: app).exists, title)
+        }
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Insert Row After", in: app).waitForNonExistence(timeout: 5))
+        XCUIElement.perform(withKeyModifiers: .shift) { table.staticTexts["2"].click() }
+        menu("Fill Selected Cells…", at: table.staticTexts["1"])
+        let sheet = window.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5), app.debugDescription)
+        let input = sheet.textFields.firstMatch
+        XCTAssertTrue(input.exists, sheet.debugDescription)
+        input.click()
+        input.typeText("9")
+        sheet.buttons["Fill"].click()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 5))
+        save("Name,Value,Note\nAlpha,9,one\nBeta,9,two\nGamma,3,three\n")
+        undo()
+        XCTAssertTrue(table.staticTexts["1"].waitForExistence(timeout: 5))
+
+        menu("Insert Row After", at: table.staticTexts["Alpha"])
+        save("Name,Value,Note\nAlpha,1,one\n,,\nBeta,2,two\nGamma,3,three\n")
+        undo()
+        let beta = table.staticTexts["Beta"]
+        XCTAssertTrue(beta.waitForExistence(timeout: 5))
+        // Click the visible fixed row-number gutter itself, not an AX press.
+        // The gutter is immediately left of the native data table.
+        let record = CGPoint(x: table.frame.minX - 16, y: beta.frame.midY)
+        XCTAssertTrue(window.frame.contains(record), "Row number must be inside the window: \(record)")
+        window.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: record.x - window.frame.minX, dy: record.y - window.frame.minY)
+        ).click()
+        app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
+        save("Name,Value,Note\nAlpha,1,one\n,,\nGamma,3,three\n")
+        undo()
+        menu("Delete Rows", at: table.staticTexts["Beta"])
+        save("Name,Value,Note\nAlpha,1,one\nGamma,3,three\n")
+        undo()
+
+        menu("Insert Column Right", at: header("Value"))
+        save("Name,Value,,Note\nAlpha,1,,one\nBeta,2,,two\nGamma,3,,three\n")
+        undo()
+        menu("Move Column Left", at: header("Value"))
+        save("Value,Name,Note\n1,Alpha,one\n2,Beta,two\n3,Gamma,three\n")
+        undo()
+        menu("Delete Column from All Records", at: header("Note"))
+        save("Name,Value\nAlpha,1\nBeta,2\nGamma,3\n")
+        undo()
+
+        for key in [XCUIKeyboardKey.delete, .forwardDelete] {
+            XCTAssertTrue(table.staticTexts["Alpha"].waitForExistence(timeout: 5))
+            table.staticTexts["Alpha"].click()
+            app.typeKey("a", modifierFlags: .command)
+            app.typeKey(key.rawValue, modifierFlags: [])
+            save("Name,Value,Note\n,,\n,,\n,,\n")
+            undo()
+        }
+    }
+
+    func testColumnStatisticsAndReplaceThroughActualControls() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = "Name,Value,Note\nAlpha,12,old old\nBeta,,old\nGamma,3,hidden\nDelta,7,keep\n"
+        let file = try fixture.file("Analysis.csv", text: original)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root,
+                                                    clipboardIsReadOnly: true)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        XCTAssertTrue(table.staticTexts["Alpha"].waitForExistence(timeout: 12))
+        let value = table.buttons.matching(NSPredicate(format: "title == %@", "Value")).firstMatch
+        XCTAssertTrue(value.exists)
+        value.rightClick()
+        let stats = WorkspaceUITestSupport.menuItem("Column Statistics…", in: app)
+        XCTAssertTrue(stats.waitForExistence(timeout: 5))
+        stats.click()
+        let empty = app.buttons["Find Visible Empty Fields"].firstMatch
+        XCTAssertTrue(empty.waitForExistence(timeout: 5))
+        let total = app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", "22", "22")).firstMatch
+        XCTAssertTrue(total.waitForExistence(timeout: 5), app.debugDescription)
+        empty.click()
+        let find = app.textFields["bailey.csv.find"]
+        XCTAssertTrue(find.waitForExistence(timeout: 5))
+        let count = app.staticTexts["bailey.csv.match-count"]
+        let emptyFound = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ OR label == %@", "1", "1"), object: count)
+        XCTAssertEqual(XCTWaiter.wait(for: [emptyFound], timeout: 5), .completed)
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(find.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(try Data(contentsOf: file), Data(original.utf8))
+
+        table.staticTexts["old old"].click()
+        app.typeKey("f", modifierFlags: [.command, .option])
+        XCTAssertTrue(find.waitForExistence(timeout: 5))
+        find.click()
+        find.typeText("old")
+        let replacement = app.textFields["bailey.csv.replacement"]
+        XCTAssertTrue(replacement.waitForExistence(timeout: 5))
+        replacement.click()
+        replacement.typeText("new")
+        let replace = app.buttons["Replace"].firstMatch
+        let replaceAll = app.buttons["Replace All"].firstMatch
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: replace)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed, app.debugDescription)
+        replace.click()
+        XCTAssertTrue(table.staticTexts["new old"].waitForExistence(timeout: 8))
+        let readyAll = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: replaceAll)
+        XCTAssertEqual(XCTWaiter.wait(for: [readyAll], timeout: 5), .completed)
+        replaceAll.click()
+        XCTAssertTrue(table.staticTexts["new new"].waitForExistence(timeout: 8))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        // Closing the overlay through its actual button works even if it owns focus.
+        if find.exists { app.buttons["Close"].firstMatch.click() }
+        table.staticTexts["new new"].click()
+        app.typeKey("s", modifierFlags: .command)
+        let expected = original.replacingOccurrences(of: "old", with: "new")
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) == Data(expected.utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+    }
+
     func testLargeRealTableFindEditAndSaveRetainAllOtherBytes() throws {
         guard let root = ProcessInfo.processInfo.environment["BAILEY_PREVIEW_ACCEPTANCE_ROOT"] else {
             throw XCTSkip("Set BAILEY_PREVIEW_ACCEPTANCE_ROOT to the comprehensive sample directory")
