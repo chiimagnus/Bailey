@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import Combine
 import SwiftUI
@@ -664,9 +665,9 @@ private final class TunnelEditorController: NSObject, NSTextFieldDelegate {
         problemLabel.stringValue = problem
         problemLabel.isHidden = false
         sheet.setContentSize(sheet.contentView?.fittingSize ?? sheet.frame.size)
-        NSAccessibility.post(
-            element: problemLabel, notification: .announcementRequested,
-            userInfo: [.announcement: problem, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        var announcement = AttributedString(problem)
+        announcement.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(announcement).post()
     }
 }
 
