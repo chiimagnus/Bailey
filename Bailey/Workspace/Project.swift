@@ -147,8 +147,7 @@ final class Project: nonisolated Identifiable {
 
     func setFilePreviewMode(_ mode: FilePreviewMode, for tab: PaneTab) {
         guard tabs.contains(where: { $0 === tab }), case .file(let file) = tab.content,
-              file.canPreviewFile else { return }
-        file.setFilePreview(mode == .preview)
+              file.canPreviewFile, file.setFilePreview(mode == .preview) else { return }
         dock.setFilePreview(of: tab.id, visible: mode == .sideBySide)
     }
 

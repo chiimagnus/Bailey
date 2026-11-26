@@ -609,13 +609,16 @@ final class FileTab: nonisolated Identifiable {
         return true
     }
 
-    func setFilePreview(_ enabled: Bool) {
-        guard previewKind != nil else { return }
+    @discardableResult
+    func setFilePreview(_ enabled: Bool) -> Bool {
+        guard previewKind != nil else { return false }
         delimitedEditingGrid?.finishEditing()
-        guard delimitedEditingGrid == nil else { return }
+        guard delimitedEditingGrid == nil else { return false }
         switch content {
-        case .text, .loading: previewOverride = enabled
-        case .image, .media, .unavailable: break
+        case .text, .loading:
+            previewOverride = enabled
+            return true
+        case .image, .media, .unavailable: return false
         }
     }
 

@@ -14,6 +14,85 @@ func csvFullFieldEditor() -> NSTextView? {
 
 @MainActor
 final class DelimitedGridInteractionTests: XCTestCase {
+    func testPreviewModeTransitionDoesNotSplitOrUnmountMarkedCSVInput() async throws {
+        let original = "Name,Value\r\nItem,old\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let project = Project(fallbackName: "CSV composition", workspaceConfiguration: .standard)
+        project.openLocalFile(url.path)
+        let tab = try XCTUnwrap(project.tabs.first)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected CSV file") }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 500, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+
+        let storage = file.nativeTextStorage
+        let grid = try await self.grid(in: host, showing: "Item")
+        XCTAssertTrue(window.makeFirstResponder(grid.table))
+        grid.table.onEdit(.init(row: 0, column: 1))
+        let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                             replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertTrue(file.hasPendingDelimitedEdit)
+
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .preview)
+        XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.showsFilePreview)
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,中文\n".utf8))
+        project.setFilePreviewMode(.sideBySide, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+        XCTAssertFalse(file.showsFilePreview)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        XCTAssertEqual(project.tabs.count, 1)
+
+        host.rootView = FileViewerView(file: file, rendersOnlyPreview: true)
+        let companion = try await self.grid(in: host, showing: "Item")
+        XCTAssertTrue(window.makeFirstResponder(companion.table))
+        companion.table.onEdit(.init(row: 0, column: 1))
+        let secondField = try XCTUnwrap(companion.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let secondEditor = try XCTUnwrap(secondField.currentEditor() as? NSTextView)
+        secondEditor.setMarkedText("xin", selectedRange: NSRange(location: 3, length: 0),
+                                  replacementRange: NSRange(location: 0, length: secondEditor.string.utf16.count))
+        XCTAssertTrue(secondEditor.hasMarkedText())
+        project.setFilePreviewMode(.source, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .sideBySide)
+        XCTAssertNotNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(secondEditor.hasMarkedText())
+
+        secondEditor.insertText("新", replacementRange: NSRange(location: NSNotFound, length: 0))
+        secondEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,新\n".utf8))
+        project.setFilePreviewMode(.source, for: tab)
+        XCTAssertEqual(project.filePreviewMode(for: tab), .source)
+        XCTAssertNil(project.dock.group(containing: .filePreview(tab.id)))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, "Name,Value\r\nItem,中文\n")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,中文\n".utf8))
+    }
+
     func testDisplayChangesRejectStaleNativePasteBeforeSwiftUIUpdates() async throws {
         let original = "Name,Value\r\nBeta,old\nAlpha,keep"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
