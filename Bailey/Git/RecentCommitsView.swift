@@ -1,43 +1,6 @@
 import AppKit
 import GhosttyTheme
-import OSLog
 import SwiftUI
-
-@MainActor
-enum GitGraphScrollLog {
-    private static let logger = Logger(subsystem: "chiimagnus.bailey", category: "GitGraphScroll")
-
-    static var enabled: Bool {
-        UserDefaults.standard.bool(forKey: "GitGraphScrollLogging")
-            || ProcessInfo.processInfo.environment["BAILEY_GIT_GRAPH_SCROLL_LOG"] == "1"
-    }
-
-    static func rowToken(_ row: String?) -> String {
-        row.map { String(UInt(bitPattern: $0.hashValue), radix: 16) } ?? "none"
-    }
-
-    static func record(
-        _ event: String, owner: TreeKeyboardOwner? = nil, row: String? = nil,
-        detail: String = ""
-    ) {
-        guard enabled else { return }
-        let view = owner?.view
-        let window = view?.window
-        let scroll = view?.enclosingScrollView
-        let responder = window?.firstResponder
-        let responderType = responder.map { String(describing: type(of: $0)) } ?? "none"
-        let offset = Double(scroll?.contentView.bounds.minY ?? -1)
-        let viewport = Double(scroll?.contentView.bounds.height ?? -1)
-        let content = Double(scroll?.documentView?.frame.height ?? -1)
-        let appActive = NSApp?.isActive ?? false
-        let ownsFocus = view != nil && responder === view
-        let message = "event=\(event) window=\(window?.windowNumber ?? -1) "
-            + "active=\(appActive) key=\(window?.isKeyWindow ?? false) first=\(ownsFocus) "
-            + "responder=\(responderType) row=\(rowToken(row)) y=\(offset) "
-            + "viewport=\(viewport) content=\(content) \(detail)"
-        logger.notice("\(message, privacy: .public)")
-    }
-}
 
 struct GitGraphReferenceGroup {
     typealias Reference = GitStatusModel.RecentCommit.Reference
@@ -93,7 +56,8 @@ final class CommitGraphLayoutCache {
 
     func layout(for commits: [GitStatusModel.RecentCommit]) -> CommitGraphLayout {
         if let cached, cached.commits == commits { return cached.layout }
-        let layout = CommitGraphLayout(commits: commits)
+        let layout = cached.flatMap { $0.layout.reusingGeometry(from: $0.commits, for: commits) }
+            ?? CommitGraphLayout(commits: commits)
         cached = (commits, layout)
         return layout
     }
@@ -177,21 +141,16 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
     @State private var layoutCache = CommitGraphLayoutCache()
     @State private var displayCache = GraphDisplayCache()
-    @State private var localKeyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var focusedRowID: String?
     @State private var selection = Selection()
     @State private var contextRowID: String?
     @Environment(\.controlActiveState) private var controlActiveState
 
-    private let providedKeyboardOwner: TreeKeyboardOwner?
+    private let keyboardOwner: TreeKeyboardOwner
     private let isKeyboardActive: Bool
     private let onKeyboardFocused: () -> Void
     private let onKeyboardAttached: () -> Void
-
-    private var keyboardOwner: TreeKeyboardOwner {
-        providedKeyboardOwner ?? localKeyboardOwner
-    }
 
     private var currentTheme: GhosttyThemeDefinition {
         Theme.terminal(dark: colorScheme == .dark)
@@ -218,7 +177,6 @@ struct RecentCommitsView: View {
     let viewMode: GitViewMode
     let fontScale: CGFloat
     let hasMoreCommits: Bool
-    let isLoadingMore: Bool
     let loadMore: () -> Bool
     let openDiff: (Commit, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
@@ -248,15 +206,15 @@ struct RecentCommitsView: View {
 
     init(
         commits: [Commit],
-        remotes: [String] = [],
-        remoteURLs: [String: String] = [:],
-        knownRemotesByCommit: [String: Set<String>] = [:],
-        hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
-        openHosted: @escaping (String, String) -> Void = { _, _ in },
-        stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
+        remotes: [String],
+        remoteURLs: [String: String],
+        knownRemotesByCommit: [String: Set<String>],
+        hostProviders: [String: GitHostedRemoteURL.Provider],
+        openHosted: @escaping (String, String) -> Void,
+        stashFilesByOID: [String: GitStatusModel.StashFilesState],
         repoRoot: String,
-        selectionScope: String = "local",
-        displayedDiff: DiffTab? = nil,
+        selectionScope: String,
+        displayedDiff: DiffTab?,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
         loadBinaryStatus: @escaping (Commit) -> Void,
         isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
@@ -265,7 +223,6 @@ struct RecentCommitsView: View {
         viewMode: GitViewMode,
         fontScale: CGFloat,
         hasMoreCommits: Bool,
-        isLoadingMore: Bool,
         loadMore: @escaping () -> Bool,
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
@@ -280,22 +237,22 @@ struct RecentCommitsView: View {
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
-        squashAction: @escaping ([String]) -> Void = { _ in },
-        commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void = { _, _ in },
-        headOID: String? = nil,
-        worktreeLocations: [GitStatusModel.WorktreeLocation] = [],
-        canActOnStash: Bool = true,
-        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
-        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
-        canActOnWorktrees: Bool = false,
-        canRevealWorktreeInFinder: Bool = false,
-        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, WorktreeAction) -> Void = { _, _ in },
-        canCreateWorktree: @escaping (Reference) -> Bool = { _ in false },
-        createWorktree: @escaping (Reference, Commit) -> Void = { _, _ in },
-        keyboardOwner: TreeKeyboardOwner? = nil,
-        isKeyboardActive: Bool = true,
-        onKeyboardFocused: @escaping () -> Void = {},
-        onKeyboardAttached: @escaping () -> Void = {}
+        squashAction: @escaping ([String]) -> Void,
+        commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void,
+        headOID: String?,
+        worktreeLocations: [GitStatusModel.WorktreeLocation],
+        canActOnStash: Bool,
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void,
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void,
+        canActOnWorktrees: Bool,
+        canRevealWorktreeInFinder: Bool,
+        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, WorktreeAction) -> Void,
+        canCreateWorktree: @escaping (Reference) -> Bool,
+        createWorktree: @escaping (Reference, Commit) -> Void,
+        keyboardOwner: TreeKeyboardOwner,
+        isKeyboardActive: Bool,
+        onKeyboardFocused: @escaping () -> Void,
+        onKeyboardAttached: @escaping () -> Void
     ) {
         self.commits = commits
         self.remotes = remotes
@@ -315,7 +272,6 @@ struct RecentCommitsView: View {
         self.viewMode = viewMode
         self.fontScale = fontScale
         self.hasMoreCommits = hasMoreCommits
-        self.isLoadingMore = isLoadingMore
         self.loadMore = loadMore
         self.openDiff = openDiff
         self.canSwitchBranch = canSwitchBranch
@@ -342,7 +298,7 @@ struct RecentCommitsView: View {
         self.worktreeAction = worktreeAction
         self.canCreateWorktree = canCreateWorktree
         self.createWorktree = createWorktree
-        providedKeyboardOwner = keyboardOwner
+        self.keyboardOwner = keyboardOwner
         self.isKeyboardActive = isKeyboardActive
         self.onKeyboardFocused = onKeyboardFocused
         self.onKeyboardAttached = onKeyboardAttached
@@ -364,7 +320,6 @@ struct RecentCommitsView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(run.rows) { row in
                         graphRow(row, graph: graph, gutter: gutter, spacing: spacing)
-                            .id(row.id)
                     }
                 }
                 // The projection, not a sample of measured lazy rows, owns
@@ -387,18 +342,11 @@ struct RecentCommitsView: View {
             TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGraphKey,
                 onFocusChanged: { focused in
                     keyboardFocused = focused
-                    GitGraphScrollLog.record(
-                        "graph-focus", owner: keyboardOwner, row: focusedRowID,
-                        detail: "focused=\(focused) active=\(isKeyboardActive)"
-                    )
                     if focused {
                         if focusedRowID == nil { focusedRowID = keyboardRows.first?.id }
                         onKeyboardFocused()
                     }
-                }, onAttachedToWindow: {
-                    GitGraphScrollLog.record("graph-attached", owner: keyboardOwner)
-                    onKeyboardAttached()
-                }, onEditCommand: { action in
+                }, onAttachedToWindow: onKeyboardAttached, onEditCommand: { action in
                     switch action {
                     case .selectAll:
                         selection.selectAll(visible: commits.filter {
@@ -423,13 +371,11 @@ struct RecentCommitsView: View {
             requestedLastCommit = nil
         }
         .onChange(of: repoRoot) { _, _ in
-            GitGraphScrollLog.record("repository-change", owner: keyboardOwner)
             focusedRowID = nil
             selection.clear()
             contextRowID = nil
         }
         .onChange(of: selectionScope) { _, _ in
-            GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
             focusedRowID = nil
             selection.clear()
             contextRowID = nil
@@ -448,22 +394,11 @@ struct RecentCommitsView: View {
                 focusedRowID = ids.first
             }
         }
-        .onChange(of: focusedRowID) { previous, id in
-            if GitGraphScrollLog.enabled {
-                let index = id.flatMap { target in keyboardRows.firstIndex { $0.id == target } } ?? -1
-                GitGraphScrollLog.record(
-                    "cursor", owner: keyboardOwner, row: id,
-                    detail: "previous=\(GitGraphScrollLog.rowToken(previous)) "
-                        + "index=\(index) focused=\(keyboardFocused) active=\(isKeyboardActive)"
-                )
-            }
+        .onChange(of: focusedRowID) { _, id in
             if keyboardFocused, let id { revealKeyboardRow(id) }
         }
         .onChange(of: keyboardFocused) { _, focused in
             if focused, let focusedRowID { revealKeyboardRow(focusedRowID) }
-        }
-        .onAppear {
-            GitGraphScrollLog.record("graph-appear", owner: keyboardOwner)
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             viewportWidth = $0
@@ -525,6 +460,7 @@ struct RecentCommitsView: View {
         struct Position {
             let index: Int
             let precedingCommits: Int
+            let navigationIndex: Int
             let isCommit: Bool
         }
 
@@ -549,9 +485,9 @@ struct RecentCommitsView: View {
             var precedingCommits = 0
             for (index, row) in rows.enumerated() {
                 if row.isNavigable {
-                    navigation.append(row)
                     positions[row.id] = Position(index: index, precedingCommits: precedingCommits,
-                                                 isCommit: row.isCommit)
+                                                 navigationIndex: navigation.count, isCommit: row.isCommit)
+                    navigation.append(row)
                 }
                 if row.isCommit { precedingCommits += 1 }
             }
@@ -899,10 +835,8 @@ struct RecentCommitsView: View {
         let y = document.isFlipped ? top.y + offset : top.y - offset - height
         let visible = scroll.documentVisibleRect
         guard y < visible.minY || y + height > visible.maxY else { return }
-        GitGraphScrollLog.record("scroll-request", owner: keyboardOwner, row: id)
         document.scrollToVisible(NSRect(x: visible.minX, y: y,
                                             width: min(1, visible.width), height: height))
-        GitGraphScrollLog.record("scroll-finished", owner: keyboardOwner, row: id)
     }
 
     private func focusRow(_ id: String) {
@@ -953,28 +887,20 @@ struct RecentCommitsView: View {
     }
 
     private func handleGraphKey(_ event: NSEvent) -> Bool {
-        if GitGraphScrollLog.enabled {
-            let index = focusedRowID.flatMap { id in keyboardRows.firstIndex { $0.id == id } } ?? -1
-            GitGraphScrollLog.record(
-                "key-down", owner: keyboardOwner, row: focusedRowID,
-                detail: "code=\(event.keyCode) cmd=\(event.modifierFlags.contains(.command)) "
-                    + "shift=\(event.modifierFlags.contains(.shift)) index=\(index) "
-                    + "focused=\(keyboardFocused) active=\(isKeyboardActive)"
-            )
-        }
         guard isKeyboardActive, keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
               event.modifierFlags.intersection([.control, .option]).isEmpty
         else { return false }
-        let rows = keyboardRows
+        let display = graphDisplay
+        let rows = display.navigation
         guard !rows.isEmpty else { return false }
-        let current = focusedRowID.flatMap { id in rows.firstIndex { $0.id == id } }
+        let current = focusedRowID.flatMap { display.positions[$0]?.navigationIndex }
         if event.modifierFlags.contains(.command) {
             guard let current, event.keyCode == 125 || event.keyCode == 126,
                   case .commit = rows[current].content,
                   let next = Self.navigationTarget(
                     commits: commits, current: commits[rows[current].commitIndex], parent: event.keyCode == 125,
                     alternate: event.modifierFlags.contains(.shift),
-                    layout: event.keyCode == 126 ? layoutCache.layout(for: commits) : nil
+                    layout: layoutCache.layout(for: commits)
                   ) else { return false }
             focusRow(commitRowID(next))
             if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
@@ -986,13 +912,13 @@ struct RecentCommitsView: View {
             let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
             let next = max(0, min(rows.count - 1, start + (event.keyCode == 125 ? 1 : -1)))
             if extending {
-                selection.select(rows[next].id, visible: rows.map(\.id), extending: true,
+                selection.select(rows[next].id, visible: display.navigationIDs, extending: true,
                                  fallbackAnchor: current.map { rows[$0].id })
             }
             focusedRowID = rows[next].id
         case 49, 36, 76: // Space / Return / Enter: same action as clicking the current row
             guard !extending, let current else { return false }
-            selection.select(rows[current].id, visible: rows.map(\.id))
+            selection.select(rows[current].id, visible: display.navigationIDs)
             activate(rows[current])
         case 124: // Right expands or enters the first visible child
             guard !extending, let current else { return false }
@@ -1019,37 +945,36 @@ struct RecentCommitsView: View {
     }
 
     private func requestMoreIfNeeded(after id: String) {
-        guard hasMoreCommits, !isLoadingMore, requestedLastCommit != id else { return }
+        guard requestedLastCommit != id else { return }
         if loadMore() { requestedLastCommit = id }
     }
 
     /// Navigate only real Git commits. Worktree and Stash pseudo nodes never form edges.
     static func navigationTarget(
         commits: [Commit], current: Commit, parent: Bool, alternate: Bool,
-        layout: CommitGraphLayout? = nil
+        layout: CommitGraphLayout
     ) -> Commit? {
         guard current.stash == nil, current.worktree == nil else { return nil }
-        let real = commits.filter { $0.stash == nil && $0.worktree == nil }
         if parent {
             let index = alternate ? 1 : 0
             guard current.parentHashes.indices.contains(index) else { return nil }
-            return real.first { $0.hash == current.parentHashes[index] }
+            return commits.first {
+                $0.stash == nil && $0.worktree == nil && $0.hash == current.parentHashes[index]
+            }
         }
-        let layout = layout ?? CommitGraphLayout(commits: commits)
-        let lanes = Dictionary(uniqueKeysWithValues: zip(commits, layout.rows).compactMap {
-            commit, row -> (String, Int)? in
-            commit.stash == nil && commit.worktree == nil ? (commit.hash, row.node.lane) : nil
-        })
-        let positions = Dictionary(uniqueKeysWithValues: real.enumerated().map { ($0.element.hash, $0.offset) })
-        let lane = lanes[current.hash]
-        let descendants = real.filter { $0.parentHashes.contains(current.hash) }
-        let ordered = descendants.sorted {
-            let left = lanes[$0.hash] == lane ? 0 : 1
-            let right = lanes[$1.hash] == lane ? 0 : 1
-            if left != right { return left < right }
-            return (positions[$0.hash] ?? 0) < (positions[$1.hash] ?? 0)
+        let lane = commits.firstIndex {
+            $0.stash == nil && $0.worktree == nil && $0.hash == current.hash
+        }.map { layout.rows[$0].node.lane }
+        // Preserve the existing history order within each group; only direct
+        // children on the current path take priority over other children.
+        var sameLane: [Commit] = []
+        var otherLanes: [Commit] = []
+        for (commit, row) in zip(commits, layout.rows)
+            where commit.stash == nil && commit.worktree == nil && commit.parentHashes.contains(current.hash) {
+            if row.node.lane == lane { sameLane.append(commit) }
+            else { otherLanes.append(commit) }
         }
-        return ordered.dropFirst(alternate ? 1 : 0).first
+        return (sameLane + otherLanes).dropFirst(alternate ? 1 : 0).first
     }
 
     private func selectAndToggle(_ commit: Commit) {
@@ -1315,13 +1240,14 @@ struct RecentCommitsView: View {
         if selected.count == selection.ids.count {
             let hashes = selected.map(\.hash)
             let allOrdinary = selected.allSatisfy { $0.parentHashes.count <= 1 }
+            let parents = commitParents
             let canDrop = !GitStatusModel.historyRewriteTargets(
                 selected: hashes, kind: .drop, head: headOID, root: repoRoot,
-                worktrees: worktreeLocations, parents: commitParents
+                worktrees: worktreeLocations, parents: parents
             ).isEmpty
             let canSquash = !GitStatusModel.historyRewriteTargets(
                 selected: hashes, kind: .squash, head: headOID, root: repoRoot,
-                worktrees: worktreeLocations, parents: commitParents
+                worktrees: worktreeLocations, parents: parents
             ).isEmpty
             Button(String(localized: "Copy Hashes", table: "Git")) {
                 copy(hashes.joined(separator: "\n"))

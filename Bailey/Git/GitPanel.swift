@@ -1957,7 +1957,6 @@ struct GitPanel: View {
                             viewMode: settings.gitViewMode,
                             fontScale: panelFontScale,
                             hasMoreCommits: model.hasMoreRecentCommits,
-                            isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
                             openDiff: { commit, file in
                                 guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
@@ -2002,10 +2001,7 @@ struct GitPanel: View {
                                 presentStashDialog(stash, action: action)
                             },
                             openWorktreeDiff: { worktree, entry, staged in
-                                guard let project, manager.selectedProject === project,
-                                      let context = project.panelContext,
-                                      project.matchesPanelTarget(context.identity),
-                                      model.matchesPanelTarget(context.identity),
+                                guard hasCurrentPanelTarget,
                                       model.canBrowse(graphTarget),
                                       model.graphCommits.contains(where: {
                                           $0.worktree?.path == worktree.path
@@ -2021,7 +2017,7 @@ struct GitPanel: View {
                             },
                             canActOnWorktrees: !model.isBusy && model.hasCurrentWorktrees
                                 && model.canUseCurrentReferences,
-                            canRevealWorktreeInFinder: model.actionTarget().scope == "local",
+                            canRevealWorktreeInFinder: graphTarget.scope == "local",
                             worktreeAction: { location, action in
                                 presentWorktreeAction(location, action: action)
                             },
@@ -2050,15 +2046,6 @@ struct GitPanel: View {
             .padding(.bottom, 8)
             .frame(width: geometry.size.width, alignment: .leading)
                 }
-            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) {
-                oldOffset, newOffset in
-                if GitGraphScrollLog.enabled {
-                    GitGraphScrollLog.record(
-                        "scroll-offset", owner: graphKeyboardOwner,
-                        detail: "previous=\(oldOffset) current=\(newOffset)"
-                    )
-                }
-            }
             .background {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGitChangeKey,
                                  onFocusChanged: { focused in
@@ -2096,10 +2083,6 @@ struct GitPanel: View {
                     .focusedValue(\.baileyPathActions, focusedChangePathActions)
             }
             .onAppear {
-                GitGraphScrollLog.record(
-                    "panel-appear", owner: graphKeyboardOwner,
-                    detail: "active=\(isGitActive) target=\(hasCurrentPanelTarget)"
-                )
                 focusGitChanges()
                 revealActiveChange()
             }
@@ -2107,9 +2090,6 @@ struct GitPanel: View {
                 revealActiveChange()
             }
             .onChange(of: isGitActive) { _, active in
-                GitGraphScrollLog.record(
-                    "panel-active", owner: graphKeyboardOwner, detail: "active=\(active)"
-                )
                 if active {
                     focusGitChanges()
                     revealActiveChange()
@@ -2162,7 +2142,6 @@ struct GitPanel: View {
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
                 notification in
                 if (notification.object as? NSWindow) === keyboardOwner.view?.window {
-                    GitGraphScrollLog.record("window-became-key", owner: graphKeyboardOwner)
                     focusGitChanges()
                 }
             }
@@ -2173,13 +2152,6 @@ struct GitPanel: View {
     private var navigableChanges: [VisibleChange] { changesDisplay.navigation }
 
     private func focusGitChanges() {
-        if GitGraphScrollLog.enabled {
-            GitGraphScrollLog.record(
-                "focus-request", owner: graphKeyboardOwner,
-                detail: "region=\(lastKeyboardRegion) active=\(isGitActive) "
-                    + "target=\(hasCurrentPanelTarget) changes=\(navigableChanges.count)"
-            )
-        }
         guard isGitActive, hasCurrentPanelTarget else { return }
         let rows = navigableChanges
         if !rows.isEmpty, !rows.contains(where: { selection(for: $0) == selectedChange }) {
@@ -2194,12 +2166,10 @@ struct GitPanel: View {
         guard !manager.isCommandPaletteVisible,
               let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
               window.isKeyWindow, NSApp.isActive, window.attachedSheet == nil else {
-            GitGraphScrollLog.record("focus-deferred", owner: graphKeyboardOwner)
             return
         }
         // An active native input always owns its field editor.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
-            GitGraphScrollLog.record("focus-native-input", owner: graphKeyboardOwner)
             return
         }
         if (lastKeyboardRegion == .graph || rows.isEmpty),
@@ -2208,7 +2178,6 @@ struct GitPanel: View {
         } else if !rows.isEmpty {
             keyboardOwner.focus()
         }
-        GitGraphScrollLog.record("focus-finished", owner: graphKeyboardOwner)
     }
 
     /// Dock activation changes the selected SCM resource, not its native keyboard owner.

@@ -4374,7 +4374,7 @@ final class GitStatusModel {
             }
         }
         let logArguments = recentCommitLogArguments(
-            limit: recentCommitLimit, hasHead: result.hasHead, worktrees: result.worktreeLocations ?? []
+            limit: recentCommitLimit, worktrees: result.worktreeLocations ?? []
         )
         if kind == .historyOnly {
             guard result.worktreeLocations != nil else { return .repository(result, presentation) }
@@ -4967,12 +4967,15 @@ final class GitStatusModel {
     }
 
     private nonisolated static func recentCommitLogArguments(
-        limit: Int, hasHead: Bool, worktrees: [WorktreeLocation]
+        limit: Int, worktrees: [WorktreeLocation]
     ) -> [String] {
+        // Every valid checkout is already represented by its full OID.
+        // Passing the current symbolic HEAD first changes Git's equal-date
+        // traversal order when viewing a different detached worktree.
         let heads = Set(worktrees.filter { !$0.isPrunable }.compactMap(\.headOID)).sorted()
         return [
             "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags",
-        ] + (hasHead ? ["HEAD"] : []) + heads + [
+        ] + heads + [
             "--date-order", "--diff-merges=first-parent", "--decorate=full",
             "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
             "--name-status", "-z",

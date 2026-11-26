@@ -102,8 +102,9 @@ SSH 核心与详情分批读取，失败或缺帧不逐命令重新取整份快�
 Git Changes 与 Git Graph 共享一条垂直滚动区域。
 新增提交、历史分页、Ref 或 Stash 变化时，滚动内容高度、轨道连线和点击区域必须同步更新，
 不能依赖切换 Project 或重建整棵 Graph 恢复显示；已有提交的展开状态和原生键盘焦点应保留。
-Git Graph 的拓扑仅随完整提交、引用、Stash 与 Worktree 输入变化重算；
-聚焦、选区、字号、主题和侧栏尺寸变化复用原有拓扑，仅更新其展示。
+Git Graph 的布局仅随有序节点、节点类型或父关系变化重算；
+检出分支、引用标签、聚焦、选区、字号、主题和侧栏尺寸不改变这些输入时复用原有轨道与色位。
+HEAD 的可证实祖先归属独立更新。
 历史组合和已知远端可达关系复用各自输入对应的派生结果；切换仓库、机器或历史／引用后
 不得继续复用旧结果。Changes 的目录索引、文件状态及父目录状态随 Git 快照在后台准备；
 缓存恢复复用索引，仍需重新核验仓库才能执行写操作。展开／折叠只更新可见行。
@@ -159,26 +160,7 @@ SSH Remote 的网页地址一般使用 HTTPS；自部署实例的特殊域名可
 仓库的多个 Git Remotes 由 Git 原生配置管理，不在 Git Panel 增加管理 Sheet。
 设置仅保留自托管域名映射，见[设置与配置](settings.md#git-设置与托管平台)。
 
-### Git Graph 滚动诊断
-
-日志默认关闭。排查重启后方向键焦点离开视野的问题时，先开启日志，
-正常退出并重新启动 App，再复现故障。以 Bailey Dev 为例：
-
-```sh
-defaults write chiimagnus.bailey.dev GitGraphScrollLogging -bool YES
-```
-
-复现后导出日志，完成诊断再关闭开关：
-
-```sh
-log show --last 30m --style compact --predicate 'subsystem == "chiimagnus.bailey" AND category == "GitGraphScroll"' > /tmp/bailey-gitgraph-scroll.log
-defaults delete chiimagnus.bailey.dev GitGraphScrollLogging
-```
-
-需要实时查看时用相同过滤条件运行 `log stream`。
-正式 App 的偏好域为 `chiimagnus.bailey`，独立测试版使用自己的 Bundle ID。
-日志包含窗口恢复／激活、原生第一响应者、键盘按键、匿名行标识与索引、滚动请求、
-滚动偏移和视口尺寸；不记录仓库路径、文件名或提交内容。诊断不会改变滚动行为。
+### 历史顺序与轨道
 
 图谱按 `git --date-order` 读取本地分支、远端跟踪分支、Tag，
 以及当前目录和所有有效工作树检出位置可达的提交。工作树即使没有关联分支，或没有未提交改动，
@@ -187,13 +169,15 @@ defaults delete chiimagnus.bailey.dev GitGraphScrollLogging
 每条提交保留完整父关系和有类型的引用（包括名称中带逗号的分支与 Tag）；
 Merge 的文件列表和历史 Diff 仍以第一父提交为基准。
 
-首次加载和分页共用工作树列表中的完整提交 ID，不按工作树分别拼接历史，
+首次加载和分页共用排序、去重后的工作树完整提交 ID，不额外优先传入当前符号 HEAD；
+同秒独立 Worktree 提交不因当前查看的目录改变遍历顺序。不按工作树分别拼接历史，
 也不把全部 Reflog 或 Stash 内部提交当作普通历史。
 当前工作树尚无首次提交时，其他工作树的历史仍正常读取。工作树列表读取失败时保留旧历史并报告错误；
 分页发现工作树新增、移除或检出位置变化时，重新读取完整快照，使提交、检出标记和文件状态保持一致。
 
-连线只来自已加载的真实父关系。当前 HEAD 可见时，其第一父路径优先占左侧主车道；
-其它路径按实际拓扑连接，不为未加载的父提交补假线。颜色属于图谱路径，不按分支名称固定；
+连线只来自已加载的真实父关系。按历史顺序分配第一父路径、空闲轨道和色位，
+不强制当前 HEAD 占左侧。相同有序提交及父关系不因切换分支而改形或改色；
+不为未加载的父提交补假线。颜色属于图谱路径，不按分支名称固定；
 12 个路径色位由当前 Ghostty 主题生成，普通与亮色槽重复时派生不同颜色，确保线条可见、标签图标可辨。
 切换明暗主题只改变配色，不重新分配车道或改变拓扑；合并后保留路径颜色；
 连线避开其它提交节点，空闲车道可复用颜色，超过 12 条活跃路径允许重复色位。
@@ -558,7 +542,8 @@ Worktree 历史回归覆盖没有分支引用的独立提交、干净与有改�
 `GitExecutionTests` 另检查精简 GUI PATH、shell 启动噪声、Hook、超时与失败；
 Push 通过临时接收仓库核对真实提交，涉及 LFS 时还检查接收端对象。
 
-`CommitGraphLayoutTests` 负责真实拓扑、颜色与字号／宽度／车道数的极值组合；
+`CommitGraphLayoutTests` 验证拓扑、颜色、检出标记变化时的几何复用与字号／宽度／车道数极值；
+`GitStatusModelTests` 验证真实分支切换、分页及同秒 detached Worktree 历史顺序；
 `GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、
 `GitGraphWorktreePresentationTests` 分别验证颜色及对比度、引用分组、Worktree 路径与状态。
 `GitGraphUITests` 和 `GitGraphGeometryUITests` 只保留真实 App 的行命中、Dock 拖动、横滚、深浅像素、

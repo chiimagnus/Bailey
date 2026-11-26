@@ -592,31 +592,39 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.canUseCurrentHistory
             && model.recentCommits.contains(where: { $0.hash == base }) }
         let graph = model.graphCommits
+        let layout = CommitGraphLayout(commits: graph)
         let mergeCommit = try XCTUnwrap(graph.first { $0.hash == merge && $0.stash == nil })
         let baseCommit = try XCTUnwrap(graph.first { $0.hash == base && $0.stash == nil })
         XCTAssertEqual(mergeCommit.parentHashes, [main, feature])
         XCTAssertEqual(RecentCommitsView.navigationTarget(
-            commits: graph, current: mergeCommit, parent: true, alternate: false
+            commits: graph, current: mergeCommit, parent: true, alternate: false, layout: layout
         )?.hash, main)
         XCTAssertEqual(RecentCommitsView.navigationTarget(
-            commits: graph, current: mergeCommit, parent: true, alternate: true
+            commits: graph, current: mergeCommit, parent: true, alternate: true, layout: layout
         )?.hash, feature)
         let missingFirstParent = graph.filter { $0.hash != main }
+        let missingLayout = CommitGraphLayout(commits: missingFirstParent)
         XCTAssertNil(RecentCommitsView.navigationTarget(
-            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: false
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: false, layout: missingLayout
         ), "Missing first parent must not silently navigate to the second parent")
         XCTAssertEqual(RecentCommitsView.navigationTarget(
-            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: true
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: true, layout: missingLayout
         )?.hash, feature)
         XCTAssertNil(RecentCommitsView.navigationTarget(
-            commits: graph, current: baseCommit, parent: true, alternate: false
+            commits: graph, current: baseCommit, parent: true, alternate: false, layout: layout
         ))
         let child = RecentCommitsView.navigationTarget(
-            commits: graph, current: baseCommit, parent: false, alternate: false
+            commits: graph, current: baseCommit, parent: false, alternate: false, layout: layout
         )
         let alternative = RecentCommitsView.navigationTarget(
-            commits: graph, current: baseCommit, parent: false, alternate: true
+            commits: graph, current: baseCommit, parent: false, alternate: true, layout: layout
         )
+        let baseLane = layout.rows[try XCTUnwrap(graph.firstIndex { $0.hash == base })].node.lane
+        let childrenInOrder = zip(graph, layout.rows).filter {
+            $0.0.parentHashes.contains(base) && $0.0.stash == nil && $0.0.worktree == nil
+        }
+        let preferred = childrenInOrder.first { $0.1.node.lane == baseLane } ?? childrenInOrder.first
+        XCTAssertEqual(child?.hash, preferred?.0.hash)
         XCTAssertEqual(Set([child?.hash, alternative?.hash].compactMap { $0 }), [main, feature],
                        "Normal and alternative child navigation must reach both real branches")
         XCTAssertEqual(git(["rev-parse", "HEAD"]), merge)
@@ -3750,6 +3758,151 @@ final class GitStatusModelTests: XCTestCase {
         )
         XCTAssertEqual(CommitGraphLayout(commits: model.graphCommits).knownHeadHistory.count,
                        4, "Both parents and the root must remain reachable from HEAD")
+    }
+
+    func testRealBranchSwitchPreservesGraphOrderLanesAndColors() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Bailey-GraphSwitch-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        @discardableResult
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.runData(args, in: root.path, environment: [
+                "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
+                "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
+            ])
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Graph Switch"])
+        try git(["config", "user.email", "graph@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try git(["commit", "--allow-empty", "-qm", "root"])
+        let base = try git(["rev-parse", "HEAD"])
+        for name in ["main", "feature", "zebra"] {
+            if name != "main" { try git(["switch", "-qc", name, base]) }
+            for index in 0..<12 {
+                try git(["commit", "--allow-empty", "-qm", "\(name)-\(index)"])
+            }
+        }
+        try git(["tag", "-a", "v1", "-m", "tag", base])
+        try git(["update-ref", "refs/remotes/origin/main", "main"])
+        try git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+        let refs = try git(["show-ref"])
+        let model = GitStatusModel()
+        try git(["switch", "-q", "main"])
+        model.sync(root: root.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertNil(model.detailError)
+        let initial = model.graphCommits
+        XCTAssertEqual(initial.count, 30)
+        let cache = CommitGraphLayoutCache()
+        let first = cache.layout(for: initial)
+        for branch in ["feature", "zebra", "main"] {
+            try git(["switch", "-q", branch])
+            model.refresh()
+            try await wait { !model.isRefreshing && model.branch == branch }
+            XCTAssertNil(model.detailError)
+            let rows = model.graphCommits
+            let layout = cache.layout(for: rows)
+            XCTAssertEqual(rows.map(\.hash), initial.map(\.hash), "Checkout must not reorder the first page")
+            XCTAssertEqual(layout.rows.map(\.node), first.rows.map(\.node))
+            XCTAssertEqual(layout.rows.map(\.links), first.rows.map(\.links))
+            XCTAssertEqual(layout.rows.map(\.bottomRails), first.rows.map(\.bottomRails))
+            let head = try git(["rev-parse", "HEAD"])
+            XCTAssertEqual(model.headOID, head)
+            XCTAssertTrue(layout.knownHeadHistory.contains(head))
+            XCTAssertTrue(rows.first { $0.hash == head }?.references.contains(
+                .init(kind: .currentBranch, name: branch)) == true)
+            XCTAssertEqual(try git(["show-ref"]), refs)
+            XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+        }
+        XCTAssertTrue(model.loadMoreCommits())
+        try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+        let full = model.graphCommits
+        XCTAssertEqual(full.count, 37)
+        XCTAssertEqual(Array(full.prefix(30)).map(\.hash), initial.map(\.hash))
+        let expanded = cache.layout(for: full)
+        XCTAssertEqual(Array(expanded.rows.prefix(30)).map(\.node), first.rows.map(\.node))
+        for branch in ["feature", "zebra", "main"] {
+            try git(["switch", "-q", branch])
+            model.refresh()
+            try await wait { !model.isRefreshing && model.branch == branch }
+            XCTAssertEqual(model.graphCommits.map(\.hash), full.map(\.hash))
+            let layout = cache.layout(for: model.graphCommits)
+            XCTAssertEqual(layout.rows.map(\.node), expanded.rows.map(\.node))
+            XCTAssertEqual(layout.rows.map(\.links), expanded.rows.map(\.links))
+        }
+        try git(["switch", "-q", "--detach", "feature~2"])
+        let detached = try git(["rev-parse", "HEAD"])
+        model.refresh()
+        try await wait { !model.isRefreshing && model.headOID == detached }
+        XCTAssertEqual(model.graphCommits.map(\.hash), full.map(\.hash))
+        let layout = cache.layout(for: model.graphCommits)
+        XCTAssertEqual(layout.rows.map(\.node), expanded.rows.map(\.node))
+        XCTAssertEqual(layout.rows.map(\.links), expanded.rows.map(\.links))
+        XCTAssertTrue(model.graphCommits.first { $0.hash == detached }?.references.contains(
+            .init(kind: .detachedHead, name: "HEAD")) == true)
+        XCTAssertEqual(layout.knownHeadHistory, Set(try git(["rev-list", "HEAD"]).split(separator: "\n").map(String.init)))
+        XCTAssertEqual(try git(["show-ref"]), refs)
+    }
+
+    func testEqualDateDetachedWorktreesPreserveHistoryOrderAcrossCheckouts() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent("Bailey-GraphWorktrees-" + UUID().uuidString)
+        let main = fixture.appendingPathComponent("main")
+        let left = fixture.appendingPathComponent("detached-left")
+        let right = fixture.appendingPathComponent("detached-right")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        @discardableResult
+        func git(_ args: [String], at root: URL = main) throws -> String {
+            let result = GitCommandExecution.runData(args, in: root.path, environment: [
+                "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
+                "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
+            ])
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Graph Worktrees"])
+        try git(["config", "user.email", "graph@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try git(["commit", "--allow-empty", "-qm", "base"])
+        let base = try git(["rev-parse", "HEAD"])
+        for root in [left, right] {
+            try git(["worktree", "add", "-q", "--detach", root.path, base])
+            for index in 0..<4 {
+                try git(["commit", "--allow-empty", "-qm", "\(root.lastPathComponent)-\(index)"], at: root)
+            }
+            XCTAssertTrue(try git(["for-each-ref", "--contains", "HEAD"], at: root).isEmpty)
+        }
+        let refs = try git(["show-ref"])
+        for remote in [false, true] {
+            let backend: any WorkspaceBackend = remote
+                ? DiscardRemoteWorkspaceFixture() : LocalWorkspaceBackend.shared
+            let model = GitStatusModel()
+            let cache = CommitGraphLayoutCache()
+            model.sync(root: main.path, backend: backend, scope: remote ? "ssh:graph-order" : "local")
+            try await wait { model.hasResolvedStatus && !model.isRefreshing }
+            XCTAssertNil(model.detailError)
+            let original = model.graphCommits
+            XCTAssertEqual(original.count, 9)
+            XCTAssertEqual(Set(original.map(\.date)).count, 1)
+            let first = cache.layout(for: original)
+            for root in [left, right, main] {
+                let head = try git(["rev-parse", "HEAD"], at: root)
+                model.sync(root: root.path, backend: backend, scope: remote ? "ssh:graph-order" : "local")
+                try await wait { model.hasResolvedStatus && !model.isRefreshing && model.headOID == head }
+                XCTAssertNil(model.detailError)
+                let rows = model.graphCommits
+                let layout = cache.layout(for: rows)
+                XCTAssertEqual(rows.map(\.hash), original.map(\.hash), "Equal-date independent tips must not favor the current checkout")
+                XCTAssertEqual(layout.rows.map(\.node), first.rows.map(\.node))
+                XCTAssertEqual(layout.rows.map(\.links), first.rows.map(\.links))
+                XCTAssertEqual(layout.knownHeadHistory, Set(try git(["rev-list", "HEAD"], at: root).split(separator: "\n").map(String.init)))
+                XCTAssertEqual(try git(["show-ref"], at: root), refs)
+            }
+        }
     }
 
     func testGitGraphUsesCommitDateOrderWithoutBreakingMergeParents() async throws {

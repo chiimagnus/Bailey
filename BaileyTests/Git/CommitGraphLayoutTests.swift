@@ -140,26 +140,25 @@ final class CommitGraphLayoutTests: XCTestCase {
                        "No loaded HEAD means a subdued neutral node, not an arbitrary branch color")
     }
 
-    func testCurrentCheckoutOwnsLeftmostLaneEvenWhenFeatureTipIsNewer() {
-        let commits = [
-            commit("feature-newer", parents: ["feature-older"]),
-            commit("feature-older", parents: ["base"]),
-            commit("main-head", parents: ["main-older"], current: true),
-            commit("main-older", parents: ["base"]),
-            commit("base"),
-        ]
-        let graph = CommitGraphLayout(commits: commits)
-        XCTAssertEqual(graph.rows[2].node.lane, 0,
-                       "The active checkout must own the main visual rail")
-        XCTAssertEqual(graph.rows[3].node.lane, 0)
-        XCTAssertEqual(graph.rows[0].node.lane, 1,
-                       "The newer side branch must not displace the active main rail")
-        XCTAssertEqual(graph.rows[1].node.lane, 1)
-        XCTAssertEqual(graph.rows[4].node.lane, 0)
-        assertConnected(graph, from: 0, to: 1, color: graph.rows[0].node.color)
-        assertConnected(graph, from: 1, to: 4, color: graph.rows[0].node.color)
-        assertConnected(graph, from: 2, to: 3, color: graph.rows[2].node.color)
-        assertConnected(graph, from: 3, to: 4, color: graph.rows[2].node.color)
+    func testCheckoutDoesNotReassignExistingHistoryPaths() {
+        let hashes = ["feature-newer", "feature-older", "main-head", "main-older", "base"]
+        let parents = [["feature-older"], ["base"], ["main-older"], ["base"], []]
+        func history(head: Int?) -> [GitStatusModel.RecentCommit] {
+            hashes.indices.map { commit(hashes[$0], parents: parents[$0], current: head == $0) }
+        }
+        let original = CommitGraphLayout(commits: history(head: nil))
+        XCTAssertEqual(original.rows.map(\.node.lane), [0, 0, 1, 1, 0])
+        for head in hashes.indices {
+            let graph = CommitGraphLayout(commits: history(head: head))
+            XCTAssertEqual(graph.laneCount, original.laneCount)
+            XCTAssertEqual(graph.rows.map(\.node), original.rows.map(\.node),
+                           "HEAD decoration must not assign different lanes or colors")
+            for index in hashes.indices {
+                XCTAssertEqual(graph.rows[index].links, original.rows[index].links)
+                XCTAssertEqual(graph.rows[index].bottomRails, original.rows[index].bottomRails)
+            }
+            XCTAssertTrue(graph.knownHeadHistory.contains(hashes[head]))
+        }
     }
 
     func testVisibleDirtyWorktreesExtendTheirHeadRailWithoutSyntheticBranches() throws {
@@ -360,13 +359,12 @@ final class CommitGraphLayoutTests: XCTestCase {
             commit("checked-out", parents: ["common"], current: true),
             commit("common"),
         ])
-        XCTAssertEqual(graph.rows[1].node.color, 0,
-                       "The active HEAD gets the primary palette color regardless of date order")
-        XCTAssertEqual(graph.rows[1].node.lane, 0)
+        XCTAssertEqual(graph.rows[0].node.color, 0)
+        XCTAssertEqual(graph.rows[0].node.lane, 0)
         XCTAssertNotEqual(graph.rows[0].node.color, graph.rows[1].node.color)
-        XCTAssertTrue(graph.rows[0].links.contains(.outgoing(.init(
-            lane: graph.rows[0].node.lane, color: graph.rows[0].node.color
-        ))))
+        assertConnected(graph, from: 0, to: 2, color: graph.rows[0].node.color)
+        assertConnected(graph, from: 1, to: 2, color: graph.rows[1].node.color)
+        XCTAssertEqual(graph.knownHeadHistory, Set(["checked-out", "common"]))
     }
 
     func testPaginationPreservesOpenTipColorsAndLanes() {
@@ -581,7 +579,7 @@ final class CommitGraphLayoutTests: XCTestCase {
                      reachability.sorted()[15]))
     }
 
-    func testCachedGraphLayoutReusesUnchangedTopologyAndRecomputesChangedHEAD() {
+    func testCachedGraphLayoutReusesGeometryWhenHEADAndDecorationsChange() {
         let cache = CommitGraphLayoutCache()
         let original = [
             commit("head", parents: ["base"], current: true),
@@ -601,9 +599,36 @@ final class CommitGraphLayoutTests: XCTestCase {
         ]
         let refreshed = cache.layout(for: updated)
         XCTAssertEqual(refreshed.knownHeadHistory, Set(["side", "base"]))
-        XCTAssertEqual(refreshed.rows[1].node.lane, 0)
+        XCTAssertEqual(refreshed.rows.map(\.node), first.rows.map(\.node))
+        XCTAssertEqual(first.rows.withUnsafeBufferPointer { $0.baseAddress },
+                       refreshed.rows.withUnsafeBufferPointer { $0.baseAddress },
+                       "Switching HEAD must reuse the existing rail geometry")
         XCTAssertEqual(refreshed.rows.withUnsafeBufferPointer { $0.baseAddress },
                        cache.layout(for: updated).rows.withUnsafeBufferPointer { $0.baseAddress })
+        let detached = GitStatusModel.RecentCommit(
+            hash: "side", shortHash: "side", subject: "side", author: "Test",
+            date: .distantPast, parentHashes: ["base"],
+            references: [.init(kind: .detachedHead, name: "HEAD"), .init(kind: .tag, name: "v1")], files: []
+        )
+        let annotated = [updated[0], detached, updated[2]]
+        let reusedAnnotations = cache.layout(for: annotated)
+        XCTAssertEqual(refreshed.rows.withUnsafeBufferPointer { $0.baseAddress },
+                       reusedAnnotations.rows.withUnsafeBufferPointer { $0.baseAddress })
+        XCTAssertEqual(reusedAnnotations.knownHeadHistory, Set(["side", "base"]))
+
+        // Parent or order changes must invalidate the cached geometry.
+        let changed = [commit("head", parents: ["side"]), detached, updated[2]]
+        let rewritten = cache.layout(for: changed)
+        let fresh = CommitGraphLayout(commits: changed)
+        XCTAssertEqual(rewritten.rows.map(\.node), fresh.rows.map(\.node))
+        XCTAssertEqual(rewritten.rows.map(\.links), fresh.rows.map(\.links))
+        XCTAssertNotEqual(reusedAnnotations.rows.withUnsafeBufferPointer { $0.baseAddress },
+                          rewritten.rows.withUnsafeBufferPointer { $0.baseAddress })
+        let reordered = [detached, updated[0], updated[2]]
+        let reorderedLayout = cache.layout(for: reordered)
+        XCTAssertEqual(reorderedLayout.rows.map(\.node), CommitGraphLayout(commits: reordered).rows.map(\.node))
+        XCTAssertNotEqual(rewritten.rows.withUnsafeBufferPointer { $0.baseAddress },
+                          reorderedLayout.rows.withUnsafeBufferPointer { $0.baseAddress })
     }
 
     func testThousandRowsWithThirtyParallelRefsDoNotCreatePhantomConnections() {
