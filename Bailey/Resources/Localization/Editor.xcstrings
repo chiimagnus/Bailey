@@ -941,16 +941,6 @@
         }
       }
     },
-    "Select Row" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择此行"
-          }
-        }
-      }
-    },
     "Insert Row After" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1111,26 +1101,6 @@
         }
       }
     },
-    "Edit Full Field…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "编辑完整字段…"
-          }
-        }
-      }
-    },
-    "View Full Field…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "查看完整字段…"
-          }
-        }
-      }
-    },
     "Full Field" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1211,42 +1181,32 @@
         }
       }
     },
-    "Fill Selection…" : {
+    "Fill Selected Cells…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "填充选区…"
+            "value" : "批量填充单元格…"
           }
         }
       }
     },
-    "Clear Selected Fields" : {
+    "Fill Selected Cells" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清空所选字段"
+            "value" : "批量填充单元格"
           }
         }
       }
     },
-    "Fill Selected Fields" : {
+    "Set every selected cell to the same value." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "填充所选字段"
-          }
-        }
-      }
-    },
-    "Only selected visible fields will change." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "只修改选中的可见字段。"
+            "value" : "将选中的单元格全部设为同一个值。"
           }
         }
       }
@@ -1367,16 +1327,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "统计范围"
-          }
-        }
-      }
-    },
-    "Selected Visible Fields" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "所选可见字段"
           }
         }
       }
@@ -1507,16 +1457,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查找可见空字段"
-          }
-        }
-      }
-    },
-    "Selection Statistics…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选区统计…"
           }
         }
       }

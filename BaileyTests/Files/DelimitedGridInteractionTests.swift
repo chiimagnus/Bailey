@@ -405,6 +405,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
             (String(repeating: "字", count: 18_000), false, false),
             ("e\u{301}\rA\nB\r\nC", true, false),
             ("read-only\r\ncomplete", true, true),
+            ("read-only short", false, true),
         ] {
             let raw = multiline ? "\"\(value)\"" : value
             let original = "Name,Value\r\nItem,\(raw)\n" + (readOnly ? "Bad,\"open" : "")
@@ -427,7 +428,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
             let grid = try await self.grid(in: host, showing: "Item")
             grid.table.onEdit(.init(row: 0, column: 1))
 
-            if !multiline && value.utf16.count <= 4096 {
+            if !readOnly && !multiline && value.utf16.count <= 4096 {
                 let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
                 XCTAssertNil(csvFullFieldEditor())
                 XCTAssertEqual((field.currentEditor() as? NSTextView)?.string, value)
@@ -625,7 +626,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
 
-    func testReadOnlyGridOffersSelectionStatisticsWithoutAnyEdit() async throws {
+    func testReadOnlyGridOffersColumnStatisticsWithoutAnyEdit() async throws {
         let original = "Name,Value\r\nItem,\nOther,7\nThird,\"\"\nBad,\"open"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         try Data(original.utf8).write(to: url)
@@ -633,7 +634,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await file.waitForText()
         defer { file.retireContent() }
-        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 300, height: 195),
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 360, height: 360),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
@@ -649,10 +650,16 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let click = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
                                                     timestamp: 0, windowNumber: window.windowNumber,
                                                     context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
-        let menu = try XCTUnwrap(grid.table.menu(for: click))
-        let stats = try XCTUnwrap(menu.item(withTitle: String(localized: "Selection Statistics…", table: "Editor")))
+        XCTAssertNil(grid.table.menu(for: click), "A read-only body has no editing menu")
+        let header = try XCTUnwrap(grid.table.headerView)
+        let rect = header.headerRect(ofColumn: 1)
+        let headerPoint = header.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+        let headerClick = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: headerPoint, modifierFlags: [],
+                                                          timestamp: 0, windowNumber: window.windowNumber,
+                                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        let menu = try XCTUnwrap(header.menu(for: headerClick))
+        let stats = try XCTUnwrap(menu.item(withTitle: String(localized: "Column Statistics…", table: "Editor")))
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(stats.action), to: stats.target, from: stats))
-        XCTAssertNil(menu.item(withTitle: String(localized: "Clear Selected Fields", table: "Editor")))
 
         let pid = ProcessInfo.processInfo.processIdentifier
         let access = await Task.detached {

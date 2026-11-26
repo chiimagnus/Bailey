@@ -274,7 +274,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
 
     @concurrent func find(
         _ query: String, source: String, index: DelimitedTableIndex, columnCount: Int, empty: Bool = false,
-        columns: IndexSet? = nil, selection: Selection? = nil
+        columns: IndexSet? = nil
     ) async throws -> [Cell] {
         guard empty || !query.isEmpty else { return [] }
         let text = source as NSString
@@ -284,7 +284,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             let fields = index.fields(in: index.records[original])
             for (column, field) in fields.prefix(columnCount).enumerated() {
                 let cell = Cell(row: row, column: column)
-                guard columns?.contains(column) != false, selection?.contains(cell) != false else { continue }
+                guard columns?.contains(column) != false else { continue }
                 let found = empty ? field.contentRange(in: text).length == 0
                     : Self.firstMatch(query, in: field.value(in: text) as NSString) != nil
                 if found { matches.append(cell) }

@@ -33,6 +33,16 @@
 - 扩展验证：401e6259 三分隔符 × 九种编码 × 十五种列变换，405 组真实 FileTab 编辑、保存、Undo 再保存和原字节比对；b2a39b51 挂载统计面板从空值谓词切换到普通查询，清空查询不恢复旧谓词。新增定点 3/3 及扩大宿主 176 通过/1 个非 CSV 的 JPEG 长时样本跳过，零失败；真实 SSH 3/3。日志 `/tmp/bailey-csv-audit-expanded.dZRBsvd3`、`/tmp/bailey-csv-audit-expanded-full.I56TByip`。
 - 清理核对：旧测试提交旁路、单独 Undo、独立表格持久化、双轨统计/Find 与按格百万字典均不在现行链。菜单可见许可与实际执行准入分离，列变更候选解析、编码及磁盘版本校验有明确独立职责，不无条件拆除。
 
+## 2026-11-26 实际界面复验与交互收敛
+
+用户明确要求去除重复右键入口；当前需求以 idea、plan 和功能文档为准，以上早期审查保留历史证据。
+- 删除完整字段、选择此行、选区统计及清空字段的菜单与专属处理；仅多格可批量填充。只读字段改为双击／Return 查看，列统计及键盘清空沿原有链。
+- 修改前实际 App 点击批量填充、增删行、插列、移列、删列，保存与撤销字节回归通过（`/tmp/bailey-csv-context-ui-baseline.hDBbUoqD`）。
+- 修改后实际 App 排序／筛选／查找／复制、单格编辑／源码切换／Undo 及保存两个用例通过（`/tmp/bailey-csv-context-ui-green.kEycHglw`）。该轮另一用例未找到行号 AX 按钮；改为对准实际可见行号进行鼠标点击，非通过 AX action 代替点击。
+- 第二轮使用开发签名，真实列统计／空值导航／单次与全部替换，精简菜单／批量填充／行号选择／增删行列／两种 Delete 与 ⌘A 的保存和一次撤销，2/2 通过，零失败（`/tmp/bailey-csv-natural-ui.ZWRe5C3g`）。
+- CSV 核心宿主 53 项：52 项首次通过；列统计新增范围控件后旧窄高夹具未显示最后一项数值，三个断言失败。调整统计用例窗口尺寸后该项 1/1 通过，完整数值、主题与只读原字节均核对。日志 `/tmp/bailey-csv-natural-host.bZGsz0vR`、`/tmp/bailey-csv-natural-host-retest.Lq4b0sw0`。
+- 正式 Debug 构建与严格验签通过（`/tmp/bailey-csv-natural-build.1dKj554P`）；未重启正式 App。未穷举所有 GUI 组合、未重新测试真实 SSH，不改变 F-12 的 Open 与阶段 No-Go。
+
 ## 发现项
 
 ## 发现 F-02
