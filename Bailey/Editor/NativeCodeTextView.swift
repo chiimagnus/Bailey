@@ -717,10 +717,10 @@ class NativeCodeTextView: NSTextView {
     }
 
     private var gutterWidth: CGFloat {
-        let digitWidth = ("8" as NSString).size(withAttributes: [
-            .font: gutterNumberFont
-        ]).width
-        return max(35, ceil(CGFloat(String(lineIndex?.lineCount ?? 1).count) * digitWidth + 10))
+        let attributes: [NSAttributedString.Key: Any] = [.font: gutterNumberFont]
+        let digitWidth = (0...9).map { (String($0) as NSString).size(withAttributes: attributes).width }.max() ?? 0
+        let digits = String(lineIndex?.lineCount ?? 1).count
+        return ceil(CGFloat(digits) * digitWidth + 2 * NativeLineNumberGutter.horizontalPadding)
     }
 
     private func resetDocumentIndex(_ document: String) {
@@ -1201,7 +1201,8 @@ extension NSTextContentManager {
 @MainActor
 final class NativeLineNumberGutter: NSView {
     weak var editor: NativeCodeTextView?
-    var preferredWidth: CGFloat = 35
+    static let horizontalPadding: CGFloat = 6
+    var preferredWidth: CGFloat = 0
     var backgroundColor: NSColor = .textBackgroundColor {
         didSet { if backgroundColor != oldValue { needsDisplay = true } }
     }
@@ -1254,7 +1255,7 @@ final class NativeLineNumberGutter: NSView {
             let size = label.size()
             let y = centerY - size.height / 2
             if y + size.height >= rect.minY, y <= rect.maxY {
-                label.draw(at: NSPoint(x: bounds.maxX - size.width - 6, y: y))
+                label.draw(at: NSPoint(x: bounds.maxX - size.width - Self.horizontalPadding, y: y))
             }
         }
         if content.documentRange.isEmpty {
