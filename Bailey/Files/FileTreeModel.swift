@@ -227,14 +227,19 @@ final class FileTreeModel {
     }
 
     private nonisolated struct DirectoryListing: Sendable {
-        let entries: [WorkspaceEntry]
-        let children: [Item]
-        let symlinks: [String]
+        // Cold compact chains only retain their single-directory shape.
+        // File contents are enumerated again when a cold directory is opened.
+        var entries: [WorkspaceEntry]?
+        var children: [Item]
+        var symlinks: [String]
         let visibility: Visibility
+        var lastUsed: UInt64
 
-        init(entries: [WorkspaceEntry], directory: String, root: String, visibility: Visibility) {
+        init(entries: [WorkspaceEntry], directory: String, root: String,
+             visibility: Visibility, lastUsed: UInt64) {
             self.entries = entries
             self.visibility = visibility
+            self.lastUsed = lastUsed
             let prefix = directory.hasSuffix("/") ? directory : directory + "/"
             let relative = directory == root ? "" : String(directory.dropFirst(
                 root.count + (root.hasSuffix("/") ? 0 : 1))) + "/"
@@ -254,8 +259,24 @@ final class FileTreeModel {
             self.children = TreeDisplayModel.sortedChildren(children)
             self.symlinks = symlinks
         }
+
+        var singleDirectoryChild: Item? {
+            guard children.count == 1, let child = children.first, child.isDirectory else { return nil }
+            return child
+        }
+
+        mutating func discardEntries() {
+            entries = nil
+            if singleDirectoryChild == nil {
+                children = []
+                symlinks = []
+            }
+        }
     }
 
+    private nonisolated static let warmDirectoryLimit = 128
+    private nonisolated static let warmEntryBudget = 8_192
+    @ObservationIgnored private var cacheAccessTick: UInt64 = 0
     @ObservationIgnored private var cachedDirectories: [String: DirectoryListing] = [:]
     @ObservationIgnored private var projectionTask: Task<Projection?, Never>?
     @ObservationIgnored private var treeEpoch: UInt64 = 0
@@ -1510,11 +1531,14 @@ final class FileTreeModel {
             let directories = cachedDirectories
             let backend = self.backend
             let previousRows = items
+            cacheAccessTick &+= 1
+            let accessTick = cacheAccessTick
             let task = Task(priority: .userInitiated) {
                 await Self.project(
                     root: path, backend: backend, directories: directories,
                     expanded: expanded, draft: draft, renaming: renaming, visibility: visibility,
-                    refresh: needsRefresh, changed: changedDirectories, previousRows: previousRows
+                    refresh: needsRefresh, changed: changedDirectories, previousRows: previousRows,
+                    accessTick: accessTick
                 )
             }
             projectionTask = task
@@ -1634,7 +1658,7 @@ final class FileTreeModel {
     @concurrent private static func project(
         root: String, backend: WorkspaceBackend, directories: [String: DirectoryListing],
         expanded: Set<String>, draft: Draft?, renaming: String?, visibility: Visibility,
-        refresh: Bool, changed: Set<String>, previousRows: [Item]
+        refresh: Bool, changed: Set<String>, previousRows: [Item], accessTick: UInt64
     ) async -> Projection? {
         var directories = directories
         var queried: Set<String> = []
@@ -1642,7 +1666,10 @@ final class FileTreeModel {
         var contentChanged = false
 
         if refresh || !changed.isEmpty {
-            let candidates = refresh ? Set(directories.keys).union([root]) : changed
+            let warmPaths = directories.compactMap { $0.value.entries != nil ? $0.key : nil }
+            let candidates = refresh
+                ? Set(warmPaths).union(requiredDirectories(root: root, rows: previousRows))
+                : changed
             let paths = candidates.filter {
                 visibility.revealAll || isVisible($0, in: root, excluding: visibility.exclude)
             }.sorted()
@@ -1654,7 +1681,8 @@ final class FileTreeModel {
                 if directories[directory]?.entries != entries {
                     contentChanged = true
                     directories[directory] = DirectoryListing(
-                        entries: entries, directory: directory, root: root, visibility: visibility
+                        entries: entries, directory: directory, root: root, visibility: visibility,
+                        lastUsed: directories[directory]?.lastUsed ?? accessTick
                     )
                 }
             }
@@ -1666,26 +1694,40 @@ final class FileTreeModel {
             inspectDirectory: { expanded.contains($0) || known.contains($0) },
             foldDirectory: { $0 != renaming }
         ) { expanded.contains($0) }
+        var visited: Set<String> = []
+        func needsListing(_ path: String) -> Bool {
+            guard !queried.contains(path) else { return false }
+            guard let listing = directories[path] else { return true }
+            return listing.entries == nil && (
+                path == root || expanded.contains(path) || listing.visibility != visibility
+                    || draft?.parentDir == path || renaming == path
+            )
+        }
         while let directory = traversal.nextDirectory() {
             guard !Task.isCancelled else { return nil }
-            if directories[directory] == nil && !queried.contains(directory) {
-                let missing = ([directory] + traversal.pendingDirectories).filter {
-                    directories[$0] == nil && !queried.contains($0)
-                }
+            visited.insert(directory)
+            if needsListing(directory) {
+                let missing = ([directory] + traversal.pendingDirectories).filter(needsListing)
                 queried.formUnion(missing)
                 let fresh = await backend.list(directories: missing)
                 guard !Task.isCancelled else { return nil }
                 readFailed = readFailed || fresh.count != missing.count
                 for (path, entries) in fresh {
                     directories[path] = DirectoryListing(
-                        entries: entries, directory: path, root: root, visibility: visibility
+                        entries: entries, directory: path, root: root, visibility: visibility,
+                        lastUsed: accessTick
                     )
                 }
             }
-            if let cached = directories[directory], cached.visibility != visibility {
+            if let cached = directories[directory], cached.visibility != visibility,
+               let entries = cached.entries {
                 directories[directory] = DirectoryListing(
-                    entries: cached.entries, directory: directory, root: root, visibility: visibility
+                    entries: entries, directory: directory, root: root, visibility: visibility,
+                    lastUsed: cached.lastUsed
                 )
+            }
+            if expanded.contains(directory) || directory == root {
+                directories[directory]?.lastUsed = accessTick
             }
             var children = directories[directory]?.children
             if let draft, draft.parentDir == directory {
@@ -1698,7 +1740,7 @@ final class FileTreeModel {
         }
         let rows = traversal.rows
         let visible = VisibleRows(rows)
-        let symlinks = Set(directories.values.flatMap(\.symlinks))
+        let symlinks = Set(visited.flatMap { directories[$0]?.symlinks ?? [] })
         var visibleSymlinks = symlinks.filter { visible.positions[$0] != nil }
         if !symlinks.isEmpty {
             for row in rows where row.isDirectory && !row.compactPrefix.isEmpty {
@@ -1707,12 +1749,60 @@ final class FileTreeModel {
                 }
             }
         }
+        if traversal.rootReadable {
+            trimDirectoryCache(&directories, keeping: requiredDirectories(root: root, rows: rows))
+        }
         return Projection(
             directories: directories, visible: visible, rowsChanged: rows != previousRows,
             visibleSymlinks: visibleSymlinks,
             rootReadable: traversal.rootReadable, readFailed: readFailed,
             contentChanged: contentChanged
         )
+    }
+
+    nonisolated private static func requiredDirectories(root: String, rows: [Item]) -> Set<String> {
+        var required: Set<String> = [root]
+        for row in rows where row.isDirectory && !row.isDraft {
+            if !row.compactPrefix.isEmpty {
+                required.formUnion(row.compactComponents.dropLast().map(\.path))
+            }
+            if row.isExpanded { required.insert(row.path) }
+        }
+        return required
+    }
+
+    nonisolated private static func trimDirectoryCache(
+        _ directories: inout [String: DirectoryListing], keeping required: Set<String>
+    ) {
+        // Only listings that produce visible children are unbounded. Other
+        // directories share a bounded warm cache, ordered by actual use.
+        let warm = directories.filter { !required.contains($0.key) && $0.value.entries != nil }
+            .sorted { lhs, rhs in
+                lhs.value.lastUsed != rhs.value.lastUsed
+                    ? lhs.value.lastUsed > rhs.value.lastUsed : lhs.key < rhs.key
+            }
+        var remainingEntries = warmEntryBudget
+        var remainingDirectories = warmDirectoryLimit
+        for (path, listing) in warm {
+            let count = listing.entries?.count ?? 0
+            if count <= remainingEntries && remainingDirectories > 0 {
+                remainingEntries -= count
+                remainingDirectories -= 1
+            } else {
+                directories[path]?.discardEntries()
+            }
+        }
+
+        // Preserve the known compact names without keeping all the files
+        // behind a folded row. Unrelated cold directory keys can disappear.
+        var compactPaths = required
+        for (path, listing) in directories {
+            if let child = listing.singleDirectoryChild, directories[child.path] != nil {
+                compactPaths.insert(path)
+                compactPaths.insert(child.path)
+            }
+        }
+        directories = directories.filter { $0.value.entries != nil || compactPaths.contains($0.key) }
     }
 
     nonisolated private static func isVisible(

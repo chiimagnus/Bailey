@@ -12,10 +12,10 @@ note = "cdf773a3、919d2c41 共享原生读取和播放，ddf88857 通过真实 
 [[tasks]]
 id = "P1-T2"
 title = "文件标签所有的 AVPlayer 和可用的紧凑控件"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = "4c304e53原生AVKit；dd7ab6dc完整App原生播放/定位/音量/静音/切标签通过。9f6ab1c6修复窄窗原生控件消失，五档窗宽实际音量、seek、播放暂停及身份全部通过，关联3/3。完整App极窄Dock滚动/裁切限制F-04由用户明确接受，不再修复或阻塞；VoiceOver待有效会话；物理听感和睡眠共享P2。"
+commit = "9f6ab1c6"
+note = "4c304e53原生AVKit，dd7ab6dc完整App真实播放/定位/音量/静音及切标签通过；9f6ab1c6五档窗宽真实控件与身份、关联3/3通过；基础AX控件、值及实际动作已有验收。F-04极窄Dock裁切用户接受；2026-11-26取消VoiceOver专项。原生声音输出及设备切换已有P2证据，真实睡眠按既有决定延期；不要求主观空间听感。"
 
 [[tasks]]
 id = "P2-T2"
@@ -23,4 +23,4 @@ title = "隐藏、重新激活与真实资源回收"
 status = "completed"
 plan = "plan-p2.md#p2-t2"
 commit = "a2d9f21d"
-note = "原生控制、百次退役、117次双窗及睡眠/唤醒通知均通过；f09805de实际WAV交替440/880Hz与静音的内置麦克风声学测量通过；a2d9f21d实体Beats Studio Pro/内置扬声器双向切换，音频和视频的暂停、位置、手动恢复、CoreAudio实际输出、退役及原字节通过。真实睡眠由用户延期亲验；耳机主观空间听感另验。"
+note = "原生控制、百次退役、117次双窗及睡眠/唤醒通知均通过；f09805de实际WAV交替440/880Hz与静音的内置麦克风声学测量通过；a2d9f21d实体Beats Studio Pro/内置扬声器双向切换，音频和视频的暂停、位置、手动恢复、CoreAudio实际输出、退役及原字节通过。真实睡眠由用户延期亲验；主观空间听感不属于交付验收。"

@@ -32,6 +32,7 @@ final class GitStatusModel {
         statusRefreshTask?.cancel()
         statusTimeoutTask?.cancel()
         for task in binaryDetailTasks.values { task.cancel() }
+        for task in historicalFileTasks.values { task.cancel() }
         for task in stashFileTasks.values { task.cancel() }
     }
 
@@ -82,6 +83,46 @@ final class GitStatusModel {
         let path: String
     }
 
+    /// Index the visible tree once, then share its exact ordering across
+    /// keyboard navigation, selection reconciliation and context commands.
+    nonisolated struct ChangeSelectionOrder: RandomAccessCollection, Equatable, Sendable {
+        let keys: [ChangeSelection]
+        private let positions: [ChangeSelection: Int]
+        private let duplicates: Set<ChangeSelection>
+
+        init(_ keys: [ChangeSelection]) {
+            self.keys = keys
+            var positions: [ChangeSelection: Int] = [:]
+            positions.reserveCapacity(keys.count)
+            var duplicates = Set<ChangeSelection>()
+            for (index, key) in keys.enumerated() {
+                if positions[key] == nil { positions[key] = index }
+                else { duplicates.insert(key) }
+            }
+            self.positions = positions
+            self.duplicates = duplicates
+        }
+
+        var startIndex: Int { keys.startIndex }
+        var endIndex: Int { keys.endIndex }
+        subscript(index: Int) -> ChangeSelection { keys[index] }
+
+        func position(of key: ChangeSelection) -> Int? { positions[key] }
+        func contains(_ key: ChangeSelection) -> Bool { positions[key] != nil }
+
+        // Context commands must reject missing or ambiguous visible targets,
+        // rather than partially applying to a selection from a previous tree.
+        func uniquelyContains(_ selection: Set<ChangeSelection>) -> Bool {
+            selection.allSatisfy { positions[$0] != nil && !duplicates.contains($0) }
+        }
+
+        func ordered(_ selection: Set<ChangeSelection>) -> [ChangeSelection]? {
+            guard uniquelyContains(selection) else { return nil }
+            if selection.count == keys.count { return keys }
+            return selection.compactMap { positions[$0] }.sorted().map { keys[$0] }
+        }
+    }
+
     nonisolated enum ChangeSection: String, Hashable, Sendable, CaseIterable {
         case merge, staged, unstaged
 
@@ -112,18 +153,43 @@ final class GitStatusModel {
     var changeCursor: ChangeSelection?
     private(set) var selectedChanges: Set<ChangeSelection> = []
     private(set) var changeAnchor: ChangeSelection?
-    var expandedCommitIDs: Set<String> = []
+    var expandedCommitIDs: Set<String> = [] {
+        didSet {
+            let closed = oldValue.subtracting(expandedCommitIDs)
+            for oid in closed { releaseHistoricalFiles(oid) }
+            for stash in stashes where closed.contains(stash.id) {
+                if !stashes.contains(where: { $0.oid == stash.oid && expandedCommitIDs.contains($0.id) }) {
+                    stashFileTasks.removeValue(forKey: stash.oid)?.cancel()
+                    stashFilesByOID.removeValue(forKey: stash.oid)
+                }
+            }
+            let opened = expandedCommitIDs.subtracting(oldValue)
+            loadHistoryFiles(for: opened)
+        }
+    }
+
+    func loadExpandedHistoryFiles() { loadHistoryFiles(for: expandedCommitIDs) }
+
+    private func loadHistoryFiles(for ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        for commit in recentCommits where ids.contains(commit.id) {
+            loadHistoricalFiles(for: commit)
+        }
+        for stash in stashes where ids.contains(stash.id) {
+            loadStashFiles(for: stash)
+        }
+    }
 
     /// Git resource selection is independent of the keyboard cursor and Graph disclosure.
     /// Mouse Shift replaces only the anchor's current contiguous range; other islands survive.
     func selectChange(
-        _ key: ChangeSelection, visible: [ChangeSelection],
+        _ key: ChangeSelection, visible: ChangeSelectionOrder,
         extending: Bool = false, toggling: Bool = false
     ) {
-        guard let end = visible.firstIndex(of: key) else { return }
+        guard let end = visible.position(of: key) else { return }
         if extending {
             let anchor = changeAnchor ?? changeCursor ?? key
-            let start = visible.firstIndex(of: anchor) ?? end
+            let start = visible.position(of: anchor) ?? end
             var lower = start
             var upper = start
             while lower > 0 && selectedChanges.contains(visible[lower - 1]) { lower -= 1 }
@@ -142,14 +208,14 @@ final class GitStatusModel {
     }
 
     /// Workbench keyboard Shift incrementally expands and contracts; it is not mouse range select.
-    func moveChangeCursor(visible: [ChangeSelection], by delta: Int, extending: Bool = false) {
+    func moveChangeCursor(visible: ChangeSelectionOrder, by delta: Int, extending: Bool = false) {
         guard !visible.isEmpty else {
             changeCursor = nil
             selectedChanges.removeAll()
             changeAnchor = nil
             return
         }
-        let current = changeCursor.flatMap { visible.firstIndex(of: $0) }
+        let current = changeCursor.flatMap { visible.position(of: $0) }
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
         if extending {
@@ -166,9 +232,9 @@ final class GitStatusModel {
         changeCursor = visible[next]
     }
 
-    func selectAllChanges(visible: [ChangeSelection]) {
+    func selectAllChanges(visible: ChangeSelectionOrder) {
         selectedChanges = Set(visible)
-        changeCursor = visible.first(where: { $0 == changeCursor }) ?? visible.first
+        if changeCursor.map({ visible.contains($0) }) != true { changeCursor = visible.first }
         changeAnchor = nil
     }
 
@@ -177,13 +243,15 @@ final class GitStatusModel {
         changeAnchor = nil
     }
 
-    func reconcileChangeSelection(visible: [ChangeSelection]) {
-        let choices = Set(visible)
-        selectedChanges.formIntersection(choices)
-        if let changeAnchor, !choices.contains(changeAnchor) {
-            self.changeAnchor = changeCursor.flatMap { choices.contains($0) ? $0 : nil }
+    func reconcileChangeSelection(visible: ChangeSelectionOrder) {
+        if !selectedChanges.isEmpty {
+            let retained = selectedChanges.filter { visible.contains($0) }
+            if retained != selectedChanges { selectedChanges = retained }
         }
-        if let changeCursor, !choices.contains(changeCursor) {
+        if let changeAnchor, !visible.contains(changeAnchor) {
+            self.changeAnchor = changeCursor.flatMap { visible.contains($0) ? $0 : nil }
+        }
+        if let changeCursor, !visible.contains(changeCursor) {
             self.changeCursor = visible.first
         }
     }
@@ -669,7 +737,6 @@ final class GitStatusModel {
         let date: Date
         let parentHashes: [String]
         let references: [Reference]
-        let files: [FileChange]
         var stash: Stash? = nil
         var worktree: WorktreeChanges? = nil
         var checkedOutWorktrees: [WorktreeLocation] = []
@@ -749,9 +816,18 @@ final class GitStatusModel {
         let stagedRows: [ChangeItem]
         let changedRows: [ChangeItem]
         let navigation: [ChangeItem]
-        let selections: [ChangeSelection]
+        let selections: ChangeSelectionOrder
+        let filePositions: [ChangeSection: [String: Int]]
+        let pathFlags: [ChangeSection: [String: Bool]]
 
         var filteredCount: Int { mergeCount + stagedCount + changedCount }
+
+        func file(path: String, sections: [ChangeSection]) -> ChangeItem? {
+            for section in sections {
+                if let position = filePositions[section]?[path] { return navigation[position] }
+            }
+            return nil
+        }
     }
 
     private struct ChangeSourceKey: Equatable {
@@ -772,7 +848,8 @@ final class GitStatusModel {
         _ entry: Entry, section: ChangeSection
     ) -> TreeDisplayModel.Row {
         .init(name: entry.fileName, path: entry.path,
-              isDirectory: false, status: .init(section.status(entry)))
+              isDirectory: false, status: .init(section.status(entry)),
+              namespace: section.rawValue + ":")
     }
 
     nonisolated struct StatusPresentation: Sendable {
@@ -780,6 +857,7 @@ final class GitStatusModel {
             var entries: [Entry]
             let tree: TreeDisplayModel.PathTree
             let positions: [String: Int]
+            let pathFlags: [String: Bool]
             var membership: Set<Entry>
 
             init(_ entries: [Entry], section: ChangeSection) {
@@ -790,7 +868,25 @@ final class GitStatusModel {
                 )
                 positions = Dictionary(entries.enumerated().map { ($0.element.path, $0.offset) },
                                        uniquingKeysWith: { first, _ in first })
+                pathFlags = Self.summarizePaths(entries)
                 membership = Set(entries)
+            }
+
+            // Exact subtree membership and untracked status are source properties,
+            // not computations to repeat while constructing a directory menu.
+            static func summarizePaths(_ entries: [Entry]) -> [String: Bool] {
+                var result: [String: Bool] = [:]
+                for entry in entries {
+                    var path = entry.path[...]
+                    let untracked = entry.staged == "?"
+                    while true {
+                        let key = String(path)
+                        result[key] = untracked || result[key] == true
+                        guard let slash = path.lastIndex(of: "/") else { break }
+                        path = path[..<slash]
+                    }
+                }
+                return result
             }
         }
 
@@ -866,6 +962,7 @@ final class GitStatusModel {
     private struct ChangeSectionSource {
         let entries: [Entry]
         let section: ChangeSection
+        let pathFlags: [String: Bool]
         private var tree: TreeDisplayModel.PathTree?
         private var positions: [String: Int] = [:]
         private var projection: (mode: GitViewMode, folders: Set<String>, rows: [ChangeItem])?
@@ -875,6 +972,7 @@ final class GitStatusModel {
             self.section = section
             tree = prepared?.tree
             positions = prepared?.positions ?? [:]
+            pathFlags = prepared?.pathFlags ?? StatusPresentation.Section.summarizePaths(entries)
         }
 
         mutating func rows(mode: GitViewMode, collapsed: Set<String>) -> [ChangeItem] {
@@ -952,16 +1050,21 @@ final class GitStatusModel {
         let stagedRows = rows(.staged)
         let changedRows = rows(.unstaged)
         let navigation = mergeRows + stagedRows + changedRows
-        let selections = navigation.map {
-            ChangeSelection(scope: sourceKey.scope, repository: sourceKey.repository,
-                            section: $0.kind.rawValue, path: $0.row.path)
-        }
+        var filePositions: [ChangeSection: [String: Int]] = [:]
+        let selections = ChangeSelectionOrder(navigation.enumerated().map { index, item in
+            if item.entry != nil, filePositions[item.kind]?[item.row.path] == nil {
+                filePositions[item.kind, default: [:]][item.row.path] = index
+            }
+            return ChangeSelection(scope: sourceKey.scope, repository: sourceKey.repository,
+                                   section: item.kind.rawValue, path: item.row.path)
+        })
         changeDisplayRevision &+= 1
         let display = ChangeDisplay(
             revision: changeDisplayRevision,
             mergeCount: mergeCount, stagedCount: stagedCount, changedCount: changedCount,
             mergeRows: mergeRows, stagedRows: stagedRows, changedRows: changedRows,
-            navigation: navigation, selections: selections
+            navigation: navigation, selections: selections, filePositions: filePositions,
+            pathFlags: changeSourceCache!.sections.mapValues(\.pathFlags)
         )
         changeDisplayCache = (key, display)
         return display
@@ -984,11 +1087,67 @@ final class GitStatusModel {
         let verification: Verification
     }
 
+    /// Commit history contains only metadata. File changes are read for
+    /// expanded commits and discarded on collapse or Graph disappearance.
+    func historicalFiles(for commit: RecentCommit) -> [RecentCommit.FileChange]? {
+        if case .loaded(let files) = historicalFilesByOID[commit.hash] { return files }
+        return nil
+    }
+
+    func loadHistoricalFiles(for commit: RecentCommit) {
+        let oid = commit.hash
+        guard isRepo, recentCommits.contains(where: {
+            $0.hash == oid && $0.parentHashes == commit.parentHashes
+        }) else { return }
+        if let cached = historicalFilesByOID[oid] {
+            switch cached {
+            case .loading, .loaded: return
+            case .failed: break
+            }
+        }
+        historicalFilesByOID[oid] = .loading
+        let generation = contextGeneration
+        let root = repoRoot
+        let backend = backend
+        historicalFileTasks[oid] = Task(priority: .userInitiated) { [weak self] in
+            let state = await Self.readHistoricalFiles(oid: oid, root: root, backend: backend)
+            guard !Task.isCancelled, let self, self.contextGeneration == generation,
+                  self.repoRoot == root else { return }
+            self.historicalFileTasks[oid] = nil
+            self.historicalFilesByOID[oid] = state
+            if case .loaded(let files) = state, !files.isEmpty {
+                self.loadHistoricalBinaryPaths(for: commit)
+            }
+        }
+    }
+
+    @concurrent private static func readHistoricalFiles(
+        oid: String, root: String, backend: WorkspaceBackend
+    ) async -> HistoryFilesState {
+        let result = await GitCommandExecution.runData(
+            ["show", "--format=", "--name-status", "-z", "--diff-merges=first-parent", oid, "--"],
+            in: root, backend: backend
+        )
+        guard result.status == 0, let files = parseGitFileChanges(result.stdout) else {
+            return .failed(result.stderr.isEmpty
+                ? String(localized: "Unable to read commit changes", table: "Git")
+                : result.stderr)
+        }
+        return .loaded(files)
+    }
+
+    private func releaseHistoricalFiles(_ oid: String) {
+        historicalFileTasks.removeValue(forKey: oid)?.cancel()
+        historicalFilesByOID.removeValue(forKey: oid)
+        binaryDetailTasks.removeValue(forKey: oid)?.cancel()
+        historicalBinaryPaths.removeValue(forKey: oid)
+    }
+
     /// Each expanded commit is queried once, not each file or each hover.
     func loadHistoricalBinaryPaths(for commit: RecentCommit) {
         let oid = commit.hash
-        guard isRepo, recentCommits.contains(where: { $0.hash == oid }),
-              historicalBinaryPaths[oid] == nil, binaryDetailTasks[oid] == nil else { return }
+        guard historicalBinaryPaths[oid] == nil, binaryDetailTasks[oid] == nil,
+              isRepo, recentCommits.contains(where: { $0.hash == oid }) else { return }
         let generation = contextGeneration
         let root = repoRoot
         let backend = backend
@@ -1188,13 +1347,15 @@ final class GitStatusModel {
             && !worktreeLocations.contains { $0.branch == branchName }
     }
 
-    nonisolated enum StashFilesState: Equatable, Sendable {
+    nonisolated enum HistoryFilesState: Equatable, Sendable {
         case loading
         case loaded([RecentCommit.FileChange])
         case failed(String)
     }
 
-    private(set) var stashFilesByOID: [String: StashFilesState] = [:]
+    private(set) var historicalFilesByOID: [String: HistoryFilesState] = [:]
+    @ObservationIgnored private var historicalFileTasks: [String: Task<Void, Never>] = [:]
+    private(set) var stashFilesByOID: [String: HistoryFilesState] = [:]
     @ObservationIgnored private var stashFileTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var graphCommitsCache: (
         commits: [RecentCommit], stashes: [Stash], worktrees: [WorktreeChanges],
@@ -1244,7 +1405,7 @@ final class GitStatusModel {
             graph.insert(RecentCommit(
                 hash: stash.oid, shortHash: String(stash.oid.prefix(7)),
                 subject: stash.message, author: stash.author, date: stash.date,
-                parentHashes: [stash.baseHash], references: [], files: [], stash: stash
+                parentHashes: [stash.baseHash], references: [], stash: stash
             ), at: entry.position)
         }
         for worktree in worktrees.filter({ !$0.entries.isEmpty })
@@ -1257,7 +1418,7 @@ final class GitStatusModel {
                 subject: String(localized: "Uncommitted Changes", table: "Git"),
                 author: "", date: .distantPast,
                 parentHashes: worktree.headOID.map { [$0] } ?? [],
-                references: [], files: [], worktree: worktree
+                references: [], worktree: worktree
             ), at: at)
         }
         return graph
@@ -1317,7 +1478,40 @@ final class GitStatusModel {
     /// tabs. Without this, every return to a repository clears `isRepo` until
     /// the asynchronous Git refresh finishes, briefly removing the toolbar
     /// and resizing the terminal through the wrong height.
-    private var cachedStatusByRoot: [String: StatusLoadResult] = [:]
+    @ObservationIgnored private var cachedStatusByRoot: [String: StatusLoadResult] = [:]
+    // Navigation and drafts are independent of these recomputable snapshots.
+    // Keep a small warm working set; the active repository has no row limit.
+    @ObservationIgnored private var inactiveStatusRoots: [String] = []
+    private static let inactiveSnapshotLimit = 4
+    private static let inactiveRecordBudget = 50_000
+
+    private func parkCurrentSnapshot() {
+        guard !rootPath.isEmpty, let cached = cachedStatusByRoot[scopedRoot] else { return }
+        if case .repository(var result, let presentation) = cached,
+           let history = result.history {
+            let limit = Self.recentCommitPageSize * 2
+            if history.commits.count > limit {
+                result.history = StatusHistory(refsByName: history.refsByName,
+                    commits: Array(history.commits.prefix(limit)), hasMore: true)
+                cachedStatusByRoot[scopedRoot] = .repository(result, presentation)
+            }
+        }
+        inactiveStatusRoots.removeAll { $0 == scopedRoot }
+        inactiveStatusRoots.append(scopedRoot)
+    }
+
+    private func activateSnapshot(_ key: String) {
+        inactiveStatusRoots.removeAll { $0 == key }
+        var retainedRecords = inactiveStatusRoots.reduce(0) {
+            $0 + (cachedStatusByRoot[$1]?.retainedRecordCount ?? 0)
+        }
+        while inactiveStatusRoots.count > Self.inactiveSnapshotLimit
+                || retainedRecords > Self.inactiveRecordBudget {
+            let oldest = inactiveStatusRoots.removeFirst()
+            retainedRecords -= cachedStatusByRoot.removeValue(forKey: oldest)?.retainedRecordCount ?? 0
+        }
+    }
+
     /// Invalidates an in-flight status refresh when a mutation begins, so its
     /// pre-operation snapshot cannot overwrite the post-operation state.
     private var statusRequestID: UInt = 0
@@ -1335,7 +1529,6 @@ final class GitStatusModel {
     @ObservationIgnored private var localWatcherForeground = true
     private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
-    private var recentCommitLimitByRoot: [String: Int] = [:]
     /// Folding a Git directory is navigation state, not part of a status
     /// refresh. Key by machine and root so different repositories stay apart.
     private var collapsedFoldersByRoot: [String: Set<String>] = [:]
@@ -1441,13 +1634,16 @@ final class GitStatusModel {
         guard let project, isCurrent(project), let context = project.panelContext else {
             if panelTargetIdentity != nil { clearPanelNavigation() }
             sync(root: "")
+            if project == nil {
+                cachedStatusByRoot.removeAll()
+                inactiveStatusRoots.removeAll()
+            }
             return
         }
         if panelTargetIdentity != context.identity {
             clearPanelNavigation()
             contextGeneration &+= 1
-            cancelOptionalReads()
-            stashFilesByOID = [:]
+            releaseHistoryDetails()
             invalidateStatusRefresh()
         }
         sync(root: context.cwd, backend: context.backend, scope: context.scope)
@@ -1469,12 +1665,20 @@ final class GitStatusModel {
             localWatcherPaths = []
         }
         if root != rootPath || workspaceScope != scope {
+            parkCurrentSnapshot()
+            activateSnapshot(scope + "\u{0}" + root)
             clearPanelNavigation()
             workspaceScope = scope
             contextGeneration &+= 1
             rootPath = root
-            recentCommitLimit = recentCommitLimitByRoot[scopedRoot]
-                ?? Self.recentCommitPageSize
+            let pageSize = Self.recentCommitPageSize
+            let retainedCommits: Int
+            if case .repository(let result, _) = cachedStatusByRoot[scopedRoot] {
+                retainedCommits = result.history?.commits.count ?? 0
+            } else {
+                retainedCommits = 0
+            }
+            recentCommitLimit = max(pageSize, ((retainedCommits + pageSize - 1) / pageSize) * pageSize)
             hasResolvedStatus = false
             clearRepositoryState(preserveIdentity: true)
             if let cachedStatus = cachedStatusByRoot[scopedRoot] {
@@ -1495,8 +1699,7 @@ final class GitStatusModel {
             hasCurrentHistory = false
             hasCurrentStashes = false
             hasCurrentWorktrees = false
-            cancelOptionalReads()
-            stashFilesByOID = [:]
+            releaseHistoryDetails()
             invalidateStatusRefresh()
             needsCoreVerification = true
         }
@@ -1685,11 +1888,7 @@ final class GitStatusModel {
                        history.refsByName == self.refsByName,
                        latest.worktreeLocations == self.worktreeLocations,
                        self.canUseCurrentReferences {
-                        if self.recentCommits != history.commits { self.recentCommits = history.commits }
-                        if self.hasMoreRecentCommits != history.hasMore {
-                            self.hasMoreRecentCommits = history.hasMore
-                        }
-                        if !self.hasCurrentHistory { self.hasCurrentHistory = true }
+                        self.applyHistory(history)
                         self.historyPageError = nil
                         if case .repository(let cached, let cachedPresentation) = self.cachedStatusByRoot[self.scopedRoot] {
                             var updated = cached
@@ -1741,7 +1940,6 @@ final class GitStatusModel {
         guard isRepo, hasMoreRecentCommits,
               !isLoadingMoreCommits, !isBusy else { return false }
         recentCommitLimit += Self.recentCommitPageSize
-        recentCommitLimitByRoot[scopedRoot] = recentCommitLimit
         isLoadingMoreCommits = true
         if isRefreshing {
             // Recheck the larger limit after the in-flight snapshot finishes.
@@ -2996,7 +3194,7 @@ final class GitStatusModel {
     ) {
         guard isCurrent(target), !path.isEmpty,
               recentCommits.contains(where: { $0.hash == commit.hash }),
-              commit.files.contains(where: { $0.path == path && $0.status != "D" }) else {
+              historicalFiles(for: commit)?.contains(where: { $0.path == path && $0.status != "D" }) == true else {
             failImmediately(String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git"),
                             completion: completion)
             return
@@ -3807,11 +4005,16 @@ final class GitStatusModel {
         let failure: String?
     }
 
-    private func cancelOptionalReads() {
+    func releaseHistoryDetails() {
         for task in binaryDetailTasks.values { task.cancel() }
         binaryDetailTasks.removeAll()
+        for task in historicalFileTasks.values { task.cancel() }
+        historicalFileTasks.removeAll()
         for task in stashFileTasks.values { task.cancel() }
         stashFileTasks.removeAll()
+        if !historicalFilesByOID.isEmpty { historicalFilesByOID = [:] }
+        if !historicalBinaryPaths.isEmpty { historicalBinaryPaths = [:] }
+        if !stashFilesByOID.isEmpty { stashFilesByOID = [:] }
     }
 
     private func invalidateStatusRefresh() {
@@ -3922,7 +4125,7 @@ final class GitStatusModel {
 
     @concurrent private static func readStashFiles(
         _ stash: Stash, root: String, backend: WorkspaceBackend
-    ) async -> StashFilesState {
+    ) async -> HistoryFilesState {
         let tracked = await GitCommandExecution.runData([
             "diff", "--name-status", "-z", "--no-ext-diff", stash.baseHash, stash.oid, "--"
         ], in: root, backend: backend)
@@ -4005,9 +4208,7 @@ final class GitStatusModel {
         defaultBranch = nil
         remotes = []
         recentCommits = []
-        cancelOptionalReads()
-        stashFilesByOID = [:]
-        historicalBinaryPaths = [:]
+        releaseHistoryDetails()
         hasMoreRecentCommits = false
         isLoadingMoreCommits = false
         stashes = []
@@ -4048,6 +4249,27 @@ final class GitStatusModel {
                 to: contextGeneration, verified: !fromCache
             ))
         }
+    }
+
+    private func applyHistory(_ history: StatusHistory) {
+        if recentCommits != history.commits {
+            let oldParents = Dictionary(uniqueKeysWithValues: recentCommits.map { ($0.hash, $0.parentHashes) })
+            let newParents = Dictionary(uniqueKeysWithValues: history.commits.map { ($0.hash, $0.parentHashes) })
+            let details = Set(historicalFilesByOID.keys).union(binaryDetailTasks.keys)
+                .union(historicalBinaryPaths.keys)
+            let invalid = details.filter { newParents[$0] == nil || oldParents[$0] != newParents[$0] }
+            for oid in invalid { releaseHistoricalFiles(oid) }
+            recentCommits = history.commits
+            let removed = Set(oldParents.keys).subtracting(newParents.keys)
+            if !expandedCommitIDs.isDisjoint(with: removed) {
+                expandedCommitIDs.subtract(removed)
+            }
+            // If a shallow boundary changes a still-expanded commit, reread
+            // only its displayed details, not every historical file.
+            loadHistoryFiles(for: Set(invalid).intersection(expandedCommitIDs))
+        }
+        if hasMoreRecentCommits != history.hasMore { hasMoreRecentCommits = history.hasMore }
+        if !hasCurrentHistory { hasCurrentHistory = true }
     }
 
     private func applyRepository(_ result: StatusResult, presentation: StatusPresentation) {
@@ -4105,19 +4327,10 @@ final class GitStatusModel {
             if defaultBranch != core.defaultBranch { defaultBranch = core.defaultBranch }
             if !hasCurrentReferences { hasCurrentReferences = true }
         }
-        if let history = result.history {
-            let liveCommits = Set(history.commits.map(\.hash))
-            for oid in binaryDetailTasks.keys.filter({ !liveCommits.contains($0) }) {
-                binaryDetailTasks.removeValue(forKey: oid)?.cancel()
-            }
-            if historicalBinaryPaths.keys.contains(where: { !liveCommits.contains($0) }) {
-                historicalBinaryPaths = historicalBinaryPaths.filter { liveCommits.contains($0.key) }
-            }
-            if recentCommits != history.commits { recentCommits = history.commits }
-            if hasMoreRecentCommits != history.hasMore { hasMoreRecentCommits = history.hasMore }
-            if !hasCurrentHistory { hasCurrentHistory = true }
-        }
+        if let history = result.history { applyHistory(history) }
         if let freshStashes = result.stashes {
+            let removed = Set(stashes.map(\.id)).subtracting(freshStashes.map(\.id))
+            if !expandedCommitIDs.isDisjoint(with: removed) { expandedCommitIDs.subtract(removed) }
             if stashes != freshStashes { stashes = freshStashes }
             if !hasCurrentStashes { hasCurrentStashes = true }
             let liveStashOIDs = Set(freshStashes.map(\.oid))
@@ -4171,6 +4384,16 @@ final class GitStatusModel {
         case repository(StatusResult, StatusPresentation)
         case notRepository
         case failed(String)
+
+        var retainedRecordCount: Int {
+            guard case .repository(let result, _) = self else { return 0 }
+            let core = result.entries.count + result.ignoredPaths.count
+            let history = (result.history?.commits.count ?? 0)
+                + (result.coreMetadata?.refsByName.count ?? 0)
+            let worktrees = (result.worktrees?.reduce(0) { $0 + $1.entries.count } ?? 0)
+                + (result.worktreeLocations?.count ?? 0)
+            return core + history + worktrees + (result.stashes?.count ?? 0)
+        }
     }
 
     nonisolated struct StatusResult: Equatable, Sendable {
@@ -4374,7 +4597,7 @@ final class GitStatusModel {
             }
         }
         let logArguments = recentCommitLogArguments(
-            limit: recentCommitLimit, hasHead: result.hasHead, worktrees: result.worktreeLocations ?? []
+            limit: recentCommitLimit, worktrees: result.worktreeLocations ?? []
         )
         if kind == .historyOnly {
             guard result.worktreeLocations != nil else { return .repository(result, presentation) }
@@ -4967,15 +5190,18 @@ final class GitStatusModel {
     }
 
     private nonisolated static func recentCommitLogArguments(
-        limit: Int, hasHead: Bool, worktrees: [WorktreeLocation]
+        limit: Int, worktrees: [WorktreeLocation]
     ) -> [String] {
+        // Every valid checkout is already represented by its full OID.
+        // Passing the current symbolic HEAD first changes Git's equal-date
+        // traversal order when viewing a different detached worktree.
         let heads = Set(worktrees.filter { !$0.isPrunable }.compactMap(\.headOID)).sorted()
         return [
             "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags",
-        ] + (hasHead ? ["HEAD"] : []) + heads + [
+        ] + heads + [
             "--date-order", "--diff-merges=first-parent", "--decorate=full",
             "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
-            "--name-status", "-z",
+            "--no-patch", "-z",
         ]
     }
 
@@ -5010,49 +5236,9 @@ final class GitStatusModel {
         _ output: String, refsByName: [String: GitRef] = [:]
     ) -> [RecentCommit] {
         output.split(separator: "\u{1e}").compactMap { record in
-            var chunks = record.split(separator: "\u{0}", omittingEmptySubsequences: false)
-                .map(String.init)
-            guard !chunks.isEmpty else { return nil }
-
-            // With --name-status -z, the first status follows the pretty
-            // header after a newline; subsequent statuses are their own NUL
-            // fields. Rename/copy records carry both old and new paths.
-            let headerAndStatus = chunks.removeFirst()
-            let boundary = headerAndStatus.lastIndex(of: "\n")
-            let header = boundary.map { String(headerAndStatus[..<$0]) } ?? headerAndStatus
-            var statusToken = boundary.map {
-                String(headerAndStatus[headerAndStatus.index(after: $0)...])
-            } ?? ""
+            guard let header = record.split(separator: "\0").first else { return nil }
             let fields = header.split(separator: "\u{1f}", omittingEmptySubsequences: false)
-            guard fields.count == 7, let timestamp = TimeInterval(fields[4]) else {
-                return nil
-            }
-
-            var files: [RecentCommit.FileChange] = []
-            var index = 0
-            while !statusToken.isEmpty, index < chunks.count {
-                guard let status = statusToken.first else { break }
-                if status == "R" || status == "C" {
-                    guard index + 1 < chunks.count else { break }
-                    files.append(.init(
-                        status: status,
-                        path: chunks[index + 1],
-                        originalPath: chunks[index]
-                    ))
-                    index += 2
-                } else {
-                    files.append(.init(
-                        status: status,
-                        path: chunks[index],
-                        originalPath: nil
-                    ))
-                    index += 1
-                }
-                guard index < chunks.count else { break }
-                statusToken = chunks[index]
-                index += 1
-            }
-
+            guard fields.count == 7, let timestamp = TimeInterval(fields[4]) else { return nil }
             return RecentCommit(
                 hash: String(fields[0]), shortHash: String(fields[1]),
                 subject: String(fields[2]), author: String(fields[3]),
@@ -5070,8 +5256,7 @@ final class GitStatusModel {
                         return reference
                     }
                     return .init(kind: .remoteAlias, name: reference.name)
-                },
-                files: files
+                }
             )
         }
     }

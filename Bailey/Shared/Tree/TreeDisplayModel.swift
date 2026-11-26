@@ -198,11 +198,12 @@ nonisolated enum TreeDisplayModel {
 
     // The hierarchy and sibling order depend on the source, not disclosure.
     struct PathTree: Sendable {
-        private let section: String
-        private let directories: [String: [Row]]
+        private let prefix: String
+        private let expandedRows: [Row]
+        private let subtreeEnds: [Int]
 
         init(_ files: [Row], section: String) {
-            self.section = section
+            prefix = section + ":"
             var directories: [String: [String: Row]] = [:]
             var seen: Set<String> = []
             for file in files {
@@ -223,16 +224,44 @@ nonisolated enum TreeDisplayModel {
                     parent = path
                 }
             }
-            self.directories = directories.mapValues { sortedChildren(Array($0.values)) }
+            let sorted = directories.mapValues { sortedChildren(Array($0.values)) }
+            // Compaction, sibling order and depth are properties of the
+            // immutable source. Compute them once with the shared traversal.
+            var traversal = Traversal(root: "") { _ in true }
+            while let directory = traversal.nextDirectory() {
+                traversal.receive(sorted[directory] ?? [])
+            }
+            let rows = traversal.rows
+            expandedRows = rows
+            var ends = [Int](repeating: rows.count, count: rows.count)
+            var ancestors: [Int] = []
+            for index in rows.indices {
+                while let parent = ancestors.last, rows[parent].depth >= rows[index].depth {
+                    ends[parent] = index
+                    ancestors.removeLast()
+                }
+                if rows[index].isDirectory { ancestors.append(index) }
+            }
+            subtreeEnds = ends
         }
 
         func rows(collapsed: Set<String>) -> [Row] {
-            let prefix = section + ":"
-            var traversal = Traversal(root: "") { !collapsed.contains(prefix + $0) }
-            while let directory = traversal.nextDirectory() {
-                traversal.receive(directories[directory] ?? [])
+            guard !collapsed.isEmpty else { return expandedRows }
+            // Disclosure walks only visible rows and jumps over a folded
+            // subtree; no rebuilding or visiting its hidden descendants.
+            var result: [Row] = []
+            var index = 0
+            while index < expandedRows.count {
+                var row = expandedRows[index]
+                if row.isDirectory, collapsed.contains(prefix + row.path) {
+                    row.isExpanded = false
+                    index = subtreeEnds[index]
+                } else {
+                    index += 1
+                }
+                result.append(row)
             }
-            return traversal.rows
+            return result
         }
     }
 

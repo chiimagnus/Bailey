@@ -15,7 +15,7 @@ title = "复用已有 File 菜单、标签右键及 Dock 预览"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = "5cee711c"
-note = "5cee711c：共用模式、原生查找、后台标签／前台菜单、同名双窗、源码／预览／并排、复制、窄宽和主题已验；45534516603 的 HTML 3/3 完整 App 通过，35503954 的真实双窗117次切换及冷启动通过；807fbdee 的 HTML 宿主18/18。任务自身完成；H08 VoiceOver、现有设备组合和共享远端阶段回归留在 P1 审计。"
+note = "5cee711c：共用模式、原生查找、后台标签／前台菜单、同名双窗、源码／预览／并排、复制、窄宽和主题已验；45534516603 的 HTML 3/3 完整 App 通过，35503954 的真实双窗117次切换及冷启动通过；807fbdee 的 HTML 宿主18/18。任务自身完成；共享最终整合留在 P1 审计。"
 
 [[tasks]]
 id = "P2-T1"
@@ -23,7 +23,7 @@ title = "实时渲染、同标签并排和阅读位置保持"
 status = "completed"
 plan = "plan-p2.md#p2-t1"
 commit = "839186db"
-note = "7c9ffcf7真实100次WebKit更新、839186db编辑期间阅读锚点，35503954双窗117次通过；隔离完整App并排自动真实拼音→中文、连续Undo/Redo、WebKit可见中文及精确源字节保存通过（/tmp/bailey-native-ime-auto.dL04QZ/run5.log）。组合输入与滚动完整交叉、VoiceOver及最终整合留阶段，不重复已完成任务。"
+note = "7c9ffcf7真实100次WebKit更新、839186db编辑期间阅读锚点，35503954双窗117次通过；隔离完整App并排自动真实拼音→中文、连续Undo/Redo、WebKit可见中文及精确源字节保存通过（/tmp/bailey-native-ime-auto.dL04QZ/run5.log）。组合输入与滚动及最终整合留阶段，不重复已完成任务。"
 
 [[tasks]]
 id = "P2-T2"

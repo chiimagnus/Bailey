@@ -136,7 +136,7 @@ final class DockWorkspaceTests: XCTestCase {
         let target = try XCTUnwrap(dock.group(containing: .files))
         let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
         let dragging = DockTabDragCoordinator()
-        dragging.setFrames(groups: [target.id: frame])
+        dragging.setGroupFrame(frame, for: target.id)
         let before = dock.root
         for invalidation in 0..<4 {
             dragging.begin(items[0], dock: dock)
@@ -144,8 +144,8 @@ final class DockWorkspaceTests: XCTestCase {
             XCTAssertEqual(dragging.position?.items, items)
             switch invalidation {
             case 0: dragging.cancel()
-            case 1: dragging.setFrames(groups: [target.id: frame.offsetBy(dx: 1, dy: 0)])
-            case 2: dragging.setFrames(tabs: [items[0]: frame])
+            case 1: dragging.setGroupFrame(frame.offsetBy(dx: 1, dy: 0), for: target.id)
+            case 2: dragging.setTabFrame(frame, for: items[0], in: target.id)
             default:
                 let other = Project(fallbackName: "other window", workspaceConfiguration: .standard)
                 dragging.finish(project: other)
@@ -909,8 +909,8 @@ final class DockWorkspaceTests: XCTestCase {
         let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
         let positionChanged = expectation(description: "Only real drag preview changes are observed")
         withObservationTracking({ _ = dragging.position }) { positionChanged.fulfill() }
-        dragging.setFrames(groups: [moved.id: frame])
-        dragging.setFrames(tabs: [.tab(pane.id): CGRect(x: 100, y: 100, width: 120, height: 38)])
+        dragging.setGroupFrame(frame, for: moved.id)
+        dragging.setTabFrame(CGRect(x: 100, y: 100, width: 120, height: 38), for: .tab(pane.id), in: moved.id)
         XCTAssertNil(dragging.position)
         dragging.begin(.files, dock: dock)
         dragging.update(.files, at: CGPoint(x: 101, y: 300), dock: dock)
@@ -938,6 +938,27 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNotEqual(source.id, moved.id)
         XCTAssertTrue(project.tabs.first === pane)
         XCTAssertTrue(browser.webView === webView)
+    }
+
+    func testDropInsertionUsesMountedTabRangeInsteadOfUnloadedTail() throws {
+        let dock = DockWorkspaceModel()
+        let ids = (0..<120).map { _ in UUID() }
+        let items = ids.map(DockItem.tab)
+        dock.syncTabs(ids, near: nil)
+        let group = try XCTUnwrap(dock.group(containing: items[0]))
+        let dragging = DockTabDragCoordinator()
+        dragging.setGroupFrame(CGRect(x: 100, y: 100, width: 600, height: 400), for: group.id)
+        for index in 20...25 {
+            dragging.setTabFrame(CGRect(x: 140 + (index - 20) * 60, y: 100, width: 60, height: 38),
+                                 for: items[index], in: group.id)
+        }
+        dragging.begin(.files, dock: dock)
+        for (x, index, insertion) in [(141, 20, 140), (250, 22, 260), (510, 26, 500)] {
+            dragging.update(.files, at: CGPoint(x: x, y: 118), dock: dock)
+            XCTAssertEqual(dragging.position?.index, index)
+            XCTAssertEqual(dragging.insertionX(in: group), CGFloat(insertion))
+        }
+        dragging.cancel()
     }
 
     func testDefaultLayoutAndDropHitTesting() throws {

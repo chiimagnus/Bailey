@@ -1,7 +1,7 @@
 import Foundation
 
 /// Commit rails use the loaded Git DAG; stash rails use their existing base-commit display link.
-nonisolated struct CommitGraphLayout {
+nonisolated struct CommitGraphLayout: Sendable {
     /// An uncommitted checkout with no visible HEAD has no known branch color.
     static let unconnectedWorktreeColor = -1
 
@@ -31,45 +31,62 @@ nonisolated struct CommitGraphLayout {
 
     let rows: [Row]
     let laneCount: Int
-    let knownHeadHistory: Set<String>
+    private(set) var knownHeadHistory: Set<String>
 
-    init(commits: [GitStatusModel.RecentCommit]) {
-        let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().compactMap {
+    private static func realPositions(in commits: [GitStatusModel.RecentCommit]) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: commits.enumerated().compactMap {
             $0.element.stash == nil && $0.element.worktree == nil
                 ? ($0.element.hash, $0.offset) : nil
         })
-        var headHistory: Set<String> = []
-        if let headIndex = commits.firstIndex(where: {
+    }
+
+    private static func headHistory(
+        in commits: [GitStatusModel.RecentCommit], positions: [String: Int]
+    ) -> Set<String> {
+        guard let headIndex = commits.firstIndex(where: {
             $0.stash == nil && $0.worktree == nil && $0.references.contains {
                 $0.kind == .currentBranch || $0.kind == .detachedHead
             }
-        }) {
-            var pending = [headIndex]
-            while let index = pending.popLast() {
-                let commit = commits[index]
-                guard headHistory.insert(commit.hash).inserted else { continue }
-                pending += commit.parentHashes.compactMap { hash in
-                    guard let parentIndex = positions[hash], parentIndex > index else { return nil }
-                    return parentIndex
-                }
+        }) else { return [] }
+        var history: Set<String> = []
+        var pending = [headIndex]
+        while let index = pending.popLast() {
+            let commit = commits[index]
+            guard history.insert(commit.hash).inserted else { continue }
+            pending += commit.parentHashes.compactMap { hash in
+                guard let parentIndex = positions[hash], parentIndex > index else { return nil }
+                return parentIndex
             }
         }
-        knownHeadHistory = headHistory
+        return history
+    }
+
+    // A checkout, ref label or worktree annotation is not a graph edge.
+    // Reuse geometry only when the ordered row identities, roles and parents match.
+    func reusingGeometry(
+        from previous: [GitStatusModel.RecentCommit],
+        for commits: [GitStatusModel.RecentCommit]
+    ) -> Self? {
+        guard previous.count == commits.count,
+              zip(previous, commits).allSatisfy({ old, new in
+                  old.hash == new.hash && old.parentHashes == new.parentHashes
+                      && (old.stash != nil) == (new.stash != nil)
+                      && (old.worktree != nil) == (new.worktree != nil)
+              }) else { return nil }
+        var updated = self
+        updated.knownHeadHistory = Self.headHistory(in: commits, positions: Self.realPositions(in: commits))
+        return updated
+    }
+
+    init(commits: [GitStatusModel.RecentCommit]) {
+        let positions = Self.realPositions(in: commits)
+        knownHeadHistory = Self.headHistory(in: commits, positions: positions)
         var nodes = [Node?](repeating: nil, count: commits.count)
 
         var reservations: [(lane: Int, color: Int, first: Int, last: Int)] = []
-        // The checked-out HEAD owns the leftmost rail even when a newer
-        // unrelated branch tip precedes it in Git's date-ordered history.
-        let real = commits.indices.filter {
-            commits[$0].stash == nil && commits[$0].worktree == nil
-        }
-        let current = real.first { index in
-            commits[index].references.contains {
-                $0.kind == .currentBranch || $0.kind == .detachedHead
-            }
-        }
-        // Stashes retain their separate display lanes; dirty worktrees do not.
-        let order = (current.map { [$0] } ?? []) + real
+        // Allocate paths in history order, independent of the active checkout.
+        // Stashes retain separate display lanes; dirty worktrees extend their HEAD.
+        let order = commits.indices.filter { commits[$0].stash == nil && commits[$0].worktree == nil }
             + commits.indices.filter { commits[$0].stash != nil }
         for start in order where nodes[start] == nil {
             var path: [Int] = []
@@ -80,7 +97,7 @@ nonisolated struct CommitGraphLayout {
                 guard let parent = commits[cursor].parentHashes.first else { break }
                 guard let next = positions[parent], next > cursor else {
                     // Only real commits can continue beyond the loaded page.
-                    if commits[cursor].stash == nil && commits[cursor].worktree == nil {
+                    if commits[cursor].stash == nil {
                         end = commits.count
                     }
                     break
@@ -92,11 +109,11 @@ nonisolated struct CommitGraphLayout {
             let concurrent = reservations.filter {
                 $0.first <= end && start <= $0.last
             }
+            let occupiedLanes = Set(concurrent.map(\.lane))
             var lane = 0
-            while concurrent.contains(where: { $0.lane == lane }) { lane += 1 }
+            while occupiedLanes.contains(lane) { lane += 1 }
             let occupiedColors = Set(concurrent.map(\.color))
-            let color: Int
-            color = (0..<12).first { !occupiedColors.contains($0) }
+            let color = (0..<12).first { !occupiedColors.contains($0) }
                 ?? reservations.count % 12
             for index in path { nodes[index] = Node(lane: lane, color: color) }
             reservations.append((lane, color, start, end))
@@ -130,31 +147,24 @@ nonisolated struct CommitGraphLayout {
                 let color = parentOffset == 0 ? from.color : to.color
                 let between = (index + 1)..<parentIndex
 
-                if commit.worktree != nil {
-                    let rail = Rail(lane: to.lane, color: to.color)
-                    graph[index].links.append(.outgoing(rail))
-                    graph[parentIndex].links.append(.incoming(rail))
-                    for intermediate in between {
-                        graph[intermediate].links.append(.through(rail))
-                    }
-                    continue
-                }
-
-                func clear(_ lane: Int) -> Bool {
-                    occupied[lane]?.intersects(integersIn: between) != true
-                }
-
                 var lane = parentOffset == 0 ? from.lane : to.lane
-                if !clear(lane) {
-                    let alternate = parentOffset == 0 ? to.lane : from.lane
-                    if clear(alternate) {
-                        lane = alternate
-                    } else {
-                        lane = (0...largestLane).first(where: clear) ?? (largestLane + 1)
+                // Worktree rows already share their visible HEAD node's lane.
+                // Only ordinary Git/stash edges reserve transit lanes.
+                if commit.worktree == nil {
+                    func clear(_ lane: Int) -> Bool {
+                        occupied[lane]?.intersects(integersIn: between) != true
                     }
+                    if !clear(lane) {
+                        let alternate = parentOffset == 0 ? to.lane : from.lane
+                        if clear(alternate) {
+                            lane = alternate
+                        } else {
+                            lane = (0...largestLane).first(where: clear) ?? (largestLane + 1)
+                        }
+                    }
+                    largestLane = max(largestLane, lane)
+                    occupied[lane, default: IndexSet()].insert(integersIn: index..<(parentIndex + 1))
                 }
-                largestLane = max(largestLane, lane)
-                occupied[lane, default: IndexSet()].insert(integersIn: index..<(parentIndex + 1))
                 let rail = Rail(lane: lane, color: color)
                 if from.lane == lane {
                     graph[index].links.append(.outgoing(rail))

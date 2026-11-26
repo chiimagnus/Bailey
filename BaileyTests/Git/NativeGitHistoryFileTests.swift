@@ -1428,7 +1428,9 @@ final class NativeGitHistoryFileTests: XCTestCase {
         model.sync(root: root.path)
         try await wait { model.hasResolvedStatus && !model.isBusy && !model.isRefreshing }
         let commit = try XCTUnwrap(model.recentCommits.first(where: { $0.hash == revision }))
-        XCTAssertTrue(commit.files.contains { $0.path == path.lastPathComponent })
+        model.loadHistoricalFiles(for: commit)
+        try await wait { model.historicalFiles(for: commit) != nil }
+        XCTAssertTrue(model.historicalFiles(for: commit)?.contains { $0.path == path.lastPathComponent } == true)
         let initialState = await model.historicalFileState(
             path.lastPathComponent, target: model.actionTarget())
         let state = try XCTUnwrap(initialState)
@@ -1459,6 +1461,8 @@ final class NativeGitHistoryFileTests: XCTestCase {
         model.sync(root: root.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == oldRevision })
+        model.loadHistoricalFiles(for: commit)
+        try await wait { model.historicalFiles(for: commit) != nil }
         let captured = await model.historicalFileState("target.txt", target: model.actionTarget())
         let state = try XCTUnwrap(captured)
         try Data("user changed after opening dialog\n".utf8).write(to: path)
@@ -1504,6 +1508,8 @@ final class NativeGitHistoryFileTests: XCTestCase {
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let target = model.actionTarget()
         let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == revision })
+        model.loadHistoricalFiles(for: commit)
+        try await wait { model.historicalFiles(for: commit) != nil }
         let captured = await model.historicalFileState("note.txt", target: target)
         let state = try XCTUnwrap(captured)
         model.resetHistoricalFile("note.txt", at: commit, target: target, expectedFileState: state,
@@ -1539,6 +1545,8 @@ final class NativeGitHistoryFileTests: XCTestCase {
         model.sync(root: root.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let commit = try XCTUnwrap(model.recentCommits.first)
+        model.loadHistoricalFiles(for: commit)
+        try await wait { model.historicalFiles(for: commit) != nil }
         let captured = await model.historicalFileState("note.txt", target: model.actionTarget())
         let state = try XCTUnwrap(captured)
         model.resetHistoricalFile("note.txt", at: commit, target: model.actionTarget(),

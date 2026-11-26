@@ -1325,6 +1325,161 @@ final class ImageAnnotationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), original)
     }
 
+    func testSpaceExhaustionPreservesDraftsAndExistingExportsAndAllowsRetry() async throws {
+        guard let path = ProcessInfo.processInfo.environment["BAILEY_WRITE_FAILURE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_WRITE_FAILURE_ROOT to a disposable, bounded test volume")
+        }
+        let volume = URL(fileURLWithPath: path, isDirectory: true).resolvingSymlinksInPath()
+        let capacity = try XCTUnwrap(volume.resourceValues(forKeys: [.volumeTotalCapacityKey]).volumeTotalCapacity)
+        XCTAssertLessThanOrEqual(capacity, 512 * 1_048_576)
+        guard capacity <= 512 * 1_048_576,
+              try volume.resourceValues(forKeys: [.volumeURLKey]).volume?.resolvingSymlinksInPath().path == volume.resolvingSymlinksInPath().path
+        else { return XCTFail("Use a dedicated small mounted test volume, not a folder on the system disk") }
+        let root = try makeRoot(on: volume)
+        let source = root.appending(path: "source.png")
+        let original = try png()
+        try original.write(to: source)
+        let annotation = try await open(source)
+        defer { annotation.retireContent() }
+        let document = try XCTUnwrap(annotation.imageAnnotations)
+        XCTAssertTrue(annotation.canAnnotateImage)
+        add(.rectangle, to: document, from: CGPoint(x: 5, y: 5), to: CGPoint(x: 30, y: 30))
+        XCTAssertTrue(annotation.isDirty)
+        await annotation.save()
+        XCTAssertNil(annotation.saveError)
+        XCTAssertFalse(annotation.isDirty)
+        let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: source.path))
+        let savedSidecar = try Data(contentsOf: sidecar)
+        add(.arrow, to: document, from: CGPoint(x: 35, y: 30), to: CGPoint(x: 85, y: 90))
+        let draft = document.state
+        let replacement = root.appending(path: "existing.png")
+        let previous = try png(offset: 1)
+        try previous.write(to: replacement)
+        let options = ImageAnnotationDrawing.Options(width: 160, height: 120)
+        let target = try await annotation.prepareAnnotationExport(request: annotation.fileContentRevision,
+                                                                  options: options, to: replacement)
+        let newImage = root.appending(path: "new.png")
+        let newSVG = root.appending(path: "vector.png")
+        let svg = root.appending(path: "drawing.svg")
+        let oldSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\"><rect width=\"32\" height=\"32\" fill=\"red\"/></svg>"
+        try Data(oldSVG.utf8).write(to: svg)
+        let vector = FileTab(path: svg.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { vector.retireContent() }
+        try await vector.waitForText()
+        vector.autoSaveSuspendedForClose = true
+        vector.text = oldSVG.replacingOccurrences(of: "red", with: "blue")
+        await vector.showSVGPreview(request: vector.textPreviewRequestID)
+        let csv = root.appending(path: "table.csv")
+        let html = root.appending(path: "page.html")
+        let txt = root.appending(path: "plain.txt")
+        let textInputs = [(csv, "Name,Value\r\nA,old\r\n"), (html, "<h1>old</h1>\n"), (txt, "old\n")]
+        var tabs: [(FileTab, URL, Data, String)] = []
+        defer { for (file, _, _, _) in tabs { file.retireContent() } }
+        for (url, originalText) in textInputs {
+            let bytes = Data(originalText.utf8)
+            try bytes.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            let text = originalText.replacingOccurrences(of: "old", with: "new 中文")
+            file.text = text
+            tabs.append((file, url, bytes, text))
+        }
+
+        func outOfSpace(_ error: Error) -> Bool {
+            let e = error as NSError
+            if e.domain == NSPOSIXErrorDomain && e.code == Int(ENOSPC) { return true }
+            if e.domain == NSCocoaErrorDomain && e.code == CocoaError.Code.fileWriteOutOfSpace.rawValue { return true }
+            if let underlying = e.userInfo[NSUnderlyingErrorKey] as? Error { return outOfSpace(underlying) }
+            return false
+        }
+        let filler = root.appending(path: "space-reservation")
+        XCTAssertTrue(FileManager.default.createFile(atPath: filler.path, contents: nil))
+        defer { try? FileManager.default.removeItem(at: filler) }
+        let handle = try FileHandle(forWritingTo: filler)
+        defer { try? handle.close() }
+        // Only the disposable volume can be exhausted; cap writes by its actual size.
+        func fill(_ count: Int, limit: Int) throws {
+            let bytes = Data(repeating: 0xA7, count: count)
+            for _ in 0..<limit {
+                do { try handle.write(contentsOf: bytes) }
+                catch {
+                    guard outOfSpace(error) else { throw error }
+                    return
+                }
+            }
+            XCTFail("The bounded test volume did not report ENOSPC")
+        }
+        try fill(1_048_576, limit: capacity / 1_048_576 + 1)
+        try fill(4096, limit: 512)
+        try? handle.synchronize()
+        try handle.close()
+
+        let namesBefore = Set(try FileManager.default.contentsOfDirectory(atPath: root.path))
+        do {
+            try await LocalWorkspaceBackend.shared.writeNewFile(path: newSVG.path, data: Data(repeating: 0xA8, count: 1_048_576))
+            XCTFail("The real publication must fail with exhausted space")
+        } catch { XCTAssertTrue(outOfSpace(error), "\(error)") }
+        for (file, url, bytes, text) in tabs {
+            await file.save()
+            XCTAssertNotNil(file.saveError, url.lastPathComponent)
+            XCTAssertTrue(file.isDirty)
+            XCTAssertEqual(file.text, text)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
+        await vector.save()
+        await annotation.save()
+        XCTAssertTrue(vector.isDirty)
+        XCTAssertNotNil(vector.saveError)
+        XCTAssertTrue(annotation.isDirty)
+        XCTAssertNotNil(annotation.saveError)
+        for (url, confirmed) in [(newImage, false), (replacement, true)] {
+            do {
+                try await annotation.exportAnnotatedImage(request: annotation.fileContentRevision, options: options,
+                    to: url, confirmedTarget: confirmed ? target : nil)
+                XCTFail("Export must not publish on the exhausted volume")
+            } catch { XCTAssertTrue(outOfSpace(error), "\(error)") }
+        }
+        do {
+            try await vector.exportSVGPNG(request: vector.textPreviewRequestID, options: .init(width: 32, height: 32), to: newSVG)
+            XCTFail("SVG export must fail without leaving a target")
+        } catch { XCTAssertTrue(outOfSpace(error), "\(error)") }
+        XCTAssertEqual(try Data(contentsOf: svg), Data(oldSVG.utf8))
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        XCTAssertEqual(try Data(contentsOf: sidecar), savedSidecar)
+        XCTAssertEqual(try Data(contentsOf: replacement), previous)
+        XCTAssertEqual(document.state, draft)
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: root.path)), namesBefore)
+        try FileManager.default.removeItem(at: filler)
+        for (file, url, _, text) in tabs {
+            await file.save()
+            XCTAssertNil(file.saveError)
+            XCTAssertFalse(file.isDirty)
+            XCTAssertEqual(try Data(contentsOf: url), Data(text.utf8))
+        }
+        await annotation.save()
+        await vector.save()
+        XCTAssertFalse(annotation.isDirty)
+        XCTAssertFalse(vector.isDirty)
+        XCTAssertNil(annotation.saveError)
+        XCTAssertNil(vector.saveError)
+        XCTAssertEqual(try Data(contentsOf: svg), Data(vector.text.utf8))
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(Data(contentsOf: sidecar),
+            version: WorkspaceFileVersion(data: original), size: document.size), draft)
+        try await annotation.exportAnnotatedImage(request: annotation.fileContentRevision, options: options, to: newImage)
+        try await vector.exportSVGPNG(request: vector.textPreviewRequestID, options: .init(width: 32, height: 32), to: newSVG)
+        XCTAssertEqual(try image(Data(contentsOf: newImage)).width, 160)
+        XCTAssertEqual(try image(Data(contentsOf: newSVG)).width, 32)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        XCTAssertEqual(try Data(contentsOf: replacement), previous)
+        let retryTarget = try await annotation.prepareAnnotationExport(request: annotation.fileContentRevision,
+                                                                      options: options, to: replacement)
+        try await annotation.exportAnnotatedImage(request: annotation.fileContentRevision, options: options,
+                                                   to: replacement, confirmedTarget: retryTarget)
+        XCTAssertEqual(try Data(contentsOf: replacement), try Data(contentsOf: newImage))
+        print("WRITE_SPACE: real ENOSPC, four text formats, annotation sidecar, new/replacement exports, cleanup and retry passed")
+    }
+
     func testReadOnlyDirectoryAndCancelledExportPreserveDraftAndLeaveNoTargets() async throws {
         let root = try makeRoot()
         let directory = root.appendingPathComponent("readonly")

@@ -1,43 +1,6 @@
 import AppKit
 import GhosttyTheme
-import OSLog
 import SwiftUI
-
-@MainActor
-enum GitGraphScrollLog {
-    private static let logger = Logger(subsystem: "chiimagnus.bailey", category: "GitGraphScroll")
-
-    static var enabled: Bool {
-        UserDefaults.standard.bool(forKey: "GitGraphScrollLogging")
-            || ProcessInfo.processInfo.environment["BAILEY_GIT_GRAPH_SCROLL_LOG"] == "1"
-    }
-
-    static func rowToken(_ row: String?) -> String {
-        row.map { String(UInt(bitPattern: $0.hashValue), radix: 16) } ?? "none"
-    }
-
-    static func record(
-        _ event: String, owner: TreeKeyboardOwner? = nil, row: String? = nil,
-        detail: String = ""
-    ) {
-        guard enabled else { return }
-        let view = owner?.view
-        let window = view?.window
-        let scroll = view?.enclosingScrollView
-        let responder = window?.firstResponder
-        let responderType = responder.map { String(describing: type(of: $0)) } ?? "none"
-        let offset = Double(scroll?.contentView.bounds.minY ?? -1)
-        let viewport = Double(scroll?.contentView.bounds.height ?? -1)
-        let content = Double(scroll?.documentView?.frame.height ?? -1)
-        let appActive = NSApp?.isActive ?? false
-        let ownsFocus = view != nil && responder === view
-        let message = "event=\(event) window=\(window?.windowNumber ?? -1) "
-            + "active=\(appActive) key=\(window?.isKeyWindow ?? false) first=\(ownsFocus) "
-            + "responder=\(responderType) row=\(rowToken(row)) y=\(offset) "
-            + "viewport=\(viewport) content=\(content) \(detail)"
-        logger.notice("\(message, privacy: .public)")
-    }
-}
 
 struct GitGraphReferenceGroup {
     typealias Reference = GitStatusModel.RecentCommit.Reference
@@ -87,13 +50,13 @@ struct GitGraphReferenceGroup {
     }
 }
 
-@MainActor
-final class CommitGraphLayoutCache {
+nonisolated struct CommitGraphLayoutCache: Sendable {
     private var cached: (commits: [GitStatusModel.RecentCommit], layout: CommitGraphLayout)?
 
-    func layout(for commits: [GitStatusModel.RecentCommit]) -> CommitGraphLayout {
+    mutating func layout(for commits: [GitStatusModel.RecentCommit]) -> CommitGraphLayout {
         if let cached, cached.commits == commits { return cached.layout }
-        let layout = CommitGraphLayout(commits: commits)
+        let layout = cached.flatMap { $0.layout.reusingGeometry(from: $0.commits, for: commits) }
+            ?? CommitGraphLayout(commits: commits)
         cached = (commits, layout)
         return layout
     }
@@ -154,6 +117,7 @@ struct RecentCommitsView: View {
         }
 
         mutating func reconcile(visible: [String]) {
+            guard !ids.isEmpty || anchor != nil else { return }
             let valid = Set(visible)
             ids.formIntersection(valid)
             extendedRange.formIntersection(valid)
@@ -175,29 +139,23 @@ struct RecentCommitsView: View {
     @Binding private var collapsedFolders: Set<String>
     @State private var requestedLastCommit: String?
     @State private var viewportWidth: CGFloat = 0
-    @State private var layoutCache = CommitGraphLayoutCache()
     @State private var displayCache = GraphDisplayCache()
-    @State private var localKeyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var focusedRowID: String?
     @State private var selection = Selection()
     @State private var contextRowID: String?
     @Environment(\.controlActiveState) private var controlActiveState
 
-    private let providedKeyboardOwner: TreeKeyboardOwner?
+    private let keyboardOwner: TreeKeyboardOwner
     private let isKeyboardActive: Bool
     private let onKeyboardFocused: () -> Void
     private let onKeyboardAttached: () -> Void
-
-    private var keyboardOwner: TreeKeyboardOwner {
-        providedKeyboardOwner ?? localKeyboardOwner
-    }
 
     private var currentTheme: GhosttyThemeDefinition {
         Theme.terminal(dark: colorScheme == .dark)
     }
 
-    private var graphPalette: GitGraphPalette { GitGraphPalette(theme: currentTheme) }
+    private var graphPalette: GitGraphPalette { GitGraphPalette.resolved(theme: currentTheme) }
     private var graphTextColor: Color { Color(nsColor: currentTheme.foregroundNSColor) }
     private var graphSecondaryText: Color { graphTextColor.opacity(0.65) }
     private var graphTertiaryText: Color { graphTextColor.opacity(0.45) }
@@ -208,17 +166,16 @@ struct RecentCommitsView: View {
     let knownRemotesByCommit: [String: Set<String>]
     let hostProviders: [String: GitHostedRemoteURL.Provider]
     let openHosted: (String, String) -> Void
-    let stashFilesByOID: [String: GitStatusModel.StashFilesState]
+    let historicalFilesByOID: [String: GitStatusModel.HistoryFilesState]
+    let stashFilesByOID: [String: GitStatusModel.HistoryFilesState]
     let repoRoot: String
     let selectionScope: String
     let displayedDiff: DiffTab?
     let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
-    let loadBinaryStatus: (Commit) -> Void
     let isBinaryFile: (Commit, Commit.FileChange) -> Bool
     let viewMode: GitViewMode
     let fontScale: CGFloat
     let hasMoreCommits: Bool
-    let isLoadingMore: Bool
     let loadMore: () -> Bool
     let openDiff: (Commit, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
@@ -248,24 +205,23 @@ struct RecentCommitsView: View {
 
     init(
         commits: [Commit],
-        remotes: [String] = [],
-        remoteURLs: [String: String] = [:],
-        knownRemotesByCommit: [String: Set<String>] = [:],
-        hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
-        openHosted: @escaping (String, String) -> Void = { _, _ in },
-        stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
+        remotes: [String],
+        remoteURLs: [String: String],
+        knownRemotesByCommit: [String: Set<String>],
+        hostProviders: [String: GitHostedRemoteURL.Provider],
+        openHosted: @escaping (String, String) -> Void,
+        historicalFilesByOID: [String: GitStatusModel.HistoryFilesState],
+        stashFilesByOID: [String: GitStatusModel.HistoryFilesState],
         repoRoot: String,
-        selectionScope: String = "local",
-        displayedDiff: DiffTab? = nil,
+        selectionScope: String,
+        displayedDiff: DiffTab?,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
-        loadBinaryStatus: @escaping (Commit) -> Void,
         isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
         expandedCommitIDs: Binding<Set<String>>,
         collapsedFolders: Binding<Set<String>>,
         viewMode: GitViewMode,
         fontScale: CGFloat,
         hasMoreCommits: Bool,
-        isLoadingMore: Bool,
         loadMore: @escaping () -> Bool,
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
@@ -280,22 +236,22 @@ struct RecentCommitsView: View {
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
-        squashAction: @escaping ([String]) -> Void = { _ in },
-        commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void = { _, _ in },
-        headOID: String? = nil,
-        worktreeLocations: [GitStatusModel.WorktreeLocation] = [],
-        canActOnStash: Bool = true,
-        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
-        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
-        canActOnWorktrees: Bool = false,
-        canRevealWorktreeInFinder: Bool = false,
-        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, WorktreeAction) -> Void = { _, _ in },
-        canCreateWorktree: @escaping (Reference) -> Bool = { _ in false },
-        createWorktree: @escaping (Reference, Commit) -> Void = { _, _ in },
-        keyboardOwner: TreeKeyboardOwner? = nil,
-        isKeyboardActive: Bool = true,
-        onKeyboardFocused: @escaping () -> Void = {},
-        onKeyboardAttached: @escaping () -> Void = {}
+        squashAction: @escaping ([String]) -> Void,
+        commitBatchAction: @escaping ([String], GitStatusModel.CommitBatchAction) -> Void,
+        headOID: String?,
+        worktreeLocations: [GitStatusModel.WorktreeLocation],
+        canActOnStash: Bool,
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void,
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void,
+        canActOnWorktrees: Bool,
+        canRevealWorktreeInFinder: Bool,
+        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, WorktreeAction) -> Void,
+        canCreateWorktree: @escaping (Reference) -> Bool,
+        createWorktree: @escaping (Reference, Commit) -> Void,
+        keyboardOwner: TreeKeyboardOwner,
+        isKeyboardActive: Bool,
+        onKeyboardFocused: @escaping () -> Void,
+        onKeyboardAttached: @escaping () -> Void
     ) {
         self.commits = commits
         self.remotes = remotes
@@ -303,19 +259,18 @@ struct RecentCommitsView: View {
         self.knownRemotesByCommit = knownRemotesByCommit
         self.hostProviders = hostProviders
         self.openHosted = openHosted
+        self.historicalFilesByOID = historicalFilesByOID
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.selectionScope = selectionScope
         self.displayedDiff = displayedDiff
         self.fileAction = fileAction
-        self.loadBinaryStatus = loadBinaryStatus
         self.isBinaryFile = isBinaryFile
         _expandedCommitIDs = expandedCommitIDs
         _collapsedFolders = collapsedFolders
         self.viewMode = viewMode
         self.fontScale = fontScale
         self.hasMoreCommits = hasMoreCommits
-        self.isLoadingMore = isLoadingMore
         self.loadMore = loadMore
         self.openDiff = openDiff
         self.canSwitchBranch = canSwitchBranch
@@ -342,7 +297,7 @@ struct RecentCommitsView: View {
         self.worktreeAction = worktreeAction
         self.canCreateWorktree = canCreateWorktree
         self.createWorktree = createWorktree
-        providedKeyboardOwner = keyboardOwner
+        self.keyboardOwner = keyboardOwner
         self.isKeyboardActive = isKeyboardActive
         self.onKeyboardFocused = onKeyboardFocused
         self.onKeyboardAttached = onKeyboardAttached
@@ -350,34 +305,39 @@ struct RecentCommitsView: View {
 
     var body: some View {
         let _ = themeChanges.revision
-        let graph = layoutCache.layout(for: commits)
-        let spacing = CommitGraphRails.spacing(
-            lanes: graph.laneCount, viewportWidth: viewportWidth, scale: fontScale
-        )
-        let gutter = CommitGraphRails.gutter(
-            lanes: graph.laneCount, spacing: spacing, scale: fontScale
-        )
-
-        let display = graphDisplay
+        let key = displayKey
+        let presentation = displayCache.presentation(for: key)
+        let display = presentation?.display ?? .empty
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(display.runs) { run in
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(run.rows) { row in
-                        graphRow(row, graph: graph, gutter: gutter, spacing: spacing)
-                            .id(row.id)
+            if let graph = presentation?.layout {
+                let spacing = CommitGraphRails.spacing(
+                    lanes: graph.laneCount, viewportWidth: viewportWidth, scale: fontScale
+                )
+                let gutter = CommitGraphRails.gutter(
+                    lanes: graph.laneCount, spacing: spacing, scale: fontScale
+                )
+                ForEach(display.runs) { run in
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(run.rows) { row in
+                            graphRow(row, graph: graph, gutter: gutter, spacing: spacing)
+                        }
                     }
+                    .frame(height: CGFloat(run.rows.count) * (run.isCommit
+                        ? Self.commitRowHeight(fontScale) : TreeRowStyle.rowHeight(fontScale)),
+                           alignment: .topLeading)
                 }
-                // The projection, not a sample of measured lazy rows, owns
-                // the extent. Each lazy run contains exactly one row height.
-                .frame(height: CGFloat(run.rows.count) * (run.isCommit
-                    ? Self.commitRowHeight(fontScale) : TreeRowStyle.rowHeight(fontScale)),
-                       alignment: .topLeading)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
             }
-            if hasMoreCommits, let last = commits.last(where: { $0.stash == nil })?.id {
+            if let presentation, hasMoreCommits,
+               let last = presentation.key.commits.last(where: { $0.stash == nil })?.id {
                 Color.clear.frame(height: 1)
                     .id(last)
                     .onScrollVisibilityChange(threshold: 0.1) { visible in
-                        if visible { requestMoreIfNeeded(after: last) }
+                        if visible, presentation.key.commits == commits { requestMoreIfNeeded(after: last) }
                     }
             }
         }
@@ -387,21 +347,14 @@ struct RecentCommitsView: View {
             TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGraphKey,
                 onFocusChanged: { focused in
                     keyboardFocused = focused
-                    GitGraphScrollLog.record(
-                        "graph-focus", owner: keyboardOwner, row: focusedRowID,
-                        detail: "focused=\(focused) active=\(isKeyboardActive)"
-                    )
                     if focused {
                         if focusedRowID == nil { focusedRowID = keyboardRows.first?.id }
                         onKeyboardFocused()
                     }
-                }, onAttachedToWindow: {
-                    GitGraphScrollLog.record("graph-attached", owner: keyboardOwner)
-                    onKeyboardAttached()
-                }, onEditCommand: { action in
+                }, onAttachedToWindow: onKeyboardAttached, onEditCommand: { action in
                     switch action {
                     case .selectAll:
-                        selection.selectAll(visible: commits.filter {
+                        selection.selectAll(visible: (presentation?.key.commits ?? []).filter {
                             $0.stash == nil && $0.worktree == nil
                         }.map(commitRowID))
                     case .copy:
@@ -413,23 +366,28 @@ struct RecentCommitsView: View {
                 }, canEditCommand: { action in
                     guard isKeyboardActive else { return false }
                     switch action {
-                    case .selectAll: return commits.contains { $0.stash == nil && $0.worktree == nil }
+                    case .selectAll: return presentation?.key.commits.contains { $0.stash == nil && $0.worktree == nil } == true
                     case .copy: return !selection.ids.isEmpty || focusedRowID != nil
                     default: return false
                     }
                 })
         }
+        .task(id: key) {
+            guard !displayCache.isPrepared(for: key) else { return }
+            if let prepared = await GraphDisplayCache.prepare(key, previous: displayCache),
+               !Task.isCancelled {
+                displayCache = prepared
+            }
+        }
         .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
             requestedLastCommit = nil
         }
         .onChange(of: repoRoot) { _, _ in
-            GitGraphScrollLog.record("repository-change", owner: keyboardOwner)
             focusedRowID = nil
             selection.clear()
             contextRowID = nil
         }
         .onChange(of: selectionScope) { _, _ in
-            GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
             focusedRowID = nil
             selection.clear()
             contextRowID = nil
@@ -437,7 +395,8 @@ struct RecentCommitsView: View {
         .onChange(of: headOID) { _, _ in
             selection.clear()
         }
-        .onChange(of: display.navigationIDs) { _, ids in
+        .onChange(of: presentation?.display.navigationIDs) { _, ids in
+            guard let ids else { return }
             selection.reconcile(visible: ids)
             if let contextRowID, !ids.contains(contextRowID) {
                 self.contextRowID = nil
@@ -448,22 +407,11 @@ struct RecentCommitsView: View {
                 focusedRowID = ids.first
             }
         }
-        .onChange(of: focusedRowID) { previous, id in
-            if GitGraphScrollLog.enabled {
-                let index = id.flatMap { target in keyboardRows.firstIndex { $0.id == target } } ?? -1
-                GitGraphScrollLog.record(
-                    "cursor", owner: keyboardOwner, row: id,
-                    detail: "previous=\(GitGraphScrollLog.rowToken(previous)) "
-                        + "index=\(index) focused=\(keyboardFocused) active=\(isKeyboardActive)"
-                )
-            }
+        .onChange(of: focusedRowID) { _, id in
             if keyboardFocused, let id { revealKeyboardRow(id) }
         }
         .onChange(of: keyboardFocused) { _, focused in
             if focused, let focusedRowID { revealKeyboardRow(focusedRowID) }
-        }
-        .onAppear {
-            GitGraphScrollLog.record("graph-appear", owner: keyboardOwner)
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             viewportWidth = $0
@@ -471,8 +419,8 @@ struct RecentCommitsView: View {
         .tint(Color(nsColor: currentTheme.accentNSColor))
     }
 
-    private struct GraphRow: Identifiable {
-        enum Content {
+    private nonisolated struct GraphRow: Identifiable, Sendable {
+        enum Content: Sendable {
             case commit(expanded: Bool)
             case folder(TreeDisplayModel.Row, key: String)
             case historicalFile(Commit.FileChange, row: TreeDisplayModel.Row, showDirectory: Bool)
@@ -486,6 +434,14 @@ struct RecentCommitsView: View {
         let commitIndex: Int
         var parent: String? = nil
         let content: Content
+
+        static func historyID(_ commitID: String, file: Commit.FileChange) -> String {
+            commitID + "\u{0}history\u{0}" + file.id
+        }
+
+        static func worktreeID(_ commitID: String, section: String, path: String) -> String {
+            commitID + "\u{0}worktree\u{0}" + section + "\u{0}" + path
+        }
 
         var isCommit: Bool {
             if case .commit = content { return true }
@@ -505,26 +461,20 @@ struct RecentCommitsView: View {
             default: false
             }
         }
-
-        var isExpanded: Bool {
-            switch content {
-            case .commit(let expanded): expanded
-            case .folder(let row, _): row.isExpanded
-            default: false
-            }
-        }
     }
 
-    private struct GraphRun: Identifiable {
+    private nonisolated struct GraphRun: Identifiable, Sendable {
         let rows: ArraySlice<GraphRow>
         let isCommit: Bool
         var id: String { rows.first!.id }
     }
 
-    private struct GraphDisplay {
+    private nonisolated struct GraphDisplay: Sendable {
+        static let empty = GraphDisplay(rows: [])
         struct Position {
             let index: Int
             let precedingCommits: Int
+            let navigationIndex: Int
             let isCommit: Bool
         }
 
@@ -549,9 +499,9 @@ struct RecentCommitsView: View {
             var precedingCommits = 0
             for (index, row) in rows.enumerated() {
                 if row.isNavigable {
-                    navigation.append(row)
                     positions[row.id] = Position(index: index, precedingCommits: precedingCommits,
-                                                 isCommit: row.isCommit)
+                                                 navigationIndex: navigation.count, isCommit: row.isCommit)
+                    navigation.append(row)
                 }
                 if row.isCommit { precedingCommits += 1 }
             }
@@ -561,18 +511,34 @@ struct RecentCommitsView: View {
         }
     }
 
-    private struct GraphDisplayKey: Equatable {
+    private nonisolated struct GraphDisplayKey: Equatable, Sendable {
         let scope: String
         let repository: String
         let commits: [Commit]
-        let stashFiles: [String: GitStatusModel.StashFilesState]
+        let historicalFiles: [String: GitStatusModel.HistoryFilesState]
+        let stashFiles: [String: GitStatusModel.HistoryFilesState]
         let expanded: Set<String>
         let collapsed: Set<String>
         let mode: GitViewMode
+
+        var prefix: String { "graph:\(scope)\u{0}\(repository)\u{0}" }
+
+        // An outstanding disclosure calculation can keep its previous rows.
+        // Never pair indices from a different repository or commit snapshot.
+        func sameSource(as other: Self) -> Bool {
+            guard scope == other.scope, repository == other.repository else { return false }
+            if commits == other.commits { return true }
+            // A newly fetched page may append rows; retain the already visible prefix.
+            // Reference changes do not invalidate the identity of historical file rows.
+            return commits.count <= other.commits.count && zip(commits, other.commits).allSatisfy {
+                $0.id == $1.id && $0.parentHashes == $1.parentHashes
+                    && $0.stash == $1.stash && $0.worktree == $1.worktree
+            }
+        }
     }
 
-    private final class GraphDisplayCache {
-        private struct FileIndex<Value: Equatable> {
+    private nonisolated struct GraphDisplayCache: Sendable {
+        private struct FileIndex<Value: Equatable & Sendable>: Sendable {
             let files: [Value]
             let byPath: [String: Value]
             let tree: TreeDisplayModel.PathTree
@@ -586,29 +552,61 @@ struct RecentCommitsView: View {
             }
         }
 
-        private var cached: (key: GraphDisplayKey, display: GraphDisplay)?
+        struct Presentation: Sendable {
+            let key: GraphDisplayKey
+            let display: GraphDisplay
+            let layout: CommitGraphLayout
+        }
+
+        private var cached: Presentation?
+        private var layoutCache = CommitGraphLayoutCache()
         private var historical: [String: FileIndex<Commit.FileChange>] = [:]
         private var worktrees: [String: FileIndex<GitStatusModel.Entry>] = [:]
 
-        func display(for key: GraphDisplayKey, build: () -> [GraphRow]) -> GraphDisplay {
-            if let cached, cached.key == key { return cached.display }
+        func isPrepared(for key: GraphDisplayKey) -> Bool { cached?.key == key }
+
+        func presentation(for key: GraphDisplayKey) -> Presentation? {
+            guard let cached, cached.key.sameSource(as: key) else { return nil }
+            return cached
+        }
+
+        @concurrent static func prepare(_ key: GraphDisplayKey, previous: Self) async -> Self? {
+            var cache = previous
+            cache.update(for: key)
+            return Task.isCancelled ? nil : cache
+        }
+
+        private mutating func update(for key: GraphDisplayKey) {
             if cached?.key.scope != key.scope || cached?.key.repository != key.repository {
                 historical.removeAll()
                 worktrees.removeAll()
-            } else if cached?.key.commits != key.commits {
-                let historySections = Set(key.commits.filter { $0.worktree == nil }.map { "commit:" + $0.id })
-                let worktreeSections = Set(key.commits.compactMap(\.worktree).flatMap { worktree in
+                layoutCache = CommitGraphLayoutCache()
+            }
+            if key.mode == .tree {
+                let expanded = key.commits.filter { key.expanded.contains($0.id) }
+                let historySections = Set(expanded.compactMap { commit -> String? in
+                    let state = commit.stash == nil
+                        ? key.historicalFiles[commit.hash]
+                        : commit.stash.flatMap { key.stashFiles[$0.oid] }
+                    guard case .loaded = state else { return nil }
+                    return "commit:" + commit.id
+                })
+                let worktreeSections = Set(expanded.compactMap(\.worktree).flatMap { worktree in
                     ["merge", "staged", "changes"].map { "worktree:" + worktree.path + ":" + $0 }
                 })
                 historical = historical.filter { historySections.contains($0.key) }
                 worktrees = worktrees.filter { worktreeSections.contains($0.key) }
+            } else {
+                historical.removeAll()
+                worktrees.removeAll()
             }
-            let display = GraphDisplay(rows: build())
-            cached = (key, display)
-            return display
+            guard let rows = buildRows(for: key), !Task.isCancelled else { return }
+            let layout = layoutCache.layout(for: key.commits)
+            guard !Task.isCancelled else { return }
+            cached = Presentation(key: key, display: GraphDisplay(rows: rows), layout: layout)
         }
 
-        func historyRows(
+        mutating func historyRows(
             _ files: [Commit.FileChange], section: String, collapsed: Set<String>,
             row: (Commit.FileChange) -> TreeDisplayModel.Row
         ) -> (nodes: [TreeDisplayModel.Row], byPath: [String: Commit.FileChange]) {
@@ -619,7 +617,7 @@ struct RecentCommitsView: View {
             return (index.tree.rows(collapsed: collapsed), index.byPath)
         }
 
-        func worktreeRows(
+        mutating func worktreeRows(
             _ files: [GitStatusModel.Entry], section: String, collapsed: Set<String>,
             row: (GitStatusModel.Entry) -> TreeDisplayModel.Row
         ) -> (nodes: [TreeDisplayModel.Row], byPath: [String: GitStatusModel.Entry]) {
@@ -629,157 +627,176 @@ struct RecentCommitsView: View {
             let index = worktrees[section]!
             return (index.tree.rows(collapsed: collapsed), index.byPath)
         }
-    }
 
-    private func commitRowID(_ commit: Commit) -> String {
-        "graph:\(selectionScope)\u{0}\(repoRoot)\u{0}\(commit.id)"
-    }
+        private static func folderID(_ commitID: String, section: String, path: String) -> String {
+            commitID + "\u{0}folder\u{0}" + section + "\u{0}" + path
+        }
 
-    private func folderRowID(_ commit: Commit, section: String, path: String) -> String {
-        commitRowID(commit) + "\u{0}folder\u{0}" + section + "\u{0}" + path
-    }
-
-    private func historicalFileRowID(_ commit: Commit, file: Commit.FileChange) -> String {
-        commitRowID(commit) + "\u{0}history\u{0}" + file.id
-    }
-
-    private func worktreeFileRowID(
-        _ commit: Commit, section: String, path: String
-    ) -> String {
-        commitRowID(commit) + "\u{0}worktree\u{0}" + section + "\u{0}" + path
-    }
-
-    private var graphDisplay: GraphDisplay {
-        let key = GraphDisplayKey(
-            scope: selectionScope, repository: repoRoot, commits: commits, stashFiles: stashFilesByOID,
-            expanded: expandedCommitIDs,
-            collapsed: Set(collapsedFolders.filter { $0.hasPrefix("commit:") || $0.hasPrefix("worktree:") }),
-            mode: viewMode
-        )
-        return displayCache.display(for: key) {
+        private mutating func buildRows(for key: GraphDisplayKey) -> [GraphRow]? {
             var rows: [GraphRow] = []
-            for (index, commit) in commits.enumerated() {
-                let id = commitRowID(commit)
+            for (index, commit) in key.commits.enumerated() {
+                guard !Task.isCancelled else { return nil }
+                let id = key.prefix + commit.id
                 let expanded = key.expanded.contains(commit.id)
                 rows.append(GraphRow(id: id, commitIndex: index, content: .commit(expanded: expanded)))
                 guard expanded else { continue }
                 if let worktree = commit.worktree {
                     appendWorktreeRows(worktree, commit: commit, index: index, key: key, to: &rows)
-                } else if let stash = commit.stash {
-                    switch stashFilesByOID[stash.oid] {
+                } else {
+                    let state: GitStatusModel.HistoryFilesState?
+                    if let stash = commit.stash {
+                        state = key.stashFiles[stash.oid]
+                    } else {
+                        state = key.historicalFiles[commit.hash]
+                    }
+                    switch state {
                     case .loaded(let files):
                         appendHistoricalRows(files, commit: commit, index: index, key: key, to: &rows)
                     case .failed(let message):
                         rows.append(GraphRow(id: id + "\u{0}detail", commitIndex: index,
                                              content: .placeholder(message, secondary: true)))
                     default:
+                        let message = commit.stash == nil
+                            ? String(localized: "Loading commit changes…", table: "Git")
+                            : String(localized: "Loading stash changes…", table: "Git")
                         rows.append(GraphRow(id: id + "\u{0}detail", commitIndex: index,
-                            content: .placeholder(String(localized: "Loading stash changes…", table: "Git"), secondary: true)))
+                            content: .placeholder(message, secondary: true)))
                     }
-                } else {
-                    appendHistoricalRows(commit.files, commit: commit, index: index, key: key, to: &rows)
                 }
             }
             return rows
         }
-    }
 
-    private var keyboardRows: [GraphRow] { graphDisplay.navigation }
-
-    private func appendHistoricalRows(
-        _ files: [Commit.FileChange], commit: Commit, index: Int, key: GraphDisplayKey,
-        to rows: inout [GraphRow]
-    ) {
-        let id = commitRowID(commit)
-        if files.isEmpty {
-            rows.append(GraphRow(id: id + "\u{0}detail", commitIndex: index,
-                content: .placeholder(String(localized: "No changed files", table: "Git"))))
-        } else if key.mode == .tree
-            && (commit.stash == nil || Set(files.map(\.path)).count == files.count) {
-            let section = "commit:" + commit.id
-            let projection = displayCache.historyRows(files, section: section, collapsed: key.collapsed,
-                                                       row: displayRow)
-            var parents: [(path: String, id: String)] = []
-            for node in projection.nodes {
-                while let last = parents.last, !node.path.hasPrefix(last.path + "/") {
-                    parents.removeLast()
-                }
-                let parent = parents.last?.id ?? id
-                if node.isDirectory {
-                    let rowID = folderRowID(commit, section: section, path: node.path)
-                    rows.append(GraphRow(id: rowID, commitIndex: index, parent: parent,
-                        content: .folder(node, key: section + ":" + node.path)))
-                    parents.append((node.path, rowID))
-                } else if let file = projection.byPath[node.path] {
-                    rows.append(GraphRow(id: historicalFileRowID(commit, file: file),
-                        commitIndex: index, parent: parent,
-                        content: .historicalFile(file, row: node, showDirectory: false)))
-                }
-            }
-        } else {
-            for file in files {
-                rows.append(GraphRow(id: historicalFileRowID(commit, file: file),
-                    commitIndex: index, parent: id,
-                    content: .historicalFile(file, row: displayRow(file), showDirectory: true)))
-            }
-        }
-    }
-
-    private func appendWorktreeRows(
-        _ worktree: GitStatusModel.WorktreeChanges, commit: Commit, index: Int,
-        key: GraphDisplayKey, to rows: inout [GraphRow]
-    ) {
-        let sections: [(name: String, label: String, staged: Bool, entries: [GitStatusModel.Entry])] = [
-            ("merge", String(localized: "MERGE CHANGES", table: "Sidebar"), false,
-                worktree.entries.filter(\.isConflict)),
-            ("staged", String(localized: "STAGED CHANGES", table: "Sidebar"), true,
-                worktree.entries.filter { !$0.isConflict && $0.staged != "." && $0.staged != "?" }),
-            ("changes", String(localized: "CHANGES", table: "Sidebar"), false,
-                worktree.entries.filter { !$0.isConflict && $0.unstaged != "." })
-        ]
-        for section in sections where !section.entries.isEmpty {
-            let parentID = commitRowID(commit)
-            rows.append(GraphRow(id: parentID + "\u{0}section\u{0}" + section.name,
-                commitIndex: index, content: .section(label: section.label, count: section.entries.count)))
-            func displayRow(_ entry: GitStatusModel.Entry) -> TreeDisplayModel.Row {
-                .init(name: entry.fileName, path: entry.path, isDirectory: false,
-                      status: .init(Self.worktreeDisplayStatus(entry, staged: section.staged)))
-            }
-            if key.mode == .tree {
-                let sectionKey = "worktree:" + worktree.path + ":" + section.name
-                let projection = displayCache.worktreeRows(
-                    section.entries, section: sectionKey, collapsed: key.collapsed, row: displayRow
-                )
+        private mutating func appendHistoricalRows(
+            _ files: [Commit.FileChange], commit: Commit, index: Int, key: GraphDisplayKey,
+            to rows: inout [GraphRow]
+        ) {
+            let id = key.prefix + commit.id
+            if files.isEmpty {
+                rows.append(GraphRow(id: id + "\u{0}detail", commitIndex: index,
+                    content: .placeholder(String(localized: "No changed files", table: "Git"))))
+            } else if key.mode == .tree
+                && (commit.stash == nil || Set(files.map(\.path)).count == files.count) {
+                let section = "commit:" + commit.id
+                let projection = historyRows(files, section: section, collapsed: key.collapsed,
+                                                           row: RecentCommitsView.displayRow)
                 var parents: [(path: String, id: String)] = []
                 for node in projection.nodes {
+                    if Task.isCancelled { return }
                     while let last = parents.last, !node.path.hasPrefix(last.path + "/") {
                         parents.removeLast()
                     }
-                    let parent = parents.last?.id ?? parentID
+                    let parent = parents.last?.id ?? id
                     if node.isDirectory {
-                        let rowID = folderRowID(commit, section: section.name, path: node.path)
+                        let rowID = Self.folderID(id, section: section, path: node.path)
                         rows.append(GraphRow(id: rowID, commitIndex: index, parent: parent,
-                            content: .folder(node, key: sectionKey + ":" + node.path)))
+                            content: .folder(node, key: section + ":" + node.path)))
                         parents.append((node.path, rowID))
-                    } else if let entry = projection.byPath[node.path] {
-                        rows.append(GraphRow(
-                            id: worktreeFileRowID(commit, section: section.name, path: entry.path),
+                    } else if let file = projection.byPath[node.path] {
+                        rows.append(GraphRow(id: GraphRow.historyID(id, file: file),
                             commitIndex: index, parent: parent,
-                            content: .worktreeFile(worktree, entry, row: node, section: section.name,
-                                                  staged: section.staged, showDirectory: false)))
+                            content: .historicalFile(file, row: node, showDirectory: false)))
                     }
                 }
             } else {
-                for entry in section.entries {
-                    rows.append(GraphRow(
-                        id: worktreeFileRowID(commit, section: section.name, path: entry.path),
-                        commitIndex: index, parent: parentID,
-                        content: .worktreeFile(worktree, entry, row: displayRow(entry), section: section.name,
-                                              staged: section.staged, showDirectory: true)))
+                for file in files {
+                    if Task.isCancelled { return }
+                    rows.append(GraphRow(id: GraphRow.historyID(id, file: file),
+                        commitIndex: index, parent: id,
+                        content: .historicalFile(file, row: RecentCommitsView.displayRow(file), showDirectory: true)))
                 }
             }
         }
+
+        private mutating func appendWorktreeRows(
+            _ worktree: GitStatusModel.WorktreeChanges, commit: Commit, index: Int,
+            key: GraphDisplayKey, to rows: inout [GraphRow]
+        ) {
+            let sections: [(name: String, label: String, staged: Bool, entries: [GitStatusModel.Entry])] = [
+                ("merge", String(localized: "MERGE CHANGES", table: "Sidebar"), false,
+                    worktree.entries.filter(\.isConflict)),
+                ("staged", String(localized: "STAGED CHANGES", table: "Sidebar"), true,
+                    worktree.entries.filter { !$0.isConflict && $0.staged != "." && $0.staged != "?" }),
+                ("changes", String(localized: "CHANGES", table: "Sidebar"), false,
+                    worktree.entries.filter { !$0.isConflict && $0.unstaged != "." })
+            ]
+            for section in sections where !section.entries.isEmpty {
+                let parentID = key.prefix + commit.id
+                rows.append(GraphRow(id: parentID + "\u{0}section\u{0}" + section.name,
+                    commitIndex: index, content: .section(label: section.label, count: section.entries.count)))
+                func displayRow(_ entry: GitStatusModel.Entry) -> TreeDisplayModel.Row {
+                    .init(name: entry.fileName, path: entry.path, isDirectory: false,
+                          status: .init(RecentCommitsView.worktreeDisplayStatus(entry, staged: section.staged)))
+                }
+                if key.mode == .tree {
+                    let sectionKey = "worktree:" + worktree.path + ":" + section.name
+                    let projection = worktreeRows(
+                        section.entries, section: sectionKey, collapsed: key.collapsed, row: displayRow
+                    )
+                    var parents: [(path: String, id: String)] = []
+                    for node in projection.nodes {
+                    if Task.isCancelled { return }
+                        while let last = parents.last, !node.path.hasPrefix(last.path + "/") {
+                            parents.removeLast()
+                        }
+                        let parent = parents.last?.id ?? parentID
+                        if node.isDirectory {
+                            let rowID = Self.folderID(parentID, section: section.name, path: node.path)
+                            rows.append(GraphRow(id: rowID, commitIndex: index, parent: parent,
+                                content: .folder(node, key: sectionKey + ":" + node.path)))
+                            parents.append((node.path, rowID))
+                        } else if let entry = projection.byPath[node.path] {
+                            rows.append(GraphRow(
+                                id: GraphRow.worktreeID(parentID, section: section.name, path: entry.path),
+                                commitIndex: index, parent: parent,
+                                content: .worktreeFile(worktree, entry, row: node, section: section.name,
+                                                      staged: section.staged, showDirectory: false)))
+                        }
+                    }
+                } else {
+                    for entry in section.entries {
+                        if Task.isCancelled { return }
+                        rows.append(GraphRow(
+                            id: GraphRow.worktreeID(parentID, section: section.name, path: entry.path),
+                            commitIndex: index, parent: parentID,
+                            content: .worktreeFile(worktree, entry, row: displayRow(entry), section: section.name,
+                                                  staged: section.staged, showDirectory: true)))
+                    }
+                }
+            }
+        }
+
     }
+
+    private func commitRowID(_ commit: Commit) -> String {
+        "graph:\(selectionScope)\u{0}\(repoRoot)\u{0}\(commit.id)"
+    }
+
+    private func historicalFileRowID(_ commit: Commit, file: Commit.FileChange) -> String {
+        GraphRow.historyID(commitRowID(commit), file: file)
+    }
+
+    private func worktreeFileRowID(
+        _ commit: Commit, section: String, path: String
+    ) -> String {
+        GraphRow.worktreeID(commitRowID(commit), section: section, path: path)
+    }
+
+    private var displayKey: GraphDisplayKey {
+        GraphDisplayKey(
+            scope: selectionScope, repository: repoRoot, commits: commits,
+            historicalFiles: historicalFilesByOID, stashFiles: stashFilesByOID,
+            expanded: expandedCommitIDs,
+            collapsed: Set(collapsedFolders.filter { $0.hasPrefix("commit:") || $0.hasPrefix("worktree:") }),
+            mode: viewMode
+        )
+    }
+
+    private var graphDisplay: GraphDisplay {
+        displayCache.presentation(for: displayKey)?.display ?? .empty
+    }
+
+    private var keyboardRows: [GraphRow] { graphDisplay.navigation }
 
     @ViewBuilder
     private func graphRow(
@@ -880,29 +897,42 @@ struct RecentCommitsView: View {
         return extending || toggling
     }
 
-    /// Reveal the actual row rect in the shared native vertical scroll view.
-    /// A lazy target's estimated position is not a reliable scroll coordinate.
-    private func revealKeyboardRow(_ id: String) {
+    /// Reveal the row and, during keyboard navigation, its next neighbor in
+    /// the direction of travel. The native viewport decides the minimum scroll.
+    private func revealKeyboardRow(_ id: String, direction: Int = 0) {
+        let display = graphDisplay
         guard isKeyboardActive, let view = keyboardOwner.view,
               view.window?.firstResponder === view,
               let scroll = view.enclosingScrollView, let document = scroll.documentView,
-              let position = graphDisplay.positions[id] else { return }
+              let position = display.positions[id] else { return }
         let detailHeight = TreeRowStyle.rowHeight(fontScale)
         let commitHeight = Self.commitRowHeight(fontScale)
-        let offset = CGFloat(position.index - position.precedingCommits) * detailHeight
-            + CGFloat(position.precedingCommits) * commitHeight
-        let height = position.isCommit ? commitHeight : detailHeight
+        let visible = scroll.documentVisibleRect
         // The keyboard host fills the Graph, not the Changes sections above it.
         let top = view.convert(NSPoint(x: view.bounds.minX,
                                       y: view.isFlipped ? view.bounds.minY : view.bounds.maxY),
                                to: document)
-        let y = document.isFlipped ? top.y + offset : top.y - offset - height
-        let visible = scroll.documentVisibleRect
-        guard y < visible.minY || y + height > visible.maxY else { return }
-        GitGraphScrollLog.record("scroll-request", owner: keyboardOwner, row: id)
-        document.scrollToVisible(NSRect(x: visible.minX, y: y,
-                                            width: min(1, visible.width), height: height))
-        GitGraphScrollLog.record("scroll-finished", owner: keyboardOwner, row: id)
+        func rect(for position: GraphDisplay.Position) -> NSRect {
+            let offset = CGFloat(position.index - position.precedingCommits) * detailHeight
+                + CGFloat(position.precedingCommits) * commitHeight
+            let height = position.isCommit ? commitHeight : detailHeight
+            let y = document.isFlipped ? top.y + offset : top.y - offset - height
+            return NSRect(x: visible.minX, y: y, width: min(1, visible.width), height: height)
+        }
+        var target = rect(for: position)
+        let neighbor = position.navigationIndex + direction
+        if direction != 0, display.navigation.indices.contains(neighbor),
+           let adjacent = display.positions[display.navigation[neighbor].id] {
+            let pair = target.union(rect(for: adjacent))
+            if pair.height <= visible.height { target = pair }
+        }
+        guard target.minY < visible.minY || target.maxY > visible.maxY else { return }
+        document.scrollToVisible(target)
+    }
+
+    private func moveKeyboardCursor(to id: String, direction: Int) {
+        focusedRowID = id
+        revealKeyboardRow(id, direction: direction)
     }
 
     private func focusRow(_ id: String) {
@@ -936,6 +966,14 @@ struct RecentCommitsView: View {
         }
     }
 
+    private func isRequestedExpanded(_ row: GraphRow) -> Bool {
+        switch row.content {
+        case .commit: expandedCommitIDs.contains(commits[row.commitIndex].id)
+        case .folder(_, let key): !collapsedFolders.contains(key)
+        default: false
+        }
+    }
+
     private func activate(_ row: GraphRow) {
         let commit = commits[row.commitIndex]
         switch row.content {
@@ -953,62 +991,56 @@ struct RecentCommitsView: View {
     }
 
     private func handleGraphKey(_ event: NSEvent) -> Bool {
-        if GitGraphScrollLog.enabled {
-            let index = focusedRowID.flatMap { id in keyboardRows.firstIndex { $0.id == id } } ?? -1
-            GitGraphScrollLog.record(
-                "key-down", owner: keyboardOwner, row: focusedRowID,
-                detail: "code=\(event.keyCode) cmd=\(event.modifierFlags.contains(.command)) "
-                    + "shift=\(event.modifierFlags.contains(.shift)) index=\(index) "
-                    + "focused=\(keyboardFocused) active=\(isKeyboardActive)"
-            )
-        }
         guard isKeyboardActive, keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
               event.modifierFlags.intersection([.control, .option]).isEmpty
         else { return false }
-        let rows = keyboardRows
+        let display = graphDisplay
+        let rows = display.navigation
         guard !rows.isEmpty else { return false }
-        let current = focusedRowID.flatMap { id in rows.firstIndex { $0.id == id } }
+        let current = focusedRowID.flatMap { display.positions[$0]?.navigationIndex }
         if event.modifierFlags.contains(.command) {
             guard let current, event.keyCode == 125 || event.keyCode == 126,
                   case .commit = rows[current].content,
+                  let presentation = displayCache.presentation(for: displayKey),
                   let next = Self.navigationTarget(
-                    commits: commits, current: commits[rows[current].commitIndex], parent: event.keyCode == 125,
+                    commits: presentation.key.commits, current: presentation.key.commits[rows[current].commitIndex], parent: event.keyCode == 125,
                     alternate: event.modifierFlags.contains(.shift),
-                    layout: event.keyCode == 126 ? layoutCache.layout(for: commits) : nil
+                    layout: presentation.layout
                   ) else { return false }
-            focusRow(commitRowID(next))
-            if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
+            moveKeyboardCursor(to: commitRowID(next), direction: event.keyCode == 125 ? 1 : -1)
+            expandedCommitIDs.insert(next.id)
             return true
         }
         let extending = event.modifierFlags.contains(.shift)
         switch event.keyCode {
         case 125, 126: // Down / Up: Shift extends the selection, plain arrows move focus only.
             let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
-            let next = max(0, min(rows.count - 1, start + (event.keyCode == 125 ? 1 : -1)))
+            let direction = event.keyCode == 125 ? 1 : -1
+            let next = max(0, min(rows.count - 1, start + direction))
             if extending {
-                selection.select(rows[next].id, visible: rows.map(\.id), extending: true,
+                selection.select(rows[next].id, visible: display.navigationIDs, extending: true,
                                  fallbackAnchor: current.map { rows[$0].id })
             }
-            focusedRowID = rows[next].id
+            moveKeyboardCursor(to: rows[next].id, direction: direction)
         case 49, 36, 76: // Space / Return / Enter: same action as clicking the current row
             guard !extending, let current else { return false }
-            selection.select(rows[current].id, visible: rows.map(\.id))
+            selection.select(rows[current].id, visible: display.navigationIDs)
             activate(rows[current])
         case 124: // Right expands or enters the first visible child
             guard !extending, let current else { return false }
             let row = rows[current]
-            if row.isExpandable && !row.isExpanded {
+            if row.isExpandable && !isRequestedExpanded(row) {
                 activate(row)
             } else if rows.indices.contains(current + 1), rows[current + 1].parent == row.id {
-                focusedRowID = rows[current + 1].id
+                moveKeyboardCursor(to: rows[current + 1].id, direction: 1)
             } else { return false }
         case 123: // Left collapses or selects the parent
             guard !extending, let current else { return false }
             let row = rows[current]
-            if row.isExpandable && row.isExpanded {
+            if row.isExpandable && isRequestedExpanded(row) {
                 activate(row)
             } else if let parent = row.parent {
-                focusedRowID = parent
+                moveKeyboardCursor(to: parent, direction: -1)
             } else { return false }
         case 53:
             guard !extending else { return false }
@@ -1019,37 +1051,36 @@ struct RecentCommitsView: View {
     }
 
     private func requestMoreIfNeeded(after id: String) {
-        guard hasMoreCommits, !isLoadingMore, requestedLastCommit != id else { return }
+        guard requestedLastCommit != id else { return }
         if loadMore() { requestedLastCommit = id }
     }
 
     /// Navigate only real Git commits. Worktree and Stash pseudo nodes never form edges.
     static func navigationTarget(
         commits: [Commit], current: Commit, parent: Bool, alternate: Bool,
-        layout: CommitGraphLayout? = nil
+        layout: CommitGraphLayout
     ) -> Commit? {
         guard current.stash == nil, current.worktree == nil else { return nil }
-        let real = commits.filter { $0.stash == nil && $0.worktree == nil }
         if parent {
             let index = alternate ? 1 : 0
             guard current.parentHashes.indices.contains(index) else { return nil }
-            return real.first { $0.hash == current.parentHashes[index] }
+            return commits.first {
+                $0.stash == nil && $0.worktree == nil && $0.hash == current.parentHashes[index]
+            }
         }
-        let layout = layout ?? CommitGraphLayout(commits: commits)
-        let lanes = Dictionary(uniqueKeysWithValues: zip(commits, layout.rows).compactMap {
-            commit, row -> (String, Int)? in
-            commit.stash == nil && commit.worktree == nil ? (commit.hash, row.node.lane) : nil
-        })
-        let positions = Dictionary(uniqueKeysWithValues: real.enumerated().map { ($0.element.hash, $0.offset) })
-        let lane = lanes[current.hash]
-        let descendants = real.filter { $0.parentHashes.contains(current.hash) }
-        let ordered = descendants.sorted {
-            let left = lanes[$0.hash] == lane ? 0 : 1
-            let right = lanes[$1.hash] == lane ? 0 : 1
-            if left != right { return left < right }
-            return (positions[$0.hash] ?? 0) < (positions[$1.hash] ?? 0)
+        let lane = commits.firstIndex {
+            $0.stash == nil && $0.worktree == nil && $0.hash == current.hash
+        }.map { layout.rows[$0].node.lane }
+        // Preserve the existing history order within each group; only direct
+        // children on the current path take priority over other children.
+        var sameLane: [Commit] = []
+        var otherLanes: [Commit] = []
+        for (commit, row) in zip(commits, layout.rows)
+            where commit.stash == nil && commit.worktree == nil && commit.parentHashes.contains(current.hash) {
+            if row.node.lane == lane { sameLane.append(commit) }
+            else { otherLanes.append(commit) }
         }
-        return ordered.dropFirst(alternate ? 1 : 0).first
+        return (sameLane + otherLanes).dropFirst(alternate ? 1 : 0).first
     }
 
     private func selectAndToggle(_ commit: Commit) {
@@ -1089,8 +1120,6 @@ struct RecentCommitsView: View {
     private func toggle(_ commit: Commit) {
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
-        } else if commit.worktree == nil {
-            loadBinaryStatus(commit)
         }
     }
 
@@ -1315,13 +1344,14 @@ struct RecentCommitsView: View {
         if selected.count == selection.ids.count {
             let hashes = selected.map(\.hash)
             let allOrdinary = selected.allSatisfy { $0.parentHashes.count <= 1 }
+            let parents = commitParents
             let canDrop = !GitStatusModel.historyRewriteTargets(
                 selected: hashes, kind: .drop, head: headOID, root: repoRoot,
-                worktrees: worktreeLocations, parents: commitParents
+                worktrees: worktreeLocations, parents: parents
             ).isEmpty
             let canSquash = !GitStatusModel.historyRewriteTargets(
                 selected: hashes, kind: .squash, head: headOID, root: repoRoot,
-                worktrees: worktreeLocations, parents: commitParents
+                worktrees: worktreeLocations, parents: parents
             ).isEmpty
             Button(String(localized: "Copy Hashes", table: "Git")) {
                 copy(hashes.joined(separator: "\n"))
@@ -1393,7 +1423,7 @@ struct RecentCommitsView: View {
         return location.branch ?? String(localized: "\(name) · No branch", table: "Git")
     }
 
-    static func worktreeDisplayStatus(_ entry: GitStatusModel.Entry,
+    nonisolated static func worktreeDisplayStatus(_ entry: GitStatusModel.Entry,
                                       staged: Bool) -> Character {
         entry.isConflict ? "U" : staged ? entry.staged : entry.unstaged
     }
@@ -1865,7 +1895,7 @@ struct RecentCommitsView: View {
         }
     }
 
-    private func displayRow(_ file: Commit.FileChange) -> TreeDisplayModel.Row {
+    private nonisolated static func displayRow(_ file: Commit.FileChange) -> TreeDisplayModel.Row {
         TreeDisplayModel.Row(name: file.fileName, path: file.path, isDirectory: false,
                              status: .init(file.status))
     }
@@ -1883,6 +1913,15 @@ struct RecentCommitsView: View {
 struct GitGraphPalette {
     // Twelve stable lane identities, using Ghostty's normal and bright ANSI hues.
     private static let slots = [4, 5, 2, 3, 6, 1, 12, 13, 10, 11, 14, 9]
+
+    private static var palettes: [GhosttyThemeDefinition: Self] = [:]
+
+    static func resolved(theme: GhosttyThemeDefinition) -> Self {
+        if let palette = palettes[theme] { return palette }
+        let palette = Self(theme: theme)
+        palettes[theme] = palette
+        return palette
+    }
 
     let colors: [NSColor]
     let iconInks: [NSColor]
@@ -2003,7 +2042,7 @@ struct CommitGraphRails: View {
     var body: some View {
         let _ = themeChanges.revision
         let theme = Theme.terminal(dark: colorScheme == .dark)
-        let palette = GitGraphPalette(theme: theme)
+        let palette = GitGraphPalette.resolved(theme: theme)
         Canvas { context, size in
             let middle = size.height / 2
             let backdrop = Color(nsColor: theme.sidebarNSColor)

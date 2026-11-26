@@ -78,7 +78,7 @@ enum ToolbarVisibility: String, CaseIterable, Identifiable {
 }
 
 /// File presentation for working-tree changes and commit history in Git; not Files.
-enum GitViewMode: String, CaseIterable, Identifiable {
+nonisolated enum GitViewMode: String, CaseIterable, Identifiable, Sendable {
     case tree
     case list
 

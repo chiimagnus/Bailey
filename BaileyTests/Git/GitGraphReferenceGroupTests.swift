@@ -11,7 +11,7 @@ final class GitGraphReferenceGroupTests: XCTestCase {
             Commit(
                 hash: oid(id), shortHash: String(repeating: String(id), count: 7),
                 subject: "commit", author: "Tester", date: .now,
-                parentHashes: parents.map(oid), references: [], files: []
+                parentHashes: parents.map(oid), references: []
             )
         }
         let commits = [
@@ -134,7 +134,7 @@ final class GitGraphReferenceGroupTests: XCTestCase {
             references: [
                 .init(kind: .remoteBranch, name: "origin/main"),
                 .init(kind: .tag, name: "v1.0"),
-            ], files: []
+            ]
         )
         let confirmed = RecentCommitsView.nodeHelp(commit, inHeadHistory: true)
         XCTAssertTrue(confirmed.contains(commit.hash))

@@ -77,7 +77,10 @@ struct GitPanel: View {
     private var expandedCommitIDsBinding: Binding<Set<String>> {
         Binding(
             get: { model.expandedCommitIDs },
-            set: { model.expandedCommitIDs = $0 }
+            set: {
+                guard hasCurrentPanelTarget else { return }
+                model.expandedCommitIDs = $0
+            }
         )
     }
     @State private var filterText = ""
@@ -1273,7 +1276,7 @@ struct GitPanel: View {
               manager.selectedProject === project,
               let context = project.panelContext,
               model.matchesPanelTarget(context.identity),
-              commit.files.contains(where: { $0.path == file.path }) else { return }
+              model.historicalFiles(for: commit)?.contains(file) == true else { return }
         let target = model.actionTarget()
         let current: @MainActor () -> Bool = {
             manager.selectedProject === project && manager.attachedWindow === window
@@ -1814,7 +1817,7 @@ struct GitPanel: View {
         let selected = model.selectedChanges
         let allowsBatchMutation = selected.count < 2 || (
             Set(selected.map(\.section)).count == 1
-                && selected.isSubset(of: Set(changes.selections))
+                && changes.selections.uniquelyContains(selected)
         )
         let graphCommits = model.graphCommits
         let graphTarget = model.actionTarget()
@@ -1933,6 +1936,7 @@ struct GitPanel: View {
                                 model.openInBrowser(remote: remote, commit: commit,
                                                     hostProviders: settings.gitHostProviders)
                             },
+                            historicalFilesByOID: model.historicalFilesByOID,
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             selectionScope: model.currentScope,
@@ -1940,14 +1944,6 @@ struct GitPanel: View {
                             fileAction: { commit, file, action in
                                 guard model.canBrowse(graphTarget) else { return }
                                 handleHistoricalFile(commit, file: file, action: action)
-                            },
-                            loadBinaryStatus: { commit in
-                                guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
-                                if let stash = commit.stash {
-                                    model.loadStashFiles(for: stash)
-                                } else {
-                                    model.loadHistoricalBinaryPaths(for: commit)
-                                }
                             },
                             isBinaryFile: { commit, file in
                                 model.isHistoricalBinaryFile(commit: commit, path: file.path)
@@ -1957,7 +1953,6 @@ struct GitPanel: View {
                             viewMode: settings.gitViewMode,
                             fontScale: panelFontScale,
                             hasMoreCommits: model.hasMoreRecentCommits,
-                            isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
                             openDiff: { commit, file in
                                 guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
@@ -2002,10 +1997,7 @@ struct GitPanel: View {
                                 presentStashDialog(stash, action: action)
                             },
                             openWorktreeDiff: { worktree, entry, staged in
-                                guard let project, manager.selectedProject === project,
-                                      let context = project.panelContext,
-                                      project.matchesPanelTarget(context.identity),
-                                      model.matchesPanelTarget(context.identity),
+                                guard hasCurrentPanelTarget,
                                       model.canBrowse(graphTarget),
                                       model.graphCommits.contains(where: {
                                           $0.worktree?.path == worktree.path
@@ -2021,7 +2013,7 @@ struct GitPanel: View {
                             },
                             canActOnWorktrees: !model.isBusy && model.hasCurrentWorktrees
                                 && model.canUseCurrentReferences,
-                            canRevealWorktreeInFinder: model.actionTarget().scope == "local",
+                            canRevealWorktreeInFinder: graphTarget.scope == "local",
                             worktreeAction: { location, action in
                                 presentWorktreeAction(location, action: action)
                             },
@@ -2042,6 +2034,21 @@ struct GitPanel: View {
                             onKeyboardAttached: focusGitChanges
                         )
                             .frame(maxWidth: .infinity)
+                            .onAppear {
+                                if hasCurrentPanelTarget, model.canBrowse(graphTarget) {
+                                    model.loadExpandedHistoryFiles()
+                                }
+                            }
+                            .onDisappear {
+                                if hasCurrentPanelTarget, model.canBrowse(graphTarget) {
+                                    model.releaseHistoryDetails()
+                                }
+                            }
+                            .onChange(of: model.canUseCurrentHistory) { _, verified in
+                                if verified, hasCurrentPanelTarget, model.canBrowse(graphTarget) {
+                                    model.loadExpandedHistoryFiles()
+                                }
+                            }
                         }
                     }
                 }
@@ -2050,15 +2057,6 @@ struct GitPanel: View {
             .padding(.bottom, 8)
             .frame(width: geometry.size.width, alignment: .leading)
                 }
-            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) {
-                oldOffset, newOffset in
-                if GitGraphScrollLog.enabled {
-                    GitGraphScrollLog.record(
-                        "scroll-offset", owner: graphKeyboardOwner,
-                        detail: "previous=\(oldOffset) current=\(newOffset)"
-                    )
-                }
-            }
             .background {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGitChangeKey,
                                  onFocusChanged: { focused in
@@ -2077,9 +2075,7 @@ struct GitPanel: View {
                                          model.selectAllChanges(visible: changes.selections)
                                      case .copy:
                                          if let target = model.selectedChanges.isEmpty
-                                             ? selectedChange : changes.selections.first(where: {
-                                                 model.selectedChanges.contains($0)
-                                             }) {
+                                             ? selectedChange : changes.selections.ordered(model.selectedChanges)?.first {
                                              copyContextPaths(for: target, absolute: false)
                                          }
                                      default: break
@@ -2096,10 +2092,6 @@ struct GitPanel: View {
                     .focusedValue(\.baileyPathActions, focusedChangePathActions)
             }
             .onAppear {
-                GitGraphScrollLog.record(
-                    "panel-appear", owner: graphKeyboardOwner,
-                    detail: "active=\(isGitActive) target=\(hasCurrentPanelTarget)"
-                )
                 focusGitChanges()
                 revealActiveChange()
             }
@@ -2107,9 +2099,6 @@ struct GitPanel: View {
                 revealActiveChange()
             }
             .onChange(of: isGitActive) { _, active in
-                GitGraphScrollLog.record(
-                    "panel-active", owner: graphKeyboardOwner, detail: "active=\(active)"
-                )
                 if active {
                     focusGitChanges()
                     revealActiveChange()
@@ -2154,15 +2143,18 @@ struct GitPanel: View {
                 if !isGitActive { revealActiveChange() }
             }
             .onChange(of: selectedChange) { _, key in
-                if let key, keyboardFocused { proxy.scrollTo(key) }
+                if keyboardFocused, let key, let index = changes.selections.position(of: key) {
+                    proxy.scrollTo(changes.navigation[index].row.id)
+                }
             }
             .onChange(of: keyboardFocused) { _, focused in
-                if focused, let selectedChange { proxy.scrollTo(selectedChange) }
+                if focused, let selectedChange, let index = changes.selections.position(of: selectedChange) {
+                    proxy.scrollTo(changes.navigation[index].row.id)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
                 notification in
                 if (notification.object as? NSWindow) === keyboardOwner.view?.window {
-                    GitGraphScrollLog.record("window-became-key", owner: graphKeyboardOwner)
                     focusGitChanges()
                 }
             }
@@ -2170,23 +2162,14 @@ struct GitPanel: View {
         }
     }
 
-    private var navigableChanges: [VisibleChange] { changesDisplay.navigation }
-
     private func focusGitChanges() {
-        if GitGraphScrollLog.enabled {
-            GitGraphScrollLog.record(
-                "focus-request", owner: graphKeyboardOwner,
-                detail: "region=\(lastKeyboardRegion) active=\(isGitActive) "
-                    + "target=\(hasCurrentPanelTarget) changes=\(navigableChanges.count)"
-            )
-        }
         guard isGitActive, hasCurrentPanelTarget else { return }
-        let rows = navigableChanges
-        if !rows.isEmpty, !rows.contains(where: { selection(for: $0) == selectedChange }) {
-            selectedChange = selection(for: rows[0])
+        let visible = changesDisplay.selections
+        if !visible.isEmpty, selectedChange.map({ visible.contains($0) }) != true {
+            selectedChange = visible.first
         }
-        waitingForChanges = rows.isEmpty
-        let tree = (lastKeyboardRegion == .graph || rows.isEmpty)
+        waitingForChanges = visible.isEmpty
+        let tree = (lastKeyboardRegion == .graph || visible.isEmpty)
             ? graphKeyboardOwner.view : keyboardOwner.view
         if let tree, let project {
             manager.registerTreeResponder(tree, for: .git, in: project)
@@ -2194,21 +2177,18 @@ struct GitPanel: View {
         guard !manager.isCommandPaletteVisible,
               let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
               window.isKeyWindow, NSApp.isActive, window.attachedSheet == nil else {
-            GitGraphScrollLog.record("focus-deferred", owner: graphKeyboardOwner)
             return
         }
         // An active native input always owns its field editor.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
-            GitGraphScrollLog.record("focus-native-input", owner: graphKeyboardOwner)
             return
         }
-        if (lastKeyboardRegion == .graph || rows.isEmpty),
+        if (lastKeyboardRegion == .graph || visible.isEmpty),
            graphKeyboardOwner.view?.window === window {
             graphKeyboardOwner.focus()
-        } else if !rows.isEmpty {
+        } else if !visible.isEmpty {
             keyboardOwner.focus()
         }
-        GitGraphScrollLog.record("focus-finished", owner: graphKeyboardOwner)
     }
 
     /// Dock activation changes the selected SCM resource, not its native keyboard owner.
@@ -2231,19 +2211,16 @@ struct GitPanel: View {
             case .worktree: kind = .unstaged
             case .commit, .revision, .revisionWorktree: return
             }
-            change = changes.navigation.first {
-                ($0.kind == kind || (kind == .unstaged && $0.kind == .merge))
-                    && $0.entry?.path == diff.path
-            }
+            change = changes.file(path: diff.path, sections: kind == .unstaged ? [.merge, .unstaged] : [.staged])
         case .file(let file):
             guard file.workspaceIdentity == project.workspaceIdentity else { return }
-            let matching = changes.navigation.filter {
-                guard let entry = $0.entry else { return false }
-                return model.absolutePath(for: entry) == file.path
-            }
-            change = matching.first(where: { $0.kind == .unstaged })
-                ?? matching.first(where: { $0.kind == .merge })
-                ?? matching.first(where: { $0.kind == .staged })
+            let root = model.repoRoot
+            let prefix = root.hasSuffix("/") ? root : root + "/"
+            guard file.path.hasPrefix(prefix) else { return }
+            let path = String(file.path.dropFirst(prefix.count))
+            guard let match = changes.file(path: path, sections: [.unstaged, .merge, .staged]),
+                  let entry = match.entry, model.absolutePath(for: entry) == file.path else { return }
+            change = match
         case .session, .browser, .none:
             return
         }
@@ -2274,11 +2251,7 @@ struct GitPanel: View {
               target.scope == model.currentScope, target.repository == model.repoRoot
         else { return [] }
         if model.selectedChanges.contains(target) {
-            let visible = changesDisplay.selections.filter {
-                model.selectedChanges.contains($0)
-            }
-            guard visible.count == model.selectedChanges.count else { return [] }
-            return visible
+            return changesDisplay.selections.ordered(model.selectedChanges) ?? []
         }
         return [target]
     }
@@ -2312,7 +2285,7 @@ struct GitPanel: View {
             guard isGitActive, hasCurrentPanelTarget, keyboardFocused else { return [] }
             let visible = changesDisplay.selections
             guard let key = model.selectedChanges.isEmpty ? selectedChange
-                : visible.first(where: { model.selectedChanges.contains($0) }) else { return [] }
+                : visible.ordered(model.selectedChanges)?.first else { return [] }
             return contextPaths(for: key, absolute: absolute)
         }
         return FocusedPathActions(paths: paths, revealablePaths: {
@@ -2364,7 +2337,7 @@ struct GitPanel: View {
         let changes = changesDisplay
         let rows = changes.navigation
         guard !rows.isEmpty else { return false }
-        let current = selectedChange.flatMap { changes.selections.firstIndex(of: $0) }
+        let current = selectedChange.flatMap { changes.selections.position(of: $0) }
         let extending = event.modifierFlags.contains(.shift)
         switch event.keyCode {
         case 125, 126: // Down / Up: Shift expands or contracts without browsing Diff
@@ -2413,18 +2386,23 @@ struct GitPanel: View {
     ) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(rows, id: \.row.id) { change in
-                if change.row.isDirectory {
-                    directoryRow(change.row, kind: change.kind,
-                                 allowsBatchMutation: allowsBatchMutation)
-                        .id(selection(for: change))
-                } else if let entry = change.entry {
-                    row(entry, kind: change.kind,
-                        showDirectory: settings.gitViewMode != .tree,
-                        displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
-                        .id(selection(for: change))
+                // One lazy child and one identity per row, including directories.
+                VStack(alignment: .leading, spacing: 0) {
+                    if change.row.isDirectory {
+                        directoryRow(change.row, kind: change.kind,
+                                     allowsBatchMutation: allowsBatchMutation)
+                    } else if let entry = change.entry {
+                        row(entry, kind: change.kind,
+                            showDirectory: settings.gitViewMode != .tree,
+                            displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
+                    }
                 }
             }
         }
+        // Every change row uses the shared fixed tree height. An offscreen
+        // section must not ask SwiftUI to discover its full height before Graph.
+        .frame(height: CGFloat(rows.count) * TreeRowStyle.rowHeight(panelFontScale),
+               alignment: .topLeading)
     }
 
     private func directoryRow(
@@ -2447,7 +2425,8 @@ struct GitPanel: View {
             isSelected: model.selectedChanges.contains(key),
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
             compactSegment: { component, index in
-                directorySegment(component, index: index, row: item, kind: kind)
+                directorySegment(component, index: index, row: item, kind: kind,
+                                 allowsBatchMutation: allowsBatchMutation)
             },
             toggle: {
                 guard hasCurrentPanelTarget else { return }
@@ -2487,13 +2466,14 @@ struct GitPanel: View {
         }
         .contextMenu {
             directoryMenu(path: item.path, target: key, kind: kind,
-                          stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
+                          stageTrigger: stageTrigger, unstageTrigger: unstageTrigger,
+                          allowsBatchMutation: allowsBatchMutation)
         }
     }
 
     private func directorySegment(
         _ component: TreeDisplayModel.Row.CompactComponent, index: Int,
-        row: TreeDisplayModel.Row, kind: GitEntryRow.Kind
+        row: TreeDisplayModel.Row, kind: GitEntryRow.Kind, allowsBatchMutation: Bool
     ) -> AnyView {
         let cursor = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
                                      section: kind.rawValue, path: row.path)
@@ -2515,7 +2495,8 @@ struct GitPanel: View {
             isExpectedMenu: { contextChange == context && PathMenuShortcut.hasPathActions($0) }) {
                 directoryMenu(path: component.path, target: context, kind: kind,
                     stageTrigger: .entry(path: component.path, operation: .stage),
-                    unstageTrigger: .entry(path: component.path, operation: .unstage))
+                    unstageTrigger: .entry(path: component.path, operation: .unstage),
+                    allowsBatchMutation: allowsBatchMutation)
             })
     }
 
@@ -2705,11 +2686,17 @@ struct GitPanel: View {
     @ViewBuilder
     private func directoryMenu(
         path: String, target: ChangeSelection, kind: GitEntryRow.Kind,
-        stageTrigger: OperationTrigger, unstageTrigger: OperationTrigger
+        stageTrigger: OperationTrigger, unstageTrigger: OperationTrigger,
+        allowsBatchMutation: Bool
     ) -> some View {
         let multiple = isGroupContext(target)
-        let available = !selectedEntries(for: target, kind: kind).isEmpty
-        if !multiple || canOperateSelectedChanges(target, kind: kind) {
+        let valid = hasCurrentPanelTarget && model.canUseCurrentStatus
+            && target.scope == model.currentScope && target.repository == model.repoRoot
+            && (multiple ? allowsBatchMutation : (!model.selectedChanges.contains(target)
+                || changesDisplay.selections.uniquelyContains([target])))
+        let flags = changesDisplay.pathFlags[kind] ?? [:]
+        let available = valid && flags[target.path] != nil
+        if !multiple || valid {
             if kind == .staged {
                 Button(String(localized: "Unstage Changes", table: "Sidebar")) {
                     performOperation(unstageTrigger) {
@@ -2728,7 +2715,7 @@ struct GitPanel: View {
                         requestDiscard(selectedEntries(for: target, kind: kind),
                                        trigger: .entry(path: path, operation: .discard))
                     }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
-                    if !multiple && selectedEntries(for: target, kind: kind).contains(where: { $0.staged == "?" }) {
+                    if !multiple && valid && flags[path] == true {
                         Button(String(localized: "Add to .gitignore", table: "Git")) {
                             ignorePaths([path], isDirectory: true)
                         }.disabled(model.isBusy)

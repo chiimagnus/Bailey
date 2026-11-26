@@ -611,6 +611,26 @@
         }
       }
     },
+    "Loading commit changes…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载提交变更…"
+          }
+        }
+      }
+    },
+    "Unable to read commit changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取提交变更"
+          }
+        }
+      }
+    },
     "Loading stash changes…" : {
       "localizations" : {
         "zh-Hans" : {

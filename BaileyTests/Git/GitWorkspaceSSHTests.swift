@@ -207,6 +207,12 @@ final class GitWorkspaceSSHTests: XCTestCase {
             let remaining = try await git(["ls-remote", "origin", "refs/heads/export/history"])
             XCTAssertEqual(remaining, "")
             let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == revision })
+            model.loadHistoricalFiles(for: commit)
+            let deadline = Date().addingTimeInterval(40)
+            while model.historicalFiles(for: commit) == nil {
+                guard Date() < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
             let captured = await model.historicalFileState("literal[1].bin", target: model.actionTarget())
             let state = try XCTUnwrap(captured)
             model.resetHistoricalFile("literal[1].bin", at: commit,

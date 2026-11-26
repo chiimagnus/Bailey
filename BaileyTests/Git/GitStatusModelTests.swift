@@ -75,6 +75,14 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    private func requireHistoricalFiles(
+        _ commit: GitStatusModel.RecentCommit, in model: GitStatusModel
+    ) async throws -> [GitStatusModel.RecentCommit.FileChange] {
+        model.loadHistoricalFiles(for: commit)
+        try await wait { model.historicalFiles(for: commit) != nil }
+        return try XCTUnwrap(model.historicalFiles(for: commit))
+    }
+
     func testHostedCommitAvailabilityUpdatesAfterRealPushToEachRemote() async throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-Hosted-\(UUID().uuidString)")
@@ -158,7 +166,7 @@ final class GitStatusModelTests: XCTestCase {
         )
         let commit = String(repeating: "a", count: 40)
         git.changeCursor = selection
-        git.selectChange(selection, visible: [selection])
+        git.selectChange(selection, visible: .init([selection]))
         git.expandedCommitIDs = [commit]
 
         git.syncSelectedProject(project: first, isCurrent: { _ in true })
@@ -175,7 +183,7 @@ final class GitStatusModelTests: XCTestCase {
                       "The previous project's Graph must not appear in the new project")
 
         git.changeCursor = selection
-        git.selectChange(selection, visible: [selection])
+        git.selectChange(selection, visible: .init([selection]))
         git.expandedCommitIDs = [commit]
         git.sync(root: directory.appendingPathComponent("other").path)
         XCTAssertNil(git.changeCursor)
@@ -205,10 +213,25 @@ final class GitStatusModelTests: XCTestCase {
         }
         model.sync(root: root.path)
         try await wait { model.changedEntries.count == count && model.hasResolvedStatus }
+        let initial = model.displayChanges(filter: "", mode: .tree, closed: [])
+        XCTAssertEqual(initial.changedCount, count)
+        XCTAssertEqual(initial.changedRows.compactMap(\.entry).count, count)
+        XCTAssertEqual(initial.navigation.count, initial.selections.count)
+        XCTAssertEqual(initial.file(path: "src/group-57/file-5700.txt", sections: [.unstaged])?.entry?.path,
+                       "src/group-57/file-5700.txt")
+        XCTAssertNil(initial.file(path: "src/group-57/file-5700.txt", sections: [.staged]))
+        XCTAssertNil(initial.file(path: "src/group-57", sections: [.unstaged]))
+        let end = try XCTUnwrap(initial.selections.last)
+        let startKey = try XCTUnwrap(initial.selections.first)
+        XCTAssertEqual(initial.selections.ordered([end, startKey]), [startKey, end])
+        XCTAssertEqual(initial.pathFlags[.unstaged]?["src"], true)
+        XCTAssertEqual(initial.pathFlags[.unstaged]?["src/group-0"], true)
+        XCTAssertNil(initial.pathFlags[.unstaged]?["src/group-00"])
+        let filtered = model.displayChanges(filter: "file-5700.txt", mode: .tree, closed: [])
+        XCTAssertEqual(filtered.changedCount, 1)
+        XCTAssertEqual(filtered.pathFlags[.unstaged]?["src/group-57"], true)
+        XCTAssertNil(filtered.pathFlags[.unstaged]?["src/group-0"])
         let first = model.displayChanges(filter: "", mode: .tree, closed: [])
-        XCTAssertEqual(first.changedCount, count)
-        XCTAssertEqual(first.changedRows.compactMap(\.entry).count, count)
-        XCTAssertEqual(first.navigation.count, first.selections.count)
 
         let start = CFAbsoluteTimeGetCurrent()
         for index in 0..<250 {
@@ -227,6 +250,8 @@ final class GitStatusModelTests: XCTestCase {
         let folded = model.displayChanges(filter: "", mode: .tree, closed: [])
         XCTAssertLessThan(folded.changedRows.count, first.changedRows.count)
         XCTAssertEqual(folded.changedCount, count)
+        XCTAssertNil(folded.file(path: "src/group-57/file-5700.txt", sections: [.unstaged]))
+        XCTAssertNil(folded.selections.ordered([end, startKey]))
         model.toggleCollapsedFolder("unstaged:src")
         XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).selections,
                        first.selections)
@@ -255,6 +280,8 @@ final class GitStatusModelTests: XCTestCase {
         print("GIT_CHANGE_SCALE entries=\(count) cached_switch_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
         XCTAssertEqual(returned.changedCount, count)
         XCTAssertEqual(returned.selections, first.selections)
+        XCTAssertEqual(returned.file(path: "src/group-57/file-5700.txt", sections: [.unstaged])?.entry?.path,
+                       "src/group-57/file-5700.txt")
         try await wait { !model.isRefreshing }
 
         XCTAssertEqual(model.displayChanges(filter: "FiLe-5700", mode: .tree, closed: [])
@@ -360,9 +387,10 @@ final class GitStatusModelTests: XCTestCase {
                         section: "unstaged", path: $0.path
                     )
                 }
+                let order = GitStatusModel.ChangeSelectionOrder(visible)
                 let t1 = CFAbsoluteTimeGetCurrent()
                 let position = [0, count / 2, count - 1][sample % 3]
-                model.selectChange(visible[position], visible: visible,
+                model.selectChange(visible[position], visible: order,
                                    extending: sample % 3 == 2,
                                    toggling: sample % 3 == 1)
                 let t2 = CFAbsoluteTimeGetCurrent()
@@ -375,37 +403,68 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testVisibleChangeIndexPreservesSparseOrderAndRejectsAmbiguousTargetsAtScale() {
+        for count in [1_000, 10_000, 100_000] {
+            let keys = (0..<count).map {
+                GitStatusModel.ChangeSelection(scope: "local", repository: "/fixture",
+                    section: "unstaged", path: "Sources/Module-\($0).swift")
+            }
+            let order = GitStatusModel.ChangeSelectionOrder(keys)
+            let selected: Set<GitStatusModel.ChangeSelection> = [keys[0], keys[count / 2], keys[count - 1]]
+            let expected = [keys[0], keys[count / 2], keys[count - 1]]
+            var scan: [Double] = []
+            var indexed: [Double] = []
+            for _ in 0..<30 {
+                let start = CFAbsoluteTimeGetCurrent()
+                XCTAssertEqual(keys.filter { selected.contains($0) }, expected)
+                scan.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                let begin = CFAbsoluteTimeGetCurrent()
+                XCTAssertEqual(order.ordered(selected), expected)
+                XCTAssertEqual(order.position(of: keys[count - 1]), count - 1)
+                indexed.append((CFAbsoluteTimeGetCurrent() - begin) * 1_000)
+            }
+            XCTAssertNil(order.ordered([.init(scope: "remote", repository: "/fixture",
+                                               section: "unstaged", path: keys[0].path)]))
+            let duplicate = GitStatusModel.ChangeSelectionOrder([keys[0], keys[0], keys[1]])
+            XCTAssertEqual(duplicate.position(of: keys[0]), 0)
+            XCTAssertNil(duplicate.ordered([keys[0]]))
+            XCTAssertEqual(duplicate.ordered([keys[1]]), [keys[1]])
+            XCTAssertEqual(order.ordered(Set(keys)), keys)
+            print("GIT_SELECTION_INDEX count=\(count) scan=\(scan.sorted()[15]) indexed=\(indexed.sorted()[15]) scan_p95=\(scan.sorted()[28]) indexed_p95=\(indexed.sorted()[28]) scan_max=\(scan.max()!) indexed_max=\(indexed.max()!)")
+        }
+    }
+
     func testGitResourceSelectionPreservesIslandsAndSeparatesIndexSections() {
         let model = GitStatusModel()
         func row(_ path: String, section: String = "unstaged") -> GitStatusModel.ChangeSelection {
             .init(scope: "local", repository: "/fixture", section: section, path: path)
         }
         let visible = ["a", "b", "c", "d", "e"].map { row($0) }
-        model.selectChange(visible[0], visible: visible)
-        model.selectChange(visible[2], visible: visible, toggling: true)
+        model.selectChange(visible[0], visible: .init(visible))
+        model.selectChange(visible[2], visible: .init(visible), toggling: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2]])
-        model.selectChange(visible[4], visible: visible, extending: true)
+        model.selectChange(visible[4], visible: .init(visible), extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
-        model.selectChange(visible[3], visible: visible, extending: true)
+        model.selectChange(visible[3], visible: .init(visible), extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
                        "Mouse Shift retracts the anchor's contiguous range but preserves islands")
 
-        model.moveChangeCursor(visible: visible, by: 1, extending: true)
+        model.moveChangeCursor(visible: .init(visible), by: 1, extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
-        model.moveChangeCursor(visible: visible, by: -1, extending: true)
+        model.moveChangeCursor(visible: .init(visible), by: -1, extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
                        "Keyboard Shift incrementally retracts without replaying mouse range")
 
         let staged = row("c", section: "staged")
-        model.selectChange(staged, visible: visible + [staged], toggling: true)
+        model.selectChange(staged, visible: .init(visible + [staged]), toggling: true)
         XCTAssertTrue(model.selectedChanges.contains(staged))
         XCTAssertTrue(model.selectedChanges.contains(visible[2]),
                       "Staged and unstaged paths are different resources")
-        model.reconcileChangeSelection(visible: [visible[0], visible[1], staged])
+        model.reconcileChangeSelection(visible: .init([visible[0], visible[1], staged]))
         XCTAssertEqual(model.selectedChanges, [visible[0], staged])
         XCTAssertEqual(model.changeCursor, staged)
 
-        model.selectAllChanges(visible: visible + [staged])
+        model.selectAllChanges(visible: .init(visible + [staged]))
         XCTAssertEqual(model.selectedChanges.count, visible.count + 1)
         model.clearChangeSelection()
         XCTAssertTrue(model.selectedChanges.isEmpty)
@@ -528,21 +587,23 @@ final class GitStatusModelTests: XCTestCase {
             try await wait { model.canUseCurrentHistory
                 && model.recentCommits.contains(where: { $0.hash == head }) }
             let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == head })
-            XCTAssertEqual(Set(commit.files.map { "\($0.status)|\($0.path)" }), expected)
-            XCTAssertEqual(commit.files.count, parsed.count)
-            let rows = commit.files.map {
+            XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+            let files = try await requireHistoricalFiles(commit, in: model)
+            XCTAssertEqual(Set(files.map { "\($0.status)|\($0.path)" }), expected)
+            XCTAssertEqual(files.count, parsed.count)
+            let rows = files.map {
                 TreeDisplayModel.Row(name: $0.fileName, path: $0.path,
                                      isDirectory: false, status: .init($0.status))
             }
             let tree = TreeDisplayModel.pathRows(rows, section: "commit", collapsed: [])
             let leaves = tree.filter { !$0.isDirectory }
             XCTAssertEqual(Set(leaves.map(\.id)).count, expected.count)
-            XCTAssertEqual(Set(leaves.map(\.path)), Set(commit.files.map(\.path)))
-            for change in commit.files {
+            XCTAssertEqual(Set(leaves.map(\.path)), Set(files.map(\.path)))
+            for change in files {
                 XCTAssertEqual(leaves.first(where: { $0.path == change.path })?.status,
                                TreeDisplayModel.Status(change.status))
             }
-            XCTAssertEqual(leaves.count, commit.files.count)
+            XCTAssertEqual(leaves.count, files.count)
             for path in ["pkg/tool", "pkg/dirToFile", "pkg/link"] {
                 XCTAssertTrue(tree.contains { $0.path == path && $0.isDirectory })
                 XCTAssertTrue(tree.contains { $0.path == path && !$0.isDirectory })
@@ -592,31 +653,39 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.canUseCurrentHistory
             && model.recentCommits.contains(where: { $0.hash == base }) }
         let graph = model.graphCommits
+        let layout = CommitGraphLayout(commits: graph)
         let mergeCommit = try XCTUnwrap(graph.first { $0.hash == merge && $0.stash == nil })
         let baseCommit = try XCTUnwrap(graph.first { $0.hash == base && $0.stash == nil })
         XCTAssertEqual(mergeCommit.parentHashes, [main, feature])
         XCTAssertEqual(RecentCommitsView.navigationTarget(
-            commits: graph, current: mergeCommit, parent: true, alternate: false
+            commits: graph, current: mergeCommit, parent: true, alternate: false, layout: layout
         )?.hash, main)
         XCTAssertEqual(RecentCommitsView.navigationTarget(
-            commits: graph, current: mergeCommit, parent: true, alternate: true
+            commits: graph, current: mergeCommit, parent: true, alternate: true, layout: layout
         )?.hash, feature)
         let missingFirstParent = graph.filter { $0.hash != main }
+        let missingLayout = CommitGraphLayout(commits: missingFirstParent)
         XCTAssertNil(RecentCommitsView.navigationTarget(
-            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: false
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: false, layout: missingLayout
         ), "Missing first parent must not silently navigate to the second parent")
         XCTAssertEqual(RecentCommitsView.navigationTarget(
-            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: true
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: true, layout: missingLayout
         )?.hash, feature)
         XCTAssertNil(RecentCommitsView.navigationTarget(
-            commits: graph, current: baseCommit, parent: true, alternate: false
+            commits: graph, current: baseCommit, parent: true, alternate: false, layout: layout
         ))
         let child = RecentCommitsView.navigationTarget(
-            commits: graph, current: baseCommit, parent: false, alternate: false
+            commits: graph, current: baseCommit, parent: false, alternate: false, layout: layout
         )
         let alternative = RecentCommitsView.navigationTarget(
-            commits: graph, current: baseCommit, parent: false, alternate: true
+            commits: graph, current: baseCommit, parent: false, alternate: true, layout: layout
         )
+        let baseLane = layout.rows[try XCTUnwrap(graph.firstIndex { $0.hash == base })].node.lane
+        let childrenInOrder = zip(graph, layout.rows).filter {
+            $0.0.parentHashes.contains(base) && $0.0.stash == nil && $0.0.worktree == nil
+        }
+        let preferred = childrenInOrder.first { $0.1.node.lane == baseLane } ?? childrenInOrder.first
+        XCTAssertEqual(child?.hash, preferred?.0.hash)
         XCTAssertEqual(Set([child?.hash, alternative?.hash].compactMap { $0 }), [main, feature],
                        "Normal and alternative child navigation must reach both real branches")
         XCTAssertEqual(git(["rev-parse", "HEAD"]), merge)
@@ -1401,6 +1470,9 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertFalse(model.hasMoreRecentCommits)
         let pageCommands = Array((await backend.commands).dropFirst(beforePage)).joined(separator: "\n")
         XCTAssertTrue(pageCommands.contains("git 'log' "), pageCommands)
+        XCTAssertTrue(pageCommands.contains("'--no-patch'"), pageCommands)
+        XCTAssertFalse(pageCommands.contains("'--name-status'"), pageCommands)
+        XCTAssertTrue(model.historicalFilesByOID.isEmpty)
         XCTAssertFalse(pageCommands.contains("git 'diff' '--numstat' "), pageCommands)
         XCTAssertFalse(pageCommands.contains("count_bytes()"), pageCommands)
         XCTAssertFalse(pageCommands.contains("git 'stash' 'list' "), pageCommands)
@@ -1411,6 +1483,114 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { !model.isRefreshing }
         XCTAssertNotNil(model.refsByName["refs/tags/outside"])
+    }
+
+    func testHistoryPagesLoadHeadersAndReleaseExpandedDetails() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("source")
+        let shallow = base.appendingPathComponent("shallow")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        func git(_ args: [String], in directory: URL) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 30)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout
+        }
+        _ = try git(["init", "-q", "-b", "main"], in: root)
+        // Each real commit modifies an existing file and introduces a new path.
+        // fast-import keeps creation time independent of process startup latency.
+        var script = ""
+        for index in 0..<96 {
+            let message = "revision \(index)"
+            let content = "real source \(index)\n"
+            script += "commit refs/heads/main\ncommitter Bailey Test <test@invalid> \(1_700_000_000 + index) +0000\n"
+            script += "data \(message.utf8.count)\n" + message + "\n"
+            for path in ["shared.swift", "Sources/file-\(index).swift"] {
+                script += "M 100644 inline \(path)\ndata \(content.utf8.count)\n" + content + "\n"
+            }
+            script += "\n"
+        }
+        let imported = GitCommandExecution.runData(["fast-import", "--quiet"], in: root.path,
+            timeout: 30, stdin: Data(script.utf8))
+        XCTAssertEqual(imported.status, 0, imported.stderr)
+        _ = try git(["reset", "--hard", "main"], in: root)
+        func fullHistory(_ model: GitStatusModel, at directory: URL) throws -> [GitStatusModel.RecentCommit] {
+            let output = try git(["log", "--branches", "--remotes", "--tags",
+                "--date-order", "--diff-merges=first-parent", "--decorate=full",
+                "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
+                "--no-patch", "-z"], in: directory)
+            return GitStatusModel.parseRecentCommits(output, refsByName: model.refsByName)
+        }
+        for remote in [false, true] {
+            let model = GitStatusModel()
+            model.setLocalFileEventsForeground(false)
+            let backend: any WorkspaceBackend = remote
+                ? DiscardRemoteWorkspaceFixture() : LocalWorkspaceBackend.shared
+            model.sync(root: root.path, backend: backend, scope: remote ? "ssh:incremental" : "local")
+            try await wait { model.hasCurrentHistory && !model.isRefreshing }
+            let expected = try fullHistory(model, at: root)
+            XCTAssertEqual(expected.count, 96)
+            for limit in [30, 60, 90, 96] {
+                XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+                XCTAssertEqual(model.recentCommits, Array(expected.prefix(limit)))
+                XCTAssertEqual(model.hasMoreRecentCommits, limit < expected.count)
+                if limit < expected.count {
+                    XCTAssertTrue(model.loadMoreCommits())
+                    try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+                }
+            }
+            for commit in [expected[0], expected[48], expected[95]] {
+                let raw = GitCommandExecution.runData(["show", "--format=", "--name-status", "-z",
+                    "--diff-merges=first-parent", commit.hash, "--"], in: root.path)
+                XCTAssertEqual(raw.status, 0, raw.stderr)
+                let changes = try XCTUnwrap(GitStatusModel.parseGitFileChanges(raw.stdout))
+                for _ in 0..<2 {
+                    model.expandedCommitIDs.insert(commit.id)
+                    try await wait { model.historicalFiles(for: commit) != nil }
+                    XCTAssertEqual(model.historicalFiles(for: commit), changes)
+                    XCTAssertEqual(model.historicalFilesByOID.count, 1)
+                    model.expandedCommitIDs.remove(commit.id)
+                    XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+                }
+            }
+        }
+        _ = try git(["clone", "--quiet", "--depth=45", "--no-local", root.path, shallow.path], in: base)
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(false)
+        model.sync(root: shallow.path)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.count, 30)
+        XCTAssertTrue(model.hasMoreRecentCommits)
+        // The branch tips remain identical, but a new shallow boundary changes
+        // a parent inside the already-loaded prefix. Never append stale rows.
+        let oldRefs = model.refsByName
+        let boundary = model.recentCommits[14]
+        model.expandedCommitIDs.insert(boundary.id)
+        try await wait { model.historicalFiles(for: boundary) != nil }
+        XCTAssertFalse(boundary.parentHashes.isEmpty)
+        _ = try git(["fetch", "--quiet", "--depth=15", "origin", "main"], in: shallow)
+        XCTAssertTrue(model.loadMoreCommits())
+        try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+        XCTAssertEqual(model.refsByName, oldRefs)
+        let expected = try fullHistory(model, at: shallow)
+        XCTAssertEqual(expected.count, 15)
+        XCTAssertEqual(model.recentCommits, expected)
+        XCTAssertFalse(model.hasMoreRecentCommits)
+        let newBoundary = try XCTUnwrap(expected.last)
+        XCTAssertEqual(newBoundary.hash, boundary.hash)
+        XCTAssertTrue(newBoundary.parentHashes.isEmpty)
+        try await wait { model.historicalFiles(for: newBoundary) != nil }
+        let raw = GitCommandExecution.runData(["show", "--format=", "--name-status", "-z",
+            "--diff-merges=first-parent", newBoundary.hash, "--"], in: shallow.path)
+        XCTAssertEqual(raw.status, 0, raw.stderr)
+        XCTAssertEqual(model.historicalFiles(for: newBoundary), GitStatusModel.parseGitFileChanges(raw.stdout))
+        model.releaseHistoryDetails()
+        XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+        XCTAssertTrue(model.expandedCommitIDs.contains(newBoundary.id))
+        model.loadExpandedHistoryFiles()
+        try await wait { model.historicalFiles(for: newBoundary) != nil }
+        model.expandedCommitIDs.remove(newBoundary.id)
+        XCTAssertTrue(model.historicalFilesByOID.isEmpty)
     }
 
     func testIndexMutationDoesNotDowngradeQueuedFullRefresh() async throws {
@@ -2460,6 +2640,66 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(leftover.running, 0)
     }
 
+    func testCollapsingHistoryCancelsPendingFileReadAndReleasesResults() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-History-Cancel-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "History Cancel Test"],
+                     ["config", "user.email", "history@invalid"],
+                     ["config", "commit.gpgsign", "false"]] {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data([0, 1, 2, 3]).write(to: root.appendingPathComponent("binary.bin"))
+        XCTAssertEqual(GitCommandExecution.run(["add", "binary.bin"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "binary"], in: root.path).status, 0)
+
+        let old = SuspendedGitStatusBackend(
+            delay: .seconds(20), passthrough: DiscardRemoteWorkspaceFixture(),
+            blockedSubcommand: "show"
+        )
+        let current = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: old, scope: "ssh:history-cancel")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        let commit = try XCTUnwrap(model.recentCommits.first)
+        model.expandedCommitIDs.insert(commit.id)
+        let startDeadline = Date().addingTimeInterval(3)
+        while Date() < startDeadline {
+            if await old.counts().started == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await old.counts()
+        XCTAssertEqual(started.started, 1)
+
+        XCTAssertEqual(model.historicalFilesByOID[commit.hash], .loading)
+        model.expandedCommitIDs.remove(commit.id)
+        XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+        let cancelDeadline = Date().addingTimeInterval(2)
+        while await old.counts().running > 0 && Date() < cancelDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let cancelled = await old.counts()
+        XCTAssertEqual(cancelled.cancelled, 1)
+        XCTAssertEqual(cancelled.running, 0)
+
+        model.sync(root: root.path, backend: current, scope: "ssh:history-cancel")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        model.expandedCommitIDs.insert(commit.id)
+        try await wait { model.historicalFiles(for: commit) != nil }
+        XCTAssertEqual(model.historicalFiles(for: commit)?.map(\.path), ["binary.bin"])
+        try await wait { model.historicalBinaryPaths[commit.hash] != nil }
+        XCTAssertTrue(model.isHistoricalBinaryFile(commit: commit, path: "binary.bin"))
+        model.expandedCommitIDs.remove(commit.id)
+        XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+        XCTAssertNil(model.historicalBinaryPaths[commit.hash])
+        model.expandedCommitIDs.insert(commit.id)
+        try await wait { model.historicalFiles(for: commit) != nil }
+        XCTAssertEqual(model.historicalFiles(for: commit)?.map(\.path), ["binary.bin"])
+    }
+
     func testReconnectCancelsStashDetailReadWithoutLosingCurrentFiles() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-Stash-Cancel-" + UUID().uuidString)
@@ -2821,7 +3061,8 @@ final class GitStatusModelTests: XCTestCase {
         let rows = model.recentCommits
         let top = try XCTUnwrap(rows.first { $0.hash == merge })
         XCTAssertEqual(top.parentHashes, [firstParent, side])
-        XCTAssertEqual(top.files.map(\.path), ["side.txt"], "Merge files must compare with the first parent")
+        let mergeFiles = try await requireHistoricalFiles(top, in: model)
+        XCTAssertEqual(mergeFiles.map(\.path), ["side.txt"], "Merge files must compare with the first parent")
         XCTAssertEqual(rows.first { $0.hash == root }?.parentHashes, [])
         XCTAssertNotNil(rows.first { $0.hash == extra })
         XCTAssertEqual(
@@ -2838,7 +3079,9 @@ final class GitStatusModelTests: XCTestCase {
         )
         XCTAssertEqual(rows.first { $0.hash == side }?.references,
                        [.init(kind: .localBranch, name: "feature/nested")])
-        XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
+        let sideCommit = try XCTUnwrap(rows.first { $0.hash == side })
+        let sideFiles = try await requireHistoricalFiles(sideCommit, in: model)
+        XCTAssertEqual(sideFiles.map(\.path), ["side.txt"])
     }
 
     func testWorktreeListParserPreservesExactPathsAndRejectsMalformedMetadata() {
@@ -3045,7 +3288,8 @@ final class GitStatusModelTests: XCTestCase {
                 XCTAssertFalse(model.recentCommits.contains { $0.hash == stash || $0.hash == stashIndex })
                 let committed = try XCTUnwrap(model.recentCommits.first { $0.hash == first })
                 XCTAssertEqual(committed.parentHashes, [base])
-                XCTAssertEqual(committed.files.map(\.path), ["committed.txt"])
+                let files = try await requireHistoricalFiles(committed, in: model)
+                XCTAssertEqual(files.map(\.path), ["committed.txt"])
                 let tipRow = try XCTUnwrap(model.graphCommits.first { $0.hash == tip })
                 XCTAssertEqual(tipRow.parentHashes, [first])
                 XCTAssertEqual(tipRow.checkedOutWorktrees.count, 2)
@@ -3752,6 +3996,151 @@ final class GitStatusModelTests: XCTestCase {
                        4, "Both parents and the root must remain reachable from HEAD")
     }
 
+    func testRealBranchSwitchPreservesGraphOrderLanesAndColors() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Bailey-GraphSwitch-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        @discardableResult
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.runData(args, in: root.path, environment: [
+                "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
+                "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
+            ])
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Graph Switch"])
+        try git(["config", "user.email", "graph@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try git(["commit", "--allow-empty", "-qm", "root"])
+        let base = try git(["rev-parse", "HEAD"])
+        for name in ["main", "feature", "zebra"] {
+            if name != "main" { try git(["switch", "-qc", name, base]) }
+            for index in 0..<12 {
+                try git(["commit", "--allow-empty", "-qm", "\(name)-\(index)"])
+            }
+        }
+        try git(["tag", "-a", "v1", "-m", "tag", base])
+        try git(["update-ref", "refs/remotes/origin/main", "main"])
+        try git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+        let refs = try git(["show-ref"])
+        let model = GitStatusModel()
+        try git(["switch", "-q", "main"])
+        model.sync(root: root.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertNil(model.detailError)
+        let initial = model.graphCommits
+        XCTAssertEqual(initial.count, 30)
+        var cache = CommitGraphLayoutCache()
+        let first = cache.layout(for: initial)
+        for branch in ["feature", "zebra", "main"] {
+            try git(["switch", "-q", branch])
+            model.refresh()
+            try await wait { !model.isRefreshing && model.branch == branch }
+            XCTAssertNil(model.detailError)
+            let rows = model.graphCommits
+            let layout = cache.layout(for: rows)
+            XCTAssertEqual(rows.map(\.hash), initial.map(\.hash), "Checkout must not reorder the first page")
+            XCTAssertEqual(layout.rows.map(\.node), first.rows.map(\.node))
+            XCTAssertEqual(layout.rows.map(\.links), first.rows.map(\.links))
+            XCTAssertEqual(layout.rows.map(\.bottomRails), first.rows.map(\.bottomRails))
+            let head = try git(["rev-parse", "HEAD"])
+            XCTAssertEqual(model.headOID, head)
+            XCTAssertTrue(layout.knownHeadHistory.contains(head))
+            XCTAssertTrue(rows.first { $0.hash == head }?.references.contains(
+                .init(kind: .currentBranch, name: branch)) == true)
+            XCTAssertEqual(try git(["show-ref"]), refs)
+            XCTAssertEqual(try git(["status", "--porcelain=v1"]), "")
+        }
+        XCTAssertTrue(model.loadMoreCommits())
+        try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+        let full = model.graphCommits
+        XCTAssertEqual(full.count, 37)
+        XCTAssertEqual(Array(full.prefix(30)).map(\.hash), initial.map(\.hash))
+        let expanded = cache.layout(for: full)
+        XCTAssertEqual(Array(expanded.rows.prefix(30)).map(\.node), first.rows.map(\.node))
+        for branch in ["feature", "zebra", "main"] {
+            try git(["switch", "-q", branch])
+            model.refresh()
+            try await wait { !model.isRefreshing && model.branch == branch }
+            XCTAssertEqual(model.graphCommits.map(\.hash), full.map(\.hash))
+            let layout = cache.layout(for: model.graphCommits)
+            XCTAssertEqual(layout.rows.map(\.node), expanded.rows.map(\.node))
+            XCTAssertEqual(layout.rows.map(\.links), expanded.rows.map(\.links))
+        }
+        try git(["switch", "-q", "--detach", "feature~2"])
+        let detached = try git(["rev-parse", "HEAD"])
+        model.refresh()
+        try await wait { !model.isRefreshing && model.headOID == detached }
+        XCTAssertEqual(model.graphCommits.map(\.hash), full.map(\.hash))
+        let layout = cache.layout(for: model.graphCommits)
+        XCTAssertEqual(layout.rows.map(\.node), expanded.rows.map(\.node))
+        XCTAssertEqual(layout.rows.map(\.links), expanded.rows.map(\.links))
+        XCTAssertTrue(model.graphCommits.first { $0.hash == detached }?.references.contains(
+            .init(kind: .detachedHead, name: "HEAD")) == true)
+        XCTAssertEqual(layout.knownHeadHistory, Set(try git(["rev-list", "HEAD"]).split(separator: "\n").map(String.init)))
+        XCTAssertEqual(try git(["show-ref"]), refs)
+    }
+
+    func testEqualDateDetachedWorktreesPreserveHistoryOrderAcrossCheckouts() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent("Bailey-GraphWorktrees-" + UUID().uuidString)
+        let main = fixture.appendingPathComponent("main")
+        let left = fixture.appendingPathComponent("detached-left")
+        let right = fixture.appendingPathComponent("detached-right")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        @discardableResult
+        func git(_ args: [String], at root: URL = main) throws -> String {
+            let result = GitCommandExecution.runData(args, in: root.path, environment: [
+                "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
+                "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
+            ])
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Graph Worktrees"])
+        try git(["config", "user.email", "graph@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try git(["commit", "--allow-empty", "-qm", "base"])
+        let base = try git(["rev-parse", "HEAD"])
+        for root in [left, right] {
+            try git(["worktree", "add", "-q", "--detach", root.path, base])
+            for index in 0..<4 {
+                try git(["commit", "--allow-empty", "-qm", "\(root.lastPathComponent)-\(index)"], at: root)
+            }
+            XCTAssertTrue(try git(["for-each-ref", "--contains", "HEAD"], at: root).isEmpty)
+        }
+        let refs = try git(["show-ref"])
+        for remote in [false, true] {
+            let backend: any WorkspaceBackend = remote
+                ? DiscardRemoteWorkspaceFixture() : LocalWorkspaceBackend.shared
+            let model = GitStatusModel()
+            var cache = CommitGraphLayoutCache()
+            model.sync(root: main.path, backend: backend, scope: remote ? "ssh:graph-order" : "local")
+            try await wait { model.hasResolvedStatus && !model.isRefreshing }
+            XCTAssertNil(model.detailError)
+            let original = model.graphCommits
+            XCTAssertEqual(original.count, 9)
+            XCTAssertEqual(Set(original.map(\.date)).count, 1)
+            let first = cache.layout(for: original)
+            for root in [left, right, main] {
+                let head = try git(["rev-parse", "HEAD"], at: root)
+                model.sync(root: root.path, backend: backend, scope: remote ? "ssh:graph-order" : "local")
+                try await wait { model.hasResolvedStatus && !model.isRefreshing && model.headOID == head }
+                XCTAssertNil(model.detailError)
+                let rows = model.graphCommits
+                let layout = cache.layout(for: rows)
+                XCTAssertEqual(rows.map(\.hash), original.map(\.hash), "Equal-date independent tips must not favor the current checkout")
+                XCTAssertEqual(layout.rows.map(\.node), first.rows.map(\.node))
+                XCTAssertEqual(layout.rows.map(\.links), first.rows.map(\.links))
+                XCTAssertEqual(layout.knownHeadHistory, Set(try git(["rev-list", "HEAD"], at: root).split(separator: "\n").map(String.init)))
+                XCTAssertEqual(try git(["show-ref"], at: root), refs)
+            }
+        }
+    }
+
     func testGitGraphUsesCommitDateOrderWithoutBreakingMergeParents() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-git-order-" + UUID().uuidString)
@@ -3882,6 +4271,109 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNotEqual(model.operation, before)
         XCTAssertNotEqual(otherGit(["show-ref", "--verify", "--quiet",
                                     "refs/tags/should-not-exist"]), 0)
+    }
+
+    func testInactiveRepositorySnapshotsEvictDeepHistoryAndOldRootsWithoutLosingDraft() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let roots = (0..<8).map { base.appendingPathComponent("project-\($0)") }
+        for (index, root) in roots.enumerated() {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: root.path).status, 0)
+            var script = ""
+            for revision in 0..<(index == 0 ? 96 : 1) {
+                let message = "project \(index) revision \(revision)"
+                script += "commit refs/heads/main\ncommitter Test <test@invalid> \(1_700_000_000 + revision) +0000\n"
+                script += "data \(message.utf8.count)\n" + message + "\n\n"
+            }
+            let imported = GitCommandExecution.runData(["fast-import", "--quiet"], in: root.path,
+                timeout: 15, stdin: Data(script.utf8))
+            XCTAssertEqual(imported.status, 0, imported.stderr)
+        }
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(false)
+        model.sync(root: roots[0].path)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        for expected in [60, 90, 96] {
+            XCTAssertTrue(model.loadMoreCommits())
+            try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+            XCTAssertEqual(model.recentCommits.count, expected)
+        }
+        let expectedHistory = model.recentCommits
+        model.commitMessage = "unsaved draft for project 0"
+        model.collapsedFolders = ["unstaged:Sources"]
+        model.sync(root: roots[1].path)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        model.sync(root: roots[0].path)
+        XCTAssertTrue(model.hasResolvedStatus, "A warm snapshot must restore immediately")
+        XCTAssertFalse(model.canUseCurrentStatus, "Cached status is not mutation authority")
+        XCTAssertEqual(model.recentCommits, Array(expectedHistory.prefix(60)))
+        XCTAssertTrue(model.hasMoreRecentCommits)
+        XCTAssertEqual(model.commitMessage, "unsaved draft for project 0")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.count, 60)
+        XCTAssertTrue(model.loadMoreCommits())
+        try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+        XCTAssertEqual(model.recentCommits, Array(expectedHistory.prefix(90)))
+
+        for root in roots.dropFirst() {
+            model.sync(root: root.path)
+            try await wait { model.hasCurrentHistory && !model.isRefreshing }
+            XCTAssertEqual(model.recentCommits.count, 1)
+        }
+        model.sync(root: roots[6].path)
+        XCTAssertTrue(model.hasResolvedStatus, "Recent projects still receive the fast cached display")
+        XCTAssertEqual(model.recentCommits.first?.subject, "project 6 revision 0")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        model.sync(root: roots[0].path)
+        XCTAssertFalse(model.hasResolvedStatus, "Least recently used project must be cold")
+        XCTAssertTrue(model.recentCommits.isEmpty)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits, Array(expectedHistory.prefix(30)))
+        XCTAssertEqual(model.commitMessage, "unsaved draft for project 0")
+        XCTAssertEqual(model.collapsedFolders, ["unstaged:Sources"])
+        model.syncSelectedProject(project: nil) { _ in false }
+        model.sync(root: roots[6].path)
+        XCTAssertFalse(model.hasResolvedStatus, "Closing the last workspace must release snapshots")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.first?.subject, "project 6 revision 0")
+    }
+
+    func testInactiveRepositorySnapshotRecordBudgetEvictsOldLargeProject() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let roots = (0..<3).map { base.appendingPathComponent("project-\($0)") }
+        let count = 26_000
+        for (index, root) in roots.enumerated() {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: root.path).status, 0)
+            if index < 2 {
+                let folder = root.appendingPathComponent("Sources")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                for file in 0..<count {
+                    try Data().write(to: folder.appendingPathComponent("file-\(file).swift"))
+                }
+            }
+        }
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(false)
+        for root in roots {
+            model.sync(root: root.path)
+            try await wait { model.hasResolvedStatus && !model.isRefreshing }
+            XCTAssertNil(model.statusError)
+            XCTAssertEqual(model.changedEntries.count, root == roots[2] ? 0 : count)
+        }
+        model.sync(root: roots[1].path)
+        XCTAssertTrue(model.hasResolvedStatus, "The newest inactive large project remains warm")
+        XCTAssertEqual(model.changedEntries.count, count)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        model.sync(root: roots[0].path)
+        XCTAssertFalse(model.hasResolvedStatus, "Two 26,000-record snapshots exceed the shared budget")
+        XCTAssertTrue(model.changedEntries.isEmpty)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.changedEntries.count, count, "Eviction must not truncate active data")
     }
 
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {

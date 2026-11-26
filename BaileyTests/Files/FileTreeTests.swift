@@ -3825,6 +3825,92 @@ final class FileTreeTests: XCTestCase {
         print("FILES_TREE_SCALE rows=\(original.count) remount_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
     }
 
+    func testColdFoldersReleaseListingsAndReopenFromDisk() async throws {
+        let root = fixture.appendingPathComponent("bounded-listings")
+        let folders = (0..<12).map { root.appendingPathComponent("folder-\($0)") }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<1_000 {
+                try Data().write(to: folder.appendingPathComponent("file-\(index).swift"))
+            }
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        for folder in folders {
+            let row = try XCTUnwrap(tree.items.first { $0.path == folder.path })
+            await tree.toggle(row)
+            XCTAssertEqual(tree.items.count, folders.count + 1_000)
+            await tree.toggle(row)
+            XCTAssertEqual(tree.items.count, folders.count)
+        }
+        let before = await counting.requests
+        await tree.sync(root: root.path, backend: counting)
+        let lastBatch = await counting.lastBatch
+        let batch = try XCTUnwrap(lastBatch)
+        XCTAssertEqual(batch.count, 9, "Refresh must only enumerate the root and the warm entry budget")
+        XCTAssertFalse(batch.contains(folders[0].path))
+        XCTAssertTrue(batch.contains(folders[11].path))
+        let refreshed = await counting.requests
+        XCTAssertEqual(refreshed[folders[0].path], before[folders[0].path])
+        let warm = try XCTUnwrap(tree.items.first { $0.path == folders[11].path })
+        await tree.toggle(warm)
+        let warmReads = await counting.requests
+        XCTAssertEqual(warmReads, refreshed)
+        await tree.toggle(warm)
+        let newFile = folders[0].appendingPathComponent("new.swift")
+        try Data().write(to: newFile)
+        let revision = tree.contentRevision
+        await tree.refreshForLocalEvents([.init(path: newFile.path, flags: UInt32(kFSEventStreamEventFlagItemCreated))])
+        XCTAssertGreaterThan(tree.contentRevision, revision, "Quick Open must still invalidate for cold directories")
+        let eventReads = await counting.requests
+        XCTAssertEqual(eventReads, refreshed)
+        await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == folders[0].path }))
+        XCTAssertEqual(tree.items.count, folders.count + 1_001)
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path })
+        let reopened = await counting.requests
+        XCTAssertEqual(reopened[folders[0].path], 2)
+    }
+
+    func testColdCompactedDirectoryPreservesRowIdentityAndRereadsOnOpen() async throws {
+        let root = fixture.appendingPathComponent("bounded-compact")
+        let a = root.appendingPathComponent("A")
+        let b = a.appendingPathComponent("B")
+        let c = b.appendingPathComponent("C")
+        try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
+        for index in 0..<9_000 {
+            try Data().write(to: c.appendingPathComponent("file-\(index).swift"))
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        for directory in [a, b, c] {
+            await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == directory.path }))
+        }
+        let row = try XCTUnwrap(tree.items.first { $0.path == c.path })
+        XCTAssertEqual(row.displayName, "A / B / C")
+        XCTAssertEqual(tree.items.count, 9_001)
+        tree.select(row)
+        await tree.toggle(row)
+        XCTAssertEqual(tree.items.count, 1)
+        XCTAssertEqual(tree.items.first?.path, c.path)
+        XCTAssertEqual(tree.items.first?.displayName, row.displayName)
+        let before = await counting.requests
+        await tree.sync(root: root.path, backend: counting)
+        let after = await counting.requests
+        XCTAssertEqual(after[c.path], before[c.path], "A folded oversized directory must not refresh its entire listing")
+        XCTAssertEqual(tree.items.first?.displayName, row.displayName)
+        XCTAssertEqual(tree.selectedPath, c.path)
+        let newFile = c.appendingPathComponent("new.swift")
+        try Data().write(to: newFile)
+        await tree.toggle(try XCTUnwrap(tree.items.first))
+        XCTAssertEqual(tree.items.count, 9_002)
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path })
+        XCTAssertEqual(tree.items.first?.displayName, row.displayName)
+        let reopened = await counting.requests
+        XCTAssertEqual(reopened[c.path], 2)
+    }
+
     func testCollapsedAndExpandedFoldersDoNotRereadUnchangedDirectories() async throws {
         let root = fixture.appendingPathComponent("cached")
         let sub = root.appendingPathComponent("sub")
@@ -4179,6 +4265,62 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(pressedSegments, [0, 1])
     }
 
+    func testSharedTreeOnlyMountsHorizontalScrollForOverflowingLabels() async throws {
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 320, height: 100),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls)
+        }
+        let short = TreeDisplayModel.Row(name: "a.swift", path: "/fixture/a.swift", isDirectory: false)
+        let longName = String(repeating: "中文長文件🧪", count: 18) + ".swift"
+        let long = TreeDisplayModel.Row(name: longName, path: "/fixture/" + longName, isDirectory: false)
+        let folder = TreeDisplayModel.Row(name: "leaf", path: "/fixture/root/leaf",
+                                          isDirectory: true, compactPrefix: ["root"])
+        for scale: CGFloat in [0.8, 1, 1.6] {
+            for dark in [false, true] {
+                for (name, row, directory, overflow) in [
+                    ("short", short, nil, false),
+                    ("long Unicode", long, nil, true),
+                    ("long directory", short, String(repeating: "parent/", count: 35), true)
+                ] as [(String, TreeDisplayModel.Row, String?, Bool)] {
+                    let view = TreeFileRow(row: row, scale: scale, directory: directory, open: {}) {
+                        _ in EmptyView()
+                    }.environment(\.colorScheme, dark ? .dark : .light)
+                    let host = NSHostingView(rootView: view)
+                    host.sizingOptions = []
+                    window.contentView = host
+                    window.orderFront(nil)
+                    host.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    let mounted = scrolls(host)
+                    XCTAssertEqual(mounted.count, overflow ? 1 : 0,
+                                   "\(name) scale=\(scale) dark=\(dark)")
+                    if overflow, let scroll = mounted.first {
+                        let extent = try XCTUnwrap(scroll.documentView?.frame.width)
+                        XCTAssertGreaterThan(extent, scroll.contentSize.width + 80)
+                        scroll.contentView.scroll(to: NSPoint(x: 70, y: 0))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        XCTAssertGreaterThan(scroll.contentView.bounds.minX, 50)
+                    }
+                }
+                let host = NSHostingView(rootView: TreeFolderRow(
+                    row: folder, scale: scale,
+                    compactSegment: { component, index in
+                        AnyView(TreeCompactSegment(component: component, index: index,
+                            onClick: {}, onContextClick: {}, onMenuClosed: {}) { EmptyView() })
+                    }, toggle: {}
+                ).environment(\.colorScheme, dark ? .dark : .light))
+                host.sizingOptions = []
+                window.contentView = host
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                XCTAssertTrue(scrolls(host).isEmpty, "Short compact paths should not mount a scroll host")
+            }
+        }
+    }
+
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
         func bitmap(
             isSelected: Bool, listActive: Bool, focusRing: Bool,
@@ -4452,6 +4594,39 @@ final class FileTreeTests: XCTestCase {
                 XCTAssertEqual(collapsed.first(where: { $0.path == "pkg/tool" && $0.isDirectory })?
                     .isExpanded, false)
             }
+        }
+    }
+
+    func testSharedPathTreeRepeatedDisclosureAtOneTenAndHundredThousandRows() {
+        for count in [1_000, 10_000, 100_000] {
+            let files = (0..<count).map { index in
+                TreeDisplayModel.Row(name: "file-\(index).swift",
+                    path: "Sources/group-\(index / (count / 10))/nested/file-\(index).swift",
+                    isDirectory: false, status: .modified)
+            }
+            let tree = TreeDisplayModel.PathTree(files, section: "history")
+            let expanded = tree.rows(collapsed: [])
+            let foldedKeys = Set((0..<10).map { "history:Sources/group-\($0)/nested" })
+            let folded = tree.rows(collapsed: foldedKeys)
+            XCTAssertEqual(expanded.count, count + 11)
+            XCTAssertEqual(folded.count, 11)
+            XCTAssertTrue(folded.dropFirst().allSatisfy { $0.isDirectory && !$0.isExpanded })
+            XCTAssertEqual(expanded.filter { !$0.isDirectory }.count, count)
+            var open: [Double] = [], closed: [Double] = []
+            for _ in 0..<30 {
+                var start = CFAbsoluteTimeGetCurrent()
+                let reopened = tree.rows(collapsed: [])
+                open.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                XCTAssertEqual(reopened.count, expanded.count)
+                start = CFAbsoluteTimeGetCurrent()
+                let refolded = tree.rows(collapsed: foldedKeys)
+                closed.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                XCTAssertEqual(refolded, folded)
+            }
+            XCTAssertEqual(tree.rows(collapsed: []), expanded)
+            let partial = tree.rows(collapsed: ["history:Sources/group-0/nested"])
+            XCTAssertEqual(partial.count, expanded.count - count / 10)
+            print("PATH_TREE_DISCLOSURE count=\(count) open_median=\(open.sorted()[15]) open_p95=\(open.sorted()[28]) open_max=\(open.max()!) folded_median=\(closed.sorted()[15]) folded_p95=\(closed.sorted()[28]) folded_max=\(closed.max()!)")
         }
     }
 

@@ -18,7 +18,7 @@ final class GitNativeDialogTests: XCTestCase {
                 hash: String(repeating: String(number), count: 40),
                 shortHash: String(repeating: String(number), count: 7),
                 subject: "Selected \(number)", author: "Tester", date: .now,
-                parentHashes: [], references: [], files: []
+                parentHashes: [], references: []
             )
         }
         for action in GitStatusModel.CommitBatchAction.allCases {
@@ -279,7 +279,7 @@ final class GitNativeDialogTests: XCTestCase {
             hash: String(repeating: "a", count: 40), shortHash: "aaaaaaa",
             subject: "Merged", author: "Tester", date: .now,
             parentHashes: [String(repeating: "b", count: 40),
-                           String(repeating: "c", count: 40)], references: [], files: []
+                           String(repeating: "c", count: 40)], references: []
         )
         for action in GitStatusModel.CommitAction.allCases {
             let dialog = GitCommitDialog(

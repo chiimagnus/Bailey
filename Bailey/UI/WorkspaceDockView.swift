@@ -30,7 +30,7 @@ final class DockTabDragCoordinator {
     @ObservationIgnored private var source: Source?
     @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
-    @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
+    @ObservationIgnored private var tabs: [UUID: [DockItem: CGRect]] = [:]
     @ObservationIgnored private var escapeMonitor: Any?
 
     isolated deinit {
@@ -50,13 +50,17 @@ final class DockTabDragCoordinator {
         NSCursor.arrow.set()
     }
 
-    func setFrames(groups: [UUID: CGRect]) {
-        if source != nil, self.groups != groups { cancel() }
-        self.groups = groups
+    func setGroupFrame(_ frame: CGRect?, for group: UUID) {
+        guard groups[group] != frame else { return }
+        if source != nil { cancel() }
+        groups[group] = frame
+        if frame == nil { tabs.removeValue(forKey: group) }
     }
-    func setFrames(tabs: [DockItem: CGRect]) {
-        if source != nil, self.tabs != tabs { cancel() }
-        self.tabs = tabs
+
+    func setTabFrame(_ frame: CGRect?, for item: DockItem, in group: UUID) {
+        guard tabs[group]?[item] != frame else { return }
+        if source != nil { cancel() }
+        tabs[group, default: [:]][item] = frame
     }
 
     func begin(_ item: DockItem, dock: DockWorkspaceModel) {
@@ -81,15 +85,20 @@ final class DockTabDragCoordinator {
               let frame = groups[group.id],
               position.location.y >= frame.minY, position.location.y < frame.minY + 38,
               let index = position.index, !group.items.isEmpty else { return nil }
-        let item = index < group.items.count ? group.items[index] : group.items[group.items.count - 1]
-        guard let bounds = tabs[item] else { return nil }
-        return index < group.items.count ? bounds.minX : bounds.maxX
+        if index < group.items.count, let bounds = tabs[group.id]?[group.items[index]] {
+            return bounds.minX
+        }
+        // The adjacent tab can be outside the lazy strip's mounted range.
+        if index > 0, let bounds = tabs[group.id]?[group.items[index - 1]] {
+            return bounds.maxX
+        }
+        return nil
     }
 
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
         guard let source, sourceDock === dock, source.item == item,
               source.sourceLayout == dock.root else { cancel(); return }
-        let hit = groups.first { $0.value.contains(location) }
+        let hit = groups.first { $0.value.contains(location) && dock.root.group(id: $0.key) != nil }
         var edge: DockEdge?
         var insertIndex: Int?
         if let hit, let target = dock.root.group(id: hit.key) {
@@ -99,10 +108,15 @@ final class DockTabDragCoordinator {
                 threshold: CGFloat(dock.configuration.edgeThreshold)
             )
             if edge == nil {
-                insertIndex = target.items.firstIndex { tab in
-                    guard let bounds = tabs[tab] else { return false }
-                    return location.x < bounds.midX && location.y <= frame.minY + 38
-                } ?? target.items.count
+                if location.y <= frame.minY + 38 {
+                    let mounted = tabs[target.id] ?? [:]
+                    insertIndex = target.items.firstIndex { tab in
+                        mounted[tab].map { location.x < $0.midX } ?? false
+                    } ?? target.items.lastIndex { mounted[$0] != nil }.map { $0 + 1 }
+                        ?? target.items.count
+                } else {
+                    insertIndex = target.items.count
+                }
             }
         }
         position = Position(
@@ -120,20 +134,6 @@ final class DockTabDragCoordinator {
             edge: position.edge, index: position.index, items: position.items,
             sourceGroupID: position.source.sourceGroupID
         )
-    }
-}
-
-private struct DockGroupFrames: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-        value.merge(nextValue()) { $1 }
-    }
-}
-
-private struct DockTabFrames: PreferenceKey {
-    static let defaultValue: [DockItem: CGRect] = [:]
-    static func reduce(value: inout [DockItem: CGRect], nextValue: () -> [DockItem: CGRect]) {
-        value.merge(nextValue()) { $1 }
     }
 }
 
@@ -156,12 +156,6 @@ struct WorkspaceDockView: View {
                 .background {
                     let _ = themeChanges.revision
                     Color(nsColor: Theme.terminal(dark: colorScheme == .dark).backgroundNSColor)
-                }
-                .onPreferenceChange(DockGroupFrames.self) {
-                    dragging.setFrames(groups: $0)
-                }
-                .onPreferenceChange(DockTabFrames.self) {
-                    dragging.setFrames(tabs: $0)
                 }
                 .onChange(of: manager.selectedProjectID) { dragging.cancel() }
                 .onDisappear { manager.attachedWindow?.isMovable = true }
@@ -335,6 +329,7 @@ struct DockTabGroupView: View {
     @State private var tabCursor: DockItem?
     @State private var tabKeyboardFocused = false
     @State private var tabStripContentWidth: CGFloat = 0
+    @State private var mountedTabItems: Set<DockItem> = []
     @State private var dragGestureItem: DockItem?
     @State private var markdownPopover: MarkdownPopover?
     @GestureState private var isTabDragging = false
@@ -415,12 +410,12 @@ struct DockTabGroupView: View {
             onPrimaryClick: { project.dock.clearContextTarget() }
         ).id(group.id))
         .background {
-            GeometryReader { geometry in
-                Color.clear.preference(
-                    key: DockGroupFrames.self,
-                    value: [group.id: geometry.frame(in: .global)]
-                )
-            }
+            Color.clear
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+                    dragging.setGroupFrame($0, for: group.id)
+                }
+                .onDisappear { dragging.setGroupFrame(nil, for: group.id) }
+                .id(group.id)
         }
         .popover(isPresented: Binding(
             get: { markdownPopover != nil },
@@ -567,17 +562,21 @@ struct DockTabGroupView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
                     ForEach(group.items, id: \.self) { item in
+                        let mounted = mountedTabItems.contains(item)
                         tab(item, paneTab: item.tabID.flatMap { tabsByID[$0] },
-                            isSelected: selectedItems.contains(item))
+                            isSelected: selectedItems.contains(item), isMounted: mounted)
                             .onHover { manager.attachedWindow?.isMovable = !$0 }
-                            .id(item)
                             .opacity(draggedItems.contains(item) ? 0.6 : 1)
                             .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: DockTabFrames.self,
-                                        value: [item: geometry.frame(in: .global)]
-                                    )
+                                if mounted {
+                                    Color.clear
+                                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+                                            dragging.setTabFrame($0, for: item, in: group.id)
+                                        }
+                                        .onDisappear {
+                                            dragging.setTabFrame(nil, for: item, in: group.id)
+                                        }
+                                        .id(group.id)
                                 }
                             }
                             .highPriorityGesture(
@@ -598,15 +597,24 @@ struct DockTabGroupView: View {
                                         }
                                         dragGestureItem = nil
                                     },
-                                including: .all
+                                including: mounted ? .all : .none
                             )
+                            .id(item)
                     }
                 }
+                .scrollTargetLayout()
                 .padding(.leading, 4)
                 .padding(.trailing, 2)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
                     tabStripContentWidth = $0
                 }
+            }
+            // Use actual laid-out tab widths, not estimates from a lazy stack.
+            // The same strip can reveal any item, but offscreen items do not
+            // instantiate AppKit context menus or register drag hit targets.
+            .onScrollTargetVisibilityChange(idType: DockItem.self, threshold: 0.001) { visible in
+                let items = Set(visible)
+                if items != mountedTabItems { mountedTabItems = items }
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(width: maxWidth, alignment: .leading)
@@ -623,7 +631,7 @@ struct DockTabGroupView: View {
                     if focused, tabCursor.map({ !group.items.contains($0) }) ?? true { tabCursor = active }
                 }, onAttachedToWindow: { tabKeyboard.view?.setAccessibilityIdentifier("bailey.dock.tabstrip") }
             ).focusedValue(\.baileyPathActions, focusedTabPathActions))
-            .onChange(of: group.selected) { _, selected in
+            .onChange(of: group.selected, initial: true) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
             }
             .onChange(of: tabCursor) { _, cursor in
@@ -639,7 +647,7 @@ struct DockTabGroupView: View {
     }
 
     @ViewBuilder
-    private func tab(_ item: DockItem, paneTab: PaneTab?, isSelected: Bool) -> some View {
+    private func tab(_ item: DockItem, paneTab: PaneTab?, isSelected: Bool, isMounted: Bool) -> some View {
         if case .tab(let id) = item, let paneTab {
             PaneTabItem(
                 tab: paneTab, isDisplayed: active == item,
@@ -650,15 +658,17 @@ struct DockTabGroupView: View {
                 close: { close(item) }
             )
             .overlay {
-                ContextMenuClickTarget(
-                    onContextClick: { project.dock.selectForContextMenu(item) },
-                    onMenuClosed: { finishTabContextMenu(for: item) },
-                    isExpectedMenu: { isMenuForTab($0, item: item) },
-                    onMiddleClick: { manager.closePanel(item, in: project) }
-                )
-                .contextMenu {
-                    if let current = project.tabs.first(where: { $0.id == id }) {
-                        projectTabMenu(current)
+                if isMounted {
+                    ContextMenuClickTarget(
+                        onContextClick: { project.dock.selectForContextMenu(item) },
+                        onMenuClosed: { finishTabContextMenu(for: item) },
+                        isExpectedMenu: { isMenuForTab($0, item: item) },
+                        onMiddleClick: { manager.closePanel(item, in: project) }
+                    )
+                    .contextMenu {
+                        if let current = project.tabs.first(where: { $0.id == id }) {
+                            projectTabMenu(current)
+                        }
                     }
                 }
             }
@@ -674,20 +684,22 @@ struct DockTabGroupView: View {
             )
             .accessibilityIdentifier("bailey.dock.\(item.contentTabID == nil ? item.configurationName ?? "unknown" : "markdown-preview")")
             .overlay {
-                ContextMenuClickTarget(
-                    onContextClick: { project.dock.selectForContextMenu(item) },
-                    onMenuClosed: { finishTabContextMenu(for: item) },
-                    isExpectedMenu: { isMenuForTab($0, item: item) },
-                    onMiddleClick: { manager.closePanel(item, in: project) }
-                )
-                .contextMenu {
-                    let closeTitle = closeTitle(for: item)
-                    Button(closeTitle) {
-                        guard isValidMenuTarget(item) else { return }
-                        close(item)
+                if isMounted {
+                    ContextMenuClickTarget(
+                        onContextClick: { project.dock.selectForContextMenu(item) },
+                        onMenuClosed: { finishTabContextMenu(for: item) },
+                        isExpectedMenu: { isMenuForTab($0, item: item) },
+                        onMiddleClick: { manager.closePanel(item, in: project) }
+                    )
+                    .contextMenu {
+                        let closeTitle = closeTitle(for: item)
+                        Button(closeTitle) {
+                            guard isValidMenuTarget(item) else { return }
+                            close(item)
+                        }
+                        .keyboardShortcut("w", modifiers: .command)
+                        .disabled(project.isClosingPanels)
                     }
-                    .keyboardShortcut("w", modifiers: .command)
-                    .disabled(project.isClosingPanels)
                 }
             }
         }

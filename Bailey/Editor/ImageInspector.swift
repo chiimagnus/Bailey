@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import SwiftUI
 
@@ -167,9 +168,10 @@ class PreviewScrollView: NSScrollView {
     }
 
     override func accessibilityLabel() -> String? {
-        isScalableVector
+        let label = isScalableVector
             ? String(localized: "SVG preview", table: "Editor")
             : String(localized: "Image preview", table: "Editor")
+        return String(localized: "\(label), \(accessibilityZoomDescription)", table: "Editor")
     }
 
     override func accessibilityValue() -> Any? { accessibilityZoomDescription }
@@ -191,7 +193,16 @@ class PreviewScrollView: NSScrollView {
             return NSAccessibilityCustomAction(name: title) { [weak self, weak item] in
                 guard let self, let item, item.menu === self.menu, item.title == title,
                       let action = item.action else { return false }
-                return NSApp.sendAction(action, to: self, from: item)
+                let previousZoom = self.accessibilityZoomDescription
+                let handled = NSApp.sendAction(action, to: self, from: item)
+                let zoom = self.accessibilityZoomDescription
+                if handled, zoom != previousZoom {
+                    // VoiceOver does not speak value changes on an AXScrollArea.
+                    var announcement = AttributedString(zoom)
+                    announcement.accessibilitySpeechAnnouncementPriority = .high
+                    AccessibilityNotification.Announcement(announcement).post()
+                }
+                return handled
             }
         }
     }

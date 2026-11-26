@@ -5,6 +5,254 @@ import XCTest
 
 @MainActor
 final class GitPanelVisibilityTests: XCTestCase {
+    func testLoadedCodeProjectsAndSplitGitPanelsSwitchUnderRealHistoryLoad() async throws {
+        try await exerciseLoadedProjects(projectCount: 2, tabCount: 24, historyCount: 3_000)
+    }
+
+    func testFourProjectsWithRealLongSourceFilesAndLargeGitHistories() async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let paths = [
+            "Bailey/Git/GitStatusModel.swift", "Bailey/Git/GitPanel.swift",
+            "Bailey/Git/DiffTextView.swift", "Bailey/Git/DiffViewerView.swift",
+            "Bailey/Git/RecentCommitsView.swift", "Bailey/Editor/FileViewerView.swift",
+            "Bailey/Git/DiffEngine.swift", "Bailey/Files/FileTreeModel.swift",
+            "Bailey/Editor/MarkdownPreview.swift", "Bailey/Workspace/WorkspaceWindowModel.swift",
+            "Bailey/Browser/BrowserView.swift", "Bailey/Editor/NativeCodeTextView.swift",
+            "Bailey/Workspace/LocalWorkspaceBackend.swift", "Bailey/UI/WorkspaceDockView.swift",
+            "Bailey/Editor/MarkdownDocument.swift"
+        ]
+        let realSources = try paths.map { path -> (String, Data) in
+            let url = repository.appendingPathComponent(path)
+            let bytes = try Data(contentsOf: url)
+            XCTAssertGreaterThan(bytes.filter { $0 == 10 }.count, 1_000)
+            return (url.lastPathComponent, bytes)
+        }
+        try await exerciseLoadedProjects(projectCount: 4, tabCount: 30, historyCount: 10_000,
+                                         earlierCommits: 300, realSources: realSources)
+    }
+
+    private func exerciseLoadedProjects(
+        projectCount: Int, tabCount: Int, historyCount: Int,
+        earlierCommits: Int = 0, realSources: [(String, Data)] = []
+    ) async throws {
+        let hasStagedResources = !realSources.isEmpty
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-LoadedProjects-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
+            groupNames: ["projects", "", "files", "git"],
+            selectedNames: ["projects", "", "files", "git"],
+            weights: [0.16, 0.40, 0.21, 0.23],
+            actionNames: DockAddAction.allCases.map(\.rawValue), edgeThreshold: 0.22
+        ))
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        let model = GitStatusModel()
+        defer { model.sync(root: "") }
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 1250, height: 720),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: model))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+
+        func layout() {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        func waitFor(_ label: String = "Native Dock did not settle", _ condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+            while !condition() && .now < deadline {
+                layout()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            guard condition() else {
+                throw NSError(domain: "LoadedProjects", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: label])
+            }
+        }
+        func views(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(views)
+        }
+        func git(_ args: [String], in root: URL) throws {
+            let result = GitCommandExecution.run(args, in: root.path)
+            guard result.status == 0 else { throw NSError(domain: "LoadedProjectGit", code: Int(result.status),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr]) }
+        }
+
+        var fixtures: [(project: Project, files: [(FileTab, NSScrollView)], root: URL)] = []
+        for projectIndex in 0..<projectCount {
+            let root = base.appendingPathComponent("project-\(projectIndex)")
+            let sources = root.appendingPathComponent("Sources")
+            let resources = root.appendingPathComponent("Resources")
+            try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+            let stagedResources = root.appendingPathComponent("StagedResources")
+            if hasStagedResources {
+                try FileManager.default.createDirectory(at: stagedResources, withIntermediateDirectories: true)
+            }
+            func resourcePath(_ index: Int) -> URL {
+                let parent = hasStagedResources && index % 3 == 0 ? stagedResources : resources
+                return parent.appendingPathComponent("file-\(index).txt")
+            }
+            try git(["init", "-q", "-b", "main"], in: root)
+            try git(["config", "user.name", "Bailey Loaded Projects"], in: root)
+            try git(["config", "user.email", "fixture@invalid"], in: root)
+            try git(["config", "commit.gpgsign", "false"], in: root)
+            if earlierCommits > 0 {
+                let seed = root.appendingPathComponent("history.txt")
+                for revision in 0..<earlierCommits {
+                    try Data("revision \(revision)\n".utf8).write(to: seed)
+                    try git(["add", "--", "history.txt"], in: root)
+                    try git(["commit", "-qm", "History \(revision)"], in: root)
+                }
+            }
+            var paths: [URL] = []
+            for index in 0..<tabCount {
+                let path: URL
+                let data: Data
+                if !realSources.isEmpty {
+                    let fixture = realSources[index % realSources.count]
+                    path = sources.appendingPathComponent("\(index)-" + fixture.0)
+                    data = fixture.1
+                } else {
+                    path = sources.appendingPathComponent("Module-\(index).swift")
+                    let source = (0..<400).map { function in
+                        """
+                        func value_\(function)(_ input: Int) -> Int {
+                            let adjusted = input + \(projectIndex * tabCount + index)
+                            return adjusted * \(function + 1)
+                        }
+
+                        """
+                    }.joined(separator: "\n")
+                    data = Data(source.utf8)
+                }
+                try data.write(to: path)
+                paths.append(path)
+            }
+            for index in 0..<historyCount {
+                try Data("original resource \(index)\n".utf8).write(
+                    to: resourcePath(index))
+            }
+            try git(["add", "-A"], in: root)
+            try git(["commit", "-qm", "Large real source history"], in: root)
+            for index in 0..<historyCount {
+                try Data("modified resource \(index)\n".utf8).write(to: resourcePath(index))
+            }
+            if hasStagedResources { try git(["add", "--", "StagedResources"], in: root) }
+            let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: configuration)
+            project.customDirectory = root.path
+            manager.projects.append(project)
+            manager.selectProject(id: project.id)
+            manager.syncGitStatus(model)
+            try await waitFor { model.hasResolvedStatus && !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
+            var files: [(FileTab, NSScrollView)] = []
+            for path in paths {
+                project.openFile(path.path)
+                let tab = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = tab.content else { XCTFail("Expected a real source file"); return }
+                try await waitFor {
+                    guard let scroll = file.editorView as? NSScrollView else { return false }
+                    return scroll.window === window && file.nativeTextStorage.length > 20_000
+                }
+                let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+                XCTAssertTrue((scroll.documentView as? NSTextView)?.textStorage === file.nativeTextStorage)
+                files.append((file, scroll))
+            }
+            XCTAssertEqual(project.tabs.count, tabCount)
+            fixtures.append((project, files, root))
+        }
+        print("LOADED_PROJECTS_READY projects=\(projectCount) tabs=\(tabCount * projectCount) changes_per_repo=\(historyCount) earlier_commits=\(earlierCommits) actual_source=\(!realSources.isEmpty)")
+        // Measure switching separately from disclosure and accessibility enumeration.
+        for pass in 0..<2 {
+            for cycle in 0..<30 {
+                let fixture = fixtures[cycle % projectCount]
+                let start = ProcessInfo.processInfo.systemUptime
+                manager.selectProject(id: fixture.project.id)
+                manager.syncGitStatus(model)
+                let folders: Set<String> = ["unstaged:Resources", "staged:StagedResources"]
+                if pass == 1 {
+                    model.collapsedFolders.formUnion(folders)
+                } else {
+                    model.collapsedFolders.subtract(folders)
+                }
+                layout()
+                XCTAssertEqual(manager.selectedProjectID, fixture.project.id)
+                XCTAssertTrue(fixture.files.last?.0.editorView === fixture.files.last?.1)
+                XCTAssertTrue(fixture.files.last?.1.window === window)
+                print("SWITCH_MATRIX pass=\(pass) cycle=\(cycle) ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) views=\(views(host).count)")
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        for cycle in 0..<30 {
+            let fixture = fixtures[cycle % projectCount]
+            let start = ProcessInfo.processInfo.systemUptime
+            manager.selectProject(id: fixture.project.id)
+            manager.syncGitStatus(model)
+            model.collapsedFolders.subtract(["unstaged:Resources", "staged:StagedResources"])
+            let selected = ProcessInfo.processInfo.systemUptime
+            layout()
+            let firstLayout = ProcessInfo.processInfo.systemUptime
+            print("LOADED_PROJECT_LAYOUT cycle=\(cycle) state_ms=\((selected-start)*1000) layout_ms=\((firstLayout-selected)*1000)")
+            try await waitFor("Project \(cycle) editor was not remounted") {
+                fixture.files.last?.0.editorView === fixture.files.last?.1
+                    && fixture.files.last?.1.window === window
+            }
+            try await waitFor("Project \(cycle) Git identity did not resolve") {
+                LocalPathScope.physicalPath(model.repoRoot) == LocalPathScope.physicalPath(fixture.root.path)
+            }
+            layout()
+            let shown = ProcessInfo.processInfo.systemUptime
+            print("LOADED_PROJECT_SWITCH cycle=\(cycle) state_ms=\((selected-start)*1000) layout_ms=\((firstLayout-selected)*1000) shown_ms=\((shown-start)*1000)")
+            XCTAssertEqual(fixture.project.tabs.count, tabCount)
+            XCTAssertTrue(fixture.files.last?.0.editorView === fixture.files.last?.1)
+            XCTAssertEqual(views(host).compactMap { $0 as? FocusReportingTextView }.count, 1)
+            try await waitFor { !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
+            let commit = try XCTUnwrap(model.recentCommits.first)
+            let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
+                $0.convert($0.bounds, to: host).minX > host.bounds.width * 0.75
+                    && $0.contentSize.height > 200
+            })
+            // Exercise the same disclosure binding as the commit row. Keep the
+            // native rendering/scroll assertions here; keyboard and pointer
+            // activation are covered separately in the interaction tests.
+            layout()
+            try await waitFor("Collapsed graph did not settle") {
+                (scroll.documentView?.frame.height ?? 0) >= CGFloat(model.changedEntries.count) * 18
+            }
+            let beforeHeight = try XCTUnwrap(scroll.documentView?.frame.height)
+            let detailHeight = TreeRowStyle.rowHeight(CGFloat(AppSettings.shared.panelFontSize / AppSettings.defaultPanelFontSize))
+            let began = ProcessInfo.processInfo.systemUptime
+            model.expandedCommitIDs.insert(commit.id)
+            layout()
+            let mounted = ProcessInfo.processInfo.systemUptime
+            try await waitFor {
+                (scroll.documentView?.frame.height ?? 0) >= beforeHeight + CGFloat(historyCount + tabCount) * detailHeight - 2
+            }
+            print("LOADED_GRAPH_EXPAND cycle=\(cycle) main_layout_ms=\((mounted-began)*1000) shown_ms=\((ProcessInfo.processInfo.systemUptime-began)*1000)")
+            XCTAssertTrue(model.expandedCommitIDs.contains(commit.id))
+            XCTAssertEqual(model.historicalFiles(for: commit)?.count, historyCount + tabCount)
+            model.expandedCommitIDs.remove(commit.id)
+            XCTAssertTrue(model.historicalFilesByOID.isEmpty)
+            try await waitFor("Commit did not collapse") { abs((scroll.documentView?.frame.height ?? 0) - beforeHeight) < 2 }
+            if let last = fixture.project.tabs.last { fixture.project.selectTab(last.id, extending: .preserve) }
+            layout()
+        }
+        for fixture in fixtures {
+            for (file, scroll) in fixture.files {
+                XCTAssertTrue((scroll.documentView as? NSTextView)?.textStorage === file.nativeTextStorage)
+                XCTAssertFalse(file.isDirty)
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: file.path)), Data(file.nativeTextStorage.string.utf8))
+            }
+        }
+    }
+
     func testLargeHistoryFolderUsesViewportRowsAndRetainsScrollHost() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GraphScale-\(UUID().uuidString)")
@@ -75,17 +323,21 @@ final class GitPanelVisibilityTests: XCTestCase {
         func views(_ root: NSView) -> [NSView] {
             [root] + root.subviews.flatMap(views)
         }
-        try await waitFor { !model.isRefreshing && model.recentCommits.first?.files.count == count }
+        try await waitFor { !model.isRefreshing && model.canUseCurrentHistory && !model.recentCommits.isEmpty }
         layout()
         let commit = try XCTUnwrap(model.recentCommits.first)
         let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
             $0.contentView.bounds.height > 200
         })
+        try await waitFor {
+            (scroll.documentView?.frame.height ?? 0) >= CGFloat(model.graphCommits.count) * 38
+        }
         let before = try XCTUnwrap(scroll.documentView?.frame.height)
         let start = ContinuousClock.now
         model.expandedCommitIDs.insert(commit.id)
         try await waitFor { (scroll.documentView?.frame.height ?? 0) > CGFloat(count * 16) }
         let elapsed = start.duration(to: .now)
+        XCTAssertEqual(model.historicalFiles(for: commit)?.count, count)
         let expandedHeight = try XCTUnwrap(scroll.documentView?.frame.height)
         let nativeViews = views(host).count
         print("GIT_GRAPH_SCALE files=\(count) first_expand=\(elapsed) native_views=\(nativeViews)")
@@ -128,32 +380,50 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
         let initialOffset = scroll.contentView.bounds.minY
         let expandedIDs = model.expandedCommitIDs
-        var previousOffset = initialOffset
-        for index in 0..<32 {
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertTrue(document.isFlipped)
+        let graphTop = keyboard.convert(
+            NSPoint(x: keyboard.bounds.minX,
+                    y: keyboard.isFlipped ? keyboard.bounds.minY : keyboard.bounds.maxY),
+            to: document
+        ).y
+        let commitHeight = CGFloat(38)
+        let rowHeight = TreeRowStyle.rowHeight(1)
+        let viewportHeight = scroll.documentVisibleRect.height
+
+        func press(_ code: UInt16) async throws {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
                 modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                 context: nil, characters: "", charactersIgnoringModifiers: "",
-                isARepeat: false, keyCode: 125))
+                isARepeat: false, keyCode: code))
             XCTAssertTrue(keyboard.onKeyDown(event))
             for _ in 0..<3 {
                 layout()
                 try await Task.sleep(for: .milliseconds(20))
             }
-            let offset = scroll.contentView.bounds.minY
             XCTAssertEqual(scroll.documentView?.frame.height ?? 0, expectedHeight, accuracy: 1,
                            "Moving the blue cursor cannot change the native scroll range")
-            if index < 3 {
-                XCTAssertEqual(offset, initialOffset, accuracy: 1,
-                               "A fully visible target must not scroll")
-            } else {
-                XCTAssertGreaterThanOrEqual(offset, previousOffset - 1)
-                XCTAssertLessThanOrEqual(offset, previousOffset + TreeRowStyle.rowHeight(1) + 2,
-                                         "An adjacent file needs at most one row of scroll")
-            }
-            previousOffset = offset
         }
-        XCTAssertGreaterThan(previousOffset, initialOffset + 100,
-                             "Offscreen keyboard targets must still scroll into view")
+
+        var expectedOffset = initialOffset
+        for index in 0..<32 {
+            try await press(125)
+            // The cursor starts on the commit, then visits the folder and files.
+            // The following row must be completely visible before the next key.
+            let nextBottom = graphTop + commitHeight + CGFloat(index + 2) * rowHeight
+            expectedOffset = max(expectedOffset, nextBottom - viewportHeight)
+            XCTAssertEqual(scroll.documentVisibleRect.minY, expectedOffset, accuracy: 2,
+                           "Down must reserve exactly one following row, without extra scroll")
+        }
+        XCTAssertGreaterThan(expectedOffset, initialOffset + 100)
+        for index in (0..<32).reversed() {
+            try await press(126)
+            let previousTop = graphTop + (index > 1
+                ? commitHeight + CGFloat(index - 2) * rowHeight : 0)
+            expectedOffset = max(0, min(expectedOffset, previousTop))
+            XCTAssertEqual(scroll.documentVisibleRect.minY, expectedOffset, accuracy: 2,
+                           "Up must reserve one preceding row, without extra scroll")
+        }
         XCTAssertEqual(model.expandedCommitIDs, expandedIDs)
         XCTAssertTrue(window.firstResponder === keyboard)
         XCTAssertLessThan(views(host).count, 1_000, "Scrolling must not mount the entire history subtree")
@@ -321,6 +591,12 @@ final class GitPanelVisibilityTests: XCTestCase {
             return frame.minX > host.bounds.width * 0.65 && frame.height > 140
         })
         let initialHistoryCount = model.recentCommits.count
+        while (scrolling.documentView?.frame.height ?? 0) < CGFloat(initialHistoryCount) * 38,
+              Date() < historyDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
         XCTAssertEqual(initialHistoryCount, 30, "An offscreen pagination sentinel must not load another page")
         let initialDocumentHeight = scrolling.documentView?.frame.height ?? 0
         XCTAssertGreaterThan(initialDocumentHeight, 900,
@@ -345,12 +621,15 @@ final class GitPanelVisibilityTests: XCTestCase {
                 expectedOffset = paginationOffset
             }
             let pageDeadline = Date().addingTimeInterval(15)
-            while model.recentCommits.count <= priorCount || model.isLoadingMoreCommits {
+            while model.recentCommits.count <= priorCount || model.isLoadingMoreCommits
+                    || (scrolling.documentView?.frame.height ?? 0) < CGFloat(model.recentCommits.count) * 38 {
                 guard Date() < pageDeadline else {
                     XCTFail("Real Git Graph pagination did not finish page \(page)")
                     return
                 }
                 try await Task.sleep(for: .milliseconds(40))
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
             }
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
@@ -761,6 +1040,134 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertEqual(try git(["rev-parse", "HEAD"]), current)
     }
 
+    func testChangesNavigationRevealsRealRowsAcrossSectionsAndModes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-ChangesViewport-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: root.path)
+            guard result.status == 0 else {
+                throw NSError(domain: "ChangesViewport", code: Int(result.status),
+                              userInfo: [NSLocalizedDescriptionKey: result.stderr])
+            }
+        }
+        try git(["init", "-q", "-b", "main"])
+        for section in ["staged", "worktree"] {
+            let folder = root.appendingPathComponent(section)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<1_000 {
+                try Data("content".utf8).write(to: folder.appendingPathComponent(String(format: "%04d.swift", index)))
+            }
+        }
+        try git(["add", "--", "staged"])
+        try Data("modified".utf8).write(to: root.appendingPathComponent("staged/0000.swift"))
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "changes viewport", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        defer { model.sync(root: "") }
+        let config = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".toml")
+        defer { try? FileManager.default.removeItem(at: config) }
+        let settings = AppSettings(configURL: config)
+        var opened = 0
+        func panel(scale: CGFloat) -> some View {
+            GitPanel(settings: settings, model: model, manager: manager, project: project,
+                     sshHost: nil, openFile: { _ in opened += 1 }, openDiff: { _, _ in opened += 1 },
+                     openCommitDiff: { _, _ in opened += 1 })
+                .environment(\.panelFontScale, scale)
+        }
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 320, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: panel(scale: 1))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        manager.syncGitStatus(model)
+        func views(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(views)
+        }
+        func wait(_ message: String, condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+            while .now < deadline {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if condition() { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTFail(message)
+            throw NSError(domain: "ChangesViewport", code: 1)
+        }
+        try await wait("The two actual change sections must load") {
+            model.hasResolvedStatus && model.stagedEntries.count == 1_000 && model.changedEntries.count == 1_001
+        }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let access = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(access, AXError.success.rawValue)
+        func attribute(_ node: NSObject, _ name: String) -> Any? {
+            guard node.responds(to: NSSelectorFromString(name)) else { return nil }
+            return node.value(forKey: name)
+        }
+        func elements(_ node: NSObject) -> [NSObject] {
+            let children = attribute(node, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(node, "accessibilityChildren") as? [NSObject] ?? []
+            return [node] + children.flatMap(elements)
+        }
+        for mode in [GitViewMode.tree, .list] {
+            settings.gitViewMode = mode
+            for scale: CGFloat in [0.8, 1.6] {
+                host.rootView = panel(scale: scale)
+                window.setContentSize(.init(width: scale > 1 ? 160 : 440, height: 500))
+                try await wait("The native Changes host must mount") {
+                    views(host).contains { $0 is TreeKeyboardView }
+                        && views(host).contains { ($0 as? NSScrollView)?.contentSize.height ?? 0 > 80 }
+                }
+                let keyboard = try XCTUnwrap(views(host).compactMap { $0 as? TreeKeyboardView }.first)
+                let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
+                    $0.contentSize.height > 80
+                })
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                let display = model.displayChanges(filter: "", mode: mode, closed: [])
+                XCTAssertEqual(display.navigation.count, 2_001 + (mode == .tree ? 3 : 0))
+                let targetRows = [display.stagedRows.last,
+                                  display.changedRows.first(where: { $0.row.path == "staged/0000.swift" }),
+                                  display.changedRows.last,
+                                  display.stagedRows.first(where: { $0.row.path == "staged/0000.swift" })]
+                for target in targetRows {
+                    let target = try XCTUnwrap(target)
+                    let key = GitStatusModel.ChangeSelection(scope: model.currentScope,
+                        repository: model.repoRoot, section: target.kind.rawValue, path: target.row.path)
+                    model.changeCursor = key
+                    let expected = target.row.accessibilityLabel + ", " + target.row.path
+                    try await wait("Changes cursor must reveal the actual row: " + expected) {
+                        let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
+                        return (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(elements).contains {
+                            guard attribute($0, "accessibilityLabel") as? String == expected,
+                                  let frame = (attribute($0, "accessibilityFrame") as? NSValue)?.rectValue else { return false }
+                            return window.convertFromScreen(frame).intersects(viewport)
+                        }
+                    }
+                    XCTAssertEqual(model.changeCursor, key)
+                    XCTAssertTrue(model.selectedChanges.isEmpty)
+                    XCTAssertEqual(opened, 0)
+                }
+                XCTAssertTrue(views(host).contains { $0 === scroll })
+            }
+        }
+    }
+
     func testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite() async throws {
         let repository = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GitVisibility-" + UUID().uuidString)
@@ -879,6 +1286,10 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertTrue(initialLoaded, "The initial 80-commit repository must load actual Git history")
         XCTAssertEqual(model.totalChangeCount, 0)
         let scroll = try XCTUnwrap(visibleScroll())
+        let graphRendered = try await waitFor {
+            (scroll.documentView?.frame.height ?? 0) >= CGFloat(model.recentCommits.count) * 36
+        }
+        XCTAssertTrue(graphRendered, "The initial native graph must be rendered before the resize sequence")
         let initialHeight = scroll.documentView?.frame.height ?? 0
         XCTAssertGreaterThan(initialHeight, scroll.contentView.bounds.height)
 
@@ -1164,18 +1575,20 @@ final class GitPanelVisibilityTests: XCTestCase {
                 ?? attribute(object, "accessibilityChildren") as? [NSObject] ?? []
             return [object] + children.flatMap(descendants)
         }
-        func commitButton(_ subject: String) throws -> NSObject {
+        func commitButton(_ subject: String) -> NSObject? {
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             let accessible = (host.accessibilityChildren() as? [NSObject] ?? [])
                 .flatMap(descendants)
-            return try XCTUnwrap(accessible.first {
+            return accessible.first {
                 attribute($0, "accessibilityRole") as? String == "AXButton"
                     && attribute($0, "accessibilityLabel") as? String == subject
-            }, "A real, pressable Graph commit button must exist for \(subject)")
+            }
         }
-        func pressCommit(_ subject: String) throws {
-            let row = try commitButton(subject)
+        func pressCommit(_ subject: String) async throws {
+            let rendered = try await waitFor { commitButton(subject) != nil }
+            XCTAssertTrue(rendered, "A real, pressable Graph commit button must exist for \(subject)")
+            let row = try XCTUnwrap(commitButton(subject))
             let selector = NSSelectorFromString("accessibilityPerformPress")
             XCTAssertTrue(row.responds(to: selector))
             typealias Action = @convention(c) (AnyObject, Selector) -> Bool
@@ -1183,16 +1596,16 @@ final class GitPanelVisibilityTests: XCTestCase {
             XCTAssertTrue(perform(row, selector),
                           "Graph commit must perform the native accessibility click")
         }
-        try pressCommit("Native Git Graph regression")
+        try await pressCommit("Native Git Graph regression")
         let axExpanded = try await waitFor { model.expandedCommitIDs.contains(updatedGraph[0].id) }
         XCTAssertTrue(axExpanded)
-        try pressCommit("Native Git Graph regression")
+        try await pressCommit("Native Git Graph regression")
         let axCollapsed = try await waitFor { !model.expandedCommitIDs.contains(updatedGraph[0].id) }
         XCTAssertTrue(axCollapsed)
-        try pressCommit("visible-history-0")
+        try await pressCommit("visible-history-0")
         let parentCollapsed = try await waitFor { !model.expandedCommitIDs.contains(previousCommit.id) }
         XCTAssertTrue(parentCollapsed)
-        try pressCommit("visible-history-0")
+        try await pressCommit("visible-history-0")
         let parentExpanded = try await waitFor { model.expandedCommitIDs.contains(previousCommit.id) }
         XCTAssertTrue(parentExpanded)
 
@@ -1238,10 +1651,10 @@ final class GitPanelVisibilityTests: XCTestCase {
             XCTAssertTrue(visibleScroll() === scroll, "Repeated commits must retain the scroll host")
             XCTAssertEqual(Set(keyboardViews(in: host).map(ObjectIdentifier.init)),
                            Set(originalKeyboardHosts.map(ObjectIdentifier.init)))
-            try pressCommit(subject)
+            try await pressCommit(subject)
             let expanded = try await waitFor { model.expandedCommitIDs.contains(head.id) }
             XCTAssertTrue(expanded, "The \(index)th HEAD must expand via real AXPress")
-            try pressCommit(subject)
+            try await pressCommit(subject)
             let collapsed = try await waitFor { !model.expandedCommitIDs.contains(head.id) }
             XCTAssertTrue(collapsed, "The \(index)th HEAD must collapse via real AXPress")
             previousOID = head.hash
@@ -1261,12 +1674,12 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertEqual(amendedHead.hash, try git(["rev-parse", "HEAD"]))
         XCTAssertFalse(model.graphCommits.contains { $0.hash == previousOID })
         XCTAssertEqual(try git(["rev-list", "--count", "HEAD"]), "7")
-        try pressCommit("Native amended graph")
+        try await pressCommit("Native amended graph")
         let amendedExpanded = try await waitFor {
             model.expandedCommitIDs.contains(amendedHead.id)
         }
         XCTAssertTrue(amendedExpanded, "Amended HEAD must remain clickable without changing Project")
-        try pressCommit("Native amended graph")
+        try await pressCommit("Native amended graph")
         let amendedCollapsed = try await waitFor {
             !model.expandedCommitIDs.contains(amendedHead.id)
         }
@@ -1277,7 +1690,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
         func clickCommitInOffscreenWindow(_ subject: String) throws {
-            let element = try commitButton(subject)
+            let element = try XCTUnwrap(commitButton(subject))
             let rect = try XCTUnwrap(
                 (attribute(element, "accessibilityFrame") as? NSValue)?.rectValue,
                 "A native Graph button must provide its onscreen hit rectangle"

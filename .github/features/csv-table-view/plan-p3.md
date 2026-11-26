@@ -156,7 +156,7 @@ FileViewerView 已读取主题 revision，但 CSVTableView 自身未观察它，
 | C15b 双路径即时刷新 | 默认→非默认→默认；同为浅色／深色的主题切换；System／Light／Dark 全部转换及 System 随真实系统外观变化；修改未生效的另一主题槽、设置重置、重开 App。独立 AppSettings 配置不得污染当前窗口。核对已挂载 CSV 实际像素与同一窗口的源文／Markdown／Dock 主题，不靠切标签才生效。 |
 | C15c 状态与焦点 | 首次挂载、普通／Hover／选择／非连续选区、活动／非活动窗口、右键目标、滚动到首中末列、拖动列宽、空／仅表头／坏表／只读／筛选零行、查找／筛选和活动 field editor。换主题后全部已实现控件与之后复用的控件无旧色，保持窗口第一响应者、真实选区、滚动原点及人工宽度；不能为上色改写选择。 |
 | C15d 输入与数据 | 原位输入中（含实际中文 IME marked text、英文输入、Unicode 组合、长字段）切换主题，保存／取消／撤销／重做；P4 增加多行／表头输入和替换／统计浮层。检查当前输入、插入点／选择、原文代次、解析／展示 ID、在途操作与磁盘最终字节。单纯换色不得提交编辑、改变 dirty／Undo、重新解析或触发保存。 |
-| C15e 几何与可访问性 | 所有 C15 窗格尺寸及连续改变宽高，系统滚动条自动／始终显示、实际可用显示倍率、鼠标／触控板、键盘、VoiceOver、提高对比度／减弱透明度／减弱动态效果；中文／英文及适用的区域数字样本。实测固定表头和行号、半可见行、滚动条、边界像素、浮层锚点和编辑器不互相覆盖；真实 AX 名称、行列位置与状态不依赖配色。 |
+| C15e 几何与可访问性 | 所有 C15 窗格尺寸及连续改变宽高，系统滚动条自动／始终显示、实际可用显示倍率、鼠标／触控板、键盘、基础 AX 语义与动作；中文／英文及适用的区域数字样本。实测固定表头和行号、半可见行、滚动条、边界像素、浮层锚点和编辑器不互相覆盖；真实 AX 名称、行列位置与状态不依赖配色。 |
 | C15f 规模与并发 | 十万行、最大列／字段／文本边界及长单元格，在快速滚动、拖选、排序／筛选／分隔符切换、输入／Undo、后台解析／查找、远端重载／断线及关闭同时重复切换主题；复用同一表格，不触发新的数据任务或全表 View 构造，测主线程耗时、可见对象数、RSS／footprint 和关闭释放；迟到的结果不能恢复旧配色。 |
 
 宿主以实际 FileViewerView → CSVTableView → NativeDelimitedGrid 链挂载，而不是手动调用 grid.style 后宣称响应式生效。
@@ -173,7 +173,7 @@ C15a×C15c、C15b×C15c/d/e/f、C15d×C15f、C15e×C16、C15b×R06/R07/R08/R10�
 宿主复用 DelimitedTablePresentationTests、DelimitedTableIndexTests、SwiftMarkdownLayoutTests、
 AppSettingsTests、NativeEditorLayoutTests、NativeEditorCompositionTests、FileTabPersistenceTests、
 NativePaneRetentionIntegrationTests、WindowOwnershipIntegrationTests。
-完整 App 复用 CSVPreviewUITests、FilePreviewWorkspaceUITests 验证真实鼠标、菜单、焦点和旁白。
+完整 App 复用 CSVPreviewUITests、FilePreviewWorkspaceUITests 验证真实鼠标、菜单、焦点及基础 AX。
 用现有 Makefile 的 `make test:类名`、`make test ONLY_TESTING=...`、
 `make test:ui ONLY_TESTING=BaileyUITests/CSVPreviewUITests`、`make build`、`make build:dev`，
 按实际受影响路径定点执行；正式阶段整合 `make test`。
