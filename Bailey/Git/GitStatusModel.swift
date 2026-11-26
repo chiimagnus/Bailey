@@ -823,7 +823,8 @@ final class GitStatusModel {
         _ entry: Entry, section: ChangeSection
     ) -> TreeDisplayModel.Row {
         .init(name: entry.fileName, path: entry.path,
-              isDirectory: false, status: .init(section.status(entry)))
+              isDirectory: false, status: .init(section.status(entry)),
+              namespace: section.rawValue + ":")
     }
 
     nonisolated struct StatusPresentation: Sendable {

@@ -2132,10 +2132,14 @@ struct GitPanel: View {
                 if !isGitActive { revealActiveChange() }
             }
             .onChange(of: selectedChange) { _, key in
-                if let key, keyboardFocused { proxy.scrollTo(key) }
+                if keyboardFocused, let key, let index = changes.selections.position(of: key) {
+                    proxy.scrollTo(changes.navigation[index].row.id)
+                }
             }
             .onChange(of: keyboardFocused) { _, focused in
-                if focused, let selectedChange { proxy.scrollTo(selectedChange) }
+                if focused, let selectedChange, let index = changes.selections.position(of: selectedChange) {
+                    proxy.scrollTo(changes.navigation[index].row.id)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
                 notification in
@@ -2371,15 +2375,16 @@ struct GitPanel: View {
     ) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(rows, id: \.row.id) { change in
-                if change.row.isDirectory {
-                    directoryRow(change.row, kind: change.kind,
-                                 allowsBatchMutation: allowsBatchMutation)
-                        .id(selection(for: change))
-                } else if let entry = change.entry {
-                    row(entry, kind: change.kind,
-                        showDirectory: settings.gitViewMode != .tree,
-                        displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
-                        .id(selection(for: change))
+                // One lazy child and one identity per row, including directories.
+                VStack(alignment: .leading, spacing: 0) {
+                    if change.row.isDirectory {
+                        directoryRow(change.row, kind: change.kind,
+                                     allowsBatchMutation: allowsBatchMutation)
+                    } else if let entry = change.entry {
+                        row(entry, kind: change.kind,
+                            showDirectory: settings.gitViewMode != .tree,
+                            displayRow: change.row, allowsBatchMutation: allowsBatchMutation)
+                    }
                 }
             }
         }

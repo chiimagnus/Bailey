@@ -1019,6 +1019,134 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertEqual(try git(["rev-parse", "HEAD"]), current)
     }
 
+    func testChangesNavigationRevealsRealRowsAcrossSectionsAndModes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-ChangesViewport-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: root.path)
+            guard result.status == 0 else {
+                throw NSError(domain: "ChangesViewport", code: Int(result.status),
+                              userInfo: [NSLocalizedDescriptionKey: result.stderr])
+            }
+        }
+        try git(["init", "-q", "-b", "main"])
+        for section in ["staged", "worktree"] {
+            let folder = root.appendingPathComponent(section)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<1_000 {
+                try Data("content".utf8).write(to: folder.appendingPathComponent(String(format: "%04d.swift", index)))
+            }
+        }
+        try git(["add", "--", "staged"])
+        try Data("modified".utf8).write(to: root.appendingPathComponent("staged/0000.swift"))
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "changes viewport", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        defer { model.sync(root: "") }
+        let config = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".toml")
+        defer { try? FileManager.default.removeItem(at: config) }
+        let settings = AppSettings(configURL: config)
+        var opened = 0
+        func panel(scale: CGFloat) -> some View {
+            GitPanel(settings: settings, model: model, manager: manager, project: project,
+                     sshHost: nil, openFile: { _ in opened += 1 }, openDiff: { _, _ in opened += 1 },
+                     openCommitDiff: { _, _ in opened += 1 })
+                .environment(\.panelFontScale, scale)
+        }
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 320, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: panel(scale: 1))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        manager.syncGitStatus(model)
+        func views(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(views)
+        }
+        func wait(_ message: String, condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+            while .now < deadline {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if condition() { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTFail(message)
+            throw NSError(domain: "ChangesViewport", code: 1)
+        }
+        try await wait("The two actual change sections must load") {
+            model.hasResolvedStatus && model.stagedEntries.count == 1_000 && model.changedEntries.count == 1_001
+        }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let access = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(access, AXError.success.rawValue)
+        func attribute(_ node: NSObject, _ name: String) -> Any? {
+            guard node.responds(to: NSSelectorFromString(name)) else { return nil }
+            return node.value(forKey: name)
+        }
+        func elements(_ node: NSObject) -> [NSObject] {
+            let children = attribute(node, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(node, "accessibilityChildren") as? [NSObject] ?? []
+            return [node] + children.flatMap(elements)
+        }
+        for mode in [GitViewMode.tree, .list] {
+            settings.gitViewMode = mode
+            for scale: CGFloat in [0.8, 1.6] {
+                host.rootView = panel(scale: scale)
+                window.setContentSize(.init(width: scale > 1 ? 160 : 440, height: 500))
+                try await wait("The native Changes host must mount") {
+                    views(host).contains { $0 is TreeKeyboardView }
+                        && views(host).contains { ($0 as? NSScrollView)?.contentSize.height ?? 0 > 80 }
+                }
+                let keyboard = try XCTUnwrap(views(host).compactMap { $0 as? TreeKeyboardView }.first)
+                let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
+                    $0.contentSize.height > 80
+                })
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                let display = model.displayChanges(filter: "", mode: mode, closed: [])
+                XCTAssertEqual(display.navigation.count, 2_001 + (mode == .tree ? 3 : 0))
+                let targetRows = [display.stagedRows.last,
+                                  display.changedRows.first(where: { $0.row.path == "staged/0000.swift" }),
+                                  display.changedRows.last,
+                                  display.stagedRows.first(where: { $0.row.path == "staged/0000.swift" })]
+                for target in targetRows {
+                    let target = try XCTUnwrap(target)
+                    let key = GitStatusModel.ChangeSelection(scope: model.currentScope,
+                        repository: model.repoRoot, section: target.kind.rawValue, path: target.row.path)
+                    model.changeCursor = key
+                    let expected = target.row.accessibilityLabel + ", " + target.row.path
+                    try await wait("Changes cursor must reveal the actual row: " + expected) {
+                        let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
+                        return (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(elements).contains {
+                            guard attribute($0, "accessibilityLabel") as? String == expected,
+                                  let frame = (attribute($0, "accessibilityFrame") as? NSValue)?.rectValue else { return false }
+                            return window.convertFromScreen(frame).intersects(viewport)
+                        }
+                    }
+                    XCTAssertEqual(model.changeCursor, key)
+                    XCTAssertTrue(model.selectedChanges.isEmpty)
+                    XCTAssertEqual(opened, 0)
+                }
+                XCTAssertTrue(views(host).contains { $0 === scroll })
+            }
+        }
+    }
+
     func testGraphRemainsVisibleAfterResizeChangesAndHistoryRewrite() async throws {
         let repository = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GitVisibility-" + UUID().uuidString)

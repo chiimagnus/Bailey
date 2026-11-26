@@ -8,7 +8,7 @@ struct PanelSectionHeader: View {
         let perform: () -> Void
     }
     struct Action: Identifiable {
-        let id = UUID()
+        var id: String { systemImage }
         let systemImage: String
         let help: String
         let shortcut: KeyboardShortcut?
