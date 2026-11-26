@@ -56,6 +56,41 @@ final class DockFocusIntegrationTests: XCTestCase {
                        "A detached editor must not receive keyboard input")
     }
 
+    func testRetainedPathActionsDoNotOwnClosedFileOrAuthorizeStalePaths() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("owner.swift")
+        try "let value = 1\n".write(to: path, atomically: true, encoding: .utf8)
+
+        let manager = WorkspaceApplication().makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        weak var releasedFile: FileTab?
+        let actions: FocusedPathActions
+        do {
+            manager.openFile(path.path)
+            let tab = try XCTUnwrap(project.selectedTab)
+            guard case .file(let file) = tab.content else { return XCTFail("Expected file tab") }
+            try await file.waitForText()
+            releasedFile = file
+            actions = FocusedPathActions.file(file, in: project, isValid: { true })
+            XCTAssertEqual(actions.paths(true), [file.path])
+            XCTAssertEqual(actions.paths(false), ["owner.swift"])
+            XCTAssertEqual(actions.revealablePaths(), [file.path])
+            project.close(tab)
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertTrue(actions.paths(true).isEmpty)
+            XCTAssertTrue(actions.paths(false).isEmpty)
+            XCTAssertTrue(actions.revealablePaths().isEmpty)
+        }
+        try await waitForCondition("An obsolete focused value must not retain a closed file") {
+            releasedFile == nil
+        }
+        XCTAssertNil(releasedFile)
+    }
+
     private func waitForCondition(
         _ description: String,
         condition: @MainActor () -> Bool

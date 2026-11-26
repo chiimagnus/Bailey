@@ -95,16 +95,19 @@ struct FocusedPathActions {
         _ file: FileTab, in project: Project,
         isValid: @escaping () -> Bool
     ) -> Self {
-        let paths: (Bool) -> [String] = { absolute in
-            guard isValid() else { return [] }
+        let paths: (Bool) -> [String] = { [weak file, weak project] absolute in
+            guard let file, let project,
+                  project.tabs.contains(where: { $0.content.id == file.id }),
+                  isValid() else { return [] }
             if absolute { return [file.path] }
             guard file.workspaceIdentity == project.workspaceIdentity,
                   let root = project.customDirectory.map({ $0 == "/" ? "/" : $0 + "/" }),
                   file.path.hasPrefix(root) else { return [] }
             return [String(file.path.dropFirst(root.count))]
         }
-        return Self(paths: paths, revealablePaths: {
-            file.workspaceIdentity == nil ? paths(true) : []
+        return Self(paths: paths, revealablePaths: { [weak file] in
+            guard let file, file.workspaceIdentity == nil else { return [] }
+            return paths(true)
         })
     }
 
