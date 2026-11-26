@@ -167,6 +167,26 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
                 ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
             return [element] + children.flatMap(descendants)
         }
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls)
+        }
+        let scroll = try XCTUnwrap(scrolls(host).first {
+            ($0.documentView?.frame.height ?? 0) > $0.contentSize.height
+        })
+        let initialHeight = try XCTUnwrap(scroll.documentView?.frame.height)
+        for fraction in [0.5, 1.0, 0.0] {
+            let offset = max(0, initialHeight - scroll.contentSize.height) * fraction
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            for _ in 0..<4 {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            let height = try XCTUnwrap(scroll.documentView?.frame.height)
+            print("PALETTE_EXTENT fraction=\(fraction) initial=\(initialHeight) height=\(height)")
+            XCTAssertEqual(height, initialHeight, accuracy: 1,
+                           "Materializing command rows cannot change the scroll extent")
+        }
         let accessibility = (host.accessibilityChildren() as? [NSObject] ?? [])
             .flatMap(descendants)
         let dismiss = try XCTUnwrap(accessibility.first {
