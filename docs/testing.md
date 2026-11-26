@@ -239,12 +239,10 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
-同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，
-编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `.build/.bailey-dev-test.lock` 原子互斥；
-已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。
-若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，
-再用 `rmdir .build/.bailey-dev-test.lock` 清理。
-其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。
+同一用户的 Bailey Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同工作树或 DerivedData：
+它们共用 Bundle ID 和系统 XCTest 会话。四个 Makefile 入口通过用户临时目录中的原生文件锁互斥；
+已有操作时立即报错，不等待或终止其他进程。持锁进程退出后系统自动释放，不需要删除锁文件。
+绕过 Makefile 或使用旧版构建入口的操作仍须人工协调；其他 GUI 测试也不得争用桌面焦点。
 `automationmodetool` 在 GUI 测试结束后可能显示 Automation Mode 已关闭；
 **不要仅凭状态就判定无法测试**，
 先直接运行受影响的 `make test:ui ONLY_TESTING=...` 重新发起系统授权，再根据实际运行结果判断。

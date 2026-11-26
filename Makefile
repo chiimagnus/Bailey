@@ -25,18 +25,21 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-skipPackageUpdates -disableAutomaticPackageResolution
 TEST_SELECTION = $(foreach TEST,$(ONLY_TESTING),-only-testing:$(TEST))
 SELECTED_TESTS_PREFLIGHT = if [ -n '$(strip $(ONLY_TESTING))' ]; then \
-	enumeration="$$lock/selected-tests.json"; \
-	trap 'rm -f "$$enumeration"; rmdir "$$lock"' EXIT; \
+	enumeration='$(CURDIR)/.build/selected-tests.json'; \
+	trap 'rm -f "$$enumeration"' EXIT; \
+	rm -f "$$enumeration"; \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) \
 		-enumerate-tests -test-enumeration-format json -test-enumeration-output-path "$$enumeration" test > /dev/null; \
 	python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); full=[g["name"]+"/"+c["name"]+"/"+t["name"].removesuffix("()") for p in j["values"] for g in p.get("children",[]) for c in g.get("children",[]) for t in c.get("children",[]) if t["kind"]=="test" and not t.get("disabled",False)]; missing=[s for s in sys.argv[2].split() if not any(p==s or p.startswith(s+"/") for p in full)]; print("Selected XCTest methods:",len(full)); sys.exit("Unmatched XCTest selector: "+", ".join(missing) if missing else 0)' "$$enumeration" '$(strip $(ONLY_TESTING))'; \
 	rm -f "$$enumeration"; \
 fi
+# Bailey Dev shares its bundle identity and XCTest session across checkouts.
 DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/.build'; \
-	lock='$(CURDIR)/.build/.bailey-dev-test.lock'; \
-	mkdir "$$lock" 2>/dev/null || { \
-		echo '无法取得 Bailey Dev 构建／测试锁；请等待已有操作结束。若上次操作被强制终止，先确认没有相关进程再移除 .build/.bailey-dev-test.lock。' >&2; exit 2; \
-	}; trap 'rmdir "$$lock"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+	lock="$$(getconf DARWIN_USER_TEMP_DIR)chiimagnus.bailey.dev-test.lock"; \
+	exec 9>"$$lock"; \
+	/usr/bin/lockf -s -t 0 9 || { \
+		echo '无法取得当前用户的 Bailey Dev 构建／测试锁；请等待已有操作结束。' >&2; exit 2; \
+	}; trap 'exit 130' INT; trap 'exit 143' TERM
 comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
 	$(if $(strip $(BUILD_NUMBER)),CURRENT_PROJECT_VERSION=$(BUILD_NUMBER))
