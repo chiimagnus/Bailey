@@ -77,7 +77,10 @@ struct GitPanel: View {
     private var expandedCommitIDsBinding: Binding<Set<String>> {
         Binding(
             get: { model.expandedCommitIDs },
-            set: { model.expandedCommitIDs = $0 }
+            set: {
+                guard hasCurrentPanelTarget else { return }
+                model.expandedCommitIDs = $0
+            }
         )
     }
     @State private var filterText = ""
@@ -2039,6 +2042,11 @@ struct GitPanel: View {
                             .onDisappear {
                                 if hasCurrentPanelTarget, model.canBrowse(graphTarget) {
                                     model.releaseHistoryDetails()
+                                }
+                            }
+                            .onChange(of: model.canUseCurrentHistory) { _, verified in
+                                if verified, hasCurrentPanelTarget, model.canBrowse(graphTarget) {
+                                    model.loadExpandedHistoryFiles()
                                 }
                             }
                         }

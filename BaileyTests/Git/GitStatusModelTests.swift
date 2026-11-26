@@ -4273,6 +4273,109 @@ final class GitStatusModelTests: XCTestCase {
                                     "refs/tags/should-not-exist"]), 0)
     }
 
+    func testInactiveRepositorySnapshotsEvictDeepHistoryAndOldRootsWithoutLosingDraft() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let roots = (0..<8).map { base.appendingPathComponent("project-\($0)") }
+        for (index, root) in roots.enumerated() {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: root.path).status, 0)
+            var script = ""
+            for revision in 0..<(index == 0 ? 96 : 1) {
+                let message = "project \(index) revision \(revision)"
+                script += "commit refs/heads/main\ncommitter Test <test@invalid> \(1_700_000_000 + revision) +0000\n"
+                script += "data \(message.utf8.count)\n" + message + "\n\n"
+            }
+            let imported = GitCommandExecution.runData(["fast-import", "--quiet"], in: root.path,
+                timeout: 15, stdin: Data(script.utf8))
+            XCTAssertEqual(imported.status, 0, imported.stderr)
+        }
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(false)
+        model.sync(root: roots[0].path)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        for expected in [60, 90, 96] {
+            XCTAssertTrue(model.loadMoreCommits())
+            try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+            XCTAssertEqual(model.recentCommits.count, expected)
+        }
+        let expectedHistory = model.recentCommits
+        model.commitMessage = "unsaved draft for project 0"
+        model.collapsedFolders = ["unstaged:Sources"]
+        model.sync(root: roots[1].path)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        model.sync(root: roots[0].path)
+        XCTAssertTrue(model.hasResolvedStatus, "A warm snapshot must restore immediately")
+        XCTAssertFalse(model.canUseCurrentStatus, "Cached status is not mutation authority")
+        XCTAssertEqual(model.recentCommits, Array(expectedHistory.prefix(60)))
+        XCTAssertTrue(model.hasMoreRecentCommits)
+        XCTAssertEqual(model.commitMessage, "unsaved draft for project 0")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.count, 60)
+        XCTAssertTrue(model.loadMoreCommits())
+        try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+        XCTAssertEqual(model.recentCommits, Array(expectedHistory.prefix(90)))
+
+        for root in roots.dropFirst() {
+            model.sync(root: root.path)
+            try await wait { model.hasCurrentHistory && !model.isRefreshing }
+            XCTAssertEqual(model.recentCommits.count, 1)
+        }
+        model.sync(root: roots[6].path)
+        XCTAssertTrue(model.hasResolvedStatus, "Recent projects still receive the fast cached display")
+        XCTAssertEqual(model.recentCommits.first?.subject, "project 6 revision 0")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        model.sync(root: roots[0].path)
+        XCTAssertFalse(model.hasResolvedStatus, "Least recently used project must be cold")
+        XCTAssertTrue(model.recentCommits.isEmpty)
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits, Array(expectedHistory.prefix(30)))
+        XCTAssertEqual(model.commitMessage, "unsaved draft for project 0")
+        XCTAssertEqual(model.collapsedFolders, ["unstaged:Sources"])
+        model.syncSelectedProject(project: nil) { _ in false }
+        model.sync(root: roots[6].path)
+        XCTAssertFalse(model.hasResolvedStatus, "Closing the last workspace must release snapshots")
+        try await wait { model.hasCurrentHistory && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.first?.subject, "project 6 revision 0")
+    }
+
+    func testInactiveRepositorySnapshotRecordBudgetEvictsOldLargeProject() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let roots = (0..<3).map { base.appendingPathComponent("project-\($0)") }
+        let count = 26_000
+        for (index, root) in roots.enumerated() {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: root.path).status, 0)
+            if index < 2 {
+                let folder = root.appendingPathComponent("Sources")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                for file in 0..<count {
+                    try Data().write(to: folder.appendingPathComponent("file-\(file).swift"))
+                }
+            }
+        }
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(false)
+        for root in roots {
+            model.sync(root: root.path)
+            try await wait { model.hasResolvedStatus && !model.isRefreshing }
+            XCTAssertNil(model.statusError)
+            XCTAssertEqual(model.changedEntries.count, root == roots[2] ? 0 : count)
+        }
+        model.sync(root: roots[1].path)
+        XCTAssertTrue(model.hasResolvedStatus, "The newest inactive large project remains warm")
+        XCTAssertEqual(model.changedEntries.count, count)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        model.sync(root: roots[0].path)
+        XCTAssertFalse(model.hasResolvedStatus, "Two 26,000-record snapshots exceed the shared budget")
+        XCTAssertTrue(model.changedEntries.isEmpty)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.changedEntries.count, count, "Eviction must not truncate active data")
+    }
+
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let first = fixture.appendingPathComponent("first")

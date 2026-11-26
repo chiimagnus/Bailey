@@ -1478,7 +1478,40 @@ final class GitStatusModel {
     /// tabs. Without this, every return to a repository clears `isRepo` until
     /// the asynchronous Git refresh finishes, briefly removing the toolbar
     /// and resizing the terminal through the wrong height.
-    private var cachedStatusByRoot: [String: StatusLoadResult] = [:]
+    @ObservationIgnored private var cachedStatusByRoot: [String: StatusLoadResult] = [:]
+    // Navigation and drafts are independent of these recomputable snapshots.
+    // Keep a small warm working set; the active repository has no row limit.
+    @ObservationIgnored private var inactiveStatusRoots: [String] = []
+    private static let inactiveSnapshotLimit = 4
+    private static let inactiveRecordBudget = 50_000
+
+    private func parkCurrentSnapshot() {
+        guard !rootPath.isEmpty, let cached = cachedStatusByRoot[scopedRoot] else { return }
+        if case .repository(var result, let presentation) = cached,
+           let history = result.history {
+            let limit = Self.recentCommitPageSize * 2
+            if history.commits.count > limit {
+                result.history = StatusHistory(refsByName: history.refsByName,
+                    commits: Array(history.commits.prefix(limit)), hasMore: true)
+                cachedStatusByRoot[scopedRoot] = .repository(result, presentation)
+            }
+        }
+        inactiveStatusRoots.removeAll { $0 == scopedRoot }
+        inactiveStatusRoots.append(scopedRoot)
+    }
+
+    private func activateSnapshot(_ key: String) {
+        inactiveStatusRoots.removeAll { $0 == key }
+        var retainedRecords = inactiveStatusRoots.reduce(0) {
+            $0 + (cachedStatusByRoot[$1]?.retainedRecordCount ?? 0)
+        }
+        while inactiveStatusRoots.count > Self.inactiveSnapshotLimit
+                || retainedRecords > Self.inactiveRecordBudget {
+            let oldest = inactiveStatusRoots.removeFirst()
+            retainedRecords -= cachedStatusByRoot.removeValue(forKey: oldest)?.retainedRecordCount ?? 0
+        }
+    }
+
     /// Invalidates an in-flight status refresh when a mutation begins, so its
     /// pre-operation snapshot cannot overwrite the post-operation state.
     private var statusRequestID: UInt = 0
@@ -1496,7 +1529,6 @@ final class GitStatusModel {
     @ObservationIgnored private var localWatcherForeground = true
     private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
-    private var recentCommitLimitByRoot: [String: Int] = [:]
     /// Folding a Git directory is navigation state, not part of a status
     /// refresh. Key by machine and root so different repositories stay apart.
     private var collapsedFoldersByRoot: [String: Set<String>] = [:]
@@ -1602,6 +1634,10 @@ final class GitStatusModel {
         guard let project, isCurrent(project), let context = project.panelContext else {
             if panelTargetIdentity != nil { clearPanelNavigation() }
             sync(root: "")
+            if project == nil {
+                cachedStatusByRoot.removeAll()
+                inactiveStatusRoots.removeAll()
+            }
             return
         }
         if panelTargetIdentity != context.identity {
@@ -1629,12 +1665,20 @@ final class GitStatusModel {
             localWatcherPaths = []
         }
         if root != rootPath || workspaceScope != scope {
+            parkCurrentSnapshot()
+            activateSnapshot(scope + "\u{0}" + root)
             clearPanelNavigation()
             workspaceScope = scope
             contextGeneration &+= 1
             rootPath = root
-            recentCommitLimit = recentCommitLimitByRoot[scopedRoot]
-                ?? Self.recentCommitPageSize
+            let pageSize = Self.recentCommitPageSize
+            let retainedCommits: Int
+            if case .repository(let result, _) = cachedStatusByRoot[scopedRoot] {
+                retainedCommits = result.history?.commits.count ?? 0
+            } else {
+                retainedCommits = 0
+            }
+            recentCommitLimit = max(pageSize, ((retainedCommits + pageSize - 1) / pageSize) * pageSize)
             hasResolvedStatus = false
             clearRepositoryState(preserveIdentity: true)
             if let cachedStatus = cachedStatusByRoot[scopedRoot] {
@@ -1896,7 +1940,6 @@ final class GitStatusModel {
         guard isRepo, hasMoreRecentCommits,
               !isLoadingMoreCommits, !isBusy else { return false }
         recentCommitLimit += Self.recentCommitPageSize
-        recentCommitLimitByRoot[scopedRoot] = recentCommitLimit
         isLoadingMoreCommits = true
         if isRefreshing {
             // Recheck the larger limit after the in-flight snapshot finishes.
@@ -4341,6 +4384,16 @@ final class GitStatusModel {
         case repository(StatusResult, StatusPresentation)
         case notRepository
         case failed(String)
+
+        var retainedRecordCount: Int {
+            guard case .repository(let result, _) = self else { return 0 }
+            let core = result.entries.count + result.ignoredPaths.count
+            let history = (result.history?.commits.count ?? 0)
+                + (result.coreMetadata?.refsByName.count ?? 0)
+            let worktrees = (result.worktrees?.reduce(0) { $0 + $1.entries.count } ?? 0)
+                + (result.worktreeLocations?.count ?? 0)
+            return core + history + worktrees + (result.stashes?.count ?? 0)
+        }
     }
 
     nonisolated struct StatusResult: Equatable, Sendable {
