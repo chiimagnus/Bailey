@@ -4179,6 +4179,62 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(pressedSegments, [0, 1])
     }
 
+    func testSharedTreeOnlyMountsHorizontalScrollForOverflowingLabels() async throws {
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 320, height: 100),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls)
+        }
+        let short = TreeDisplayModel.Row(name: "a.swift", path: "/fixture/a.swift", isDirectory: false)
+        let longName = String(repeating: "中文長文件🧪", count: 18) + ".swift"
+        let long = TreeDisplayModel.Row(name: longName, path: "/fixture/" + longName, isDirectory: false)
+        let folder = TreeDisplayModel.Row(name: "leaf", path: "/fixture/root/leaf",
+                                          isDirectory: true, compactPrefix: ["root"])
+        for scale: CGFloat in [0.8, 1, 1.6] {
+            for dark in [false, true] {
+                for (name, row, directory, overflow) in [
+                    ("short", short, nil, false),
+                    ("long Unicode", long, nil, true),
+                    ("long directory", short, String(repeating: "parent/", count: 35), true)
+                ] as [(String, TreeDisplayModel.Row, String?, Bool)] {
+                    let view = TreeFileRow(row: row, scale: scale, directory: directory, open: {}) {
+                        _ in EmptyView()
+                    }.environment(\.colorScheme, dark ? .dark : .light)
+                    let host = NSHostingView(rootView: view)
+                    host.sizingOptions = []
+                    window.contentView = host
+                    window.orderFront(nil)
+                    host.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    let mounted = scrolls(host)
+                    XCTAssertEqual(mounted.count, overflow ? 1 : 0,
+                                   "\(name) scale=\(scale) dark=\(dark)")
+                    if overflow, let scroll = mounted.first {
+                        let extent = try XCTUnwrap(scroll.documentView?.frame.width)
+                        XCTAssertGreaterThan(extent, scroll.contentSize.width + 80)
+                        scroll.contentView.scroll(to: NSPoint(x: 70, y: 0))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        XCTAssertGreaterThan(scroll.contentView.bounds.minX, 50)
+                    }
+                }
+                let host = NSHostingView(rootView: TreeFolderRow(
+                    row: folder, scale: scale,
+                    compactSegment: { component, index in
+                        AnyView(TreeCompactSegment(component: component, index: index,
+                            onClick: {}, onContextClick: {}, onMenuClosed: {}) { EmptyView() })
+                    }, toggle: {}
+                ).environment(\.colorScheme, dark ? .dark : .light))
+                host.sizingOptions = []
+                window.contentView = host
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                XCTAssertTrue(scrolls(host).isEmpty, "Short compact paths should not mount a scroll host")
+            }
+        }
+    }
+
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
         func bitmap(
             isSelected: Bool, listActive: Bool, focusRing: Bool,

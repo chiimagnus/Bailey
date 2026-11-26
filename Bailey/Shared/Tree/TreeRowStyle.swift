@@ -520,38 +520,46 @@ private struct TreeRowLabel: View {
                 MaterialFileIconView(path: iconPath, size: TreeRowStyle.iconSize,
                                      opacity: row.status == .deleted ? 0.6 : 1)
             }
-            ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    Group {
-                        if let compactSegment, !row.compactPrefix.isEmpty {
-                            HStack(spacing: 0) {
-                                ForEach(Array(row.compactComponents.enumerated()), id: \.element.path) { entry in
-                                    if entry.offset > 0 { Text(" / ") }
-                                    compactSegment(entry.element, entry.offset)
-                                }
-                            }
-                        } else {
-                            Text(row.displayName)
-                        }
-                    }
-                    .font(.system(size: TreeRowStyle.fontSize * scale))
-                    .foregroundStyle(row.status?.color(theme: theme)
-                        ?? text.opacity(row.name.hasPrefix(".") ? 0.35 : 0.65))
-                    .strikethrough(!row.isDirectory && row.status == .deleted)
+            ViewThatFits(in: .horizontal) {
+                labels(theme: theme, text: text)
                     .fixedSize(horizontal: true, vertical: false)
-                    if let directory, !directory.isEmpty {
-                        Text(directory)
-                            .font(.system(size: 10 * scale))
-                            .foregroundStyle(text.opacity(0.45))
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
+                ScrollView(.horizontal) {
+                    labels(theme: theme, text: text)
                 }
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             }
-            .scrollIndicators(.hidden)
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
+    }
+
+    private func labels(theme: GhosttyThemeDefinition, text: Color) -> some View {
+        HStack(spacing: 6) {
+            Group {
+                if let compactSegment, !row.compactPrefix.isEmpty {
+                    HStack(spacing: 0) {
+                        ForEach(Array(row.compactComponents.enumerated()), id: \.element.path) { entry in
+                            if entry.offset > 0 { Text(" / ") }
+                            compactSegment(entry.element, entry.offset)
+                        }
+                    }
+                } else {
+                    Text(row.displayName)
+                }
+            }
+            .font(.system(size: TreeRowStyle.fontSize * scale))
+            .foregroundStyle(row.status?.color(theme: theme)
+                ?? text.opacity(row.name.hasPrefix(".") ? 0.35 : 0.65))
+            .strikethrough(!row.isDirectory && row.status == .deleted)
+            .fixedSize(horizontal: true, vertical: false)
+            if let directory, !directory.isEmpty {
+                Text(directory)
+                    .font(.system(size: 10 * scale))
+                    .foregroundStyle(text.opacity(0.45))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
     }
 }
 
