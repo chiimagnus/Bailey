@@ -536,16 +536,7 @@ final class FocusReportingTextView: NativeCodeTextView {
     func updateSyntaxHighlighting(for path: String) {
         let language = SyntaxHighlighting.language(for: path)
         guard language != syntaxLanguage else { return }
-        syntaxCoordinator?.deactivate()
-        syntaxCoordinator = nil
-        nativeLayoutManager.removeRenderingAttribute(.foregroundColor,
-                                                    for: nativeContentManager.documentRange)
-        if let plugin = SyntaxHighlighting.configuration(for: path) {
-            syntaxCoordinator = SyntaxHighlightCoordinator(
-                textView: self, theme: plugin.theme, language: plugin.language,
-                highlightsData: plugin.highlightsData, injectionsData: plugin.injectionsData
-            )
-        }
+        installSyntaxHighlighting(SyntaxHighlighting.configuration(for: path))
         syntaxLanguage = language
     }
     override func becomeFirstResponder() -> Bool {

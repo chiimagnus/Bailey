@@ -130,7 +130,10 @@ class NativeCodeTextView: NSTextView {
         storage.replaceCharacters(in: range, with: replacement)
     }
 
-    var syntaxCoordinator: SyntaxHighlightCoordinator?
+    private(set) var syntaxCoordinator: SyntaxHighlightCoordinator?
+    private var syntaxConfiguration: SyntaxHighlightConfiguration?
+    private var syntaxSuspended = false
+    private var syntaxNeedsRepaint = false
     private var nativeDocumentRetired = false
 
     /// Only a true content-owner retirement may detach this TextKit document.
@@ -144,8 +147,8 @@ class NativeCodeTextView: NSTextView {
         breakUndoCoalescing()
         allowsUndo = false
         documentUndoManager.removeAllActions()
-        syntaxCoordinator?.deactivate()
-        syntaxCoordinator = nil
+        suspendSyntaxHighlighting()
+        syntaxConfiguration = nil
         delegate = nil
         onCharacterEdit = nil
         if let textEditObserver {
@@ -182,15 +185,62 @@ class NativeCodeTextView: NSTextView {
         }
     }
 
-    func installSyntaxHighlighting(_ configuration: SyntaxHighlightConfiguration) {
+    func installSyntaxHighlighting(_ configuration: SyntaxHighlightConfiguration?) {
+        guard !nativeDocumentRetired else { return }
         syntaxCoordinator?.deactivate()
-        nativeLayoutManager.removeRenderingAttribute(.foregroundColor,
-                                                    for: nativeContentManager.documentRange)
+        syntaxCoordinator = nil
+        syntaxConfiguration = configuration
+        syntaxNeedsRepaint = true
+        if !syntaxSuspended { resumeSyntaxHighlighting() }
+    }
+
+    private func suspendSyntaxHighlighting() {
+        syntaxSuspended = true
+        syntaxCoordinator?.deactivate()
+        syntaxCoordinator = nil
+    }
+
+    private func resumeSyntaxHighlighting() {
+        guard !nativeDocumentRetired else { return }
+        syntaxSuspended = false
+        if syntaxNeedsRepaint {
+            nativeLayoutManager.removeRenderingAttribute(.foregroundColor,
+                                                        for: nativeContentManager.documentRange)
+            syntaxNeedsRepaint = false
+        }
+        guard syntaxCoordinator == nil, let configuration = syntaxConfiguration else { return }
         syntaxCoordinator = SyntaxHighlightCoordinator(
             textView: self, theme: configuration.theme, language: configuration.language,
             highlightsData: configuration.highlightsData,
             injectionsData: configuration.injectionsData
         )
+    }
+
+    // Parsing is presentation state, not part of the retained native document.
+    // Keep valid rendering colors on an unchanged document during reattachment.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if window != nil, newWindow == nil { suspendSyntaxHighlighting() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        if isHiddenOrHasHiddenAncestor {
+            suspendSyntaxHighlighting()
+        } else {
+            resumeSyntaxHighlighting()
+        }
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        if window != nil { suspendSyntaxHighlighting() }
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        if window != nil, !isHiddenOrHasHiddenAncestor { resumeSyntaxHighlighting() }
     }
     var showsLineNumbers = false {
         didSet { if showsLineNumbers != oldValue { configureGutter() } }
@@ -803,6 +853,7 @@ class NativeCodeTextView: NSTextView {
 
     private func processStorageEdit(_ storage: NSTextStorage) {
         guard storage.editedMask.contains(.editedCharacters) else { return }
+        if syntaxSuspended, syntaxConfiguration != nil { syntaxNeedsRepaint = true }
         let edited = storage.editedRange
         let priorLength = edited.length - storage.changeInLength
         guard edited.location != NSNotFound, edited.location >= 0,

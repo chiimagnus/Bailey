@@ -200,6 +200,15 @@ final class GitPanelVisibilityTests: XCTestCase {
         let sessionStarted = ProcessInfo.processInfo.systemUptime
         memory("initial")
         var fixtures: [(project: Project, files: [(FileTab, NSScrollView)], root: URL)] = []
+        func verifyVisibleParsers() {
+            let editors = fixtures.flatMap { $0.files.compactMap { $0.1.documentView as? NativeCodeTextView } }
+            let visible = editors.filter { $0.window != nil && !$0.isHiddenOrHasHiddenAncestor }
+            XCTAssertEqual(visible.count, 1)
+            XCTAssertTrue(visible.allSatisfy { $0.syntaxCoordinator != nil })
+            XCTAssertTrue(editors.filter { $0.window == nil || $0.isHiddenOrHasHiddenAncestor }
+                .allSatisfy { $0.syntaxCoordinator == nil })
+            print("WORKSPACE_PARSERS editors=\(editors.count) active=\(editors.filter { $0.syntaxCoordinator != nil }.count)")
+        }
         for (projectIndex, fixture) in prepared.enumerated() {
             let (root, paths) = fixture
             let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: configuration)
@@ -236,6 +245,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             }
             XCTAssertEqual(project.tabs.count, tabCount)
             fixtures.append((project, files, root))
+            verifyVisibleParsers()
             memory("loaded-\(projectIndex + 1)")
         }
         print("LOADED_PROJECTS_READY projects=\(projectCount) tabs=\(tabCount * projectCount) changes_per_repo=\(historyCount) earlier_commits=\(earlierCommits) actual_source=\(!realSources.isEmpty)")
@@ -257,7 +267,10 @@ final class GitPanelVisibilityTests: XCTestCase {
                 XCTAssertTrue(fixture.files.last?.0.editorView === fixture.files.last?.1)
                 XCTAssertTrue(fixture.files.last?.1.window === window)
                 print("SWITCH_MATRIX pass=\(pass) cycle=\(cycle) ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) views=\(views(host).count)")
-                if cycle.isMultiple(of: 20) { memory("switch-\(pass)-\(cycle)") }
+                if cycle.isMultiple(of: 20) {
+                    verifyVisibleParsers()
+                    memory("switch-\(pass)-\(cycle)")
+                }
                 try await Task.sleep(for: .milliseconds(20))
             }
         }
@@ -330,7 +343,10 @@ final class GitPanelVisibilityTests: XCTestCase {
             XCTAssertEqual(scroll.documentView?.frame.height ?? 0, beforeHeight, accuracy: 2)
             if let last = fixture.project.tabs.last { fixture.project.selectTab(last.id, extending: .preserve) }
             layout()
-            if cycle.isMultiple(of: 20) { memory("disclosure-\(cycle)") }
+            if cycle.isMultiple(of: 20) {
+                verifyVisibleParsers()
+                memory("disclosure-\(cycle)")
+            }
         }
         for fixture in fixtures {
             for (file, scroll) in fixture.files {
