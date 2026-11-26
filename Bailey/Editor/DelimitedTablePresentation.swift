@@ -136,6 +136,95 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         let range: NSRange
     }
 
+    struct ColumnStatistics: Sendable, Equatable {
+        let column: Int
+        let total: Int
+        let empty: Int
+        let numeric: Int
+        var other: Int { total - empty - numeric }
+        let minimum: Double?
+        let maximum: Double?
+        let sum: Double?
+        let average: Double?
+    }
+
+    private struct CompensatedSum {
+        var sum = 0.0
+        var correction = 0.0
+        var value: Double { sum + correction }
+
+        mutating func add(_ value: Double) {
+            let next = sum + value
+            correction += abs(sum) >= abs(value) ? (sum - next) + value : (value - next) + sum
+            sum = next
+        }
+    }
+
+    private struct ColumnAccumulator {
+        var total = 0
+        var empty = 0
+        var numeric = 0
+        var minimum: Double?
+        var maximum: Double?
+        var bands: [Int: CompensatedSum] = [:]
+
+        private func scale(_ band: Int) -> Double {
+            Double(sign: .plus, exponent: band * 64 - 1074, significand: 1)
+        }
+
+        mutating func add(_ text: String) {
+            total += 1
+            if text.isEmpty { empty += 1; return }
+            guard let value = DelimitedTablePresentation.finiteNumber(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+            numeric += 1
+            minimum = min(minimum ?? value, value)
+            maximum = max(maximum ?? value, value)
+            if value != 0 {
+                let band = (value.exponent + 1074) / 64
+                bands[band, default: CompensatedSum()].add(value / scale(band))
+            }
+        }
+
+        func statistics(column: Int) -> ColumnStatistics {
+            var combined = CompensatedSum()
+            var magnitude = 1.0
+            for band in bands.keys.sorted(by: >) {
+                guard let partial = bands[band], partial.value != 0 else { continue }
+                let power = scale(band)
+                if combined.value == 0 {
+                    combined = partial
+                    magnitude = power
+                } else {
+                    let factor = power / magnitude
+                    combined.add(partial.sum * factor)
+                    combined.add(partial.correction * factor)
+                }
+            }
+            func represent(_ normalized: Double) -> Double? {
+                let result = normalized * magnitude
+                return result.isFinite && (result != 0 || combined.value == 0) ? result : nil
+            }
+            return .init(column: column, total: total, empty: empty, numeric: numeric, minimum: minimum, maximum: maximum,
+                         sum: numeric == 0 ? nil : represent(combined.value),
+                         average: numeric == 0 ? nil : represent(combined.value / Double(numeric)))
+        }
+    }
+
+    @concurrent static func statistics(
+        in scope: FieldScope, source: String, index: DelimitedTableIndex
+    ) async throws -> [ColumnStatistics] {
+        let text = source as NSString
+        var accumulators: [Int: ColumnAccumulator] = [:]
+        try scope.visit(in: index) { row, columns in
+            for column in columns {
+                guard let field = index.field(record: row, column: column) else { continue }
+                accumulators[column, default: ColumnAccumulator()].add(field.value(in: text))
+            }
+        }
+        try Task.checkCancellation()
+        return scope.columns.map { (accumulators[$0] ?? ColumnAccumulator()).statistics(column: $0) }
+    }
+
     let id = UUID()
     let configuration: Configuration
     var header: Bool { configuration.header }
@@ -184,18 +273,21 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     }
 
     @concurrent func find(
-        _ query: String, source: String, index: DelimitedTableIndex, columnCount: Int
+        _ query: String, source: String, index: DelimitedTableIndex, columnCount: Int, empty: Bool = false,
+        columns: IndexSet? = nil, selection: Selection? = nil
     ) async throws -> [Cell] {
-        guard !query.isEmpty else { return [] }
+        guard empty || !query.isEmpty else { return [] }
         let text = source as NSString
         var matches: [Cell] = []
         for (row, original) in rows.enumerated() {
             if row.isMultiple(of: 256) { try Task.checkCancellation() }
             let fields = index.fields(in: index.records[original])
             for (column, field) in fields.prefix(columnCount).enumerated() {
-                if Self.firstMatch(query, in: field.value(in: text) as NSString) != nil {
-                    matches.append(Cell(row: row, column: column))
-                }
+                let cell = Cell(row: row, column: column)
+                guard columns?.contains(column) != false, selection?.contains(cell) != false else { continue }
+                let found = empty ? field.contentRange(in: text).length == 0
+                    : Self.firstMatch(query, in: field.value(in: text) as NSString) != nil
+                if found { matches.append(cell) }
             }
         }
         try Task.checkCancellation()

@@ -3,6 +3,12 @@ import GhosttyTheme
 import Observation
 import SwiftUI
 
+private struct DelimitedAnalysisTarget: Hashable {
+    let display: UUID
+    let columns: IndexSet
+    let selection: DelimitedTablePresentation.Selection?
+}
+
 @Observable
 final class DelimitedTableControls {
     struct ParseRequest: Hashable {
@@ -22,7 +28,10 @@ final class DelimitedTableControls {
 
     var separator: DelimitedTableIndex.Separator?
     var configuration = DelimitedTablePresentation.Configuration()
-    var query = ""
+    var query = "" {
+        didSet { if !query.isEmpty { emptySearch = nil } }
+    }
+    fileprivate var emptySearch: DelimitedAnalysisTarget?
     var showsFind = false
     var showsReplace = false
     var findFocus = 0
@@ -83,6 +92,7 @@ final class DelimitedTableControls {
         case .show:
             showsFind = true
             showsReplace = false
+            emptySearch = nil
             findFocus &+= 1
         case .hide: showsFind = false
         case .next: findStep &+= 1
@@ -92,8 +102,17 @@ final class DelimitedTableControls {
         case .replace:
             showsFind = true
             showsReplace = true
+            emptySearch = nil
             findFocus &+= 1
         }
+    }
+
+    fileprivate func findEmptyFields(_ target: DelimitedAnalysisTarget) {
+        query = ""
+        emptySearch = target
+        showsFind = true
+        showsReplace = false
+        findFocus &+= 1
     }
 }
 
@@ -104,6 +123,7 @@ struct CSVTableView: View {
     private struct SearchRequest: Hashable {
         let display: UUID
         let query: String
+        let empty: DelimitedAnalysisTarget?
     }
 
     private enum ReplaceScope: CaseIterable, Hashable {
@@ -149,6 +169,7 @@ struct CSVTableView: View {
     @State private var occurrenceCount: (ReplaceRequest, Int)?
     @State private var replaceCursor: ReplaceCursor?
     @State private var replaceTask: Task<Void, Never>?
+    @State private var statisticsTarget: DelimitedAnalysisTarget?
     @FocusState private var focusedInput: Input?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -161,7 +182,10 @@ struct CSVTableView: View {
         let display = DisplayRequest(parse: parse, configuration: controls.configuration)
         let snapshot = controls.parsed.flatMap { $0.parseRequest == parse ? $0 : nil }
         let active = displayed.flatMap { $0.0 == display ? $0.1 : nil }
-        let query = active.map { SearchRequest(display: $0.id, query: controls.query) }
+        let query = active.map { projection in
+            SearchRequest(display: projection.id, query: controls.query,
+                          empty: controls.emptySearch.flatMap { $0.display == projection.id ? $0 : nil })
+        }
         let matches = search.flatMap { $0.0 == query ? $0.1 : nil } ?? []
         surface(snapshot: active == nil ? nil : snapshot, active: active, matches: matches, theme: theme,
                 failed: parseFailed == parse || displayFailed == display)
@@ -203,7 +227,8 @@ struct CSVTableView: View {
                 do {
                     let found = try await active.find(
                         query.query, source: snapshot.source, index: snapshot.index,
-                        columnCount: DelimitedTableIndex.maximumColumns
+                        columnCount: DelimitedTableIndex.maximumColumns, empty: query.empty != nil,
+                        columns: query.empty?.columns, selection: query.empty?.selection
                     )
                     guard !Task.isCancelled, controls.request(for: file) == parse,
                           controls.configuration == display.configuration, controls.query == query.query else { return }
@@ -212,11 +237,14 @@ struct CSVTableView: View {
             }
             .onChange(of: controls.findFocus) {
                 filterTarget = nil
+                statisticsTarget = nil
                 focus(.find)
             }
             .onChange(of: display) {
                 if filterTarget?.request != display { filterTarget = nil }
                 pinnedSelection = nil
+                statisticsTarget = nil
+                controls.emptySearch = nil
             }
             .onChange(of: controls.query) { replaceCursor = nil; replaceTask?.cancel() }
             .onChange(of: controls.findStep) { replaceCursor = nil }
@@ -247,8 +275,20 @@ struct CSVTableView: View {
                     file: file, snapshot: snapshot, presentation: active, theme: theme,
                     findStep: controls.findStep, matches: matches, onFocused: onFocused,
                     onFilter: { column, request in
+                        statisticsTarget = nil
                         filterDraft = controls.configuration.filters[column] ?? ""
                         filterTarget = (column, request)
+                    },
+                    onStatistics: { target in
+                        filterTarget = nil
+                        controls.perform(.hide)
+                        statisticsTarget = target
+                    },
+                    onSelectionChanged: { selection in
+                        guard let target = statisticsTarget, let original = target.selection, original != selection else { return }
+                        DispatchQueue.main.async {
+                            if statisticsTarget == target { statisticsTarget = nil }
+                        }
                     }
                 )
                 .opacity(hasRows ? 1 : 0)
@@ -298,7 +338,20 @@ struct CSVTableView: View {
     private func overlay(display: DisplayRequest, snapshot: FileTab.DelimitedSnapshot?,
                          active: DelimitedTablePresentation?, matches: [DelimitedTablePresentation.Cell],
                          theme: GhosttyThemeDefinition) -> some View {
-        if let target = filterTarget, target.request == display {
+        if let target = statisticsTarget, let active, target.display == active.id, let snapshot {
+            DelimitedStatisticsView(target: target, snapshot: snapshot, active: active, theme: theme,
+                                    isCurrent: {
+                                        guard let grid = controls.grid, grid.acceptsProjection(target.display) else { return false }
+                                        return target.selection.map { $0 == grid.table.selection } ?? true
+                                    },
+                                    onClose: { statisticsTarget = nil },
+                                    onFind: {
+                                        guard controls.grid?.acceptsProjection(active.id) == true else { return }
+                                        statisticsTarget = nil
+                                        controls.findEmptyFields(target)
+                                    })
+                .id(target)
+        } else if let target = filterTarget, target.request == display {
             HStack {
                 TextField(String(localized: "Filter Column", table: "Editor"), text: $filterDraft)
                     .accessibilityIdentifier("bailey.csv.filter")
@@ -316,7 +369,8 @@ struct CSVTableView: View {
             @Bindable var controls = controls
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    TextField(String(localized: "Find", table: "Terminal"), text: $controls.query)
+                    TextField(controls.emptySearch == nil ? String(localized: "Find", table: "Terminal")
+                              : String(localized: "Empty Fields", table: "Editor"), text: $controls.query)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("bailey.csv.find")
                         .focused($focusedInput, equals: .find)
@@ -460,6 +514,97 @@ struct CSVTableView: View {
     }
 }
 
+private struct DelimitedStatisticsView: View {
+    let target: DelimitedAnalysisTarget
+    let snapshot: FileTab.DelimitedSnapshot
+    let active: DelimitedTablePresentation
+    let theme: GhosttyThemeDefinition
+    let isCurrent: () -> Bool
+    let onClose: () -> Void
+    let onFind: () -> Void
+    @State private var all = false
+    @State private var results: (Bool, [DelimitedTablePresentation.ColumnStatistics])?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Statistics", tableName: "Editor").font(.headline)
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(Text("Close"))
+            }
+            if target.selection == nil {
+                Picker(String(localized: "Statistics Range", table: "Editor"), selection: $all) {
+                    Text("Visible Records", tableName: "Editor").tag(false)
+                    Text("All Data Records", tableName: "Editor").tag(true)
+                }
+                .controlSize(.small)
+            } else {
+                Text("Selected Visible Fields", tableName: "Editor").font(.caption)
+            }
+            if snapshot.index.issue != nil {
+                Text("Partial table — only indexed fields are counted.", tableName: "Editor")
+                    .font(.caption)
+            }
+            if let results, results.0 == all {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 5) {
+                        ForEach(results.1, id: \.column) { result in
+                            if result.column != results.1.first?.column { Divider() }
+                            Text(verbatim: columnTitle(result.column)).font(.subheadline.weight(.medium)).lineLimit(1)
+                            LabeledContent(String(localized: "Fields", table: "Editor"), value: result.total.formatted())
+                            LabeledContent(String(localized: "Empty", table: "Editor"), value: result.empty.formatted())
+                            LabeledContent(String(localized: "Numeric", table: "Editor"), value: result.numeric.formatted())
+                            LabeledContent(String(localized: "Other or Out of Range", table: "Editor"), value: result.other.formatted())
+                            LabeledContent(String(localized: "Minimum", table: "Editor"), value: number(result.minimum, count: result.numeric))
+                            LabeledContent(String(localized: "Maximum", table: "Editor"), value: number(result.maximum, count: result.numeric))
+                            LabeledContent(String(localized: "Sum", table: "Editor"), value: number(result.sum, count: result.numeric))
+                            LabeledContent(String(localized: "Average", table: "Editor"), value: number(result.average, count: result.numeric))
+                        }
+                    }.font(.caption).monospacedDigit()
+                }
+                .frame(idealHeight: 164, maxHeight: 218)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Button(String(localized: "Find Visible Empty Fields", table: "Editor"), action: onFind)
+                .controlSize(.small)
+        }
+        .padding(8)
+        .frame(maxWidth: 350)
+        .modifier(DelimitedOverlayStyle(theme: theme))
+        .accessibilityIdentifier("bailey.csv.statistics")
+        .onKeyPress(.escape) { onClose(); return .handled }
+        .task(id: all) {
+            let includeHidden = all
+            let scope = DelimitedTablePresentation.FieldScope(
+                rows: includeHidden ? nil : active.rows, firstRecord: active.header ? 1 : 0,
+                columns: target.columns, selection: target.selection
+            )
+            guard let values = try? await DelimitedTablePresentation.statistics(in: scope, source: snapshot.source,
+                                                                                 index: snapshot.index),
+                  !Task.isCancelled, all == includeHidden, isCurrent() else { return }
+            results = (includeHidden, values)
+        }
+    }
+
+    private func columnTitle(_ column: Int) -> String {
+        if active.header,
+           let title = snapshot.index.field(record: 0, column: column)?.value(in: snapshot.source as NSString, limit: 128),
+           !title.isEmpty { return title }
+        return String(localized: "Column \(column + 1)", table: "Editor")
+    }
+
+    private func number(_ value: Double?, count: Int) -> String {
+        guard let value else { return count == 0 ? "—" : String(localized: "Not Representable", table: "Editor") }
+        if value != 0 && (abs(value) >= 1e9 || abs(value) < 1e-6) {
+            return value.formatted(.number.notation(.scientific).precision(.significantDigits(1...10)))
+        }
+        return value.formatted(.number.precision(.significantDigits(1...10)))
+    }
+}
+
 private struct DelimitedOverlayStyle: ViewModifier {
     let theme: GhosttyThemeDefinition
 
@@ -491,6 +636,8 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     let matches: [DelimitedTablePresentation.Cell]
     let onFocused: () -> Void
     let onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void
+    let onStatistics: (DelimitedAnalysisTarget) -> Void
+    let onSelectionChanged: (DelimitedTablePresentation.Selection) -> Void
 
     func makeNSView(context: Context) -> DelimitedGrid { DelimitedGrid() }
 
@@ -499,6 +646,8 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
         grid.applyTheme(theme)
         grid.table.onFocused = onFocused
         grid.onFilter = onFilter
+        grid.onStatistics = onStatistics
+        grid.onSelectionChanged = onSelectionChanged
         if let snapshot, let presentation, !snapshot.index.records.isEmpty {
             grid.install(snapshot, presentation: presentation)
             grid.showMatch(matches, step: findStep)
@@ -533,6 +682,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     fileprivate var palette: DelimitedPalette { table.palette }
     private var installingColumns = false
     var onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void = { _, _ in }
+    fileprivate var onStatistics: (DelimitedAnalysisTarget) -> Void = { _ in }
+    var onSelectionChanged: (DelimitedTablePresentation.Selection) -> Void = { _ in }
     private var snapshot: FileTab.DelimitedSnapshot?
     private var presentation: DelimitedTablePresentation?
     private var source: NSString = ""
@@ -632,7 +783,11 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         }
         table.onMenu = { [weak self] cell in self?.recordMenu(at: cell) }
         table.acceptsGridActions = { [weak self] in self?.projectionIsCurrent == true }
-        table.onSelectionChanged = { [weak self] in self?.gutter.needsDisplay = true }
+        table.onSelectionChanged = { [weak self] in
+            guard let self else { return }
+            gutter.needsDisplay = true
+            onSelectionChanged(table.selection)
+        }
         scrollView.documentView = table
         addSubview(scrollView)
         addSubview(gutter)
@@ -695,6 +850,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         file = nil
         table.onFocused = {}
         onFilter = { _, _ in }
+        onStatistics = { _ in }
+        onSelectionChanged = { _ in }
     }
 
     func install(_ snapshot: FileTab.DelimitedSnapshot, presentation: DelimitedTablePresentation) {
@@ -1125,6 +1282,9 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             }
             menu.addItem(item(String(localized: "Select Row", table: "Editor"), action: #selector(selectRow(_:))))
         }
+        if !target.selection.blocks.isEmpty {
+            menu.addItem(item(String(localized: "Selection Statistics…", table: "Editor"), action: #selector(selectionStatistics(_:))))
+        }
         if file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit {
             if !target.selection.blocks.isEmpty {
                 menu.addItem(item(String(localized: "Fill Selection…", table: "Editor"), action: #selector(chooseFillValue(_:))))
@@ -1148,6 +1308,11 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     @objc private func selectRow(_ sender: NSMenuItem) {
         guard let row = recordTarget(sender)?.cell?.row else { return }
         table.selectRecord(row, modifiers: [])
+    }
+
+    @objc private func selectionStatistics(_ sender: NSMenuItem) {
+        guard let target = recordTarget(sender) else { return }
+        onStatistics(.init(display: target.projection, columns: target.selection.columns, selection: target.selection))
     }
 
     @objc private func openFullCellItem(_ sender: NSMenuItem) {
@@ -1231,6 +1396,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         menu.addItem(.separator())
         menu.addItem(item(String(localized: "Filter Column…", table: "Editor"), action: #selector(filter(_:)), tag: column))
         menu.addItem(item(String(localized: "Fit Column Width", table: "Editor"), action: #selector(fitColumnWidth(_:)), tag: column))
+        menu.addItem(item(String(localized: "Column Statistics…", table: "Editor"), action: #selector(columnStatistics(_:)), tag: column))
         if controls.configuration.filters[column] != nil {
             menu.addItem(item(String(localized: "Clear Column Filter", table: "Editor"), action: #selector(clearFilter(_:)), tag: column))
         }
@@ -1282,6 +1448,13 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     @objc private func renameHeaderItem(_ sender: NSMenuItem) {
         if accepts(sender) { renameHeader(sender.tag) }
+    }
+
+    @objc private func columnStatistics(_ sender: NSMenuItem) {
+        guard accepts(sender), let projection = projectionID else { return }
+        let selection = table.wholeColumns
+        let columns = selection.contains(sender.tag) ? selection : IndexSet(integer: sender.tag)
+        onStatistics(.init(display: projection, columns: columns, selection: nil))
     }
 
     private struct ColumnDeletion {

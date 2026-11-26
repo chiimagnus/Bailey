@@ -1351,6 +1351,186 @@
         }
       }
     },
+    "Statistics" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计"
+          }
+        }
+      }
+    },
+    "Statistics Range" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计范围"
+          }
+        }
+      }
+    },
+    "Selected Visible Fields" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选可见字段"
+          }
+        }
+      }
+    },
+    "Partial table — only indexed fields are counted." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表格仅部分可读，仅统计已识别的字段。"
+          }
+        }
+      }
+    },
+    "Fields" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "字段数"
+          }
+        }
+      }
+    },
+    "Empty" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空字段"
+          }
+        }
+      }
+    },
+    "Numeric" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有效数值"
+          }
+        }
+      }
+    },
+    "Other or Out of Range" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "非数值或超出范围"
+          }
+        }
+      }
+    },
+    "Minimum" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小值"
+          }
+        }
+      }
+    },
+    "Maximum" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大值"
+          }
+        }
+      }
+    },
+    "Sum" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合计"
+          }
+        }
+      }
+    },
+    "Average" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平均值"
+          }
+        }
+      }
+    },
+    "Not Representable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数值无法表示"
+          }
+        }
+      }
+    },
+    "Column %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 列"
+          }
+        }
+      }
+    },
+    "Empty Fields" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空字段"
+          }
+        }
+      }
+    },
+    "Find Visible Empty Fields" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找可见空字段"
+          }
+        }
+      }
+    },
+    "Selection Statistics…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选区统计…"
+          }
+        }
+      }
+    },
+    "Column Statistics…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列统计…"
+          }
+        }
+      }
+    },
     "Fit Column Width" : {
       "localizations" : {
         "zh-Hans" : {

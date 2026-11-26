@@ -446,6 +446,37 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(file.delimitedTable.query, "cafe")
     }
 
+    func testReadOnlyGridOffersSelectionStatisticsWithoutAnyEdit() async throws {
+        let original = "Name,Value\r\nItem,\nBad,\"open"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 300, height: 195),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Item")
+        let cell = grid.table.frameOfCell(atColumn: 1, row: 0)
+        let point = grid.table.convert(NSPoint(x: cell.midX, y: cell.midY), to: nil)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                                                    timestamp: 0, windowNumber: window.windowNumber,
+                                                    context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        let menu = try XCTUnwrap(grid.table.menu(for: click))
+        let stats = try XCTUnwrap(menu.item(withTitle: String(localized: "Selection Statistics…", table: "Editor")))
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(stats.action), to: stats.target, from: stats))
+        XCTAssertNil(menu.item(withTitle: String(localized: "Clear Selected Fields", table: "Editor")))
+        XCTAssertFalse(file.hasPendingDelimitedEdit)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+    }
+
     private func grid(in host: NSView, showing value: String) async throws -> DelimitedGrid {
         func find(_ view: NSView) -> DelimitedGrid? {
             if let grid = view as? DelimitedGrid { return grid }

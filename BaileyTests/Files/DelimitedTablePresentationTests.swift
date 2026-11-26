@@ -8,6 +8,70 @@ import XCTest
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
+    func testColumnStatisticsCountsOnlyRealFieldsAndDoesNotOverflowIntermediateSums() async throws {
+        let source = "Name,A,B,C,D\r\nItem,1e308,1e308,\"\",000\n"
+            + "Other,1e-300,1e308,  ,-0\rLast,-1e308,NaN,1e-9999,=3\nBroken,invalid"
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+        XCTAssertNotNil(index.issue)
+        let columns = IndexSet(integersIn: 1..<5)
+        let scope = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1, columns: columns, selection: nil)
+        let stats = try await DelimitedTablePresentation.statistics(in: scope, source: source, index: index)
+        XCTAssertEqual(stats.map(\.total), [4, 3, 3, 3])
+        XCTAssertEqual(stats.map(\.numeric), [3, 2, 0, 2])
+        XCTAssertEqual(stats.map(\.empty), [0, 0, 1, 0])
+        XCTAssertEqual(stats.map(\.other), [1, 1, 2, 1])
+        XCTAssertEqual(stats[0].maximum, 1e308)
+        XCTAssertEqual(stats[0].minimum, -1e308)
+        XCTAssertEqual(try XCTUnwrap(stats[0].sum), 1e-300, accuracy: 1e-314)
+        XCTAssertEqual(try XCTUnwrap(stats[0].average), 1e-300 / 3, accuracy: 1e-314)
+        XCTAssertNil(stats[1].sum)
+        XCTAssertEqual(stats[1].average, 1e308)
+        XCTAssertNil(stats[2].average)
+        XCTAssertEqual(stats[3].sum, 0)
+
+        let active = try await DelimitedTablePresentation.evaluate(
+            source: source, index: index, configuration: .init(filters: [0: "Item"]))
+        var selection = DelimitedTablePresentation.Selection()
+        selection.select(.init(row: 0, column: 3))
+        selection.select(.init(row: 0, column: 3), adding: true)
+        let selected = DelimitedTablePresentation.FieldScope(rows: active.rows, firstRecord: 1,
+                                                              columns: selection.columns, selection: selection)
+        let selectedStats = try await DelimitedTablePresentation.statistics(in: selected, source: source, index: index)
+        XCTAssertEqual(selectedStats.map(\.total), [1])
+        XCTAssertEqual(selectedStats.map(\.empty), [1])
+        let empty = try await active.find("", source: source, index: index, columnCount: 5,
+                                          empty: true, columns: selection.columns, selection: selection)
+        XCTAssertEqual(empty, [.init(row: 0, column: 3)])
+        let all = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
+        let allEmpty = try await all.find("", source: source, index: index, columnCount: 5, empty: true)
+        XCTAssertEqual(allEmpty, [.init(row: 0, column: 3)], "Missing fields and whitespace are not empty fields")
+    }
+
+    func testColumnStatisticsScansAMillionRealFieldsAndCancels() async throws {
+        let row = "1,2,3,-4,0,NaN,,0.1,1e-5,5e-324\n"
+        let source = String(repeating: row, count: 100_000)
+        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+        XCTAssertNil(index.issue)
+        XCTAssertEqual(index.records.count * index.columnCount, 1_000_000)
+        let scope = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 0,
+                                                           columns: IndexSet(integersIn: 0..<10), selection: nil)
+        let started = ContinuousClock.now
+        let stats = try await DelimitedTablePresentation.statistics(in: scope, source: source, index: index)
+        XCTAssertEqual(stats[0].sum, 100_000)
+        XCTAssertEqual(stats[3].sum, -400_000)
+        XCTAssertEqual(stats[5].other, 100_000)
+        XCTAssertEqual(stats[6].empty, 100_000)
+        XCTAssertEqual(stats[9].sum, Double.leastNonzeroMagnitude * 100_000)
+        XCTAssertEqual(stats[9].average, Double.leastNonzeroMagnitude)
+        print("CSV_STATS fields=1000000 elapsed=\(started.duration(to: .now))")
+        let canceled = Task { try await DelimitedTablePresentation.statistics(in: scope, source: source, index: index) }
+        canceled.cancel()
+        do {
+            _ = try await canceled.value
+            XCTFail("Cancellation must prevent publication")
+        } catch is CancellationError {}
+    }
+
     func testLiteralReplaceUsesNonOverlappingOccurrencesAndPinnedFields() async throws {
         let original = "Name,Left,Keep,Right\r\nShown,Café CAFÉ,\" K \",\"left\r\nright\"\n"
             + "Hidden,CAFÉ,do not touch,CAFÉ\rShown,Cafe,wider,\"Cafe\u{301}\""
