@@ -770,7 +770,14 @@ final class Project: nonisolated Identifiable {
         }
         closeBatch(contents) { [weak self] accepted in
             guard accepted, let self else { return }
-            for item in items { self.dock.removeTool(item) }
+            for item in items {
+                // Closing only a companion must not discard an active native input session.
+                if case .filePreview(let id) = item,
+                   let tab = self.tabs.first(where: { $0.id == id }),
+                   case .file(let file) = tab.content,
+                   !file.finishDelimitedInput() { continue }
+                self.dock.removeTool(item)
+            }
         }
     }
 
