@@ -136,12 +136,20 @@ final class PreviewScrollViewTests: XCTestCase {
         for _ in 0..<100 { replace(invalid) }
         let latest = source("#00ff00")
         replace(latest)
+        // Move the actual native clip view while the new drawing is pending.
+        XCTAssertNotEqual(file.svgPreview?.drawing?.request, file.textPreviewRequestID)
+        let origin = remounted.contentView.bounds.origin
+        remounted.contentView.scroll(to: CGPoint(x: origin.x + 45, y: origin.y + 35))
+        remounted.reflectScrolledClipView(remounted.contentView)
+        let moved = try XCTUnwrap(file.graphicViewportPosition)
+        XCTAssertGreaterThan(abs(moved.center.x - position.center.x), 10)
+        XCTAssertGreaterThan(abs(moved.center.y - position.center.y), 10)
         try await waitFor("Only the newest valid green drawing may replace the previous pixels") { green() }
         let updated = try XCTUnwrap(previewScroll(in: host))
         XCTAssertTrue(updated === remounted)
-        XCTAssertEqual(updated.pixelScale, position.pixelScale, accuracy: 0.001)
-        XCTAssertEqual(updated.contentView.bounds.midX, position.center.x, accuracy: 2)
-        XCTAssertEqual(updated.contentView.bounds.midY, position.center.y, accuracy: 2)
+        XCTAssertEqual(updated.pixelScale, moved.pixelScale, accuracy: 0.001)
+        XCTAssertEqual(updated.contentView.bounds.midX, moved.center.x, accuracy: 2)
+        XCTAssertEqual(updated.contentView.bounds.midY, moved.center.y, accuracy: 2)
         XCTAssertNil(file.svgPreview?.error)
         try await waitFor("Remove the stale banner after a valid edit") { !hasStaleBanner() }
         XCTAssertEqual(file.text, latest)
