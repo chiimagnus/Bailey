@@ -36,7 +36,7 @@ Bailey 是自由组装的 AI IDE，以原生终端工作区支持开发者使用
 | 所有者 | 负责内容 |
 | --- | --- |
 | [Theme.swift](../Bailey/App/Theme.swift) | 应用外观、终端主题解析、窗口背景、强调色和分隔线 |
-| [PanelTypography.swift](../Bailey/UI/Panels/PanelTypography.swift) | 面板文字的共享缩放 |
+| [PanelTypography.swift](../Bailey/UI/Panels/PanelTypography.swift) | 面板与 Markdown 阅读文字的相对字号缩放 |
 | [TreeRowStyle.swift](../Bailey/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的尺寸与共享行、Projects／命令面板的状态视觉 |
 | [WorkspaceChrome.swift](../Bailey/UI/Components/WorkspaceChrome.swift) | 标签、工具按钮及其共享外壳 |
 | [WindowChrome.swift](../Bailey/UI/Components/WindowChrome.swift) | 原生窗口接入与窗口外壳 |
@@ -50,6 +50,8 @@ Dock 根背景与 Files／Git 侧栏按当前外观从已选主题直接解析�
 不得依赖创建时颜色。内置 Default 与自定义主题互切也必须即时生效。
 
 共享值由表中各自所有者维护；文档不复制数值表，也不为“统一”新建并行设计系统。
+字号分类与系统菜单入口见 [设置与内容缩放](features/settings.md#字号与内容缩放)。
+原生内容按对应字号重算文字和布局，不缩放窗口外壳、输入控件或媒体本身。
 
 ## 共享树行
 

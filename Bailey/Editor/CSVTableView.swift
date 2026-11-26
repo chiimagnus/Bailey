@@ -39,6 +39,7 @@ final class DelimitedTableControls {
     private(set) var parsed: FileTab.DelimitedSnapshot?
     @ObservationIgnored var pendingSelection: PendingSelection?
     @ObservationIgnored weak var grid: DelimitedGrid?
+    // Stored at the default table size; manual widths survive a change of scale.
     @ObservationIgnored var columnWidths: [Int: CGFloat] = [:]
     @ObservationIgnored private var columnRevision: String?
     @ObservationIgnored private(set) var columnMove: (before: String, after: String, positions: [Int: Int])?
@@ -275,6 +276,7 @@ struct CSVTableView: View {
             ZStack {
                 NativeDelimitedGrid(
                     file: file, snapshot: snapshot, presentation: active, theme: theme,
+                    fontSize: CGFloat(AppSettings.shared.tableFontSize),
                     findStep: controls.findStep, matches: matches, onFocused: onFocused,
                     onFilter: { column, request in
                         statisticsTarget = nil
@@ -621,6 +623,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     let snapshot: FileTab.DelimitedSnapshot?
     let presentation: DelimitedTablePresentation?
     let theme: GhosttyThemeDefinition
+    let fontSize: CGFloat
     let findStep: Int
     let matches: [DelimitedTablePresentation.Cell]?
     let onFocused: () -> Void
@@ -632,6 +635,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     func updateNSView(_ grid: DelimitedGrid, context: Context) {
         grid.file = file
         grid.applyTheme(theme)
+        grid.applyFontSize(fontSize)
         grid.table.onFocused = onFocused
         grid.onFilter = onFilter
         grid.onStatistics = onStatistics
@@ -809,6 +813,46 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         if let edit = editing { styleEditor(edit) }
     }
 
+    private var fontScale: CGFloat { table.cellFont.pointSize / CGFloat(FontSizeRole.table.defaultSize) }
+
+    func applyFontSize(_ size: CGFloat) {
+        guard table.cellFont.pointSize != size else { return }
+        let previousScale = fontScale
+        let previousRowHeight = table.rowHeight
+        let origin = scrollView.contentView.bounds.origin
+        table.cellFont = .monospacedSystemFont(ofSize: size, weight: .regular)
+        table.columnTitleFont = .systemFont(ofSize: size, weight: .medium)
+        table.recordFont = .monospacedSystemFont(ofSize: size * 10 / 11, weight: .regular)
+        let scale = fontScale
+        let ratio = scale / previousScale
+        installingColumns = true
+        for column in table.tableColumns {
+            // Capture the width before AppKit clamps it to the new minimum.
+            let width = column.width * ratio
+            let maximum = column.maxWidth * ratio
+            column.minWidth = 0
+            column.maxWidth = maximum
+            column.minWidth = 44 * scale
+            column.width = width
+        }
+        installingColumns = false
+        table.rowHeight = ceil(30 * scale)
+        if let header = table.headerView {
+            header.setFrameSize(NSSize(width: header.frame.width, height: table.rowHeight))
+            header.needsDisplay = true
+        }
+        needsLayout = true
+        scrollView.tile()
+        layoutSubtreeIfNeeded()
+        let clip = scrollView.contentView
+        clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: CGPoint(x: origin.x * ratio, y: origin.y * table.rowHeight / previousRowHeight),
+                                                         size: clip.bounds.size)).origin)
+        scrollView.reflectScrolledClipView(clip)
+        table.refreshSelection()
+        gutter.needsDisplay = true
+        if let edit = editing { styleEditor(edit) }
+    }
+
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil { endEditingForProjectionChange() }
         super.viewWillMove(toWindow: newWindow)
@@ -893,7 +937,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
                 column = columns[columnIndex]
             } else {
                 column = NSTableColumn(identifier: .init(String(columnIndex)))
-                column.minWidth = 44
+                column.maxWidth *= fontScale
+                column.minWidth = 44 * fontScale
                 column.headerCell = DelimitedColumnHeader(textCell: "")
             }
             let title = header && !index.records.isEmpty
@@ -901,7 +946,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             let displayTitle = header ? Self.singleLine(title) : String(columnIndex + 1)
             if column.title != displayTitle { column.title = displayTitle }
             if let width = controls?.columnWidths[columnIndex] {
-                column.width = width
+                column.width = width * fontScale
             } else if fitExisting || isNewColumn {
                 column.width = fittedWidth(columnIndex, title: displayTitle, index: index,
                                            header: header, samplesPerColumn: 4096 / count)
@@ -912,8 +957,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     private func fittedWidth(_ column: Int, title: String, index: DelimitedTableIndex,
                              header: Bool, samplesPerColumn: Int) -> CGFloat {
-        let headerAttributes: [NSAttributedString.Key: Any] = [.font: DelimitedColumnHeader.titleFont]
-        let cellAttributes: [NSAttributedString.Key: Any] = [.font: DelimitedCellField.textFont]
+        let headerAttributes: [NSAttributedString.Key: Any] = [.font: table.columnTitleFont]
+        let cellAttributes: [NSAttributedString.Key: Any] = [.font: table.cellFont]
         var width = (title as NSString).size(withAttributes: headerAttributes).width
         let first = header ? 1 : 0
         let rows = max(0, index.records.count - first)
@@ -923,15 +968,15 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             guard let field = index.field(record: first + row, column: column) else { continue }
             let value = Self.singleLine(field.value(in: source, limit: 128))
             width = max(width, (value as NSString).size(withAttributes: cellAttributes).width)
-            if width >= 268 { break }
+            if width >= 268 * fontScale { break }
         }
-        return min(290, max(110, ceil(width) + 22))
+        return min(290 * fontScale, max(110 * fontScale, ceil(width) + 22 * fontScale))
     }
 
     func tableViewColumnDidResize(_ notification: Notification) {
         guard !installingColumns, let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
               let index = Int(column.identifier.rawValue) else { return }
-        controls?.columnWidths[index] = column.width
+        controls?.columnWidths[index] = column.width / fontScale
     }
 
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
@@ -1075,6 +1120,9 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     private func styleEditor(_ edit: CellEdit) {
+        if let editor = edit.textEditor, !editor.hasMarkedText(), editor.font != table.cellFont {
+            editor.font = table.cellFont
+        }
         if case .full(let panel) = edit.input {
             panel.apply(palette)
             return
@@ -1557,7 +1605,6 @@ private final class DelimitedFieldPopover: NSObject, NSPopoverDelegate, NSTextVi
         editor.autoresizingMask = [.width]
         editor.textContainer?.widthTracksTextView = true
         editor.textContainerInset = NSSize(width: 6, height: 6)
-        editor.font = DelimitedCellField.textFont
         editor.string = value
         editor.delegate = self
         editor.setAccessibilityIdentifier("bailey.csv.full-field")
@@ -1632,7 +1679,7 @@ private final class DelimitedFieldPopover: NSObject, NSPopoverDelegate, NSTextVi
 
 private final class DelimitedRecordGutter: NSView {
     private weak var grid: DelimitedGrid?
-    private static let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+    private var font: NSFont { grid?.table.recordFont ?? .monospacedSystemFont(ofSize: 10, weight: .regular) }
     override var isFlipped: Bool { true }
 
     init(grid: DelimitedGrid) {
@@ -1650,7 +1697,7 @@ private final class DelimitedRecordGutter: NSView {
 
     var preferredWidth: CGFloat {
         let digits = String(grid?.recordCount ?? 0).count
-        return max(46, ceil(("0" as NSString).size(withAttributes: [.font: Self.font]).width) * CGFloat(digits) + 20)
+        return max(46, ceil(("0" as NSString).size(withAttributes: [.font: font]).width) * CGFloat(digits) + 20)
     }
 
     private var headerRect: NSRect {
@@ -1683,7 +1730,7 @@ private final class DelimitedRecordGutter: NSView {
         palette.header.setFill()
         dirtyRect.intersection(bounds).fill()
         func label(_ title: String, in rect: NSRect, color: NSColor) {
-            let attributes: [NSAttributedString.Key: Any] = [.font: Self.font, .foregroundColor: color]
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
             let size = (title as NSString).size(withAttributes: attributes)
             (title as NSString).draw(at: NSPoint(x: max(0, rect.maxX - size.width - 10),
                                                  y: floor(rect.midY - size.height / 2)),
@@ -1807,8 +1854,6 @@ private final class DelimitedHeader: NSTableHeaderView {
 }
 
 private final class DelimitedColumnHeader: NSTableHeaderCell {
-    static let titleFont = NSFont.systemFont(ofSize: 11, weight: .medium)
-
     override func draw(withFrame frame: NSRect, in controlView: NSView) {
         guard let table = (controlView as? NSTableHeaderView)?.tableView as? DelimitedNativeTable else { return }
         let palette = table.palette
@@ -1820,7 +1865,7 @@ private final class DelimitedColumnHeader: NSTableHeaderCell {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         let title = NSAttributedString(string: stringValue, attributes: [
-            .font: Self.titleFont, .foregroundColor: palette.text, .paragraphStyle: paragraph
+            .font: table.columnTitleFont, .foregroundColor: palette.text, .paragraphStyle: paragraph
         ])
         let column = table.column(at: NSPoint(x: frame.midX, y: 0))
         let sorts = table.file?.delimitedTable.configuration.sort ?? []
@@ -1840,7 +1885,6 @@ private final class DelimitedColumnHeader: NSTableHeaderCell {
 }
 
 fileprivate final class DelimitedCellField: NSTextField {
-    static let textFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
     var isNumeric = false
     var rule: NSColor? {
         didSet { if rule != oldValue { needsDisplay = true } }
@@ -1856,7 +1900,6 @@ fileprivate final class DelimitedCellField: NSTextField {
         cell?.usesSingleLineMode = true
         cell?.isScrollable = true
         focusRingType = .none
-        font = Self.textFont
     }
 
     @available(*, unavailable)
@@ -1950,6 +1993,10 @@ fileprivate struct DelimitedPalette {
 }
 
 final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
+    fileprivate var cellFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    fileprivate var columnTitleFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+    fileprivate var recordFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+
     typealias Cell = DelimitedTablePresentation.Cell
     fileprivate lazy var palette = DelimitedPalette(
         Theme.terminal(dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
@@ -2193,6 +2240,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     }
 
     fileprivate func style(_ label: DelimitedCellField, cell: Cell) {
+        if label.currentEditor() == nil, label.font != cellFont { label.font = cellFont }
         let selected = selection.contains(cell)
         let active = window?.isKeyWindow == true
         label.rule = palette.grid

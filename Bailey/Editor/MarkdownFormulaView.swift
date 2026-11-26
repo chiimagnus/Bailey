@@ -55,19 +55,20 @@ struct MarkdownFormulaView: View {
     var fontSize: CGFloat? = nil
     var source: NSRange? = nil
     @Environment(\.markdownSourceLocation) private var locateSource
+    @Environment(\.panelFontScale) private var fontScale
     @State private var cannotTypeset = false
 
     var body: some View {
         Group {
             if cannotTypeset {
                 MarkdownNativeText.make([.text(display ? "$$\n\(latex)\n$$" : "$\(latex)$", source: source)])
-                    .font(.system(size: fontSize ?? (display ? 18 : 16), design: .monospaced))
+                    .font(.system(size: (fontSize ?? (display ? 18 : 16)) * fontScale, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .pointerStyle(.horizontalText)
             } else {
                 SwiftUIMath.Math(latex)
                     .mathFont(SwiftUIMath.Math.Font(name: .latinModern,
-                                                   size: fontSize ?? (display ? 22 : 16)))
+                                                   size: (fontSize ?? (display ? 22 : 16)) * fontScale))
                     .mathTypesettingStyle(display ? .display : .text)
                     .onGeometryChange(for: Bool.self) { proxy in
                         proxy.size.width <= 0 || proxy.size.height <= 0

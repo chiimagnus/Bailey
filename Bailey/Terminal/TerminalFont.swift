@@ -19,11 +19,11 @@ enum TerminalFont {
         CTFontManagerRegisterFontURLs(urls as CFArray, .process, true, nil)
     }
 
-    /// The terminal font for the current settings (family + size).
+    /// Source and Diff share the selected monospace family, not the terminal size.
     @MainActor
-    static func current() -> NSFont {
+    static func editor() -> NSFont {
         let settings = AppSettings.shared
-        return resolve(family: settings.fontFamily, size: CGFloat(settings.fontSize))
+        return resolve(family: settings.fontFamily, size: CGFloat(settings.editorFontSize))
     }
 
     /// Resolves a family name to a terminal-ready font. Empty family means

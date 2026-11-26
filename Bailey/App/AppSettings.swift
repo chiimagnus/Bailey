@@ -85,6 +85,69 @@ nonisolated enum GitViewMode: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+/// The five user-adjustable text sizes. Each role is a single persisted preference.
+enum FontSizeRole: CaseIterable {
+    case panel, terminal, editor, table, reader
+
+    var defaultSize: Double {
+        switch self {
+        case .panel: AppSettings.defaultPanelFontSize
+        case .terminal, .editor: AppSettings.defaultFontSize
+        case .table: 11
+        case .reader: 16
+        }
+    }
+
+    var range: ClosedRange<Double> {
+        self == .panel ? AppSettings.panelFontSizeRange : AppSettings.fontSizeRange
+    }
+
+    var configKey: String {
+        switch self {
+        case .panel: "panel.font-size"
+        case .terminal: "font-size"
+        case .editor: "editor.font-size"
+        case .table: "table.font-size"
+        case .reader: "reader.font-size"
+        }
+    }
+
+    var keyPath: ReferenceWritableKeyPath<AppSettings, Double> {
+        switch self {
+        case .panel: \AppSettings.panelFontSize
+        case .terminal: \AppSettings.fontSize
+        case .editor: \AppSettings.editorFontSize
+        case .table: \AppSettings.tableFontSize
+        case .reader: \AppSettings.readerFontSize
+        }
+    }
+
+    func validated(_ value: Double?) -> Double {
+        guard let value, range.contains(value) else { return defaultSize }
+        return value
+    }
+}
+
+enum ContentZoomAction {
+    case increase, decrease, reset
+
+    func fontSize(_ current: Double, role: FontSizeRole) -> Double {
+        switch self {
+        case .increase: min(role.range.upperBound, current + 1)
+        case .decrease: max(role.range.lowerBound, current - 1)
+        case .reset: role.defaultSize
+        }
+    }
+
+    func pageZoom(_ current: CGFloat) -> CGFloat {
+        switch self {
+        case .increase: min(3, current * 1.2)
+        case .decrease: max(0.5, current / 1.2)
+        case .reset: 1
+        }
+    }
+}
+
 /// User-configurable settings, persisted to `~/.config/bailey/config.toml`.
 /// Views observe this directly; `WorkspaceWindowModel` re-themes live sessions on
 /// any change.
@@ -161,6 +224,21 @@ final class AppSettings {
     /// hierarchy for section labels, content, metadata, and controls.
     var panelFontSize: Double {
         didSet { save() }
+    }
+
+    var editorFontSize: Double { didSet { save() } }
+    var tableFontSize: Double { didSet { save() } }
+    var readerFontSize: Double { didSet { save() } }
+
+    func fontSize(for role: FontSizeRole) -> Double { self[keyPath: role.keyPath] }
+
+    func setFontSize(_ size: Double, for role: FontSizeRole) {
+        let size = role.validated(size)
+        if self[keyPath: role.keyPath] != size { self[keyPath: role.keyPath] = size }
+    }
+
+    func adjustFontSize(_ role: FontSizeRole, action: ContentZoomAction) {
+        setFontSize(action.fontSize(fontSize(for: role), role: role), for: role)
     }
 
     /// `auto` shows the toolbar only for Git projects; `always` keeps its Git
@@ -270,13 +348,15 @@ final class AppSettings {
             fallback: Theme.defaultLightThemeName
         )
         fontFamily = toml["font-family"]?.string ?? ""
-        let size = toml["font-size"]?.double ?? Self.defaultFontSize
-        fontSize = Self.fontSizeRange.contains(size) ? size : Self.defaultFontSize
-        let panelSize = toml["panel.font-size"]?.double
-            ?? Self.defaultPanelFontSize
-        panelFontSize = Self.panelFontSizeRange.contains(panelSize)
-            ? panelSize
-            : Self.defaultPanelFontSize
+        let terminalSize = FontSizeRole.terminal.validated(toml[FontSizeRole.terminal.configKey]?.double)
+        fontSize = terminalSize
+        panelFontSize = FontSizeRole.panel.validated(toml[FontSizeRole.panel.configKey]?.double)
+        // Preserve the former shared source/Diff size when opening an older config.
+        // Once saved, editor.font-size is independent, even at its default value.
+        editorFontSize = FontSizeRole.editor.validated(toml[FontSizeRole.editor.configKey] == nil
+            ? terminalSize : toml[FontSizeRole.editor.configKey]?.double)
+        tableFontSize = FontSizeRole.table.validated(toml[FontSizeRole.table.configKey]?.double)
+        readerFontSize = FontSizeRole.reader.validated(toml[FontSizeRole.reader.configKey]?.double)
         toolbarVisibility = ToolbarVisibility(
             rawValue: toml["toolbar.visibility"]?.string ?? ""
         ) ?? Self.defaultToolbarVisibility
@@ -375,8 +455,7 @@ final class AppSettings {
 
     func resetFont() {
         fontFamily = ""
-        fontSize = Self.defaultFontSize
-        panelFontSize = Self.defaultPanelFontSize
+        for role in FontSizeRole.allCases { setFontSize(role.defaultSize, for: role) }
         fontThicken = false
     }
 
@@ -422,9 +501,8 @@ final class AppSettings {
         if !fontFamily.isEmpty {
             lines.append("font-family = \(TOML.quote(fontFamily))")
         }
-        lines.append("font-size = \(TOML.number(fontSize))")
-        if panelFontSize != Self.defaultPanelFontSize {
-            lines.append("panel.font-size = \(TOML.number(panelFontSize))")
+        for role in FontSizeRole.allCases {
+            lines.append("\(role.configKey) = \(TOML.number(fontSize(for: role)))")
         }
         if toolbarVisibility != Self.defaultToolbarVisibility {
             lines.append("toolbar.visibility = \(TOML.quote(toolbarVisibility.rawValue))")

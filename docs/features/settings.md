@@ -19,9 +19,27 @@
 `⌘,` 打开原生 SwiftUI 设置窗口。左侧按功能分为 Common、Text Editor、Terminal、Browser、
 File Manager、Git Manager、Projects，以及连接设置（端口转发、手机通知）；右侧使用系统 `Form`。
 
-Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和面板字号。
-Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史。
+Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和通用面板字号。
+Text Editor 设置源码／Diff、CSV／TSV、Markdown 阅读字号及折行；Terminal 设置终端字号、等宽字体家族、光标、Option 和历史。
 系统字体家族仅在首次展示 Terminal 字体选择器时枚举，其他页面和 App 启动不预载该列表。
+
+### 字号与内容缩放
+
+| 设置 | 作用范围 | 配置键 | 默认 |
+| --- | --- | --- | ---: |
+| 面板字号 | Projects、Files、Git Manager | `panel.font-size` | 14 pt |
+| 终端字号 | Terminal | `font-size` | 13 pt |
+| 编辑器字号 | 所有源码与 Git Diff | `editor.font-size` | 13 pt |
+| 表格字号 | CSV／TSV | `table.font-size` | 11 pt |
+| 阅读字号 | Markdown 预览 | `reader.font-size` | 16 pt |
+
+通用面板字号范围 9–18 pt，其余 8–32 pt。源码与终端继续共用等宽字体家族，字号独立。
+旧配置首次读取时，若缺少 `editor.font-size`，以原终端字号作为编辑器初值；下一次保存明确写入五组值，
+此后调整任一组不影响其他组。读取旧配置不立即写盘，保留手工布局。
+Window 菜单 `⌘+`、`⌘-`、`⌘0` 按当前活动组的实际内容放大、缩小或恢复该组默认值，
+不因并排预览指向同一文件而误调源码。HTML／Browser 使用当前 WebView 的页面缩放；
+图片／SVG 使用现有图形视口缩放，恢复适应窗口；音视频保留系统控件，无字号命令。
+调整立即作用于同类内容，不重建终端、编辑器或预览文档。
 Git Manager 保留既有文件布局和工具栏选项，仅新增自部署 Git 托管域名映射。
 File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
 

@@ -32,6 +32,8 @@ struct MarkdownPreview: View {
     @State private var detailsState = MarkdownDetailsState()
     @State private var selectedSource: NSRange?
     @State private var pendingReveal: (index: Int, sourceOffset: Int?)?
+    private let settings = AppSettings.shared
+    private var fontScale: CGFloat { CGFloat(settings.readerFontSize / FontSizeRole.reader.defaultSize) }
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -78,8 +80,8 @@ struct MarkdownPreview: View {
                         )
                         .frame(width: 0, height: 0)
                     }
-                    .font(.system(size: 16))
-                    .lineSpacing(4)
+                    .font(.system(size: CGFloat(settings.readerFontSize)))
+                    .lineSpacing(4 * fontScale)
                     .foregroundStyle(Color(nsColor: palette.foregroundNSColor))
                     .tint(Color(nsColor: palette.accentNSColor))
                     .frame(maxWidth: 890, alignment: .leading)
@@ -92,6 +94,7 @@ struct MarkdownPreview: View {
                 .accessibilityIdentifier("bailey.markdown.preview")
                 .coordinateSpace(name: "bailey.markdown.reader")
                 .environment(detailsState)
+                .environment(\.panelFontScale, fontScale)
                 .overlay {
                     Canvas { context, size in
                         guard let selectedSource else { return }
@@ -154,6 +157,13 @@ struct MarkdownPreview: View {
                     guard !readerIsScrolling, let block = restoredBlock ?? sourceBlock else { return }
                     scroll(to: block, sourceOffset: restoredSourceOffset ?? synchronizedSourceOffset,
                            viewportY: restoredViewportY, rows: rows)
+                }
+                .onChange(of: fontScale) { _, _ in
+                    let anchor = restoredSourceOffset.map { (offset: $0, viewportY: restoredViewportY) }
+                        ?? sourceCoordinates.firstVisibleSource()
+                    guard !readerIsScrolling, let anchor,
+                          let block = MarkdownBlockIndex(document).block(atUTF16Offset: anchor.offset) else { return }
+                    scroll(to: block, sourceOffset: anchor.offset, viewportY: anchor.viewportY, rows: rows)
                 }
                 .onChange(of: synchronizedSourceOffset) { _, offset in
                     guard !readerIsScrolling, let offset, let block = sourceBlock else { return }
@@ -318,7 +328,7 @@ struct MarkdownPreview: View {
         for index in indices {
             if index != indices.lowerBound { result = result + Text(verbatim: "\n\n") }
             if case .paragraph(let inline) = document.blocks[index].content {
-                result = result + MarkdownNativeText.make(inline)
+                result = result + MarkdownNativeText.make(inline, fontScale: fontScale)
             }
         }
         return result
@@ -1064,6 +1074,7 @@ private extension MarkdownAlert {
 }
 
 private struct MarkdownNativeBlockView: View {
+    @Environment(\.panelFontScale) private var fontScale
     let block: MarkdownNativeBlock
     let resource: PreviewResource
     let assetRefresh: UInt
@@ -1129,10 +1140,10 @@ private struct MarkdownNativeBlockView: View {
                                                    assetRefresh: assetRefresh,
                                                    formulaFontSize: Self.headingSize(level))
                         } else {
-                            MarkdownNativeText.make(inline).pointerStyle(.horizontalText)
+                            MarkdownNativeText.make(inline, fontScale: fontScale).pointerStyle(.horizontalText)
                         }
                     }
-                        .font(.system(size: Self.headingSize(level), weight: .semibold))
+                        .font(.system(size: Self.headingSize(level) * fontScale, weight: .semibold))
                         .foregroundStyle(level == 6
                             ? MarkdownReaderColors.secondary(dark: colorScheme == .dark)
                             : MarkdownReaderColors.text(dark: colorScheme == .dark))
@@ -1168,7 +1179,7 @@ private struct MarkdownNativeBlockView: View {
             if MarkdownMixedParagraph.containsEmbedded(inline) {
                 MarkdownMixedParagraph(inline: inline, resource: resource, assetRefresh: assetRefresh)
             } else {
-                MarkdownNativeText.make(inline)
+                MarkdownNativeText.make(inline, fontScale: fontScale)
                     .fixedSize(horizontal: false, vertical: true)
                     .pointerStyle(.horizontalText)
             }
@@ -1242,8 +1253,8 @@ private struct MarkdownNativeBlockView: View {
             MarkdownHTMLContent(nodes: nodes, resource: resource, assetRefresh: assetRefresh,
                                 selectionPath: selectionPath)
         case .rawHTML(let source):
-            MarkdownNativeText.make([.text(source, source: sourceRange)])
-                .font(.system(size: 14, design: .monospaced))
+            MarkdownNativeText.make([.text(source, source: sourceRange)], fontScale: fontScale)
+                .panelFont(size: 14, design: .monospaced)
                 .foregroundStyle(.secondary).pointerStyle(.horizontalText)
         case .rule:
             Divider()
@@ -1294,7 +1305,7 @@ private struct MarkdownNativeBlockView: View {
                 MarkdownMixedParagraph(inline: inline, resource: resource,
                                        assetRefresh: assetRefresh)
             } else {
-                MarkdownNativeText.make(inline)
+                MarkdownNativeText.make(inline, fontScale: fontScale)
                     .pointerStyle(.horizontalText)
             }
         }
@@ -1315,6 +1326,7 @@ private struct MarkdownNativeBlockView: View {
 
 
 private struct MarkdownMixedParagraph: View {
+    @Environment(\.panelFontScale) private var fontScale
     private enum Segment {
         case text([MarkdownInline])
         case image(String, String, source: NSRange?)
@@ -1391,7 +1403,7 @@ private struct MarkdownMixedParagraph: View {
     private func content(_ segment: Segment, inline: Bool) -> some View {
         switch segment {
         case .text(let inlines):
-            MarkdownNativeText.make(inlines)
+            MarkdownNativeText.make(inlines, fontScale: fontScale)
                 .fixedSize(horizontal: inline, vertical: true)
                 .pointerStyle(.horizontalText)
         case .image(let source, let alt, let range):
@@ -1462,6 +1474,7 @@ private struct MarkdownCodeBlockView: View {
 }
 
 struct MarkdownCodeText: View {
+    @Environment(\.panelFontScale) private var fontScale
     struct Request: Hashable {
         let source: String
         let language: String?
@@ -1511,8 +1524,8 @@ struct MarkdownCodeText: View {
 
     var body: some View {
         mappedText
-        .font(.system(size: 13.6, design: .monospaced))
-        .lineSpacing(3)
+        .panelFont(size: 13.6, design: .monospaced)
+        .lineSpacing(3 * fontScale)
         .pointerStyle(.horizontalText)
         .task(id: request) {
             rendered = nil
@@ -1553,7 +1566,7 @@ enum MarkdownNativeText {
         let href: URL?
     }
 
-    static func make(_ nodes: [MarkdownInline]) -> Text {
+    static func make(_ nodes: [MarkdownInline], fontScale: CGFloat = 1) -> Text {
         let (tags, matched) = MarkdownInlineHTML.scan(nodes)
 
         var active: [ActiveHTML] = []
@@ -1576,16 +1589,16 @@ enum MarkdownNativeText {
                     continue
                 }
             }
-            var text = part(node)
+            var text = part(node, fontScale: fontScale)
             for tag in active {
                 switch tag.name {
                 case "b", "strong": text = text.bold()
                 case "i", "em": text = text.italic()
                 case "s", "del": text = text.strikethrough()
-                case "code", "kbd": text = text.font(.system(size: 13.5, design: .monospaced))
+                case "code", "kbd": text = text.font(.system(size: 13.5 * fontScale, design: .monospaced))
                 case "a":
                     if let url = tag.href {
-                        text = linkedText([node], url: url)
+                        text = linkedText([node], url: url, fontScale: fontScale)
                     }
                 default: break
                 }
@@ -1601,7 +1614,7 @@ enum MarkdownNativeText {
         return url
     }
 
-    private static func part(_ node: MarkdownInline) -> Text {
+    private static func part(_ node: MarkdownInline, fontScale: CGFloat) -> Text {
         switch node {
         case .text(let content, let source):
             if let source {
@@ -1611,20 +1624,20 @@ enum MarkdownNativeText {
             }
             return Text(verbatim: content)
         case .code(let content, let source):
-            let text = Text(attributed([node]))
+            let text = Text(attributed([node], fontScale: fontScale))
             guard let source else { return text }
             return text.customAttribute(
                 MarkdownSourceGlyph(source: source, displayLength: content.utf16.count)
             )
         case .emphasis(let children):
-            return make(children).italic()
+            return make(children, fontScale: fontScale).italic()
         case .strong(let children):
-            return make(children).bold()
+            return make(children, fontScale: fontScale).bold()
         case .strike(let children):
-            return make(children).strikethrough()
+            return make(children, fontScale: fontScale).strikethrough()
         case .link(let destination, let children):
-            guard let url = URL(string: destination) else { return make(children) }
-            return linkedText(children, url: url)
+            guard let url = URL(string: destination) else { return make(children, fontScale: fontScale) }
+            return linkedText(children, url: url, fontScale: fontScale)
         case .image(_, let alt, let source):
             let text = Text(verbatim: alt)
             guard let source, !alt.isEmpty else { return text }
@@ -1640,8 +1653,8 @@ enum MarkdownNativeText {
         }
     }
 
-    private static func linkedText(_ nodes: [MarkdownInline], url: URL) -> Text {
-        var linked = attributed(nodes)
+    private static func linkedText(_ nodes: [MarkdownInline], url: URL, fontScale: CGFloat) -> Text {
+        var linked = attributed(nodes, fontScale: fontScale)
         linked.link = url
         let text = Text(linked).customAttribute(MarkdownLinkGlyph())
         var runs: [MarkdownSourceRun] = []
@@ -1681,7 +1694,7 @@ enum MarkdownNativeText {
         }
     }
 
-    static func attributed(_ nodes: [MarkdownInline]) -> AttributedString {
+    static func attributed(_ nodes: [MarkdownInline], fontScale: CGFloat = 1) -> AttributedString {
         nodes.reduce(into: AttributedString()) { result, node in
             var part: AttributedString
             switch node {
@@ -1692,21 +1705,21 @@ enum MarkdownNativeText {
                 add(.code, to: &part)
                 part.backgroundColor = Color.primary.opacity(0.08)
             case .strong(let children):
-                part = attributed(children)
+                part = attributed(children, fontScale: fontScale)
                 add(.stronglyEmphasized, to: &part)
             case .emphasis(let children):
-                part = attributed(children)
+                part = attributed(children, fontScale: fontScale)
                 add(.emphasized, to: &part)
             case .strike(let children):
-                part = attributed(children)
+                part = attributed(children, fontScale: fontScale)
                 add(.strikethrough, to: &part)
             case .link(let destination, let children):
-                part = attributed(children)
+                part = attributed(children, fontScale: fontScale)
                 part.link = URL(string: destination)
                 if destination.hasPrefix("#bailey-note:"), !part.characters.isEmpty,
                    part.characters.allSatisfy(\.isNumber) {
-                    part.font = .system(size: 12, weight: .medium)
-                    part.baselineOffset = 5
+                    part.font = .system(size: 12 * fontScale, weight: .medium)
+                    part.baselineOffset = 5 * fontScale
                 }
             case .image(_, let alt, _):
                 part = AttributedString(alt)

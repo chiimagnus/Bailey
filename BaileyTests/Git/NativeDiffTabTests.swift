@@ -2811,7 +2811,7 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
     func testLocalGitStagedAndUnstagedDiffReadyLatencyMatrix() async throws {
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         print("AUDIT_DIFF_ENV system=\(ProcessInfo.processInfo.operatingSystemVersionString) font=\(font.fontName) size=\(font.pointSize) longLineWidth=\(AppSettings.shared.longLineDisplayWidth) scale=\(NSScreen.main?.backingScaleFactor ?? 0) scroller=\(NSScroller.preferredScrollerStyle.rawValue)")
         for lineCount in [1_000, 24_000, 100_000] {
             let root = try repository()

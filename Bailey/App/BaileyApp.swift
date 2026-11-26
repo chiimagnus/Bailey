@@ -535,6 +535,26 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: [.command, .control])
             .disabled(NSApp.keyWindow == nil)
+
+            Divider()
+
+            Button(String(localized: "Zoom In", table: "Interface")) {
+                manager?.zoomContent(.increase)
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(manager?.canZoomContent != true)
+
+            Button(String(localized: "Zoom Out", table: "Interface")) {
+                manager?.zoomContent(.decrease)
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(manager?.canZoomContent != true)
+
+            Button(String(localized: "Reset Zoom", table: "Interface")) {
+                manager?.zoomContent(.reset)
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(manager?.canZoomContent != true)
         }
     }
 }

@@ -53,6 +53,57 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
+    func testIndependentFontSizesMigrateAndRoundTripWithoutChangingOtherRoles() throws {
+        let legacy = "font-size = 19\npanel.font-size = 15\n"
+        try legacy.write(to: configURL, atomically: true, encoding: .utf8)
+        let settings = AppSettings(configURL: configURL)
+        XCTAssertEqual(settings.editorFontSize, 19)
+        XCTAssertEqual(settings.fontSize, 19)
+        XCTAssertEqual(settings.panelFontSize, 15)
+        XCTAssertEqual(settings.tableFontSize, 11)
+        XCTAssertEqual(settings.readerFontSize, 16)
+        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), legacy)
+        for role in FontSizeRole.allCases {
+            let previous = FontSizeRole.allCases.map { settings.fontSize(for: $0) }
+            let changed = expectation(description: role.configKey)
+            withObservationTracking({ _ = settings.fontSize(for: role) }) { changed.fulfill() }
+            settings.adjustFontSize(role, action: .increase)
+            wait(for: [changed], timeout: 1)
+            for (index, other) in FontSizeRole.allCases.enumerated() {
+                XCTAssertEqual(settings.fontSize(for: other), previous[index] + (other == role ? 1 : 0))
+            }
+            let reopened = AppSettings(configURL: configURL)
+            for other in FontSizeRole.allCases {
+                XCTAssertEqual(reopened.fontSize(for: other), settings.fontSize(for: other))
+            }
+            settings.setFontSize(role.range.upperBound, for: role)
+            settings.adjustFontSize(role, action: .increase)
+            XCTAssertEqual(settings.fontSize(for: role), role.range.upperBound)
+            settings.setFontSize(role.range.lowerBound, for: role)
+            settings.adjustFontSize(role, action: .decrease)
+            XCTAssertEqual(settings.fontSize(for: role), role.range.lowerBound)
+            settings.adjustFontSize(role, action: .reset)
+            XCTAssertEqual(settings.fontSize(for: role), role.defaultSize)
+        }
+        settings.setFontSize(21, for: .terminal)
+        XCTAssertEqual(AppSettings(configURL: configURL).editorFontSize, 13,
+                       "An explicit default editor size must not inherit a later terminal size")
+        for role in FontSizeRole.allCases {
+            settings.setFontSize(role.range.upperBound, for: role)
+        }
+        settings.resetToDefaults()
+        for role in FontSizeRole.allCases {
+            XCTAssertEqual(settings.fontSize(for: role), role.defaultSize)
+            XCTAssertEqual(AppSettings(configURL: configURL).fontSize(for: role), role.defaultSize)
+        }
+        try "font-size = 22\neditor.font-size = -1\ntable.font-size = 100\nreader.font-size = true\npanel.font-size = 0\n".write(to: configURL, atomically: true, encoding: .utf8)
+        let invalid = AppSettings(configURL: configURL)
+        XCTAssertEqual(invalid.fontSize, 22)
+        for role in FontSizeRole.allCases where role != .terminal {
+            XCTAssertEqual(invalid.fontSize(for: role), role.defaultSize)
+        }
+    }
+
     func testLongLineRenderingWidthPersistsValidModesAndRejectsBadValues() throws {
         let settings = AppSettings(configURL: configURL)
         XCTAssertEqual(settings.longLineDisplayWidth, .standard)

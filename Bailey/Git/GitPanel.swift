@@ -1919,7 +1919,7 @@ struct GitPanel: View {
                                     .padding(.vertical, 16)
                             } else {
                                 Text(String(localized: "Unable to read Git history.", table: "Git"))
-                                    .font(.system(size: 11))
+                                    .panelFont(size: 11)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 16)

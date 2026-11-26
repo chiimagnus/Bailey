@@ -795,7 +795,7 @@ private enum DiffGhostGeometry {
         guard !decorations.positionedGhosts.isEmpty else { return [] }
         let configuredHeight = textView.defaultParagraphStyle?.maximumLineHeight ?? 0
         let rowHeight = configuredHeight > 0 ? configuredHeight
-            : DiffTypography.lineHeight(for: textView.font ?? TerminalFont.current())
+            : DiffTypography.lineHeight(for: textView.font ?? TerminalFont.editor())
         let viewport = clipView.bounds
         let ghosts = decorations.positionedGhosts
         // A leading deletion occupies the native text container's top inset.
@@ -1077,7 +1077,7 @@ final class DiffGutterView: NSView {
             needsDisplay = true
         }
     }
-    var font: NSFont = TerminalFont.current() {
+    var font: NSFont = TerminalFont.editor() {
         didSet {
             recalculateThickness()
             needsDisplay = true

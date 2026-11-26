@@ -14,6 +14,80 @@ func csvFullFieldEditor() -> NSTextView? {
 
 @MainActor
 final class DelimitedGridInteractionTests: XCTestCase {
+    func testLiveTableFontResizePreservesGridProjectionSelectionAndDraft() async throws {
+        let original = "Name,Value,Note\r\nAlpha,old,one\nBeta,2,two\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let settings = AppSettings.shared
+        let oldSize = settings.tableFontSize
+        defer { settings.setFontSize(oldSize, for: .table) }
+        settings.setFontSize(11, for: .table)
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 600, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Alpha")
+        let table = grid.table
+        let first = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField)
+        XCTAssertEqual(first.font?.pointSize, 11)
+        let originalHeight = table.rowHeight
+        let width = table.tableColumns[0].width
+        table.select(.init(row: 0, column: 0))
+        table.select(.init(row: 1, column: 1), extending: true)
+        let selection = table.selection
+        let revision = file.textPreviewRequestID
+        let parsed = file.delimitedTable.parsed?.requestID
+        func resize(_ size: Double) async throws {
+            settings.setFontSize(size, for: .table)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                if let field = table.view(atColumn: 0, row: 0, makeIfNecessary: false) as? NSTextField,
+                   field.font?.pointSize == CGFloat(size) { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let field = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField)
+            XCTAssertEqual(field.font?.pointSize, CGFloat(size))
+            XCTAssertEqual(table.rowHeight, ceil(originalHeight * CGFloat(size / 11)))
+            XCTAssertEqual(table.tableColumns[0].width, width * CGFloat(size / 11), accuracy: 1)
+            XCTAssertTrue(file.delimitedTable.grid === grid)
+            XCTAssertTrue(grid.table === table)
+            XCTAssertEqual(file.textPreviewRequestID, revision)
+            XCTAssertEqual(file.delimitedTable.parsed?.requestID, parsed)
+            XCTAssertEqual(file.text, original)
+            XCTAssertFalse(file.documentUndoManager.canUndo)
+        }
+        for size in [18.0, 8, 32, 11] {
+            try await resize(size)
+            XCTAssertEqual(table.selection, selection)
+        }
+        XCTAssertTrue(window.makeFirstResponder(table))
+        table.onEdit(.init(row: 0, column: 1))
+        let field = try XCTUnwrap(table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                             replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(editor.hasMarkedText())
+        try await resize(20)
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertTrue(file.hasPendingDelimitedEdit)
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.replacingOccurrences(of: "old", with: "中文").utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+    }
+
     func testPreviewModeTransitionDoesNotSplitOrUnmountMarkedCSVInput() async throws {
         let original = "Name,Value\r\nItem,old\n"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")

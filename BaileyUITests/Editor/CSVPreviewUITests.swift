@@ -4,6 +4,68 @@ import XCTest
 
 @MainActor
 final class CSVPreviewUITests: XCTestCase {
+    func testFocusedFontCommandsAdjustOnlyTheVisibleContentKind() throws {
+        continueAfterFailure = false
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("workspace/Zoom.csv", text: "Name,Value\nAlpha,123\nBeta,456\n")
+        let config = try fixture.file(".config/bailey-dev/config.toml", text: "font-size = 15\npanel.font-size = 14\neditor.font-size = 13\ntable.font-size = 11\nreader.font-size = 16\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", configurationHome: fixture.root,
+                                                    project: file.deletingLastPathComponent(), clipboardIsReadOnly: true)
+        let window = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        let table = WorkspaceUITestSupport.element("bailey.csv.table", in: app)
+        let cell = table.staticTexts["Alpha"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 12))
+        cell.click()
+        let originalHeight = cell.frame.height
+        func expect(_ key: String, _ size: Int) {
+            let persisted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let text = (try? String(contentsOf: config, encoding: .utf8)) ?? ""
+                return text.split(separator: "\n").contains { $0 == "\(key) = \(size)" }
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [persisted], timeout: 5), .completed,
+                           "\(key) must be \(size); \((try? String(contentsOf: config, encoding: .utf8)) ?? "unreadable")")
+        }
+        app.menuBarItems["Window"].click()
+        let windowMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Bring All to Front"].exists
+        })
+        XCTAssertTrue(windowMenu.menuItems["Move & Resize"].exists)
+        XCTAssertTrue(windowMenu.menuItems["Zoom In"].isEnabled)
+        XCTAssertTrue(windowMenu.menuItems["Zoom Out"].isEnabled)
+        XCTAssertTrue(windowMenu.menuItems["Reset Zoom"].isEnabled)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey("+", modifierFlags: .command)
+        expect("table.font-size", 12)
+        let larger = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cell.frame.height > originalHeight }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [larger], timeout: 5), .completed)
+        expect("font-size", 15)
+        expect("editor.font-size", 13)
+        app.menuBarItems["Window"].click()
+        windowMenu.menuItems["Zoom Out"].click()
+        expect("table.font-size", 11)
+        app.typeKey("+", modifierFlags: .command)
+        expect("table.font-size", 12)
+        app.typeKey("-", modifierFlags: .command)
+        expect("table.font-size", 11)
+        app.typeKey("+", modifierFlags: .command)
+        expect("table.font-size", 12)
+        app.typeKey("0", modifierFlags: .command)
+        expect("table.font-size", 11)
+
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let source = window.textViews.firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 10))
+        source.click()
+        app.typeKey("+", modifierFlags: .command)
+        expect("editor.font-size", 14)
+        expect("table.font-size", 11)
+        expect("font-size", 15)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "Name,Value\nAlpha,123\nBeta,456\n")
+    }
+
     func testWindowShortcutAndBackgroundTabMenuKeepTheirOwnCSVTargets() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)

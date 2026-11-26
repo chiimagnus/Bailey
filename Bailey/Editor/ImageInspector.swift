@@ -479,7 +479,11 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
             cancelAnnotationDrag()
             cancelOutput()
         }
+        if self.annotationFile?.graphicViewport === self, self.annotationFile !== annotationFile {
+            self.annotationFile?.graphicViewport = nil
+        }
         self.annotationFile = annotationFile
+        annotationFile?.graphicViewport = self
         self.annotationDocument = annotationDocument
         self.canAnnotate = canAnnotate
         canvas.annotationEditing = annotationEditing && canAnnotate
@@ -833,6 +837,7 @@ private final class RasterScrollView: PreviewScrollView, NSMenuItemValidation {
         copyMenuItem.menu?.removeItem(copyMenuItem)
         exportMenuItem.menu?.removeItem(exportMenuItem)
         cancelOutput()
+        if annotationFile?.graphicViewport === self { annotationFile?.graphicViewport = nil }
         annotationFile = nil
         cancelAnnotationDrag()
         invalidateAnnotationRendering()
