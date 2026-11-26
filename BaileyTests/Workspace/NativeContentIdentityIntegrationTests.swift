@@ -330,6 +330,96 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
                        "Native accessibility must select the same tab as the pointer")
     }
 
+    func testDockAccentUsesReactiveWindowAppearanceWithoutGrantingNativeInput() async throws {
+        let (root, _) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("table.csv")
+        try "Name,Value\nAlpha,25\n".write(to: url, atomically: true, encoding: .utf8)
+        let settings = AppSettings.shared
+        let previousTheme = settings.themeDark
+        defer { settings.themeDark = previousTheme }
+        settings.themeDark = "Adwaita Dark"
+        XCTAssertEqual(Theme.terminal(dark: true).name, "Adwaita Dark")
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(url.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let tab = try XCTUnwrap(project.selectedTab)
+        let item = DockItem.tab(tab.id)
+        let group = try XCTUnwrap(project.dock.group(containing: item))
+        let git = GitStatusModel()
+        let dragging = DockTabDragCoordinator()
+        func view(_ state: ControlActiveState, appearsActive: Bool) -> some View {
+            DockTabGroupView(group: group, project: project, manager: manager,
+                             git: git, dragging: dragging)
+                .environment(\.colorScheme, .dark)
+                .environment(\.controlActiveState, state)
+                .environment(\.appearsActive, appearsActive)
+                .background(Color(nsColor: Theme.terminal(dark: true).backgroundNSColor))
+        }
+        let host = NSHostingView(rootView: view(.key, appearsActive: true))
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 480, height: 240),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderBack(nil)
+        func pointers(_ view: NSView) -> [ContextMenuClickView] {
+            (view as? ContextMenuClickView).flatMap { $0.onMiddleClick != nil ? [$0] : nil }
+                ?? view.subviews.flatMap(pointers)
+        }
+        func layout() {
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+        }
+        try await wait { layout(); return pointers(host).count == 1 }
+        let focus = try XCTUnwrap(find(DockGroupFocusView.self, in: host))
+        XCTAssertFalse(window.isKeyWindow, "Host test must not claim desktop key focus")
+        XCTAssertFalse(focus.canFocus?() ?? true, "An appearance override must not authorize native keyboard input")
+        func tint() throws -> Double {
+            layout()
+            let pointer = try XCTUnwrap(pointers(host).first)
+            let frame = pointer.convert(pointer.bounds, to: host)
+            XCTAssertGreaterThan(frame.height, 10)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let sx = CGFloat(bitmap.pixelsWide) / host.bounds.width
+            let sy = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+            let y = host.isFlipped ? frame.maxY - 2.5 : host.bounds.height - frame.minY - 2.5
+            let row = Int(y * sy)
+            let samples = (Int((frame.minX + frame.width / 3) * sx)..<Int((frame.maxX - frame.width / 3) * sx)).compactMap { x -> Double? in
+                guard let c = bitmap.colorAt(x: x, y: row)?.usingColorSpace(.sRGB) else { return nil }
+                return Double(c.blueComponent - c.redComponent)
+            }.sorted()
+            return try XCTUnwrap(samples.dropFirst(samples.count / 2).first)
+        }
+        // A SwiftUI window appearance update and the native focus gate are
+        // separate inputs. Simulate both agreeing and arriving independently.
+        let initiallyActive = try tint()
+        print("DOCK_VISUAL initial=\(initiallyActive) native=\(window.isKeyWindow)")
+        XCTAssertGreaterThan(initiallyActive, 0.14, "The displayed CSV tab must have an accent fill")
+        host.rootView = view(.inactive, appearsActive: false)
+        try await wait { layout(); return !focus.isActive }
+        let inactive = try tint()
+        XCTAssertLessThan(inactive, initiallyActive - 0.08)
+        host.rootView = view(.key, appearsActive: false)
+        try await wait { layout(); return focus.isActive }
+        let restored = try tint()
+        XCTAssertGreaterThan(restored, inactive + 0.08)
+        XCTAssertEqual(restored, initiallyActive, accuracy: 0.04)
+        XCTAssertFalse(focus.canFocus?() ?? true)
+        project.dock.select(.files)
+        try await wait { layout(); return !focus.isActive }
+        XCTAssertLessThan(try tint(), restored - 0.08)
+        project.selectTab(tab.id)
+        try await wait { layout(); return focus.isActive }
+        XCTAssertEqual(try tint(), restored, accuracy: 0.04)
+        XCTAssertEqual(project.dock.activeGroupID, group.id)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "Name,Value\nAlpha,25\n")
+    }
+
     func testDisplayedTabExposesRealAccessibilitySelection() async throws {
         let host = NSHostingView(rootView: TabItemChrome(
             systemImage: "doc", title: "Selected document", isDisplayed: true,
