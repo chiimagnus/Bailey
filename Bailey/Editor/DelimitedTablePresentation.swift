@@ -154,8 +154,21 @@ nonisolated struct DelimitedTablePresentation: Sendable {
     static func value(
         in text: NSString, index: DelimitedTableIndex, record: Int, column: Int, limit: Int? = nil
     ) -> String {
-        let fields = index.fields(in: index.records[record])
-        guard column >= 0, column < fields.count else { return "" }
-        return fields[fields.startIndex + column].value(in: text, limit: limit)
+        index.field(record: record, column: column)?.value(in: text, limit: limit) ?? ""
+    }
+
+    static func finiteNumber(_ value: String) -> Double? {
+        var nonzeroMantissa = false
+        var inExponent = false
+        for byte in value.utf8 {
+            switch byte {
+            case 69, 101: inExponent = true
+            case 49...57: nonzeroMantissa = nonzeroMantissa || !inExponent
+            case 43, 45, 46, 48: break
+            default: return nil
+            }
+        }
+        guard let result = Double(value), result.isFinite, result != 0 || !nonzeroMantissa else { return nil }
+        return result
     }
 }

@@ -26,10 +26,15 @@ nonisolated struct DelimitedTableIndex: Sendable {
 
         var source: NSRange { NSRange(location: Int(start), length: Int(length)) }
 
+        func contentRange(in text: NSString) -> NSRange {
+            let range = source
+            return range.length >= 2 && text.character(at: range.location) == 34
+                ? NSRange(location: range.location + 1, length: range.length - 2) : range
+        }
+
         func value(in text: NSString, limit: Int? = nil) -> String {
-            var range = source
-            let quoted = range.length >= 2 && text.character(at: range.location) == 34
-            if quoted { range = NSRange(location: range.location + 1, length: range.length - 2) }
+            var range = contentRange(in: text)
+            let quoted = range.location != Int(start)
             let truncated = limit.map { range.length > $0 } ?? false
             if truncated, let limit {
                 range.length = limit
@@ -73,6 +78,12 @@ nonisolated struct DelimitedTableIndex: Sendable {
     private let fields: [Field]
 
     func fields(in record: Record) -> ArraySlice<Field> { fields[record.fieldIndices] }
+
+    func field(record: Int, column: Int) -> Field? {
+        guard records.indices.contains(record), column >= 0 else { return nil }
+        let fields = fields(in: records[record])
+        return column < fields.count ? fields[fields.startIndex + column] : nil
+    }
 
     @concurrent static func parse(
         _ text: String, preferred: Separator, selected: Separator? = nil

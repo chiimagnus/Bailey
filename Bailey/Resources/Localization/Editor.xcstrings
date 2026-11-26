@@ -911,6 +911,16 @@
         }
       }
     },
+    "Fit Column Width" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适应列宽"
+          }
+        }
+      }
+    },
     "Apply Filter" : {
       "localizations" : {
         "zh-Hans" : {

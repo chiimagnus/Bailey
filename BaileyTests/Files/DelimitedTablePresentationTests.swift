@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
@@ -105,9 +106,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         controls.configuration.sort = [.init(column: 0, ascending: true)]
         controls.configuration.filters = [1: "g"]
         let grid = DelimitedGrid()
-        grid.controls = controls
         grid.file = file
-        grid.table.file = file
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 350),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -187,9 +186,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
         let grid = DelimitedGrid()
-        grid.controls = file.delimitedTable
         grid.file = file
-        grid.table.file = file
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -251,6 +248,121 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertEqual(file.text, edited, "A different native text responder must own the command")
         XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
         XCTAssertNil(file.editorView)
+    }
+
+    func testMountedCSVGridRepaintsWithoutReplacingSelectionOrInput() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let original = "sample_id,material,confining_MPa,strain_rate_s-1,peak_MPa,notes\n"
+            + "F-001,shale,0,82.4,116.3,baseline\n"
+            + "F-002,shale,5,95.8,132.5,\"axial, lateral\"\n"
+            + "F-003,shale,10,118.5,147.1,\"interrupted\nloading\""
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let previousLight = Theme.terminal(dark: false).name
+        let previousDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: previousLight, dark: previousDark) }
+        Theme.reloadSelection(light: "Rose Pine Dawn", dark: "Dracula")
+        let frame = CGRect(x: -950, y: -950, width: 920, height: 300)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.appearance = NSAppearance(named: .aqua)
+        let hosted = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = hosted
+        window.orderBack(nil)
+
+        func mountedGrid(_ view: NSView) -> DelimitedGrid? {
+            if let grid = view as? DelimitedGrid { return grid }
+            return view.subviews.lazy.compactMap { mountedGrid($0) }.first
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+        while mountedGrid(hosted)?.table.numberOfRows != 3, ContinuousClock.now < deadline {
+            hosted.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let grid = try XCTUnwrap(mountedGrid(hosted))
+        XCTAssertEqual(grid.table.numberOfRows, 3)
+        XCTAssertEqual(grid.table.rowHeight, 30)
+        XCTAssertEqual(grid.table.headerView?.bounds.height, 30)
+        XCTAssertEqual(grid.table.tableColumns[0].width, 110)
+        XCTAssertGreaterThan(grid.table.tableColumns[5].width, 110)
+        let notes = try XCTUnwrap(grid.table.view(atColumn: 5, row: 2, makeIfNecessary: true) as? NSTextField)
+        XCTAssertEqual(notes.stringValue, "interrupted ↵ loading")
+        let selected = DelimitedTablePresentation.Cell(row: 0, column: 4)
+        grid.table.select(selected, reveal: true)
+        grid.table.tableColumns[4].width = 194
+        grid.table.onEdit(selected)
+        let field = try XCTUnwrap(grid.table.view(atColumn: 4, row: 0, makeIfNecessary: true) as? NSTextField)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                             replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        let revision = file.textPreviewRequestID
+        let marked = editor.markedRange()
+        let selectedRange = editor.selectedRange()
+        let origin = grid.contentView.bounds.origin
+
+        func capture(expected: NSColor, name: String) throws {
+            hosted.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(grid.bitmapImageRepForCachingDisplay(in: grid.bounds))
+            grid.cacheDisplay(in: grid.bounds, to: bitmap)
+            let reference = try XCTUnwrap(expected.usingColorSpace(bitmap.colorSpace))
+            let canvasCount = stride(from: 4, to: bitmap.pixelsHigh - 4, by: 8).filter { height in
+                guard let color = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: height) else { return false }
+                return max(abs(color.redComponent - reference.redComponent),
+                           abs(color.greenComponent - reference.greenComponent),
+                           abs(color.blueComponent - reference.blueComponent)) < 0.04
+            }.count
+            XCTAssertGreaterThan(canvasCount, bitmap.pixelsHigh / 16, name)
+            let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                                           uniformTypeIdentifier: UTType.png.identifier)
+            attachment.name = "CSV Native - \(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        for (dark, names) in [(false, Theme.commonLightThemes), (true, Theme.commonDarkThemes)] {
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            for name in names.map(\.name) {
+                Theme.reloadSelection(light: dark ? "Rose Pine Dawn" : name, dark: dark ? name : "Dracula")
+                let expected = Theme.terminal(dark: dark).backgroundNSColor
+                let repaint = ContinuousClock.now.advanced(by: .milliseconds(120))
+                while grid.backgroundColor != expected, ContinuousClock.now < repaint {
+                    hosted.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                XCTAssertEqual(grid.backgroundColor, expected, name)
+                XCTAssertEqual(grid.table.backgroundColor, expected, name)
+                XCTAssertTrue(mountedGrid(hosted) === grid)
+                XCTAssertTrue(field.currentEditor() === editor)
+                XCTAssertEqual(editor.string, "zhong")
+                XCTAssertEqual(editor.markedRange(), marked)
+                XCTAssertEqual(editor.selectedRange(), selectedRange)
+                XCTAssertTrue(window.firstResponder === editor)
+                XCTAssertEqual(grid.table.selection.caret, selected)
+                XCTAssertEqual(grid.table.tableColumns[4].width, 194)
+                XCTAssertEqual(grid.contentView.bounds.origin, origin)
+                XCTAssertEqual(file.textPreviewRequestID, revision)
+                if name == "Default Light" || name == "Dracula" { try capture(expected: expected, name: name) }
+            }
+        }
+        grid.cancelEditing()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
+    }
+
+    func testFiniteDecimalHighlightsDoNotConvertLiteralValues() {
+        for value in ["0", "-0", "0.0e-800", "00047", "+.5", "3.", "-9.12E-304", "5e-324"] {
+            XCTAssertNotNil(DelimitedTablePresentation.finiteNumber(value), value)
+        }
+        for value in ["", " ", " 0", "0x1p2", "NaN", "+inf", "1e309", "1e-500", "2e", "1,000", "2026-11-26"] {
+            XCTAssertNil(DelimitedTablePresentation.finiteNumber(value), value)
+        }
     }
 
     func testMountedCSVGridRetainsKeyboardFocusAcrossEditUndoRedo() async throws {
@@ -423,9 +535,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
             let grid = DelimitedGrid()
-            grid.controls = file.delimitedTable
             grid.file = file
-            grid.table.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
@@ -465,9 +575,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let controls = file.delimitedTable
             controls.configuration.sort = [.init(column: 0, ascending: true)]
             let grid = DelimitedGrid()
-            grid.controls = controls
             grid.file = file
-            grid.table.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
@@ -526,9 +634,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             defer { project.terminateAll() }
             let controls = file.delimitedTable
             let grid = DelimitedGrid()
-            grid.controls = controls
             grid.file = file
-            grid.table.file = file
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
@@ -636,17 +742,21 @@ final class DelimitedTablePresentationTests: XCTestCase {
         let grid = DelimitedGrid()
         window.contentView = grid
         let tall = "Name,Value\n" + (0..<100_000).map { "Row \($0),\($0)\n" }.joined()
-        let wide = (0..<2501).map { "column \($0)" }.joined(separator: ",") + "\n"
-            + (0..<2501).map { "cell \($0)" }.joined(separator: ",")
-        for (source, row, column, expected) in [
-            (tall, 99_999, 1, "99999"),
-            (wide, 0, 2500, "cell 2500"),
-        ] {
+        let widths = [1, 2501, 4095, 4096, 4097]
+        let fixtures = [(tall, 99_999, 1, "99999")] + widths.map { width in
+            let wide = (0..<width).map { "column \($0)" }.joined(separator: ",") + "\n"
+                + (0..<width).map { "cell \($0)" }.joined(separator: ",")
+            let last = min(width, DelimitedGrid.maximumColumns) - 1
+            return (wide, 0, last, "cell \(last)")
+        }
+        for (source, row, column, expected) in fixtures {
             let index = try await DelimitedTableIndex.parse(source, preferred: .comma)
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: source, index: index, configuration: .init()
             )
-            grid.install(.init(index: index, source: source, requestID: expected, documentRevision: expected),
+            let started = ContinuousClock.now
+            grid.install(.init(index: index, source: source, requestID: String(index.columnCount),
+                               documentRevision: String(index.columnCount)),
                          presentation: presentation)
             grid.layoutSubtreeIfNeeded()
             grid.table.select(.init(row: row, column: column), reveal: true)
@@ -654,6 +764,8 @@ final class DelimitedTablePresentationTests: XCTestCase {
             XCTAssertTrue(grid.table.frameOfCell(atColumn: column, row: row).intersects(grid.table.visibleRect))
             let field = try XCTUnwrap(grid.table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField)
             XCTAssertEqual(field.stringValue, expected)
+            XCTAssertEqual(grid.table.numberOfColumns, min(index.columnCount, DelimitedGrid.maximumColumns))
+            print("CSV_GRID rows=\(presentation.rows.count) columns=\(index.columnCount) last=\(column) elapsed=\(started.duration(to: .now))")
             XCTAssertTrue(field.isAccessibilitySelected())
             var realizedRows = 0
             grid.table.enumerateAvailableRowViews { _, _ in realizedRows += 1 }
