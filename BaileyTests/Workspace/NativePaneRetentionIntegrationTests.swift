@@ -1724,6 +1724,72 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), binary)
     }
 
+    func testReloadedDocumentDoesNotShareUndoWithRetiredNativeView() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try Data("old\n".utf8).write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 700, height: 460),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            file.retireNativeEditor()
+            window.contentView = nil
+            window.close()
+        }
+        window.contentView = host
+        window.orderFront(nil)
+        try await settle { host.layoutSubtreeIfNeeded(); return file.editorView != nil }
+        let oldScroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let oldEditor = try XCTUnwrap(oldScroll.documentView as? NativeCodeTextView)
+        let oldUndo = try XCTUnwrap(oldEditor.undoManager)
+        oldEditor.insertText("first ", replacementRange: NSRange(location: 0, length: 0))
+        oldEditor.breakUndoCoalescing()
+        XCTAssertTrue(oldUndo.canUndo)
+        await file.save()
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), Data("first old\n".utf8))
+
+        // A byte-identical read and remount must preserve the same history.
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertTrue(file.documentUndoManager === oldUndo)
+        XCTAssertTrue(oldUndo.canUndo)
+
+        // An accepted replacement is a different document, even while
+        // AppKit still retains the old native responder.
+        try Data("new\n".utf8).write(to: path)
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        try await settle {
+            host.layoutSubtreeIfNeeded()
+            return file.editorView != nil && file.editorView !== oldScroll
+        }
+        let newScroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let newEditor = try XCTUnwrap(newScroll.documentView as? NativeCodeTextView)
+        let newUndo = try XCTUnwrap(newEditor.undoManager)
+        XCTAssertFalse(newUndo === oldUndo)
+        XCTAssertFalse(oldUndo.canUndo)
+        XCTAssertFalse(oldUndo.canRedo)
+        XCTAssertFalse(oldEditor.allowsUndo)
+        XCTAssertTrue(newUndo === file.documentUndoManager)
+
+        newEditor.insertText("second ", replacementRange: NSRange(location: 0, length: 0))
+        newEditor.breakUndoCoalescing()
+        XCTAssertEqual(file.text, "second new\n")
+        XCTAssertTrue(newUndo.canUndo)
+        XCTAssertFalse(oldUndo.canUndo, "The obsolete responder must not acquire current document history")
+        if oldUndo.canUndo { oldUndo.undo() }
+        XCTAssertEqual(file.text, "second new\n", "An obsolete undo owner must not mutate the current document")
+        if newUndo.canUndo { newUndo.undo() }
+        XCTAssertEqual(file.text, "new\n")
+        if newUndo.canRedo { newUndo.redo() }
+        XCTAssertEqual(file.text, "second new\n")
+    }
+
     func testRetiredNativeDocumentReleasesLargeTextFromCachedAppKitView() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1750,13 +1816,21 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         // detached view objects, but not the retired file's large text buffer.
         let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
         XCTAssertGreaterThan(editor.textStorage?.length ?? 0, 100_000)
+        let contentStorage = try XCTUnwrap(editor.textContentStorage)
+        let oldStorage = try XCTUnwrap(editor.textStorage)
+        let layoutManager = try XCTUnwrap(editor.textLayoutManager)
+        XCTAssertTrue(contentStorage.textLayoutManagers.contains { $0 === layoutManager })
         file.retireNativeEditor()
+        XCTAssertFalse(contentStorage.textLayoutManagers.contains { $0 === layoutManager },
+                       "A retired view must no longer bind the old document to its layout manager")
         XCTAssertNil(file.editorView)
         XCTAssertNil(scroll.documentView)
         XCTAssertNil(editor.syntaxCoordinator)
         XCTAssertFalse(editor.isEditable)
-        XCTAssertEqual(editor.textStorage?.length, 0,
-                       "A cached retired view must release its obsolete text bytes")
+        XCTAssertEqual(oldStorage.length, 0,
+                       "The retired document must release its obsolete text bytes")
+        XCTAssertEqual(editor.textStorage?.length ?? 0, 0,
+                       "A cached retired view must not retain document bytes")
         XCTAssertTrue(file.text.isEmpty, "A retired file must not keep a second text buffer")
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), source)
     }

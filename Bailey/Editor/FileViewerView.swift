@@ -94,7 +94,7 @@ final class FileTab: nonisolated Identifiable {
     /// Only explicit full-content consumers materialize its Swift String.
     @ObservationIgnored private(set) var nativeTextStorage = NSTextStorage()
     @ObservationIgnored private(set) var nativeContentStorage = NSTextContentStorage()
-    @ObservationIgnored let documentUndoManager = UndoManager()
+    @ObservationIgnored private(set) var documentUndoManager = UndoManager()
     @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int]? = [:]
     @ObservationIgnored private var nativeEditObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var pendingStorageChange = false
@@ -242,6 +242,9 @@ final class FileTab: nonisolated Identifiable {
         contentStorage.textStorage = storage
         nativeTextStorage = storage
         nativeContentStorage = contentStorage
+        // AppKit undo targets belong to this native document generation.
+        // A cached, retired NSTextView must never receive the new stack.
+        documentUndoManager = UndoManager()
         observeNativeEdits()
     }
 

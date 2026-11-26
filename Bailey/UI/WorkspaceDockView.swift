@@ -340,10 +340,13 @@ struct DockTabGroupView: View {
         windowAppearsActive && canFocusGroup()
     }
 
-    private func canFocusGroup() -> Bool {
-        manager.selectedProject === project && project.dock.activeGroupID == group.id
-            && manager.attachedWindow?.isKeyWindow == true && NSApp.isActive
-            && !manager.isCommandPaletteVisible && manager.attachedWindow?.attachedSheet == nil
+    private var canFocusGroup: () -> Bool {
+        { [weak manager, weak project, groupID = group.id] in
+            guard let manager, let project else { return false }
+            return manager.selectedProject === project && project.dock.activeGroupID == groupID
+                && manager.attachedWindow?.isKeyWindow == true && NSApp.isActive
+                && !manager.isCommandPaletteVisible && manager.attachedWindow?.attachedSheet == nil
+        }
     }
 
     private func focusGroup() {

@@ -810,6 +810,108 @@ final class NativeSyntaxHighlightingTests: XCTestCase {
         XCTAssertEqual(editor.text, "# Heading\n```swift\nlet value = 42\n```\n")
     }
 
+    func testUnmountedSourceEditorReleasesParserAndRestoresCurrentSyntaxWithoutReplacingDocument() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = folder.appendingPathComponent("source.swift")
+        let renamed = folder.appendingPathComponent("source.md")
+        let source = "# Heading\n\nlet value = 42\n"
+        try Data(source.utf8).write(to: original)
+        let file = FileTab(path: original.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        func sourceView() -> AnyView {
+            AnyView(SourceTextEditor(file: file, font: font,
+                palette: .theme(dark: true), wrapLines: false, isFocused: false))
+        }
+        let host = NSHostingView(rootView: sourceView())
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            file.retireNativeEditor()
+            window.contentView = nil
+            window.close()
+        }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+        let storage = file.nativeTextStorage
+        let undo = try XCTUnwrap(editor.undoManager)
+        let keyword = (source as NSString).range(of: "let").location
+        let keywordColor = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
+            for: "keyword", theme: SyntaxHighlighting.theme))
+        try await wait { self.color(editor, at: keyword) == keywordColor }
+
+        weak var parked = editor.syntaxCoordinator
+        host.rootView = AnyView(Color.clear)
+        try await wait { host.layoutSubtreeIfNeeded(); return file.editorView == nil }
+        XCTAssertNil(editor.syntaxCoordinator, "An unmounted source must not retain a full parser")
+        try await wait { parked == nil }
+        XCTAssertTrue(editor.textStorage === storage)
+        XCTAssertTrue(editor.undoManager === undo)
+
+        host.rootView = sourceView()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return file.editorView === scroll && editor.syntaxCoordinator != nil
+        }
+        XCTAssertTrue(scroll.documentView === editor)
+        XCTAssertEqual(editor.text, source)
+        try await wait { self.color(editor, at: keyword) == keywordColor }
+
+        // A hidden ancestor (e.g. a retained Diff pane) is also offscreen.
+        weak var hidden = editor.syntaxCoordinator
+        scroll.isHidden = true
+        XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+        try await wait { editor.syntaxCoordinator == nil && hidden == nil }
+        XCTAssertTrue(editor.textStorage === storage)
+        scroll.isHidden = false
+        try await wait {
+            editor.syntaxCoordinator != nil && self.color(editor, at: keyword) == keywordColor
+        }
+        XCTAssertTrue(editor.undoManager === undo)
+
+        host.rootView = AnyView(Color.clear)
+        try await wait { host.layoutSubtreeIfNeeded(); return file.editorView == nil }
+        file.appendText("// offscreen 中文 👋\n")
+        XCTAssertNil(editor.syntaxCoordinator)
+        try FileManager.default.moveItem(at: original, to: renamed)
+        file.updatePath(renamed.path)
+        XCTAssertNil(editor.syntaxCoordinator, "Renaming a parked editor must not start a parser")
+        XCTAssertTrue(undo.canUndo)
+        let changed = source + "// offscreen 中文 👋\n"
+        XCTAssertEqual(storage.string, changed)
+
+        host.rootView = sourceView()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return file.editorView === scroll && editor.syntaxCoordinator != nil
+        }
+        let parser = Parser()
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: renamed.path))
+        try parser.setLanguage(plugin.language.parser)
+        let active = try XCTUnwrap(editor.syntaxCoordinator)
+        let actual = try await active.tsClient.currentTree()
+        let expected = try XCTUnwrap(parser.parse(changed)?.rootNode)
+        XCTAssertEqual(actual.rootNode?.sExpressionString, expected.sExpressionString)
+        XCTAssertEqual(actual.rootNode?.range, expected.range)
+        let heading = (source as NSString).range(of: "Heading").location
+        let headingColor = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
+            for: "text.title", theme: SyntaxHighlighting.theme))
+        try await wait { self.color(editor, at: heading) == headingColor }
+        XCTAssertTrue(scroll.documentView === editor)
+        XCTAssertTrue(editor.textStorage === storage)
+        XCTAssertTrue(editor.undoManager === undo)
+        undo.undo()
+        XCTAssertEqual(storage.string, source)
+        XCTAssertFalse(file.isDirty)
+    }
+
     func testRenamingMountedFileChangesGrammarWithoutDiscardingUndo() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
