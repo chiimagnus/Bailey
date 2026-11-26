@@ -179,7 +179,8 @@ NativePaneRetentionIntegrationTests、WindowOwnershipIntegrationTests。
 按实际受影响路径定点执行；正式阶段整合 `make test`。
 本机环境沿共享 R01（当前 macOS／SDK／Apple Silicon，保留最低 macOS 15.6 部署目标，不冒称旧系统实机）；
 缺配的物理显示设备及真实睡眠按共享延期约定处理，获授权 Windows Tailscale 走真实后端。
-用户此前暂停 GUI／全量测试的决定仍有效，需恢复验收并独占图形会话；未测不计通过。
+本轮按用户要求不运行完整 App GUI 测试，不占用桌面键鼠。可验证的原生操作、基础 AX、
+像素与状态尽量下沉到挂载宿主；完整 App 专有路径保留为未测，不把宿主结果当成 E2E。
 每个无法安全执行的条件记录具体前提、原因、尝试／替代证据、潜在影响、补验方式及是否阻塞对应 Gate。
 
 每任务同时更新 docs/features/editor.md，若共享视觉规则变化才更新 docs/ui.md。
