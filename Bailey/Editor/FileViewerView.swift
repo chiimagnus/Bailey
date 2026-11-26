@@ -89,6 +89,7 @@ final class FileTab: nonisolated Identifiable {
     }
     @ObservationIgnored private var pendingAnnotationPublication: AnnotationPublication?
     private(set) var annotationError: String?
+    @ObservationIgnored weak var graphicViewport: PreviewScrollView?
     @ObservationIgnored var graphicViewportPosition: PreviewScrollView.Position?
     /// The tab owns the one writable native document, even before any view is mounted.
     /// Only explicit full-content consumers materialize its Swift String.
@@ -186,6 +187,7 @@ final class FileTab: nonisolated Identifiable {
         htmlPreview = nil
         targetGeneration &+= 1
         gifPlayback = nil
+        graphicViewport = nil
         graphicViewportPosition = nil
         invalidateReload()
         retireMedia()
@@ -1627,7 +1629,7 @@ final class FileTab: nonisolated Identifiable {
             // but shaping a large document must never block the main actor.
             var prepared: (font: NSFont, widths: NativeMeasuredLineWidths.Prepared)?
             if case .text = loaded.content, !AppSettings.shared.wrapLines {
-                let font = TerminalFont.current()
+                let font = TerminalFont.editor()
                 if let descriptorData = try? NSKeyedArchiver.archivedData(
                     withRootObject: font.fontDescriptor, requiringSecureCoding: true
                 ), let widths = await NativeMeasuredLineWidths.prepareAsync(
@@ -1960,7 +1962,7 @@ struct FileViewerView: View {
                         .frame(height: 23)
                         SourceTextEditor(
                             file: file,
-                            font: TerminalFont.current(),
+                            font: TerminalFont.editor(),
                             palette: .theme(dark: colorScheme == .dark),
                             wrapLines: settings.wrapLines,
                             longLineDisplayWidth: settings.longLineDisplayWidth,

@@ -141,7 +141,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
                     leftPane.layoutSubtreeIfNeeded()
                     leftPane.setScrollOffset(pane.scrollOffset)
                 }
-                let rowHeight = DiffTypography.paragraphStyle(for: TerminalFont.current())
+                let rowHeight = DiffTypography.paragraphStyle(for: TerminalFont.editor())
                     .maximumLineHeight
                 let visibleRows = Int(pane.scrollView.contentView.bounds.height / max(1, rowHeight))
                 if row < visibleRows || (pane.scrollOffset.y > 1
@@ -177,7 +177,7 @@ final class DiffNativeSurface: NSView, NSTextViewDelegate {
 
     func render() {
         guard let diff else { return }
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         let style = DiffTypography.paragraphStyle(for: font)
         let longLineDisplayWidth = AppSettings.shared.longLineDisplayWidth
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

@@ -1163,7 +1163,7 @@ final class NativeEditorLayoutTests: XCTestCase {
         let source = (0..<382).map { "let item\($0) = 1 // " + String(repeating: "wide", count: $0 % 43) }
             .joined(separator: "\n")
         for font in TerminalFont.selectableFamilies()
-            .map({ TerminalFont.resolve(family: $0, size: 13) }) + [TerminalFont.current()] {
+            .map({ TerminalFont.resolve(family: $0, size: 13) }) + [TerminalFont.editor()] {
             let (window, scroll, editor) = mount(source, font: font)
             defer { window.close() }
             for offset in [0, source.utf16.count / 4, source.utf16.count / 2,
@@ -1203,7 +1203,7 @@ final class NativeEditorLayoutTests: XCTestCase {
         let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await file.waitForText()
         file.editorState.scrollY = 5_000
-        let host = NSHostingView(rootView: SourceTextEditor(file: file, font: TerminalFont.current(),
+        let host = NSHostingView(rootView: SourceTextEditor(file: file, font: TerminalFont.editor(),
             palette: .theme(dark: true), wrapLines: false, isFocused: false))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -1226,7 +1226,7 @@ final class NativeEditorLayoutTests: XCTestCase {
             XCTAssertTrue(scroll.documentView === editor)
         }
         for wraps in [true, false, true, false] {
-            host.rootView = SourceTextEditor(file: file, font: TerminalFont.current(),
+            host.rootView = SourceTextEditor(file: file, font: TerminalFont.editor(),
                 palette: .theme(dark: true), wrapLines: wraps, isFocused: false)
             host.layoutSubtreeIfNeeded()
             XCTAssertTrue(scroll.documentView === editor)

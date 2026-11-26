@@ -4995,7 +4995,7 @@ final class NativeFileTabTests: XCTestCase {
         file.text = String(repeating: "中文👋\t", count: 50)
         XCTAssertNil(file.preparedLineWidths,
                      "Editing before mounting must discard the old bytes' width snapshot")
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -5076,7 +5076,7 @@ final class NativeFileTabTests: XCTestCase {
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let host = NSHostingView(rootView: SourceTextEditor(
-            file: file, font: TerminalFont.current(),
+            file: file, font: TerminalFont.editor(),
             palette: .theme(dark: false), wrapLines: false, isFocused: false
         ))
         let started = CFAbsoluteTimeGetCurrent()
@@ -5087,7 +5087,7 @@ final class NativeFileTabTests: XCTestCase {
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1_000
         print("P2_FILETAB_FIRST_NATIVE_UNIQUE rows=100000 mounted_ms=\(elapsedMs)")
         XCTAssertEqual(editor.string, source)
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         let style = NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle
         style.defaultTabInterval = NativeCodeTextView.tabInterval
         let tail = String(repeating: "中文👋\t", count: 80)

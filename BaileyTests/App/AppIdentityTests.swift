@@ -146,6 +146,14 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(newWindow.count, 1)
         XCTAssertEqual(newWindow.first?.keyEquivalent, "n")
         XCTAssertEqual(newWindow.first?.keyEquivalentModifierMask, [.command, .shift])
+        let all = try XCTUnwrap(NSApp.mainMenu).items.compactMap(\.submenu).flatMap(\.items)
+        for (title, key) in [("Zoom In", "+"), ("Zoom Out", "-"), ("Reset Zoom", "0")] {
+            let name = String(localized: String.LocalizationValue(title), table: "Interface")
+            let item = try XCTUnwrap(menu.items.first { $0.title == name })
+            XCTAssertEqual(item.keyEquivalent, key)
+            XCTAssertEqual(item.keyEquivalentModifierMask, .command)
+            XCTAssertEqual(all.filter { $0.keyEquivalent == key && $0.keyEquivalentModifierMask == .command }.count, 1)
+        }
         XCTAssertEqual(menu.items.filter {
             $0.title == String(localized: "Enter Full Screen", table: "Interface")
                 || $0.title == String(localized: "Exit Full Screen", table: "Interface")

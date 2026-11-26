@@ -205,19 +205,7 @@ struct SettingsView: View {
         }
 
         Section(String(localized: "Panels", table: "Settings")) {
-            HStack {
-                Text(String(localized: "Font size", table: "Settings"))
-                Slider(value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
-                    .tint(themeAccent)
-                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
-                Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
-                Stepper("", value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
-                    .labelsHidden()
-                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
-            }
+            fontSizeRow(String(localized: "Panel font size", table: "Settings"), role: .panel)
         }
 
         Section {
@@ -233,8 +221,7 @@ struct SettingsView: View {
 
     var hasCustomizedPreferences: Bool {
         !settings.fontFamily.isEmpty
-            || settings.fontSize != AppSettings.defaultFontSize
-            || settings.panelFontSize != AppSettings.defaultPanelFontSize
+            || FontSizeRole.allCases.contains { settings.fontSize(for: $0) != $0.defaultSize }
             || settings.fontThicken
             || settings.cursorShape != .block
             || !settings.cursorBlinking
@@ -271,19 +258,7 @@ struct SettingsView: View {
                 }
             }
 
-            HStack {
-                Text(String(localized: "Size", table: "Settings"))
-                Slider(value: $settings.fontSize, in: AppSettings.fontSizeRange, step: 1)
-                    .tint(themeAccent)
-                    .accessibilityLabel(String(localized: "Size", table: "Settings"))
-                Text(String(localized: "\(Int(settings.fontSize)) pt", table: "Settings"))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
-                Stepper("", value: $settings.fontSize, in: AppSettings.fontSizeRange, step: 1)
-                    .labelsHidden()
-                    .accessibilityLabel(String(localized: "Size", table: "Settings"))
-            }
+            fontSizeRow(String(localized: "Size", table: "Settings"), role: .terminal)
         }
 
         Section(String(localized: "Preview", table: "Settings")) {
@@ -336,7 +311,29 @@ struct SettingsView: View {
         }
     }
 
+    private func fontSizeRow(_ title: String, role: FontSizeRole) -> some View {
+        let value = Binding(get: { settings.fontSize(for: role) },
+                            set: { settings.setFontSize($0, for: role) })
+        return HStack {
+            Text(title)
+            Slider(value: value, in: role.range, step: 1)
+                .tint(themeAccent)
+                .accessibilityLabel(title)
+            Text(String(localized: "\(Int(value.wrappedValue)) pt", table: "Settings"))
+                .monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
+            Stepper("", value: value, in: role.range, step: 1)
+                .labelsHidden().accessibilityLabel(title)
+        }
+    }
+
+    @ViewBuilder
     private var textEditorSettings: some View {
+        Section(String(localized: "Font", table: "Settings")) {
+            fontSizeRow(String(localized: "Editor font size", table: "Settings"), role: .editor)
+            fontSizeRow(String(localized: "Table font size", table: "Settings"), role: .table)
+            fontSizeRow(String(localized: "Reading font size", table: "Settings"), role: .reader)
+        }
         Section(String(localized: "Text Editing", table: "Settings")) {
             Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
                 .tint(themeAccent)

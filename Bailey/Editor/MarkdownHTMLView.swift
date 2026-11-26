@@ -22,6 +22,7 @@ struct MarkdownHTMLContent: View {
     var selectionPath: [Int] = []
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
+    @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
         let layoutNodes = MarkdownHTML.groupedForPresentation(nodes)
@@ -29,11 +30,11 @@ struct MarkdownHTMLContent: View {
             switch layoutNodes[index] {
             case .text(let text, _):
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Self.inlineText([layoutNodes[index]]).pointerStyle(.horizontalText)
+                    inlineText([layoutNodes[index]]).pointerStyle(.horizontalText)
                 }
             case .paragraph(let children):
                 if MarkdownHTML.isInline(children) {
-                    Self.inlineText(children).pointerStyle(.horizontalText)
+                    inlineText(children).pointerStyle(.horizontalText)
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
                         MarkdownHTMLContent(nodes: children, resource: resource,
@@ -65,7 +66,7 @@ struct MarkdownHTMLContent: View {
                                     let cell = rows[row].cells[column]
                                     Group {
                                         if MarkdownHTML.isInline(cell.nodes) {
-                                            Self.inlineText(cell.nodes)
+                                            inlineText(cell.nodes)
                                         } else {
                                             MarkdownHTMLContent(nodes: cell.nodes, resource: resource,
                                                                 assetRefresh: assetRefresh,
@@ -100,14 +101,14 @@ struct MarkdownHTMLContent: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Group {
                         if MarkdownHTML.isInline(children) {
-                            Self.inlineText(children)
+                            inlineText(children)
                         } else {
                             MarkdownHTMLContent(nodes: children, resource: resource,
                                                 assetRefresh: assetRefresh,
                                                 selectionPath: selectionPath + [index])
                         }
                     }
-                    .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1],
+                    .font(.system(size: [32, 24, 20, 16, 14, 13.6][max(1, min(level, 6)) - 1] * fontScale,
                                   weight: .semibold))
                     .foregroundStyle(level == 6
                         ? MarkdownReaderColors.secondary(dark: colorScheme == .dark)
@@ -123,9 +124,9 @@ struct MarkdownHTMLContent: View {
                     ForEach(items.indices, id: \.self) { item in
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(ordered ? "\(start + item)." : "•")
-                                .frame(width: 24, alignment: .trailing)
+                                .frame(width: 24 * fontScale, alignment: .trailing)
                             if MarkdownHTML.isInline(items[item]) {
-                                Self.inlineText(items[item]).pointerStyle(.horizontalText)
+                                inlineText(items[item]).pointerStyle(.horizontalText)
                             } else {
                                 MarkdownHTMLContent(nodes: items[item], resource: resource,
                                                     assetRefresh: assetRefresh,
@@ -145,7 +146,7 @@ struct MarkdownHTMLContent: View {
                                     selectionPath: selectionPath + [index])
             case .link(let url, let children):
                 if MarkdownHTML.isInline(children) {
-                    Self.inlineText([.link(url, children)])
+                    inlineText([.link(url, children)])
                         .tint(MarkdownReaderColors.link(dark: colorScheme == .dark))
                         .pointerStyle(.horizontalText)
                 } else {
@@ -159,7 +160,7 @@ struct MarkdownHTMLContent: View {
                 }
             case .emphasis(let children, let tag):
                 if MarkdownHTML.isInline(children) {
-                    Self.styledText(Self.inlineText(children), tag: tag).pointerStyle(.horizontalText)
+                    styledText(inlineText(children), tag: tag).pointerStyle(.horizontalText)
                 } else {
                     MarkdownHTMLContent(nodes: children, resource: resource,
                                         assetRefresh: assetRefresh, selectionPath: selectionPath + [index])
@@ -172,7 +173,7 @@ struct MarkdownHTMLContent: View {
         }
     }
 
-    private static func inlineText(_ nodes: [MarkdownHTML], link: URL? = nil) -> Text {
+    private func inlineText(_ nodes: [MarkdownHTML], link: URL? = nil) -> Text {
         nodes.reduce(Text(verbatim: "")) { result, node in
             switch node {
             case .text(let value, let source):
@@ -198,12 +199,12 @@ struct MarkdownHTMLContent: View {
         }
     }
 
-    private static func styledText(_ text: Text, tag: String) -> Text {
+    private func styledText(_ text: Text, tag: String) -> Text {
         switch tag {
         case "b", "strong": text.bold()
         case "em", "i": text.italic()
         case "s", "del": text.strikethrough()
-        case "code", "kbd": text.font(.system(size: 13.6, design: .monospaced))
+        case "code", "kbd": text.font(.system(size: 13.6 * fontScale, design: .monospaced))
         default: text
         }
     }

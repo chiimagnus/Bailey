@@ -61,7 +61,7 @@ struct MarkdownMermaidView: View {
                         .foregroundStyle(.secondary)
                     ScrollView(.horizontal) {
                         MarkdownNativeText.make([.text(source, source: sourceRange)])
-                            .font(.system(.body, design: .monospaced))
+                            .panelFont(size: 13, design: .monospaced)
                             .pointerStyle(.horizontalText)
                     }
                 }

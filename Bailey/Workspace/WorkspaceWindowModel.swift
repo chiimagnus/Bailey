@@ -717,6 +717,63 @@ final class WorkspaceWindowModel {
         return preview
     }
 
+    var focusedFontRole: FontSizeRole? {
+        guard !isClosed, !isCommandPaletteVisible, attachedWindow?.attachedSheet == nil,
+              let project = selectedProject, let item = project.dock.activeGroup?.selected else { return nil }
+        switch item {
+        case .projects, .files, .git: return .panel
+        case .tab, .filePreview:
+            switch project.focusedContent {
+            case .session: return .terminal
+            case .diff: return .editor
+            case .file(let file):
+                if let preview = focusedPreviewFile {
+                    switch preview.previewKind {
+                    case .delimited: return .table
+                    case .markdown: return .reader
+                    case .html, .svg, .none: return nil
+                    }
+                }
+                if case .text = file.content { return .editor }
+                return nil
+            case .browser, .none: return nil
+            }
+        }
+    }
+
+    private var focusedZoomWebView: WKWebView? {
+        guard !isClosed, !isCommandPaletteVisible, attachedWindow?.attachedSheet == nil else { return nil }
+        if let preview = focusedHTMLPreview { return preview.webView }
+        return selectedBrowser?.webView
+    }
+
+    private var focusedGraphicZoomView: PreviewScrollView? {
+        guard !isClosed, !isCommandPaletteVisible, attachedWindow?.attachedSheet == nil,
+              case .file(let file)? = selectedProject?.focusedContent,
+              let view = file.graphicViewport, let window = attachedWindow,
+              view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        if case .image = file.content { return view }
+        return focusedPreviewFile?.previewKind == .svg ? view : nil
+    }
+
+    var canZoomContent: Bool {
+        focusedFontRole != nil || focusedZoomWebView != nil || focusedGraphicZoomView != nil
+    }
+
+    func zoomContent(_ action: ContentZoomAction, settings: AppSettings = .shared) {
+        if let role = focusedFontRole {
+            settings.adjustFontSize(role, action: action)
+        } else if let webView = focusedZoomWebView {
+            webView.pageZoom = action.pageZoom(webView.pageZoom)
+        } else if let view = focusedGraphicZoomView {
+            switch action {
+            case .increase: view.zoomIn()
+            case .decrease: view.zoomOut()
+            case .reset: view.fit()
+            }
+        }
+    }
+
     func closeActivePanelOrWindow() {
         guard let project = selectedProject,
               let item = project.dock.activeGroup?.selected else {

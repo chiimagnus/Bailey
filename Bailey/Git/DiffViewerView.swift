@@ -832,7 +832,7 @@ final class DiffTab: nonisolated Identifiable {
 
     private func publishDisplay(_ computation: DiffComputation, inputs: DiffDisplayInputs) {
         displayInputs = inputs
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         display = DiffDisplay(
             computation: computation, inputs: inputs,
@@ -953,7 +953,7 @@ final class DiffTab: nonisolated Identifiable {
         let matchingReviewSnapshot = !isDirty && editComparisonOld == nil
         let inFlightCore = matchingReviewSnapshot ? displayCoreTask : nil
         let cachedCore = matchingReviewSnapshot ? displayInputs?.core : nil
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         let style = DiffTypography.paragraphStyle(for: font)
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let theme = Theme.terminal(dark: dark)
@@ -1916,7 +1916,7 @@ struct DiffViewerView: View {
             }
         }
         .onChange(of: settings.fontFamily) { _, _ in diff.refreshNativeAppearance() }
-        .onChange(of: settings.fontSize) { _, _ in diff.refreshNativeAppearance() }
+        .onChange(of: settings.editorFontSize) { _, _ in diff.refreshNativeAppearance() }
         .onChange(of: settings.longLineDisplayWidth) { _, _ in diff.nativeSurface?.render() }
         .onChange(of: themeChanges.revision) { _, _ in diff.refreshNativeAppearance() }
     }

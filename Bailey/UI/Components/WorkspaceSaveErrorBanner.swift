@@ -132,7 +132,7 @@ private struct WorkspaceSaveConflictReview: NSViewRepresentable {
 
     func updateNSView(_ pane: DiffCodePaneView, context: Context) {
         let _ = themeChanges.revision
-        let font = TerminalFont.current()
+        let font = TerminalFont.editor()
         let style = DiffTypography.paragraphStyle(for: font)
         let color = Theme.terminal(dark: colorScheme == .dark).foregroundNSColor
         pane.applyTypography(font: font, paragraphStyle: style, textColor: color,

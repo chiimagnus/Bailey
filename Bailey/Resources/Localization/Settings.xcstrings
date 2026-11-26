@@ -1,6 +1,36 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Reading font size" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阅读字号"
+          }
+        }
+      }
+    },
+    "Table font size" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表格字号"
+          }
+        }
+      }
+    },
+    "Editor font size" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑器字号"
+          }
+        }
+      }
+    },
     "%@ (Bundled)" : {
       "localizations" : {
         "zh-Hans" : {

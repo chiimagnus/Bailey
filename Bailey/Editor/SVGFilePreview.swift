@@ -268,7 +268,9 @@ final class SVGPreviewScrollView: PreviewScrollView {
         outputTask = nil
         if let sheet = outputSheet { sheet.sheetParent?.endSheet(sheet, returnCode: .cancel) }
         outputSheet = nil
+        if outputFile?.graphicViewport === self, outputFile !== file { outputFile?.graphicViewport = nil }
         outputFile = file
+        file?.graphicViewport = self
         outputRequest = request
         let actions = [#selector(copyPNG), #selector(exportPNG)]
         if let menu {
