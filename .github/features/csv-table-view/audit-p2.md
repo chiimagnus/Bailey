@@ -18,7 +18,7 @@
 
 ## 2026-11-26 独立逐提交复审
 
-以 `a50ec9da` 为起点重新检查计划和提交差异，不继承历史审查结论。
+以 `788a46a6` 为起点重新检查计划和提交差异，不继承历史审查结论。
 - P2-T1 `aa65af7b`、`8488bb8a`、`9b62d36c`、`f2f35ff3`、`807fbdee`：`DelimitedGrid` → `FileTab.begin/commit/submitDelimitedEdit` → `DelimitedTableMutation.prepare` → `applyDocumentReplacements`；实际 NSTextStorage、同一 Undo、输入保留及保存等待均接入主路径。十万行 100 次编辑，主线程 edit p95 0.074 s、Undo p95 0.0037 s（修复后独立宿主实测）。
 - P2-T2 `e471b25b`、`e697efb5`：`FileTab`／`DiffTab` → `WorkspaceSaveConflict` → `WorkspaceBackend`；核对实际编码后字节、唯一版本确认、外部变更、失败草稿及重连。比较不写入，旧确认不得替换新磁盘版本；本机 staged exchange 保留被位移写入者内容，平台严格非协作 CAS 不是现有后端承诺。
 - 重新检查文件持久化 89 项（87 通过、2 无关图片样本跳过、0 失败）、原生输入 13 项、窗口所有权及会话状态；见 `/tmp/bailey-csv-audit-green.b8rGMPOC`。本机跨作用域输入及保存未发现新的实现缺口；真实远端 F-12 另行追踪。
@@ -36,7 +36,7 @@
 - 风险：`撤销后的保存可能未成功发布，或保存基线/缓冲区不一致；当前证据不足以判断原因`
 - 预期修复：`区分 Undo 缓冲区、dirty、保存错误、发布确认及远端字节，定位真实原因，不盲目重试或放宽断言`
 - 验证：`独立 CSV Dev 真实 Windows SSH 定点复验，保留精确字节断言`
-- 解决证据：`首轮 /tmp/bailey-csv-audit-final.kSRdvSR2：58 项，57 通过、1 失败，SSHFileTreeLiveTests.swift:499；0bb8a30e 补强原文、dirty、saveError、远端原字节断言；定点实机复验 /tmp/bailey-csv-audit-ssh.rdB05Ew3 1/1；混合文件百次切换与真实远端同进程复验 /tmp/bailey-csv-audit-mixed-ssh.Yw37oemG 2/2，远端两次均通过，无跳过。本轮新增同一真实 SSH 用例独立连续 5 次及扩大整合中 1 次通过，累计首次失败后 8 次通过；/tmp/bailey-csv-ssh-repeat.fcD223vj/{1..5}.log、/tmp/bailey-csv-audit-expanded-full.I56TByip。45adba4c 受控后端验证明确拒绝、发布前超时、发布后回执丢失三种撤销保存恢复，精确缓冲/dirty/错误/重试/Redo/字节均通过。扩大真实 SSH 3/3 含 32 MiB 文件读写/重开/超限拒绝。未复现不等于根因解决，保持 Open。`
+- 解决证据：`首轮 /tmp/bailey-csv-audit-final.kSRdvSR2：58 项，57 通过、1 失败，SSHFileTreeLiveTests.swift:499；dfd91631 补强原文、dirty、saveError、远端原字节断言；定点实机复验 /tmp/bailey-csv-audit-ssh.rdB05Ew3 1/1；混合文件百次切换与真实远端同进程复验 /tmp/bailey-csv-audit-mixed-ssh.Yw37oemG 2/2，远端两次均通过，无跳过。本轮新增同一真实 SSH 用例独立连续 5 次及扩大整合中 1 次通过，累计首次失败后 8 次通过；/tmp/bailey-csv-ssh-repeat.fcD223vj/{1..5}.log、/tmp/bailey-csv-audit-expanded-full.I56TByip。dd42430d 受控后端验证明确拒绝、发布前超时、发布后回执丢失三种撤销保存恢复，精确缓冲/dirty/错误/重试/Redo/字节均通过。扩大真实 SSH 3/3 含 32 MiB 文件读写/重开/超限拒绝。未复现不等于根因解决，保持 Open。`
 
 
 ## 发现 F-11

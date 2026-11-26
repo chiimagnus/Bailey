@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：Go（本轮 P1 专项）；共享最终整合另见 P2 F-12。
-- **依据**：独立复审两个任务及实际调用链，F-07、F-08 经 Red/Green 修复于 `8af85b6d`、`1edfbc02`；本机 CSV 核心 53/53、真实共享文件切换和原生宿主通过，直接关闭路径新增受影响宿主 79/79；正式 Debug 与严格验签通过。历史记录仅供追溯，本轮不运行完整 App GUI。
+- **依据**：独立复审两个任务及实际调用链，F-07、F-08 经 Red/Green 修复于 `e7c26698`、`71e76441`；本机 CSV 核心 53/53、真实共享文件切换和原生宿主通过，直接关闭路径新增受影响宿主 79/79；正式 Debug 与严格验签通过。历史记录仅供追溯，本轮不运行完整 App GUI。
 - **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
   已有实际表格和基础 AX 证据可复用，发现新的相关缺陷时再定点核验。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
@@ -21,9 +21,9 @@
 
 ## 2026-11-26 独立逐提交复审
 
-以 `a50ec9da` 为起点重新读取 idea、plan、todo、原提交 diff 和当前生产调用链，不以既有 audit 为证据。
-- P1-T1 `1c9aefcc`、`50fc8b13`、`812be136`：`FilePreviewKind`、`TextFileEncoding`、`FileTab.delimitedSnapshot` → `DelimitedTableIndex.parse`；UTF-16 原区间、分隔符、容量、取消及编码路由均进入实际文件视图。当前索引 17 项全部通过。
-- P1-T2 `24019b00`、`49a9e09d`、`188e025d`：`Project`／`WorkspaceWindowModel` → `FileViewerView` → `CSVTableView`／`DelimitedGrid`；排序、筛选、选区、复制、Find 使用当前投影而非第二份正文。F-07 经真实 marked-text 宿主 Red/Green，`8af85b6d` 让 FileTab 拒绝切换时 Dock 同步保持原布局；没有新增组合输入状态或旁路。
+以 `788a46a6` 为起点重新读取 idea、plan、todo、原提交 diff 和当前生产调用链，不以既有 audit 为证据。
+- P1-T1 `1c9aefcc`、`50fc8b13`、`0897e227`：`FilePreviewKind`、`TextFileEncoding`、`FileTab.delimitedSnapshot` → `DelimitedTableIndex.parse`；UTF-16 原区间、分隔符、容量、取消及编码路由均进入实际文件视图。当前索引 17 项全部通过。
+- P1-T2 `24019b00`、`49a9e09d`、`2a5408d5`：`Project`／`WorkspaceWindowModel` → `FileViewerView` → `CSVTableView`／`DelimitedGrid`；排序、筛选、选区、复制、Find 使用当前投影而非第二份正文。F-07 经真实 marked-text 宿主 Red/Green，`e7c26698` 让 FileTab 拒绝切换时 Dock 同步保持原布局；没有新增组合输入状态或旁路。
 - 基线 169 项（166 通过、3 样本跳过、0 失败）；修复后 171 项（168 通过、3 样本跳过、0 失败），见 `/tmp/bailey-csv-fresh-baseline.U1YAA6Ut`、`/tmp/bailey-csv-audit-green.b8rGMPOC`。此前逐提交复审所覆盖的 49 项 CSV 核心，本次已扩为 51 项。正式 App GUI 未运行，不冒称覆盖。
 - 清理核对：没有独立 CSV 展示菜单、临时正文或旧查找匹配索引；`canPreviewMarkdown` 仍由真实 Markdown 滚动同步、链接路由和菜单调用，不是废弃兼容入口。
 
@@ -39,7 +39,7 @@
 - 风险：`中文组合期间关闭预览会直接修改 Dock 并卸载正在编辑的表格；模式切换的拒绝语义未覆盖关闭命令`
 - 预期修复：`让 FileTab 负责结束当前输入的统一边界，Project 在移除并排预览前尊重其结果，保持无内容的预览仍可关闭`
 - 验证：`真实原生 marked-text 宿主，经 Project.closePanels 关闭并排预览，验证拒绝期间 Dock/首响应者/原字节不变；确认后关闭成功并保存、撤销准确`
-- 解决证据：`1edfbc02；真实 Project.closePanels + 原生 marked-text Red 2 断言失败 /tmp/bailey-csv-companion-red.rZTiDC06；Green 79/79 含 Dock、窗口关闭、原生输入、保存及字节/Undo /tmp/bailey-csv-companion-green.vwP6GWdH；正式 Debug 构建与严格验签 /tmp/bailey-csv-companion-build.diJNRAkL。FileTab.finishDelimitedInput 统一保存/展示/关闭预览入口，不复制输入状态。`
+- 解决证据：`71e76441；真实 Project.closePanels + 原生 marked-text Red 2 断言失败 /tmp/bailey-csv-companion-red.rZTiDC06；Green 79/79 含 Dock、窗口关闭、原生输入、保存及字节/Undo /tmp/bailey-csv-companion-green.vwP6GWdH；正式 Debug 构建与严格验签 /tmp/bailey-csv-companion-build.diJNRAkL。FileTab.finishDelimitedInput 统一保存/展示/关闭预览入口，不复制输入状态。`
 
 
 ## 发现 F-07
@@ -52,7 +52,7 @@
 - 风险：`从默认表格请求并排时同时出现两个表格；从并排关闭预览可能提前卸载输入，打断组合输入并使网格所有权冲突`
 - 预期修复：`让 FileTab 的展示模式切换明确返回是否接受；Project 仅在接受时更新同一 Dock 布局，复用真实原生输入结束边界`
 - 验证：`真实 Project/FileViewerView 原生 field editor marked text：默认表格→并排、并排→源码均验证布局、唯一文档和输入保持；提交组合后切换、Undo 和实际保存字节`
-- 解决证据：`8af85b6d0a3fae1ec7dfcfd6aec2ce34951d6f2e；Red /tmp/bailey-csv-audit-red.mPfINPoJ，4 条断言失败；Green /tmp/bailey-csv-audit-green.b8rGMPOC，真实项目两种模式切换、组合输入、保存与 Undo 通过。`
+- 解决证据：`e7c266989943e0bb38d700e3731ad034b5fd81c8；Red /tmp/bailey-csv-audit-red.mPfINPoJ，4 条断言失败；Green /tmp/bailey-csv-audit-green.b8rGMPOC，真实项目两种模式切换、组合输入、保存与 Undo 通过。`
 
 
 ## 发现 F-06
@@ -65,7 +65,7 @@
 - 风险：`排序/筛选/重建后实际选区被隐藏查找覆盖；手动移动光标后下一匹配可能跳错`
 - 预期修复：`将隐式选中限定为可见查找结果变化，显式导航使用实际 caret 与已有 findStep；删独立 matchIndex`
 - 验证：`挂载原生 CSV：查找、隐藏、手动选中、排序、验证选区保留与下一/上一匹配、保存原字节`
-- 解决证据：`188e025d；原生挂载 Red 3 失败→Green；排序后手动选区不被隐藏查找覆盖，下一/上一按实际 caret，原字节/dirty/Undo 不变；CSV Dev 49/49、正式 Debug 构建及严格验签均退出0；/tmp/bailey-csv-find-red.4fHnrpog、/tmp/bailey-csv-find-green.cSZoBuQP、/tmp/bailey-csv-find-build.LtUMXNbQ`
+- 解决证据：`2a5408d5；原生挂载 Red 3 失败→Green；排序后手动选区不被隐藏查找覆盖，下一/上一按实际 caret，原字节/dirty/Undo 不变；CSV Dev 49/49、正式 Debug 构建及严格验签均退出0；/tmp/bailey-csv-find-red.4fHnrpog、/tmp/bailey-csv-find-green.cSZoBuQP、/tmp/bailey-csv-find-build.LtUMXNbQ`
 
 
 ## 发现 F-05
@@ -78,7 +78,7 @@
 - 风险：`合法 CSV 的普通数据中出现分号或 Tab 会被误判为歧义，正常网格被禁止编辑；分号表格的逗号小数同样受影响`
 - 预期修复：`在有明确合法候选时只考虑采样内完整且结构一致的多列记录；无一致候选仍允许部分坏表及显式选择；采样截断不视为文件结束`
 - 验证：`新增 CSV/TSV/分号分隔符真实样本与原有歧义、截断测试；确认 FileTab.canEditDelimited 及原文字节`
-- 解决证据：`812be136；六组真实文件Red 13断言失败，Green CSV Dev 48/48，正式Debug make build严格验签；/tmp/bailey-csv-delimiter-red.aPvPLtC5、/tmp/bailey-csv-delimiter-green.RCsao0Vp、/tmp/bailey-csv-p1-build.Vis1KhpJ`
+- 解决证据：`0897e227；六组真实文件Red 13断言失败，Green CSV Dev 48/48，正式Debug make build严格验签；/tmp/bailey-csv-delimiter-red.aPvPLtC5、/tmp/bailey-csv-delimiter-green.RCsao0Vp、/tmp/bailey-csv-p1-build.Vis1KhpJ`
 
 
 ## 发现 F-04
