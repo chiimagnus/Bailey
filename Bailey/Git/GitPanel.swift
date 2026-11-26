@@ -2236,7 +2236,7 @@ struct GitPanel: View {
     /// Modifier click changes only Selection; browsing and folder expansion stay explicit.
     @discardableResult
     private func selectGitChangeForPointer(_ key: ChangeSelection) -> Bool {
-        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        let flags = TreePointerSelection.modifiers(event: NSApp.currentEvent, window: keyboardOwner.view?.window)
         let extending = flags.contains(.shift)
         let toggling = flags.contains(.command) && !extending
         model.selectChange(key, visible: changesDisplay.selections,

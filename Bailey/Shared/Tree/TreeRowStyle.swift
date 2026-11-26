@@ -22,6 +22,17 @@ enum PathMenuShortcut {
     }
 }
 
+/// Only pointer input in this tree's window may modify a click selection.
+/// AX presses and unrelated keyboard events must not inherit stale modifiers.
+@MainActor
+enum TreePointerSelection {
+    static func modifiers(event: NSEvent?, window: NSWindow?) -> NSEvent.ModifierFlags {
+        guard let event, let window, event.windowNumber == window.windowNumber,
+              event.type == .leftMouseDown || event.type == .leftMouseUp else { return [] }
+        return event.modifierFlags.intersection([.command, .shift])
+    }
+}
+
 /// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
 @MainActor
 final class TreeKeyboardOwner {
