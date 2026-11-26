@@ -4511,6 +4511,39 @@ final class FileTreeTests: XCTestCase {
         }
     }
 
+    func testSharedPathTreeRepeatedDisclosureAtOneTenAndHundredThousandRows() {
+        for count in [1_000, 10_000, 100_000] {
+            let files = (0..<count).map { index in
+                TreeDisplayModel.Row(name: "file-\(index).swift",
+                    path: "Sources/group-\(index / (count / 10))/nested/file-\(index).swift",
+                    isDirectory: false, status: .modified)
+            }
+            let tree = TreeDisplayModel.PathTree(files, section: "history")
+            let expanded = tree.rows(collapsed: [])
+            let foldedKeys = Set((0..<10).map { "history:Sources/group-\($0)/nested" })
+            let folded = tree.rows(collapsed: foldedKeys)
+            XCTAssertEqual(expanded.count, count + 11)
+            XCTAssertEqual(folded.count, 11)
+            XCTAssertTrue(folded.dropFirst().allSatisfy { $0.isDirectory && !$0.isExpanded })
+            XCTAssertEqual(expanded.filter { !$0.isDirectory }.count, count)
+            var open: [Double] = [], closed: [Double] = []
+            for _ in 0..<30 {
+                var start = CFAbsoluteTimeGetCurrent()
+                let reopened = tree.rows(collapsed: [])
+                open.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                XCTAssertEqual(reopened.count, expanded.count)
+                start = CFAbsoluteTimeGetCurrent()
+                let refolded = tree.rows(collapsed: foldedKeys)
+                closed.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                XCTAssertEqual(refolded, folded)
+            }
+            XCTAssertEqual(tree.rows(collapsed: []), expanded)
+            let partial = tree.rows(collapsed: ["history:Sources/group-0/nested"])
+            XCTAssertEqual(partial.count, expanded.count - count / 10)
+            print("PATH_TREE_DISCLOSURE count=\(count) open_median=\(open.sorted()[15]) open_p95=\(open.sorted()[28]) open_max=\(open.max()!) folded_median=\(closed.sorted()[15]) folded_p95=\(closed.sorted()[28]) folded_max=\(closed.max()!)")
+        }
+    }
+
     func testSharedTreePreservesExistingFileRowIdentityAndCompaction() {
         let files = [
             TreeDisplayModel.Row(name: "one", path: "root/folder/one", isDirectory: false),
