@@ -3825,6 +3825,92 @@ final class FileTreeTests: XCTestCase {
         print("FILES_TREE_SCALE rows=\(original.count) remount_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
     }
 
+    func testColdFoldersReleaseListingsAndReopenFromDisk() async throws {
+        let root = fixture.appendingPathComponent("bounded-listings")
+        let folders = (0..<12).map { root.appendingPathComponent("folder-\($0)") }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<1_000 {
+                try Data().write(to: folder.appendingPathComponent("file-\(index).swift"))
+            }
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        for folder in folders {
+            let row = try XCTUnwrap(tree.items.first { $0.path == folder.path })
+            await tree.toggle(row)
+            XCTAssertEqual(tree.items.count, folders.count + 1_000)
+            await tree.toggle(row)
+            XCTAssertEqual(tree.items.count, folders.count)
+        }
+        let before = await counting.requests
+        await tree.sync(root: root.path, backend: counting)
+        let lastBatch = await counting.lastBatch
+        let batch = try XCTUnwrap(lastBatch)
+        XCTAssertEqual(batch.count, 9, "Refresh must only enumerate the root and the warm entry budget")
+        XCTAssertFalse(batch.contains(folders[0].path))
+        XCTAssertTrue(batch.contains(folders[11].path))
+        let refreshed = await counting.requests
+        XCTAssertEqual(refreshed[folders[0].path], before[folders[0].path])
+        let warm = try XCTUnwrap(tree.items.first { $0.path == folders[11].path })
+        await tree.toggle(warm)
+        let warmReads = await counting.requests
+        XCTAssertEqual(warmReads, refreshed)
+        await tree.toggle(warm)
+        let newFile = folders[0].appendingPathComponent("new.swift")
+        try Data().write(to: newFile)
+        let revision = tree.contentRevision
+        await tree.refreshForLocalEvents([.init(path: newFile.path, flags: UInt32(kFSEventStreamEventFlagItemCreated))])
+        XCTAssertGreaterThan(tree.contentRevision, revision, "Quick Open must still invalidate for cold directories")
+        let eventReads = await counting.requests
+        XCTAssertEqual(eventReads, refreshed)
+        await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == folders[0].path }))
+        XCTAssertEqual(tree.items.count, folders.count + 1_001)
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path })
+        let reopened = await counting.requests
+        XCTAssertEqual(reopened[folders[0].path], 2)
+    }
+
+    func testColdCompactedDirectoryPreservesRowIdentityAndRereadsOnOpen() async throws {
+        let root = fixture.appendingPathComponent("bounded-compact")
+        let a = root.appendingPathComponent("A")
+        let b = a.appendingPathComponent("B")
+        let c = b.appendingPathComponent("C")
+        try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
+        for index in 0..<9_000 {
+            try Data().write(to: c.appendingPathComponent("file-\(index).swift"))
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        for directory in [a, b, c] {
+            await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == directory.path }))
+        }
+        let row = try XCTUnwrap(tree.items.first { $0.path == c.path })
+        XCTAssertEqual(row.displayName, "A / B / C")
+        XCTAssertEqual(tree.items.count, 9_001)
+        tree.select(row)
+        await tree.toggle(row)
+        XCTAssertEqual(tree.items.count, 1)
+        XCTAssertEqual(tree.items.first?.path, c.path)
+        XCTAssertEqual(tree.items.first?.displayName, row.displayName)
+        let before = await counting.requests
+        await tree.sync(root: root.path, backend: counting)
+        let after = await counting.requests
+        XCTAssertEqual(after[c.path], before[c.path], "A folded oversized directory must not refresh its entire listing")
+        XCTAssertEqual(tree.items.first?.displayName, row.displayName)
+        XCTAssertEqual(tree.selectedPath, c.path)
+        let newFile = c.appendingPathComponent("new.swift")
+        try Data().write(to: newFile)
+        await tree.toggle(try XCTUnwrap(tree.items.first))
+        XCTAssertEqual(tree.items.count, 9_002)
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path })
+        XCTAssertEqual(tree.items.first?.displayName, row.displayName)
+        let reopened = await counting.requests
+        XCTAssertEqual(reopened[c.path], 2)
+    }
+
     func testCollapsedAndExpandedFoldersDoNotRereadUnchangedDirectories() async throws {
         let root = fixture.appendingPathComponent("cached")
         let sub = root.appendingPathComponent("sub")
