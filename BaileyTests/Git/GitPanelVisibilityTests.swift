@@ -377,32 +377,50 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
         let initialOffset = scroll.contentView.bounds.minY
         let expandedIDs = model.expandedCommitIDs
-        var previousOffset = initialOffset
-        for index in 0..<32 {
+        let document = try XCTUnwrap(scroll.documentView)
+        XCTAssertTrue(document.isFlipped)
+        let graphTop = keyboard.convert(
+            NSPoint(x: keyboard.bounds.minX,
+                    y: keyboard.isFlipped ? keyboard.bounds.minY : keyboard.bounds.maxY),
+            to: document
+        ).y
+        let commitHeight = CGFloat(38)
+        let rowHeight = TreeRowStyle.rowHeight(1)
+        let viewportHeight = scroll.documentVisibleRect.height
+
+        func press(_ code: UInt16) async throws {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
                 modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                 context: nil, characters: "", charactersIgnoringModifiers: "",
-                isARepeat: false, keyCode: 125))
+                isARepeat: false, keyCode: code))
             XCTAssertTrue(keyboard.onKeyDown(event))
             for _ in 0..<3 {
                 layout()
                 try await Task.sleep(for: .milliseconds(20))
             }
-            let offset = scroll.contentView.bounds.minY
             XCTAssertEqual(scroll.documentView?.frame.height ?? 0, expectedHeight, accuracy: 1,
                            "Moving the blue cursor cannot change the native scroll range")
-            if index < 3 {
-                XCTAssertEqual(offset, initialOffset, accuracy: 1,
-                               "A fully visible target must not scroll")
-            } else {
-                XCTAssertGreaterThanOrEqual(offset, previousOffset - 1)
-                XCTAssertLessThanOrEqual(offset, previousOffset + TreeRowStyle.rowHeight(1) + 2,
-                                         "An adjacent file needs at most one row of scroll")
-            }
-            previousOffset = offset
         }
-        XCTAssertGreaterThan(previousOffset, initialOffset + 100,
-                             "Offscreen keyboard targets must still scroll into view")
+
+        var expectedOffset = initialOffset
+        for index in 0..<32 {
+            try await press(125)
+            // The cursor starts on the commit, then visits the folder and files.
+            // The following row must be completely visible before the next key.
+            let nextBottom = graphTop + commitHeight + CGFloat(index + 2) * rowHeight
+            expectedOffset = max(expectedOffset, nextBottom - viewportHeight)
+            XCTAssertEqual(scroll.documentVisibleRect.minY, expectedOffset, accuracy: 2,
+                           "Down must reserve exactly one following row, without extra scroll")
+        }
+        XCTAssertGreaterThan(expectedOffset, initialOffset + 100)
+        for index in (0..<32).reversed() {
+            try await press(126)
+            let previousTop = graphTop + (index > 1
+                ? commitHeight + CGFloat(index - 2) * rowHeight : 0)
+            expectedOffset = max(0, min(expectedOffset, previousTop))
+            XCTAssertEqual(scroll.documentVisibleRect.minY, expectedOffset, accuracy: 2,
+                           "Up must reserve one preceding row, without extra scroll")
+        }
         XCTAssertEqual(model.expandedCommitIDs, expandedIDs)
         XCTAssertTrue(window.firstResponder === keyboard)
         XCTAssertLessThan(views(host).count, 1_000, "Scrolling must not mount the entire history subtree")

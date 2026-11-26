@@ -877,27 +877,42 @@ struct RecentCommitsView: View {
         return extending || toggling
     }
 
-    /// Reveal the actual row rect in the shared native vertical scroll view.
-    /// A lazy target's estimated position is not a reliable scroll coordinate.
-    private func revealKeyboardRow(_ id: String) {
+    /// Reveal the row and, during keyboard navigation, its next neighbor in
+    /// the direction of travel. The native viewport decides the minimum scroll.
+    private func revealKeyboardRow(_ id: String, direction: Int = 0) {
+        let display = graphDisplay
         guard isKeyboardActive, let view = keyboardOwner.view,
               view.window?.firstResponder === view,
               let scroll = view.enclosingScrollView, let document = scroll.documentView,
-              let position = graphDisplay.positions[id] else { return }
+              let position = display.positions[id] else { return }
         let detailHeight = TreeRowStyle.rowHeight(fontScale)
         let commitHeight = Self.commitRowHeight(fontScale)
-        let offset = CGFloat(position.index - position.precedingCommits) * detailHeight
-            + CGFloat(position.precedingCommits) * commitHeight
-        let height = position.isCommit ? commitHeight : detailHeight
+        let visible = scroll.documentVisibleRect
         // The keyboard host fills the Graph, not the Changes sections above it.
         let top = view.convert(NSPoint(x: view.bounds.minX,
                                       y: view.isFlipped ? view.bounds.minY : view.bounds.maxY),
                                to: document)
-        let y = document.isFlipped ? top.y + offset : top.y - offset - height
-        let visible = scroll.documentVisibleRect
-        guard y < visible.minY || y + height > visible.maxY else { return }
-        document.scrollToVisible(NSRect(x: visible.minX, y: y,
-                                            width: min(1, visible.width), height: height))
+        func rect(for position: GraphDisplay.Position) -> NSRect {
+            let offset = CGFloat(position.index - position.precedingCommits) * detailHeight
+                + CGFloat(position.precedingCommits) * commitHeight
+            let height = position.isCommit ? commitHeight : detailHeight
+            let y = document.isFlipped ? top.y + offset : top.y - offset - height
+            return NSRect(x: visible.minX, y: y, width: min(1, visible.width), height: height)
+        }
+        var target = rect(for: position)
+        let neighbor = position.navigationIndex + direction
+        if direction != 0, display.navigation.indices.contains(neighbor),
+           let adjacent = display.positions[display.navigation[neighbor].id] {
+            let pair = target.union(rect(for: adjacent))
+            if pair.height <= visible.height { target = pair }
+        }
+        guard target.minY < visible.minY || target.maxY > visible.maxY else { return }
+        document.scrollToVisible(target)
+    }
+
+    private func moveKeyboardCursor(to id: String, direction: Int) {
+        focusedRowID = id
+        revealKeyboardRow(id, direction: direction)
     }
 
     private func focusRow(_ id: String) {
@@ -972,7 +987,7 @@ struct RecentCommitsView: View {
                     alternate: event.modifierFlags.contains(.shift),
                     layout: presentation.layout
                   ) else { return false }
-            focusRow(commitRowID(next))
+            moveKeyboardCursor(to: commitRowID(next), direction: event.keyCode == 125 ? 1 : -1)
             if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
             return true
         }
@@ -980,12 +995,13 @@ struct RecentCommitsView: View {
         switch event.keyCode {
         case 125, 126: // Down / Up: Shift extends the selection, plain arrows move focus only.
             let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
-            let next = max(0, min(rows.count - 1, start + (event.keyCode == 125 ? 1 : -1)))
+            let direction = event.keyCode == 125 ? 1 : -1
+            let next = max(0, min(rows.count - 1, start + direction))
             if extending {
                 selection.select(rows[next].id, visible: display.navigationIDs, extending: true,
                                  fallbackAnchor: current.map { rows[$0].id })
             }
-            focusedRowID = rows[next].id
+            moveKeyboardCursor(to: rows[next].id, direction: direction)
         case 49, 36, 76: // Space / Return / Enter: same action as clicking the current row
             guard !extending, let current else { return false }
             selection.select(rows[current].id, visible: display.navigationIDs)
@@ -996,7 +1012,7 @@ struct RecentCommitsView: View {
             if row.isExpandable && !isRequestedExpanded(row) {
                 activate(row)
             } else if rows.indices.contains(current + 1), rows[current + 1].parent == row.id {
-                focusedRowID = rows[current + 1].id
+                moveKeyboardCursor(to: rows[current + 1].id, direction: 1)
             } else { return false }
         case 123: // Left collapses or selects the parent
             guard !extending, let current else { return false }
@@ -1004,7 +1020,7 @@ struct RecentCommitsView: View {
             if row.isExpandable && isRequestedExpanded(row) {
                 activate(row)
             } else if let parent = row.parent {
-                focusedRowID = parent
+                moveKeyboardCursor(to: parent, direction: -1)
             } else { return false }
         case 53:
             guard !extending else { return false }

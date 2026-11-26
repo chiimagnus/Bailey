@@ -739,9 +739,15 @@ final class GitGraphUITests: XCTestCase {
                       "Keyboard navigation must realize an offscreen commit")
         XCTAssertTrue(destination.isHittable,
                       "A focused Git Graph commit must stay inside the scroll viewport")
+        let next = app.buttons["navigation-17"]
+        XCTAssertTrue(next.isHittable,
+                      "Down must keep the next commit visible before disclosure")
         app.typeKey(" ", modifierFlags: [])
-        XCTAssertTrue(historicalFile("navigation-18.txt", in: app).waitForExistence(timeout: 12),
+        let detail = historicalFile("navigation-18.txt", in: app)
+        XCTAssertTrue(detail.waitForExistence(timeout: 12),
                       "Space must expand the actual navigated commit")
+        XCTAssertTrue(detail.isHittable)
+        XCTAssertTrue(destination.isHittable)
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), initialHead)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), initialStatus)
         XCTAssertEqual(try Data(contentsOf: tracked),
