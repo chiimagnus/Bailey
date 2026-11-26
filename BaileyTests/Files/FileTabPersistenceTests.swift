@@ -582,7 +582,7 @@ final class FileTabPersistenceTests: XCTestCase {
             file.autoSaveSuspendedForClose = true
             let loaded = try await file.delimitedSnapshot(using: .comma)
             let snapshot = try XCTUnwrap(loaded)
-            try await file.editDelimited(.paste("new", rows: [1], origin: .init(row: 0, column: 1), columns: 2),
+            try await requireDelimitedEdit(file, .paste("new", rows: [1], origin: .init(row: 0, column: 1), columns: 2),
                                          using: snapshot)
             XCTAssertEqual(file.text, draft)
             await file.save()
@@ -2940,7 +2940,7 @@ final class FileTabPersistenceTests: XCTestCase {
         let selection = DelimitedTablePresentation.Cell(row: 1, column: 1)
         file.submitDelimitedEdit(.paste(value, rows: [1], origin: origin, columns: 2),
                                  using: snapshot, selecting: selection)
-        try await waitForFileTabState { file.delimitedTable.pendingCell == selection }
+        try await waitForFileTabState { file.delimitedTable.pendingSelection == .cell(selection) }
         XCTAssertTrue(file.hasPendingDelimitedEdit)
         XCTAssertEqual(file.fileEncoding, .utf8BOM)
         XCTAssertTrue(file.text.utf16.elementsEqual(original.utf16))
@@ -3001,7 +3001,7 @@ final class FileTabPersistenceTests: XCTestCase {
             let result = try await file.delimitedSnapshot(using: .comma)
             let snapshot = try XCTUnwrap(result)
             XCTAssertTrue(file.canEditDelimited(snapshot))
-            try await file.editDelimited(.cells([.init(row: row, column: 1): value]), using: snapshot)
+            try await requireDelimitedEdit(file, .cells([.init(row: row, column: 1): value]), using: snapshot)
         }
         try await edit(1, "111")
         let first = file.text

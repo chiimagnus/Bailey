@@ -155,6 +155,119 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(file.text, original)
     }
 
+    func testColumnMenuInsertsAcrossHiddenRecordsAndKeepsColumnSettings() async throws {
+        let original = "Name,Group\r\nShown,keep\nHidden,\"other\"\rLast,keep"
+        let expected = "Name,,Group\r\nShown,,keep\nHidden,,\"other\"\rLast,,keep"
+        func bytes(_ source: String) -> Data { Data([0xef, 0xbb, 0xbf]) + Data(source.utf8) }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try bytes(original).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        file.delimitedTable.configuration.filters[1] = "keep"
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 350, height: 210),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Shown")
+        XCTAssertEqual(grid.table.numberOfRows, 2)
+        grid.table.tableColumns[1].width = 190
+        let header = try XCTUnwrap(grid.table.headerView)
+        let origin = header.convert(NSPoint(x: 25, y: header.bounds.midY), to: nil)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: origin, modifierFlags: [],
+                                                    timestamp: 0, windowNumber: window.windowNumber,
+                                                    context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        let menu = try XCTUnwrap(header.menu(for: click))
+        let insertion = try XCTUnwrap(menu.item(withTitle: String(localized: "Insert Column Right", table: "Editor")))
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(insertion.action), to: insertion.target, from: insertion))
+        let task = try XCTUnwrap(file.delimitedEditTask)
+        let inserted = await task.value
+        XCTAssertTrue(inserted)
+        XCTAssertEqual(file.delimitedTable.configuration.filters, [2: "keep"])
+        XCTAssertEqual(file.delimitedTable.columnWidths[2], 190)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, expected)
+        XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
+    }
+
+    func testNativeHeaderEditorKeepsFullRawValueAndRetainsUnrepresentableInput() async throws {
+        for encoding in [TextFileEncoding.utf8BOM, .latin1] {
+            let title = String(repeating: "long ", count: 850) + "A\rB\nC\r\nD"
+            let original = "\"\(title)\",Value\r\nItem,old\n"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+            let baseline = try XCTUnwrap(encoding.encoded(original))
+            try baseline.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.reopen(using: encoding)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            defer { file.retireContent() }
+            let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 330, height: 210),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let host = NSHostingView(rootView: FileViewerView(file: file))
+            window.contentView = host
+            window.orderBack(nil)
+            let grid = try await self.grid(in: host, showing: "Item")
+            let header = try XCTUnwrap(grid.table.headerView)
+            let origin = header.convert(NSPoint(x: 25, y: header.bounds.midY), to: nil)
+            let click = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: origin, modifierFlags: [],
+                                                        timestamp: 0, windowNumber: window.windowNumber,
+                                                        context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+            let menu = try XCTUnwrap(header.menu(for: click))
+            let rename = try XCTUnwrap(menu.item(withTitle: String(localized: "Rename Header…", table: "Editor")))
+            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(rename.action), to: rename.target, from: rename))
+
+            func currentEditor(_ view: NSView) -> NSTextView? {
+                if let editor = view as? NSTextView, editor.accessibilityIdentifier() == "bailey.csv.full-field" { return editor }
+                return view.subviews.lazy.compactMap(currentEditor).first
+            }
+            let native = try XCTUnwrap(NSApp.windows.compactMap(\.contentView).lazy.compactMap(currentEditor).first)
+            XCTAssertEqual(Data(native.string.utf8), Data(title.utf8))
+            let end = NSRange(location: native.string.utf16.count, length: 0)
+            native.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: end)
+            await file.save()
+            XCTAssertTrue(native.hasMarkedText())
+            XCTAssertTrue(file.hasPendingDelimitedEdit)
+            XCTAssertEqual(try Data(contentsOf: url), baseline)
+            native.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+            await file.save()
+            if encoding == .latin1 {
+                XCTAssertEqual(file.delimitedDraft?.value, title + "中文")
+                XCTAssertTrue(file.hasPendingDelimitedEdit)
+                XCTAssertFalse(file.documentUndoManager.canUndo)
+                XCTAssertEqual(try Data(contentsOf: url), baseline)
+                file.setFilePreview(false)
+                XCTAssertEqual(file.delimitedDraft?.value, title + "中文")
+                file.discardDelimitedDraft()
+                XCTAssertFalse(file.hasPendingDelimitedEdit)
+            } else {
+                XCTAssertEqual(try Data(contentsOf: url), encoding.encoded("\"\(title)中文\",Value\r\nItem,old\n"))
+                XCTAssertFalse(file.hasPendingDelimitedEdit)
+                let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+                while file.delimitedTable.pendingSelection != nil, ContinuousClock.now < deadline {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                XCTAssertEqual(grid.table.wholeColumns, IndexSet(integer: 0))
+                file.documentUndoManager.undo()
+                XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
+            }
+        }
+    }
+
     private func grid(in host: NSView, showing value: String) async throws -> DelimitedGrid {
         func find(_ view: NSView) -> DelimitedGrid? {
             if let grid = view as? DelimitedGrid { return grid }

@@ -8,6 +8,7 @@ nonisolated enum DelimitedTableMutation {
         case paste(String, rows: [Int], origin: DelimitedTablePresentation.Cell, columns: Int)
         case insertRows(before: Int, count: Int)
         case deleteRows(Set<Int>)
+        case columns([Int?])
     }
 
     struct Replacement: Sendable {
@@ -31,6 +32,7 @@ nonisolated enum DelimitedTableMutation {
         try Task.checkCancellation()
         let text = source as NSString
         let replacements: [Replacement]
+        var expectedColumns: Int?
         switch change {
         case .paste(let clipboardText, let rows, let origin, let columns):
             // Freeze physical row order when the user invokes Paste, rather
@@ -73,8 +75,10 @@ nonisolated enum DelimitedTableMutation {
         case .insertRows(let before, let count):
             let columns = max(1, index.columnCount)
             guard (0...index.records.count).contains(before), count > 0,
-                  count <= 1_000_000 / columns,
-                  index.records.count <= 1_000_000 / columns - count else { throw Failure.invalidSelection }
+                  count <= DelimitedTableIndex.maximumFields / columns,
+                  index.records.count <= DelimitedTableIndex.maximumFields / columns - count else {
+                throw Failure.invalidSelection
+            }
             let separator = String(UnicodeScalar(index.separator.rawValue)!)
             // An empty single-column record at EOF needs explicit quotes.
             let row = columns == 1 ? "\"\"" : String(repeating: separator, count: columns - 1)
@@ -95,21 +99,71 @@ nonisolated enum DelimitedTableMutation {
                 let boundary = joinsLineEndings(removing: range, in: text) ? "\"\"" : ""
                 return .init(range: range, old: text.substring(with: range), new: boundary)
             }
+        case .columns(let order):
+            let oldCount = index.columnCount
+            let existing = order.compactMap { $0 }
+            let allowed = 1...DelimitedTableIndex.maximumColumns
+            guard !index.records.isEmpty, allowed.contains(oldCount), allowed.contains(order.count),
+                  existing.allSatisfy((0..<oldCount).contains), Set(existing).count == existing.count,
+                  index.records.count <= DelimitedTableIndex.maximumFields / order.count else { throw Failure.invalidSelection }
+            expectedColumns = order.count
+            let current = (0..<oldCount).map(Optional.some)
+            let common = zip(current, order).prefix { $0.0 == $0.1 }.count
+            if common == oldCount, common == order.count { return [] }
+            let suffix = zip(current.dropFirst(common).reversed(), order.dropFirst(common).reversed())
+                .prefix { $0.0 == $0.1 }.count
+            let delimiter = String(UnicodeScalar(index.separator.rawValue)!)
+            var edits: [Replacement] = []
+            for record in index.records {
+                try Task.checkCancellation()
+                let fields = index.fields(in: record)
+                guard fields.count == oldCount, let first = fields.first, let last = fields.last else {
+                    throw Failure.invalidTable
+                }
+                let body = NSUnionRange(first.source, last.source)
+                if order.count == 1, order[0].map({ fields[fields.startIndex + $0].source.length == 0 }) ?? true,
+                   NSMaxRange(body) == text.length || joinsLineEndings(removing: body, in: text) {
+                    edits.append(.init(range: body, old: text.substring(with: body), new: "\"\""))
+                    continue
+                }
+                let start = common == 0 ? body.location : NSMaxRange(fields[fields.startIndex + common - 1].source)
+                let end = suffix == 0 ? NSMaxRange(body) : fields[fields.endIndex - suffix].source.location
+                let changed = order[common..<(order.count - suffix)]
+                var value = changed.map { column in
+                    column.map { text.substring(with: fields[fields.startIndex + $0].source) } ?? ""
+                }.joined(separator: delimiter)
+                if common > 0, !changed.isEmpty || suffix > 0 { value = delimiter + value }
+                if suffix > 0, !changed.isEmpty { value += delimiter }
+                let range = NSRange(location: start, length: end - start)
+                let old = text.substring(with: range)
+                if !old.utf16.elementsEqual(value.utf16) { edits.append(.init(range: range, old: old, new: value)) }
+            }
+            replacements = edits
         }
 
         let ordered = replacements.sorted { $0.range.location > $1.range.location }
         guard !ordered.isEmpty else { return [] }
         let length = ordered.reduce(text.length) { $0 + $1.new.utf16.count - $1.range.length }
-        guard length <= FileTab.maxTextBytes else { throw Failure.tooLarge }
+        guard length <= DelimitedTableIndex.maximumSourceUnits else { throw Failure.tooLarge }
         // Validate the actual candidate encoding before the atomic storage edit.
         // This runs off the main actor and never serializes the grid or changes
         // any untouched field, record order, quote spelling or line ending.
-        let candidate = NSMutableString(string: source)
-        for edit in ordered {
+        var candidate = ""
+        candidate.reserveCapacity(length)
+        var start = 0
+        for edit in ordered.reversed() {
             try Task.checkCancellation()
-            candidate.replaceCharacters(in: edit.range, with: edit.new)
+            candidate.append(text.substring(with: NSRange(location: start, length: edit.range.location - start)))
+            candidate.append(edit.new)
+            start = NSMaxRange(edit.range)
         }
-        guard let bytes = encoding.encoded(candidate as String) else { throw Failure.cannotEncode }
+        candidate.append(text.substring(from: start))
+        if let expectedColumns {
+            let checked = try await DelimitedTableIndex.parse(candidate, preferred: index.separator, selected: index.separator)
+            guard checked.issue == nil, checked.records.count == index.records.count,
+                  checked.columnCount == expectedColumns else { throw Failure.invalidTable }
+        }
+        guard let bytes = encoding.encoded(candidate) else { throw Failure.cannotEncode }
         guard bytes.count <= FileTab.maxTextBytes else { throw Failure.tooLarge }
         try Task.checkCancellation()
         return ordered

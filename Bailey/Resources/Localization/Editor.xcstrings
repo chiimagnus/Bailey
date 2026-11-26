@@ -991,6 +991,206 @@
         }
       }
     },
+    "Insert Column Left" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在左侧插入列"
+          }
+        }
+      }
+    },
+    "Insert Column Right" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在右侧插入列"
+          }
+        }
+      }
+    },
+    "Delete Column from All Records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从全部记录删除此列"
+          }
+        }
+      }
+    },
+    "Delete Selected Columns from All Records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从全部记录删除所选列"
+          }
+        }
+      }
+    },
+    "Move Column Left" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向左移动列"
+          }
+        }
+      }
+    },
+    "Move Column Right" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向右移动列"
+          }
+        }
+      }
+    },
+    "Move Column to Position…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动列到指定位置…"
+          }
+        }
+      }
+    },
+    "Move Column to Position" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动列到指定位置"
+          }
+        }
+      }
+    },
+    "Move Column" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动列"
+          }
+        }
+      }
+    },
+    "Enter a position from 1 to %lld. This changes every record." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入 1 到 %lld 之间的位置。此操作将修改全部记录。"
+          }
+        }
+      }
+    },
+    "Rename Header…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名表头…"
+          }
+        }
+      }
+    },
+    "Changes All Records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作用于全部记录"
+          }
+        }
+      }
+    },
+    "Full Field" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完整字段"
+          }
+        }
+      }
+    },
+    "Apply Field" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用字段"
+          }
+        }
+      }
+    },
+    "A table field still has unapplied input." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有一个表格字段的输入尚未应用。"
+          }
+        }
+      }
+    },
+    "Review Field Draft…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看字段草稿…"
+          }
+        }
+      }
+    },
+    "Unapplied Field" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未应用的字段"
+          }
+        }
+      }
+    },
+    "Copy Field Draft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制字段草稿"
+          }
+        }
+      }
+    },
+    "Discard Field Draft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃字段草稿"
+          }
+        }
+      }
+    },
+    "Retry Field Edit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试字段编辑"
+          }
+        }
+      }
+    },
     "Fit Column Width" : {
       "localizations" : {
         "zh-Hans" : {

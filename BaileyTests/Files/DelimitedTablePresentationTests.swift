@@ -26,7 +26,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             defer { file.retireContent() }
             let loaded = try await file.delimitedSnapshot(using: .comma)
             let snapshot = try XCTUnwrap(loaded)
-            try await file.editDelimited(.cells([.init(row: row, column: column): ""]), using: snapshot)
+            try await requireDelimitedEdit(file, .cells([.init(row: row, column: column): ""]), using: snapshot)
             let refreshed = try await file.delimitedSnapshot(using: .comma)
             XCTAssertEqual(refreshed?.index.records.count, snapshot.index.records.count, original.debugDescription)
             XCTAssertEqual(Data(file.text.utf8), Data(expected.utf8))
@@ -50,7 +50,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         file.autoSaveSuspendedForClose = true
         defer { file.retireContent() }
         let loaded = try await file.delimitedSnapshot(using: .comma)
-        try await file.editDelimited(.deleteRows([1, 2, 5]), using: try XCTUnwrap(loaded))
+        try await requireDelimitedEdit(file, .deleteRows([1, 2, 5]), using: try XCTUnwrap(loaded))
         let refreshed = try await file.delimitedSnapshot(using: .comma)
         XCTAssertEqual(refreshed?.index.records.count, 5)
         XCTAssertEqual(file.text, expected)
@@ -82,7 +82,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             file.autoSaveSuspendedForClose = true
             defer { file.retireContent() }
             let loaded = try await file.delimitedSnapshot(using: .tab)
-            try await file.editDelimited(.paste(clipboard, rows: [0, 1],
+            try await requireDelimitedEdit(file, .paste(clipboard, rows: [0, 1],
                                                 origin: .init(row: onlyEmpty ? 1 : 0, column: 0), columns: 2),
                                          using: try XCTUnwrap(loaded))
             await file.save()
@@ -531,7 +531,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             try await file.waitForText()
             defer { file.retireContent() }
             let loaded = try await file.delimitedSnapshot(using: .comma)
-            try await file.editDelimited(.cells([.init(row: 1, column: 1): "first"]), using: XCTUnwrap(loaded))
+            try await requireDelimitedEdit(file, .cells([.init(row: 1, column: 1): "first"]), using: XCTUnwrap(loaded))
             let current = try await file.delimitedSnapshot(using: .comma)
             let snapshot = try XCTUnwrap(current)
             let presentation = try await DelimitedTablePresentation.evaluate(
@@ -693,6 +693,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         controls.configuration.filters = [0: "1", 2: "3"]
         controls.configuration.sort = [.init(column: 2, ascending: true)]
         let narrower = try await DelimitedTableIndex.parse("A,B\n1,2", preferred: .comma)
+        controls.acceptEdit(.columns([0, 1]), from: "original", to: "narrower")
         controls.accept(.init(index: narrower, source: "A,B\n1,2", requestID: "narrower", documentRevision: "narrower"))
         XCTAssertEqual(controls.configuration.filters, [0: "1"])
         XCTAssertTrue(controls.configuration.sort.isEmpty)
@@ -751,7 +752,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         let fixtures = [(tall, 99_999, 1, "99999")] + widths.map { width in
             let wide = (0..<width).map { "column \($0)" }.joined(separator: ",") + "\n"
                 + (0..<width).map { "cell \($0)" }.joined(separator: ",")
-            let last = min(width, DelimitedGrid.maximumColumns) - 1
+            let last = min(width, DelimitedTableIndex.maximumColumns) - 1
             return (wide, 0, last, "cell \(last)")
         }
         for (source, row, column, expected) in fixtures {
@@ -769,7 +770,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             XCTAssertTrue(grid.table.frameOfCell(atColumn: column, row: row).intersects(grid.table.visibleRect))
             let field = try XCTUnwrap(grid.table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField)
             XCTAssertEqual(field.stringValue, expected)
-            XCTAssertEqual(grid.table.numberOfColumns, min(index.columnCount, DelimitedGrid.maximumColumns))
+            XCTAssertEqual(grid.table.numberOfColumns, min(index.columnCount, DelimitedTableIndex.maximumColumns))
             print("CSV_GRID rows=\(presentation.rows.count) columns=\(index.columnCount) last=\(column) elapsed=\(started.duration(to: .now))")
             XCTAssertTrue(field.isAccessibilitySelected())
             var realizedRows = 0

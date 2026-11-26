@@ -15,6 +15,11 @@ final class DelimitedTableControls {
         let configuration: DelimitedTablePresentation.Configuration
     }
 
+    enum PendingSelection: Equatable {
+        case cell(DelimitedTablePresentation.Cell)
+        case column(Int)
+    }
+
     var separator: DelimitedTableIndex.Separator?
     var configuration = DelimitedTablePresentation.Configuration()
     var query = ""
@@ -23,9 +28,11 @@ final class DelimitedTableControls {
     var findStep = 0
     var editError: String?
     private(set) var parsed: FileTab.DelimitedSnapshot?
-    @ObservationIgnored var pendingCell: DelimitedTablePresentation.Cell?
+    @ObservationIgnored var pendingSelection: PendingSelection?
     @ObservationIgnored weak var grid: DelimitedGrid?
     @ObservationIgnored var columnWidths: [Int: CGFloat] = [:]
+    @ObservationIgnored private var columnRevision: String?
+    @ObservationIgnored private(set) var columnMove: (before: String, after: String, positions: [Int: Int])?
 
     func request(for file: FileTab) -> ParseRequest {
         ParseRequest(source: file.textPreviewRequestID, separator: separator)
@@ -34,16 +41,39 @@ final class DelimitedTableControls {
     func accept(_ snapshot: FileTab.DelimitedSnapshot) {
         let index = snapshot.index
         let next: DelimitedTablePresentation.Configuration
-        if let previous = parsed?.index.separator, previous != index.separator {
+        if columnRevision.map({ $0 != snapshot.documentRevision }) == true ||
+            parsed.map({ $0.index.separator != index.separator }) == true {
             next = .init(header: configuration.header)
             columnWidths.removeAll()
+            columnMove = nil
         } else {
-            next = configuration.restricted(to: min(index.columnCount, DelimitedGrid.maximumColumns))
+            next = configuration.restricted(to: min(index.columnCount, DelimitedTableIndex.maximumColumns))
             columnWidths = columnWidths.filter { $0.key < index.columnCount }
         }
+        columnRevision = snapshot.documentRevision
         parsed = snapshot
         if next != configuration { configuration = next }
     }
+
+    func acceptEdit(_ change: DelimitedTableMutation.Change, from previous: String, to current: String) {
+        columnRevision = current
+        guard case .columns(let order) = change else { return }
+        let positions = Dictionary(uniqueKeysWithValues: order.enumerated().compactMap { entry in
+            entry.element.map { ($0, entry.offset) }
+        })
+        columnWidths = Dictionary(uniqueKeysWithValues: columnWidths.compactMap { old, width in
+            positions[old].map { ($0, width) }
+        })
+        configuration.filters = Dictionary(uniqueKeysWithValues: configuration.filters.compactMap { old, filter in
+            positions[old].map { ($0, filter) }
+        })
+        configuration.sort = configuration.sort.compactMap { sort in
+            positions[sort.column].map { .init(column: $0, ascending: sort.ascending) }
+        }
+        columnMove = (previous, current, positions)
+    }
+
+    func finishColumnMove() { columnMove = nil }
 
     func retire() { parsed = nil }
 
@@ -135,7 +165,7 @@ struct CSVTableView: View {
                 do {
                     let found = try await active.find(
                         query.query, source: snapshot.source, index: snapshot.index,
-                        columnCount: DelimitedGrid.maximumColumns
+                        columnCount: DelimitedTableIndex.maximumColumns
                     )
                     guard !Task.isCancelled, controls.request(for: file) == parse,
                           controls.configuration == display.configuration, controls.query == query.query else { return }
@@ -159,7 +189,7 @@ struct CSVTableView: View {
             if let snapshot {
                 if let issue = snapshot.index.issue {
                     notice(String(localized: "Table issue at line \(issue.line), column \(issue.column).", table: "Editor"))
-                } else if snapshot.index.columnCount > DelimitedGrid.maximumColumns {
+                } else if snapshot.index.columnCount > DelimitedTableIndex.maximumColumns {
                     notice(String(localized: "This table has too many columns to display.", table: "Editor"))
                 } else if snapshot.index.needsSeparatorChoice {
                     notice(String(localized: "Choose the table delimiter.", table: "Editor"))
@@ -332,7 +362,6 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
 }
 
 final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
-    static let maximumColumns = 4096
     let table = DelimitedNativeTable()
     let scrollView = NSScrollView()
     private lazy var gutter = DelimitedRecordGutter(grid: self)
@@ -354,13 +383,29 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     private var source: NSString = ""
     private var copyTask: Task<Void, Never>?
     private struct CellEdit {
-        let field: DelimitedCellField
-        let cell: DelimitedTablePresentation.Cell
+        enum Input {
+            case inline(DelimitedCellField, DelimitedTablePresentation.Cell)
+            case full(DelimitedFieldPopover)
+        }
+
+        let input: Input
         let snapshot: FileTab.DelimitedSnapshot
         let physical: DelimitedTablePresentation.Cell
         let original: String
+        let selection: DelimitedTableControls.PendingSelection?
         var editorAppearance: FieldEditorAppearance?
         var movement: Int? = nil
+
+        var textEditor: NSTextView? {
+            switch input {
+            case .inline(let field, _): field.currentEditor() as? NSTextView
+            case .full(let panel): panel.editor
+            }
+        }
+
+        func draft(value: String, selecting target: DelimitedTableControls.PendingSelection? = nil) -> FileTab.DelimitedDraft {
+            .init(cell: physical, value: value, snapshot: snapshot, selection: target ?? selection)
+        }
     }
     private struct FieldEditorAppearance {
         weak var editor: NSTextView?
@@ -466,7 +511,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil { finishEditing() }
+        if newWindow == nil { endEditingForProjectionChange() }
         super.viewWillMove(toWindow: newWindow)
     }
 
@@ -474,7 +519,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     // and pending clipboard work do not.
     func clearProjection() {
         guard snapshot != nil || presentation != nil else { return }
-        finishEditing()
+        endEditingForProjectionChange()
         copyTask?.cancel()
         copyTask = nil
         table.clearSelection()
@@ -495,11 +540,15 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     func install(_ snapshot: FileTab.DelimitedSnapshot, presentation: DelimitedTablePresentation) {
         guard presentation.id != self.presentation?.id else { return }
-        finishEditing()
-        let previousRows = self.snapshot?.documentRevision == snapshot.documentRevision &&
+        endEditingForProjectionChange()
+        let move = controls?.columnMove.flatMap { change in
+            change.before == self.snapshot?.documentRevision && change.after == snapshot.documentRevision
+                ? change.positions : nil
+        }
+        let previousRows = (move != nil || self.snapshot?.documentRevision == snapshot.documentRevision) &&
             self.snapshot?.index.separator == snapshot.index.separator ? self.presentation?.rows : nil
         let oldHeader = self.presentation?.header
-        let needsFit = self.snapshot?.index.separator != snapshot.index.separator ||
+        let needsFit = move != nil || self.snapshot?.index.separator != snapshot.index.separator ||
             oldHeader != presentation.header
         let rebuildColumns = self.snapshot?.requestID != snapshot.requestID ||
             self.snapshot?.index.separator != snapshot.index.separator || oldHeader != presentation.header
@@ -518,24 +567,23 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         previousMatches = []
         table.reloadData()
         if let previousRows {
-            table.remapRows(from: previousRows, to: presentation.rows)
+            table.remapRows(from: previousRows, to: presentation.rows, columns: move)
         } else {
             table.clearSelection()
         }
+        controls?.finishColumnMove()
         table.headerView?.needsDisplay = true
         needsLayout = true
-        if let cell = controls?.pendingCell {
-            controls?.pendingCell = nil
-            if let row = presentation.rows.firstIndex(of: cell.row) {
-                table.select(.init(row: row, column: cell.column), reveal: true)
-            }
+        if let target = controls?.pendingSelection {
+            controls?.pendingSelection = nil
+            restoreSelection(target)
         }
     }
 
     private func installColumns(index: DelimitedTableIndex, header: Bool, fitExisting: Bool) {
         installingColumns = true
         defer { installingColumns = false }
-        let count = min(index.columnCount, Self.maximumColumns)
+        let count = min(index.columnCount, DelimitedTableIndex.maximumColumns)
         let columns = table.tableColumns
         for column in columns.dropFirst(count) { table.removeTableColumn(column) }
         for columnIndex in 0..<count {
@@ -598,6 +646,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         guard projectionIsCurrent, let column = Int(tableColumn.identifier.rawValue) else { return }
         table.window?.makeFirstResponder(table)
         table.selectColumn(column, modifiers: NSApp.currentEvent?.modifierFlags ?? [])
+        if NSApp.currentEvent?.clickCount == 2 { renameHeader(column) }
     }
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
@@ -669,15 +718,18 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     private func beginEditing(_ cell: DelimitedTablePresentation.Cell) {
-        guard projectionIsCurrent, editing == nil, let file, !file.hasPendingDelimitedEdit, let snapshot,
-              file.canEditDelimited(snapshot), let physical = physicalCell(cell),
-              let window else { return }
+        guard projectionIsCurrent, editing == nil, let file, let snapshot, let physical = physicalCell(cell),
+              let window, snapshot.index.field(record: physical.row, column: physical.column) != nil,
+              file.beginDelimitedEditing(in: self, using: snapshot) else { return }
         table.select(cell, reveal: true)
         table.layoutSubtreeIfNeeded()
-        guard let field = table.view(atColumn: cell.column, row: cell.row, makeIfNecessary: true) as? DelimitedCellField,
-              file.beginDelimitedEditing(in: self, using: snapshot) else { return }
+        guard let field = table.view(atColumn: cell.column, row: cell.row, makeIfNecessary: true) as? DelimitedCellField else {
+            file.endDelimitedEditing(in: self)
+            return
+        }
         let original = value(cell)
-        editing = CellEdit(field: field, cell: cell, snapshot: snapshot, physical: physical, original: original)
+        editing = CellEdit(input: .inline(field, cell), snapshot: snapshot, physical: physical,
+                           original: original, selection: .cell(physical))
         field.stringValue = original
         field.isEditable = true
         field.isSelectable = true
@@ -694,39 +746,91 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     private func styleEditor(_ edit: CellEdit) {
-        guard let editor = edit.field.currentEditor() as? NSTextView else { return }
+        if case .full(let panel) = edit.input {
+            panel.apply(palette)
+            return
+        }
+        guard let editor = edit.textEditor else { return }
         editor.textColor = palette.text
         editor.insertionPointColor = palette.focus
         editor.selectedTextAttributes = [.backgroundColor: palette.selection, .foregroundColor: palette.selectedText]
     }
 
     private func restoreField(_ edit: CellEdit) {
-        edit.field.delegate = nil
-        edit.field.isEditable = false
-        edit.field.isSelectable = false
-        edit.field.isBordered = false
-        edit.editorAppearance?.restore()
-        displayValue(in: edit.field, at: edit.cell)
-        table.style(edit.field, cell: edit.cell)
+        switch edit.input {
+        case .inline(let field, let cell):
+            field.delegate = nil
+            field.isEditable = false
+            field.isSelectable = false
+            field.isBordered = false
+            edit.editorAppearance?.restore()
+            displayValue(in: field, at: cell)
+            table.style(field, cell: cell)
+        case .full(let panel):
+            panel.popover.close()
+        }
+    }
+
+    private func renameHeader(_ column: Int) {
+        guard projectionIsCurrent, presentation?.header == true,
+              let header = table.headerView else { return }
+        table.scrollColumnToVisible(column)
+        beginFullField(.init(row: 0, column: column), selecting: .column(column),
+                       from: header.headerRect(ofColumn: column), in: header, editable: true)
+    }
+
+    private func beginFullField(_ physical: DelimitedTablePresentation.Cell,
+                                selecting selection: DelimitedTableControls.PendingSelection?,
+                                from rect: NSRect, in anchor: NSView, editable: Bool) {
+        guard editing == nil, let file, let snapshot, anchor.window != nil,
+              let field = snapshot.index.field(record: physical.row, column: physical.column) else { return }
+        if editable, !file.beginDelimitedEditing(in: self, using: snapshot) { return }
+        let original = field.value(in: source)
+        let panel = DelimitedFieldPopover(value: original, editable: editable)
+        let edit = CellEdit(input: .full(panel), snapshot: snapshot, physical: physical,
+                            original: original, selection: selection)
+        editing = edit
+        panel.confirm = { [weak self] in self?.finishEditing() }
+        panel.dismiss = { [weak self, weak panel] in
+            guard let self, let panel, let edit = editing,
+                  case .full(let current) = edit.input, current === panel else { return }
+            completeEditing(edit, value: panel.editor.string)
+        }
+        panel.cancel = { [weak self] in self?.cancelEditing() }
+        styleEditor(edit)
+        panel.show(from: rect, in: anchor)
     }
 
     func finishEditing() {
-        guard let edit = editing, let window = edit.field.window else { return }
-        // Commit through AppKit's actual field editor, without activating a
-        // different Dock group or retaining an offscreen editable field.
-        window.endEditing(for: edit.field)
+        guard let edit = editing, edit.textEditor?.hasMarkedText() != true else { return }
+        switch edit.input {
+        case .inline(let field, _):
+            field.window?.endEditing(for: field)
+        case .full(let panel):
+            completeEditing(edit, value: panel.editor.string)
+        }
+    }
+
+    private func endEditingForProjectionChange() {
+        finishEditing()
+        guard let edit = editing else { return }
+        if let editor = edit.textEditor {
+            file?.retainDelimitedEditing(in: self, draft: edit.draft(value: editor.string))
+        }
+        cancelEditing()
     }
 
     func cancelEditing() {
         guard let edit = editing else { return }
         editing = nil
         file?.endDelimitedEditing(in: self)
-        edit.field.abortEditing()
+        if case .inline(let field, _) = edit.input { field.abortEditing() }
         restoreField(edit)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard let edit = editing, control === edit.field, !textView.hasMarkedText(),
+        guard let edit = editing, case .inline(let field, _) = edit.input,
+              control === field, !textView.hasMarkedText(),
               let window, window.firstResponder === textView else { return false }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             cancelEditing()
@@ -753,45 +857,57 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
-        guard let edit = editing, notification.object as? NSTextField === edit.field else { return }
-        let value = edit.field.stringValue
+        guard let edit = editing, case .inline(let field, _) = edit.input,
+              notification.object as? NSTextField === field else { return }
         let movement = edit.movement ?? notification.userInfo?["NSTextMovement"] as? Int
-        editing = nil
-        restoreField(edit)
         guard movement != NSCancelTextMovement else {
+            editing = nil
+            restoreField(edit)
             file?.endDelimitedEditing(in: self)
             return
         }
-        var destination = edit.physical
-        if movement == NSTabTextMovement || movement == NSBacktabTextMovement,
-           let next = table.adjacent(to: edit.cell, backwards: movement == NSBacktabTextMovement),
+        completeEditing(edit, value: field.stringValue, movement: movement)
+    }
+
+    private func completeEditing(_ edit: CellEdit, value: String, movement: Int? = nil) {
+        editing = nil
+        restoreField(edit)
+        var destination = edit.selection
+        if case .inline(_, let cell) = edit.input,
+           movement == NSTabTextMovement || movement == NSBacktabTextMovement,
+           let next = table.adjacent(to: cell, backwards: movement == NSBacktabTextMovement),
            let physical = physicalCell(next) {
-            destination = physical
+            destination = .cell(physical)
         }
         if value.utf16.elementsEqual(edit.original.utf16) {
             file?.endDelimitedEditing(in: self)
-            if let row = presentation?.rows.firstIndex(of: destination.row) {
-                table.select(.init(row: row, column: destination.column), reveal: true)
-            }
+            if let destination { restoreSelection(destination) }
             return
         }
-        file?.commitDelimitedEditing(in: self, change: .cells([edit.physical: value]),
-                                     using: edit.snapshot, selecting: destination)
+        file?.commitDelimitedEditing(in: self, draft: edit.draft(value: value, selecting: destination))
     }
 
-    private func apply(_ change: DelimitedTableMutation.Change, snapshot: FileTab.DelimitedSnapshot,
-                       selecting cell: DelimitedTablePresentation.Cell?) {
-        file?.submitDelimitedEdit(change, using: snapshot, selecting: cell)
+    private func restoreSelection(_ target: DelimitedTableControls.PendingSelection) {
+        switch target {
+        case .cell(let cell):
+            if let row = presentation?.rows.firstIndex(of: cell.row) {
+                table.select(.init(row: row, column: cell.column), reveal: true)
+            }
+        case .column(let column):
+            if table.tableColumns.indices.contains(column) {
+                table.scrollColumnToVisible(column)
+                table.selectColumn(column, modifiers: [])
+            }
+        }
     }
 
     /// Read a rectangular TSV clipboard using the same parser as file data.
     /// Literal text (including formulas) is never evaluated or reformatted.
     func paste(_ text: String) {
-        guard projectionIsCurrent, let file, !file.hasPendingDelimitedEdit, let snapshot, let presentation,
-              let origin = table.selection.caret, presentation.rows.indices.contains(origin.row),
-              file.canEditDelimited(snapshot) else { return }
+        guard projectionIsCurrent, let file, let snapshot, let presentation,
+              let origin = table.selection.caret, presentation.rows.indices.contains(origin.row) else { return }
         file.submitDelimitedEdit(.paste(text, rows: presentation.rows, origin: origin,
-                                        columns: min(snapshot.index.columnCount, Self.maximumColumns)),
+                                        columns: table.numberOfColumns),
                                  using: snapshot,
                                  selecting: .init(row: presentation.rows[origin.row], column: origin.column))
     }
@@ -839,7 +955,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     @objc private func insertRow(_ sender: NSMenuItem) {
         guard let target = recordTarget(sender), let snapshot else { return }
         let row = target.row.flatMap(recordNumber) ?? snapshot.index.records.count
-        apply(.insertRows(before: row, count: 1), snapshot: snapshot, selecting: .init(row: row, column: 0))
+        file?.submitDelimitedEdit(.insertRows(before: row, count: 1), using: snapshot,
+                                  selecting: .init(row: row, column: 0))
     }
 
     @objc private func deleteRows(_ sender: NSMenuItem) {
@@ -848,7 +965,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             presentation.rows.indices.contains(row) ? presentation.rows[row] : nil
         })
         guard !rows.isEmpty else { return }
-        apply(.deleteRows(rows), snapshot: snapshot, selecting: nil)
+        file?.submitDelimitedEdit(.deleteRows(rows), using: snapshot, selecting: nil)
     }
 
     private func copySelection() {
@@ -899,7 +1016,108 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         }
         delimiter.submenu = submenu
         menu.addItem(delimiter)
+        if let snapshot, let file, file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit {
+            let count = snapshot.index.columnCount
+            if presentation.header {
+                menu.addItem(item(String(localized: "Rename Header…", table: "Editor"), action: #selector(renameHeaderItem(_:)), tag: column))
+            }
+            if (1...DelimitedTableIndex.maximumColumns).contains(count) {
+                menu.addItem(.separator())
+                menu.addItem(.sectionHeader(title: String(localized: "Changes All Records", table: "Editor")))
+                if count < DelimitedTableIndex.maximumColumns {
+                    menu.addItem(item(String(localized: "Insert Column Left", table: "Editor"), action: #selector(insertColumnLeft(_:)), tag: column))
+                    menu.addItem(item(String(localized: "Insert Column Right", table: "Editor"), action: #selector(insertColumnRight(_:)), tag: column))
+                }
+                if count > 1 {
+                    menu.addItem(item(String(localized: "Delete Column from All Records", table: "Editor"), action: #selector(deleteColumn(_:)), tag: column))
+                    let selected = table.wholeColumns
+                    if selected.count > 1, selected.count < count {
+                        let deletion = item(String(localized: "Delete Selected Columns from All Records", table: "Editor"),
+                                            action: #selector(deleteSelectedColumns(_:)), tag: column)
+                        deletion.representedObject = ColumnDeletion(projection: presentation.id, columns: selected)
+                        menu.addItem(deletion)
+                    }
+                    if column > 0 {
+                        menu.addItem(item(String(localized: "Move Column Left", table: "Editor"), action: #selector(moveColumnLeft(_:)), tag: column))
+                    }
+                    if column + 1 < count {
+                        menu.addItem(item(String(localized: "Move Column Right", table: "Editor"), action: #selector(moveColumnRight(_:)), tag: column))
+                    }
+                    menu.addItem(item(String(localized: "Move Column to Position…", table: "Editor"), action: #selector(chooseColumnPosition(_:)), tag: column))
+                }
+            }
+        }
         return menu
+    }
+
+    @objc private func renameHeaderItem(_ sender: NSMenuItem) {
+        if accepts(sender) { renameHeader(sender.tag) }
+    }
+
+    private struct ColumnDeletion {
+        let projection: UUID
+        let columns: IndexSet
+    }
+
+    private func changeColumns(_ transform: (inout [Int?]) -> Void) {
+        guard projectionIsCurrent, let snapshot,
+              (1...DelimitedTableIndex.maximumColumns).contains(snapshot.index.columnCount) else { return }
+        var order = (0..<snapshot.index.columnCount).map(Optional.some)
+        transform(&order)
+        guard (1...DelimitedTableIndex.maximumColumns).contains(order.count) else { return }
+        file?.submitDelimitedEdit(.columns(order), using: snapshot, selecting: nil)
+    }
+
+    @objc private func insertColumnLeft(_ sender: NSMenuItem) {
+        if accepts(sender) { changeColumns { $0.insert(nil, at: sender.tag) } }
+    }
+
+    @objc private func insertColumnRight(_ sender: NSMenuItem) {
+        if accepts(sender) { changeColumns { $0.insert(nil, at: sender.tag + 1) } }
+    }
+
+    @objc private func deleteColumn(_ sender: NSMenuItem) {
+        if accepts(sender) { changeColumns { $0.remove(at: sender.tag) } }
+    }
+
+    @objc private func deleteSelectedColumns(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? ColumnDeletion, target.projection == projectionID else { return }
+        changeColumns { order in
+            for column in target.columns.reversed() { order.remove(at: column) }
+        }
+    }
+
+    @objc private func moveColumnLeft(_ sender: NSMenuItem) { moveColumn(sender, to: sender.tag - 1) }
+    @objc private func moveColumnRight(_ sender: NSMenuItem) { moveColumn(sender, to: sender.tag + 1) }
+
+    private func moveColumn(_ sender: NSMenuItem, to destination: Int) {
+        guard accepts(sender), sender.tag != destination, table.tableColumns.indices.contains(destination) else { return }
+        changeColumns { order in
+            let column = order.remove(at: sender.tag)
+            order.insert(column, at: destination)
+        }
+    }
+
+    @objc private func chooseColumnPosition(_ sender: NSMenuItem) {
+        guard accepts(sender), let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Move Column to Position", table: "Editor")
+        alert.informativeText = String(localized: "Enter a position from 1 to \(table.numberOfColumns). This changes every record.", table: "Editor")
+        let position = NSTextField(string: String(sender.tag + 1))
+        let formatter = NumberFormatter()
+        formatter.minimum = 1
+        formatter.maximum = NSNumber(value: table.numberOfColumns)
+        formatter.allowsFloats = false
+        position.formatter = formatter
+        position.frame = NSRect(x: 0, y: 0, width: 125, height: 24)
+        alert.accessoryView = position
+        alert.addButton(withTitle: String(localized: "Move Column", table: "Editor"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.window.initialFirstResponder = position
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self, let requested = position.objectValue as? NSNumber else { return }
+            moveColumn(sender, to: requested.intValue - 1)
+        }
     }
 
     private func accepts(_ sender: NSMenuItem) -> Bool {
@@ -941,13 +1159,113 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     @objc private func toggleHeader(_ sender: NSMenuItem) {
         guard accepts(sender) else { return }
         finishEditing()
+        guard editing == nil else { return }
         controls?.configuration.header.toggle()
     }
 
     @objc private func chooseDelimiter(_ sender: NSMenuItem) {
         guard accepts(sender) else { return }
         finishEditing()
+        guard editing == nil else { return }
         controls?.separator = DelimitedTableIndex.Separator(rawValue: UInt16(sender.tag))
+    }
+}
+
+private final class DelimitedFieldPopover: NSObject, NSPopoverDelegate, NSTextViewDelegate {
+    let popover = NSPopover()
+    let editor = NSTextView(usingTextLayoutManager: true)
+    private let scroll = NSScrollView()
+    private let panel = NSView()
+    var confirm: () -> Void = {}
+    var cancel: () -> Void = {}
+    var dismiss: () -> Void = {}
+
+    init(value: String, editable: Bool) {
+        super.init()
+        panel.wantsLayer = true
+        editor.isEditable = editable
+        editor.isSelectable = true
+        editor.isRichText = false
+        editor.allowsUndo = true
+        editor.isAutomaticTextReplacementEnabled = false
+        editor.isAutomaticDashSubstitutionEnabled = false
+        editor.isAutomaticQuoteSubstitutionEnabled = false
+        editor.isAutomaticSpellingCorrectionEnabled = false
+        editor.isVerticallyResizable = true
+        editor.isHorizontallyResizable = false
+        editor.autoresizingMask = [.width]
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainerInset = NSSize(width: 6, height: 6)
+        editor.font = DelimitedCellField.textFont
+        editor.string = value
+        editor.delegate = self
+        editor.setAccessibilityIdentifier("bailey.csv.full-field")
+        editor.setAccessibilityLabel(String(localized: "Full Field", table: "Editor"))
+        editor.frame = NSRect(x: 0, y: 0, width: 320, height: 160)
+        scroll.documentView = editor
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+
+        let close = NSButton(title: editable ? String(localized: "Cancel") : String(localized: "Close"),
+                             target: self, action: #selector(cancelField(_:)))
+        let buttons = NSStackView()
+        buttons.orientation = .horizontal
+        buttons.addView(close, in: .trailing)
+        if editable {
+            let apply = NSButton(title: String(localized: "Apply Field", table: "Editor"),
+                                 target: self, action: #selector(confirmField(_:)))
+            apply.keyEquivalent = "\r"
+            apply.keyEquivalentModifierMask = .command
+            buttons.addView(apply, in: .trailing)
+        }
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(scroll)
+        panel.addSubview(buttons)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
+            scroll.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
+            scroll.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
+            scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -6),
+            buttons.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
+            buttons.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
+            buttons.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -8)
+        ])
+        let controller = NSViewController()
+        controller.view = panel
+        popover.contentViewController = controller
+        popover.animates = false
+        popover.behavior = .transient
+        popover.delegate = self
+    }
+
+    func show(from rect: NSRect, in anchor: NSView) {
+        let width = min(420, max(220, anchor.window?.contentView?.bounds.width ?? 320))
+        popover.contentSize = NSSize(width: width, height: 204)
+        popover.show(relativeTo: rect, of: anchor, preferredEdge: .maxY)
+        editor.window?.makeFirstResponder(editor)
+    }
+
+    func apply(_ palette: DelimitedPalette) {
+        panel.layer?.backgroundColor = palette.header.cgColor
+        scroll.backgroundColor = palette.input
+        editor.backgroundColor = palette.input
+        editor.textColor = palette.text
+        editor.insertionPointColor = palette.focus
+        editor.selectedTextAttributes = [.backgroundColor: palette.selection, .foregroundColor: palette.selectedText]
+    }
+
+    @objc private func confirmField(_ sender: NSButton) { if !editor.hasMarkedText() { confirm() } }
+    @objc private func cancelField(_ sender: NSButton) { cancel() }
+
+    func popoverShouldClose(_ popover: NSPopover) -> Bool { !editor.hasMarkedText() }
+    func popoverDidClose(_ notification: Notification) { dismiss() }
+
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.cancelOperation(_:)), !textView.hasMarkedText() else { return false }
+        cancel()
+        return true
     }
 }
 
@@ -1468,17 +1786,22 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
         syncSelection()
     }
 
-    func remapRows(from previous: [Int], to current: [Int]) {
+    func remapRows(from previous: [Int], to current: [Int], columns: [Int: Int]?) {
+        if let columns { selection.remapColumns(columns) }
         if previous != current { selection.remapRows(from: previous, to: current) }
         syncSelection()
     }
 
     override func accessibilitySelectedColumns() -> [Any]? {
-        guard numberOfRows > 0, let columns = accessibilityColumns() else { return [] }
-        let indexes = selection.blocks.reduce(into: IndexSet()) { indexes, block in
+        guard let columns = accessibilityColumns() else { return [] }
+        return wholeColumns.compactMap { columns.indices.contains($0) ? columns[$0] : nil }
+    }
+
+    var wholeColumns: IndexSet {
+        guard numberOfRows > 0 else { return [] }
+        return selection.blocks.reduce(into: IndexSet()) { indexes, block in
             if block.rows.count == numberOfRows { indexes.formUnion(block.columns) }
         }
-        return indexes.compactMap { columns.indices.contains($0) ? columns[$0] : nil }
     }
 
     private func syncSelection() {

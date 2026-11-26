@@ -1,6 +1,10 @@
 import Foundation
 
 nonisolated struct DelimitedTableIndex: Sendable {
+    static let maximumColumns = 4096
+    static let maximumFields = 1_000_000
+    static let maximumSourceUnits = 32 << 20
+
     enum Separator: UInt16, CaseIterable, Sendable {
         case comma = 44
         case semicolon = 59
@@ -127,7 +131,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
                 try Task.checkCancellation()
                 scanner.nextCancellationCheck = scanner.offset + 65_536
             }
-            guard scanner.offset <= (32 << 20) - length else {
+            guard scanner.offset <= maximumSourceUnits - length else {
                 scanner.fail(.sourceLimit)
                 return scanner
             }
@@ -189,7 +193,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
         }
 
         private mutating func finishField() -> Bool {
-            guard fields.count < 1_000_000 else { fail(.fieldLimit); return false }
+            guard fields.count < maximumFields else { fail(.fieldLimit); return false }
             fields.append(Field(fieldStart, endingAt: offset))
             return true
         }

@@ -82,6 +82,21 @@ nonisolated struct DelimitedTablePresentation: Sendable {
             caret = project(caret) ?? first
             anchor = project(anchor) ?? caret
         }
+
+        mutating func remapColumns(_ indexes: [Int: Int]) {
+            func project(_ cell: Cell?) -> Cell? {
+                guard let cell, let column = indexes[cell.column] else { return nil }
+                return Cell(row: cell.row, column: column)
+            }
+            blocks = blocks.compactMap { block in
+                let columns = IndexSet(block.columns.compactMap { indexes[$0] })
+                return columns.isEmpty ? nil : Block(rows: block.rows, columns: columns)
+            }
+            caret = project(caret) ?? blocks.first.flatMap { block in
+                block.rows.first.flatMap { row in block.columns.first.map { Cell(row: row, column: $0) } }
+            }
+            anchor = project(anchor) ?? caret
+        }
     }
 
     let id = UUID()
@@ -157,7 +172,7 @@ nonisolated struct DelimitedTablePresentation: Sendable {
         let selectedColumns = selection.columns
         guard !selectedRows.isEmpty, !selectedColumns.isEmpty,
               let finalRow = selectedRows.last, rows.indices.contains(finalRow),
-              selectedRows.count <= 1_000_000 / selectedColumns.count else { return nil }
+              selectedRows.count <= DelimitedTableIndex.maximumFields / selectedColumns.count else { return nil }
         let text = source as NSString
         var output = ""
         var size = 0
