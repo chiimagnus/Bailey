@@ -18,7 +18,7 @@ P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例�
 
 内容沿用现有职责：`MarkdownDocument` 将 swift-markdown AST 投影成不可变展示节点；
 `MarkdownHTML`／SwiftSoup 只处理静态白名单 HTML，`SVGArtwork`／SwiftDraw 净化 SVG，
-`MarkdownResource` 经当前项目／机器的 backend 读取授权资源；ImageIO 处理静态图片与有界 GIF，
+`PreviewResource` 经当前项目／机器的 backend 读取授权资源；ImageIO 处理静态图片与有界 GIF，
 `MarkdownMermaid`／MermaidKit 离线绘图，AVKit 负责用户主动播放的媒体。
 数学使用 `MarkdownMath` 与 `MarkdownFormulaView` 的公开 SwiftUIMath Canvas API，
 脚注仅在 swift-markdown 不支持的语法范围做最小扩展。
@@ -27,6 +27,10 @@ P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例�
 
 **每项任务的完成门槛**：专项小输入用于 Red→Green 定位，但必须同时通过下面定义的
 真实复杂文档、关联交互与适用边界；不把完整混排验收推迟到 P2-T9，也不为测试硬编码特例。
+
+后续 [P3](plan-p3.md) 在本阶段能力上补齐行内／块 HTML 统一语义、
+GitHub 文件兼容、源码链接导航及预览查找；共享语义快照以 P3 的真实接入为准。
+本页保留 P2 的原任务和验收边界，不另建兼容渲染路径。
 
 ## 任务
 
@@ -43,7 +47,7 @@ P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例�
 ### P2-T2 保存、恢复、链接与真实文件行为
 
 - 沿用 `FileTab.save`／外部修改检测／编码与 BOM；视图模式不入持久化文件正文、不自动保存，重开可以默认源码；单标签和 Dock companion 按同一保存保护关闭。
-- 相对链接经 `Project.openMarkdownLink` → `MarkdownResource.resolvedFile` → `Project.openFile` 打开已授权的实际文件，并复用标签；`#本页标题`、`other.md#标题`、百分号编码／空格／重复标题与脚注目标准确跳转，非法片段就地提示。
+- 相对链接经 `Project.openMarkdownLink` → `PreviewResource.resolvedFile` → `Project.openFile` 打开已授权的实际文件，并复用标签；`#本页标题`、`other.md#标题`、百分号编码／空格／重复标题与脚注目标准确跳转，非法片段就地提示。
   外链仅在主动点击时显式送入 Bailey Browser，点击前无网络访问或预取。
 - 验证 CRLF／UTF-8 BOM／UTF-16、重命名、冲突、只读、SSH 断线、关闭否决、重启恢复及 VoiceOver。
 
@@ -52,7 +56,7 @@ P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例�
 
 - 从 swift-markdown `HTMLBlock`／`InlineHTML` 和图片节点提取原始内容，交给 SwiftSoup／SwiftDraw／ImageIO／AVKit；完整保留段落前后的混排。
 - `MarkdownHTML` 只支持可映射为原生 SwiftUI 的静态 HTML 标签：`img`、`svg`、`details`、表格、列表、标题、强调、带 controls 的音视频等。未知标签按可读文本降级；事件处理器、远端链接资源、iframe、表单和 script 不执行。
-- 通过 `MarkdownResource` 读取实际项目内资源：PNG/JPEG/HEIC/WebP/GIF、渐变及滤镜 SVG；GIF 与媒体生命周期按资源预算限制。视图销毁时停止播放并清理临时文件。
+- 通过 `PreviewResource` 读取实际项目内资源：PNG/JPEG/HEIC/WebP/GIF、渐变及滤镜 SVG；GIF 与媒体生命周期按资源预算限制。视图销毁时停止播放并清理临时文件。
 - 宿主和实际 GUI 验证 HTML inline 连续排版、图片尺寸、Retina、相对链接、恶意 SVG 与 HTML、媒体 seek／暂停／释放，以及 SSH 与本地路径隔离。
 
 <a id="p2-t4"></a>
@@ -129,7 +133,7 @@ P2-T5/T6 分别完善文本级定位和只读展示选择，不靠滚动比例�
   折叠状态归当前 `FileTab` 的**只读展示**，保留源码、查找与保存字节。
   在重解析、修改标题、切换模式及恢复后按有效源码身份保持／废弃折叠项，
   不让隐藏内容丢失或滚动突然跳顶；展开可回到原阅读锚点。
-- **富内容查看**：图片、SVG、GIF 点击复用 `MarkdownResource` 授权的文件查看入口；
+- **富内容查看**：图片、SVG、GIF 点击复用 `PreviewResource`（原 MarkdownResource）授权的文件查看入口；
   Mermaid 是本地生成的图形，直接在只读查看界面放大，不能把它误当作工作区真实文件。
   大图可平移、缩放、适应视口／查看原比例，极窄 Dock 不裁掉用户无法触达的内容。
   脚注引用／定义及返回位置形成往返导航；媒体暂停与销毁复用 P2-T3，失败资源保留可读占位。
