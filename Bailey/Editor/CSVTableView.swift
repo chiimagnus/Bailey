@@ -85,7 +85,10 @@ final class DelimitedTableControls {
 
     func finishColumnMove() { columnMove = nil }
 
-    func retire() { parsed = nil }
+    func retire() {
+        grid?.clearProjection()
+        parsed = nil
+    }
 
     func perform(_ action: FindAction) {
         switch action {

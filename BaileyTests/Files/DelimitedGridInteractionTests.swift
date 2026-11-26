@@ -93,6 +93,41 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data("Name,Value\r\nItem,中文\n".utf8))
     }
 
+    func testClosingFileRetiresRetainedNativeGridBeforeSwiftUIUnmount() async throws {
+        let original = "Name,Value\n" + String(repeating: "Item,42\n", count: 100_000)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        let bytes = Data(original.utf8)
+        try bytes.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let project = Project(fallbackName: "CSV retirement", workspaceConfiguration: .standard)
+        project.openLocalFile(url.path)
+        let tab = try XCTUnwrap(project.tabs.first)
+        guard case .file(let file) = tab.content else { return XCTFail("Expected CSV file") }
+        try await file.waitForText()
+        defer { project.terminateAll() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 500, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Item")
+        XCTAssertEqual(grid.table.numberOfRows, 100_000)
+        XCTAssertNotNil(file.delimitedTable.parsed)
+        grid.table.select(.init(row: 99_999, column: 1), reveal: true)
+        XCTAssertEqual(grid.table.selection.caret, .init(row: 99_999, column: 1))
+
+        project.close(tab)
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(file.delimitedTable.parsed)
+        XCTAssertEqual(file.nativeTextStorage.length, 0)
+        XCTAssertEqual(grid.table.numberOfRows, 0, "A retained native view must release the retired projection synchronously")
+        XCTAssertTrue(grid.table.selection.blocks.isEmpty)
+        XCTAssertNil(grid.table.selection.caret)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
     func testDisplayChangesRejectStaleNativePasteBeforeSwiftUIUpdates() async throws {
         let original = "Name,Value\r\nBeta,old\nAlpha,keep"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
