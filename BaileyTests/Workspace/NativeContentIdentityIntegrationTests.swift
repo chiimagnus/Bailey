@@ -559,6 +559,127 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
                        "Tabs must stop bouncing when the panel widens again")
     }
 
+    func testOverflowingTabStripMountsOnlyViewportTabsAndReachesBothEnds() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        manager.projects.append(project)
+        manager.selectProject(id: project.id)
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath), encoding: .utf8)
+        for index in 0..<120 {
+            let prefix = index.isMultiple(of: 3) ? String(repeating: "長い名前-", count: 5) : "file-"
+            let path = root.appendingPathComponent(prefix + String(index) + ".swift")
+            try source.write(to: path, atomically: true, encoding: .utf8)
+            project.openFile(path.path)
+        }
+        let selected = try XCTUnwrap(project.selectedTab)
+        let group = try XCTUnwrap(project.dock.group(containing: .tab(selected.id)))
+        let ordered = group.items.compactMap(\.tabID)
+        XCTAssertEqual(ordered.count, 120)
+        let first = try XCTUnwrap(project.tabs.first { $0.id == ordered.first })
+        let last = try XCTUnwrap(project.tabs.first { $0.id == ordered.last })
+        XCTAssertEqual(project.tabs.count, 120)
+
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 1200, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        func descendants(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+        func strip() -> NSScrollView? {
+            descendants(host).compactMap { $0 as? NSScrollView }.filter {
+                $0.bounds.height > 10 && $0.bounds.height < 30
+            }.max { ($0.documentView?.frame.width ?? 0) < ($1.documentView?.frame.width ?? 0) }
+        }
+        func layout() {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        do {
+            try await wait {
+                layout()
+                return (strip()?.documentView?.frame.width ?? 0) > 5_000
+            }
+        } catch {
+            print("TAB_STRIP_SCROLLS", descendants(host).compactMap { $0 as? NSScrollView }.map {
+                "\($0.bounds.size) -> \($0.documentView?.frame.size ?? .zero)"
+            })
+            throw error
+        }
+        func mountedCount() -> Int {
+            descendants(host).compactMap { $0 as? ContextMenuClickView }.filter { $0.onMiddleClick != nil }.count
+        }
+        try await wait {
+            layout()
+            return mountedCount() > 3
+        }
+        print("TAB_STRIP_SCALE tabs=120 mounted=\(mountedCount())")
+        XCTAssertLessThan(mountedCount(), 45, "Offscreen tabs must not mount native menu/drag surfaces")
+
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let access = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(access, AXError.success.rawValue)
+
+        func selectAndReveal(_ tab: PaneTab, atEnd: Bool) async throws {
+            guard case .file(let file) = tab.content else { return XCTFail("Expected file") }
+            project.selectTab(tab.id)
+            func attribute(_ node: NSObject, _ key: String) -> Any? {
+                guard node.responds(to: NSSelectorFromString(key)) else { return nil }
+                return node.value(forKey: key)
+            }
+            func findTab(_ node: NSObject) -> NSObject? {
+                if attribute(node, "accessibilityValue") as? String == file.path,
+                   attribute(node, "accessibilityIdentifier") as? String == "bailey.tab.file" {
+                    return node
+                }
+                let children = attribute(node, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                    ?? attribute(node, "accessibilityChildren") as? [NSObject] ?? []
+                return children.lazy.compactMap(findTab).first
+            }
+            var measured = CGRect.zero
+            var viewport = CGRect.zero
+            defer { print("TAB_STRIP_REVEAL end=\(atEnd) frame=\(measured) viewport=\(viewport)") }
+            try await wait {
+                layout()
+                guard let scroll = strip(),
+                      let element = findTab(host),
+                      let frame = attribute(element, "accessibilityFrame") as? NSRect else { return false }
+                measured = frame
+                viewport = window.convertToScreen(scroll.contentView.convert(scroll.contentView.bounds, to: nil))
+                return frame.width >= TabItemChrome.minimumWidth
+                    && frame.intersection(viewport).width >= min(frame.width, viewport.width) - 2
+            }
+            XCTAssertEqual(project.selectedTabID, tab.id)
+            try await wait {
+                layout()
+                return file.editorView?.window === window
+            }
+            XCTAssertEqual(file.nativeTextStorage.string, source)
+        }
+        try await selectAndReveal(first, atEnd: false)
+        try await selectAndReveal(last, atEnd: true)
+        for width: CGFloat in [700, 340, 1700, 1200] {
+            window.setContentSize(NSSize(width: width, height: 500))
+            try await selectAndReveal(first, atEnd: false)
+            try await selectAndReveal(last, atEnd: true)
+        }
+        XCTAssertEqual(project.tabs.count, 120)
+    }
+
     func testFileDiffFileReturnsToSameEditorAndDiffDocument() async throws {
         let (root, fileURL) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

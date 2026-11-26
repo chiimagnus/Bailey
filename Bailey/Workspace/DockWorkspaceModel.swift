@@ -4,7 +4,7 @@ import Observation
 
 /// One movable workspace tab. A project owns its live editor/terminal tabs;
 /// this model owns only where each tab is displayed.
-enum DockItem: Hashable {
+nonisolated enum DockItem: Hashable, Sendable {
     case projects
     case files
     case git

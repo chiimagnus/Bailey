@@ -57,6 +57,9 @@ struct PaneTabItem: View {
 }
 
 struct TabItemChrome: View {
+    private static let iconWidth: CGFloat = 14
+    private static let contentPadding: CGFloat = 4
+    static var minimumWidth: CGFloat { iconWidth + 2 * contentPadding }
     private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
     let systemImage: String
@@ -84,7 +87,7 @@ struct TabItemChrome: View {
                             Image(systemName: "xmark")
                                 .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(.secondary)
-                                .frame(width: 14, height: 14)
+                                .frame(width: Self.iconWidth, height: Self.iconWidth)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -114,7 +117,7 @@ struct TabItemChrome: View {
                             )
                     }
                 }
-                .frame(width: 14, height: 14)
+                .frame(width: Self.iconWidth, height: Self.iconWidth)
                 Text(verbatim: title)
                     .font(.system(size: 11.5))
                     .foregroundStyle((isDisplayed || isSelected) && isPaneFocused ? .primary : .secondary)
@@ -125,7 +128,7 @@ struct TabItemChrome: View {
                         .frame(width: 5, height: 5)
                 }
             }
-            .padding(4)
+            .padding(Self.contentPadding)
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)

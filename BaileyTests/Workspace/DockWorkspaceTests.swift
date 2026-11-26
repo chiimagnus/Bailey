@@ -940,6 +940,27 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertTrue(browser.webView === webView)
     }
 
+    func testDropInsertionUsesMountedTabRangeInsteadOfUnloadedTail() throws {
+        let dock = DockWorkspaceModel()
+        let ids = (0..<120).map { _ in UUID() }
+        let items = ids.map(DockItem.tab)
+        dock.syncTabs(ids, near: nil)
+        let group = try XCTUnwrap(dock.group(containing: items[0]))
+        let dragging = DockTabDragCoordinator()
+        dragging.setGroupFrame(CGRect(x: 100, y: 100, width: 600, height: 400), for: group.id)
+        for index in 20...25 {
+            dragging.setTabFrame(CGRect(x: 140 + (index - 20) * 60, y: 100, width: 60, height: 38),
+                                 for: items[index], in: group.id)
+        }
+        dragging.begin(.files, dock: dock)
+        for (x, index, insertion) in [(141, 20, 140), (250, 22, 260), (510, 26, 500)] {
+            dragging.update(.files, at: CGPoint(x: x, y: 118), dock: dock)
+            XCTAssertEqual(dragging.position?.index, index)
+            XCTAssertEqual(dragging.insertionX(in: group), CGFloat(insertion))
+        }
+        dragging.cancel()
+    }
+
     func testDefaultLayoutAndDropHitTesting() throws {
         let frame = CGRect(x: 10, y: 20, width: 300, height: 300)
         XCTAssertEqual(DockDropHitTest.edge(at: CGPoint(x: 12, y: 170), in: frame), .left)
