@@ -135,9 +135,10 @@ nonisolated indirect enum MarkdownHTML: Sendable, Equatable {
         case "video", "audio":
             let fallback = element.children().filter { $0.tagNameNormal() == "source" }
             let candidates = try [element.attr("src")] + fallback.map { try $0.attr("src") }
+            let kind: NativeMedia.Kind = tag == "video" ? .video : .audio
             if element.hasAttr("controls"),
-               let url = candidates.compactMap(reference).first(where: { MarkdownMedia.video(for: $0) == (tag == "video") }) {
-                return [.media(url, video: tag == "video")]
+               let url = candidates.compactMap(reference).first(where: { NativeMedia.candidate($0.pathExtension) == kind }) {
+                return [.media(url, video: kind == .video)]
             }
             return [.text(try element.outerHtml())]
         case "details":

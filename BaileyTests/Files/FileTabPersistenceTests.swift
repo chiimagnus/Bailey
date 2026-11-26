@@ -1,8 +1,10 @@
 import AppKit
 import Darwin
 import Foundation
+import ImageIO
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import Bailey
 
@@ -26,7 +28,12 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private(set) var readingPath: String?
     var pendingReadCount: Int { reading.count }
 
-    init(path: String, contents: Data) { files = [path: contents] }
+    private let reportsRegularFiles: Bool
+
+    init(path: String, contents: Data, reportsRegularFiles: Bool = false) {
+        files = [path: contents]
+        self.reportsRegularFiles = reportsRegularFiles
+    }
 
     func pauseOneRead() { nextReadPaused = true }
     func finishRead(with data: Data? = nil) {
@@ -36,18 +43,20 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         if let data { continuation.resume(returning: data) }
         else { continuation.resume(throwing: Rejection.simulated) }
     }
-    func finishWrite(failing: Bool = false) {
+    func finishWrite(failing: Bool = false, transportTimedOut: Bool = false) {
         guard let pending = writing else { return }
         writing = nil
         writingPath = nil
         if failing {
-            pending.finish.resume(throwing: Rejection.simulated)
+            if transportTimedOut { pending.finish.resume(throwing: WorkspaceError.timedOut) }
+            else { pending.finish.resume(throwing: Rejection.simulated) }
         } else if let expected = pending.expected,
                   !(files[pending.path].map(expected.matches) ?? false) {
             pending.finish.resume(throwing: WorkspaceError.changedExternally)
         } else {
             files[pending.path] = pending.data
-            pending.finish.resume()
+            if transportTimedOut { pending.finish.resume(throwing: WorkspaceError.timedOut) }
+            else { pending.finish.resume() }
         }
     }
     func data(at path: String) -> Data? { files[path] }
@@ -84,7 +93,11 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     }
 
     func list(directory: String) async throws -> [WorkspaceEntry] { [] }
-    func stat(path: String) async throws -> WorkspaceStat? { nil }
+    func stat(path: String) async throws -> WorkspaceStat? {
+        guard reportsRegularFiles, let bytes = files[path] else { return nil }
+        return WorkspaceStat(isRegular: true, isDirectory: false, isSymlink: false,
+                             size: bytes.count, mtime: .distantPast)
+    }
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
@@ -109,6 +122,18 @@ private func waitForFileTabState(_ condition: () async -> Bool) async throws {
         guard Date() < deadline else { return XCTFail("Editor operation did not settle") }
         try await Task.sleep(for: .milliseconds(10))
     }
+}
+
+/// The independent process neither observes nor participates in Bailey's publication lock.
+nonisolated func publishIndependentFile(_ source: URL, to path: String, replacing: Bool) throws {
+    guard FileManager.default.fileExists(atPath: source.path) else { return }
+    let writer = Process()
+    writer.executableURL = URL(fileURLWithPath: "/bin/sh")
+    writer.arguments = ["-c", replacing ? "mv -f \"$1\" \"$2\"" : "cat \"$1\" > \"$2\" && rm \"$1\"", "_",
+                        source.path, path]
+    try writer.run()
+    writer.waitUntilExit()
+    guard writer.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
 }
 
 @MainActor
@@ -136,11 +161,11 @@ final class FileTabPersistenceTests: XCTestCase {
             file.autoSaveSuspendedForClose = true
             XCTAssertEqual(file.text, source)
             XCTAssertEqual(file.fileEncoding, encoding)
-            XCTAssertFalse(file.showsMarkdownPreview)
-            file.setMarkdownPreview(true)
-            XCTAssertTrue(file.showsMarkdownPreview)
-            file.setMarkdownPreview(false)
-            file.setMarkdownPreview(true)
+            XCTAssertFalse(file.showsFilePreview)
+            file.setFilePreview(true)
+            XCTAssertTrue(file.showsFilePreview)
+            file.setFilePreview(false)
+            file.setFilePreview(true)
             XCTAssertEqual(try Data(contentsOf: path), originalBytes,
                            "Switching Markdown preview cannot re-encode the original file")
             XCTAssertFalse(file.isDirty)
@@ -157,7 +182,7 @@ final class FileTabPersistenceTests: XCTestCase {
             let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
                                    workspaceIdentity: nil)
             try await reopened.waitForText()
-            XCTAssertFalse(reopened.showsMarkdownPreview,
+            XCTAssertFalse(reopened.showsFilePreview,
                            "Reopening a Markdown file defaults to source mode")
             XCTAssertEqual(reopened.text, edited)
             XCTAssertEqual(reopened.fileEncoding, encoding)
@@ -183,9 +208,9 @@ final class FileTabPersistenceTests: XCTestCase {
                              workspaceIdentity: nil)
         try await first.waitForText()
         try await second.waitForText()
-        XCTAssertNotEqual(first.markdownResourceID, second.markdownResourceID,
+        XCTAssertNotEqual(first.fileContentRevision, second.fileContentRevision,
                           "Two different files may have identical revisions but must not share a preview target")
-        XCTAssertNotEqual(first.markdownRequestID, second.markdownRequestID,
+        XCTAssertNotEqual(first.textPreviewRequestID, second.textPreviewRequestID,
                           "SwiftUI .task(id:) must reparse after a different FileTab becomes visible")
         XCTAssertEqual(first.text, "# First\n")
         XCTAssertEqual(second.text, "# Second\n")
@@ -207,10 +232,10 @@ final class FileTabPersistenceTests: XCTestCase {
                                workspaceIdentity: nil)
             try await file.waitForText()
             file.autoSaveSuspendedForClose = true
-            let oldRequest = file.markdownRequestID
+            let oldRequest = file.textPreviewRequestID
             file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
                                                     with: "After")
-            XCTAssertNotEqual(file.markdownRequestID, oldRequest)
+            XCTAssertNotEqual(file.textPreviewRequestID, oldRequest)
             let document = try await MarkdownDocument.parse(file.text)
             XCTAssertEqual(document.blocks.count, count + 1,
                            "The newest source must retain every long-document block")
@@ -242,32 +267,32 @@ final class FileTabPersistenceTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         XCTAssertTrue(file.canPreviewMarkdown)
-        let resource = file.markdownResourceID
-        let firstRequest = file.markdownRequestID
+        let resource = file.fileContentRevision
+        let firstRequest = file.textPreviewRequestID
         let bodyOffset = (file.text as NSString).range(of: "中文").location
         file.markdownReadingOffset = bodyOffset
-        file.setMarkdownPreview(true)
-        XCTAssertTrue(file.showsMarkdownPreview)
-        XCTAssertEqual(file.markdownRequestID, firstRequest)
+        file.setFilePreview(true)
+        XCTAssertTrue(file.showsFilePreview)
+        XCTAssertEqual(file.textPreviewRequestID, firstRequest)
 
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 6),
                                                 with: "After")
-        let secondRequest = file.markdownRequestID
+        let secondRequest = file.textPreviewRequestID
         XCTAssertNotEqual(secondRequest, firstRequest)
-        XCTAssertEqual(file.markdownResourceID, resource,
+        XCTAssertEqual(file.fileContentRevision, resource,
                        "Ordinary typing must not invalidate the file's resource identity")
         XCTAssertEqual(file.text, "# After\n\n中文🙂 and code.\n")
         XCTAssertEqual(file.markdownReadingOffset, bodyOffset - 1)
         file.nativeTextStorage.replaceCharacters(in: NSRange(location: 2, length: 5),
                                                 with: "Newest")
-        XCTAssertNotEqual(file.markdownRequestID, secondRequest,
+        XCTAssertNotEqual(file.textPreviewRequestID, secondRequest,
                           "A second edit must supersede a pending asynchronous preview parse")
         XCTAssertEqual(file.text, "# Newest\n\n中文🙂 and code.\n")
-        file.setMarkdownPreview(false)
-        file.setMarkdownPreview(true)
+        file.setFilePreview(false)
+        file.setFilePreview(true)
         XCTAssertEqual(file.markdownReadingOffset, bodyOffset,
                        "Switching source/preview cannot reset the stored reading position")
-        XCTAssertEqual(file.markdownResourceID, resource)
+        XCTAssertEqual(file.fileContentRevision, resource)
         XCTAssertTrue(file.isDirty)
         XCTAssertEqual(try Data(contentsOf: path), original,
                        "Live preview and unsaved edits must not write the original file")
@@ -298,6 +323,343 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertNotNil(file.saveError)
     }
 
+    func testReviewedSaveConflictBindsDiskDraftAndOwnerAcrossTextFormats() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encoding = TextFileEncoding.utf8BOM
+        for suffix in ["csv", "html", "svg", "txt"] {
+            let path = root.appendingPathComponent("document." + suffix)
+            let base = "Name,Value\r\nItem,old 中文\n"
+            let external = "Name,Value\r\nItem,ext 中文\n"
+            let newer = "Name,Value\r\nItem,two 中文\n"
+            let draft = "Name,Value\r\nItem,new 中文\n"
+            let latest = "Name,Value\r\nItem,end 中文\n"
+            let original = try XCTUnwrap(encoding.encoded(base))
+            let disk = try XCTUnwrap(encoding.encoded(external))
+            let disk2 = try XCTUnwrap(encoding.encoded(newer))
+            try original.write(to: path)
+            let first = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            let other = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { first.retireContent(); other.retireContent() }
+            try await first.waitForText()
+            try await other.waitForText()
+            first.autoSaveSuspendedForClose = true
+            other.autoSaveSuspendedForClose = true
+            first.text = draft
+            other.text = draft
+            try disk.write(to: path, options: .atomic)
+            await first.save()
+            await other.save()
+            XCTAssertTrue(first.canCompareSaveConflict, suffix)
+            let review = try await first.compareSaveConflict()
+            XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: disk))
+            XCTAssertEqual(review.draftVersion, WorkspaceFileVersion(data: try XCTUnwrap(encoding.encoded(draft))))
+            XCTAssertTrue(review.review.text.contains("Item,ext 中文"))
+            XCTAssertTrue(review.review.text.contains("Item,new 中文"))
+            XCTAssertEqual(try Data(contentsOf: path), disk, "Comparison/cancel never writes")
+            do {
+                try await other.resolveSaveConflict(review)
+                XCTFail("A review must not authorize another document")
+            } catch WorkspaceError.changedExternally {}
+            try disk2.write(to: path, options: .atomic)
+            do {
+                try await first.resolveSaveConflict(review)
+                XCTFail("A stale disk revision must not be overwritten")
+            } catch WorkspaceError.changedExternally {}
+            XCTAssertEqual(try Data(contentsOf: path), disk2)
+            XCTAssertTrue(first.isDirty)
+            XCTAssertEqual(first.text, draft)
+            let second = try await first.compareSaveConflict()
+            first.text = latest
+            do {
+                try await first.resolveSaveConflict(second)
+                XCTFail("A changed draft needs another comparison")
+            } catch WorkspaceError.changedExternally {}
+            XCTAssertEqual(try Data(contentsOf: path), disk2)
+            XCTAssertEqual(first.text, latest)
+            let final = try await first.compareSaveConflict()
+            try await first.resolveSaveConflict(final)
+            XCTAssertEqual(try Data(contentsOf: path), try XCTUnwrap(encoding.encoded(latest)))
+            XCTAssertFalse(first.isDirty)
+            XCTAssertNil(first.saveError)
+            XCTAssertFalse(first.canCompareSaveConflict)
+            XCTAssertTrue(other.isDirty)
+            do {
+                try await first.resolveSaveConflict(final)
+                XCTFail("Successful confirmation cannot be replayed")
+            } catch WorkspaceError.changedExternally {}
+        }
+    }
+
+    func testReviewedEncodingOnlyConflictRetainsExplicitIntentAcrossRefresh() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let original = "draft 中文🙂\r\n"
+        try Data(original.utf8).write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let external = Data("disk 中文🙂\r\n".utf8)
+        try external.write(to: path, options: .atomic)
+        await file.save(as: .utf16LEBOM)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertTrue(file.canCompareSaveConflict)
+        file.refreshWhenSelected()
+        file.reopen(using: .latin1)
+        let review = try await file.compareSaveConflict()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(review.diskEncoding, TextFileEncoding.utf8.name)
+        XCTAssertTrue(review.review.text.contains("disk 中文🙂"))
+        XCTAssertEqual(review.draftEncoding, TextFileEncoding.utf16LEBOM.name)
+        XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: external))
+        try await file.resolveSaveConflict(review)
+        XCTAssertEqual(try Data(contentsOf: path), try XCTUnwrap(TextFileEncoding.utf16LEBOM.encoded(original)))
+        XCTAssertEqual(file.fileEncoding, .utf16LEBOM)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+    }
+
+    func testReviewedOverwritePreservesEditsMadeDuringPublication() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("Name,Value\nItem,old\n".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let reviewed = "Name,Value\nItem,new\n"
+        let newest = "Name,Value\nItem,end\n"
+        file.text = reviewed
+        await backend.replace(path: path, with: Data("Name,Value\nItem,ext\n".utf8))
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        let publishing = Task { try await file.resolveSaveConflict(review) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        file.text = newest
+        await backend.finishWrite(transportTimedOut: true)
+        try await publishing.value
+        let published = await backend.data(at: path)
+        XCTAssertEqual(published, Data(reviewed.utf8))
+        XCTAssertEqual(file.text, newest)
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let retry = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await retry.value
+        let final = await backend.data(at: path)
+        XCTAssertEqual(final, Data(newest.utf8))
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+    }
+
+    func testReviewedComparisonHandlesLargeCSVAndRefusesUnboundedLineModel() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let base = "Name,Value\n" + String(repeating: "row,12345678901234567890123456789012345678901234567890\n", count: 100_000)
+        let external = base + "disk,external\n"
+        let draft = base + "draft,local\n"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data(base.utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = draft
+        await backend.replace(path: path, with: Data(external.utf8))
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        XCTAssertEqual(review.diskVersion, WorkspaceFileVersion(data: Data(external.utf8)))
+        XCTAssertTrue(review.review.text.contains("disk,external"))
+        XCTAssertTrue(review.review.text.contains("draft,local"))
+        await backend.replace(path: path, with: Data(repeating: 10, count: 500_001))
+        do {
+            _ = try await file.compareSaveConflict()
+            XCTFail("Excessive row allocation must be refused without writing")
+        } catch WorkspaceError.tooLarge {}
+        let actual = await backend.data(at: path)
+        XCTAssertEqual(actual, Data(repeating: 10, count: 500_001))
+        XCTAssertEqual(file.text, draft)
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testReviewedOverwriteStillPreservesLateIndependentWriterAndRecovery() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("table.csv")
+        let rival = root.appendingPathComponent("rival.csv")
+        let base = Data("Name,Value\nItem,old\n".utf8)
+        let external = Data("Name,Value\nItem,ext\n".utf8)
+        let late = Data("Name,Value\nItem,end\n".utf8)
+        let draft = "Name,Value\nItem,new\n"
+        try base.write(to: path)
+        let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+            try publishIndependentFile(rival, to: $0, replacing: true)
+        })
+        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = draft
+        try external.write(to: path, options: .atomic)
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        try late.write(to: rival)
+        do {
+            try await file.resolveSaveConflict(review)
+            XCTFail("Explicit approval must retain the exchange verification and recovery")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, draft)
+        let recovery = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") })
+            .appendingPathComponent(path.lastPathComponent)
+        XCTAssertEqual(try Data(contentsOf: recovery), late)
+        XCTAssertTrue(file.saveError?.contains(recovery.path) == true)
+        XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+        let next = try await file.compareSaveConflict()
+        try await file.resolveSaveConflict(next)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        XCTAssertEqual(try Data(contentsOf: recovery), late, "Explicit resolution must not delete recovery files")
+    }
+
+    func testReviewedConflictCannotFollowRenamedTargetOrCompareBinaryDisk() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("old.txt")
+        let renamed = root.appendingPathComponent("new.txt")
+        try Data("base".utf8).write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "draft"
+        let external = Data("external".utf8)
+        try external.write(to: path, options: .atomic)
+        await file.save()
+        let review = try await file.compareSaveConflict()
+        try FileManager.default.moveItem(at: path, to: renamed)
+        try external.write(to: path)
+        file.updatePath(renamed.path)
+        do {
+            try await file.resolveSaveConflict(review)
+            XCTFail("A prior target's review must expire")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), external)
+        XCTAssertEqual(try Data(contentsOf: renamed), external)
+        let binary = Data([0, 1, 2, 0])
+        try binary.write(to: renamed, options: .atomic)
+        do {
+            _ = try await file.compareSaveConflict()
+            XCTFail("A binary replacement cannot be blindly approved as text")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: renamed), binary)
+        XCTAssertEqual(file.text, "draft")
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testCSVLateIndependentPublicationRetainsDisplacedBytesAndDraft() async throws {
+        for replacing in [false, true] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bailey-csv-late-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let path = root.appendingPathComponent("table 中文.csv")
+            let rival = root.appendingPathComponent("rival.csv")
+            let baseline = Data("Name,Value\r\nItem,old\n".utf8)
+            let external = Data("Name,Value\r\nItem,ext\n".utf8)
+            let draft = "Name,Value\r\nItem,new\n"
+            try baseline.write(to: path)
+            try external.write(to: rival)
+            let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+                try publishIndependentFile(rival, to: $0, replacing: replacing)
+            })
+            let file = FileTab(path: path.path, backend: backend, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            try await file.editDelimited(.paste("new", rows: [1], origin: .init(row: 0, column: 1), columns: 2),
+                                         using: snapshot)
+            XCTAssertEqual(file.text, draft)
+            await file.save()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: rival.path), "Independent publication must have run")
+            XCTAssertTrue(file.isDirty)
+            XCTAssertEqual(file.text, draft)
+            XCTAssertNotNil(file.saveError)
+            let entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            let recovery = entries.filter { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") }
+            XCTAssertEqual(recovery.count, 1)
+            guard let directory = recovery.first else { continue }
+            let stored = directory.appendingPathComponent(path.lastPathComponent)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertTrue(file.saveError?.contains(stored.path) == true,
+                          "Expected recovery at \(stored.path), got \(file.saveError ?? "nil")")
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            // Repeating Save must neither consume the recovery nor accept the stale baseline.
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            XCTAssertTrue(file.saveError?.contains(stored.path) == true, "A retry must retain the exact recovery location")
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            // A second independent publication must retain both recovery paths.
+            try baseline.write(to: path, options: .atomic)
+            let secondExternal = Data("Name,Value\r\nItem,two\n".utf8)
+            try secondExternal.write(to: rival)
+            await file.save()
+            XCTAssertTrue(file.isDirty)
+            let recoveries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") }
+                .map { $0.appendingPathComponent(path.lastPathComponent) }
+            XCTAssertEqual(recoveries.count, 2)
+            let second = try XCTUnwrap(recoveries.first { $0.path != stored.path })
+            XCTAssertEqual(try Data(contentsOf: second), secondExternal)
+            await file.save()
+            let notice = try XCTUnwrap(file.saveError)
+            for location in [stored, second] {
+                XCTAssertTrue(notice.contains(location.path))
+                XCTAssertEqual(notice.components(separatedBy: location.path).count, 2,
+                               "Each recovery should be reported once")
+            }
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            XCTAssertEqual(file.text, draft)
+            // Explicitly reconcile the source to the accepted baseline, then retry.
+            try baseline.write(to: path, options: .atomic)
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: second), secondExternal)
+        }
+    }
+
+    func testRecoveryBannerWrapsLongPathsInNarrowNativeHost() throws {
+        let path = "/private/var/folders/" + String(repeating: "目录-with-long-name/", count: 6)
+            + "Bailey Save Recovery 12345678-1234-1234-1234-123456789012/实验.csv"
+        let messages = [DisplacedSaveError(recoveryPath: path).localizedDescription,
+                        "保存期间文件发生变化，目标可能包含草稿。被替换的文件已保留在：" + path]
+        for message in messages {
+            for scheme in [ColorScheme.light, .dark] {
+                func height(_ width: CGFloat) -> CGFloat {
+                    let host = NSHostingView(rootView: WorkspaceErrorBanner(message: message)
+                        .environment(\.colorScheme, scheme).frame(width: width))
+                    let size = host.fittingSize
+                    XCTAssertEqual(size.width, width, accuracy: 1)
+                    return size.height
+                }
+                let wide = height(920), medium = height(480), narrow = height(220)
+                XCTAssertGreaterThan(wide, 20)
+                XCTAssertGreaterThan(medium, wide)
+                XCTAssertGreaterThan(narrow, medium)
+                print("RECOVERY_BANNER scheme=\(scheme) widths=920/480/220 heights=\(wide)/\(medium)/\(narrow)")
+            }
+        }
+    }
+
     func testLocalConditionalWriteKeepsModeAndDoesNotFollowSymlink() async throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-cas-local-\(UUID().uuidString)")
@@ -322,6 +684,13 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: linked), baseline)
         XCTAssertEqual(try Data(contentsOf: source), update)
         XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: linked.path))
+        let relative = folder.appendingPathComponent("relative.sh")
+        try FileManager.default.createSymbolicLink(atPath: relative.path, withDestinationPath: source.lastPathComponent)
+        try await backend.write(path: relative.path, data: baseline,
+                                ifUnchanged: WorkspaceFileVersion(data: update))
+        XCTAssertEqual(try Data(contentsOf: relative), baseline)
+        XCTAssertEqual(try Data(contentsOf: source), update)
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: relative.path))
         let removed = folder.appendingPathComponent("removed.sh")
         try baseline.write(to: removed)
         try FileManager.default.removeItem(at: removed)
@@ -332,7 +701,7 @@ final class FileTabPersistenceTests: XCTestCase {
         } catch WorkspaceError.changedExternally {}
         XCTAssertFalse(FileManager.default.fileExists(atPath: removed.path))
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)),
-                       Set([source.lastPathComponent, linked.lastPathComponent]))
+                       Set([source.lastPathComponent, linked.lastPathComponent, relative.lastPathComponent]))
     }
 
     func testLocalConditionalWriteSupportsLongLegalFileName() async throws {
@@ -678,6 +1047,13 @@ final class FileTabPersistenceTests: XCTestCase {
                 XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
                 XCTAssertEqual(error.code, Int(ENOTSUP), path)
             }
+            do {
+                _ = try await LocalWorkspaceBackend.shared.readPrefix(path: path, maxBytes: 128)
+                XCTFail("Nonregular file must not expose a prefix: \(path)")
+            } catch let error as NSError {
+                XCTAssertEqual(error.domain, NSPOSIXErrorDomain, path)
+                XCTAssertEqual(error.code, Int(ENOTSUP), path)
+            }
             XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
                               "FIFO and device reads must not block while waiting for input")
         }
@@ -697,6 +1073,10 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
         XCTAssertFalse(file.isDirty)
         XCTAssertEqual(try Data(contentsOf: target), Data(original.utf8))
+        let prefix = try await LocalWorkspaceBackend.shared.readPrefix(path: link.path, maxBytes: 7)
+        XCTAssertEqual(prefix, Data(original.utf8.prefix(7)))
+        let entire = try await LocalWorkspaceBackend.shared.readPrefix(path: link.path, maxBytes: 64)
+        XCTAssertEqual(entire, Data(original.utf8))
     }
 
     func testImageExtensionNeverAuthorizesUnboundedBackendRead() async throws {
@@ -710,12 +1090,79 @@ final class FileTabPersistenceTests: XCTestCase {
                        "An image-looking extension must not bypass the text size limit")
     }
 
+    func testRasterContentRatherThanSuffixDeterminesTheViewerAcrossRenameAndReload() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = try XCTUnwrap(CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8,
+                                             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 0.1, green: 0.9, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        let artwork = try XCTUnwrap(context.makeImage())
+        var fixtures: [(UTType, Data)] = []
+        for format in [UTType.png, .jpeg, .heic, .gif, .tiff, .bmp, .icns] {
+            let bytes = NSMutableData()
+            let writer = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, format.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(writer, artwork, nil)
+            XCTAssertTrue(CGImageDestinationFinalize(writer), format.identifier)
+            fixtures.append((format, bytes as Data))
+        }
+        let webp = try XCTUnwrap(Data(base64Encoded: "UklGRhwAAABXRUJQVlA4TA8AAAAvD8ADAAcQ9Y/+ByKi/wEA"))
+        fixtures.append((.webP, webp))
+        for (format, bytes) in fixtures {
+            let folder = root.appendingPathComponent(format.identifier)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            let named = folder.appendingPathComponent("sample.png")
+            try bytes.write(to: named)
+            let file = FileTab(path: named.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            func assertImage(_ tab: FileTab, at path: URL) async throws {
+                tab.loadIfNeeded()
+                try await waitForFileTabState { if case .loading = tab.content { return false }; return true }
+                guard case .image(let image) = tab.content else {
+                    return XCTFail("Expected \(format.identifier) image at \(path.lastPathComponent)")
+                }
+                let expected = try MarkdownPicture.decode(bytes)
+                XCTAssertEqual(image.pixelSize, CGSize(width: expected.poster.width, height: expected.poster.height))
+                XCTAssertEqual(try Data(contentsOf: path), bytes)
+                XCTAssertFalse(tab.isDirty)
+                XCTAssertFalse(tab.canPreviewFile, "A raster has no editable XML or CSV buffer")
+            }
+            try await assertImage(file, at: named)
+            for filename in ["无后缀 #100%", "sample.txt", "sample.svg", "sample.TIFF"] {
+                let destination = folder.appendingPathComponent(filename)
+                let from = URL(fileURLWithPath: file.path)
+                try FileManager.default.moveItem(at: from, to: destination)
+                file.updatePath(destination.path)
+                file.reloadFromDiskIfClean()
+                let reopened = FileTab(path: destination.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                defer { reopened.retireContent() }
+                try await assertImage(reopened, at: destination)
+                try await assertImage(file, at: destination)
+            }
+        }
+        for (name, source) in [("text.png", "ordinary text\n"),
+                               ("notes.txt", "BM is a shorthand for benchmark.\n"),
+                               ("format.md", "GIF89a is a GIF file header, not an image.\n"),
+                               ("vector.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"/>")] {
+            let url = root.appendingPathComponent(name)
+            let bytes = Data(source.utf8)
+            try bytes.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            defer { file.retireContent() }
+            try await file.waitForText()
+            XCTAssertEqual(file.text, source)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+        }
+    }
+
     func testActualLargeImagePreviewKeepsIndependentBoundedRead() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bitmap = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 2048, pixelsHigh: 2048,
+            bitmapDataPlanes: nil, pixelsWide: 4096, pixelsHigh: 3072,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
             isPlanar: false, colorSpaceName: .deviceRGB,
             bytesPerRow: 0, bitsPerPixel: 0
@@ -729,7 +1176,7 @@ final class FileTabPersistenceTests: XCTestCase {
             buffer[i] = UInt8(truncatingIfNeeded: entropy)
         }
         let pixels = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        XCTAssertGreaterThan(pixels.count, 8 << 20)
+        XCTAssertGreaterThan(pixels.count, 32 << 20)
         let path = root.appendingPathComponent("large-image.png")
         try pixels.write(to: path)
 
@@ -740,7 +1187,7 @@ final class FileTabPersistenceTests: XCTestCase {
         guard case .image(let preview) = file.content else {
             return XCTFail("Real PNG larger than text limit must remain previewable")
         }
-        XCTAssertEqual(preview.representations.first?.pixelsWide, 2048)
+        XCTAssertEqual(preview.poster.width, 4096)
         XCTAssertEqual(try Data(contentsOf: path), pixels)
 
         let linked = root.appendingPathComponent("linked-image.png")
@@ -755,6 +1202,162 @@ final class FileTabPersistenceTests: XCTestCase {
         guard case .image = linkedFile.content else {
             return XCTFail("A symlink to a large regular image must retain image preview")
         }
+        let renamed = root.appendingPathComponent("large raster #100%.txt")
+        try FileManager.default.moveItem(at: path, to: renamed)
+        let reopened = FileTab(path: renamed.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { reopened.retireContent() }
+        reopened.loadIfNeeded()
+        try await waitForFileTabState { if case .loading = reopened.content { return false }; return true }
+        guard case .image(let actual) = reopened.content else {
+            return XCTFail("A real image larger than the text limit remains previewable after a suffix change")
+        }
+        XCTAssertEqual(actual.pixelSize, CGSize(width: 4096, height: 3072))
+        XCTAssertEqual(try Data(contentsOf: renamed), pixels)
+    }
+
+    func testNativePNGsAtTheExactRasterPixelBudget() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bounds = [
+            (width: 1, height: 1, pixels: 1, allowed: true),
+            (width: 4_095, height: 1, pixels: 4_095, allowed: true),
+            (width: 4_096, height: 1, pixels: 4_096, allowed: true),
+            (width: 4_097, height: 1, pixels: 4_097, allowed: true),
+            (width: 1, height: 4_097, pixels: 4_097, allowed: true),
+            (width: 73_903, height: 433, pixels: 31_999_999, allowed: true),
+            (width: 8_000, height: 4_000, pixels: 32_000_000, allowed: true),
+            (width: 57_041, height: 561, pixels: 32_000_001, allowed: false),
+        ]
+        for fixture in bounds {
+            let bytes: Data = try autoreleasepool {
+                let canvas = try XCTUnwrap(CGContext(
+                    data: nil, width: fixture.width, height: fixture.height, bitsPerComponent: 8, bytesPerRow: 0,
+                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+                ))
+                canvas.setFillColor(gray: 0.4, alpha: 1)
+                canvas.fill(CGRect(x: 0, y: 0, width: fixture.width, height: fixture.height))
+                let buffer = NSMutableData()
+                let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                    buffer, UTType.png.identifier as CFString, 1, nil
+                ))
+                CGImageDestinationAddImage(destination, try XCTUnwrap(canvas.makeImage()), nil)
+                XCTAssertTrue(CGImageDestinationFinalize(destination))
+                let source = try XCTUnwrap(CGImageSourceCreateWithData(buffer, nil))
+                let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+                XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, fixture.width)
+                XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, fixture.height)
+                XCTAssertEqual(fixture.width * fixture.height, fixture.pixels)
+                let control = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 128,
+                ] as CFDictionary)
+                XCTAssertNotNil(control, "Even the over-budget input is a valid native PNG")
+                return buffer as Data
+            }
+            let path = root.appending(path: "\(fixture.width)x\(fixture.height).png")
+            try bytes.write(to: path)
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if fixture.allowed {
+                let size = CGSize(width: fixture.width, height: fixture.height)
+                guard case .image(let preview) = file.content else {
+                    return XCTFail("Native PNG with \(fixture.pixels) pixels must open")
+                }
+                XCTAssertEqual(preview.pixelSize, size)
+                let longest = max(fixture.width, fixture.height)
+                XCTAssertEqual(max(preview.poster.width, preview.poster.height), min(4_096, longest))
+                let inspected: CGImage
+                if longest > 4_096 {
+                    let request = try XCTUnwrap(file.originalImageRequest())
+                    let detail = try await request()
+                    let rect = CGRect(x: 0, y: 0, width: 20, height: 20).intersection(CGRect(origin: .zero, size: size))
+                    let region = try await detail.render(rect)
+                    XCTAssertEqual(region.rect, rect)
+                    XCTAssertEqual(region.image.width, Int(rect.width))
+                    XCTAssertEqual(region.image.height, Int(rect.height))
+                    inspected = region.image
+                } else {
+                    XCTAssertNil(file.originalImageRequest())
+                    inspected = preview.poster
+                }
+                let crop = try XCTUnwrap(inspected.cropping(to: CGRect(x: 0, y: 0, width: 1, height: 1)))
+                let probe = try XCTUnwrap(NSBitmapImageRep(cgImage: crop).colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB))
+                XCTAssertGreaterThan(probe.redComponent, 0.1)
+                XCTAssertLessThan(probe.redComponent, 0.8)
+                let inline = try MarkdownPicture.decode(bytes).poster
+                XCTAssertEqual(max(inline.width, inline.height), min(2_048, longest))
+            } else {
+                if case .unavailable(let reason) = file.content {
+                    XCTAssertEqual(reason, String(localized: "Image is too large or invalid", table: "Workspace"))
+                } else {
+                    XCTFail("Over-budget PNG must not publish decoded pixels")
+                }
+                XCTAssertNil(file.originalImageRequest())
+                XCTAssertThrowsError(try MarkdownPicture.decode(bytes))
+            }
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            file.retireContent()
+        }
+    }
+
+    func testRealJPEGAtTheExactImageFileByteBudgets() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BAILEY_IMAGE_LONG_SESSION"] == "1",
+              let fixture = environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_LONG_SESSION=1 and BAILEY_IMAGE_ACCEPTANCE_ROOT")
+        }
+        let original = URL(fileURLWithPath: fixture).appending(path: "images/超清大图-6000x4000.jpg")
+        let bytes = try Data(contentsOf: original)
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let textBudget = 32 << 20
+        let imageBudget = 256 << 20
+        let endMarker = Data([0x5a])
+        for byteCount in [textBudget - 1, textBudget, textBudget + 1, imageBudget - 1, imageBudget, imageBudget + 1] {
+            let path = root.appending(path: "\(byteCount).jpg")
+            try bytes.write(to: path)
+            do {
+                let writer = try FileHandle(forWritingTo: path)
+                try writer.truncate(atOffset: UInt64(byteCount))
+                try writer.seek(toOffset: UInt64(byteCount - 1))
+                try writer.write(contentsOf: endMarker)
+                try writer.close()
+            }
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if byteCount <= imageBudget {
+                guard case .image(let preview) = file.content else {
+                    return XCTFail("A native JPEG of \(byteCount) bytes must open")
+                }
+                XCTAssertEqual(preview.pixelSize, CGSize(width: 6000, height: 4000))
+                XCTAssertEqual(preview.poster.width, 4_096)
+                if byteCount == textBudget || byteCount == imageBudget {
+                    let request = try XCTUnwrap(file.originalImageRequest())
+                    let detail = try await request()
+                    let patch = try await detail.render(CGRect(x: 200, y: 200, width: 64, height: 64))
+                    XCTAssertEqual(patch.image.width, 64)
+                    XCTAssertEqual(patch.image.height, 64)
+                    let pixel = try XCTUnwrap(NSBitmapImageRep(cgImage: patch.image).colorAt(x: 10, y: 10))
+                    XCTAssertEqual(pixel.alphaComponent, 1, accuracy: 0.01)
+                }
+            } else {
+                if case .unavailable = file.content {} else { XCTFail("The +1 byte file must not become previewable") }
+                XCTAssertNil(file.originalImageRequest())
+            }
+            file.retireContent()
+            XCTAssertEqual(try path.resourceValues(forKeys: [.fileSizeKey]).fileSize, byteCount)
+            let reader = try FileHandle(forReadingFrom: path)
+            XCTAssertEqual(try reader.read(upToCount: bytes.count), bytes)
+            try reader.seek(toOffset: UInt64(byteCount - 1))
+            XCTAssertEqual(try reader.read(upToCount: 1), endMarker)
+            try reader.close()
+            try FileManager.default.removeItem(at: path)
+        }
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
     }
 
     func testOversizedFakeImageCannotBypassTextCapacity() async throws {
@@ -775,6 +1378,108 @@ final class FileTabPersistenceTests: XCTestCase {
             return XCTFail("An oversized renamed text file must not become editable")
         }
         XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
+    func testCompressedSVGIsReportedWithoutMisclassifyingText() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gzip = try SVGArtworkTests.compressedSVGBytes()
+        for suffix in ["svgz", "SVGZ", "svg"] {
+            let url = root.appending(path: "compressed.\(suffix)")
+            try gzip.write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if case .unavailable(let reason) = file.content {
+                XCTAssertEqual(reason, String(localized: "Compressed SVG is not supported. Open an uncompressed SVG file.",
+                                               table: "Workspace"))
+            } else {
+                XCTFail("The compressed bytes must not enter the text or vector preview")
+            }
+            XCTAssertFalse(file.canPreviewFile)
+            XCTAssertTrue(file.text.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: url), gzip)
+        }
+
+        let url = root.appending(path: "plain.SVGZ")
+        let source = "Plain text with an SVGZ suffix.\n"
+        try Data(source.utf8).write(to: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, source)
+        XCTAssertFalse(file.canPreviewFile)
+        XCTAssertEqual(try Data(contentsOf: url), Data(source.utf8))
+    }
+
+    func testFileAndMarkdownImagePreviewsRespectEXIFOrientation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 20, height: 12, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        let quadrantColors = [4, 2, 1, 7]
+        for (index, color) in quadrantColors.enumerated() {
+            context.setFillColor(CGColor(
+                red: color & 4 == 0 ? 0 : 1, green: color & 2 == 0 ? 0 : 1,
+                blue: color & 1 == 0 ? 0 : 1, alpha: 1
+            ))
+            context.fill(CGRect(x: (index % 2) * 10, y: (1 - index / 2) * 6, width: 10, height: 6))
+        }
+        let original = try XCTUnwrap(context.makeImage())
+        let expectedQuadrants = [
+            [0, 1, 2, 3], [1, 0, 3, 2], [3, 2, 1, 0], [2, 3, 0, 1],
+            [0, 2, 1, 3], [2, 0, 3, 1], [3, 1, 2, 0], [1, 3, 0, 2],
+        ]
+
+        func quadrants(_ image: CGImage) throws -> [Int] {
+            let sample = try XCTUnwrap(CGContext(
+                data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            ))
+            let pixels = try XCTUnwrap(sample.data).assumingMemoryBound(to: UInt8.self)
+            return try (0..<4).map { index in
+                let rect = CGRect(x: (1 + 2 * (index % 2)) * image.width / 4,
+                                  y: (1 + 2 * (index / 2)) * image.height / 4, width: 1, height: 1)
+                let pixel = try XCTUnwrap(image.cropping(to: rect))
+                sample.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return (pixels[0] >= 128 ? 4 : 0) + (pixels[1] >= 128 ? 2 : 0) + (pixels[2] >= 128 ? 1 : 0)
+            }
+        }
+
+        for orientation in 1...8 {
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                bytes, UTType.jpeg.identifier as CFString, 1, nil
+            ))
+            CGImageDestinationAddImage(destination, original, [
+                kCGImagePropertyOrientation: orientation,
+            ] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            let data = bytes as Data
+            let path = directory.appendingPathComponent("orientation-\(orientation).JPG")
+            try data.write(to: path)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            XCTAssertEqual(properties?[kCGImagePropertyOrientation] as? Int, orientation)
+            let expected = orientation >= 5 ? CGSize(width: 12, height: 20) : CGSize(width: 20, height: 12)
+
+            let picture = try MarkdownPicture.decode(data)
+            XCTAssertEqual(CGSize(width: picture.poster.width, height: picture.poster.height), expected)
+            let expectedColors = expectedQuadrants[orientation - 1].map { quadrantColors[$0] }
+            XCTAssertEqual(try quadrants(picture.poster), expectedColors, "EXIF \(orientation) in Markdown")
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .image = file.content { return true }; return false }
+            guard case .image(let image) = file.content else { return XCTFail("Expected JPEG preview") }
+            XCTAssertEqual(image.pixelSize, expected)
+            XCTAssertEqual(CGSize(width: image.poster.width, height: image.poster.height), expected)
+            XCTAssertEqual(try quadrants(image.poster), expectedColors, "EXIF \(orientation) in FileTab")
+            XCTAssertEqual(try Data(contentsOf: path), data)
+        }
     }
 
     func testLargeImagePreviewUsesBoundedDecodedDimensions() async throws {
@@ -798,9 +1503,178 @@ final class FileTabPersistenceTests: XCTestCase {
         guard case .image(let image) = file.content else {
             return XCTFail("Valid image must remain previewable")
         }
-        XCTAssertLessThanOrEqual(image.representations.first?.pixelsWide ?? .max, 4096)
-        XCTAssertLessThanOrEqual(image.representations.first?.pixelsHigh ?? .max, 4096)
+        XCTAssertEqual(image.pixelSize, CGSize(width: 5000, height: 2500))
+        XCTAssertLessThanOrEqual(image.poster.width, 4096)
+        XCTAssertLessThanOrEqual(image.poster.height, 4096)
+        let request = try XCTUnwrap(file.originalImageRequest())
+        let original = try await request()
+        guard case .region = original else { return XCTFail("PNG must use bounded scanline extraction") }
+        let rect = CGRect(x: 1000, y: 1000, width: 120, height: 120)
+        let pixels = try await original.render(rect)
+        XCTAssertEqual(pixels.rect, rect)
+        XCTAssertEqual(pixels.image.width, 120)
+        XCTAssertEqual(pixels.image.height, 120)
         XCTAssertEqual(try Data(contentsOf: path), imageBytes)
+
+        var changed = imageBytes
+        changed[changed.count - 1] ^= 1
+        try changed.write(to: path)
+        do {
+            _ = try await request()
+            XCTFail("A detail request must not render bytes other than the accepted original")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), changed)
+    }
+
+    func testTruncatedRealJPEGDoesNotPublishAnImageAndRecoversWhenReplaced() async throws {
+        guard let fixture = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let original = URL(fileURLWithPath: fixture).appending(path: "images/超清大图-6000x4000.jpg")
+        let bytes = try Data(contentsOf: original)
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for truncation in [2, bytes.count / 2] {
+            let target = folder.appending(path: "truncated-\(truncation).jpg")
+            let shortened = Data(bytes.dropLast(truncation))
+            try shortened.write(to: target)
+            let file = FileTab(path: target.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .loading = file.content { return false }; return true }
+            if case .unavailable(let reason) = file.content {
+                XCTAssertEqual(reason, String(localized: "Image is too large or invalid", table: "Workspace"))
+            } else {
+                XCTFail("A cut JPEG must not publish partial pixels")
+            }
+            XCTAssertNil(file.originalImageRequest())
+            XCTAssertEqual(try Data(contentsOf: target), shortened)
+
+            let prior = file.reloadRevision
+            try bytes.write(to: target, options: .atomic)
+            file.reloadFromDiskIfClean()
+            try await waitForFileTabState {
+                if case .image = file.content { return file.reloadRevision != prior }
+                return false
+            }
+            let request = try XCTUnwrap(file.originalImageRequest())
+            let detail = try await request()
+            let region = CGRect(x: 5750, y: 3800, width: 103, height: 77)
+            let patch = try await detail.render(region)
+            XCTAssertEqual(patch.rect, region)
+            XCTAssertEqual(patch.image.width, 103)
+            XCTAssertEqual(patch.image.height, 77)
+            XCTAssertEqual(try Data(contentsOf: target), bytes)
+        }
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+
+    func testOriginalImageReadCannotPublishAfterRenameDisconnectOrClose() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 4300, pixelsHigh: 8,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let path = "/fixture/detail.png"
+        let actions: [(FileTab) -> Void] = [
+            { $0.updatePath("/fixture/renamed.png") },
+            { $0.rebindWorkspace(to: nil) },
+            { $0.retireContent() },
+        ]
+        for action in actions {
+            let backend = EditorWorkspaceFixture(path: path, contents: bytes)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "fixture-remote")
+            file.loadIfNeeded()
+            try await waitForFileTabState { if case .image = file.content { return true }; return false }
+            let request = try XCTUnwrap(file.originalImageRequest())
+            await backend.pauseOneRead()
+            let pending = Task { try await request() }
+            try await waitForFileTabState { await backend.pendingReadCount == 1 }
+            let originalPath = await backend.readingPath
+            XCTAssertEqual(originalPath, path)
+            action(file)
+            await backend.finishRead(with: bytes)
+            do {
+                _ = try await pending.value
+                XCTFail("Canceled image decoding must not deliver pixels")
+            } catch is CancellationError {}
+            do {
+                _ = try await request()
+                XCTFail("A stale request must not start new reads")
+            } catch WorkspaceError.changedExternally {}
+            let reads = await backend.readCount
+            let onDisk = await backend.data(at: path)
+            XCTAssertEqual(reads, 2)
+            XCTAssertEqual(onDisk, bytes)
+        }
+    }
+
+    func testMountedOriginalImageRecoversFromRenameDuringDetailRead() async throws {
+        let size = CGSize(width: 5001, height: 101)
+        let sample = CGRect(x: 2500, y: 50, width: 1, height: 1)
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(NSColor.black.cgColor)
+        context.fill(CGRect(origin: .zero, size: size))
+        context.setFillColor(NSColor.green.cgColor)
+        context.fill(sample)
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: XCTUnwrap(context.makeImage()))
+            .representation(using: .png, properties: [:]))
+        let oldPath = "/fixture/detail.png"
+        let newPath = "/fixture/renamed.png"
+        let backend = EditorWorkspaceFixture(path: oldPath, contents: png)
+        let file = FileTab(path: oldPath, backend: backend, workspaceIdentity: "fixture-remote")
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 420, height: 260),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            file.retireContent()
+            window.close()
+            Task { await backend.finishRead() }
+        }
+        window.contentView = host
+        window.orderFront(nil)
+        func scrollView(in view: NSView) -> PreviewScrollView? {
+            (view as? PreviewScrollView) ?? view.subviews.lazy.compactMap(scrollView(in:)).first
+        }
+        try await waitForFileTabState { scrollView(in: host) != nil }
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(scrollView(in: host))
+        let canvas = try XCTUnwrap(scroll.documentView)
+        func paintedGreen() -> CGFloat {
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+                                                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                isPlanar: false, colorSpaceName: .deviceRGB,
+                                                bytesPerRow: 0, bitsPerPixel: 0),
+                  let painting = NSGraphicsContext(bitmapImageRep: bitmap) else { return -1 }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = painting
+            painting.cgContext.translateBy(x: -sample.minX, y: -sample.minY)
+            canvas.draw(sample)
+            NSGraphicsContext.restoreGraphicsState()
+            return bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB)?.greenComponent ?? -1
+        }
+        XCTAssertLessThan(paintedGreen(), 0.9, "The thumbnail cannot retain the original one-pixel detail")
+        await backend.pauseOneRead()
+        scroll.actualSize()
+        try await waitForFileTabState { await backend.readingPath == oldPath }
+        let center = scroll.contentView.bounds.midX
+
+        try await backend.rename(from: oldPath, to: newPath)
+        file.updatePath(newPath)
+        await backend.finishRead(with: png)
+        try await waitForFileTabState { paintedGreen() > 0.95 }
+        XCTAssertTrue(scrollView(in: host) === scroll)
+        XCTAssertEqual(scroll.pixelScale, 1, accuracy: 0.001)
+        XCTAssertEqual(scroll.contentView.bounds.midX, center, accuracy: 1)
+        let reads = await backend.readCount
+        let moved = await backend.data(at: newPath)
+        XCTAssertEqual(reads, 3, "Read the poster, cancel the original, and request the renamed original exactly once")
+        XCTAssertEqual(moved, png)
     }
 
     func testInvalidUTF8AndImageFallbackRespectTextCapacity() async throws {
@@ -847,7 +1721,7 @@ final class FileTabPersistenceTests: XCTestCase {
         image.loadIfNeeded()
         try await waitForFileTabState { if case .image = image.content { return true }; return false }
         guard case .image(let preview) = image.content else { return XCTFail("Expected actual image preview") }
-        XCTAssertEqual(preview.representations.first?.pixelsWide, 2)
+        XCTAssertEqual(preview.poster.width, 2)
     }
 
     func testFixedHostDisconnectRebindsDirtyFileWithoutLosingDraft() async throws {
@@ -1813,6 +2687,503 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved when closing the file")
     }
 
+    func testAnnotationSaveQueuesLaterDraftAndKeepsFailedRevision() async throws {
+        let path = "/fixture/\(UUID().uuidString).png"
+        let context = try XCTUnwrap(CGContext(data: nil, width: 120, height: 100,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let bytes = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            bytes, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let original = bytes as Data
+        let version = WorkspaceFileVersion(data: original)
+        let size = CGSize(width: 120, height: 100)
+        let sidecar = ImageAnnotationSidecar.path(for: path)
+        let backend = EditorWorkspaceFixture(path: path, contents: original, reportsRegularFiles: true)
+        let initial = try await ImageAnnotationSidecar.encode(.init(), version: version, size: size)
+        await backend.replace(path: sidecar, with: initial)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        file.loadIfNeeded()
+        defer { file.retireContent() }
+        try await waitForFileTabState { file.imageAnnotations != nil }
+        let document = try XCTUnwrap(file.imageAnnotations)
+        document.begin()
+        document.tool = .rectangle
+        document.commitGesture(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 30, y: 30))
+        let first = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        document.commitGesture(from: CGPoint(x: 40, y: 40), to: CGPoint(x: 70, y: 70))
+        let second = document.state
+        file.autoSaveOnFocusLoss()
+        await backend.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { document.savedState == first && file.isSaving }
+        XCTAssertNil(file.saveError, "Lost acknowledgement must reconcile the actual published revision")
+        XCTAssertTrue(file.isDirty)
+        let persistedFirst = await backend.data(at: sidecar)
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(try XCTUnwrap(persistedFirst),
+                                                        version: version, size: size), first)
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        await backend.finishWrite()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(document.savedState, second)
+        let persistedSecond = await backend.data(at: sidecar)
+        document.commitGesture(from: CGPoint(x: 4, y: 60), to: CGPoint(x: 20, y: 90))
+        let unsaved = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        await backend.finishWrite(failing: true, transportTimedOut: true)
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(document.state, unsaved)
+        XCTAssertEqual(document.savedState, second)
+        let retained = await backend.data(at: sidecar)
+        let untouched = await backend.data(at: path)
+        XCTAssertEqual(retained, persistedSecond)
+        XCTAssertEqual(untouched, original)
+
+        // Disconnect after a successful publication and make read-back over
+        // the old channel fail too. Reconnect to the same machine and preserve
+        // the newer edits while accepting only the exact published snapshot.
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await backend.writingPath == sidecar }
+        await backend.pauseOneRead()
+        file.rebindWorkspace(to: nil)
+        await backend.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { await backend.readingPath == sidecar }
+        let remotePublished = await backend.data(at: sidecar)
+        await backend.finishRead()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        let live = EditorWorkspaceFixture(path: path, contents: original, reportsRegularFiles: true)
+        await live.replace(path: sidecar, with: try XCTUnwrap(remotePublished))
+        file.rebindWorkspace(to: live)
+        XCTAssertTrue(file.isDirty)
+        document.commitGesture(from: CGPoint(x: 75, y: 70), to: CGPoint(x: 110, y: 95))
+        let later = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        XCTAssertEqual(document.savedState, unsaved)
+        XCTAssertTrue(file.isDirty)
+        await live.finishWrite()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertEqual(document.savedState, later)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let storedLater = await live.data(at: sidecar)
+        XCTAssertEqual(try ImageAnnotationSidecar.decode(try XCTUnwrap(storedLater),
+                                                        version: version, size: size), later)
+
+        // Undoing an in-flight draft to the old baseline cannot make the
+        // document clean while publication is unresolved.
+        document.commitGesture(from: CGPoint(x: 2, y: 2), to: CGPoint(x: 12, y: 12))
+        let inFlight = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        document.undoManager.undo()
+        XCTAssertEqual(document.state, later)
+        XCTAssertTrue(file.isDirty)
+        await live.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertEqual(document.savedState, inFlight)
+        XCTAssertTrue(file.isDirty)
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        await live.finishWrite()
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertEqual(document.savedState, later)
+        XCTAssertFalse(file.isDirty)
+
+        // The transport can also disappear after publication while another
+        // writer replaces the original image. Exact sidecar read-back alone
+        // must not mark an annotation for the obsolete source as saved.
+        document.commitGesture(from: CGPoint(x: 80, y: 10), to: CGPoint(x: 110, y: 35))
+        let finalDraft = document.state
+        file.autoSaveOnFocusLoss()
+        try await waitForFileTabState { await live.writingPath == sidecar }
+        await live.pauseOneRead()
+        await live.finishWrite(transportTimedOut: true)
+        try await waitForFileTabState { await live.readingPath == sidecar }
+        let published = await live.data(at: sidecar)
+        await live.replace(path: path, with: Data(repeating: 0xA5, count: original.count))
+        await live.finishRead(with: published)
+        try await waitForFileTabState { !file.isSaving }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(document.savedState, later)
+        XCTAssertEqual(document.state, finalDraft)
+    }
+
+    func testGridByteProofTracksAcceptedBaselineWithoutReplacingUnchangedText() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let source = "Name,Value\r\nItem,old\n"
+        let plain = Data(source.utf8)
+        let bom = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(source))
+        try bom.write(to: path)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        file.reopen(using: .utf8)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, source)
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(loaded)
+        let storage = file.nativeTextStorage
+        XCTAssertFalse(file.canEditDelimited(snapshot), "An explicit decode that strips a BOM cannot prove byte equality")
+        XCTAssertEqual(try Data(contentsOf: path), bom)
+
+        try plain.write(to: path, options: .atomic)
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState { file.savedTextPreservesOriginalBytes }
+        XCTAssertTrue(file.canEditDelimited(snapshot))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        try bom.write(to: path, options: .atomic)
+        file.reloadFromDiskIfClean()
+        try await waitForFileTabState { !file.savedTextPreservesOriginalBytes }
+        XCTAssertFalse(file.canEditDelimited(snapshot))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+
+        await file.save(as: .utf16LEBOM)
+        XCTAssertNil(file.saveError)
+        XCTAssertTrue(file.canEditDelimited(snapshot))
+        XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.utf16LEBOM.encoded(source))
+        XCTAssertTrue(file.nativeTextStorage === storage)
+    }
+
+    func testAcceptedCSVInputSurvivesDisconnectAndSameMachineReconnect() async throws {
+        for committed in [false, true] {
+            let path = "/fixture/\(UUID().uuidString).csv"
+            let original = "Name,Value\r\nItem,old\n"
+            let bytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+            let backend = EditorWorkspaceFixture(path: path, contents: bytes)
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+            try await file.waitForText()
+            defer { file.retireContent() }
+            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(loaded)
+            let grid = DelimitedGrid()
+            grid.controls = file.delimitedTable
+            grid.file = file
+            grid.table.file = file
+            let presentation = try await DelimitedTablePresentation.evaluate(
+                source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 260),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = grid
+            window.orderBack(nil)
+            defer { grid.detach(); window.close() }
+            grid.install(snapshot, presentation: presentation)
+            grid.layoutSubtreeIfNeeded()
+            grid.table.onEdit(.init(row: 0, column: 1))
+            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.insertText("中文,值", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            if committed { XCTAssertTrue(window.makeFirstResponder(grid.table)) }
+            XCTAssertEqual(file.text, original)
+            file.rebindWorkspace(to: nil)
+            XCTAssertNil(field.currentEditor(), "Disconnect must end the native field editor before accepting more input")
+            grid.detach()
+            try await waitForFileTabState { !file.hasPendingDelimitedEdit }
+            let expected = "Name,Value\r\nItem,\"中文,值\"\n"
+            XCTAssertEqual(file.text, expected, "Already accepted input must survive a transport transition")
+            XCTAssertTrue(file.isDirty)
+            XCTAssertNotNil(file.readOnlyReason)
+            let unchanged = await backend.data(at: path)
+            XCTAssertEqual(unchanged, bytes)
+            guard file.text == expected else { continue }
+            let live = EditorWorkspaceFixture(path: path, contents: bytes)
+            file.rebindWorkspace(to: live)
+            let saving = Task { await file.save() }
+            try await waitForFileTabState { await live.writingPath == path }
+            await live.finishWrite()
+            await saving.value
+            let saved = await live.data(at: path)
+            XCTAssertEqual(saved, TextFileEncoding.utf8BOM.encoded(expected))
+            XCTAssertFalse(file.isDirty)
+            XCTAssertNil(file.saveError)
+            XCTAssertTrue(file.documentUndoManager.canUndo)
+        }
+    }
+
+    func testAcceptedCSVEditSurvivesOverlappingEncodingPublication() async throws {
+        try await checkAcceptedCSVEditOverlappingEncodingPublication(.utf16LEBOM)
+    }
+
+    func testAcceptedCSVEditSurvivesIncompatibleEncodingPublication() async throws {
+        try await checkAcceptedCSVEditOverlappingEncodingPublication(.latin1)
+    }
+
+    private func checkAcceptedCSVEditOverlappingEncodingPublication(_ encoding: TextFileEncoding) async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let original = "Name,Value\r\nItem,old\n"
+        let initial = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+        let backend = EditorWorkspaceFixture(path: path, contents: initial)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let storage = file.nativeTextStorage
+        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let snapshot = try XCTUnwrap(loaded)
+
+        // Pause the actual conditional publication, accept a wide grid paste,
+        // then complete the conversion while the paste is being prepared.
+        let converting = Task { await file.save(as: encoding) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        let value = String(repeating: "x", count: 2 << 20) + ",中文"
+        let origin = DelimitedTablePresentation.Cell(row: 0, column: 1)
+        let selection = DelimitedTablePresentation.Cell(row: 1, column: 1)
+        file.submitDelimitedEdit(.paste(value, rows: [1], origin: origin, columns: 2),
+                                 using: snapshot, selecting: selection)
+        try await waitForFileTabState { file.delimitedTable.pendingCell == selection }
+        XCTAssertTrue(file.hasPendingDelimitedEdit)
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+        XCTAssertTrue(file.text.utf16.elementsEqual(original.utf16))
+        await backend.finishWrite()
+        await converting.value
+        try await waitForFileTabState { !file.hasPendingDelimitedEdit }
+
+        let expected = "Name,Value\r\nItem,\"\(value)\"\n"
+        let converted = await backend.data(at: path)
+        XCTAssertEqual(converted, encoding.encoded(original))
+        XCTAssertEqual(file.fileEncoding, encoding)
+        XCTAssertNil(file.delimitedTable.editError)
+        XCTAssertTrue(file.text.utf16.elementsEqual(expected.utf16),
+                      "A valid accepted paste cannot disappear when the encoding baseline changes")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(file.nativeTextStorage === storage)
+        guard file.text.utf16.elementsEqual(expected.utf16) else { return }
+
+        file.documentUndoManager.undo()
+        XCTAssertTrue(file.text.utf16.elementsEqual(original.utf16))
+        XCTAssertFalse(file.isDirty)
+        file.documentUndoManager.redo()
+        XCTAssertTrue(file.text.utf16.elementsEqual(expected.utf16))
+        XCTAssertTrue(file.isDirty)
+        let finalEncoding: TextFileEncoding
+        if encoding == .latin1 {
+            await file.save()
+            XCTAssertNotNil(file.saveError)
+            XCTAssertTrue(file.isDirty)
+            XCTAssertTrue(file.text.utf16.elementsEqual(expected.utf16))
+            let unchanged = await backend.data(at: path)
+            XCTAssertEqual(unchanged, converted)
+            finalEncoding = .utf8BOM
+        } else {
+            finalEncoding = encoding
+        }
+        let saving = Task { await file.save(as: finalEncoding == encoding ? nil : finalEncoding) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite()
+        await saving.value
+        let saved = await backend.data(at: path)
+        XCTAssertTrue(saved == finalEncoding.encoded(expected))
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+    }
+
+    func testCSVGridReconnectConfirmsPublishedRevisionBeforeSavingNewFields() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let original = "Name,Value\r\n中文,000\nOther,\"literal\""
+        let initial = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(original))
+        let backend = EditorWorkspaceFixture(path: path, contents: initial)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        defer { file.retireContent() }
+        try await file.waitForText()
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+
+        func edit(_ row: Int, _ value: String) async throws {
+            let result = try await file.delimitedSnapshot(using: .comma)
+            let snapshot = try XCTUnwrap(result)
+            XCTAssertTrue(file.canEditDelimited(snapshot))
+            try await file.editDelimited(.cells([.init(row: row, column: 1): value]), using: snapshot)
+        }
+        try await edit(1, "111")
+        let first = file.text
+        let firstBytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(first))
+        let saving = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await backend.finishWrite(transportTimedOut: true)
+        await saving.value
+        let published = await backend.data(at: path)
+        XCTAssertEqual(published, firstBytes)
+        XCTAssertTrue(file.isDirty)
+
+        let live = EditorWorkspaceFixture(path: path, contents: firstBytes)
+        file.rebindWorkspace(to: live)
+        try await edit(2, "second,field")
+        let latest = file.text
+        let next = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        guard await live.writingPath == path else {
+            await next.value
+            return XCTFail("Reconnection must resolve the earlier publication before starting a new conditional write")
+        }
+        await live.finishWrite()
+        await next.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let stored = await live.data(at: path)
+        XCTAssertEqual(stored, TextFileEncoding.utf8BOM.encoded(latest))
+        XCTAssertEqual(file.text, "Name,Value\r\n中文,111\nOther,\"second,field\"")
+
+        // Undo while a different revision is in flight must not permit a clean
+        // reload or lose the user's intention to restore the last saved bytes.
+        try await edit(1, "222")
+        let attempted = file.text
+        let attempt = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, latest)
+        XCTAssertTrue(file.isDirty, "The unresolved publication may change the saved baseline")
+        let readsBefore = await live.readCount
+        file.reloadFromDiskIfClean()
+        try await Task.sleep(for: .milliseconds(50))
+        let readsAfter = await live.readCount
+        XCTAssertEqual(readsAfter, readsBefore, "A clean reload must not replace an unresolved undo")
+        await live.finishWrite(transportTimedOut: true)
+        await attempt.value
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, latest)
+        let attemptedBytes = await live.data(at: path)
+        XCTAssertEqual(attemptedBytes, TextFileEncoding.utf8BOM.encoded(attempted))
+        let revert = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        await live.finishWrite()
+        await revert.value
+        XCTAssertFalse(file.isDirty)
+        let reverted = await live.data(at: path)
+        XCTAssertEqual(reverted, TextFileEncoding.utf8BOM.encoded(latest))
+
+        // The old channel may also fail before publishing. Only an exact
+        // read of the old version permits another conditional submission.
+        try await edit(1, "333")
+        let retryDraft = file.text
+        let lost = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await live.finishWrite(failing: true, transportTimedOut: true)
+        await lost.value
+        let unchanged = EditorWorkspaceFixture(path: path, contents: try XCTUnwrap(reverted))
+        file.rebindWorkspace(to: unchanged)
+        let retry = Task { await file.save() }
+        try await waitForFileTabState { await unchanged.writingPath == path }
+        await unchanged.finishWrite()
+        await retry.value
+        XCTAssertFalse(file.isDirty)
+        let retried = await unchanged.data(at: path)
+        XCTAssertEqual(retried, TextFileEncoding.utf8BOM.encoded(retryDraft))
+
+        // A third version is not a successful write and must never become
+        // the accepted base for the next write. Preserve both real bytes
+        // and the native draft, even if the foreign revision has equal size.
+        try await edit(1, "444")
+        let attemptedDraft = file.text
+        let pendingSave = Task { await file.save() }
+        try await waitForFileTabState { await unchanged.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await unchanged.finishWrite(transportTimedOut: true)
+        await pendingSave.value
+        let attemptedData = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(attemptedDraft))
+        let foreignData = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(attemptedDraft.replacingOccurrences(of: "444", with: "999")))
+        XCTAssertEqual(attemptedData.count, foreignData.count)
+        let foreign = EditorWorkspaceFixture(path: path, contents: foreignData)
+        file.rebindWorkspace(to: foreign)
+        await file.save()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        XCTAssertEqual(file.text, attemptedDraft)
+        let untouched = await foreign.data(at: path)
+        XCTAssertEqual(untouched, foreignData)
+        // Once the exact attempted bytes reappear, a new explicit Save
+        // confirms the existing revision without writing it a second time.
+        await foreign.replace(path: path, with: attemptedData)
+        let beforeConfirmation = await foreign.readCount
+        let confirming = Task { await file.save() }
+        try await waitForFileTabState {
+            let writes = await foreign.writingPath
+            let reads = await foreign.readCount
+            return writes != nil || reads > beforeConfirmation && !file.isSaving
+        }
+        if await foreign.writingPath != nil {
+            XCTFail("Confirmation must not submit the same bytes again")
+            await foreign.finishWrite(failing: true)
+        }
+        await confirming.value
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let confirmed = await foreign.data(at: path)
+        XCTAssertEqual(confirmed, attemptedData)
+    }
+
+    func testDisconnectedCleanEncodingPublicationIsNotSilentlyDiscarded() async throws {
+        let path = "/fixture/\(UUID().uuidString).csv"
+        let source = "Name,Value\n中文,001"
+        let original = Data(source.utf8)
+        let backend = EditorWorkspaceFixture(path: path, contents: original)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        defer { file.retireContent() }
+        try await file.waitForText()
+        let writing = Task { await file.save(as: .utf8BOM) }
+        try await waitForFileTabState { await backend.writingPath == path }
+        XCTAssertFalse(file.isDirty, "Encoding-only publication is not a text edit")
+        file.rebindWorkspace(to: nil)
+        await backend.finishWrite(transportTimedOut: true)
+        await writing.value
+        let newBytes = try XCTUnwrap(TextFileEncoding.utf8BOM.encoded(source))
+        let published = await backend.data(at: path)
+        XCTAssertEqual(published, newBytes)
+        XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave)
+        let live = EditorWorkspaceFixture(path: path, contents: newBytes)
+        file.rebindWorkspace(to: live)
+        // Reconciliation must confirm the prior conversion, not send a second write.
+        await file.save()
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let pending = await live.writingPath
+        XCTAssertNil(pending)
+        let persisted = await live.data(at: path)
+        XCTAssertEqual(persisted, newBytes)
+
+        // A lost response before publication must not be mistaken for a
+        // successful conversion. An explicit retry can then use the verified
+        // original bytes, without allowing a clean refresh to discard intent.
+        let convertingBack = Task { await file.save(as: .utf8) }
+        try await waitForFileTabState { await live.writingPath == path }
+        file.rebindWorkspace(to: nil)
+        await live.finishWrite(failing: true, transportTimedOut: true)
+        await convertingBack.value
+        let unchanged = EditorWorkspaceFixture(path: path, contents: newBytes)
+        file.rebindWorkspace(to: unchanged)
+        await file.save()
+        XCTAssertEqual(file.fileEncoding, .utf8BOM)
+        XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave)
+        let unconfirmedWrite = await unchanged.writingPath
+        XCTAssertNil(unconfirmedWrite)
+        let readsBeforeRefresh = await unchanged.readCount
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        let readsAfterRefresh = await unchanged.readCount
+        XCTAssertEqual(readsAfterRefresh, readsBeforeRefresh)
+        XCTAssertTrue(PaneContent.file(file).hasUnresolvedSave, "Refresh must not discard an unpublished encoding choice")
+        let retry = Task { await file.save(as: .utf8) }
+        try await waitForFileTabState { await unchanged.writingPath == path }
+        await unchanged.finishWrite()
+        await retry.value
+        XCTAssertEqual(file.fileEncoding, .utf8)
+        XCTAssertFalse(PaneContent.file(file).hasUnresolvedSave)
+        let restored = await unchanged.data(at: path)
+        XCTAssertEqual(restored, original)
+    }
+
     func testFocusTriggeredSaveSerializesConcurrentEditsAndKeepsFailures() async throws {
         let path = "/fixture/\(UUID().uuidString).txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
@@ -2161,6 +3532,37 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.fileEncoding, .utf8)
     }
 
+    func testDelimitedDataKeepsUTF8CellsRatherThanApplyingCodingCookies() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for (extensionName, separator) in [("CSV", ","), ("tSv", "\t")] {
+            for label in ["GBK", "mbcs", "unsupported"] {
+                let path = folder.appendingPathComponent("\(label).\(extensionName)")
+                let original = "# coding: \(label)\(separator)模型🧪\r\n=1\(separator)é\r"
+                let bytes = Data(original.utf8)
+                try bytes.write(to: path)
+                let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                do {
+                    try await file.waitForText()
+                } catch {
+                    XCTFail("A UTF-8 data field must not be interpreted as a \(label) declaration: \(error)")
+                    continue
+                }
+                XCTAssertEqual(file.text, original)
+                XCTAssertEqual(file.fileEncoding, .utf8)
+                XCTAssertEqual(try Data(contentsOf: path), bytes)
+                await file.save(as: .utf16LEBOM)
+                XCTAssertNil(file.saveError)
+                XCTAssertEqual(try Data(contentsOf: path), TextFileEncoding.utf16LEBOM.encoded(original))
+                let reopened = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                try await reopened.waitForText()
+                XCTAssertEqual(reopened.fileEncoding, .utf16LEBOM)
+                XCTAssertEqual(reopened.text, original)
+            }
+        }
+    }
+
     func testUTF8AndUTF16ByteOrderMarksRemainByteExact() async throws {
         for encoding in [TextFileEncoding.utf8BOM, .utf16LEBOM, .utf16BEBOM] {
             let path = "/fixture/bom-\(encoding.name).txt"
@@ -2220,7 +3622,19 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.saveError, file.readOnlyReason)
         file.text = "baseline"
         file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty, "The previous channel published a different revision")
+        let actual = await backend.data(at: path)
+        XCTAssertEqual(actual, Data("unsaved".utf8))
+        let live = EditorWorkspaceFixture(path: path, contents: try XCTUnwrap(actual))
+        file.rebindWorkspace(to: live)
+        let restoring = Task { await file.save() }
+        try await waitForFileTabState { await live.writingPath == path }
+        await live.finishWrite()
+        await restoring.value
         XCTAssertFalse(file.isDirty)
+        XCTAssertNil(file.saveError)
+        let restored = await live.data(at: path)
+        XCTAssertEqual(restored, Data("baseline".utf8))
     }
 
     func testCleanReloadPublishesOnlyNewBytesAndDropsRenamedRead() async throws {
@@ -2788,7 +4202,7 @@ final class NativeFileTabTests: XCTestCase {
         editor.insertText("ab", replacementRange: NSRange(location: 0, length: 2))
         editor.breakUndoCoalescing()
         XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
-        XCTAssertFalse(file.isDirty, "Exact inverse edit returns to the original baseline")
+        XCTAssertTrue(file.isDirty, "An inverse edit cannot discard an in-flight revision before publication is known")
         await backend.finishWrite()
         await saving.value
         XCTAssertTrue(file.isDirty, "An in-flight write establishes a new baseline")

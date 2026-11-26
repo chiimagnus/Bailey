@@ -527,6 +527,25 @@ final class FinderDeliveryIntegrationTests: XCTestCase {
         try await originalFile.waitForText()
         XCTAssertEqual(originalFile.text, "local bytes")
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "local bytes")
+
+        let tableURL = folder.appendingPathComponent("same.CSV")
+        let tableBytes = Data("Name,Value\r\n本机,17\r\n".utf8)
+        try tableBytes.write(to: tableURL)
+        XCTAssertTrue(b.openExternalLocalItems([tableURL]).isEmpty)
+        let tableTab = try XCTUnwrap(remote.selectedTab)
+        guard case .file(let tableFile) = tableTab.content else { return XCTFail("Expected Finder table") }
+        XCTAssertNil(tableFile.workspaceIdentity)
+        handled = nil
+        self.workspaceApplication.openExternalFiles([tableURL], preferred: a) { handled = $0 }
+        XCTAssertEqual(handled, true)
+        XCTAssertTrue(remote.selectedTab === tableTab)
+        XCTAssertEqual(remote.tabs.filter { $0.content.isFile }.count, 2)
+        XCTAssertEqual(a.selectedProject?.tabs.filter { $0.content.isFile }.count, 0)
+        try await tableFile.waitForText()
+        XCTAssertEqual(remote.filePreviewMode(for: tableTab), .preview)
+        let tableSnapshot = try await tableFile.delimitedSnapshot()
+        XCTAssertTrue(tableFile.canEditDelimited(try XCTUnwrap(tableSnapshot)))
+        XCTAssertEqual(try Data(contentsOf: tableURL), tableBytes)
     }
 
     func testExternalOpenDefersUntilAllCreatedWindowsHaveAttached() throws {

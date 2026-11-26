@@ -93,12 +93,12 @@ nonisolated final class GitFileEventWatcher {
         if let gitDirectory { candidates += gitMetadataDirectories(gitDirectory) }
         let filesystem = FileManager.default
         var paths: [String] = []
-        for path in candidates.map({ ($0 as NSString).standardizingPath })
+        for path in candidates.map(LocalPathScope.physicalPath)
             .sorted(by: { $0.count < $1.count }) {
             var isDirectory: ObjCBool = false
             guard filesystem.fileExists(atPath: path, isDirectory: &isDirectory),
                   isDirectory.boolValue,
-                  !paths.contains(where: { path == $0 || path.hasPrefix($0 + "/") })
+                  !paths.contains(where: { LocalPathScope.contains(path, in: $0) })
             else { continue }
             paths.append(path)
         }
@@ -106,14 +106,14 @@ nonisolated final class GitFileEventWatcher {
     }
 
     static func gitMetadataDirectories(_ gitDirectory: String) -> [String] {
-        var paths = [gitDirectory]
-        let commonDirFile = URL(fileURLWithPath: gitDirectory, isDirectory: true)
+        let physicalDirectory = LocalPathScope.physicalPath(gitDirectory)
+        var paths = [physicalDirectory]
+        let commonDirFile = URL(fileURLWithPath: physicalDirectory, isDirectory: true)
             .appendingPathComponent("commondir")
         if let relative = try? String(contentsOf: commonDirFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), !relative.isEmpty {
-            paths.append(URL(fileURLWithPath: relative,
-                             relativeTo: commonDirFile.deletingLastPathComponent())
-                .standardizedFileURL.path)
+            let common = relative.hasPrefix("/") ? relative : physicalDirectory + "/" + relative
+            paths.append(LocalPathScope.physicalPath(common))
         }
         return paths
     }

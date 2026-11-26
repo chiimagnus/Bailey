@@ -1,0 +1,80 @@
+//
+//  DOM.Pattern.swift
+//  SwiftDraw
+//
+//  Created by Simon Whitty on 26/3/19.
+//  Copyright 2020 Simon Whitty
+//
+//  Distributed under the permissive zlib license
+//  Get the latest version from here:
+//
+//  https://github.com/swhitty/SwiftDraw
+//
+//  This software is provided 'as-is', without any express or implied
+//  warranty.  In no event will the authors be held liable for any damages
+//  arising from the use of this software.
+//
+//  Permission is granted to anyone to use this software for any purpose,
+//  including commercial applications, and to alter it and redistribute it
+//  freely, subject to the following restrictions:
+//
+//  1. The origin of this software must not be misrepresented; you must not
+//  claim that you wrote the original software. If you use this software
+//  in a product, an acknowledgment in the product documentation would be
+//  appreciated but is not required.
+//
+//  2. Altered source versions must be plainly marked as such, and must not be
+//  misrepresented as being the original software.
+//
+//  3. This notice may not be removed or altered from any source distribution.
+//
+
+import Foundation
+
+package extension DOM {
+
+    struct Pattern: ContainerElement {
+
+        package var id: String
+        package var x: Coordinate?
+        package var y: Coordinate?
+        package var width: Coordinate?
+        package var height: Coordinate?
+
+        package var patternUnits: Units?
+        package var patternContentUnits: Units?
+
+        package var childElements: [DOM.GraphicsElement] = []
+        /// Holders of the presentation attributes of the pattern's ancestors and of the pattern itself,
+        /// outermost first, which its contents inherit; empty for patterns built in code.
+        package var ancestors: [DOM.GraphicsElement] = []
+
+        package var href: URL?
+        package var viewBox: DOM.SVG.ViewBox?
+        package var preserveAspectRatio: DOM.PreserveAspectRatio?
+        package var patternTransform: [Transform]?
+        /// `transform-origin` of the paint server transform (SVG 2), not inherited through href
+        package var transformOrigin: TransformOrigin?
+        /// Names of the x / y / width / height attributes written as percentages; their value
+        /// is stored as a fraction and resolved against the viewport under userSpaceOnUse.
+        package var percentageAttributes: Set<String> = []
+
+        /// The viewport of the `<svg>` this element is defined in, that percentages resolve
+        /// against under userSpaceOnUse; nil when parsed outside an `<svg>`.
+        package var viewport: XMLParser.Viewport?
+
+        package init(id: String, width: Coordinate? = nil, height: Coordinate? = nil) {
+            self.id = id
+            self.width = width
+            self.height = height
+        }
+    }
+}
+
+package extension DOM.Pattern {
+
+    enum Units: String {
+        case userSpaceOnUse
+        case objectBoundingBox
+    }
+}

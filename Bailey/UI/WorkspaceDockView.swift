@@ -204,7 +204,7 @@ extension DockItem {
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .tab: "terminal"
-        case .markdownPreview: "doc.richtext"
+        case .filePreview: "doc.richtext"
         }
     }
 
@@ -214,7 +214,7 @@ extension DockItem {
         case .files: String(localized: "File Manager", table: "Sidebar")
         case .git: String(localized: "Git Manager", table: "Sidebar")
         case .tab(let id): project.tabs.first { $0.id == id }?.displayTitle ?? String(localized: "Tab", table: "Workspace")
-        case .markdownPreview: String(localized: "Preview", table: "Editor")
+        case .filePreview: String(localized: "Preview", table: "Editor")
         }
     }
 }
@@ -435,8 +435,8 @@ struct DockTabGroupView: View {
                     MarkdownOutlineView(file: file) { heading in
                         guard let current = currentMenuTab(id) else { return }
                         file.pendingMarkdownFragment = heading.anchor
-                        if project.markdownMode(for: current) == .source {
-                            project.setMarkdownMode(.preview, for: current)
+                        if project.filePreviewMode(for: current) == .source {
+                            project.setFilePreviewMode(.preview, for: current)
                         }
                         markdownPopover = nil
                     } onDismiss: {
@@ -762,6 +762,26 @@ struct DockTabGroupView: View {
         return project.tabs.first { $0.id == id }
     }
 
+    private func openHTML(_ tabID: UUID, saveFirst: Bool) {
+        guard case .file(let file)? = currentMenuTab(tabID)?.content else { return }
+        Task { @MainActor in
+            do {
+                try await project.openHTMLInBrowser(file, saveFirst: saveFirst) {
+                    currentMenuTab(tabID)?.content.id == file.id
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard currentMenuTab(tabID)?.content.id == file.id,
+                      let window = manager.attachedWindow else { return }
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Could not open the saved HTML.", table: "Editor")
+                alert.informativeText = error.localizedDescription
+                alert.beginSheetModal(for: window) { _ in }
+            }
+        }
+    }
+
     private func close(_ item: DockItem) {
         guard project.dock.group(containing: item)?.id == group.id else { return }
         manager.closePanel(item, in: project)
@@ -786,7 +806,7 @@ struct DockTabGroupView: View {
                     manager: manager,
                     destination: (projectID: project.id, groupID: group.id)
                 ))
-        case .tab(let id), .markdownPreview(let id):
+        case .tab(let id), .filePreview(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 PanelContentView(
                     tab: tab,
@@ -798,14 +818,14 @@ struct DockTabGroupView: View {
                         manager.newBrowserTab(initialURL: $0)
                     },
                     onNewFileTab: { manager.openFile($0) },
-                    markdownDirectory: markdownDirectory(for: tab),
-                    rendersOnlyMarkdown: active == .markdownPreview(id),
+                    resourceDirectory: resourceDirectory(for: tab),
+                    rendersOnlyPreview: active == .filePreview(id),
                     onMarkdownLink: { file, url in
                         await project.openMarkdownLink(url, from: file) {
                             manager.selectedProject === project && manager.attachedWindow?.isKeyWindow == true
                         }
                     },
-                    onMarkdownLocateSource: {
+                    onRevealFileSource: {
                         guard manager.selectedProject === project,
                               project.tabs.contains(where: { $0 === tab }) else { return }
                         project.dock.select(.tab(id))
@@ -842,7 +862,7 @@ struct DockTabGroupView: View {
 
     private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }
 
-    private func markdownDirectory(for tab: PaneTab) -> String? {
+    private func resourceDirectory(for tab: PaneTab) -> String? {
         guard case .file(let file) = tab.content,
               file.workspaceIdentity == project.workspaceIdentity else { return nil }
         return project.customDirectory
@@ -859,15 +879,34 @@ struct DockTabGroupView: View {
     private func projectTabMenu(_ tab: PaneTab) -> some View {
         let tabID = tab.id
         if case .file(let file) = tab.content {
-            if file.canPreviewMarkdown {
-                ForEach(MarkdownViewMode.allCases, id: \.self) { mode in
-                    Button(mode.title) {
+            if file.canPreviewFile {
+                ForEach(FilePreviewMode.allCases, id: \.self) { mode in
+                    Button(mode.title(for: file.previewKind)) {
                         if let current = currentMenuTab(tabID) {
-                            project.setMarkdownMode(mode, for: current)
+                            project.setFilePreviewMode(mode, for: current)
                         }
                     }
-                    .disabled(project.markdownMode(for: tab) == mode)
+                    .disabled(project.filePreviewMode(for: tab) == mode)
                 }
+            }
+            if file.canPreviewFile, file.previewKind == .html {
+                if file.workspaceIdentity != nil {
+                    Text("Remote HTML cannot run in the local browser.", tableName: "Editor")
+                } else {
+                    Button(file.isDirty ? String(localized: "Open Saved HTML in Browser", table: "Editor")
+                           : String(localized: "Open HTML in Browser", table: "Editor")) {
+                        openHTML(tabID, saveFirst: false)
+                    }
+                    .disabled(!file.canRunLocalHTML || file.isSaving)
+                    if file.isDirty {
+                        Button(String(localized: "Save and Open HTML in Browser", table: "Editor")) {
+                            openHTML(tabID, saveFirst: true)
+                        }
+                        .disabled(!file.canRunLocalHTML || file.isSaving)
+                    }
+                }
+            }
+            if file.canPreviewMarkdown {
                 Toggle(String(localized: "Synchronize Scrolling", table: "Editor"), isOn: Binding(
                     get: { file.markdownScrollSyncEnabled },
                     set: { value in
@@ -882,6 +921,8 @@ struct DockTabGroupView: View {
                 Button(String(localized: "Front Matter…", table: "Editor")) {
                     if currentMenuTab(tabID) != nil { markdownPopover = .metadata(tabID) }
                 }
+                Divider()
+            } else if file.canPreviewFile {
                 Divider()
             }
             Button(String(localized: "Reveal in File Manager", table: "Interface")) {

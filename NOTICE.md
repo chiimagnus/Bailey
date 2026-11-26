@@ -35,8 +35,9 @@ Bailey 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参�
 | `swift-cmark`（cmark-gfm 解析器） | [上游代码](https://github.com/swiftlang/swift-cmark)、[BSD/MIT 等许可证原文](Bailey/Resources/Licenses/LICENSE-swift-cmark.txt)；版本固定见 `Package.resolved` |
 | Markdown HTML 解析 | [SwiftSoup 及本地补丁](Vendor/SwiftSoup/README.md)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftsoup.txt) |
 | YAML Front Matter | [Yams](https://github.com/jpsim/Yams)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-yams.txt) |
-| SVG 原生绘制 | [SwiftDraw](https://github.com/swhitty/SwiftDraw)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftdraw.txt) |
+| SVG 原生绘制 | [SwiftDraw 来源及补丁](Vendor/SwiftDraw/README.md)、[zlib 原文](Bailey/Resources/Licenses/LICENSE-swiftdraw.txt) |
 | Mermaid 原生图表 | [MermaidKit](https://github.com/2389-research/MermaidKit)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-mermaidkit.txt) |
+| PNG／TIFF 区域像素读取 | [RasterRegions 固定源码与范围](Vendor/RasterRegions/README.md)、[libpng 原文](Bailey/Resources/Licenses/LICENSE-libpng.txt)、[LibTIFF 原文](Bailey/Resources/Licenses/LICENSE-libtiff.txt)；LZW 代码源自加州大学伯克利分校 |
 | Markdown 原生数学排版 | [SwiftUIMath](https://github.com/gonzalezreal/swiftui-math)、[MIT 原文](Bailey/Resources/Licenses/LICENSE-swiftui-math.txt)；版本固定见 `Package.resolved` |
 
 升级依赖或重新生成资源时，保留原有许可证与版权文本；自有文档整理不翻译、覆盖或删减这些原文。

@@ -92,12 +92,25 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         let version: WorkspaceFileVersion
     }
 
+    /// One frozen attempted save, retained by its document until the actual
+    /// publication is known. The upload bytes need not survive the attempt.
+    struct Publication: Sendable {
+        let path: String
+        let text: String
+        let encoding: TextFileEncoding
+        let explicit: Bool
+        let changesText: Bool
+        let previous: WorkspaceFileVersion
+        let version: WorkspaceFileVersion
+    }
+
     /// The frozen native text is immutable; prepare its full encoding, strict
     /// round trip, declaration check and new content hash off the main actor.
     @concurrent static func prepareSave(
-        _ text: String, as chosen: TextFileEncoding, checkDeclaration: Bool
+        _ text: String, as chosen: TextFileEncoding, path: String, checkDeclaration: Bool
     ) async -> Result<EncodedSave, SaveEncodingFailure> {
-        if checkDeclaration && contradictsDeclaration(text, chosen: chosen) {
+        if checkDeclaration, DelimitedTableIndex.Separator.preferred(for: path) == nil,
+           contradictsDeclaration(text, chosen: chosen) {
             return .failure(.contradictsDeclaration)
         }
         guard let bytes = chosen.encoded(text) else { return .failure(.cannotRoundTrip) }
@@ -135,7 +148,7 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         return nil
     }
 
-    static func contradictsDeclaration(_ text: String, chosen: TextFileEncoding) -> Bool {
+    private static func contradictsDeclaration(_ text: String, chosen: TextFileEncoding) -> Bool {
         guard let name = codingCookie(in: Data(text.utf8)) else { return false }
         switch name.replacingOccurrences(of: "_", with: "-") {
         case "mbcs":
@@ -199,7 +212,7 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
     }
 
     static func decode(
-        _ bytes: Data, backend: WorkspaceBackend, override: TextFileEncoding? = nil
+        _ bytes: Data, path: String, backend: WorkspaceBackend, override: TextFileEncoding? = nil
     ) async -> Result<Document, DecodeFailure> {
         let bom = bytes.starts(with: utf8BOM.signature) ? utf8BOM
             : bytes.starts(with: utf16LEBOM.signature) ? utf16LEBOM
@@ -211,6 +224,12 @@ nonisolated struct TextFileEncoding: Hashable, Sendable {
         } else if let bom {
             chosen = bom
         } else if let cookie {
+            if DelimitedTableIndex.Separator.preferred(for: path) != nil {
+                guard !bytes.contains(0) else { return .failure(.binary) }
+                if let text = utf8.decoded(bytes) {
+                    return .success(Document(text: text, encoding: .utf8))
+                }
+            }
             guard let found = await declared(cookie, backend: backend) else {
                 return .failure(.unsupportedEncoding(cookie))
             }

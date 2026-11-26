@@ -5,7 +5,7 @@ import SwiftUI
 struct MarkdownPreview: View {
     let document: MarkdownDocument
     let revision: String
-    let resource: MarkdownResource
+    let resource: PreviewResource
     let assetRefresh: UInt
     var collapsedHeadings: Set<MarkdownDocument.HeadingIdentity> = []
     var onToggleHeading: (MarkdownDocument.HeadingIdentity) -> Void = { _ in }
@@ -1065,7 +1065,7 @@ private extension MarkdownAlert {
 
 private struct MarkdownNativeBlockView: View {
     let block: MarkdownNativeBlock
-    let resource: MarkdownResource
+    let resource: PreviewResource
     let assetRefresh: UInt
     var anchor: String? = nil
     var selectionPath: [Int] = []
@@ -1322,7 +1322,7 @@ private struct MarkdownMixedParagraph: View {
     }
 
     let inline: [MarkdownInline]
-    let resource: MarkdownResource
+    let resource: PreviewResource
     let assetRefresh: UInt
     var formulaFontSize: CGFloat? = nil
 

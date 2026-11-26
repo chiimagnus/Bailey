@@ -6,7 +6,7 @@ import XCTest
 @testable import Bailey
 
 private actor DiffWorkspaceFixture: WorkspaceBackend {
-    private var contents = Data("baseline😀\r\n".utf8)
+    private var contents: Data
     private var pendingWrite: (Data, WorkspaceFileVersion?, CheckedContinuation<Void, Error>)?
     private var pendingRead: CheckedContinuation<Data, Error>?
     private var pauseRead = false
@@ -21,6 +21,10 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private var cancelledHeldGit = 0
     private var batchOIDs: [String] = []
     private var batchOverride: Data?
+
+    init(contents: Data = Data("baseline😀\r\n".utf8)) {
+        self.contents = contents
+    }
 
     func simulateBatchResponse(_ bytes: Data) {
         mutateIndexDuringBatch = true
@@ -5550,6 +5554,96 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
     }
 
+    func testReviewedWorktreeConflictWritesOnlyReviewedDraftAndKeepsGitIndex() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let relative = "reviewed.txt"
+        let path = directory.appendingPathComponent(relative)
+        try Data("base\n".utf8).write(to: path)
+        for args in [["add", "--", relative], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let head = GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path).stdout
+        let index = GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout
+        let diff = DiffTab(repoRoot: directory.path, path: relative, source: .worktree,
+                           untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: try isolatedPreferences())
+        try await wait { diff.canPresentNativeContent }
+        diff.autoSaveSuspendedForClose = true
+        try replaceNativeDiffText(diff, with: "draft 中文\n")
+        let external = Data("disk\n".utf8)
+        try external.write(to: path, options: .atomic)
+        await diff.save()
+        XCTAssertTrue(diff.canCompareSaveConflict)
+        let first = try await diff.compareSaveConflict()
+        XCTAssertEqual(first.diskVersion, WorkspaceFileVersion(data: external))
+        XCTAssertTrue(first.review.text.contains("disk"))
+        XCTAssertTrue(first.review.text.contains("draft 中文"))
+        let newer = Data("second disk\n".utf8)
+        try newer.write(to: path, options: .atomic)
+        do {
+            try await diff.resolveSaveConflict(first)
+            XCTFail("Stale confirmation")
+        } catch WorkspaceError.changedExternally {}
+        XCTAssertEqual(try Data(contentsOf: path), newer)
+        XCTAssertTrue(diff.isDirty)
+        let second = try await diff.compareSaveConflict()
+        try await diff.resolveSaveConflict(second)
+        XCTAssertEqual(try Data(contentsOf: path), Data("draft 中文\n".utf8))
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertNil(diff.saveError)
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path).stdout, head)
+        XCTAssertEqual(GitCommandExecution.run(["ls-files", "-s", "--", relative], in: directory.path).stdout, index)
+    }
+
+    func testLateIndependentDiffPublicationKeepsRecoveryLocationOnRetry() async throws {
+        for replacing in [false, true] {
+            let directory = try repository()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let relative = "table 中文.csv"
+            let path = directory.appendingPathComponent(relative)
+            let rival = directory.appendingPathComponent("rival.csv")
+            let baseline = Data("Name,Value\nItem,old\n".utf8)
+            let external = Data("Name,Value\nItem,ext\n".utf8)
+            let draft = "Name,Value\nItem,new\n"
+            try baseline.write(to: path)
+            for args in [["add", "--", relative], ["commit", "-qm", "baseline"]] {
+                XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+            }
+            try external.write(to: rival)
+            let backend = LocalWorkspaceBackend(beforeConditionalPublication: {
+                try publishIndependentFile(rival, to: $0, replacing: replacing)
+            })
+            let diff = DiffTab(repoRoot: directory.path, path: relative, source: .worktree,
+                               untracked: false, origPath: nil, backend: backend,
+                               workspaceIdentity: nil, preferences: try isolatedPreferences())
+            try await wait { diff.canPresentNativeContent }
+            diff.autoSaveSuspendedForClose = true
+            try replaceNativeDiffText(diff, with: draft)
+            XCTAssertTrue(diff.isDirty)
+            await diff.save()
+            let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            let recovery = try XCTUnwrap(entries.first { $0.lastPathComponent.hasPrefix("Bailey Save Recovery ") })
+            let stored = recovery.appendingPathComponent(relative).resolvingSymlinksInPath()
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertTrue(diff.saveError?.contains(LocalPathScope.physicalPath(stored.path)) == true)
+            XCTAssertTrue(diff.isDirty)
+            XCTAssertEqual(diff.editedNewContent, draft)
+            await diff.save()
+            XCTAssertTrue(diff.saveError?.contains(LocalPathScope.physicalPath(stored.path)) == true,
+                          "A retry must retain the exact recovery location")
+            XCTAssertTrue(diff.isDirty)
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            try baseline.write(to: path, options: .atomic)
+            await diff.save()
+            XCTAssertNil(diff.saveError)
+            XCTAssertFalse(diff.isDirty)
+            XCTAssertEqual(try Data(contentsOf: path), Data(draft.utf8))
+            XCTAssertEqual(try Data(contentsOf: stored), external)
+        }
+    }
+
     func testCleanWorktreeDiffEncodingWriteIsProtectedDuringTabAndBatchClose() async throws {
         for batch in [false, true] {
             for failing in [false, true] {
@@ -5682,6 +5776,111 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(stored, Data("已保存但回执丢失👋\n".utf8))
         XCTAssertNil(diff.saveError)
         XCTAssertFalse(diff.isDirty)
+    }
+
+    func testWorktreeDiffReconnectConfirmsPublishedRevisionBeforeTheNextSave() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack-reconnect.csv", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
+        defer { diff.retireNativeSurface() }
+        try await wait { diff.canPresentNativeContent }
+        try replaceNativeDiffText(diff, with: "Name,Value\r\n中文,111")
+        let written = Data(diff.editedNewContent.utf8)
+        let saving = Task { await diff.save() }
+        try await wait { await backend.writing }
+        diff.rebindWorkspace(to: nil)
+        await backend.finishWrite(failing: true, publishedBeforeFailure: true)
+        await saving.value
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, written)
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertNotNil(diff.readOnlyReason)
+
+        let live = DiffWorkspaceFixture(contents: written)
+        diff.rebindWorkspace(to: live)
+        try replaceNativeDiffText(diff, with: "Name,Value\r\n中文,222")
+        let latest = diff.editedNewContent
+        let next = Task { await diff.save() }
+        try await wait { await live.writing }
+        await live.finishWrite()
+        await next.value
+        XCTAssertEqual(diff.editedNewContent, latest)
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertNil(diff.saveError)
+        let persisted = await live.stored()
+        XCTAssertEqual(persisted, Data(latest.utf8))
+        let writes = await live.writes
+        XCTAssertEqual(writes, 1)
+
+    }
+
+    func testWorktreeDiffUndoDuringUncertainPublicationKeepsDraftAndRestoresBytes() async throws {
+        let latest = "Name,Value\r\n中文,222"
+        let live = DiffWorkspaceFixture(contents: Data(latest.utf8))
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack-undo.csv", source: .worktree,
+                           untracked: true, origPath: nil, backend: live,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
+        defer { diff.retireNativeSurface() }
+        try await wait { diff.canPresentNativeContent }
+        XCTAssertEqual(diff.editedNewContent, latest)
+        try replaceNativeDiffText(diff, with: "Name,Value\r\n中文,333")
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        let undo = try XCTUnwrap(editor.undoManager)
+        let attempted = diff.editedNewContent
+        let attempt = Task { await diff.save() }
+        try await wait { await live.writing }
+        undo.undo()
+        XCTAssertEqual(diff.editedNewContent, latest)
+        XCTAssertTrue(diff.isDirty, "Undo cannot mark an unconfirmed publication clean")
+        await live.finishWrite(failing: true, publishedBeforeFailure: true)
+        await attempt.value
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(diff.editedNewContent, latest)
+        let actual = await live.stored()
+        XCTAssertEqual(actual, Data(attempted.utf8))
+        let revert = Task { await diff.save() }
+        try await wait { await live.writing }
+        await live.finishWrite()
+        await revert.value
+        XCTAssertFalse(diff.isDirty)
+        XCTAssertNil(diff.saveError)
+        let final = await live.stored()
+        XCTAssertEqual(final, Data(latest.utf8))
+
+    }
+
+    func testWorktreeDiffDisconnectedCleanEncodingPublicationRemainsUnresolved() async throws {
+        let latest = "Name,Value\r\n中文,222"
+        let live = DiffWorkspaceFixture(contents: Data(latest.utf8))
+        let diff = DiffTab(repoRoot: "/fixture", path: "ack-encoding.csv", source: .worktree,
+                           untracked: true, origPath: nil, backend: live,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
+        defer { diff.retireNativeSurface() }
+        try await wait { diff.canPresentNativeContent }
+        XCTAssertFalse(diff.isDirty)
+        let converting = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await live.writing }
+        diff.rebindWorkspace(to: nil)
+        await live.finishWrite(failing: true)
+        await converting.value
+        let unchanged = DiffWorkspaceFixture(contents: Data(latest.utf8))
+        diff.rebindWorkspace(to: unchanged)
+        await diff.save()
+        XCTAssertTrue(PaneContent.diff(diff).hasUnresolvedSave)
+        XCTAssertEqual(diff.fileEncoding, .utf8)
+        diff.reload()
+        XCTAssertFalse(diff.isLoading, "Refresh must not discard an unpublished encoding choice")
+        XCTAssertTrue(PaneContent.diff(diff).hasUnresolvedSave)
+        let retry = Task { await diff.save(as: .utf8BOM) }
+        try await wait { await unchanged.writing }
+        await unchanged.finishWrite()
+        await retry.value
+        XCTAssertEqual(diff.fileEncoding, .utf8BOM)
+        XCTAssertFalse(PaneContent.diff(diff).hasUnresolvedSave)
+        let converted = await unchanged.stored()
+        XCTAssertEqual(converted, TextFileEncoding.utf8BOM.encoded(latest))
     }
 
     func testWorktreeDiffRejectsEncodingThatWouldExceedFiveMiB() async throws {
@@ -5817,6 +6016,37 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(tab.newContent, new)
         XCTAssertTrue(tab.hasChanges)
         try await wait { tab.display != nil }
+    }
+
+    func testCSVWorktreeAndGitBlobKeepCodingCellAndConvertOnlyOnExplicitSave() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let name = "实验.CSV"
+        let file = directory.appendingPathComponent(name)
+        let old = "# coding: GBK,模型🧪\r\n0,10\r\n"
+        let current = "# coding: GBK,模型🧪\r\n0,20\r\n"
+        try Data(old.utf8).write(to: file)
+        for args in [["add", name], ["commit", "-qm", "CSV baseline"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data(current.utf8).write(to: file)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: name, source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: try isolatedPreferences()
+        )
+        tab.autoSaveSuspendedForClose = true
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(Data(tab.oldContent.utf8), Data(old.utf8))
+        XCTAssertEqual(Data(tab.newContent.utf8), Data(current.utf8))
+        XCTAssertEqual(tab.fileEncoding, .utf8)
+        XCTAssertEqual(try Data(contentsOf: file), Data(current.utf8))
+
+        await tab.save(as: .utf16BEBOM)
+        XCTAssertNil(tab.saveError)
+        XCTAssertEqual(try Data(contentsOf: file), TextFileEncoding.utf16BEBOM.encoded(current))
     }
 
     func testEncodingOnlyGitChangeRemainsVisibleWhenDecodedTextMatches() async throws {

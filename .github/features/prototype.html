@@ -90,29 +90,8 @@
 .media-volume-control{display:flex;align-items:center;gap:3px}
 .media-volume-control input[type="range"]{width:76px;height:18px;accent-color:#91add5;cursor:pointer}
 .media-volume-control input[type="range"]:focus-visible{outline:1px solid #91add5;outline-offset:3px}
-.audio-space{height:100%;width:100%;display:grid;place-items:center;position:relative;container-type:inline-size}
-.audio-composition{width:min(82%,800px);display:flex;flex-direction:column;align-items:center;gap:12px;transform:translateY(-7px)}
-.wave{width:100%;height:114px;cursor:pointer;touch-action:pan-y;outline:none}
-.progress{height:2px;width:100%;background:#3d3e48;position:relative;cursor:pointer}
-.progress>div{position:absolute;left:0;top:0;height:2px;background:#8eaee3;width:0}
-.progress>i{position:absolute;width:6px;height:6px;border-radius:50%;background:#adcafa;top:-2px;left:0;transform:translateX(-50%)}
-.progress input{position:absolute;left:0;top:-10px;width:100%;height:22px;margin:0;opacity:0;cursor:pointer}
-.progress:focus-within{outline:1px solid #83a9e1;outline-offset:5px;border-radius:3px}
-.times{width:100%;display:flex;justify-content:space-between;font:10px var(--mono);color:#747987;margin-top:-3px}
-.audio-transport{display:grid;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);align-items:center;width:100%;margin-top:12px}
-.audio-play{border:1px solid #545660;border-radius:50%;width:44px;height:44px;font-size:17px;background:#26272f;color:#dce3f2;display:grid;place-items:center;padding:0}
-.audio-play:hover{background:#343d4f;border-color:#7792b6}
-.audio-play:active{transform:scale(.96)}
-.audio-transport .media-volume-control{justify-self:end}
-@container (max-width:360px){
- .audio-transport .media-volume-control input{width:34px}
-}
-@container (max-width:240px){
- .audio-transport .media-speed{min-width:52px;padding-left:6px;padding-right:17px}
- .audio-transport .media-volume-control{position:relative}
- .audio-transport .media-volume-control input{display:none;position:absolute;bottom:32px;right:-7px;width:100px;height:30px;padding:0 8px;background:#2a2c35f2;border:1px solid #ffffff20;border-radius:8px;box-shadow:0 6px 22px #0007}
- .audio-transport .media-volume-control:hover input,.audio-transport .media-volume-control:focus-within input{display:block}
-}
+.audio-space{height:100%;display:grid;place-items:center}
+.audio-space audio{width:min(92%,520px)}
 .video-space{height:100%;width:100%;background:#090a0e;display:grid;place-items:center;overflow:hidden;position:relative}
 .video-frame{position:relative;overflow:hidden;background:#090a0e;max-width:100%;max-height:100%}
 .video-frame video{width:100%;height:100%;object-fit:contain;display:block;background:#090a0e}
@@ -134,7 +113,6 @@
 .video-subtitles{font-size:11px;font-weight:650;letter-spacing:.01em}
 .video-subtitles.active{color:#a8caff;background:#3c5377}
 @media(max-width:650px){
- .audio-composition{width:92%}
  .media-volume-control input[type="range"]{width:48px}
  .video-controls{padding:10px 9px 8px;bottom:10px;width:calc(100% - 20px)}
  .video-bottom{gap:3px}
@@ -267,7 +245,7 @@ const Demo=(()=>{
   items.push(...tabExtra());showMenu(e,items)});
  let tabExtra=()=>[item("关闭标签",()=>toast("原型不会关闭正式 Bailey 标签"))];
  function setTabExtra(fn){tabExtra=fn}
- function setCanvasMenu(fn){canvasMenu=fn;stage.addEventListener("contextmenu",e=>{if(e.target.closest(".source,.context,.floating-tools,.csv-input,.audio-transport,.video-controls"))return;const items=canvasMenu(e);if(items?.length)showMenu(e,items)})}
+ function setCanvasMenu(fn){canvasMenu=fn;stage.addEventListener("contextmenu",e=>{if(e.target.closest(".source,.context,.floating-tools,.csv-input,.audio-space audio,.video-controls"))return;const items=canvasMenu(e);if(items?.length)showMenu(e,items)})}
  document.addEventListener("pointerdown",e=>{if(!menu.contains(e.target))menu.classList.remove("show")});
  document.addEventListener("scroll",()=>menu.classList.remove("show"),true);
  function editor(text,id){const shell=document.createElement("div");shell.className="editor";
@@ -823,64 +801,11 @@ Demo.setCanvasMenu(actions);Demo.setTabExtra(actions);draw();
 
 }
 if(activeKind==="audio"){
-
-const area=document.createElement("div");area.className="audio-space";
-const audio=document.createElement("audio");audio.preload="metadata";audio.src="./audio-file-playback/demo-audio.m4a";audio.volume=.65;
-const composition=document.createElement("div");composition.className="audio-composition";
-const wave=document.createElement("canvas");wave.className="wave";wave.setAttribute("aria-label","音频波形：拖动定位");composition.append(wave);
-const progress=document.createElement("div");progress.className="progress";
-const line=document.createElement("div"),dot=document.createElement("i");
-const seekRange=document.createElement("input");seekRange.type="range";seekRange.min="0";seekRange.max="1000";seekRange.value="0";seekRange.step="1";
-seekRange.setAttribute("aria-label","播放进度");progress.append(line,dot,seekRange);composition.append(progress);
-const times=document.createElement("div");times.className="times";
-const now=document.createElement("span"),duration=document.createElement("span");
-now.textContent="00:00";duration.textContent="--:--";times.append(now,duration);composition.append(times);
-const transport=document.createElement("div");transport.className="audio-transport";
-const media=mediaInlineControls(audio);
-const play=document.createElement("button");play.className="audio-play";play.type="button";play.textContent="▶";play.title="播放";play.setAttribute("aria-label","播放");
-transport.append(media.speedWrap,play,media.volumeGroup);composition.append(transport);
-area.append(composition,audio);Demo.stage.append(area);
-const peaks=[];
-for(let i=0;i<180;i++){const x=i/180;peaks.push(Math.max(.09,Math.min(.92,.20+.44*Math.abs(Math.sin(i*.25)*Math.cos(i*.061))+.18*Math.sin(i*.37)**2+.08*Math.cos(x*12)**2)))}
-function clock(n){if(!Number.isFinite(n))return "--:--";n=Math.floor(n);return String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0")}
-function drawWave(){
- const dpr=devicePixelRatio||1,rect=wave.getBoundingClientRect(),w=Math.round(rect.width*dpr),h=Math.round(rect.height*dpr);
- if(w<1||h<1)return;if(wave.width!==w||wave.height!==h){wave.width=w;wave.height=h}
- const ctx=wave.getContext("2d");ctx.clearRect(0,0,w,h);
- const pct=Number.isFinite(audio.duration)&&audio.duration>0?audio.currentTime/audio.duration:0;
- for(let i=0;i<peaks.length;i++){
-  const x=i*w/peaks.length,y=peaks[i]*h*.77;
-  ctx.fillStyle=i/peaks.length<pct?"#89aee1":"#606779b5";
-  ctx.fillRect(x,(h-y)/2,Math.max(.9,w/peaks.length-2*dpr),y);
- }
- line.style.width=pct*100+"%";dot.style.left=pct*100+"%";
-}
-function refresh(){
- now.textContent=clock(audio.currentTime);duration.textContent=clock(audio.duration);
- play.textContent=audio.paused?"▶":"Ⅱ";play.title=audio.paused?"播放":"暂停";play.setAttribute("aria-label",play.title);
- if(Number.isFinite(audio.duration)&&audio.duration>0)seekRange.value=String(Math.round(audio.currentTime/audio.duration*1000));
- drawWave()
-}
-async function toggle(){try{if(audio.paused)await audio.play();else audio.pause();refresh()}
- catch(e){Demo.toast("无法播放音频："+e.message)}}
-play.onclick=toggle;
-function seekFromWave(e){
- if(!Number.isFinite(audio.duration))return;
- const r=wave.getBoundingClientRect();
- audio.currentTime=Math.max(0,Math.min(audio.duration,(e.clientX-r.left)/r.width*audio.duration));refresh()
-}
-wave.addEventListener("pointerdown",e=>{if(e.button===0)seekFromWave(e)});
-wave.addEventListener("pointermove",e=>{if(e.buttons&1)seekFromWave(e)});
-seekRange.oninput=()=>{if(Number.isFinite(audio.duration))audio.currentTime=Number(seekRange.value)/1000*audio.duration;refresh()};
-for(const ev of ["timeupdate","play","pause","loadedmetadata","ended"])audio.addEventListener(ev,refresh);
-audio.onerror=()=>Demo.toast("音频无法解码；正式 App 将显示系统错误");
-new ResizeObserver(drawWave).observe(wave);
-const actions=()=>[
- Demo.item("回到开头",()=>{audio.currentTime=0;refresh()}),
- Demo.item("媒体信息",()=>Demo.toast("M4A · "+clock(audio.duration)))
-];
-Demo.setCanvasMenu(actions);refresh();
-
+ const area=document.createElement("div");area.className="audio-space";
+ const audio=document.createElement("audio");audio.controls=true;audio.preload="metadata";
+ audio.src="./audio-file-playback/demo-audio.m4a";
+ audio.onerror=()=>Demo.toast("音频无法解码");
+ area.append(audio);Demo.stage.append(area);
 }
 if(activeKind==="video"){
 

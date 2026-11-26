@@ -111,7 +111,7 @@ final class FileTreeModel {
         let epoch = treeEpoch
         let backend = self.backend
         let requestRevision = interactionRevision
-        let normalized = (path as NSString).standardizingPath
+        let normalized = LocalPathScope.lexicalPath(path)
         guard !root.isEmpty, path == normalized, path != root,
               LocalPathScope.contains(path, in: root), isCurrentTarget()
         else { return false }
@@ -472,7 +472,7 @@ final class FileTreeModel {
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: root)) != nil else {
             return nil
         }
-        let parent = physicalRootPath((root as NSString).deletingLastPathComponent)
+        let parent = LocalPathScope.physicalPath((root as NSString).deletingLastPathComponent)
         // FSEvents is recursive: monitoring '/' for /tmp or /var would subscribe
         // to the entire filesystem. Those top-level aliases reconcile on activation.
         guard parent != "/" else { return nil }
@@ -498,7 +498,7 @@ final class FileTreeModel {
             return
         }
         let root = rootPath
-        let physicalRoot = Self.physicalRootPath(root)
+        let physicalRoot = LocalPathScope.physicalPath(root)
         var mappings = [root: physicalRoot]
         for (parent, entries) in cachedDirectories {
             for entry in entries where entry.isSymlink && entry.isDirectory {
@@ -508,7 +508,7 @@ final class FileTreeModel {
                 // It still needs events: changing the link's target can split
                 // that compact row into multiple visible entries.
                 if items.contains(where: { $0.path == path || $0.path.hasPrefix(path + "/") }) {
-                    mappings[path] = Self.physicalRootPath(path)
+                    mappings[path] = LocalPathScope.physicalPath(path)
                 }
             }
         }
@@ -547,10 +547,17 @@ final class FileTreeModel {
                 Task { @MainActor [weak self] in
                     guard let self, self.localWatcherToken == token,
                           self.localFileEventsEnabled, self.rootPath == root else { return }
-                    await self.rebuild(refresh: true)
+                    await self.reconcileLocalFileEvents()
                 }
             }
         }
+    }
+
+    private func reconcileLocalFileEvents() async {
+        let epoch = treeEpoch
+        let revision = contentRevision
+        await rebuild(refresh: true)
+        if treeEpoch == epoch, contentRevision == revision { contentRevision &+= 1 }
     }
 
     private func queueLocalFileEvents(_ events: [GitFileEventWatcher.Event]) {
@@ -565,14 +572,6 @@ final class FileTreeModel {
             self.pendingLocalEvents.removeAll()
             self.localEventRefreshTask = nil
             await self.refreshForLocalEvents(events)
-        }
-    }
-
-    private static func physicalRootPath(_ root: String) -> String {
-        root.withCString { source in
-            guard let resolved = Darwin.realpath(source, nil) else { return root }
-            defer { free(resolved) }
-            return String(cString: resolved)
         }
     }
 
@@ -591,13 +590,10 @@ final class FileTreeModel {
             guard event.path == (link as NSString).deletingLastPathComponent,
                   event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0
             else { return false }
-            return Self.physicalRootPath(rootPath) != localWatchMappings[rootPath]
+            return LocalPathScope.physicalPath(rootPath) != localWatchMappings[rootPath]
         }
         if rootLinkChanged || events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
-            let epoch = treeEpoch
-            let revision = contentRevision
-            await rebuild(refresh: true)
-            if treeEpoch == epoch, contentRevision == revision { contentRevision &+= 1 }
+            await reconcileLocalFileEvents()
             return
         }
 
@@ -626,7 +622,7 @@ final class FileTreeModel {
         // FSEvents reports physical paths; expanded directory symlinks can
         // expose the same directory under several visible tree paths.
         let mappings = localWatchMappings.isEmpty
-            ? [rootPath: Self.physicalRootPath(rootPath)] : localWatchMappings
+            ? [rootPath: LocalPathScope.physicalPath(rootPath)] : localWatchMappings
         for event in events {
             // Never standardize a missing event path: NSString changes /private/var
             // to /var for existing entries but not reliably for deleted ones.
@@ -880,7 +876,7 @@ final class FileTreeModel {
             )
             return FileBatchResult(failures: [reason])
         }
-        let sourcePaths = Array(Set(paths)).sorted {
+        let sourcePaths = Array(Set(ImageAnnotationSidecar.coalescedSelection(paths))).sorted {
             $0.count == $1.count ? $0 < $1 : $0.count < $1.count
         }.reduce(into: [String]()) { accepted, path in
             guard !accepted.contains(where: { LocalPathScope.contains(path, in: $0) }) else { return }
@@ -888,8 +884,10 @@ final class FileTreeModel {
         }
 
         var result = FileBatchResult()
-        let rootPath = (root as NSString).standardizingPath
-        let targetPath = directory.map { ($0 as NSString).standardizingPath }
+        guard let rootPath = LocalPathScope.lexicalPath(root) else {
+            return FileBatchResult(failures: [String(localized: "Couldn’t complete file operation.", table: "Workspace")])
+        }
+        let targetPath = directory.flatMap(LocalPathScope.lexicalPath)
         let physicalRoot: String
         do {
             physicalRoot = try await Self.physicalDirectory(
@@ -944,7 +942,7 @@ final class FileTreeModel {
         for source in sourcePaths {
             guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
                   epoch == treeEpoch else { break }
-            let normalized = (source as NSString).standardizingPath
+            let normalized = LocalPathScope.lexicalPath(source)
             guard normalized == source,
                   source != rootPath, LocalPathScope.contains(source, in: rootPath) else {
                 result.failures.append(
@@ -988,6 +986,7 @@ final class FileTreeModel {
             }
             do {
                 var completedDestination = destination
+                var includesAnnotation = false
                 if scope == "local", backend is LocalWorkspaceBackend,
                    action == .copy || action == .move {
                     guard let physicalTarget, let targetPath else { continue }
@@ -1002,6 +1001,10 @@ final class FileTreeModel {
                     case .copied(let path), .moved(let path):
                         completedDestination = (targetPath as NSString)
                             .appendingPathComponent((path as NSString).lastPathComponent)
+                    case .copiedPair(let path), .movedPair(let path):
+                        includesAnnotation = true
+                        completedDestination = (targetPath as NSString)
+                            .appendingPathComponent((path as NSString).lastPathComponent)
                     case .copiedWithoutRemoval(let path, let retainedAt):
                         let copy = (targetPath as NSString)
                             .appendingPathComponent((path as NSString).lastPathComponent)
@@ -1013,6 +1016,12 @@ final class FileTreeModel {
                     case .unchanged: continue
                     }
                 } else {
+                    let pair = try await ImageAnnotationSidecar.pair(at: physicalSource, backend: backend)
+                    if pair == nil, let physicalDestination, physicalDestination != physicalSource {
+                        try await ImageAnnotationSidecar.requireUnpaired(physicalDestination, backend: backend)
+                    }
+                    guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
+                          epoch == treeEpoch else { break }
                     switch action {
                     case .copy:
                         guard let physicalDestination else { continue }
@@ -1022,24 +1031,37 @@ final class FileTreeModel {
                                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
                             }
                             let name = try await Self.copyWithUniqueName(
-                                source: physicalSource, into: resolvedParent, backend: backend
+                                source: physicalSource, into: resolvedParent, backend: backend, pair: pair
                             )
                             completedDestination = (sourceParent as NSString).appendingPathComponent(name)
+                        } else if let pair {
+                            try await pair.copy(to: physicalDestination, backend: backend)
                         } else {
                             try await backend.copy(from: physicalSource, to: physicalDestination)
                         }
                     case .move:
-                        guard let physicalDestination, physicalDestination != source else { continue }
-                        try await backend.rename(from: physicalSource, to: physicalDestination)
+                        guard let physicalDestination, physicalDestination != physicalSource else { continue }
+                        if let pair { try await pair.move(to: physicalDestination, backend: backend) }
+                        else { try await backend.rename(from: physicalSource, to: physicalDestination) }
                     case .delete:
-                        try await backend.delete(paths: [physicalSource])
+                        if let pair { try await pair.remove(backend: backend) }
+                        else { try await backend.delete(paths: [physicalSource]) }
                     }
+                    includesAnnotation = pair != nil
                 }
                 result.succeeded.append((
                     source: source, destination: action == .delete ? nil : completedDestination
                 ))
+                if includesAnnotation {
+                    result.succeeded.append((source: ImageAnnotationSidecar.path(for: source),
+                        destination: action == .delete ? nil : completedDestination.map { ImageAnnotationSidecar.path(for: $0) }))
+                }
             } catch {
                 result.failures.append("\(source): \(error.localizedDescription)")
+                if root == self.rootPath, scope == workspaceScope, epoch == treeEpoch {
+                    invalidateDirectory(containing: source)
+                    if let destination { invalidateDirectory(containing: destination) }
+                }
             }
         }
 
@@ -1059,7 +1081,7 @@ final class FileTreeModel {
             for entry in result.copiedWithoutRemoval {
                 invalidateDirectory(containing: entry.destination)
             }
-            if !result.succeeded.isEmpty || !result.copiedWithoutRemoval.isEmpty {
+            if !result.succeeded.isEmpty || !result.copiedWithoutRemoval.isEmpty || !result.failures.isEmpty {
                 await rebuild(refresh: true)
             }
             if !result.failures.isEmpty {
@@ -1071,7 +1093,7 @@ final class FileTreeModel {
     }
 
     private static func copyWithUniqueName(
-        source: String, into parent: String, backend: WorkspaceBackend
+        source: String, into parent: String, backend: WorkspaceBackend, pair: ImageAnnotationSidecar.Pair?
     ) async throws -> String {
         let original = (source as NSString).lastPathComponent
         let fileExtension = (original as NSString).pathExtension
@@ -1080,7 +1102,14 @@ final class FileTreeModel {
             let suffix = number == 1 ? " copy" : " copy \(number)"
             let name = stem + suffix + (fileExtension.isEmpty ? "" : "." + fileExtension)
             let candidate = (parent as NSString).appendingPathComponent(name)
+            if let pair {
+                if try await ImageAnnotationSidecar.entryExists(candidate, backend: backend) { continue }
+                if try await ImageAnnotationSidecar.entryExists(ImageAnnotationSidecar.path(for: candidate), backend: backend) { continue }
+                try await pair.copy(to: candidate, backend: backend)
+                return name
+            }
             do {
+                try await ImageAnnotationSidecar.requireUnpaired(candidate, backend: backend)
                 try await backend.copy(from: source, to: candidate)
                 return name
             } catch {
@@ -1129,7 +1158,7 @@ final class FileTreeModel {
     /// absolute path when the file actually moved, so callers can follow it
     /// (e.g. re-point open tabs).
     @discardableResult
-    func rename(_ item: Item, to newName: String) async -> String? {
+    func rename(_ item: Item, to newName: String, didMoveAnnotation: ((String, String) -> Void)? = nil) async -> String? {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
@@ -1200,17 +1229,32 @@ final class FileTreeModel {
             )
             return nil
         }
+        var includesAnnotation = false
         do {
-            try await backend.rename(from: physicalSource, to: physicalDest)
+            let pair = try await ImageAnnotationSidecar.pair(at: physicalSource, backend: backend)
+            if pair == nil { try await ImageAnnotationSidecar.requireUnpaired(physicalDest, backend: backend) }
+            guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
+            if let pair {
+                try await pair.move(to: physicalDest, backend: backend)
+                includesAnnotation = true
+                didMoveAnnotation?(ImageAnnotationSidecar.path(for: item.path), ImageAnnotationSidecar.path(for: dest))
+            } else {
+                try await backend.rename(from: physicalSource, to: physicalDest)
+            }
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
                 presentError(String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"), error.localizedDescription)
+                invalidateDirectory(containing: item.path)
+                await rebuild()
             }
             return nil
         }
         // The disk mutation succeeded; only the old tree's visual state is stale.
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return dest }
         remapPaths(from: item.path, to: dest)
+        if includesAnnotation {
+            remapPaths(from: ImageAnnotationSidecar.path(for: item.path), to: ImageAnnotationSidecar.path(for: dest))
+        }
         invalidateDirectory(containing: item.path)
         await rebuild()
         return dest

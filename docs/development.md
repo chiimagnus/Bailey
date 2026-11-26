@@ -36,12 +36,17 @@ Makefile 通过构建参数选择正式版或开发版，不复制 App Target、
 直接在 Xcode 中运行 scheme 不会自动带入 Makefile 的开发版参数；
 需要隔离的 Bailey Dev 时，应使用 `make build:dev` 生成的开发版 App。
 
-正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
-测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
+正式版产物位于 `.build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
+测试版位于 `.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
 App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.dev`）。
 两者使用独立 DerivedData 和 Bundle ID，
 测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；
-包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
+包依赖仍在 `.build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
+
+`make build:release` 关闭覆盖率插桩、启用未使用代码剔除，
+并在构建后使用 `strip -x` 移除本地符号、仅保留公式渲染实际使用的 Latin Modern 字体。
+精简后使用原构建签名的证书重新签名并严格验签；Debug 和测试包保持原样。
+Xcode 的调试符号不进入 App；`make package` 将对应 dSYM 单独压缩供崩溃分析。
 
 宿主与完整 App UI 的测试边界见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；
 `make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给本机阶段验收。
@@ -109,7 +114,14 @@ Debug／Release 构建与签名。
 Apple `swift-markdown`（经 `swift-cmark` 使用 cmark-gfm）仅负责解析 Markdown；
 阅读 UI 由 Bailey 自己的 SwiftUI 组件渲染，不使用 Textual、MarkdownView 或 WebKit。
 代码围栏复用现有 Tree-sitter 高亮；公式使用公开的 SwiftUIMath Canvas 排版 API，不使用私有 SPI。
+Release 仅保留当前固定使用的 Latin Modern 数学字体及其数据表，保留原许可；
+其他字体仍在依赖缓存中，不随发布包分发。
 资源、HTML、SVG 和媒体的行为见 [编辑器文档](features/editor.md)。
+SVG 共用 [本地 SwiftDraw](../Vendor/SwiftDraw/README.md)；版本、许可证及小数倍率图案补丁见对应包。
+[Vendor/RasterRegions](../Vendor/RasterRegions/README.md) 固定 libpng 和 LibTIFF 的源码与许可，
+仅负责版本化栅格数据的原像素区域提取。Xcode 通过本地 SwiftPM 包编译，压缩依赖仅为 SDK zlib，
+不依赖 Homebrew 或额外安装；更新依赖时同时执行原像素专项、Debug／Release 构建及验签。
+
 块 HTML 复用 [本地 SwiftSoup](../Vendor/SwiftSoup/README.md) 的分词和节点原文区间；
 补丁只负责保留并公开文字和实体的字节位置，不替换 HTML 解析规则。
 

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BC1000000000000000000073 /* RasterRegions in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000072 /* RasterRegions */; };
 		BC1000000000000000000043 /* MermaidRender in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000042 /* MermaidRender */; };
 		BC1000000000000000000033 /* SwiftDraw in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000032 /* SwiftDraw */; };
 		BC1000000000000000000013 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = BC1000000000000000000012 /* Yams */; };
@@ -73,6 +74,7 @@
 				BC1000000000000000000013 /* Yams in Frameworks */,
 				BC1000000000000000000023 /* SwiftSoup in Frameworks */,
 				BC1000000000000000000033 /* SwiftDraw in Frameworks */,
+				BC1000000000000000000073 /* RasterRegions in Frameworks */,
 				BC1000000000000000000053 /* Markdown in Frameworks */,
 				BC1000000000000000000063 /* SwiftUIMath in Frameworks */,
 				BC1000000000000000000043 /* MermaidRender in Frameworks */,
@@ -154,6 +156,7 @@
 				BC1000000000000000000012 /* Yams */,
 				BC1000000000000000000022 /* SwiftSoup */,
 				BC1000000000000000000032 /* SwiftDraw */,
+				BC1000000000000000000072 /* RasterRegions */,
 				BC1000000000000000000052 /* Markdown */,
 				BC1000000000000000000062 /* SwiftUIMath */,
 				BC1000000000000000000042 /* MermaidRender */,
@@ -223,7 +226,8 @@
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
 				BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */,
 				BC1000000000000000000021 /* XCLocalSwiftPackageReference "Vendor/SwiftSoup" */,
-				BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */,
+				BC1000000000000000000071 /* XCLocalSwiftPackageReference "Vendor/RasterRegions" */,
+				BC1000000000000000000031 /* XCLocalSwiftPackageReference "Vendor/SwiftDraw" */,
 				BC1000000000000000000051 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				BC1000000000000000000061 /* XCRemoteSwiftPackageReference "swiftui-math" */,
 				BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */,
@@ -379,7 +383,10 @@
 			buildSettings = {
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_COVERAGE_MAPPING = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
@@ -517,6 +524,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		BC1000000000000000000071 /* XCLocalSwiftPackageReference "Vendor/RasterRegions" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/RasterRegions;
+		};
 		AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/Neon;
@@ -533,6 +544,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/SwiftSoup;
 		};
+		BC1000000000000000000031 /* XCLocalSwiftPackageReference "Vendor/SwiftDraw" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/SwiftDraw;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -542,14 +557,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 2.10.2;
-			};
-		};
-		BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/swhitty/SwiftDraw";
-			requirement = {
-				kind = exactVersion;
-				version = 0.30.0;
 			};
 		};
 		BC1000000000000000000011 /* XCRemoteSwiftPackageReference "Yams" */ = {
@@ -589,6 +596,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		BC1000000000000000000072 /* RasterRegions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BC1000000000000000000071 /* XCLocalSwiftPackageReference "Vendor/RasterRegions" */;
+			productName = RasterRegions;
+		};
 		BC1000000000000000000042 /* MermaidRender */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = BC1000000000000000000041 /* XCRemoteSwiftPackageReference "MermaidKit" */;
@@ -596,7 +608,7 @@
 		};
 		BC1000000000000000000032 /* SwiftDraw */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = BC1000000000000000000031 /* XCRemoteSwiftPackageReference "SwiftDraw" */;
+			package = BC1000000000000000000031 /* XCLocalSwiftPackageReference "Vendor/SwiftDraw" */;
 			productName = SwiftDraw;
 		};
 		BC1000000000000000000012 /* Yams */ = {

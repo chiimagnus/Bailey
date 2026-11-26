@@ -376,8 +376,9 @@ nonisolated private final class FoldedDiffContentStorage: NSTextContentStorage {
 /// The pane's text view expands collapsed-run separators on click instead
 /// of placing a caret in the separator row.
 final class DiffTextView: NativeCodeTextView, NSTextLayoutManagerDelegate {
-    override init(contentStorage storage: NSTextContentStorage = FoldedDiffContentStorage()) {
-        super.init(contentStorage: storage)
+    override init(contentStorage storage: NSTextContentStorage = FoldedDiffContentStorage(),
+                  undoManager: UndoManager = UndoManager()) {
+        super.init(contentStorage: storage, undoManager: undoManager)
     }
 
     private var fixedLayoutRowHeight: CGFloat?

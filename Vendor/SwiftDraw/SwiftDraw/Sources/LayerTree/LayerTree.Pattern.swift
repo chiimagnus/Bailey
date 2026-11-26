@@ -1,0 +1,80 @@
+//
+//  LayerTree.Pattern.swift
+//  SwiftDraw
+//
+//  Created by Simon Whitty on 27/3/19.
+//  Copyright 2020 WhileLoop Pty Ltd. All rights reserved.
+//
+//  Distributed under the permissive zlib license
+//  Get the latest version from here:
+//
+//  https://github.com/swhitty/SwiftDraw
+//
+//  This software is provided 'as-is', without any express or implied
+//  warranty.  In no event will the authors be held liable for any damages
+//  arising from the use of this software.
+//
+//  Permission is granted to anyone to use this software for any purpose,
+//  including commercial applications, and to alter it and redistribute it
+//  freely, subject to the following restrictions:
+//
+//  1. The origin of this software must not be misrepresented; you must not
+//  claim that you wrote the original software. If you use this software
+//  in a product, an acknowledgment in the product documentation would be
+//  appreciated but is not required.
+//
+//  2. Altered source versions must be plainly marked as such, and must not be
+//  misrepresented as being the original software.
+//
+//  3. This notice may not be removed or altered from any source distribution.
+//
+
+import SwiftDrawDOM
+
+extension LayerTree {
+
+    enum PatternUnits: Hashable {
+        case userSpaceOnUse
+        case objectBoundingBox
+    }
+
+    final class Pattern: Hashable {
+
+        var frame: LayerTree.Rect
+        var contentUnits: PatternUnits
+        var contents: [LayerTree.Layer.Contents]
+
+        /// patternUnits: the coordinate system of `frame`
+        var units: PatternUnits
+        var viewBox: LayerTree.Rect?
+        var preserveAspectRatio: DOM.PreserveAspectRatio = .default
+        /// patternTransform: maps the pattern tile space into the user space of the filled element
+        var transform: LayerTree.Transform.Matrix
+
+        init(frame: LayerTree.Rect, contentUnits: PatternUnits = .userSpaceOnUse, units: PatternUnits = .userSpaceOnUse)
+        {
+            self.frame = frame
+            self.contentUnits = contentUnits
+            self.contents = []
+            self.units = units
+            self.viewBox = nil
+            self.transform = .identity
+        }
+
+        func hash(into hasher: inout Hasher) {
+            frame.hash(into: &hasher)
+            contentUnits.hash(into: &hasher)
+            contents.hash(into: &hasher)
+            units.hash(into: &hasher)
+            viewBox.hash(into: &hasher)
+            preserveAspectRatio.hash(into: &hasher)
+            transform.hash(into: &hasher)
+        }
+
+        static func == (lhs: LayerTree.Pattern, rhs: LayerTree.Pattern) -> Bool {
+            return lhs.frame == rhs.frame && lhs.contentUnits == rhs.contentUnits && lhs.contents == rhs.contents
+                && lhs.units == rhs.units && lhs.viewBox == rhs.viewBox
+                && lhs.preserveAspectRatio == rhs.preserveAspectRatio && lhs.transform == rhs.transform
+        }
+    }
+}

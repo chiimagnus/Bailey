@@ -185,6 +185,66 @@ enum WorkspaceUITestSupport {
         let sheet = owner.sheets.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 15),
                       "The native file/folder picker should be attached to the current window")
+        // NSOpenPanel sometimes resolves an absolute path immediately, closes
+        // Go to Folder, and selects its target in the parent directory.
+        // Both native states must identify the exact test target before Add/Open.
+        func selectedExpectedTarget() -> Bool {
+            let parent = url.deletingLastPathComponent().lastPathComponent
+            guard sheet.popUpButtons["where popup"].value as? String == parent else { return false }
+            return sheet.outlineRows.allElementsBoundByIndex.contains { row in
+                guard row.isSelected else { return false }
+                return row.textFields.allElementsBoundByIndex.contains { field in
+                    guard let displayed = field.value as? String else { return false }
+                    let visibleName = displayed.replacingOccurrences(of: "...", with: "")
+                        .replacingOccurrences(of: "…", with: "")
+                    return visibleName.count >= 8 && url.lastPathComponent.hasPrefix(visibleName)
+                }
+            }
+        }
+        try resolvePickerPath(url, in: app, isResolved: selectedExpectedTarget) {
+            try confirmPicker(sheet)
+        }
+    }
+
+    /// The native panel may only select an output in this test's own project.
+    static func saveFile(_ url: URL, in app: XCUIApplication, window: XCUIElement,
+                         replacing: Bool = false) throws {
+        let destination = url.standardizedFileURL
+        let parent = destination.deletingLastPathComponent()
+        precondition(session?.project?.path == parent.path, "Save output must belong to the test project")
+        XCTAssertEqual(FileManager.default.fileExists(atPath: destination.path), replacing)
+        let sheet = window.sheets.firstMatch
+        // An image export first presents its format alert, then the save panel.
+        // Wait for the native panel itself before invoking Go to Folder.
+        guard sheet.buttons["OKButton"].waitForExistence(timeout: 15) else {
+            throw NSError(domain: "BaileyUITestPicker", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Native save panel confirmation missing"
+            ])
+        }
+        func isSelectedDirectory() -> Bool {
+            sheet.popUpButtons["where popup"].value as? String == parent.lastPathComponent
+        }
+        try resolvePickerPath(parent, in: app, isResolved: isSelectedDirectory) {
+            let expectedName = sheet.textFields.matching(NSPredicate(format: "value IN %@", [
+                destination.lastPathComponent, destination.deletingPathExtension().lastPathComponent
+            ])).firstMatch
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                !app.textFields["PathTextField"].exists && isSelectedDirectory() && expectedName.exists
+                    && FileManager.default.fileExists(atPath: destination.path) == replacing
+            }, object: nil)
+            guard XCTWaiter.wait(for: [ready], timeout: 12) == .completed else {
+                throw NSError(domain: "BaileyUITestPicker", code: 7, userInfo: [
+                    NSLocalizedDescriptionKey: "Save panel did not resolve the intended new test file: \(destination.path)"
+                ])
+            }
+            try confirmPicker(sheet)
+        }
+    }
+
+    private static func resolvePickerPath(
+        _ url: URL, in app: XCUIApplication, isResolved: @escaping () -> Bool,
+        then confirm: () throws -> Void
+    ) throws {
         app.typeKey("g", modifierFlags: [.command, .shift])
         let pathField = app.textFields["PathTextField"]
         guard pathField.waitForExistence(timeout: 10) else {
@@ -213,29 +273,13 @@ enum WorkspaceUITestSupport {
         }
         pathField.typeKey("a", modifierFlags: .command)
         pathField.typeKey("v", modifierFlags: .command)
-        // NSOpenPanel sometimes resolves an absolute path immediately, closes
-        // Go to Folder, and selects its target in the parent directory.
-        // Both native states must identify the exact test target before Add/Open.
-        func selectedExpectedTarget() -> Bool {
-            let parent = url.deletingLastPathComponent().lastPathComponent
-            guard sheet.popUpButtons["where popup"].value as? String == parent else { return false }
-            return sheet.outlineRows.allElementsBoundByIndex.contains { row in
-                guard row.isSelected else { return false }
-                return row.textFields.allElementsBoundByIndex.contains { field in
-                    guard let displayed = field.value as? String else { return false }
-                    let visibleName = displayed.replacingOccurrences(of: "...", with: "")
-                        .replacingOccurrences(of: "…", with: "")
-                    return visibleName.count >= 8 && url.lastPathComponent.hasPrefix(visibleName)
-                }
-            }
-        }
         let entered = app.textFields.matching(identifier: "PathTextField").matching(NSPredicate(
             format: "value IN %@", [url.path, url.path + "/"]
         )).firstMatch
         let resolved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             if entered.exists { return true }
             if pathField.exists { return false }
-            return selectedExpectedTarget()
+            return isResolved()
         }, object: nil)
         guard XCTWaiter.wait(for: [resolved], timeout: 8) == .completed else {
             throw NSError(domain: "BaileyUITestPicker", code: 4, userInfo: [
@@ -243,6 +287,10 @@ enum WorkspaceUITestSupport {
             ])
         }
         if pathField.exists { pathField.typeKey(XCUIKeyboardKey.return, modifierFlags: []) }
+        try confirm()
+    }
+
+    private static func confirmPicker(_ sheet: XCUIElement) throws {
         let confirmation = sheet.buttons["OKButton"]
         guard confirmation.waitForExistence(timeout: 15) else {
             throw NSError(domain: "BaileyUITestPicker", code: 2,

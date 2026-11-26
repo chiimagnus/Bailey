@@ -9,7 +9,7 @@ enum DockItem: Hashable {
     case files
     case git
     case tab(UUID)
-    case markdownPreview(UUID)
+    case filePreview(UUID)
 
     init?(configurationName: String) {
         switch configurationName {
@@ -25,7 +25,7 @@ enum DockItem: Hashable {
         case .projects: "projects"
         case .files: "files"
         case .git: "git"
-        case .tab, .markdownPreview: nil
+        case .tab, .filePreview: nil
         }
     }
 
@@ -35,7 +35,7 @@ enum DockItem: Hashable {
     }
 
     var contentTabID: UUID? {
-        if case .markdownPreview(let id) = self { return id }
+        if case .filePreview(let id) = self { return id }
         return tabID
     }
 }
@@ -317,7 +317,7 @@ enum DockSavedItem: Codable, Hashable {
         case .projects: self = .projects
         case .files: self = .files
         case .git: self = .git
-        case .markdownPreview: return nil
+        case .filePreview: return nil
         case .tab(let id):
             guard let index = tabIDs.firstIndex(of: id) else { return nil }
             self = .tab(index)
@@ -640,8 +640,8 @@ final class DockWorkspaceModel {
 
     func removeTool(_ item: DockItem) {
         if case .tab = item { return }
-        if case .markdownPreview(let id) = item {
-            setMarkdownPreview(of: id, visible: false)
+        if case .filePreview(let id) = item {
+            setFilePreview(of: id, visible: false)
             return
         }
         if let remaining = root.removing(item) {
@@ -654,8 +654,8 @@ final class DockWorkspaceModel {
         }
     }
 
-    func setMarkdownPreview(of tabID: UUID, visible: Bool) {
-        let item = DockItem.markdownPreview(tabID)
+    func setFilePreview(of tabID: UUID, visible: Bool) {
+        let item = DockItem.filePreview(tabID)
         guard let sourceGroup = root.group(containing: .tab(tabID)) else { return }
         if visible {
             guard root.group(containing: item) == nil else { return }
@@ -673,7 +673,7 @@ final class DockWorkspaceModel {
     }
 
     func snapshot(tabIDs: [UUID]) -> DockSavedNode {
-        let previews = root.groups.flatMap(\.items).filter { if case .markdownPreview = $0 { true } else { false } }
+        let previews = root.groups.flatMap(\.items).filter { if case .filePreview = $0 { true } else { false } }
         let persisted = previews.reduce(root) { layout, item in layout.removing(item) ?? layout }
         return DockSavedNode(persisted, tabIDs: tabIDs)
     }

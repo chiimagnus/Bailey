@@ -128,22 +128,29 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized dedicated SSH test host")
         }
-        let snapshots = SessionStore.load()
-        let histories = TerminalHistoryStore.load()
-        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
         let socket = "/tmp/kp4-src-\(UUID().uuidString.prefix(8)).sock"
+        let root = "/tmp/bailey-p4-ssh-\(UUID().uuidString.lowercased())"
         let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
-        let created = try await backend.run(argv: ["mktemp", "-d", "/tmp/bailey-p4-ssh-XXXXXX"],
-                                            cwd: nil, env: nil, stdin: nil, timeout: 25)
-        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
-        let root = String(decoding: created.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (root as NSString).deletingLastPathComponent == "/tmp",
-              (root as NSString).lastPathComponent.hasPrefix("bailey-p4-ssh-") else {
-            throw WorkspaceError.notFound
-        }
+        var createdDirectory = false
+        var creationUncertain = false
+        var savedWorkspace: (windows: [SessionSnapshot], histories: [String: String])?
+        var phase = "create remote fixture"
+
         func cleanup() async {
-            do { try await backend.delete(paths: [root]) }
-            catch { XCTFail("Could not clean this test's remote directory \(root): \(error)") }
+            do {
+                if createdDirectory {
+                    try await backend.delete(paths: [root])
+                } else if creationUncertain {
+                    // A lost mkdir reply may have left our known empty directory.
+                    // Never recursively delete a directory whose creation was not confirmed.
+                    let removed = try await backend.run(
+                        argv: ["sh", "-c", "if [ -e \"$1\" ] || [ -L \"$1\" ]; then rmdir -- \"$1\"; fi",
+                               "cleanup", root], cwd: nil, env: nil, stdin: nil, timeout: 25
+                    )
+                    XCTAssertEqual(removed.status, 0, String(decoding: removed.stderr, as: UTF8.self))
+                }
+            } catch { XCTFail("Could not clean this test's remote directory \(root): \(error)") }
+            guard createdDirectory || FileManager.default.fileExists(atPath: socket) else { return }
             do {
                 let stopped = try await Task.detached {
                     try ProcessRemoteCommandRunner.launch(
@@ -161,7 +168,19 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             }
             return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        let outcome: Result<Void, Error>
         do {
+            creationUncertain = true
+            let created = try await backend.run(argv: ["mkdir", "--", root], cwd: nil,
+                                                env: nil, stdin: nil, timeout: 25)
+            // SSH status 255 is a transport failure, not a confirmed mkdir reply.
+            creationUncertain = created.status == 255
+            guard created.status == 0 else {
+                XCTFail(String(decoding: created.stderr, as: UTF8.self))
+                throw WorkspaceError.notFound
+            }
+            createdDirectory = true
+            phase = "initialize remote Git repository"
             let setup = """
             set -eu
             git init -q -b main
@@ -193,6 +212,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
                 XCTFail(String(decoding: prepared.stderr, as: UTF8.self))
                 throw WorkspaceError.notFound
             }
+            phase = "resolve and prepare remote Git heads"
             let side = try await git(["rev-parse", "refs/heads/side"])
             let original = try await git(["rev-parse", "HEAD"])
             print("P4 SSH test: fixed project, temporary repository=\(root)")
@@ -201,6 +221,8 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             let cleared = try await backend.run(argv: ["rm", "-f", "editor-ready"], cwd: root,
                                                 env: nil, stdin: nil, timeout: 25)
             XCTAssertEqual(cleared.status, 0)
+            phase = "open independent interactive PTY"
+            savedWorkspace = (SessionStore.load(), TerminalHistoryStore.load())
             let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             let project = Project(fallbackName: "SSH PTY Rebase", workspaceConfiguration: .standard)
@@ -225,6 +247,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             window.contentView = terminal.surface
             window.orderFront(nil)
             window.contentView?.layoutSubtreeIfNeeded()
+            phase = "wait for remote sequence editor"
             do {
                 try await wait {
                     do { return try await backend.read(path: root + "/editor-ready", maxBytes: 4096).contains(Data("PTY\n".utf8)) }
@@ -242,6 +265,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             XCTAssertEqual(waitingHead, original)
             try await wait { terminal.location.remoteConnection != nil }
             XCTAssertNotEqual(terminal.location.remoteConnection?.controlSocket.path, socket)
+            phase = "send editor input and verify rebase"
             terminal.sendCommand("\r")
             try await wait { try await git(["rev-parse", "HEAD^"]) == side }
             let mainBytes = try await git(["show", "HEAD:main.txt"])
@@ -251,10 +275,17 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             XCTAssertFalse(terminal.hasExited)
             terminal.terminate()
             try await wait { terminal.hasExited }
-            await cleanup()
+            outcome = .success(())
         } catch {
-            await cleanup()
-            throw error
+            print("P4 SSH test failed during \(phase): \(String(reflecting: error))")
+            outcome = .failure(error)
         }
+        await cleanup()
+        if let savedWorkspace {
+            SessionStore.save(savedWorkspace.windows)
+            TerminalHistoryStore.save(savedWorkspace.histories)
+        }
+        // Preserve the original remote failure after cleaning up the fixture.
+        try outcome.get()
     }
 }

@@ -49,7 +49,7 @@ enum PaneContent: nonisolated Identifiable {
 
     @MainActor var isDirty: Bool {
         switch self {
-        case .file(let file): file.isDirty
+        case .file(let file): file.isDirty || file.hasPendingDelimitedEdit
         case .diff(let diff): diff.isDirty
         case .session, .browser: false
         }
@@ -77,6 +77,14 @@ enum PaneContent: nonisolated Identifiable {
         switch self {
         case .file(let file): await file.save()
         case .diff(let diff): await diff.save()
+        case .session, .browser: break
+        }
+    }
+
+    @MainActor func deactivate() {
+        switch self {
+        case .file(let file): file.deactivate()
+        case .diff(let diff): diff.autoSaveOnFocusLoss()
         case .session, .browser: break
         }
     }

@@ -1,4 +1,7 @@
 import AppKit
+import ApplicationServices
+import AVFoundation
+import AVKit
 import Observation
 import SwiftUI
 import WebKit
@@ -854,6 +857,516 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
 
         try await settle { retiredFile == nil }
         XCTAssertNil(retiredFile, "The live Dock must not retain a closed 100k FileTab")
+    }
+
+    func testEmbeddedAndFileMediaOwnIndependentPlayersAndStagingLifetimes() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-shared-media-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".github/features")
+
+        func nativePlayers(in view: NSView) -> [AVPlayerView] {
+            if let playerView = view as? AVPlayerView { return [playerView] }
+            return view.subviews.flatMap { nativePlayers(in: $0) }
+        }
+        let project = Project(fallbackName: "Shared media", workspaceConfiguration: .standard)
+        defer { project.closeAll() }
+        let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: -2000, y: -2000, width: 1080, height: 560),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 560))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        window.setContentSize(container.bounds.size)
+        window.orderFront(nil)
+        let pid = ProcessInfo.processInfo.processIdentifier
+        // Activate the host's native accessibility tree without requiring this
+        // offscreen window to appear in the system-wide window list.
+        let ax = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(ax, AXError.success.rawValue)
+
+        func attribute(_ element: NSObject, _ name: String) -> Any? {
+            guard element.responds(to: NSSelectorFromString(name)) else { return nil }
+            return element.value(forKey: name)
+        }
+        func loadButton(in element: NSObject) -> NSObject? {
+            if attribute(element, "accessibilityIdentifier") as? String == "bailey.markdown.media.load" {
+                return element
+            }
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            for child in children {
+                if let found = loadButton(in: child) { return found }
+            }
+            return nil
+        }
+
+        var sources = [
+            ("audio", fixtures.appendingPathComponent("audio-file-playback/demo-audio.m4a")),
+            ("video", fixtures.appendingPathComponent("video-file-playback/demo-video.mp4")),
+        ]
+        if let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] {
+            let samples = URL(fileURLWithPath: root).appendingPathComponent("media")
+            sources.append(("audio", samples.appendingPathComponent("音频-定位.wav")))
+            sources.append(("video", samples.appendingPathComponent("视频-内置字幕.mp4")))
+        }
+        for (tag, fixture) in sources {
+            let source = folder.appendingPathComponent("shared." + fixture.pathExtension)
+            let bytes = try Data(contentsOf: fixture)
+            try bytes.write(to: source)
+            let document = folder.appendingPathComponent("Media.md")
+            let markdown = Data("# Media\n\n<\(tag) controls src=\"\(source.lastPathComponent)\"></\(tag)>\n".utf8)
+            try markdown.write(to: document)
+            project.openLocalFile(source.path)
+            let mediaTab = try XCTUnwrap(project.selectedTab)
+            guard case .file(let media) = mediaTab.content else { return XCTFail("Expected media file tab") }
+            project.openLocalFile(document.path)
+            let markdownTab = try XCTUnwrap(project.selectedTab)
+            guard case .file(let file) = markdownTab.content else { return XCTFail("Expected Markdown file tab") }
+            file.setFilePreview(true)
+            try await file.waitForText()
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return media.mediaPlayer?.currentItem?.status == .readyToPlay
+                    && file.markdownSourceIndex?.request == file.textPreviewRequestID
+            }
+            let independent = try XCTUnwrap(media.mediaPlayer)
+            let mountedPlayers = nativePlayers(in: host).compactMap(\.player)
+            XCTAssertEqual(mountedPlayers.count, 1)
+            XCTAssertTrue(mountedPlayers.first === independent,
+                          "Only the standalone system player may exist before requesting Markdown media")
+            // Exercise the real accessible control from this mounted host,
+            // as the other native component tests do. Window-server enumeration
+            // can omit an offscreen window during a complete host test run.
+            XCTAssertTrue(host.window === window)
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                return loadButton(in: host) != nil
+            }
+            XCTAssertEqual(host.bounds.width, 1080, accuracy: 1,
+                           "The window must retain its allocated viewport, not shrink to SwiftUI's ideal size")
+            XCTAssertEqual(host.bounds.height, 560, accuracy: 1)
+            let load = try XCTUnwrap(loadButton(in: host), "Markdown media button in its owning host")
+            XCTAssertEqual(attribute(load, "accessibilityRole") as? String, kAXButtonRole)
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            guard load.responds(to: selector) else {
+                return XCTFail("The real Markdown media button must expose a press action")
+            }
+            typealias Action = @convention(c) (AnyObject, Selector) -> Bool
+            let press = unsafeBitCast(load.method(for: selector), to: Action.self)
+            guard press(load, selector) else {
+                return XCTFail("The real Markdown media button must perform its press action")
+            }
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return nativePlayers(in: host).compactMap(\.player).contains {
+                    $0 !== independent && $0.currentItem?.status == .readyToPlay
+                }
+            }
+            let embedded = try XCTUnwrap(nativePlayers(in: host).compactMap(\.player).first { $0 !== independent })
+            let independentItem = try XCTUnwrap(independent.currentItem)
+            let embeddedItem = try XCTUnwrap(embedded.currentItem)
+            XCTAssertEqual(independentItem.allowedAudioSpatializationFormats, .monoStereoAndMultichannel)
+            XCTAssertEqual(embeddedItem.allowedAudioSpatializationFormats, .monoStereoAndMultichannel)
+            let independentAsset = try XCTUnwrap(independentItem.asset as? AVURLAsset)
+            let embeddedAsset = try XCTUnwrap(embeddedItem.asset as? AVURLAsset)
+            XCTAssertEqual(try Data(contentsOf: independentAsset.url), bytes)
+            XCTAssertEqual(try Data(contentsOf: embeddedAsset.url), bytes)
+            XCTAssertNotEqual(independentAsset.url, embeddedAsset.url)
+            XCTAssertEqual(independentAsset.url.resolvingSymlinksInPath(), source.resolvingSymlinksInPath())
+            let stagedFolder = embeddedAsset.url.deletingLastPathComponent()
+            XCTAssertTrue(stagedFolder.lastPathComponent.hasPrefix("Bailey-Markdown-"))
+            let permissions = try XCTUnwrap(FileManager.default.attributesOfItem(
+                atPath: stagedFolder.path
+            )[.posixPermissions] as? Int)
+            XCTAssertEqual(permissions & 0o077, 0)
+            independent.isMuted = true
+            embedded.isMuted = true
+            let firstPosition = await independent.seek(to: CMTime(seconds: 1, preferredTimescale: 600),
+                                                       toleranceBefore: .zero, toleranceAfter: .zero)
+            let secondPosition = await embedded.seek(to: CMTime(seconds: 2, preferredTimescale: 600),
+                                                   toleranceBefore: .zero, toleranceAfter: .zero)
+            XCTAssertTrue(firstPosition)
+            XCTAssertTrue(secondPosition)
+            embedded.playImmediately(atRate: 1)
+            independent.playImmediately(atRate: 1)
+            try await settle { independent.rate != 0 && embedded.rate != 0 }
+            embedded.pause()
+            XCTAssertEqual(embedded.rate, 0)
+            XCTAssertNotEqual(independent.rate, 0, "Pausing Markdown must not pause the independent media tab")
+            project.closeContent(.file(file))
+            try await settle {
+                embedded.currentItem == nil && !FileManager.default.fileExists(atPath: stagedFolder.path)
+            }
+            XCTAssertEqual(embedded.rate, 0)
+            XCTAssertTrue(independent.currentItem === independentItem)
+            XCTAssertTrue(media.mediaPlayer === independent)
+            XCTAssertNotEqual(independent.rate, 0, "Closing Markdown must leave the other player's playback untouched")
+            independent.pause()
+            project.closeContent(.file(media))
+            try await settle { independent.currentItem == nil }
+            XCTAssertNil(media.mediaPlayer)
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: source), bytes)
+            XCTAssertEqual(try Data(contentsOf: document), markdown)
+        }
+    }
+
+    func testSevenRealFormatsSurviveOneHundredNativeViewerSwitchesAndClose() async throws {
+        guard let fixturePath = ProcessInfo.processInfo.environment["BAILEY_PREVIEW_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_PREVIEW_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let fixture = URL(fileURLWithPath: fixturePath, isDirectory: true)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-mixed-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let primary = folder.appending(path: "primary")
+        let secondary = folder.appending(path: "secondary")
+        for root in [primary, secondary] {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+            for name in ["Markdown 综合验收.md", "HTML 综合验收.html", "graphics", "images", "media", "styles", "tables"] {
+                try FileManager.default.copyItem(at: fixture.appending(path: name), to: root.appending(path: name))
+            }
+        }
+        let names = ["Markdown 综合验收.md", "tables/复杂字段.csv", "graphics/复杂科研图.svg",
+                     "HTML 综合验收.html", "images/动画-34帧.gif", "media/音频-定位.m4a",
+                     "media/视频-内置字幕.mp4"]
+        let paths = names.map { primary.appending(path: $0) }
+        let otherPaths = names.map { secondary.appending(path: $0) }
+        // Same filenames but different actual data in the second project.
+        let otherHTML = try String(contentsOf: otherPaths[3], encoding: .utf8)
+            .replacingOccurrences(of: "Bailey / HTML 综合验收", with: "Second window HTML")
+        try Data(otherHTML.utf8).write(to: otherPaths[3])
+        let otherCSV = try String(contentsOf: otherPaths[1], encoding: .utf8)
+            .replacingOccurrences(of: "试样 A", with: "Second window CSV")
+        try Data(otherCSV.utf8).write(to: otherPaths[1])
+        let baseline = try (paths + otherPaths).map { try Data(contentsOf: $0) }
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+
+        final class WeakOwner {
+            let label: String
+            weak var value: AnyObject?
+            init(_ label: String, _ value: AnyObject) { self.label = label; self.value = value }
+        }
+        func mounted<T: NSView>(_ type: T.Type, in root: NSView, matching: (T) -> Bool = { _ in true }) -> T? {
+            if let view = root as? T, view.window != nil, !view.isHiddenOrHasHiddenAncestor, matching(view) {
+                return view
+            }
+            for child in root.subviews {
+                if let view = mounted(type, in: child, matching: matching) { return view }
+            }
+            return nil
+        }
+        func memoryMiB() -> (resident: Double, peak: Double, footprint: Double) {
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+                }
+            }
+            XCTAssertEqual(result, KERN_SUCCESS)
+            return (Double(info.resident_size) / 1_048_576, Double(info.resident_size_peak) / 1_048_576,
+                    Double(info.phys_footprint) / 1_048_576)
+        }
+
+        let before = memoryMiB()
+        let started = ProcessInfo.processInfo.systemUptime
+        var weakOwners: [WeakOwner] = []
+        var weakPlayers: [WeakOwner] = []
+        var closedTabIDs = Set<UUID>()
+        do {
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([primary])
+            let project = try XCTUnwrap(manager.selectedProject)
+            var tabs: [PaneTab] = []
+            var files: [FileTab] = []
+            for path in paths {
+                project.openFile(path.path)
+                let tab = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = tab.content else { return XCTFail("Expected a real file tab") }
+                tabs.append(tab)
+                files.append(file)
+                weakOwners.append(WeakOwner("file " + path.lastPathComponent, file))
+            }
+            XCTAssertEqual(Set(tabs.map(\.id)).count, 7)
+            let host = NSHostingView(rootView: NativeSelectedFile(project: project))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
+                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = host
+            manager.attach(to: window)
+            window.orderFront(nil)
+
+            let otherManager = workspaceApplication.makeWindow()
+            defer { otherManager.windowClosed() }
+            otherManager.addLocalFolders([secondary])
+            let otherProject = try XCTUnwrap(otherManager.selectedProject)
+            let otherHost = NSHostingView(rootView: NativeSelectedFile(project: otherProject))
+            let otherWindow = NSWindow(contentRect: NSRect(x: 30, y: 30, width: 820, height: 560),
+                                       styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
+            otherWindow.isReleasedWhenClosed = false
+            defer { otherWindow.close() }
+            otherWindow.contentView = otherHost
+            otherManager.attach(to: otherWindow)
+            otherWindow.orderBack(nil)
+
+            // Each iteration must reach a mounted native surface, not just a new selected ID.
+            func ready(_ index: Int, file: FileTab, tab: PaneTab, project: Project,
+                       host: NSView, window: NSWindow) -> Bool {
+                host.layoutSubtreeIfNeeded()
+                guard project.selectedTabID == tab.id else { return false }
+                switch index {
+                case 0:
+                    return file.markdownSourceIndex?.request == file.textPreviewRequestID
+                        && mounted(NSScrollView.self, in: host) != nil
+                case 1:
+                    return mounted(DelimitedGrid.self, in: host)?.table.numberOfRows == 5
+                case 2:
+                    return mounted(SVGPreviewScrollView.self, in: host)?.documentView?.subviews.isEmpty == false
+                case 3:
+                    guard let preview = file.htmlPreview else { return false }
+                    return preview.webView.window === window && !preview.webView.isLoading && preview.webView.url != nil
+                        && !preview.failed
+                case 4:
+                    return mounted(PreviewScrollView.self, in: host) { $0.accessibilityIdentifier() == "bailey.image.inspector" } != nil
+                        && file.gifPlayback != nil
+                default:
+                    guard let player = file.mediaPlayer else { return false }
+                    return mounted(AVPlayerView.self, in: host) { $0.player === player } != nil
+                        && player.currentItem?.status == .readyToPlay
+                }
+            }
+            var identities: [Int: ObjectIdentifier] = [:]
+            var cachedPlayerViews: [Int: AVPlayerView] = [:]
+            var memorySamples: [(resident: Double, peak: Double, footprint: Double)] = []
+            for step in 0..<100 {
+                let index = step % files.count
+                let file = files[index]
+                project.selectTab(tabs[index].id)
+                if step < 4 {
+                    try await file.waitForText()
+                    project.setFilePreviewMode(.preview, for: tabs[index])
+                }
+                try await settle {
+                    ready(index, file: file, tab: tabs[index], project: project, host: host, window: window)
+                }
+                guard ready(index, file: file, tab: tabs[index], project: project, host: host, window: window) else {
+                    return XCTFail("Unready native viewer at step \(step), \(paths[index].lastPathComponent)")
+                }
+                XCTAssertFalse(file.isDirty)
+                XCTAssertNil(file.reloadError)
+                let retained: AnyObject
+                switch index {
+                case 0, 1, 2: retained = file.nativeTextStorage
+                case 3: retained = try XCTUnwrap(file.htmlPreview)
+                case 4: retained = try XCTUnwrap(file.gifPlayback)
+                default: retained = try XCTUnwrap(file.mediaPlayer)
+                }
+                if let first = identities[index] {
+                    XCTAssertEqual(ObjectIdentifier(retained), first, "Reload/remount must not replace the tab-owned state")
+                } else {
+                    identities[index] = ObjectIdentifier(retained)
+                    // AppKit may cache an empty retired NSTextStorage. The FileTab
+                    // must release, and its document must be cleared on true close.
+                    if index >= 5, let player = retained as? AVPlayer {
+                        let item = try XCTUnwrap(player.currentItem)
+                        weakPlayers.append(WeakOwner(paths[index].lastPathComponent, player))
+                        weakOwners.append(WeakOwner("item " + paths[index].lastPathComponent, item))
+                        weakOwners.append(WeakOwner("asset " + paths[index].lastPathComponent, item.asset))
+                    } else if index >= 3 {
+                        weakOwners.append(WeakOwner("resource " + paths[index].lastPathComponent, retained))
+                    }
+                }
+                if index == 3 {
+                    let webView = try XCTUnwrap(file.htmlPreview?.webView)
+                    let title = try await webView.evaluateJavaScript("document.querySelector('h1').textContent", contentWorld: .defaultClient) as? String
+                    XCTAssertEqual(title, "Bailey / HTML 综合验收")
+                }
+                if index == 4, step == 4 {
+                    let playback = try XCTUnwrap(file.gifPlayback)
+                    playback.togglePause(automaticallyPlays: true)
+                    XCTAssertTrue(playback.isPaused(automaticallyPlays: true))
+                } else if index == 4 {
+                    XCTAssertEqual(file.gifPlayback?.isPaused(automaticallyPlays: true), true)
+                }
+                // Keep all seven first-window owners alive while actually opening
+                // and closing a same-named file in the other native window.
+                otherProject.openFile(otherPaths[index].path)
+                let otherTab = try XCTUnwrap(otherProject.selectedTab)
+                guard case .file(let otherFile) = otherTab.content else {
+                    return XCTFail("Expected an independently owned file in the second window")
+                }
+                XCTAssertTrue(closedTabIDs.insert(otherTab.id).inserted)
+                XCTAssertFalse(otherFile === file)
+                XCTAssertEqual(otherFile.path, otherPaths[index].path)
+                XCTAssertEqual(otherProject.tabs.count, 1)
+                weakOwners.append(WeakOwner("second window tab \(step)", otherFile))
+                if index < 4 {
+                    try await otherFile.waitForText()
+                    otherProject.setFilePreviewMode(.preview, for: otherTab)
+                }
+                try await settle {
+                    ready(index, file: otherFile, tab: otherTab, project: otherProject,
+                          host: otherHost, window: otherWindow)
+                }
+                guard ready(index, file: otherFile, tab: otherTab, project: otherProject,
+                            host: otherHost, window: otherWindow) else {
+                    return XCTFail("Unready second-window viewer at step \(step)")
+                }
+                XCTAssertFalse(otherFile.isDirty)
+                XCTAssertNil(otherFile.reloadError)
+                if index < 4 {
+                    XCTAssertFalse(otherFile.nativeTextStorage === file.nativeTextStorage)
+                }
+                if index == 1 {
+                    XCTAssertTrue(otherFile.text.contains("Second window CSV"))
+                    XCTAssertFalse(file.text.contains("Second window CSV"))
+                } else if index == 3 {
+                    let preview = try XCTUnwrap(otherFile.htmlPreview)
+                    XCTAssertFalse(preview === file.htmlPreview)
+                    let title = try await preview.webView.evaluateJavaScript(
+                        "document.querySelector('h1').textContent", contentWorld: .defaultClient
+                    ) as? String
+                    XCTAssertEqual(title, "Second window HTML")
+                    weakOwners.append(WeakOwner("second window HTML \(step)", preview))
+                } else if index == 4 {
+                    let playback = try XCTUnwrap(otherFile.gifPlayback)
+                    XCTAssertFalse(playback === file.gifPlayback)
+                    weakOwners.append(WeakOwner("second window GIF \(step)", playback))
+                } else if index >= 5 {
+                    let player = try XCTUnwrap(otherFile.mediaPlayer)
+                    XCTAssertFalse(player === file.mediaPlayer)
+                    let item = try XCTUnwrap(player.currentItem)
+                    weakPlayers.append(WeakOwner("second window player \(step)", player))
+                    weakOwners.append(WeakOwner("second window item \(step)", item))
+                    weakOwners.append(WeakOwner("second window asset \(step)", item.asset))
+                    let asset = try XCTUnwrap(item.asset as? AVURLAsset)
+                    XCTAssertEqual(asset.url.resolvingSymlinksInPath().path,
+                                   otherPaths[index].resolvingSymlinksInPath().path)
+                    player.isMuted = true
+                    let moved = await player.seek(to: CMTime(seconds: 1, preferredTimescale: 600),
+                                                  toleranceBefore: .zero, toleranceAfter: .zero)
+                    XCTAssertTrue(moved)
+                    XCTAssertEqual(player.currentTime().seconds, 1, accuracy: 0.1)
+                }
+                if step == 99 {
+                    otherWindow.close()
+                    XCTAssertNil(otherManager.attachedWindow)
+                    XCTAssertFalse(workspaceApplication.containsWindow(otherManager))
+                    XCTAssertTrue(otherManager.projects.isEmpty)
+                    otherWindow.contentView = nil
+                } else {
+                    otherProject.close(otherTab)
+                    XCTAssertTrue(otherProject.tabs.isEmpty)
+                }
+                XCTAssertNil(otherFile.htmlPreview)
+                XCTAssertNil(otherFile.gifPlayback)
+                XCTAssertNil(otherFile.mediaPlayer)
+                XCTAssertTrue(otherFile.text.isEmpty)
+                XCTAssertEqual(project.tabs.count, 7)
+                XCTAssertTrue(manager.attachedWindow === window)
+                XCTAssertTrue(ready(index, file: file, tab: tabs[index], project: project, host: host, window: window),
+                              "Closing the other owner must not invalidate the active viewer")
+
+                if index >= 5 {
+                    let player = try XCTUnwrap(file.mediaPlayer)
+                    player.isMuted = true
+                    if step < 7 {
+                        let moved = await player.seek(to: CMTime(seconds: 2, preferredTimescale: 600),
+                                                      toleranceBefore: .zero, toleranceAfter: .zero)
+                        XCTAssertTrue(moved)
+                        cachedPlayerViews[index] = try XCTUnwrap(mounted(AVPlayerView.self, in: host) { $0.player === player })
+                        player.playImmediately(atRate: 1)
+                    } else {
+                        XCTAssertEqual(player.rate, 0)
+                        XCTAssertEqual(player.currentTime().seconds, 2, accuracy: 0.5)
+                    }
+                }
+                if step > 0 {
+                    let last = (step - 1) % files.count
+                    if last >= 5 {
+                        let player = try XCTUnwrap(files[last].mediaPlayer)
+                        try await settle { player.rate == 0 }
+                        XCTAssertEqual(player.rate, 0)
+                        if let cached = cachedPlayerViews.removeValue(forKey: last) {
+                            try await settle { cached.player == nil }
+                            guard cached.player == nil else {
+                                return XCTFail("A dismantled native view must not own its former player")
+                            }
+                            XCTAssertFalse(cached.updatesNowPlayingInfoCenter)
+                        }
+                    }
+                }
+                if step.isMultiple(of: 10) { memorySamples.append(memoryMiB()) }
+            }
+            XCTAssertEqual(closedTabIDs.count, 100)
+            XCTAssertEqual(project.tabs.count, 7)
+            XCTAssertEqual(identities.count, 7)
+            project.selectTab(tabs[0].id)
+            project.setFilePreviewMode(.source, for: tabs[0])
+            let markdown = files[0]
+            try await settle { markdown.editorView?.window === window }
+            let editor = try XCTUnwrap((markdown.editorView as? NSScrollView)?.documentView as? FocusReportingTextView)
+            let original = markdown.text
+            editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+            try await settle { markdown.isDirty }
+            XCTAssertTrue(markdown.isDirty)
+            try XCTUnwrap(editor.undoManager).undo()
+            try await settle { !markdown.isDirty }
+            XCTAssertEqual(markdown.text, original)
+            XCTAssertFalse(markdown.isDirty)
+            XCTAssertEqual(ObjectIdentifier(markdown.nativeTextStorage), identities[0])
+
+            project.closeAll()
+            XCTAssertTrue(project.tabs.isEmpty)
+            for file in files {
+                XCTAssertNil(file.mediaPlayer)
+                XCTAssertNil(file.htmlPreview)
+                XCTAssertNil(file.gifPlayback)
+                XCTAssertTrue(file.text.isEmpty)
+            }
+            manager.close(project)
+            XCTAssertFalse(manager.projects.contains { $0 === project })
+            window.contentView = nil
+            print("PREVIEW_MIXED primary_switches=100 secondary_opens_and_closes=100 elapsed_s=\(ProcessInfo.processInfo.systemUptime - started) initial_mib=\(before) samples_mib=\(memorySamples)")
+        }
+        try await settle { weakOwners.allSatisfy { $0.value == nil } }
+        XCTAssertTrue(weakOwners.allSatisfy { $0.value == nil }, "Closed owners: \(weakOwners.filter { $0.value != nil }.map(\.label))")
+        // AVKit can retain an empty AVPlayer via its private controller after
+        // the view is dismantled. Test the real media lifetime, and surface
+        // any retained shells instead of calling them fully deallocated.
+        for owner in weakPlayers {
+            if let player = owner.value as? AVPlayer {
+                XCTAssertEqual(player.rate, 0)
+                XCTAssertNil(player.currentItem)
+            }
+        }
+        for (path, original) in zip(paths + otherPaths, baseline) {
+            XCTAssertEqual(try Data(contentsOf: path), original, "Source bytes changed: \(path.path)")
+        }
+        print("PREVIEW_MIXED after_release_mib=\(memoryMiB()) live_owners=\(weakOwners.filter { $0.value != nil }.count) retained_empty_players=\(weakPlayers.filter { $0.value != nil }.map(\.label))")
     }
 
     func testFiveLargeFileTabsReleaseNativeDocumentsAfterRealProjectClose() async throws {

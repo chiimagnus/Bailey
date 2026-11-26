@@ -487,15 +487,26 @@ final class GitPanelVisibilityTests: XCTestCase {
         XCTAssertFalse(model.expandedCommitIDs.contains(head.id))
         let selector = NSSelectorFromString("accessibilityPerformPress")
         typealias Action = @convention(c) (AnyObject, Selector) -> Bool
-        for expanded in [true, false] {
-            let button = try narrowCommitButton()
+        func pressCommit(_ button: NSObject, expanded: Bool, message: String) async throws {
+            XCTAssertEqual(model.expandedCommitIDs.contains(head.id), !expanded,
+                           "The next press must start from the opposite state")
             XCTAssertTrue(button.responds(to: selector))
             let perform = unsafeBitCast(button.method(for: selector), to: Action.self)
-            XCTAssertTrue(perform(button, selector),
-                          "A 120pt Git Graph row must accept the actual native AXPress")
-            host.layoutSubtreeIfNeeded()
-            XCTAssertEqual(model.expandedCommitIDs.contains(head.id), expanded,
-                           "The 120pt native click must toggle the correct commit")
+            XCTAssertTrue(perform(button, selector), "The native button must accept AXPress")
+            // AXPress acknowledges delivery, not synchronous SwiftUI state mutation.
+            // Let the main run loop deliver the action, then verify its real effect.
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while model.expandedCommitIDs.contains(head.id) != expanded,
+                  ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(model.expandedCommitIDs.contains(head.id), expanded, message)
+        }
+        for expanded in [true, false] {
+            try await pressCommit(try narrowCommitButton(), expanded: expanded,
+                                  message: "The 120pt native click must toggle the correct commit")
         }
         XCTAssertEqual(combinations, 48)
         let minimumHeight = try XCTUnwrap(heightByFont[9])
@@ -572,12 +583,8 @@ final class GitPanelVisibilityTests: XCTestCase {
         let visibleGraph = try XCTUnwrap(foundGraph,
             "The newly moved Graph must become visible and hittable when scrolling down from 1,026 Changes")
         XCTAssertEqual(attribute(visibleGraph, "accessibilityLabel") as? String, "Dense main 3")
-        XCTAssertTrue(visibleGraph.responds(to: selector))
-        let perform = unsafeBitCast(visibleGraph.method(for: selector), to: Action.self)
-        XCTAssertTrue(perform(visibleGraph, selector),
-                      "Staging 1,026 files must not prevent clicking the existing Graph")
-        let expanded = model.expandedCommitIDs.contains(head.id)
-        XCTAssertTrue(expanded, "The dense HEAD must still expand after the shared scroll grows")
+        try await pressCommit(visibleGraph, expanded: true,
+                              message: "The dense HEAD must still expand after the shared scroll grows")
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let picture = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))

@@ -1,38 +1,96 @@
-# P2｜网格编辑与无损保存
+# P2｜通过现有 TextKit 单缓冲编辑 CSV 并原样保存
 
-交付表格改单元格、增删行、撤销重做，且 Git Diff 与磁盘内容只反映明确的用户编辑。
+交付网格单元格编辑、撤销、增删行、复制粘贴和条件保存。
+排序／筛选只改变展示映射，不能在保存时重排或重写其它字段。
 
-## 技术决定
+## 已确认的写入语义
 
-沿用 P1 的**自有单份 RFC 4180 词法索引**、AppKit `NSTableView` 与现有 TextKit 2／`UndoManager`，**不引入 `CodableCSV` 或第二套 CSV 序列化器**。
-网格写入按 UTF-16 源区间修补原生 `NSTextStorage`，仅对用户明确改变的字段执行必要的 quote/escape；未经编辑的其它字段／行永不因排序、筛选或保存而重新编码。
-文件真实字节保存与外部版本比对继续由 `FileTab.save` / `WorkspaceBackend.write(ifUnchanged:)` 负责，不引入新的文件写入层或后台自动转换。
+`FileTab.nativeTextStorage` 是唯一可写正文；`FileTab.save` 经
+`TextFileEncoding.prepareSave` **把完整文本编码为字节**，随后调用
+`WorkspaceBackend.write(ifUnchanged:)` 保护原文件版本。
+因此“只修改某个字段”应指**当前文本文档只替换该字段源区间**，
+最终编码后字节 diff 也必须证明未编辑区间保持原样，
+而不是另做一套 CSV 磁盘补丁或序列化整张表。
+任何编码在保存前必须严格往返：若重新编码整个未编辑原文与原始
+`WorkspaceFileVersion` 不匹配，网格只读，提示用户回源码，不得静默转换。
 
-## 方案
-
-在现有 `FileTab` 的 `NSTextStorage` 上执行字段级替换，不把排序后可见行当物理行，也不先重排整份 CSV。
-解析索引由文本版本失效重建；Undo、编码、保存队列和 `WorkspaceBackend.write(ifUnchanged:)` 仍走原有 FileTab。
-若源文件已损坏而无法提供无歧义字节区间，不允许网格写入；源码仍可修复。
-插入新行按原文件的分隔符和主导换行构造新字段，绝不将逗号拆成普通字符串。
+当前 `SourceTextEditor` 的 `Coordinator` 与原生 `NSTextView` 持有编辑器和 Undo 关联，
+而网格默认显示时编辑器可能尚未挂载。
+`NSTextStorage.replaceCharacters` 不应被假定自动注册与 `NSTextView` 完全相同的 Undo；
+**首个 P2 任务必须先用真实 AppKit 宿主实验验证脱挂载时 Undo 属于谁**：
+把文本源和网格编辑绑定同一个文件标签寿命的原生 Undo 上下文，
+让源码输入、网格输入与 `⌘Z`／`⌘⇧Z` 同栈交替生效；
+不靠一个不可见的第二编辑器，也不新建单元格草稿正文／独立 Undo 历史。
+当网格输入生效，更新现有 `nativeStorageDidChange`／`refreshDirtyState` 的同一条链，
+撤销须复原完整原文区间且在回到保存基线时清除脏状态。
 
 ## 任务
 
 <a id="p2-t1"></a>
-### P2-T1 单元格操作共享 TextKit Undo
+### P2-T1 对原文源区间执行原生编辑、复用唯一 Undo
 
-- **位置**：`FileTab` 编辑入口、CSV 解析器、`CSVTableView`、原生 UndoManager。
-- **实施**：双击／Return 编辑、Tab／Shift-Tab 导航、范围粘贴和增删行；视图排序／过滤后的显示行必须映射回**物理记录**，使用稳定的 UTF-16 源范围替换并在变更后作索引失效处理。
-  只对修改的字段做最低限度引号／转义，保留其他字段的全部原样写法；多格粘贴作为同一 Undo 事务并处理行列容量限制。新文本修改原生 TextKit 正文，源码和表格共用原生 Undo。
-- **验证**：按逐字节 diff 检查仅目标字段变化；复杂引号／多行单格、CRLF、BOM、中文／emoji 的 NSRange、空值与尾列、大小范围粘贴、筛选或排序后改单格、源码／表格交替编辑及 Undo／Redo；同一 `FileTab` 的未保存修改绝不丢失。
+- **位置**：P1 CSV 解析索引、`FileTab.nativeTextStorage`、
+  `SourceTextEditor` 的现有编辑／Undo 归属、`CSVTableView`。
+- **实施**：双击／Return 编辑、Tab／Shift-Tab 导航、矩形粘贴、插入／删除记录；
+  先由当前展示行映射回物理记录，再定位单元格 UTF-16 源范围。
+  单元格修改时只对该字段加入最低限度 quote/escape，未变的引用方式不动；
+  多格操作作为一组 Undo，修改后按编辑代次重建索引并保留有效选区。
+  确保源码／网格输入到同一 NSTextStorage、Undo、dirty、保存队列；
+  同任务删除被替代的旧事件、选区或重复转换，不补建中间可写表格模型。
+- **验证**：实测 `NSTextStorage`／`NSTextView` 同栈 Undo、网格默认打开无源码视图、
+  源码↔网格交替编辑、中文 IME、行高不一、筛选／排序后改单格、
+  带引号／多行字段、空列、复制粘贴不同行列形状、容量边界、
+  32 MiB 限制、Ctrl／Cmd 组合键、撤销到基线恢复 clean；
+  对照原文 UTF-16 与保存后每一处真实字节 diff。
 
 <a id="p2-t2"></a>
-### P2-T2 保存与真实外部冲突验收
+### P2-T2 严格往返编码、条件保存和外部冲突
 
-- **位置**：既有 `FileTab.save`／`WorkspaceBackend.write(ifUnchanged:)`、CSV 文件测试、`docs/features/editor.md`。
-- **实施**：保留字段外字节、源编码、BOM、未编辑的引用方式和混合行尾。外部内容变化时拒绝覆盖并保留未保存表格编辑，统一关闭提示。
-- **验证**：磁盘前后 byte diff；关闭、App 恢复、Finder 修改、多窗口两个脏副本、不可写文件和 32 MiB 边界。实际应用中完成打开→编辑→⌘S→重开、Git Diff，确保没有隐式重写。
+- **位置**：`FileTab.save`／`TextFileEncoding.prepareSave`、
+  `WorkspaceBackend.write(ifUnchanged:)`、CSV 测试与 `docs/features/editor.md`。
+- **实施**：继续由现有 FileTab 执行全文编码和有版本的条件写入，
+  保存前断言未修改的源文字区间按原编码逐字节一致；
+  保留 BOM、CR/LF/CRLF、原引用样式与不变的空白。
+  外部内容已被更改时不覆盖并保持全部未存的网格编辑。
+  复用只读原生 Diff 展示磁盘／草稿；取消不写盘，
+  显式覆盖仅使用本次比较确认的目标、磁盘原字节版本、草稿和编码意图，
+  进入既有文档保存队列及条件写入。任一版本改变拒绝旧确认；
+  图片旁车还必须校验原图，Git Worktree Diff 不改变 index 或 HEAD。
+  `write(ifUnchanged:)` 当前是提交前验证，不是跨所有文件系统的原子比较替换；
+  并发外部写入窗口如实测可导致覆盖，应在共享 Backend 所有者处一次修复，
+  不能把方法名或只检查 `mtime` 当作完美无冲突的证据。
+  不新增 CSV 读写引擎、独立保存队列或排序后导出覆盖原文件。
+- **验证**：打开→网格编辑→⌘S→重开→Git Diff 的实际磁盘变化；
+  外部同长同 mtime 改写、两个窗口并发脏稿、编码失败／只读、
+  保存中继续编辑、权限错误、SSH 断线重连、重命名、
+  不合法 CSV 修复前禁网格编辑、UTF-8 BOM／UTF-16／GBK、混合行尾和容量临界点。
+  对比整份源字节 diff、Undo 重做、关闭保护及未改字段逐字节保留。
 
 ## 阶段验收
 
-按 `docs/testing.md` 完成本机宿主字节级边界与真实 Bailey Dev GUI。
-筛选与排序仍为只读视图行为，只有显式字段与行操作参与保存；不以“能显示表格”冒充“可安全编辑”。
+运行现有 `FileTabPersistenceTests`、`NativeEditorCompositionTests`、
+CSV 解析／事务／Undo 与条件保存宿主用例、`make build` 和阶段 `make test`；
+隔离 Bailey Dev 验证表格和源码实际编辑保存、文件冲突和快捷键，
+遵守 `docs/testing.md` 的本机／获授权 SSH、规模、状态和极端组合。
+
+### CSV 写入与事务专项验收矩阵（P2）
+
+P1 的 C01–C07 和[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)
+均须按受影响路径回归；以下测试要在真实 `NSTextStorage`、原生 Undo 和临时磁盘上执行。
+
+| 编号 | 操作和竞态 | 通过条件 |
+| --- | --- | --- |
+| C08 网格默认打开 | 从未挂过源码编辑器的 FileTab 直接编辑网格，⌘Z／⌘⇧Z；随后切到源码编辑再回网格撤销。 | 一份文档和一份原生 Undo 历史，网格与 TextKit 的交错事务按实际先后撤销；不能靠“后台藏一个 NSTextView”模拟。 |
+| C09 单格源范围 | 在排序／过滤后编辑重复值、最后一列空格、嵌套引号／多行字段、中文及 surrogate 边界、含逗号／引号的值。 | 精确替换被选物理字段及最少必要 quote，不修改其它字段、换行／行序；修改后解析索引与 UI 显示同一 revision。 |
+| C10 批量事务 | 2×2／不规则矩形粘贴、Tab／Shift-Tab、插入／删除行、多格部分非法／超 32 MiB、用户 Undo 中再次粘贴、源区间失效。 | 作为一次 Undo 原子变化，失败不会留下部分新行；重做／撤销回原始文件后 dirty=false，原先显示映射失效后不误写旧行。 |
+| C11 字节往返 | UTF-8 BOM／UTF-16／GBK／Shift-JIS／Latin-1、混合 CR/LF/CRLF、不同引号写法、前导 `=/+/-/@` 字段、Unicode 规范等价字符。 | 先证明未改的旧全文能按原编码**逐字节 round-trip**；成功修改只产生目标字段字节 diff，其余原样。非往返／不安全编码拒绝网格写入并保留源码编辑能力。 |
+| C12 保存冲突 | 源码失焦自动保存／⌘S／后台自动刷新、两个窗口同时改单元格、外部同大小同 mtime 替换、存盘期间再次输入、写入失败／断线／重连。 | `FileTab.save` 一条队列和已接受版本负责结果；冲突拒绝旧稿覆盖，任何失败保留可继续编辑的未存正文和可见错误，不新建 CSV 保存器。 |
+| C13 恢复目标 | 表格编辑后改名／移动／删除、选中不存在记录、切不同 SSH 主机、另窗打开同名本机文件、关闭否决、App 会话重启及 Git Diff。 | 没有错机／错行／错路径写入；完成保存后磁盘、Git 和源码视图一致，未存草稿不会被旧解析任务或生命周期回调丢弃。 |
+| C14 性能 | 100000 行和宽字段下单格编辑、Unicode/CRLF 源范围重建、多次 Undo、100 次切源码／网格、同版本快速 100 次输入。 | 不因一次字段编辑全文重新序列化 CSV 或同步重扫／重排整个 UI；测量主线程延迟、文本额外复制量、内存和稳定索引更新。 |
+
+必须交叉 C08×C10、C09×C11、C10×C14、C12×C13、C11×C12 和 C13×R10；
+**保存检查与最终写入间的外部替换**需借受控后端屏障实际测试。
+保存冲突按[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，在本任务核对 VS Code 的版本基线、写入、冲突比较、
+显式覆盖与草稿保护，再收敛已有 Backend／FileTab／DiffTab 路径并同步各调用者。
+保留真实双进程竞态和严格 CAS 的未满足项，不以循环重试、假锁或元数据降级掩盖。
+按用户确认的执行顺序，先完成共享保存冲突实施与本机验收；真实 Tailscale SSH 定点复验归下一项，阶段验收继续追踪。

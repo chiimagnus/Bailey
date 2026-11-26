@@ -28,7 +28,7 @@ class NativeCodeTextView: NSTextView {
         let stops = NSParagraphStyle.default.tabStops
         return stops.count > 1 ? stops[1].location - stops[0].location : 28
     }()
-    private let documentUndoManager = UndoManager()
+    private let documentUndoManager: UndoManager
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
         get { string }
@@ -428,7 +428,9 @@ class NativeCodeTextView: NSTextView {
         )
     }
 
-    init(contentStorage storage: NSTextContentStorage = NSTextContentStorage()) {
+    init(contentStorage storage: NSTextContentStorage = NSTextContentStorage(),
+         undoManager: UndoManager = UndoManager()) {
+        documentUndoManager = undoManager
         let layout = NSTextLayoutManager()
         let container = NSTextContainer(size: CGSize(width: 1000, height: CGFloat.greatestFiniteMagnitude))
         storage.addTextLayoutManager(layout)

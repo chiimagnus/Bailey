@@ -15,6 +15,29 @@ nonisolated struct WorkspaceFileVersion: Sendable, Equatable {
     func matches(_ bytes: Data) -> Bool {
         byteCount == bytes.count && sha256 == WorkspaceFileVersion(data: bytes).sha256
     }
+
+    enum PublicationStatus: Sendable {
+        case published, unchanged
+    }
+
+    /// An uncertain write is resolved only by complete bytes of either known
+    /// revision. A third revision remains a conflict; it is never a new base.
+    @concurrent func publicationStatus(at path: String, previous: WorkspaceFileVersion,
+                                       backend: WorkspaceBackend) async throws -> PublicationStatus {
+        let bytes: Data
+        do {
+            bytes = try await backend.read(path: path, maxBytes: max(byteCount, previous.byteCount))
+        } catch WorkspaceError.notFound {
+            throw WorkspaceError.changedExternally
+        } catch WorkspaceError.tooLarge {
+            throw WorkspaceError.changedExternally
+        }
+        try Task.checkCancellation()
+        let actual = WorkspaceFileVersion(data: bytes)
+        if actual == self { return .published }
+        if actual == previous { return .unchanged }
+        throw WorkspaceError.changedExternally
+    }
 }
 
 /// One directory entry, as the file tree needs it.
@@ -50,6 +73,30 @@ nonisolated enum WorkspaceError: Error {
     case timedOut
     /// An independent writer replaced the accepted source bytes before publish.
     case changedExternally
+
+    /// A transport failure does not tell us whether publication occurred.
+    /// Definite version conflicts and local write errors are not ambiguous.
+    static func publicationUncertain(_ error: Error) -> Bool {
+        switch error {
+        case WorkspaceError.timedOut, RemoteConnectionError.notConnected:
+            return true
+        case let failure as RemoteCommandFailure:
+            return failure.status == 255 || failure.status == -2
+        case RemoteConnectionError.commandFailed(let status, _):
+            return status == 255 || status == -2
+        default:
+            return false
+        }
+    }
+}
+
+/// A completed exchange whose displaced entry could not be verified or removed.
+nonisolated struct DisplacedSaveError: LocalizedError, Equatable, Sendable {
+    let recoveryPath: String
+
+    var errorDescription: String? {
+        String(localized: "The file changed during save or its previous version could not be verified. The destination may contain your draft. The displaced entry is preserved at: \(recoveryPath)", table: "Workspace")
+    }
 }
 
 /// The workspace a project's panels, editor and diff viewer operate on:
@@ -69,8 +116,10 @@ nonisolated protocol WorkspaceBackend: Sendable {
     /// At most `maxBytes`; throws `WorkspaceError.tooLarge` beyond that and
     /// `.notFound` when the path is gone.
     func read(path: String, maxBytes: Int) async throws -> Data
+    /// Read only the leading bytes of a regular file, without accepting it as a complete document.
+    func readPrefix(path: String, maxBytes: Int) async throws -> Data
     func write(path: String, data: Data) async throws
-    /// Text save only: compare the accepted raw bytes before atomically publishing.
+    /// Document save: compare the accepted raw bytes before atomically publishing.
     /// No default fallback to unconditional write is permitted.
     func write(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion) async throws
     func createFile(path: String) async throws
@@ -95,6 +144,15 @@ nonisolated protocol WorkspaceBackend: Sendable {
 }
 
 extension WorkspaceBackend {
+    func readPrefix(path: String, maxBytes: Int) async throws -> Data {
+        // In-memory fixtures can implement their existing bounded command path.
+        let result = try await runLimited(argv: ["/usr/bin/head", "-c", String(maxBytes), "--", path],
+                                          cwd: nil, env: nil, stdin: nil, timeout: 25,
+                                          stdoutLimit: maxBytes, stderrLimit: 16_384)
+        guard result.status == 0 else { throw CocoaError(.fileReadUnknown) }
+        return result.stdout
+    }
+
     func runLimited(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?, stdoutLimit: Int, stderrLimit: Int

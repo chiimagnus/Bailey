@@ -70,8 +70,10 @@ struct MarkdownMermaidView: View {
             }
         }
         .sheet(isPresented: $inspecting) {
-            if let image {
-                MarkdownImageInspector(image: image, showsCloseButton: true)
+            if let poster = image?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                ImageInspector(image: RasterPreview(
+                    poster: poster, pixelSize: CGSize(width: poster.width, height: poster.height)
+                ), showsCloseButton: true)
                     .frame(minWidth: 360, minHeight: 280)
             }
         }

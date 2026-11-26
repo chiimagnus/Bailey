@@ -732,10 +732,10 @@ final class SwiftMarkdownNativeTests: XCTestCase {
           <script>alert(1)</script>
         </svg>
         """
-        let image = try MarkdownSVG.render(Data(svg.utf8))
+        let image = try SVGArtwork.render(Data(svg.utf8))
         XCTAssertEqual(image.image.width, 40)
         XCTAssertEqual(image.image.height, 20)
-        XCTAssertThrowsError(try MarkdownSVG.render(Data("<!DOCTYPE svg><svg/>".utf8)))
+        XCTAssertThrowsError(try SVGArtwork.render(Data("<!DOCTYPE svg><svg/>".utf8)))
     }
 
     func testSVGOnlyAllowsLocalFragmentURLsInsideStyledGradientsAndFilters() throws {
@@ -755,7 +755,9 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               <script>alert(1)</script>
             </svg>
             """
-        let cleaned = try MarkdownSVG.sanitizedXML(Data(source.utf8))
+        let sanitized = try SVGArtwork.sanitizedXML(Data(source.utf8))
+        let cleaned = sanitized.xml
+        XCTAssertEqual(sanitized.omitted, ["@fill", "@href", "@onclick", "@style", "image", "script"])
         XCTAssertTrue(cleaned.contains("linearGradient"))
         XCTAssertTrue(cleaned.contains("fill:url(#safe)"),
                       "A valid local CSS gradient must survive sanitization")
@@ -766,7 +768,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertFalse(cleaned.contains("file:///"))
         XCTAssertFalse(cleaned.contains("onclick"))
         XCTAssertFalse(cleaned.contains("<script"))
-        let image = try MarkdownSVG.render(Data(source.utf8))
+        let image = try SVGArtwork.render(Data(source.utf8))
         XCTAssertEqual(image.image.width, 48)
         XCTAssertEqual(image.image.height, 24)
         XCTAssertEqual(image.pointSize.width, 24)
@@ -779,12 +781,39 @@ final class SwiftMarkdownNativeTests: XCTestCase {
               <rect width="40" height="12" fill="url(#fade)"/>
             </svg>
             """
-        let raster = NSBitmapImageRep(cgImage: try MarkdownSVG.render(Data(gradient.utf8)).image)
+        let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(Data(gradient.utf8)).image)
         let left = try XCTUnwrap(raster.colorAt(x: 6, y: 12)?.usingColorSpace(.deviceRGB))
         let right = try XCTUnwrap(raster.colorAt(x: 74, y: 12)?.usingColorSpace(.deviceRGB))
         XCTAssertGreaterThan(left.redComponent, right.redComponent + 0.25,
                              "SVG gradients must produce different actual pixel colors")
         XCTAssertGreaterThan(right.blueComponent, left.blueComponent + 0.25)
+    }
+
+    func testSVGReportsOmittedFeaturesAndKeepsClippingWithNegativeViewBox() throws {
+        let text = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="-12 -8 24 16">
+              <defs>
+                <clipPath id="left"><rect x="-12" y="-8" width="12" height="16"/></clipPath>
+                <pattern id="p" width="1" height="1"><circle r="1"/></pattern>
+                <foreignObject width="1" height="1"/>
+                <symbol id="other" viewBox="0 0 6 8"><rect width="6" height="8"/></symbol>
+              </defs>
+              <rect x="-12" y="-8" width="24" height="16" fill="red" clip-path="url(#left)"/>
+              <use href="#other" x="1" y="-4" width="6" height="8" fill="blue"/>
+            </svg>
+            """
+        let source = Data(text.utf8)
+        let vector = try SVGArtwork.parse(source)
+        XCTAssertEqual(vector.omitted, ["foreignObject"])
+        let raster = NSBitmapImageRep(cgImage: try SVGArtwork.render(source).image)
+        let painted = try XCTUnwrap(raster.colorAt(x: 8, y: 16)?.usingColorSpace(.deviceRGB))
+        let clipped = try XCTUnwrap(raster.colorAt(x: 40, y: 16)?.usingColorSpace(.deviceRGB))
+        let reused = try XCTUnwrap(raster.colorAt(x: 30, y: 16)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(painted.redComponent, 0.9)
+        XCTAssertGreaterThan(painted.alphaComponent, 0.9)
+        XCTAssertLessThan(clipped.alphaComponent, 0.05)
+        XCTAssertGreaterThan(reused.blueComponent, 0.9)
+        XCTAssertGreaterThan(reused.alphaComponent, 0.9)
     }
 
     func testRenderedHeadingTextRangePointsPastMarkdownMarkers() async throws {
@@ -1145,15 +1174,57 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(picture.animation.isEmpty)
     }
 
+    func testJPEGNeedsThePrimaryImageEndMarkerNotAnEmbeddedThumbnail() throws {
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: 96, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 0.3, green: 0.8, blue: 0.1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 96, height: 64))
+        let image = try XCTUnwrap(context.makeImage())
+        func jpeg(progressive: Bool) throws -> Data {
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+                bytes, UTType.jpeg.identifier as CFString, 1, nil
+            ))
+            CGImageDestinationAddImage(destination, image, [
+                kCGImagePropertyJFIFDictionary: [kCGImagePropertyJFIFIsProgressive: progressive],
+            ] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            XCTAssertGreaterThan(bytes.length, 2)
+            return bytes as Data
+        }
+        let embedded = try jpeg(progressive: false)
+        let length = embedded.count + 2
+        let applicationSegment = Data([0xff, 0xef, UInt8(length >> 8), UInt8(length & 0xff)]) + embedded
+        for progressive in [false, true] {
+            let primary = try jpeg(progressive: progressive)
+            XCTAssertEqual(Array(primary.suffix(2)), [0xff, 0xd9])
+            let frameMarker: UInt8 = progressive ? 0xc2 : 0xc0
+            XCTAssertNotNil(primary.range(of: Data([0xff, frameMarker])))
+            let merged = primary.prefix(2) + applicationSegment + primary.dropFirst(2)
+            let complete = merged + Data("trailing camera data".utf8)
+            let picture = try MarkdownPicture.decode(complete)
+            XCTAssertEqual(picture.poster.width, 96)
+            XCTAssertEqual(picture.poster.height, 64)
+            for shortened in [Data(merged.dropLast()), Data(merged.dropLast(2)),
+                              Data(merged.prefix(applicationSegment.count + 2))] {
+                XCTAssertThrowsError(try MarkdownPicture.decode(shortened)) { error in
+                    XCTAssertEqual((error as? CocoaError)?.code, .fileReadCorruptFile)
+                }
+            }
+        }
+    }
+
     func testGIFFramesHonorTimingAndAnimationBudget() throws {
-        func frame(_ color: CGColor, dimension: Int = 16) throws -> CGImage {
+        func frame(_ color: CGColor, width: Int = 16, height: Int = 16) throws -> CGImage {
             let context = try XCTUnwrap(CGContext(
-                data: nil, width: dimension, height: dimension, bitsPerComponent: 8, bytesPerRow: 0,
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ))
             context.setFillColor(color)
-            context.fill(CGRect(x: 0, y: 0, width: dimension, height: dimension))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
             return try XCTUnwrap(context.makeImage())
         }
 
@@ -1186,10 +1257,10 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertEqual(picture.animation.count, 2)
         XCTAssertEqual(picture.animation[0].seconds, 0.2, accuracy: 0.01)
         XCTAssertEqual(picture.animation[1].seconds, 0.6, accuracy: 0.01)
-        XCTAssertEqual(picture.image(at: 0), picture.animation[0].image)
-        XCTAssertEqual(picture.image(at: 0.3), picture.animation[1].image)
-        XCTAssertEqual(picture.image(at: 0.85), picture.animation[0].image,
-                       "Animations must loop rather than freeze on the last frame")
+        let single = try MarkdownPicture.decode(animatedGIF(frameCount: 1, at: root.appending(path: "single.gif")))
+        XCTAssertTrue(single.animation.isEmpty)
+        let capped = try MarkdownPicture.decode(animatedGIF(frameCount: 32, at: root.appending(path: "32.gif")))
+        XCTAssertEqual(capped.animation.count, 32)
 
         let overBudget = try MarkdownPicture.decode(animatedGIF(
             frameCount: 33, at: root.appending(path: "oversized-animation.gif")
@@ -1197,14 +1268,244 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         XCTAssertTrue(overBudget.animation.isEmpty,
                       "More than 32 GIF frames must degrade to a static poster")
         XCTAssertEqual(overBudget.poster.width, 16)
-        let large = try frame(CGColor(red: 1, green: 0, blue: 0, alpha: 1), dimension: 600)
-        let overPixelBudget = try MarkdownPicture.decode(animatedGIF(
-            frameCount: 32, at: root.appending(path: "oversized-pixels.gif"),
-            images: (large, large)
-        ))
-        XCTAssertTrue(overPixelBudget.animation.isEmpty,
-                      "32 frames exceeding eight million decoded pixels must use a static poster")
+        for (count, width, height, pixels) in [(8, 999, 1001, 7_999_992), (8, 1000, 1000, 8_000_000),
+                                               (10, 863, 927, 8_000_010)] {
+            XCTAssertEqual(count * width * height, pixels)
+            let large = try frame(CGColor(red: 1, green: 0, blue: 0, alpha: 1), width: width, height: height)
+            let boundary = try MarkdownPicture.decode(animatedGIF(
+                frameCount: count, at: root.appending(path: "\(pixels).gif"), images: (large, large)
+            ))
+            XCTAssertEqual(boundary.animation.count, pixels > 8_000_000 ? 0 : count)
+            XCTAssertEqual(boundary.poster.width, width)
+            XCTAssertEqual(boundary.poster.height, height)
+        }
         XCTAssertThrowsError(try MarkdownPicture.decode(Data("not an image".utf8)))
+    }
+
+    func testGIFPartialFramesPreserveTransparencyAndHonorBothDisposalModes() throws {
+        let gif = try XCTUnwrap(Data(base64Encoded: """
+            R0lGODlhBgAEAPAAAAAAAP8AACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFDAAAACwAAAAABgAEAAACBYQfcctbACH5BAwWAAAALAMAAQABAAEAgAD/AAAAAAICRAEAIfkECCAAAAAsBAABAAEAAQCAAAD/AAAAAgJEAQAh+QQEKgAAACwFAAEAAQABAID//wAAAAACAkQBADs=
+            """))
+        let picture = try MarkdownPicture.decode(gif)
+        XCTAssertEqual(picture.animation.count, 4)
+        let source = try XCTUnwrap(RasterPreview.source(gif))
+        let expectedPixels = [
+            ["red", "clear", "clear", "clear"],
+            ["red", "green", "clear", "clear"],
+            ["red", "clear", "blue", "clear"],
+            ["red", "clear", "clear", "yellow"],
+        ]
+        for index in [3, 1, 2, 0] {
+            let frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 8)
+            XCTAssertEqual(frame.image.width, 6)
+            XCTAssertEqual(frame.image.height, 4)
+            XCTAssertEqual(frame.seconds, [0.12, 0.22, 0.32, 0.42][index], accuracy: 0.001)
+            let bitmap = NSBitmapImageRep(cgImage: frame.image)
+            let row = try [0, 3, 4, 5].map { column -> String in
+                let color = try XCTUnwrap(bitmap.colorAt(x: column, y: 1)?.usingColorSpace(.sRGB))
+                if color.alphaComponent < 0.01 { return "clear" }
+                switch (color.redComponent > 0.8, color.greenComponent > 0.8, color.blueComponent > 0.8) {
+                case (true, false, false): return "red"
+                case (false, true, false): return "green"
+                case (false, false, true): return "blue"
+                case (true, true, false): return "yellow"
+                default: return "unexpected"
+                }
+            }
+            XCTAssertEqual(row, expectedPixels[index])
+        }
+    }
+
+    func testGIFKeepsEncodedLongPauseAndRateLimitsZeroAndShortFrames() throws {
+        let bytes = try gifDelayFixture()
+        let source = try XCTUnwrap(RasterPreview.source(bytes))
+        XCTAssertEqual(RasterPreview.gifFrameCount(source), 3)
+        for (index, seconds) in [12.5, 0.04, 0.04].enumerated() {
+            let frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 8)
+            XCTAssertEqual(frame.seconds, seconds, accuracy: 0.0001)
+        }
+        let inline = try MarkdownPicture.decode(bytes)
+        XCTAssertEqual(inline.animation.map(\.seconds), [12.5, 0.04, 0.04])
+    }
+
+    func testGIFTruncatedFrameNeverPublishesPartialPixels() throws {
+        let bytes = try gifDelayFixture()
+        let source = try XCTUnwrap(RasterPreview.source(Data(bytes.dropLast(4))))
+        XCTAssertEqual(try RasterPreview.gifFrame(source, at: 1, maximumDimension: 8).image.width, 4)
+        XCTAssertThrowsError(try RasterPreview.gifFrame(source, at: 2, maximumDimension: 8))
+    }
+
+    func testGIFMissingMiddleFrameDataKeepsThePosterInBothViewers() async throws {
+        var bytes = try gifDelayFixture()
+        var withComment = bytes
+        let descriptorInsideComment: [UInt8] = [0x2c, 0, 0, 0, 0, 4, 0, 4, 0, 0, 2, 0]
+        withComment.insert(contentsOf: [0x21, 0xfe, UInt8(descriptorInsideComment.count)]
+                           + descriptorInsideComment + [0], at: 19)
+        XCTAssertEqual(try MarkdownPicture.decode(withComment).animation.count, 3)
+
+        let middleData = 0x58..<0x5e
+        XCTAssertEqual(Array(bytes[middleData]), [4, 0x84, 0x8f, 0x09, 0x05, 0])
+        bytes.replaceSubrange(middleData, with: [0])
+        let source = try XCTUnwrap(RasterPreview.source(bytes))
+        XCTAssertEqual(RasterPreview.gifFrameCount(source), 3, "The malformed frame must be followed by another frame")
+        let inline = try MarkdownPicture.decode(bytes)
+        XCTAssertTrue(inline.animation.isEmpty)
+        XCTAssertEqual(inline.poster.width, 4)
+
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "Missing middle.gif")
+        try bytes.write(to: url)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        defer { file.retireContent() }
+        file.loadIfNeeded()
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in file.gifFramesRequest() != nil }, object: nil)
+        await fulfillment(of: [loaded], timeout: 5)
+        let request = try XCTUnwrap(file.gifFramesRequest())
+        let playback = try XCTUnwrap(file.gifPlayback)
+        let running = Task { await playback.play(automaticallyPlays: true, load: request) }
+        defer { running.cancel() }
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            playback.failed || playback.image != nil
+        }, object: nil)
+        await fulfillment(of: [settled], timeout: 3)
+        XCTAssertTrue(playback.failed)
+        XCTAssertNil(playback.image)
+        guard case .image(let preview) = file.content else { return XCTFail("The valid poster must stay visible") }
+        XCTAssertEqual(preview.poster.width, 4)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+    }
+
+    func testGIFPlaybackDefaultsToTheSystemAnimationPreferenceAndRespectsManualControl() async throws {
+        let playback = GIFPlayback()
+        XCTAssertFalse(playback.isPaused(automaticallyPlays: true))
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: false))
+        await playback.play(automaticallyPlays: false) {
+            XCTFail("A disabled automatic animation must not request frame data")
+            throw CocoaError(.fileReadUnknown)
+        }
+        XCTAssertNil(playback.image)
+        XCTAssertFalse(playback.failed)
+
+        playback.togglePause(automaticallyPlays: false)
+        XCTAssertFalse(playback.isPaused(automaticallyPlays: false),
+                       "Explicit Resume must work even when automatic playback is disabled")
+        let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
+        let frame = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8)
+        let prefetched = expectation(description: "Explicit playback prefetches a real GIF frame")
+        let stopped = expectation(description: "Explicit pause cancels the running task")
+        let task = Task {
+            await playback.play(automaticallyPlays: false) {
+                GIFPlayback.Frames(count: 3) { index in
+                    if index != 0 { prefetched.fulfill() }
+                    return frame
+                }
+            }
+            stopped.fulfill()
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [prefetched], timeout: 2)
+        XCTAssertTrue(playback.image === frame.image)
+        playback.togglePause(automaticallyPlays: false)
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: false))
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: true))
+        await fulfillment(of: [stopped], timeout: 2)
+        XCTAssertTrue(playback.image === frame.image, "Pausing preserves the displayed frame")
+        playback.reset()
+        XCTAssertNil(playback.image)
+        XCTAssertFalse(playback.isPaused(automaticallyPlays: true))
+        XCTAssertTrue(playback.isPaused(automaticallyPlays: false))
+    }
+
+    func testGIFResetCancelsLongHoldAndItsSuspendedPrefetch() async throws {
+        let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
+        let initial = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8)
+        let playback = GIFPlayback()
+        let decoding = expectation(description: "First frame is holding while the next frame decodes")
+        let cancelled = expectation(description: "Reset cancels prefetched frame")
+        let stopped = expectation(description: "Reset releases the playback task")
+        let task = Task {
+            await playback.play(automaticallyPlays: true) {
+                GIFPlayback.Frames(count: 3) { index in
+                    if index == 0 { return initial }
+                    decoding.fulfill()
+                    do {
+                        try await Task.sleep(for: .seconds(20))
+                    } catch is CancellationError {
+                        cancelled.fulfill()
+                    }
+                    return initial
+                }
+            }
+            stopped.fulfill()
+        }
+        defer { task.cancel() }
+        await fulfillment(of: [decoding], timeout: 2)
+        XCTAssertTrue(playback.image === initial.image)
+        playback.reset()
+        await fulfillment(of: [cancelled, stopped], timeout: 1)
+        XCTAssertNil(playback.image)
+        XCTAssertFalse(playback.failed)
+    }
+
+    func testCancelledGIFRestartDoesNotInterruptTheCurrentPlayback() async throws {
+        let source = try XCTUnwrap(RasterPreview.source(gifDelayFixture()))
+        let red = try RasterPreview.gifFrame(source, at: 0, maximumDimension: 8).image
+        let green = try RasterPreview.gifFrame(source, at: 1, maximumDimension: 8).image
+        let playback = GIFPlayback()
+        let prefetch = expectation(description: "Active playback reaches its first frame")
+        let active = Task {
+            await playback.play(automaticallyPlays: true) {
+                GIFPlayback.Frames(count: 2) { index in
+                    if index == 0 { return RasterPreview.GIFFrame(image: red, seconds: 0.6) }
+                    prefetch.fulfill()
+                    return RasterPreview.GIFFrame(image: green, seconds: 10)
+                }
+            }
+        }
+        defer { active.cancel() }
+        await fulfillment(of: [prefetch], timeout: 2)
+        XCTAssertTrue(playback.image === red)
+        let stale = Task {
+            await playback.play(automaticallyPlays: true) {
+                XCTFail("A cancelled mount cannot start a new read")
+                throw CancellationError()
+            }
+        }
+        stale.cancel()
+        await stale.value
+        let advances = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in playback.image === green }, object: nil
+        )
+        await fulfillment(of: [advances], timeout: 2)
+    }
+
+    private func gifDelayFixture() throws -> Data {
+        try XCTUnwrap(Data(base64Encoded: """
+            R0lGODlhBAAEAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQA4gQAACwAAAAABAAEAAACBISPCQUAIfkEAAAAAAAsAAAAAAQABACAAP8AAAAAAgSEjwkFACH5BAABAAAALAAAAAAEAAQAgAAA/wAAAAIEhI8JBQA7
+            """))
+    }
+
+    func testGIFRealSampleDecodesIndicesPastTheInlineAnimationBudget() throws {
+        guard let root = ProcessInfo.processInfo.environment["BAILEY_IMAGE_ACCEPTANCE_ROOT"] else {
+            throw XCTSkip("Set BAILEY_IMAGE_ACCEPTANCE_ROOT to the comprehensive sample directory")
+        }
+        let url = URL(fileURLWithPath: root).appending(path: "images/动画-34帧.gif")
+        let bytes = try Data(contentsOf: url)
+        let source = try XCTUnwrap(RasterPreview.source(bytes))
+        XCTAssertEqual(RasterPreview.gifFrameCount(source), 34)
+        XCTAssertTrue(try MarkdownPicture.decode(bytes).animation.isEmpty)
+        for (index, inside, outside) in [(33, 200, 35), (0, 35, 200), (32, 170, 35)] {
+            let frame = try RasterPreview.gifFrame(source, at: index, maximumDimension: 320)
+            XCTAssertEqual(frame.seconds, 0.12, accuracy: 0.001)
+            XCTAssertEqual(frame.image.width, 320)
+            XCTAssertEqual(frame.image.height, 192)
+            let bitmap = NSBitmapImageRep(cgImage: frame.image)
+            XCTAssertGreaterThan(try XCTUnwrap(bitmap.colorAt(x: inside, y: 90)).alphaComponent, 0.9)
+            XCTAssertLessThan(try XCTUnwrap(bitmap.colorAt(x: outside, y: 90)).alphaComponent, 0.1)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
 
     func testMediaStageUsesAuthorizedBytesAndRejectsUnboundedFiles() async throws {
@@ -1219,9 +1520,13 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
         buffer.frameLength = 8_000
         buffer.floatChannelData?[0].initialize(repeating: 0, count: 8_000)
-        let writer = try AVAudioFile(forWriting: audio, settings: format.settings)
-        try writer.write(from: buffer)
-        let resource = MarkdownResource(
+        do {
+            let writer = try AVAudioFile(forWriting: audio, settings: format.settings)
+            try writer.write(from: buffer)
+        }
+        // Stage a finalized WAV rather than a snapshot of a writer's still-open header.
+        XCTAssertEqual(try AVAudioFile(forReading: audio).length, 8_000)
+        let resource = PreviewResource(
             path: document.path, directory: root.path, backend: LocalWorkspaceBackend.shared
         )
         let staged = try await MarkdownMedia.stage(try XCTUnwrap(URL(string: "sound.wav")), from: resource)
@@ -1233,8 +1538,8 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         )[.posixPermissions] as? Int)
         XCTAssertEqual(permissions & 0o077, 0,
                        "The staged file must reside in a private directory")
-        let playable = try await MarkdownMedia.asset(at: staged).load(.isPlayable)
-        XCTAssertTrue(playable)
+        let playable = try await NativeMedia.open(staged.path)
+        XCTAssertEqual(playable.kind, .audio)
 
         let tooBig = root.appending(path: "oversized.wav")
         XCTAssertTrue(FileManager.default.createFile(atPath: tooBig.path, contents: nil))
@@ -1265,7 +1570,7 @@ final class SwiftMarkdownNativeTests: XCTestCase {
         try Data("secret".utf8).write(to: temporary.appendingPathComponent("secret"))
         try FileManager.default.createSymbolicLink(at: assets.appendingPathComponent("escape"),
                                                      withDestinationURL: temporary.appendingPathComponent("secret"))
-        let resource = MarkdownResource(path: docs.appendingPathComponent("README.md").path,
+        let resource = PreviewResource(path: docs.appendingPathComponent("README.md").path,
                                         directory: root.path, backend: LocalWorkspaceBackend.shared)
         let approved = try await resource.read(try XCTUnwrap(URL(string: "../assets/image.bin")), maxBytes: 100)
         XCTAssertEqual(approved, Data("safe".utf8))

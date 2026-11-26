@@ -14,7 +14,7 @@ enum ToolPanel {
 
 /// One Find menu command, routed from the menu bar to whichever find
 /// implementation the focused pane owns: Ghostty's own search in a terminal,
-/// `NSTextFinder`'s find bar in a file editor.
+/// `NSTextFinder` in a file editor, or the focused read-only preview.
 enum FindAction {
     case show
     case replace
@@ -50,7 +50,7 @@ final class WorkspaceWindowModel {
             if let oldValue {
                 let previous = projects.first { $0.id == oldValue }
                 previous?.dock.clearContextTarget()
-                previous?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
+                previous?.tabs.forEach { $0.content.deactivate() }
             }
             selectedProject?.dock.clearContextTarget()
             filesTreeResponder = nil
@@ -664,6 +664,14 @@ final class WorkspaceWindowModel {
     /// the find bar's own field holds keyboard focus.
     func performFindAction(_ action: FindAction) {
         guard canFind else { return }
+        if let focusedDelimitedTable {
+            focusedDelimitedTable.perform(action)
+            return
+        }
+        if let focusedHTMLPreview {
+            focusedHTMLPreview.performFindAction(action)
+            return
+        }
         switch selectedProject?.focusedContent {
         case .session(let session): session.find.perform(action)
         case .file(let file): file.performFindAction(action)
@@ -672,21 +680,41 @@ final class WorkspaceWindowModel {
         }
     }
 
-    /// Find uses the active pane's existing native text or terminal surface.
+    /// Find uses the active pane's text, terminal or read-only preview surface.
     var canFind: Bool {
+        if focusedDelimitedTable != nil || focusedHTMLPreview != nil { return true }
         switch selectedProject?.focusedContent {
         case .session, .diff: return true
-        case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsMarkdownPreview
+        case .file(let file): return selectedProject?.dock.activeGroup?.selected?.tabID != nil && !file.showsFilePreview
         case .browser, .none: return false
         }
     }
 
     var canReplace: Bool {
         switch selectedProject?.focusedContent {
-        case .file: return canFind
+        case .file: return canFind && focusedDelimitedTable == nil && focusedHTMLPreview == nil
         case .diff(let diff): return diff.isEditing && diff.isEditableNow
         case .session, .browser, .none: return false
         }
+    }
+
+    private var focusedPreviewFile: FileTab? {
+        guard let project = selectedProject, let tab = project.focusedTab,
+              case .file(let file) = tab.content, file.canPreviewFile,
+              let item = project.dock.activeGroup?.selected,
+              item == .filePreview(tab.id) || (item == .tab(tab.id) && file.showsFilePreview) else { return nil }
+        return file
+    }
+
+    private var focusedDelimitedTable: DelimitedTableControls? {
+        guard let file = focusedPreviewFile, file.previewKind == .delimited else { return nil }
+        return file.delimitedTable
+    }
+
+    private var focusedHTMLPreview: HTMLPreview? {
+        guard let file = focusedPreviewFile, file.previewKind == .html,
+              let preview = file.htmlPreview, !preview.failed else { return nil }
+        return preview
     }
 
     func closeActivePanelOrWindow() {
@@ -829,22 +857,29 @@ final class WorkspaceWindowModel {
 
     var canSaveSelectedFile: Bool { selectedProject?.focusedContent?.isDirty == true }
 
-    private var activeMarkdownTab: PaneTab? {
+    private var activePreviewTab: PaneTab? {
         guard !isClosed, !isCommandPaletteVisible, !isSSHFolderPickerVisible,
               attachedWindow?.isKeyWindow == true, attachedWindow?.attachedSheet == nil,
               let tab = selectedProject?.focusedTab, case .file(let file) = tab.content,
-              file.canPreviewMarkdown else { return nil }
+              file.canPreviewFile else { return nil }
         return tab
     }
 
-    var markdownMenuMode: MarkdownViewMode? {
-        guard let project = selectedProject, let tab = activeMarkdownTab else { return nil }
-        return project.markdownMode(for: tab) == .source ? .preview : .source
+    var filePreviewMenuMode: FilePreviewMode? {
+        guard let project = selectedProject, let tab = activePreviewTab else { return nil }
+        return project.filePreviewMode(for: tab) == .source ? .preview : .source
     }
 
-    func toggleMarkdownPreview() {
-        guard let project = selectedProject, let tab = activeMarkdownTab, let markdownMenuMode else { return }
-        project.setMarkdownMode(markdownMenuMode, for: tab)
+    var filePreviewMenuTitle: String {
+        guard let mode = filePreviewMenuMode, case .file(let file)? = activePreviewTab?.content else {
+            return FilePreviewMode.preview.title
+        }
+        return mode.title(for: file.previewKind)
+    }
+
+    func toggleFilePreview() {
+        guard let project = selectedProject, let tab = activePreviewTab, let filePreviewMenuMode else { return }
+        project.setFilePreviewMode(filePreviewMenuMode, for: tab)
     }
 
     /// Saves the focused pane if it holds a file or an editable diff.
@@ -861,12 +896,14 @@ final class WorkspaceWindowModel {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target) else { return nil }
         do {
             return try await application.withProtectedFiles(
-                paths: [item.path], workspace: target.workspace
+                paths: ImageAnnotationSidecar.protectedPaths([item.path]), workspace: target.workspace
             ) {
                 guard self.selectedProjectID == project.id, project.matchesPanelTarget(target) else {
                     throw CancellationError()
                 }
-                let newPath = await project.fileTree.rename(item, to: newName)
+                let newPath = await project.fileTree.rename(item, to: newName) { source, destination in
+                    self.application.fileRenamed(from: source, to: destination, workspace: target.workspace)
+                }
                 if let newPath {
                     self.application.fileRenamed(
                         from: item.path, to: newPath, workspace: target.workspace
@@ -914,7 +951,7 @@ final class WorkspaceWindowModel {
         }
         if operation == .copy, target.workspace == nil { return await perform() }
         do {
-            return try await application.withProtectedFiles(paths: paths, workspace: target.workspace) {
+            return try await application.withProtectedFiles(paths: ImageAnnotationSidecar.protectedPaths(paths), workspace: target.workspace) {
                 await perform()
             }
         } catch {
@@ -1178,7 +1215,7 @@ final class WorkspaceWindowModel {
                 }
                 do {
                     result = try await application.withProtectedFiles(
-                        paths: protectedPaths, workspace: nil,
+                        paths: ImageAnnotationSidecar.protectedPaths(protectedPaths), workspace: nil,
                         didSave: { savedPath in
                             let savedPhysicalPath = LocalPathScope.resolvedPath(savedPath)
                             for path in paths {

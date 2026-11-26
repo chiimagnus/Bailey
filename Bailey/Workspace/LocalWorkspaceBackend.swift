@@ -13,6 +13,8 @@ nonisolated struct LocalFileTransferResult: Sendable {
 nonisolated enum LocalFileTransferOutcome: Sendable {
     case copied(String)
     case moved(String)
+    case copiedPair(String)
+    case movedPair(String)
     case copiedWithoutRemoval(destination: String, retainedAt: String)
     case unchanged
 }
@@ -22,6 +24,29 @@ nonisolated enum LocalPathScope {
     static func contains(_ path: String, in directory: String) -> Bool {
         guard !directory.isEmpty else { return false }
         return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
+    }
+
+    /// Normalize spelling without consulting the local filesystem. Foundation's
+    /// standardizingPath changes existing /private/tmp paths into /tmp aliases
+    /// and can even do so for paths belonging to a remote workspace.
+    static func lexicalPath(_ path: String) -> String? {
+        guard path.hasPrefix("/"), !path.utf8.contains(0) else { return nil }
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == ".." { if !parts.isEmpty { parts.removeLast() } }
+            else if part != "." { parts.append(part) }
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    // FSEvents uses physical paths, including /private/var, which Foundation
+    // may shorten to /var even when resolving symbolic links.
+    static func physicalPath(_ root: String) -> String {
+        root.withCString { source in
+            guard let resolved = Darwin.realpath(source, nil) else { return root }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
     }
 
     /// After a move, resolve surviving ancestors rather than the now-missing old leaf.
@@ -59,25 +84,35 @@ nonisolated struct LocalFileIdentity: Equatable, Sendable {
     static func read(_ path: String) -> Self? {
         var info = Darwin.stat()
         guard lstat(path, &info) == 0 else { return nil }
-        return Self(
-            device: UInt64(truncatingIfNeeded: info.st_dev),
-            inode: UInt64(truncatingIfNeeded: info.st_ino),
-            mode: UInt16(info.st_mode), size: Int64(info.st_size),
-            modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
-            modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec),
-            changedSeconds: Int64(info.st_ctimespec.tv_sec),
-            changedNanoseconds: Int64(info.st_ctimespec.tv_nsec)
-        )
+        return Self(info)
+    }
+
+    fileprivate init(_ info: Darwin.stat) {
+        device = UInt64(truncatingIfNeeded: info.st_dev)
+        inode = UInt64(truncatingIfNeeded: info.st_ino)
+        mode = UInt16(info.st_mode)
+        size = Int64(info.st_size)
+        modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
+        modifiedNanoseconds = Int64(info.st_mtimespec.tv_nsec)
+        changedSeconds = Int64(info.st_ctimespec.tv_sec)
+        changedNanoseconds = Int64(info.st_ctimespec.tv_nsec)
     }
 }
 
 /// The Mac's own disk and process table. Wraps exactly the calls the panels
 /// made inline before the seam existed.
 ///
-/// Nothing is stored, so the type is `Sendable` and its `@concurrent`
+/// Publication coordination is process-wide; the backend is `Sendable` and its `@concurrent`
 /// methods run off the main actor even when a main-actor model awaits them.
 nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     static let shared = LocalWorkspaceBackend()
+    // Serialize Bailey conditional commits, not preparation or independent reads.
+    private static let publicationLock = NSLock()
+    private let beforeConditionalPublication: (@Sendable (String) throws -> Void)?
+
+    init(beforeConditionalPublication: (@Sendable (String) throws -> Void)? = nil) {
+        self.beforeConditionalPublication = beforeConditionalPublication
+    }
 
     // MARK: - Files
 
@@ -123,6 +158,10 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try Self.readSync(path: path, maxBytes: maxBytes)
     }
 
+    @concurrent func readPrefix(path: String, maxBytes: Int) async throws -> Data {
+        try Self.readSync(path: path, maxBytes: maxBytes, prefixOnly: true)
+    }
+
     @concurrent func read(path: String, maxBytes: Int, confinedTo directory: String) async throws -> Data {
         try Self.readSync(path: path, maxBytes: maxBytes, confinedTo: Self.canonicalPath(directory))
     }
@@ -144,9 +183,47 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         return String(cString: resolved)
     }
 
-    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil) throws -> Data {
+    struct ReadableFile: Sendable {
+        let path: String
+        let identity: LocalFileIdentity
+        let dataGeneration: UInt32?
+
+        func hasSameData(as other: Self) -> Bool {
+            guard path == other.path else { return false }
+            guard let dataGeneration, let next = other.dataGeneration else {
+                return identity == other.identity
+            }
+            return dataGeneration == next && identity.refersToSameEntry(as: other.identity)
+                && identity.mode == other.identity.mode && identity.size == other.identity.size
+                && identity.modifiedSeconds == other.identity.modifiedSeconds
+                && identity.modifiedNanoseconds == other.identity.modifiedNanoseconds
+        }
+    }
+
+    static func readableFile(at path: String, includingDataGeneration: Bool = false) throws -> ReadableFile {
         try Task.checkCancellation()
-        guard maxBytes >= 0, maxBytes < .max, !path.utf8.contains(0) else {
+        let handle = try openForReading(path)
+        defer { try? handle.close() }
+        let info = try regularFileStat(handle)
+        return ReadableFile(path: try pathOfOpenFile(handle), identity: LocalFileIdentity(info),
+                            dataGeneration: includingDataGeneration ? dataGeneration(of: handle) : nil)
+    }
+
+    private static func dataGeneration(of handle: FileHandle) -> UInt32? {
+        // getattrlist(2): a nonzero generation tracks data changes to this entry, not its xattrs.
+        // Unsupported filesystems and mapped files can return no usable generation.
+        var attrs = attrlist()
+        attrs.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
+        attrs.commonattr = attrgroup_t(ATTR_CMN_GEN_COUNT)
+        var result = (length: UInt32(0), generation: UInt32(0))
+        guard fgetattrlist(handle.fileDescriptor, &attrs, &result, MemoryLayout.size(ofValue: result),
+                           UInt32(FSOPT_ATTR_CMN_EXTENDED)) == 0,
+              result.length == MemoryLayout.size(ofValue: result), result.generation != 0 else { return nil }
+        return result.generation
+    }
+
+    private static func openForReading(_ path: String) throws -> FileHandle {
+        guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
         // Nonblocking open is necessary *before* fstat: a FIFO must never wait
@@ -157,20 +234,20 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             if code == ENOENT || code == ENOTDIR { throw WorkspaceError.notFound }
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
         }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? handle.close() }
-        if let root {
-            var resolved = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-            guard fcntl(fd, F_GETPATH, &resolved) != -1,
-                  LocalPathScope.contains(
-                      String(decoding: resolved.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self),
-                      in: root
-                  ) else {
-                throw CocoaError(.fileReadNoPermission)
-            }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    private static func pathOfOpenFile(_ handle: FileHandle) throws -> String {
+        var resolved = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(handle.fileDescriptor, F_GETPATH, &resolved) != -1 else {
+            throw CocoaError(.fileReadNoPermission)
         }
+        return String(decoding: resolved.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    private static func regularFileStat(_ handle: FileHandle) throws -> Darwin.stat {
         var info = Darwin.stat()
-        guard fstat(fd, &info) == 0 else {
+        guard fstat(handle.fileDescriptor, &info) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
         guard (info.st_mode & S_IFMT) == S_IFREG else {
@@ -179,8 +256,24 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         guard info.st_size >= 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
         }
-        let length = UInt64(info.st_size)
-        guard length <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        return info
+    }
+
+    private static func readSync(path: String, maxBytes: Int, confinedTo root: String? = nil,
+                                 prefixOnly: Bool = false) throws -> Data {
+        try Task.checkCancellation()
+        guard maxBytes >= 0, maxBytes < .max else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        let handle = try openForReading(path)
+        defer { try? handle.close() }
+        if let root, try !LocalPathScope.contains(pathOfOpenFile(handle), in: root) {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        let info = try regularFileStat(handle)
+        let fileLength = UInt64(info.st_size)
+        guard prefixOnly || fileLength <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        let length = min(fileLength, UInt64(maxBytes))
 
         var data = Data()
         while UInt64(data.count) < length {
@@ -193,14 +286,9 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         // A changed length invalidates the read; never return a partial or
         // mixed-length file as if it were the accepted full document.
-        guard fstat(fd, &info) == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-        }
-        guard info.st_size >= 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
-        }
-        guard UInt64(info.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
-        guard UInt64(info.st_size) == length else {
+        let after = try regularFileStat(handle)
+        guard prefixOnly || UInt64(after.st_size) <= UInt64(maxBytes) else { throw WorkspaceError.tooLarge }
+        guard UInt64(after.st_size) == fileLength else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EBUSY))
         }
         return data
@@ -210,15 +298,78 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
-    /// FileTab's conditional save has its own commit contract. POSIX offers
-    /// atomic rename, not a universal compare-and-rename against outside writers.
+    /// Exchange retains the displaced entry for conflict verification. It is
+    /// not a filesystem CAS, especially against writers with an open descriptor.
     @concurrent func write(path: String, data: Data,
                            ifUnchanged version: WorkspaceFileVersion) async throws {
+        try Self.writeStaged(path: path, data: data, ifUnchanged: version,
+                             beforeConditionalPublication: beforeConditionalPublication)
+    }
+
+    @concurrent func writeNewFile(path: String, data: Data) async throws {
+        try Self.writeStaged(path: path, data: data, ifUnchanged: nil)
+    }
+
+    /// A file chosen for export. Existing bytes and entry identity are captured
+    /// before the replacement confirmation, not when the rendered data is ready.
+    nonisolated struct ImageExportTarget: Sendable {
+        let path: String
+        let identity: LocalFileIdentity?
+        let version: WorkspaceFileVersion?
+
+        var replacesExistingFile: Bool { identity != nil }
+    }
+
+    @concurrent func prepareImageExport(path: String, protecting source: String?) async throws -> ImageExportTarget {
+        let destination = try Self.exportPath(path)
+        try ImageAnnotationSidecar.requireUnpairedLocal(destination)
+        let identity = LocalFileIdentity.read(destination)
+        if let source {
+            let original = try Self.canonicalPath(source)
+            guard original != destination, let originalIdentity = LocalFileIdentity.read(original),
+                  identity?.refersToSameEntry(as: originalIdentity) != true else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+        }
+        if let identity {
+            guard identity.mode & UInt16(S_IFMT) == UInt16(S_IFREG) else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            let bytes = try Self.readSync(path: destination, maxBytes: FileTab.maxImageBytes)
+            guard LocalFileIdentity.read(destination) == identity else { throw WorkspaceError.changedExternally }
+            return ImageExportTarget(path: destination, identity: identity, version: WorkspaceFileVersion(data: bytes))
+        }
+        var info = Darwin.stat()
+        guard lstat(destination, &info) != 0, errno == ENOENT else {
+            throw WorkspaceError.changedExternally
+        }
+        return ImageExportTarget(path: destination, identity: nil, version: nil)
+    }
+
+    private static func exportPath(_ path: String) throws -> String {
+        guard !path.utf8.contains(0) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let parent = try canonicalPath(url.deletingLastPathComponent().path)
+        return (parent as NSString).appendingPathComponent(url.lastPathComponent)
+    }
+
+    @concurrent func writeImageExport(_ target: ImageExportTarget, to path: String, data: Data) async throws {
+        guard try Self.exportPath(path) == target.path else { throw WorkspaceError.changedExternally }
+        try Self.writeStaged(path: target.path, data: data, ifUnchanged: target.version, exportTarget: target,
+                             beforeConditionalPublication: beforeConditionalPublication)
+    }
+
+    private static func writeStaged(path: String, data: Data, ifUnchanged version: WorkspaceFileVersion?,
+                                    exportTarget: ImageExportTarget? = nil,
+                                    beforeConditionalPublication: (@Sendable (String) throws -> Void)? = nil) throws {
         try Task.checkCancellation()
         guard !path.utf8.contains(0) else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
-        _ = try Self.verifyCurrentVersion(path: path, expected: version)
+        if let target = exportTarget, LocalFileIdentity.read(path) != target.identity {
+            throw WorkspaceError.changedExternally
+        }
+        if let version { _ = try Self.verifyCurrentVersion(path: path, expected: version) }
         // Fixed sibling name: a valid 255-byte filename must not overflow NAME_MAX.
         let parent = (path as NSString).deletingLastPathComponent
         var template = Array((parent + "/.bailey-save.XXXXXXXX").utf8CString)
@@ -229,26 +380,97 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         let stage = String(decoding: template.dropLast().map { UInt8(bitPattern: $0) },
                            as: UTF8.self)
-        defer { try? FileManager.default.removeItem(atPath: stage) }
         let item = stage + "/item"
-        try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
-        _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
-        let originalMode = try Self.verifyCurrentVersion(path: path, expected: version)
-        if let originalMode {
-            guard chmod(item, mode_t(originalMode)) == 0 else {
-                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        var ownsStage = true
+        defer {
+            if ownsStage {
+                _ = unlink(item)
+                _ = rmdir(stage)
             }
         }
+        try data.write(to: URL(fileURLWithPath: item), options: .withoutOverwriting)
+        _ = try Self.verifyCurrentVersion(path: item, expected: WorkspaceFileVersion(data: data))
         let stagedHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: item))
         try stagedHandle.synchronize()
         try stagedHandle.close()
-        try Task.checkCancellation()
-        let status = item.withCString { from in
-            path.withCString { to in Darwin.rename(from, to) }
+        try Self.publicationLock.withLock {
+            try Task.checkCancellation()
+            let status: Int32
+            if let target = exportTarget {
+                guard try Self.canonicalPath(parent) == parent,
+                      LocalFileIdentity.read(path) == target.identity else {
+                    throw WorkspaceError.changedExternally
+                }
+                try ImageAnnotationSidecar.requireUnpairedLocal(path)
+            }
+            if let version {
+                let originalMode = try Self.verifyCurrentVersion(path: path, expected: version)
+                if let originalMode {
+                    guard chmod(item, mode_t(originalMode)) == 0 else {
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
+                }
+                if let target = exportTarget {
+                    guard LocalFileIdentity.read(path) == target.identity else { throw WorkspaceError.changedExternally }
+                    try ImageAnnotationSidecar.requireUnpairedLocal(path)
+                }
+                try beforeConditionalPublication?(path)
+                status = item.withCString { from in
+                    path.withCString { to in renamex_np(from, to, UInt32(RENAME_SWAP)) }
+                }
+                guard status == 0 else {
+                    let code = errno
+                    if code == ENOENT || code == ENOTDIR { throw WorkspaceError.changedExternally }
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+                }
+                // The stage now belongs to the displaced writer. Never clean it
+                // on an unverified result, including cancellation after exchange.
+                ownsStage = false
+                do {
+                    if let identity = exportTarget?.identity,
+                       LocalFileIdentity.read(item)?.refersToSameEntry(as: identity) != true {
+                        throw WorkspaceError.changedExternally
+                    }
+                    if let originalMode {
+                        guard try Self.verifyCurrentVersion(path: item, expected: version) == originalMode else {
+                            throw WorkspaceError.changedExternally
+                        }
+                    } else {
+                        // A relative symlink was moved one directory deeper.
+                        // Verify its original referent without changing it.
+                        let link = try FileManager.default.destinationOfSymbolicLink(atPath: item)
+                        let referent = link.hasPrefix("/") ? link : (parent as NSString).appendingPathComponent(link)
+                        _ = try Self.verifyCurrentVersion(path: referent, expected: version)
+                    }
+                    guard unlink(item) == 0 else {
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
+                    ownsStage = true
+                } catch {
+                    let recovery = retainDisplacedEntry(item: item, stage: stage, target: path)
+                    throw DisplacedSaveError(recoveryPath: recovery)
+                }
+            } else {
+                status = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: path))
+            }
+            guard status == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
         }
-        guard status == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-        }
+    }
+
+    /// Make the conflicting entry discoverable without touching the destination
+    /// again. If the move fails, the private stage is itself the recovery location.
+    private static func retainDisplacedEntry(item: String, stage: String, target: String) -> String {
+        let parent = (target as NSString).deletingLastPathComponent
+        let directory = (parent as NSString).appendingPathComponent("Bailey Save Recovery " + UUID().uuidString)
+        let name = (target as NSString).lastPathComponent
+        let renamedItem = (stage as NSString).appendingPathComponent(name)
+        let storedName = exclusiveRename(from: URL(fileURLWithPath: item), to: URL(fileURLWithPath: renamedItem)) == 0
+            ? name : "item"
+        let destination = exclusiveRename(from: URL(fileURLWithPath: stage), to: URL(fileURLWithPath: directory)) == 0
+            ? directory : stage
+        return (LocalPathScope.physicalPath(destination) as NSString).appendingPathComponent(storedName)
     }
 
     /// Verify bytes through a bounded streaming, nonblocking regular-file FD,
@@ -317,6 +539,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         var result = LocalFileTransferResult()
         var seen = Set<URL>()
         let unique = sources.filter { seen.insert($0.standardizedFileURL).inserted }
+        let selected = Set(ImageAnnotationSidecar.coalescedSelection(unique.filter(\.isFileURL).map { $0.standardizedFileURL.path }))
         let selectedDirectories = Set(unique.compactMap { source -> String? in
             guard source.isFileURL,
                   let identity = LocalFileIdentity.read(source.standardizedFileURL.path),
@@ -329,6 +552,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 continue
             }
             let path = source.standardizedFileURL.path
+            guard selected.contains(path) else { continue }
             var ancestor = (path as NSString).deletingLastPathComponent
             var includedByParent = false
             while ancestor != path {
@@ -346,7 +570,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 continue
             }
             do {
-                let outcome = try Self.transferLocalSync(
+                let outcome = try await Self.transferLocal(
                     from: source, into: URL(fileURLWithPath: directory), move: move,
                     expectedIdentity: expectedIdentities?[path], authorizedRoot: authorizedRoot
                 )
@@ -355,6 +579,11 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                     result.copied.append(destination)
                 case .moved(let destination):
                     result.moved.append((path, destination))
+                case .copiedPair(let destination):
+                    result.copied.append(contentsOf: [destination, ImageAnnotationSidecar.path(for: destination)])
+                case .movedPair(let destination):
+                    result.moved.append((path, destination))
+                    result.moved.append((ImageAnnotationSidecar.path(for: path), ImageAnnotationSidecar.path(for: destination)))
                 case .copiedWithoutRemoval(let destination, let retainedAt):
                     result.copied.append(destination)
                     result.copiedWithoutRemoval.append((path, destination, retainedAt))
@@ -374,16 +603,16 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         from source: String, into directory: String, move: Bool,
         expectedIdentity: LocalFileIdentity? = nil, authorizedRoot: String? = nil
     ) async throws -> LocalFileTransferOutcome {
-        try Self.transferLocalSync(
+        try await Self.transferLocal(
             from: URL(fileURLWithPath: source), into: URL(fileURLWithPath: directory),
             move: move, expectedIdentity: expectedIdentity, authorizedRoot: authorizedRoot
         )
     }
 
-    private static func transferLocalSync(
+    @concurrent private static func transferLocal(
         from source: URL, into directory: URL, move: Bool,
         expectedIdentity: LocalFileIdentity?, authorizedRoot: String?
-    ) throws -> LocalFileTransferOutcome {
+    ) async throws -> LocalFileTransferOutcome {
         guard source.isFileURL, source.host == nil || source.host == "localhost" else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
@@ -415,8 +644,11 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         if type == UInt16(S_IFDIR), LocalPathScope.contains(target.path, in: physicalSource.path) {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
         }
+        if parent.path == target.path && move { return .unchanged }
+        let pair = try await ImageAnnotationSidecar.pair(at: physicalSource.path, backend: shared)
+        guard LocalFileIdentity.read(physicalSource.path) == identity,
+              target.resolvingSymlinksInPath().path == target.path else { throw WorkspaceError.changedExternally }
         if parent.path == target.path {
-            if move { return .unchanged }
             let name = original.lastPathComponent
             let ext = (name as NSString).pathExtension
             let stem = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
@@ -426,6 +658,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             for number in 1...Int.max {
                 let suffix = number == 1 ? " copy" : " copy \(number)"
                 let budget = maxNameBytes - suffix.utf8.count - extensionSuffix.utf8.count
+                    - (pair == nil ? 0 : ImageAnnotationSidecar.suffix.utf8.count)
                 guard budget > 0 else { throw CocoaError(.fileWriteInvalidFileName) }
                 var truncatedStem = stem
                 while truncatedStem.utf8.count > budget { truncatedStem.removeLast() }
@@ -434,7 +667,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 )
                 var existing = Darwin.stat()
                 if lstat(candidate.path, &existing) == 0 { continue }
+                if let pair {
+                    if try await ImageAnnotationSidecar.entryExists(ImageAnnotationSidecar.path(for: candidate.path), backend: shared) { continue }
+                    try await pair.copy(to: candidate.path, backend: shared)
+                    return .copiedPair(candidate.path)
+                }
                 do {
+                    try ImageAnnotationSidecar.requireUnpairedLocal(candidate.path)
                     try copyExclusive(from: physicalSource, to: candidate)
                     return .copied(candidate.path)
                 } catch {
@@ -445,6 +684,15 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             throw CocoaError(.fileWriteFileExists)
         }
         let destination = target.appendingPathComponent(original.lastPathComponent)
+        if let pair {
+            if move {
+                try await pair.move(to: destination.path, backend: shared)
+                return .movedPair(destination.path)
+            }
+            try await pair.copy(to: destination.path, backend: shared)
+            return .copiedPair(destination.path)
+        }
+        try ImageAnnotationSidecar.requireUnpairedLocal(destination.path)
         if move {
             return try moveExclusive(from: physicalSource, to: destination, identity: identity)
         }

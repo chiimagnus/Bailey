@@ -291,6 +291,9 @@ final class GitTagActionTests: XCTestCase {
     }
 
     func testFailedTagContainmentQueryStopsBeforeAnyRemotePush() async throws {
+        // Exercise the command failure itself, not the independent filesystem
+        // refresh that may invalidate the action before the command completes.
+        model.setLocalFileEventsForeground(false)
         let bare = try remote("origin")
         let head = try git(["rev-parse", "HEAD"])
         try git(["tag", "blocked", head])
@@ -325,6 +328,42 @@ final class GitTagActionTests: XCTestCase {
         let selection = await model.tagRemotesWithoutCommit(head, selected: ["origin"],
                                                             target: model.actionTarget())
         XCTAssertEqual(selection, ["origin"], "Restoring the repository must restore the valid query")
+    }
+
+    func testTagContainmentRefusesActionAfterRepositoryDisappears() async throws {
+        model.setLocalFileEventsForeground(false)
+        let bare = try remote("origin")
+        let head = try git(["rev-parse", "HEAD"])
+        try git(["tag", "blocked", head])
+        try await refresh()
+        let target = model.actionTarget()
+        let gitDirectory = directory.appendingPathComponent(".git")
+        let paused = remotesDirectory.appendingPathComponent("paused-local-git")
+        try FileManager.default.moveItem(at: gitDirectory, to: paused)
+        defer {
+            if FileManager.default.fileExists(atPath: paused.path) {
+                try? FileManager.default.moveItem(at: paused, to: gitDirectory)
+            }
+        }
+        model.refresh()
+        try await settle()
+        XCTAssertTrue(model.hasResolvedStatus)
+        XCTAssertFalse(model.isRepo, "A vanished .git directory is a resolved non-repository, not a transient status error")
+        XCTAssertFalse(model.canBrowse(target))
+        XCTAssertFalse(model.isCurrent(target, requiresStableHead: false))
+        let result = await model.tagRemotesWithoutCommit(head, selected: ["origin"], target: target)
+        XCTAssertNil(result)
+        XCTAssertFalse(model.isRepo)
+        XCTAssertFalse(model.isBusy)
+        try FileManager.default.moveItem(at: paused, to: gitDirectory)
+        XCTAssertNotEqual(GitCommandExecution.run([
+            "--git-dir", bare.path, "show-ref", "--verify", "refs/tags/blocked"
+        ], in: directory.path).status, 0)
+        XCTAssertEqual(try git(["rev-parse", "refs/tags/blocked"]), head)
+        try await refresh()
+        let recovered = await model.tagRemotesWithoutCommit(head, selected: ["origin"],
+                                                            target: model.actionTarget())
+        XCTAssertEqual(recovered, ["origin"])
     }
 
     func testPushTagStopsAfterFirstRemoteRefusalAndWarnsForUnknownReachability() async throws {

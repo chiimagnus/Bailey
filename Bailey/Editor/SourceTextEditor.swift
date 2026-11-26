@@ -51,7 +51,7 @@ struct SourceTextEditor: NSViewRepresentable {
 
     private var onResignFirstResponder: () -> Void {
         { [weak file] in
-            guard let file, !file.showsMarkdownPreview else { return }
+            guard let file, !file.showsFilePreview else { return }
             file.autoSaveOnFocusLoss()
         }
     }
@@ -80,7 +80,7 @@ struct SourceTextEditor: NSViewRepresentable {
         context.coordinator.wasFocused = isFocused
         if let pending = file.pendingMarkdownSource {
             file.pendingMarkdownSource = nil
-            if pending.request == file.markdownRequestID,
+            if pending.request == file.textPreviewRequestID,
                let restorable = scrollView as? RestorableScrollView {
                 restorable.restoreOnFirstLayout = { [weak textView] in
                     guard let textView else { return }
@@ -103,7 +103,8 @@ struct SourceTextEditor: NSViewRepresentable {
 
     private func makeScrollView(coordinator: Coordinator) -> NSScrollView {
         let scrollView = RestorableScrollView()
-        let textView = FocusReportingTextView(contentStorage: file.nativeContentStorage)
+        let textView = FocusReportingTextView(contentStorage: file.nativeContentStorage,
+                                              undoManager: file.documentUndoManager)
         if let snapshot = file.preparedLineWidths {
             if !wrapLines, snapshot.font.isEqual(font) {
                 _ = textView.installPreparedLineWidths(snapshot.widths, font: font)
@@ -253,7 +254,7 @@ struct SourceTextEditor: NSViewRepresentable {
     /// Guarded assignments: the font/color setters restyle the whole
     /// document, and this runs on every SwiftUI render.
     private func apply(to textView: NativeCodeTextView, scrollView: NSScrollView) {
-        textView.isEditable = file.readOnlyReason == nil && file.reloadError == nil
+        textView.isEditable = file.readOnlyReason == nil && file.reloadError == nil && file.delimitedEditTask == nil
         if textView.font != font {
             textView.font = font
             textView.updateGutter()
@@ -335,7 +336,7 @@ struct SourceTextEditor: NSViewRepresentable {
         func refreshMarkdownViewport() {
             guard let file, file.canPreviewMarkdown, file.markdownScrollSyncEnabled,
                   let mapping = file.markdownSourceIndex,
-                  mapping.request == file.markdownRequestID,
+                  mapping.request == file.textPreviewRequestID,
                   let scrollView, scrollView.window != nil,
                   let editor = scrollView.documentView as? NativeCodeTextView else { return }
             guard let layout = editor.textLayoutManager,
@@ -444,6 +445,7 @@ struct SourceTextEditor: NSViewRepresentable {
                       replacementString: String?) -> Bool {
             guard view === textView, let file, file.editorCoordinator === self,
                   let replacementString, let storage = view.textStorage else { return true }
+            guard file.delimitedEditTask == nil else { return false }
             pendingReplacement = (range, storage.attributedSubstring(from: range).string,
                                   replacementString, storage.length)
             return true

@@ -139,7 +139,11 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var isDirty = false
     private(set) var fileEncoding = TextFileEncoding.utf8
     @ObservationIgnored private var preferredEncoding: TextFileEncoding?
-    var saveError: String?
+    private var saveFailure = WorkspaceSaveFailure()
+    var saveError: String? {
+        get { saveFailure.message }
+        set { saveFailure.message = newValue }
+    }
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
     private(set) var readOnlyReason: String?
@@ -160,6 +164,9 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
 
     func retireNativeSurface() {
+        saveError = nil
+        targetGeneration &+= 1
+        pendingTextPublication = nil
         nativeSurface?.retireNativeDocument()
         nativeSurface = nil
     }
@@ -192,6 +199,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var savedNewContent = ""
     /// Immutable raw bytes version accepted with the editable worktree snapshot.
     @ObservationIgnored private var savedSourceVersion: WorkspaceFileVersion?
+    @ObservationIgnored private var pendingTextPublication: TextFileEncoding.Publication?
     var editedNewContent: String { nativeSurface?.editedText ?? savedNewContent }
     @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int]? = [:]
     @ObservationIgnored private var reversibleEdit: (
@@ -268,7 +276,8 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     func reopen(using encoding: TextFileEncoding?) {
-        guard !isDirty, !isSaving, !fileMutationHeld else {
+        guard !hasSaveConflict else { return }
+        guard !isDirty, !isSaving, !fileMutationHeld, pendingTextPublication == nil else {
             saveError = String(localized: "Save or discard edits before changing encoding.", table: "Git")
             return
         }
@@ -284,8 +293,13 @@ final class DiffTab: nonisolated Identifiable {
     /// user who reconnects in another terminal of the same project is
     /// reconnecting to the same machine.
     func reevaluateWorkspace(in project: Project) {
+        guard let workspaceIdentity else { return }
+        rebindWorkspace(to: project.connectedWorkspace(for: workspaceIdentity))
+    }
+
+    func rebindWorkspace(to live: WorkspaceBackend?) {
         guard !originalFileMovedOrDeleted, let workspaceIdentity else { return }
-        guard let live = project.connectedWorkspace(for: workspaceIdentity) else {
+        guard let live else {
             setReadOnly(true, destination: workspaceIdentity)
             return
         }
@@ -370,7 +384,7 @@ final class DiffTab: nonisolated Identifiable {
     func reload(snapshotAttempt: Int = 0) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
-        guard readOnlyReason == nil, !isDirty else { return }
+        guard readOnlyReason == nil, !isDirty, pendingTextPublication == nil, saveFailure.conflict == nil else { return }
         invalidateReload()
         displayGeneration &+= 1
         displayTask?.cancel()
@@ -701,7 +715,7 @@ final class DiffTab: nonisolated Identifiable {
         if reverted {
             nativeCodeUnitDelta = [:]
             reversibleEdit = nil
-            isDirty = false
+            isDirty = pendingTextPublication?.changesText == true
         } else {
             if let removed, var delta = nativeCodeUnitDelta {
                 Self.adjustCodeUnits(removed, by: -1, delta: &delta)
@@ -724,8 +738,9 @@ final class DiffTab: nonisolated Identifiable {
             || nativeCodeUnitDelta?.isEmpty == false {
             isDirty = true
         } else {
-            isDirty = !TextFileEncoding.hasIdenticalCodeUnits(current, savedNewContent)
-            if !isDirty { nativeCodeUnitDelta = [:] }
+            let textDirty = !TextFileEncoding.hasIdenticalCodeUnits(current, savedNewContent)
+            if !textDirty { nativeCodeUnitDelta = [:] }
+            isDirty = textDirty || pendingTextPublication?.changesText == true
         }
     }
 
@@ -1035,8 +1050,33 @@ final class DiffTab: nonisolated Identifiable {
         if isEditing { refreshEditDecorations(immediate: true) }
     }
 
+    private var saveConflictContext: WorkspaceSaveConflict.Context? {
+        guard isEditableNow, !fileMutationHeld, !originalFileMovedOrDeleted,
+              let failure = saveFailure.conflict, let baseline = savedSourceVersion else { return nil }
+        return .init(owner: id, generation: targetGeneration, failure: failure,
+                     path: (repoRoot as NSString).appendingPathComponent(path), baseline: baseline)
+    }
+
+    var hasSaveConflict: Bool { saveFailure.conflict != nil }
+    var canCompareSaveConflict: Bool { !isSaving && saveConflictContext != nil }
+
+    func compareSaveConflict() async throws -> WorkspaceSaveConflict {
+        guard !isSaving, let context = saveConflictContext else { throw WorkspaceError.changedExternally }
+        let review = try await WorkspaceSaveConflict.text(context: context, backend: backend,
+            draft: editedNewContent, encoding: fileEncoding, preferred: preferredEncoding, maxBytes: Self.maxBytes)
+        try Task.checkCancellation()
+        guard !isSaving, context == saveConflictContext else { throw WorkspaceError.changedExternally }
+        return review
+    }
+
+    func resolveSaveConflict(_ review: WorkspaceSaveConflict) async throws {
+        guard !isSaving, review.context == saveConflictContext else { throw WorkspaceError.changedExternally }
+        await save(as: review.context.failure.encoding, resolving: review)
+        guard saveError == nil, targetGeneration == review.context.generation else { throw WorkspaceError.changedExternally }
+    }
+
     func autoSaveOnFocusLoss() {
-        guard isDirty, !autoSaveSuspendedForClose else { return }
+        guard saveFailure.conflict == nil, isDirty, !autoSaveSuspendedForClose else { return }
         Task { await save() }
     }
 
@@ -1044,8 +1084,8 @@ final class DiffTab: nonisolated Identifiable {
         guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
         fileMutationHeld = true
         await lastSaveTask?.value
-        if isDirty { await writeCurrentText() }
-        guard !isDirty, saveError == nil else {
+        if isDirty || pendingTextPublication != nil { await writeCurrentText() }
+        guard !isDirty, pendingTextPublication == nil, saveError == nil else {
             endFileMutation()
             return false
         }
@@ -1072,7 +1112,10 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     /// One write task coalesces repeated saves without dropping explicit encodings.
-    func save(as encoding: TextFileEncoding? = nil) async {
+    func save(as encoding: TextFileEncoding? = nil, resolving review: WorkspaceSaveConflict? = nil) async {
+        if let review {
+            guard lastSaveTask == nil, review.context == saveConflictContext else { return }
+        }
         if fileMutationHeld {
             if encoding != nil {
                 saveError = String(localized: "Cannot change encoding during a file operation.", table: "Git")
@@ -1090,8 +1133,10 @@ final class DiffTab: nonisolated Identifiable {
         let task = Task { [weak self] in
             guard let self else { return }
             var intent = encoding
+            var approval = review
             while true {
-                await self.writeCurrentText(as: intent)
+                await self.writeCurrentText(as: intent, resolving: approval)
+                approval = nil
                 if !self.pendingEncodingSaves.isEmpty {
                     intent = self.pendingEncodingSaves.removeFirst()
                     self.saveLatestRequested = false
@@ -1108,26 +1153,87 @@ final class DiffTab: nonisolated Identifiable {
         await task.value
     }
 
-    private func writeCurrentText(as encoding: TextFileEncoding? = nil) async {
-        guard isEditable, isDirty || (encoding != nil && encoding != fileEncoding) else { return }
+    private func resolveTextPublication(path: String, target: WorkspaceBackend, generation: UInt,
+                                        replacingEncodingIntent: Bool = false)
+        async throws -> WorkspaceFileVersion.PublicationStatus? {
+        guard let pending = pendingTextPublication else { return nil }
+        guard pending.path == path else { throw WorkspaceError.changedExternally }
+        let status = try await pending.version.publicationStatus(
+            at: path, previous: pending.previous, backend: target)
+        guard generation == targetGeneration else { return nil }
+        if status == .unchanged, pending.explicit, !replacingEncodingIntent { return status }
+        pendingTextPublication = nil
+        if status == .published {
+            acceptPublishedText(pending.text, encoding: pending.encoding, explicit: pending.explicit,
+                                version: pending.version)
+        } else {
+            refreshNativeDirtyState()
+            if !isDirty && !pending.explicit { saveError = nil }
+        }
+        return status
+    }
+
+    private func reportTextPublicationError(_ error: Error, generation: UInt, encoding: TextFileEncoding? = nil) {
+        if generation != targetGeneration {
+            if pendingTextPublication != nil {
+                saveError = readOnlyReason ?? String(localized: "Save result could not be confirmed.", table: "Workspace")
+            }
+            return
+        }
+        let intent = encoding ?? (pendingTextPublication?.explicit == true ? pendingTextPublication?.encoding : nil)
+        let message: String
+        if case WorkspaceError.changedExternally = error {
+            message = String(localized: "The file changed outside Bailey. Your edits remain unsaved.", table: "Git")
+        } else {
+            message = error.localizedDescription
+        }
+        saveFailure.record(error, message: message, encoding: intent)
+    }
+
+    private func writeCurrentText(as encoding: TextFileEncoding? = nil,
+                                  resolving review: WorkspaceSaveConflict? = nil) async {
+        if let review, review.context != saveConflictContext { return }
+        guard isEditable, pendingTextPublication != nil || isDirty || (encoding != nil && encoding != fileEncoding) || review != nil
+        else { return }
         if let readOnlyReason {
             saveError = readOnlyReason
             return
         }
-        guard let expected = savedSourceVersion else {
+        let target = backend
+        let generation = targetGeneration
+        let filePath = (repoRoot as NSString).appendingPathComponent(path)
+        if review == nil, pendingTextPublication != nil {
+            do {
+                guard let status = try await resolveTextPublication(
+                    path: filePath, target: target, generation: generation,
+                    replacingEncodingIntent: encoding != nil), pendingTextPublication == nil else { return }
+                if status == .unchanged, encoding == fileEncoding, !isDirty {
+                    saveError = nil
+                    return
+                }
+            } catch {
+                reportTextPublicationError(error, generation: generation, encoding: encoding)
+                return
+            }
+        }
+        guard isDirty || (encoding != nil && encoding != fileEncoding) || review != nil else { return }
+        guard let baseline = savedSourceVersion else {
             saveError = String(localized: "Original file bytes are unknown. Reopen before saving.",
                                table: "Git")
             return
         }
+        invalidateReload()
         let chosen = encoding ?? fileEncoding
         let written = editedNewContent
-        let target = backend
-        let generation = targetGeneration
-        let filePath = (repoRoot as NSString).appendingPathComponent(path)
+        let changedText = isDirty
         let prepared = await TextFileEncoding.prepareSave(
-            written, as: chosen, checkDeclaration: chosen != fileEncoding
+            written, as: chosen, path: filePath, checkDeclaration: chosen != fileEncoding
         )
         guard generation == targetGeneration, readOnlyReason == nil, isEditable else { return }
+        guard savedSourceVersion == baseline else {
+            reportTextPublicationError(WorkspaceError.changedExternally, generation: generation, encoding: encoding)
+            return
+        }
         let payload: TextFileEncoding.EncodedSave
         switch prepared {
         case .failure(.contradictsDeclaration):
@@ -1146,30 +1252,50 @@ final class DiffTab: nonisolated Identifiable {
                                table: "Git")
             return
         }
+        if let review, !review.authorizes(context: saveConflictContext, draft: payload.version) {
+            reportTextPublicationError(WorkspaceError.changedExternally, generation: generation, encoding: encoding)
+            return
+        }
+        let expected = review?.diskVersion ?? baseline
         invalidateReload()
+        pendingTextPublication = .init(path: filePath, text: written, encoding: chosen, explicit: encoding != nil,
+                                       changesText: changedText, previous: expected, version: payload.version)
+        refreshNativeDirtyState()
         do {
             try await target.write(path: filePath, data: payload.bytes, ifUnchanged: expected)
-            guard generation == targetGeneration, readOnlyReason == nil else { return }
-            acceptPublishedText(written, encoding: chosen, explicit: encoding != nil,
-                                version: payload.version)
         } catch {
-            guard generation == targetGeneration else { return }
-            if case WorkspaceError.changedExternally = error {
-                saveError = String(localized: "The file changed outside Bailey. Your edits remain unsaved.",
-                                   table: "Git")
+            // Retirement releases the attempted snapshot; there is no
+            // document left to update with a late response.
+            guard pendingTextPublication != nil else { return }
+            if !WorkspaceError.publicationUncertain(error) {
+                pendingTextPublication = nil
+                refreshNativeDirtyState()
+                reportTextPublicationError(error, generation: targetGeneration, encoding: encoding)
                 return
             }
-            // The remote rename may have succeeded just before losing its reply.
-            // Confirm the final bytes; never retry an unconditional write.
-            let actual = try? await target.read(path: filePath, maxBytes: payload.bytes.count)
-            guard generation == targetGeneration, readOnlyReason == nil else { return }
-            if let actual, payload.version.matches(actual) {
-                acceptPublishedText(written, encoding: chosen, explicit: encoding != nil,
-                                    version: payload.version)
-            } else {
-                saveError = error.localizedDescription
+            if generation == targetGeneration {
+                do {
+                    let status = try await resolveTextPublication(
+                        path: filePath, target: target, generation: generation)
+                    if status == .published || (status == .unchanged && !isDirty && encoding == nil) {
+                        return
+                    }
+                } catch {
+                    reportTextPublicationError(error, generation: generation, encoding: encoding)
+                    return
+                }
             }
+            reportTextPublicationError(error, generation: generation, encoding: encoding)
+            return
         }
+        guard generation == targetGeneration else {
+            if pendingTextPublication != nil {
+                saveError = readOnlyReason ?? String(localized: "Save result could not be confirmed.", table: "Workspace")
+            }
+            return
+        }
+        pendingTextPublication = nil
+        acceptPublishedText(written, encoding: chosen, explicit: encoding != nil, version: payload.version)
     }
 
     private func acceptPublishedText(
@@ -1284,6 +1410,12 @@ final class DiffTab: nonisolated Identifiable {
     private nonisolated enum GitLocation {
         case index(path: String, stages: [Int])
         case tree(revision: String, path: String)
+
+        var path: String {
+            switch self {
+            case .index(let path, _), .tree(_, let path): path
+            }
+        }
     }
 
     private nonisolated static func firstGitContent(
@@ -1376,7 +1508,7 @@ final class DiffTab: nonisolated Identifiable {
                 blob = content
             }
         }
-        switch await TextFileEncoding.decode(blob, backend: backend, override: override) {
+        switch await TextFileEncoding.decode(blob, path: location.path, backend: backend, override: override) {
         case .success(let document):
             return (.content(document, oid: oid, isLFS: pointer != nil), selection.isUnmerged)
         case .failure(.binary):
@@ -1389,19 +1521,17 @@ final class DiffTab: nonisolated Identifiable {
     private nonisolated static func gitObject(
         _ location: GitLocation, in root: String, backend: WorkspaceBackend
     ) async -> (oid: String?, isUnmerged: Bool, error: String?) {
-        let path: String
+        let path = location.path
         let args: [String]
         switch location {
-        case .index(let name, _):
-            path = name
+        case .index:
             // A literal pathspec includes directory descendants. Exclude that
             // subtree in Git itself so a reused directory cannot exhaust the
             // metadata budget before we can determine the exact index entry.
             args = ["--no-literal-pathspecs", "ls-files", "--stage", "-z", "--",
-                    ":(literal)" + name, ":(exclude,literal)" + name + "/"]
-        case .tree(let revision, let name):
-            path = name
-            args = ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", revision, "--", name]
+                    ":(literal)" + path, ":(exclude,literal)" + path + "/"]
+        case .tree(let revision, _):
+            args = ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", revision, "--", path]
         }
         let limit = 1 << 16
         let metadata = await GitCommandExecution.runData(
@@ -1662,7 +1792,7 @@ final class DiffTab: nonisolated Identifiable {
         }
         do {
             let data = try await backend.read(path: filePath, maxBytes: maxBytes)
-            switch await TextFileEncoding.decode(data, backend: backend, override: override) {
+            switch await TextFileEncoding.decode(data, path: filePath, backend: backend, override: override) {
             case .success(let document):
                 return (document.text, nil, document.encoding, data,
                         WorkspaceFileVersion(data: data))
@@ -1838,7 +1968,7 @@ struct DiffViewerView: View {
                     Button(encoding.name) { diff.reopen(using: encoding) }
                 }
             }
-            .disabled(diff.isDirty)
+            .disabled(diff.isDirty || diff.hasSaveConflict)
             if diff.isEditing {
                 Menu(String(localized: "Save with Encoding", table: "Git")) {
                     ForEach(TextFileEncoding.choices, id: \.self) { encoding in
@@ -1881,22 +2011,13 @@ struct DiffViewerView: View {
     }
 
     private func saveErrorBar(_ message: String) -> some View {
-        readErrorBar(String(localized: "Could not save: \(message)", table: "Git"))
+        WorkspaceSaveErrorBanner(message: String(localized: "Could not save: \(message)", table: "Git"),
+                                 canCompare: diff.canCompareSaveConflict,
+                                 compare: diff.compareSaveConflict, overwrite: diff.resolveSaveConflict)
     }
 
     private func readErrorBar(_ message: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10))
-            Text(message)
-                .font(.system(size: 11))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(Color(red: 0.82, green: 0.60, blue: 0.13))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(Color.primary.opacity(0.04))
+        WorkspaceErrorBanner(message: message)
     }
 }
 
