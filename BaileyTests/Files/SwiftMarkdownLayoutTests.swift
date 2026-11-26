@@ -25,6 +25,52 @@ final class SwiftMarkdownLayoutTests: XCTestCase {
             + "bridges=\(bridgeCount(host))"
     }
 
+    func testCodeBlockLayoutDoesNotDrawItsTerminatingLineEndingAsAnExtraRow() async throws {
+        let code = "make build\nmake test\nmake run"
+        let cases: [(markdown: String, visible: String)] = [
+            ("```\n" + code + "\n```", code),
+            ("```sh\n" + code + "\n```", code),
+            ("```unknown-language\n" + code + "\n```", code),
+            ("~~~\n" + code + "\n\n~~~", code + "\n"),
+            ("```\n\n" + code + "\n```", "\n" + code),
+            ("```\n" + code, code),
+            ("    make build\n    make test\n    make run\n", code),
+            ("```\n    中文 🧪  \n\nnext\n```", "    中文 🧪  \n\nnext"),
+            ("```\n```", ""),
+        ]
+        for (markdown, visible) in cases {
+            for ending in ["\n", "\r\n", "\r"] {
+                let source = markdown.replacingOccurrences(of: "\n", with: ending)
+                let document = try await MarkdownDocument.parse(source)
+                guard case .code(let parsed, let language, let runs) = document.blocks.first?.content else {
+                    XCTFail("Expected parsed code block: \(source.debugDescription)")
+                    continue
+                }
+                let rendered = NSHostingView(rootView: MarkdownCodeText(
+                    source: parsed, language: language, sourceRuns: runs
+                ))
+                let expected = NSHostingView(rootView: Text(verbatim: visible)
+                    .font(.system(size: 13.6, design: .monospaced)).lineSpacing(3))
+                XCTAssertEqual(rendered.rootView.source, visible)
+                XCTAssertEqual(rendered.rootView.sourceRuns,
+                               runs.filter { NSMaxRange($0.displayed) <= visible.utf16.count })
+                XCTAssertEqual(parsed, visible.isEmpty ? "" : visible + "\n",
+                               "The original parsed code (and the copy button payload) stays intact")
+                let actualSize = rendered.fittingSize
+                let expectedSize = expected.fittingSize
+                XCTAssertEqual(actualSize.height, expectedSize.height, accuracy: 1,
+                               "Code block must render only its actual lines: \(source.debugDescription)")
+                XCTAssertEqual(actualSize.width, expectedSize.width, accuracy: 1,
+                               "Code indentation, internal blank lines and spaces must stay visible")
+            }
+        }
+
+        let highlighted = MarkdownCodeText(source: "let value = 42\n", language: "swift", sourceRuns: [])
+        let syntax = await MarkdownCodeText.highlight(highlighted.source, language: highlighted.language)
+        XCTAssertEqual(String(try XCTUnwrap(syntax).characters), "let value = 42")
+        XCTAssertEqual(MarkdownCodeText(source: code, language: nil, sourceRuns: []).source, code)
+    }
+
     func testPreviewScrollAlignsActualTextKitLineEvenWhenAlreadyVisible() async throws {
         let source = (0..<90).map { "Line \($0) 中文 👩‍🚀" }.joined(separator: "\n")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).md")

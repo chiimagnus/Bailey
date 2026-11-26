@@ -352,7 +352,7 @@ final class SSHFolderPickerTests: XCTestCase {
     }
 
     func testUnicodeAndLargeDirectoryNavigation() async {
-        let many = (0..<1500).map { folder("Folder-\($0)") }
+        let many = (0..<6_000).map { folder("Folder-\($0)") }
         let backend = PickerBackend(
             startup: "/home/user\n",
             directories: ["/home/user": many + [
@@ -361,7 +361,16 @@ final class SSHFolderPickerTests: XCTestCase {
         )
         let model = SSHFolderPickerModel(hosts: ["server"], backendForHost: { _ in backend })
         await model.selectHost("server")
-        XCTAssertEqual(model.rows.count, 1503, "1 parent and 1502 visible folders")
+        XCTAssertEqual(model.rows.count, 6_003, "One parent and 6,002 visible folders")
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<250 {
+            model.moveSelection(1)
+            XCTAssertNotNil(model.enterPath)
+            XCTAssertEqual(model.rows.count, 6_003)
+        }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        print("SSH_PICKER_SCALE rows=6003 navigation_250_ms=\(elapsed)")
+        XCTAssertLessThan(elapsed, 1_000, "Cursor changes must not re-filter the directory")
         model.editInput("/home/user/中文")
         XCTAssertEqual(model.rows, ["..", "中文 空格"])
         model.moveSelection(1)

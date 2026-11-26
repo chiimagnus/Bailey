@@ -59,28 +59,57 @@ final class SSHFolderPickerModel {
         return parent.isEmpty ? "/" : parent
     }
 
-    var rows: [String] {
-        let available = (showingDrives ? windowsDrives : folders)
-            .filter { showHidden || !$0.hasPrefix(".") }
-        guard let directory, let edited = Self.remotePath(input) else { return [] }
-        let prefix = directory == "/" ? "/" : directory + "/"
-        let filtered: [String]
-        if edited == directory {
-            filtered = available
-        } else if edited.hasPrefix(prefix) {
-            let suffix = String(edited.dropFirst(prefix.count))
-            filtered = suffix.contains("/") ? [] : available.filter {
-                $0.localizedStandardContains(suffix)
+    private struct RowsKey: Equatable {
+        let directory: String?
+        let input: String
+        let showHidden: Bool
+        let names: [String]
+    }
+
+    private struct Rows {
+        let names: [String]
+        let positions: [String: Int]
+
+        init(_ names: [String]) {
+            self.names = names
+            positions = Dictionary(names.enumerated().map { ($0.element, $0.offset) },
+                                   uniquingKeysWith: { first, _ in first })
+        }
+    }
+
+    @ObservationIgnored private var rowsCache: (key: RowsKey, rows: Rows)?
+
+    var rows: [String] { presentedRows.names }
+
+    private var presentedRows: Rows {
+        let key = RowsKey(directory: directory, input: input, showHidden: showHidden,
+                          names: showingDrives ? windowsDrives : folders)
+        if let rowsCache, rowsCache.key == key { return rowsCache.rows }
+        let names: [String]
+        if let directory = key.directory, let edited = Self.remotePath(key.input) {
+            let prefix = directory == "/" ? "/" : directory + "/"
+            let available = key.showHidden ? key.names : key.names.filter { !$0.hasPrefix(".") }
+            if edited == directory {
+                names = (parent == nil ? [] : [".."]) + available
+            } else if edited.hasPrefix(prefix) {
+                let suffix = String(edited.dropFirst(prefix.count))
+                let filtered = suffix.contains("/") ? [] : available.filter {
+                    $0.localizedStandardContains(suffix)
+                }
+                names = (parent == nil ? [] : [".."]) + filtered
+            } else {
+                names = []
             }
         } else {
-            // A separately typed path must not leave unrelated old entries visible.
-            return []
+            names = []
         }
-        return (parent == nil ? [] : [".."]) + filtered
+        let result = Rows(names)
+        rowsCache = (key, result)
+        return result
     }
 
     func path(for name: String) -> String? {
-        guard let directory, rows.contains(name) else { return nil }
+        guard let directory, presentedRows.positions[name] != nil else { return nil }
         if name == ".." { return parent }
         return (directory as NSString).appendingPathComponent(name)
     }
@@ -114,11 +143,11 @@ final class SSHFolderPickerModel {
     }
 
     func moveSelection(_ step: Int) {
-        let available = rows
-        guard !available.isEmpty else { return }
-        let previous = selectedName.flatMap { available.firstIndex(of: $0) }
-            ?? (step > 0 ? -1 : available.count)
-        selectedName = available[max(0, min(available.count - 1, previous + step))]
+        let available = presentedRows
+        guard !available.names.isEmpty else { return }
+        let previous = selectedName.flatMap { available.positions[$0] }
+            ?? (step > 0 ? -1 : available.names.count)
+        selectedName = available.names[max(0, min(available.names.count - 1, previous + step))]
     }
 
     func invalidate() {
@@ -230,15 +259,11 @@ final class SSHFolderPickerModel {
             }
             guard stat.isDirectory else { throw FolderIssue.file }
             let entries = try await backend.list(directory: destination)
+            let names = await Self.folderNames(entries)
             guard isCurrent(request, host: host) else { return }
             directory = destination
             pendingPath = nil
-            folders = entries.filter {
-                $0.isDirectory && $0.name != "." && $0.name != ".."
-                    && !$0.name.contains("/") && !$0.name.contains("\0")
-            }
-            .map(\.name)
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            folders = names
             isLoading = false
         } catch {
             guard isCurrent(request, host: host) else { return }
@@ -246,6 +271,15 @@ final class SSHFolderPickerModel {
             pendingPath = nil
             errorMessage = error.localizedDescription
         }
+    }
+
+    @concurrent private static func folderNames(_ entries: [WorkspaceEntry]) async -> [String] {
+        entries.filter {
+            $0.isDirectory && $0.name != "." && $0.name != ".."
+                && !$0.name.contains("/") && !$0.name.contains("\0")
+        }
+        .map(\.name)
+        .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     func confirm(onChoose: @MainActor (String, String) -> Void) async {

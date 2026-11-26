@@ -82,7 +82,7 @@ final class GitStatusModel {
         let path: String
     }
 
-    nonisolated enum ChangeSection: String, Hashable, Sendable {
+    nonisolated enum ChangeSection: String, Hashable, Sendable, CaseIterable {
         case merge, staged, unstaged
 
         nonisolated func status(_ entry: Entry) -> Character {
@@ -754,74 +754,212 @@ final class GitStatusModel {
         var filteredCount: Int { mergeCount + stagedCount + changedCount }
     }
 
-    private struct ChangeDisplayKey: Equatable {
+    private struct ChangeSourceKey: Equatable {
         let scope: String
         let repository: String
         let entriesRevision: UInt64
-        let mode: GitViewMode
         let filter: String
+    }
+
+    private struct ChangeDisplayKey: Equatable {
+        let source: ChangeSourceKey
+        let mode: GitViewMode
         let folders: Set<String>
         let closed: Set<ChangeSection>
     }
 
+    private nonisolated static func changeDisplayRow(
+        _ entry: Entry, section: ChangeSection
+    ) -> TreeDisplayModel.Row {
+        .init(name: entry.fileName, path: entry.path,
+              isDirectory: false, status: .init(section.status(entry)))
+    }
+
+    nonisolated struct StatusPresentation: Sendable {
+        struct Section: Sendable {
+            var entries: [Entry]
+            let tree: TreeDisplayModel.PathTree
+            let positions: [String: Int]
+            var membership: Set<Entry>
+
+            init(_ entries: [Entry], section: ChangeSection) {
+                self.entries = entries
+                tree = TreeDisplayModel.PathTree(
+                    entries.map { GitStatusModel.changeDisplayRow($0, section: section) },
+                    section: section.rawValue
+                )
+                positions = Dictionary(entries.enumerated().map { ($0.element.path, $0.offset) },
+                                       uniquingKeysWith: { first, _ in first })
+                membership = Set(entries)
+            }
+        }
+
+        var generation: UInt
+        var sections: [ChangeSection: Section]
+        let decorations: [String: FileDecoration]
+        let directoryDecorations: [String: FileDecoration]
+
+        init(_ result: StatusResult, generation: UInt) {
+            self.generation = generation
+            var groups: [ChangeSection: [Entry]] = [.merge: [], .staged: [], .unstaged: []]
+            var decorations: [String: FileDecoration] = [:]
+            for var entry in result.entries {
+                entry.repositoryRoot = result.topLevel
+                entry.snapshotGeneration = generation
+                entry.snapshotBranch = result.branch
+                entry.snapshotHeadOID = result.headOID
+                if decorations[entry.path] == nil {
+                    decorations[entry.path] = FileDecoration(
+                        staged: entry.staged, unstaged: entry.unstaged, isConflict: entry.isConflict
+                    )
+                }
+                if entry.isConflict {
+                    groups[.merge, default: []].append(entry)
+                } else {
+                    if entry.staged != "." && entry.staged != "?" {
+                        groups[.staged, default: []].append(entry)
+                    }
+                    if entry.unstaged != "." {
+                        groups[.unstaged, default: []].append(entry)
+                    }
+                }
+            }
+            var ancestors: [String: FileDecoration] = [:]
+            for (path, decoration) in decorations {
+                var parent = path
+                while let slash = parent.lastIndex(of: "/") {
+                    parent = String(parent[..<slash])
+                    if let current = ancestors[parent],
+                       current.directoryPriority >= decoration.directoryPriority { continue }
+                    ancestors[parent] = decoration
+                }
+            }
+            self.decorations = decorations
+            directoryDecorations = ancestors
+            sections = Dictionary(uniqueKeysWithValues: groups.map {
+                ($0.key, Section($0.value, section: $0.key))
+            })
+        }
+
+        // Cache restoration needs fresh action identities, but not a new
+        // hierarchy or write-authorizing membership until Git verifies it.
+        func rebound(to generation: UInt, verified: Bool) -> Self {
+            if generation == self.generation { return self }
+            var result = self
+            result.generation = generation
+            for section in ChangeSection.allCases {
+                guard var group = result.sections[section] else { continue }
+                group.entries = group.entries.map {
+                    var entry = $0
+                    entry.snapshotGeneration = generation
+                    return entry
+                }
+                group.membership = verified ? Set(group.entries) : []
+                result.sections[section] = group
+            }
+            return result
+        }
+    }
+
+    @ObservationIgnored private var statusPresentation: StatusPresentation?
+
+    private struct ChangeSectionSource {
+        let entries: [Entry]
+        let section: ChangeSection
+        private var tree: TreeDisplayModel.PathTree?
+        private var positions: [String: Int] = [:]
+        private var projection: (mode: GitViewMode, folders: Set<String>, rows: [ChangeItem])?
+
+        init(entries: [Entry], section: ChangeSection, prepared: StatusPresentation.Section?) {
+            self.entries = entries
+            self.section = section
+            tree = prepared?.tree
+            positions = prepared?.positions ?? [:]
+        }
+
+        mutating func rows(mode: GitViewMode, collapsed: Set<String>) -> [ChangeItem] {
+            let folders = mode == .tree ? Set(collapsed.filter {
+                $0.hasPrefix(section.rawValue + ":")
+            }) : []
+            if let projection, projection.mode == mode, projection.folders == folders {
+                return projection.rows
+            }
+            func displayRow(_ entry: Entry) -> TreeDisplayModel.Row {
+                GitStatusModel.changeDisplayRow(entry, section: section)
+            }
+            let rows: [ChangeItem]
+            if mode == .list {
+                rows = entries.map { ChangeItem(kind: section, row: displayRow($0), entry: $0) }
+            } else {
+                if tree == nil {
+                    tree = TreeDisplayModel.PathTree(entries.map(displayRow), section: section.rawValue)
+                    positions = Dictionary(entries.enumerated().map { ($0.element.path, $0.offset) },
+                                           uniquingKeysWith: { first, _ in first })
+                }
+                rows = tree!.rows(collapsed: folders).compactMap { row in
+                    if row.isDirectory { return ChangeItem(kind: section, row: row, entry: nil) }
+                    guard let position = positions[row.path] else { return nil }
+                    return ChangeItem(kind: section, row: row, entry: entries[position])
+                }
+            }
+            projection = (mode, folders, rows)
+            return rows
+        }
+    }
+
+    @ObservationIgnored private var changeSourceCache: (key: ChangeSourceKey, sections: [ChangeSection: ChangeSectionSource])?
     @ObservationIgnored private var changeDisplayCache: (key: ChangeDisplayKey, value: ChangeDisplay)?
     @ObservationIgnored private var changeDisplayRevision: UInt64 = 0
 
-    /// Derive visible rows only when Git status or display inputs change.
-    /// Focus and selection never invalidate the tree.
+    /// Source hierarchy and sibling order survive disclosure and selection changes.
     func displayChanges(
         filter: String, mode: GitViewMode, closed: Set<ChangeSection>
     ) -> ChangeDisplay {
         let folders = mode == .tree ? Set(collapsedFolders.filter {
             $0.hasPrefix("merge:") || $0.hasPrefix("staged:") || $0.hasPrefix("unstaged:")
         }) : []
-        let key = ChangeDisplayKey(
+        let sourceKey = ChangeSourceKey(
             scope: currentScope, repository: repoRoot, entriesRevision: changeEntriesRevision,
-            mode: mode, filter: filter, folders: folders, closed: closed
+            filter: filter.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        let key = ChangeDisplayKey(source: sourceKey, mode: mode, folders: folders, closed: closed)
         if let cached = changeDisplayCache, cached.key == key { return cached.value }
 
-        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        func matching(_ entries: [Entry]) -> [Entry] {
-            query.isEmpty ? entries : entries.filter { $0.path.localizedCaseInsensitiveContains(query) }
-        }
-        func rows(_ entries: [Entry], section: ChangeSection) -> [ChangeItem] {
-            if mode == .list {
-                return entries.map { entry in
-                    ChangeItem(kind: section, row: TreeDisplayModel.Row(
-                        name: entry.fileName, path: entry.path, isDirectory: false,
-                        status: .init(section.status(entry))
-                    ), entry: entry)
+        if changeSourceCache?.key != sourceKey {
+            func matching(_ entries: [Entry]) -> [Entry] {
+                sourceKey.filter.isEmpty ? entries : entries.filter {
+                    $0.path.localizedCaseInsensitiveContains(sourceKey.filter)
                 }
             }
-            let files = entries.map {
-                TreeDisplayModel.Row(name: $0.fileName, path: $0.path,
-                                     isDirectory: false, status: .init(section.status($0)))
-            }
-            let byPath = Dictionary(entries.map { ($0.path, $0) },
-                                    uniquingKeysWith: { first, _ in first })
-            return TreeDisplayModel.pathRows(files, section: section.rawValue, collapsed: folders)
-                .compactMap { row in
-                    if row.isDirectory { return ChangeItem(kind: section, row: row, entry: nil) }
-                    guard let entry = byPath[row.path] else { return nil }
-                    return ChangeItem(kind: section, row: row, entry: entry)
-                }
+            let prepared = sourceKey.filter.isEmpty ? statusPresentation : nil
+            changeSourceCache = (sourceKey, [
+                .merge: ChangeSectionSource(entries: matching(mergeEntries), section: .merge,
+                                            prepared: prepared?.sections[.merge]),
+                .staged: ChangeSectionSource(entries: matching(stagedEntries), section: .staged,
+                                             prepared: prepared?.sections[.staged]),
+                .unstaged: ChangeSectionSource(entries: matching(changedEntries), section: .unstaged,
+                                               prepared: prepared?.sections[.unstaged])
+            ])
         }
-        let merge = matching(mergeEntries)
-        let staged = matching(stagedEntries)
-        let changed = matching(changedEntries)
-        let mergeRows = closed.contains(.merge) ? [] : rows(merge, section: .merge)
-        let stagedRows = closed.contains(.staged) ? [] : rows(staged, section: .staged)
-        let changedRows = closed.contains(.unstaged) ? [] : rows(changed, section: .unstaged)
+        func rows(_ section: ChangeSection) -> [ChangeItem] {
+            guard !closed.contains(section) else { return [] }
+            return changeSourceCache!.sections[section]!.rows(mode: mode, collapsed: folders)
+        }
+        let mergeCount = changeSourceCache!.sections[.merge]!.entries.count
+        let stagedCount = changeSourceCache!.sections[.staged]!.entries.count
+        let changedCount = changeSourceCache!.sections[.unstaged]!.entries.count
+        let mergeRows = rows(.merge)
+        let stagedRows = rows(.staged)
+        let changedRows = rows(.unstaged)
         let navigation = mergeRows + stagedRows + changedRows
         let selections = navigation.map {
-            ChangeSelection(scope: key.scope, repository: key.repository,
+            ChangeSelection(scope: sourceKey.scope, repository: sourceKey.repository,
                             section: $0.kind.rawValue, path: $0.row.path)
         }
         changeDisplayRevision &+= 1
         let display = ChangeDisplay(
             revision: changeDisplayRevision,
-            mergeCount: merge.count, stagedCount: staged.count, changedCount: changed.count,
+            mergeCount: mergeCount, stagedCount: stagedCount, changedCount: changedCount,
             mergeRows: mergeRows, stagedRows: stagedRows, changedRows: changedRows,
             navigation: navigation, selections: selections
         )
@@ -1340,7 +1478,7 @@ final class GitStatusModel {
             hasResolvedStatus = false
             clearRepositoryState(preserveIdentity: true)
             if let cachedStatus = cachedStatusByRoot[scopedRoot] {
-                apply(cachedStatus)
+                apply(cachedStatus, fromCache: true)
                 hasResolvedStatus = true
                 hasCurrentReferences = false
                 hasCurrentHistory = false
@@ -1395,7 +1533,7 @@ final class GitStatusModel {
             localWatcher = nil
             localWatcherPaths = []
         } else {
-            if case .repository(let previous) = cachedStatusByRoot[scopedRoot] {
+            if case .repository(let previous, _) = cachedStatusByRoot[scopedRoot] {
                 configureLocalWatcher(root: previous.topLevel, gitDirectory: previous.gitDirectory)
             } else {
                 configureLocalWatcher(root: rootPath, gitDirectory: nil)
@@ -1455,9 +1593,10 @@ final class GitStatusModel {
         }
         let requestKind = pendingRefresh.map { $0 == kind ? kind : .full } ?? kind
         pendingRefresh = nil
+        let previousSnapshot = cachedStatusByRoot[scopedRoot]
         let expectedCore: StatusResult?
         if requestKind == .historyOnly,
-           case .repository(let previous) = cachedStatusByRoot[scopedRoot] {
+           case .repository(let previous, _) = previousSnapshot {
             expectedCore = previous
         } else {
             expectedCore = nil
@@ -1508,20 +1647,21 @@ final class GitStatusModel {
         statusRefreshTask = Task(priority: .utility) { [weak self] in
             let result = await Self.runGitStatus(
                     in: root, recentCommitLimit: commitLimit, backend: backend,
-                    kind: requestKind, requestID: requestID
-                ) { [weak self] core in
+                    kind: requestKind, requestID: requestID, generation: generation,
+                    previous: previousSnapshot
+                ) { [weak self] core, presentation in
                     guard let self, self.contextGeneration == generation,
                           self.statusRequestID == requestID, self.rootPath == root else { return false }
-                    self.apply(.repository(core))
+                    self.apply(.repository(core, presentation))
                     self.coreCompletedRequestID = requestID
                     let previous: StatusResult?
-                    if case .repository(let saved) = self.cachedStatusByRoot[self.scopedRoot] {
+                    if case .repository(let saved, _) = self.cachedStatusByRoot[self.scopedRoot] {
                         previous = saved
                     } else {
                         previous = nil
                     }
                     self.cachedStatusByRoot[self.scopedRoot] = .repository(
-                        core.retainingDisplayMetadata(from: previous)
+                        core.retainingDisplayMetadata(from: previous), presentation
                     )
                     if !self.hasResolvedStatus { self.hasResolvedStatus = true }
                     return true
@@ -1536,7 +1676,7 @@ final class GitStatusModel {
             let loadingMore = commitLimit < self.recentCommitLimit
             if self.isLoadingMoreCommits != loadingMore { self.isLoadingMoreCommits = loadingMore }
             switch result {
-            case .repository(let latest):
+            case .repository(let latest, let presentation):
                 if requestKind == .historyOnly {
                     // A page failure does not mean the verified repository changed.
                     // Only a changed core/ref snapshot requires a new full query.
@@ -1551,10 +1691,10 @@ final class GitStatusModel {
                         }
                         if !self.hasCurrentHistory { self.hasCurrentHistory = true }
                         self.historyPageError = nil
-                        if case .repository(let cached) = self.cachedStatusByRoot[self.scopedRoot] {
+                        if case .repository(let cached, let cachedPresentation) = self.cachedStatusByRoot[self.scopedRoot] {
                             var updated = cached
                             updated.history = history
-                            self.cachedStatusByRoot[self.scopedRoot] = .repository(updated)
+                            self.cachedStatusByRoot[self.scopedRoot] = .repository(updated, cachedPresentation)
                         }
                     } else if expectedCore?.matchesCore(latest) != true
                                 || !self.canUseCurrentReferences
@@ -1567,17 +1707,17 @@ final class GitStatusModel {
                     }
                 } else {
                     let previous: StatusResult?
-                    if case .repository(let cached) = self.cachedStatusByRoot[self.scopedRoot] {
+                    if case .repository(let cached, _) = self.cachedStatusByRoot[self.scopedRoot] {
                         previous = cached
                     } else {
                         previous = nil
                     }
                     self.cachedStatusByRoot[self.scopedRoot] = .repository(
-                        latest.retainingDisplayMetadata(from: previous)
+                        latest.retainingDisplayMetadata(from: previous), presentation
                     )
                     // Readable cached details are not evidence that this query
                     // verified them. Only the raw result can authorize actions.
-                    self.apply(.repository(latest))
+                    self.apply(.repository(latest, presentation))
                     if requestKind == .indexOnly, !self.hasCurrentReferences {
                         self.queueRefresh(.full)
                     }
@@ -3829,6 +3969,8 @@ final class GitStatusModel {
         stagedEntries = []
         changedEntries = []
         entryMembership.removeAll()
+        statusPresentation = nil
+        changeSourceCache = nil
         changeDisplayCache = nil
         graphCommitsCache = nil
         knownRemotesCache = nil
@@ -3875,7 +4017,7 @@ final class GitStatusModel {
         hasCurrentWorktrees = false
     }
 
-    private func apply(_ loadResult: StatusLoadResult) {
+    private func apply(_ loadResult: StatusLoadResult, fromCache: Bool = false) {
         switch loadResult {
         case .notRepository:
             // A refresh can finish after a user action starts. Do not let a
@@ -3900,13 +4042,15 @@ final class GitStatusModel {
             if hasCurrentStashes { hasCurrentStashes = false }
             if hasCurrentWorktrees { hasCurrentWorktrees = false }
             return
-        case .repository(let result):
+        case .repository(let result, let presentation):
             if statusError != nil { statusError = nil }
-            applyRepository(result)
+            applyRepository(result, presentation: presentation.rebound(
+                to: contextGeneration, verified: !fromCache
+            ))
         }
     }
 
-    private func applyRepository(_ result: StatusResult) {
+    private func applyRepository(_ result: StatusResult, presentation: StatusPresentation) {
         if needsCoreVerification { needsCoreVerification = false }
         if result.detailsCompleted {
             if fullDetailError != result.detailError { fullDetailError = result.detailError }
@@ -4001,69 +4145,30 @@ final class GitStatusModel {
                 if hasCurrentLineTotals { hasCurrentLineTotals = false }
             }
         }
-        let entries = result.entries.map { entry in
-            var entry = entry
-            entry.repositoryRoot = result.topLevel
-            entry.snapshotGeneration = contextGeneration
-            entry.snapshotBranch = result.branch
-            entry.snapshotHeadOID = result.headOID
-            return entry
+        if presentation.decorations != fileDecorations {
+            directoryDecorations = presentation.directoryDecorations
+            fileDecorations = presentation.decorations
         }
-        // A staged deletion and untracked file can legitimately share one path.
-        let decorations = Dictionary(
-            entries.map {
-                ($0.path, FileDecoration(staged: $0.staged, unstaged: $0.unstaged, isConflict: $0.isConflict))
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        if decorations != fileDecorations {
-            var ancestors: [String: FileDecoration] = [:]
-            for (path, decoration) in decorations {
-                var parent = path
-                while let slash = parent.lastIndex(of: "/") {
-                    parent = String(parent[..<slash])
-                    if let current = ancestors[parent],
-                       current.directoryPriority >= decoration.directoryPriority { continue }
-                    ancestors[parent] = decoration
-                }
-            }
-            directoryDecorations = ancestors
-            fileDecorations = decorations
+        if result.ignoredLoaded, ignoredPaths != result.ignoredPaths {
+            ignoredPaths = result.ignoredPaths
         }
-        if result.ignoredLoaded {
-            if ignoredPaths != result.ignoredPaths { ignoredPaths = result.ignoredPaths }
-        }
-        let conflicts = entries.filter(\.isConflict)
-        let staged = entries.filter {
-            !$0.isConflict && $0.staged != "." && $0.staged != "?"
-        }
-        let changedFiles = entries.filter {
-            !$0.isConflict && $0.unstaged != "."
-        }
+        let conflicts = presentation.sections[.merge]?.entries ?? []
+        let staged = presentation.sections[.staged]?.entries ?? []
+        let changedFiles = presentation.sections[.unstaged]?.entries ?? []
         var rowsChanged = false
-        if mergeEntries != conflicts {
-            mergeEntries = conflicts
-            entryMembership[.merge] = Set(conflicts)
-            rowsChanged = true
-        }
-        if stagedEntries != staged {
-            stagedEntries = staged
-            entryMembership[.staged] = Set(staged)
-            rowsChanged = true
-        }
-        if changedEntries != changedFiles {
-            changedEntries = changedFiles
-            entryMembership[.unstaged] = Set(changedFiles)
-            rowsChanged = true
-        }
+        if mergeEntries != conflicts { mergeEntries = conflicts; rowsChanged = true }
+        if stagedEntries != staged { stagedEntries = staged; rowsChanged = true }
+        if changedEntries != changedFiles { changedEntries = changedFiles; rowsChanged = true }
+        entryMembership = presentation.sections.mapValues(\.membership)
+        statusPresentation = presentation
         if rowsChanged { changeEntriesRevision &+= 1 }
         if backend is LocalWorkspaceBackend {
             configureLocalWatcher(root: result.topLevel, gitDirectory: result.gitDirectory)
         }
     }
 
-    nonisolated enum StatusLoadResult: Equatable, Sendable {
-        case repository(StatusResult)
+    nonisolated enum StatusLoadResult: Sendable {
+        case repository(StatusResult, StatusPresentation)
         case notRepository
         case failed(String)
     }
@@ -4143,7 +4248,9 @@ final class GitStatusModel {
         backend: WorkspaceBackend,
         kind: RefreshKind,
         requestID: UInt,
-        onCore: @MainActor @Sendable (StatusResult) -> Bool
+        generation: UInt,
+        previous: StatusLoadResult?,
+        onCore: @MainActor @Sendable (StatusResult, StatusPresentation) -> Bool
     ) async -> StatusLoadResult {
         let started = ProcessInfo.processInfo.systemUptime
         let remote = !(backend is LocalWorkspaceBackend)
@@ -4240,11 +4347,21 @@ final class GitStatusModel {
             return .failed(error.localizedDescription)
         }
 
+        guard !Task.isCancelled else { return .failed(timeoutMessage) }
+        let presentation: StatusPresentation
+        if case .repository(let prior, let prepared) = previous,
+           prior.topLevel == result.topLevel, prior.branch == result.branch,
+           prior.headOID == result.headOID, prior.entries == result.entries {
+            presentation = prepared.rebound(to: generation, verified: true)
+        } else {
+            presentation = StatusPresentation(result, generation: generation)
+        }
+        guard !Task.isCancelled else { return .failed(timeoutMessage) }
         phase = "details"
         outcome = "partial"
         let coreMilliseconds = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
         Self.statusLogger.debug("core ready id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) elapsed_ms=\(coreMilliseconds, privacy: .public)")
-        guard await onCore(result) else { return .repository(result) }
+        guard await onCore(result, presentation) else { return .repository(result, presentation) }
         if kind != .indexOnly {
             let worktrees = await statusGit(
                 ["worktree", "list", "--porcelain", "-z"], in: resolvedRoot, batched: false
@@ -4260,7 +4377,7 @@ final class GitStatusModel {
             limit: recentCommitLimit, hasHead: result.hasHead, worktrees: result.worktreeLocations ?? []
         )
         if kind == .historyOnly {
-            guard result.worktreeLocations != nil else { return .repository(result) }
+            guard result.worktreeLocations != nil else { return .repository(result, presentation) }
             prefetched = await prefetchedSnapshotCommands(
                 in: resolvedRoot,
                 argumentSets: [Self.refSnapshotArguments, logArguments],
@@ -4269,13 +4386,13 @@ final class GitStatusModel {
             let refs = await statusGit(Self.refSnapshotArguments, in: resolvedRoot)
             guard refs.status == 0 else {
                 result.detailError = gitFailureMessage(refs, fallback: timeoutMessage)
-                return .repository(result)
+                return .repository(result, presentation)
             }
             let names = parseRefSnapshot(refs.stdout)
             let log = await statusGit(logArguments, in: resolvedRoot)
             guard log.status == 0 else {
                 result.detailError = gitFailureMessage(log, fallback: timeoutMessage)
-                return .repository(result)
+                return .repository(result, presentation)
             }
             let commits = parseRecentCommits(log.stdout, refsByName: names)
             result.history = StatusHistory(
@@ -4284,7 +4401,7 @@ final class GitStatusModel {
                 hasMore: commits.count > recentCommitLimit
             )
             outcome = "complete"
-            return .repository(result)
+            return .repository(result, presentation)
         }
 
         if kind == .full {
@@ -4406,7 +4523,7 @@ final class GitStatusModel {
             }
         }
         outcome = result.detailError == nil ? "complete" : "degraded"
-        return .repository(result)
+        return .repository(result, presentation)
     }
 
 

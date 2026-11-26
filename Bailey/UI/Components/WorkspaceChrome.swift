@@ -20,6 +20,7 @@ struct PaneTabItem: View {
                 isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
                 isContextTarget: isContextTarget, select: select, close: close
             )
+            .accessibilityIdentifier("bailey.tab.terminal")
         case .file(let file):
             TabItemChrome(
                 systemImage: "doc.text", fileIconPath: file.path,

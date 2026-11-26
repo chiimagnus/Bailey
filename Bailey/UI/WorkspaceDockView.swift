@@ -39,11 +39,12 @@ final class DockTabDragCoordinator {
 
     func cancel(_ item: DockItem? = nil) {
         if let item, source?.item != item { return }
+        guard source != nil || position != nil || escapeMonitor != nil else { return }
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
         // Layout preferences may update before project-switch cancellation;
         // preserve their latest frames so the next drag can still hit a target.
-        position = nil
+        if position != nil { position = nil }
         source = nil
         sourceDock = nil
         NSCursor.arrow.set()
@@ -559,14 +560,18 @@ struct DockTabGroupView: View {
     }
 
     private func tabStrip(maxWidth: CGFloat) -> some View {
-        ScrollViewReader { scrollProxy in
+        let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
+        let selectedItems = Set(project.dock.selection(in: group.id))
+        let draggedItems = Set(dragging.position?.items ?? [])
+        return ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
                     ForEach(group.items, id: \.self) { item in
-                        tab(item)
+                        tab(item, paneTab: item.tabID.flatMap { tabsByID[$0] },
+                            isSelected: selectedItems.contains(item))
                             .onHover { manager.attachedWindow?.isMovable = !$0 }
                             .id(item)
-                            .opacity(dragging.position?.items.contains(item) == true ? 0.6 : 1)
+                            .opacity(draggedItems.contains(item) ? 0.6 : 1)
                             .background {
                                 GeometryReader { geometry in
                                     Color.clear.preference(
@@ -634,12 +639,11 @@ struct DockTabGroupView: View {
     }
 
     @ViewBuilder
-    private func tab(_ item: DockItem) -> some View {
-        if case .tab(let id) = item,
-           let paneTab = project.tabs.first(where: { $0.id == id }) {
+    private func tab(_ item: DockItem, paneTab: PaneTab?, isSelected: Bool) -> some View {
+        if case .tab(let id) = item, let paneTab {
             PaneTabItem(
                 tab: paneTab, isDisplayed: active == item,
-                isSelected: project.dock.selection(in: group.id).contains(item),
+                isSelected: isSelected,
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
@@ -662,7 +666,7 @@ struct DockTabGroupView: View {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
                 isDisplayed: active == item,
-                isSelected: project.dock.selection(in: group.id).contains(item),
+                isSelected: isSelected,
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },

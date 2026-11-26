@@ -134,6 +134,7 @@ struct CommandPaletteView: View {
     /// remaining fast enough to scan a large project on every keystroke.
     private static let fuzzyMatcher = FuzzyMatcher(config: .smithWaterman)
     private static let maxFileResults = 50
+    private static let resultRowHeight: CGFloat = 30
 
     var body: some View {
         let _ = themeChanges.revision
@@ -656,15 +657,24 @@ struct CommandPaletteView: View {
                 .foregroundStyle(.secondary)
                 .padding(.vertical, 24)
         } else {
+            let sections = Dictionary(grouping: items.enumerated(), by: { $0.element.section })
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 1) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, command in
-                            if index == 0 || items[index - 1].section != command.section {
-                                sectionHeader(command.section, isFirst: index == 0)
+                    VStack(spacing: 1) {
+                        ForEach([PaletteSection.command, .file, .session], id: \.self) { section in
+                            if let entries = sections[section], let first = entries.first {
+                                sectionHeader(section, isFirst: first.offset == 0)
+                                LazyVStack(spacing: 1) {
+                                    ForEach(entries, id: \.element.id) { index, command in
+                                        row(command, index: index, highlightQuery: highlightQuery)
+                                            .id(command.id)
+                                    }
+                                }
+                                // Headers have their own intrinsic height;
+                                // only uniform result rows participate in lazy layout.
+                                .frame(height: CGFloat(entries.count) * Self.resultRowHeight
+                                    + CGFloat(entries.count - 1), alignment: .top)
                             }
-                            row(command, index: index, highlightQuery: highlightQuery)
-                                .id(command.id)
                         }
                     }
                     .padding(6)
@@ -732,7 +742,7 @@ struct CommandPaletteView: View {
                 }
             }
             .padding(.horizontal, 9)
-            .frame(height: 30)
+            .frame(height: Self.resultRowHeight)
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)

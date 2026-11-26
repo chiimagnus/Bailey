@@ -112,6 +112,19 @@ final class DockWorkspaceTests: XCTestCase {
         }
     }
 
+    func testIdleDragCancellationDoesNotInvalidateDockObservation() async throws {
+        let project = Project(fallbackName: "idle drag", workspaceConfiguration: .standard)
+        let dragging = DockTabDragCoordinator()
+        let invalidation = expectation(description: "No preview mutation without a drag position")
+        invalidation.isInverted = true
+        withObservationTracking({ _ = dragging.position }) { invalidation.fulfill() }
+        for _ in 0..<30 { dragging.cancel() }
+        dragging.begin(.files, dock: project.dock)
+        dragging.cancel()
+        await fulfillment(of: [invalidation], timeout: 0.1)
+        XCTAssertNil(dragging.position)
+    }
+
     func testDragSourceCannotRestartAfterCancelResizeOrLayoutInvalidation() throws {
         let project = Project(fallbackName: "drag", workspaceConfiguration: .standard)
         project.newBrowserTab(initialFocus: .none)

@@ -1888,6 +1888,25 @@ final class FileTreeTests: XCTestCase {
                 let selected = tree.selectedPaths
                 XCTAssertTrue(try key(115))
                 XCTAssertEqual(tree.selectedPath, rows[0].path)
+                // Pure focus movement within the visible range must not
+                // invalidate the scroll extent or move the viewport.
+                for _ in 0..<4 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                let stableHeight = try XCTUnwrap(scroll.documentView?.frame.height)
+                let stableOffset = scroll.contentView.bounds.minY
+                for index in 1...min(3, page - 1) {
+                    XCTAssertTrue(try key(125))
+                    XCTAssertEqual(tree.selectedPath, rows[index].path)
+                    for _ in 0..<4 {
+                        host.layoutSubtreeIfNeeded()
+                        try await Task.sleep(for: .milliseconds(25))
+                    }
+                    XCTAssertEqual(scroll.documentView?.frame.height ?? 0, stableHeight, accuracy: 1)
+                    XCTAssertEqual(scroll.contentView.bounds.minY, stableOffset, accuracy: 1)
+                }
+                XCTAssertTrue(try key(115))
                 let startOffset = scroll.contentView.bounds.origin.y
                 XCTAssertTrue(try key(121))
                 XCTAssertEqual(tree.selectedPath, rows[page].path, "font=\(fontSize), height=\(height)")
@@ -2327,20 +2346,33 @@ final class FileTreeTests: XCTestCase {
         tree.select(childRow)
         tree.select(siblingRow, toggling: true)
         XCTAssertEqual(tree.selectedPaths.count, 2)
+        XCTAssertEqual(tree.selectedOperationPaths, [child.path, sibling.path])
+        await tree.beginNewFile(in: root.path)
+        XCTAssertNotNil(tree.visibleDraftPath)
+        XCTAssertEqual(tree.selectedOperationPaths, [child.path, sibling.path])
+        XCTAssertEqual(tree.moveSelection(by: -1)?.path, child.path)
+        XCTAssertEqual(tree.moveSelection(by: 1)?.path, sibling.path)
+        await tree.cancelDraft()
+        XCTAssertNil(tree.visibleDraftPath)
+        XCTAssertEqual(tree.selectedOperationPaths, [child.path, sibling.path])
 
         let newFolder = root.appendingPathComponent("renamed")
         let moved = await tree.rename(dir, to: newFolder.lastPathComponent)
         XCTAssertEqual(moved, newFolder.path)
         XCTAssertTrue(tree.selectedPaths.contains(newFolder.appendingPathComponent("child.swift").path))
         XCTAssertTrue(tree.selectedPaths.contains(sibling.path))
+        XCTAssertEqual(tree.selectedOperationPaths, [newFolder.appendingPathComponent("child.swift").path, sibling.path])
         let renamedDir = try XCTUnwrap(tree.items.first { $0.path == newFolder.path })
         await tree.toggle(renamedDir)
         XCTAssertFalse(tree.selectedPaths.contains(newFolder.appendingPathComponent("child.swift").path))
         XCTAssertTrue(tree.selectedPaths.contains(sibling.path))
+        XCTAssertEqual(tree.selectedOperationPaths, [sibling.path])
+        XCTAssertNil(tree.visibleItem(at: newFolder.appendingPathComponent("child.swift").path))
 
         await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared, scope: "ssh:another-machine")
         XCTAssertTrue(tree.selectedPaths.isEmpty)
         XCTAssertNil(tree.selectedPath)
+        XCTAssertTrue(tree.selectedOperationPaths.isEmpty)
     }
 
     func testSelectionAnchorFollowsRenameMoveDeletionAndVisibilityWithoutRevivingOldPaths() async throws {
@@ -3711,6 +3743,86 @@ final class FileTreeTests: XCTestCase {
         let nestedCycle = try XCTUnwrap(tree.items.first { $0.path == alias.path + "/loop" })
         await tree.toggle(nestedCycle)
         XCTAssertLessThan(tree.items.count, 75, "Symlink loops cannot generate an unbounded tree")
+    }
+
+    func testFileCommandTargetsDoNotScaleWithUnselectedRows() async throws {
+        var medians: [Double] = []
+        for count in [1_000, 30_000] {
+            let root = fixture.appendingPathComponent("command-targets-\(count)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            for index in 0..<count {
+                let name = String(format: "file-%06d.txt", index)
+                try Data().write(to: root.appendingPathComponent(name))
+            }
+            let tree = FileTreeModel()
+            await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+            XCTAssertEqual(tree.items.count, count)
+            let first = try XCTUnwrap(tree.items.first)
+            let last = try XCTUnwrap(tree.items.last)
+            tree.select(last)
+            tree.select(first, toggling: true)
+            let expected = [first.path, last.path]
+            var times: [Double] = []
+            for _ in 0..<30 {
+                let start = ProcessInfo.processInfo.systemUptime
+                for _ in 0..<10 {
+                    XCTAssertEqual(tree.selectedOperationPaths, expected)
+                    XCTAssertEqual(tree.contextSelection(for: last), expected)
+                    XCTAssertEqual(tree.selectedItem?.path, first.path)
+                }
+                times.append(ProcessInfo.processInfo.systemUptime - start)
+            }
+            times.sort()
+            let median = (times[14] + times[15]) / 2
+            medians.append(median)
+            print("FILES_COMMAND_TARGETS rows=\(count) median_ms=\(median * 1000) p95_ms=\(times[28] * 1000) max_ms=\(times[29] * 1000)")
+            tree.clearExplicitSelection()
+            XCTAssertEqual(tree.selectedOperationPaths, [first.path])
+            tree.focus(last)
+            XCTAssertEqual(tree.selectedOperationPaths, [last.path])
+            tree.selectAllVisible()
+            XCTAssertEqual(tree.selectedOperationPaths, tree.items.map(\.path))
+            XCTAssertEqual(tree.contextSelection(for: last), tree.items.map(\.path))
+        }
+        XCTAssertLessThan(medians[1], max(medians[0] * 5, 0.005),
+                          "Menu validation must not scan every unrelated row for a sparse selection")
+    }
+
+    func testLargeCachedFolderProjection() async throws {
+        let root = fixture.appendingPathComponent("large-tree")
+        let folders = ["first", "second"].map { root.appendingPathComponent($0) }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for index in 0..<3_000 {
+                try Data().write(to: folder.appendingPathComponent("file-\(index).swift"))
+            }
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        for folder in folders {
+            await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == folder.path }))
+        }
+        XCTAssertEqual(tree.items.count, 6_002)
+        let original = tree.items
+        let requests = await counting.requests
+        let folder = try XCTUnwrap(original.first { $0.path == folders[0].path })
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<5 {
+            await tree.toggle(folder)
+            XCTAssertEqual(tree.items.count, 3_002)
+            await tree.toggle(folder)
+            XCTAssertEqual(tree.items, original)
+        }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        XCTAssertLessThan(elapsed, 1_000, "Warm disclosure must reuse prepared directory rows")
+        let after = await counting.requests
+        XCTAssertEqual(after, requests, "Warm disclosure must not enumerate directories again")
+        print("FILES_TREE_SCALE rows=\(original.count) warm_10_ms=\(elapsed)")
+        let switchStart = CFAbsoluteTimeGetCurrent()
+        await tree.sync(root: root.path, backend: counting)
+        XCTAssertEqual(tree.items, original)
+        print("FILES_TREE_SCALE rows=\(original.count) remount_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
     }
 
     func testCollapsedAndExpandedFoldersDoNotRereadUnchangedDirectories() async throws {

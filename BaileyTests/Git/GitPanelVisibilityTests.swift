@@ -5,6 +5,160 @@ import XCTest
 
 @MainActor
 final class GitPanelVisibilityTests: XCTestCase {
+    func testLargeHistoryFolderUsesViewportRowsAndRetainsScrollHost() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-GraphScale-\(UUID().uuidString)")
+        let folder = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: root.path)
+            guard result.status == 0 else {
+                throw NSError(domain: "GraphScale", code: Int(result.status),
+                              userInfo: [NSLocalizedDescriptionKey: result.stderr])
+            }
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Bailey Graph Scale"])
+        try git(["config", "user.email", "graph-scale@example.invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        // Mix the two row heights in a single real history, including
+        // commits below a large expanded detail subtree.
+        let seed = root.appendingPathComponent("seed.txt")
+        for index in 0..<15 {
+            try Data("revision \(index)".utf8).write(to: seed)
+            try git(["add", "--", "seed.txt"])
+            try git(["commit", "-qm", "Earlier revision \(index)"])
+        }
+        let count = 4_000
+        for index in 0..<count {
+            try Data("x".utf8).write(to: folder.appendingPathComponent("file-\(index).txt"))
+        }
+        try git(["add", "-A"])
+        try git(["commit", "-qm", "Large history folder"])
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        defer { model.sync(root: "") }
+        let config = root.deletingLastPathComponent().appendingPathComponent("Bailey-GraphScale-\(UUID().uuidString).toml")
+        defer { try? FileManager.default.removeItem(at: config) }
+        let settings = AppSettings(configURL: config)
+        settings.gitViewMode = .tree
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 320, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: GitPanel(
+            settings: settings, model: model, manager: manager, project: project, sshHost: nil,
+            openFile: { _ in }, openDiff: { _, _ in }, openCommitDiff: { _, _ in }
+        ))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        manager.syncGitStatus(model)
+        func layout() {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        func waitFor(_ condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+            while !condition() && ContinuousClock.now < deadline {
+                layout()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(condition())
+        }
+        func views(_ root: NSView) -> [NSView] {
+            [root] + root.subviews.flatMap(views)
+        }
+        try await waitFor { !model.isRefreshing && model.recentCommits.first?.files.count == count }
+        layout()
+        let commit = try XCTUnwrap(model.recentCommits.first)
+        let scroll = try XCTUnwrap(views(host).compactMap { $0 as? NSScrollView }.first {
+            $0.contentView.bounds.height > 200
+        })
+        let before = try XCTUnwrap(scroll.documentView?.frame.height)
+        let start = ContinuousClock.now
+        model.expandedCommitIDs.insert(commit.id)
+        try await waitFor { (scroll.documentView?.frame.height ?? 0) > CGFloat(count * 16) }
+        let elapsed = start.duration(to: .now)
+        let expandedHeight = try XCTUnwrap(scroll.documentView?.frame.height)
+        let nativeViews = views(host).count
+        print("GIT_GRAPH_SCALE files=\(count) first_expand=\(elapsed) native_views=\(nativeViews)")
+        XCTAssertLessThan(nativeViews, 1_000, "The expanded commit must not mount thousands of offscreen file rows")
+        let key = "commit:" + commit.id + ":folder"
+        for _ in 0..<2 {
+            model.toggleCollapsedFolder(key)
+            try await waitFor { (scroll.documentView?.frame.height ?? .infinity) < before + 150 }
+            model.toggleCollapsedFolder(key)
+            try await waitFor { (scroll.documentView?.frame.height ?? 0) > CGFloat(count * 16) }
+        }
+        // Content is known: 4,000 files and one directory have one fixed
+        // tree-row height, regardless of which rows SwiftUI realizes.
+        let expectedHeight = before + CGFloat(count + 1) * TreeRowStyle.rowHeight(1)
+        XCTAssertEqual(expandedHeight, expectedHeight, accuracy: 1)
+        XCTAssertTrue(views(host).contains { $0 === scroll })
+        for fraction in [0.0, 0.25, 0.75, 1.0, 0.5, 0.0] {
+            let offset = max(0, expectedHeight - scroll.contentView.bounds.height) * fraction
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            for _ in 0..<5 {
+                layout()
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            let actual = try XCTUnwrap(scroll.documentView?.frame.height)
+            print("GIT_GRAPH_EXTENT fraction=\(fraction) expected=\(expectedHeight) actual=\(actual) offset=\(scroll.contentView.bounds.minY)")
+            XCTAssertEqual(actual, expectedHeight, accuracy: 1,
+                           "Realizing different row types must not change the scroll range")
+            XCTAssertEqual(scroll.contentView.bounds.minY, offset, accuracy: 2,
+                           "Measuring newly visible rows must not move the scroll position")
+        }
+        // Exercise the actual native Graph responder, not a model-only cursor.
+        let keyboard = try XCTUnwrap(views(host).compactMap { $0 as? TreeKeyboardView }.first {
+            $0.enclosingScrollView === scroll
+        })
+        XCTAssertTrue(window.makeFirstResponder(keyboard))
+        for _ in 0..<5 {
+            layout()
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let initialOffset = scroll.contentView.bounds.minY
+        let expandedIDs = model.expandedCommitIDs
+        var previousOffset = initialOffset
+        for index in 0..<32 {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: 125))
+            XCTAssertTrue(keyboard.onKeyDown(event))
+            for _ in 0..<3 {
+                layout()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let offset = scroll.contentView.bounds.minY
+            XCTAssertEqual(scroll.documentView?.frame.height ?? 0, expectedHeight, accuracy: 1,
+                           "Moving the blue cursor cannot change the native scroll range")
+            if index < 3 {
+                XCTAssertEqual(offset, initialOffset, accuracy: 1,
+                               "A fully visible target must not scroll")
+            } else {
+                XCTAssertGreaterThanOrEqual(offset, previousOffset - 1)
+                XCTAssertLessThanOrEqual(offset, previousOffset + TreeRowStyle.rowHeight(1) + 2,
+                                         "An adjacent file needs at most one row of scroll")
+            }
+            previousOffset = offset
+        }
+        XCTAssertGreaterThan(previousOffset, initialOffset + 100,
+                             "Offscreen keyboard targets must still scroll into view")
+        XCTAssertEqual(model.expandedCommitIDs, expandedIDs)
+        XCTAssertTrue(window.firstResponder === keyboard)
+        XCTAssertLessThan(views(host).count, 1_000, "Scrolling must not mount the entire history subtree")
+    }
+
     func testRealDockConstrainsGitScrollWidthToItsAllocatedPane() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-GitDockWidth-" + UUID().uuidString)
@@ -167,6 +321,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             return frame.minX > host.bounds.width * 0.65 && frame.height > 140
         })
         let initialHistoryCount = model.recentCommits.count
+        XCTAssertEqual(initialHistoryCount, 30, "An offscreen pagination sentinel must not load another page")
         let initialDocumentHeight = scrolling.documentView?.frame.height ?? 0
         XCTAssertGreaterThan(initialDocumentHeight, 900,
                              "The real Dock must lay out a long, scrollable Git Graph")
@@ -177,7 +332,18 @@ final class GitPanelVisibilityTests: XCTestCase {
         var priorCount = initialHistoryCount
         for page in 1...6 {
             XCTAssertTrue(model.hasMoreRecentCommits)
-            XCTAssertTrue(model.loadMoreCommits())
+            // Check real viewport-triggered pagination as well as the model's
+            // append path. The last page is requested only by scrolling.
+            let expectedOffset: CGFloat
+            if page == 6 {
+                let bottom = max(0, (scrolling.documentView?.frame.height ?? 0) - scrolling.contentSize.height)
+                scrolling.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+                scrolling.reflectScrolledClipView(scrolling.contentView)
+                expectedOffset = scrolling.contentView.bounds.minY
+            } else {
+                XCTAssertTrue(model.loadMoreCommits())
+                expectedOffset = paginationOffset
+            }
             let pageDeadline = Date().addingTimeInterval(15)
             while model.recentCommits.count <= priorCount || model.isLoadingMoreCommits {
                 guard Date() < pageDeadline else {
@@ -189,7 +355,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             XCTAssertGreaterThan(model.recentCommits.count, priorCount)
-            XCTAssertEqual(scrolling.contentView.bounds.minY, paginationOffset, accuracy: 6,
+            XCTAssertEqual(scrolling.contentView.bounds.minY, expectedOffset, accuracy: 6,
                            "Appending history page \(page) must not jump the visible Git Graph")
             priorCount = model.recentCommits.count
         }

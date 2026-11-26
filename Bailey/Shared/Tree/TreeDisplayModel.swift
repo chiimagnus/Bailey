@@ -1,6 +1,6 @@
 import Foundation
 
-enum TreeDisplayModel {
+nonisolated enum TreeDisplayModel {
     enum Status: Equatable, Sendable {
         case modified, added, untracked, deleted, renamed, copied, conflict, ignored, changed
 
@@ -58,7 +58,7 @@ enum TreeDisplayModel {
         }
     }
 
-    struct Row: Identifiable, Equatable {
+    struct Row: Identifiable, Equatable, Sendable {
         struct CompactComponent: Identifiable, Equatable {
             let name: String
             let path: String
@@ -154,6 +154,7 @@ enum TreeDisplayModel {
             return nil
         }
 
+        /// Receives the source's pre-sorted children.
         mutating func receive(_ children: [Row]?) {
             guard let reading else { return }
             self.reading = nil
@@ -180,45 +181,64 @@ enum TreeDisplayModel {
         }
 
         private mutating func enqueue(_ children: [Row], depth: Int) {
-            let sorted = children.sorted { first, second in
-                if first.isDraft != second.isDraft { return first.isDraft }
-                if first.isDirectory != second.isDirectory { return first.isDirectory }
-                return first.name.localizedStandardCompare(second.name) == .orderedAscending
-            }
-            for var row in sorted.reversed() {
+            for var row in children.reversed() {
                 row.depth = depth
                 pending.append(.row(row, compactDepth: 0))
             }
         }
     }
 
+    static func sortedChildren(_ rows: [Row]) -> [Row] {
+        rows.sorted { first, second in
+            if first.isDraft != second.isDraft { return first.isDraft }
+            if first.isDirectory != second.isDirectory { return first.isDirectory }
+            return first.name.localizedStandardCompare(second.name) == .orderedAscending
+        }
+    }
+
+    // The hierarchy and sibling order depend on the source, not disclosure.
+    struct PathTree: Sendable {
+        private let section: String
+        private let directories: [String: [Row]]
+
+        init(_ files: [Row], section: String) {
+            self.section = section
+            var directories: [String: [String: Row]] = [:]
+            var seen: Set<String> = []
+            for file in files {
+                guard seen.insert(file.path + (file.isDirectory ? "/" : "")).inserted else { continue }
+                let components = file.path.split(separator: "/")
+                var parent = ""
+                for (index, name) in components.enumerated() {
+                    let path = parent.isEmpty ? String(name) : parent + "/" + name
+                    let key = path + (index == components.count - 1 && !file.isDirectory ? "" : "/")
+                    var row = index == components.count - 1
+                        ? file : (directories[parent]?[key] ?? Row(name: String(name), path: path, isDirectory: true))
+                    row.namespace = section + ":"
+                    if row.isDirectory, let status = file.status,
+                       status.directoryPriority > (row.status?.directoryPriority ?? 0) {
+                        row.status = status
+                    }
+                    directories[parent, default: [:]][key] = row
+                    parent = path
+                }
+            }
+            self.directories = directories.mapValues { sortedChildren(Array($0.values)) }
+        }
+
+        func rows(collapsed: Set<String>) -> [Row] {
+            let prefix = section + ":"
+            var traversal = Traversal(root: "") { !collapsed.contains(prefix + $0) }
+            while let directory = traversal.nextDirectory() {
+                traversal.receive(directories[directory] ?? [])
+            }
+            return traversal.rows
+        }
+    }
+
     static func pathRows(
         _ files: [Row], section: String, collapsed: Set<String>
     ) -> [Row] {
-        var directories: [String: [String: Row]] = [:]
-        var seen: Set<String> = []
-        for file in files {
-            guard seen.insert(file.path + (file.isDirectory ? "/" : "")).inserted else { continue }
-            let components = file.path.split(separator: "/").map(String.init)
-            var parent = ""
-            for (index, name) in components.enumerated() {
-                let path = parent.isEmpty ? name : parent + "/" + name
-                let key = path + (index == components.count - 1 && !file.isDirectory ? "" : "/")
-                var row = index == components.count - 1
-                    ? file : (directories[parent]?[key] ?? Row(name: name, path: path, isDirectory: true))
-                row.namespace = section + ":"
-                if row.isDirectory, let status = file.status,
-                   status.directoryPriority > (row.status?.directoryPriority ?? 0) {
-                    row.status = status
-                }
-                directories[parent, default: [:]][key] = row
-                parent = path
-            }
-        }
-        var traversal = Traversal(root: "") { !collapsed.contains(section + ":" + $0) }
-        while let directory = traversal.nextDirectory() {
-            traversal.receive(Array(directories[directory, default: [:]].values))
-        }
-        return traversal.rows
+        PathTree(files, section: section).rows(collapsed: collapsed)
     }
 }

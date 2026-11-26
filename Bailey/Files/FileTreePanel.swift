@@ -280,7 +280,7 @@ private struct FileTreeScrollView: View {
             .onChange(of: model.selectedPath) { _, path in
                 if let path { proxy.scrollTo(path) }
             }
-            .onChange(of: model.items.first(where: \.isDraft)?.path) { _, path in
+            .onChange(of: model.visibleDraftPath) { _, path in
                 if let path { proxy.scrollTo(path, anchor: .top) }
             }
         }
@@ -292,7 +292,7 @@ private struct FileTreeScrollView: View {
         guard isActive, canFocusKeyboard(), isCurrentTarget(),
               model.renamingPath == nil, model.draft == nil else { return }
         if model.selectedItem == nil {
-            let current = model.items.first { !$0.isDraft && $0.path == currentFilePath }
+            let current = currentFilePath.flatMap { model.visibleItem(at: $0) }
             let item = current ?? model.items.first { !$0.isDraft }
             if let item {
                 if current != nil { model.select(item) }
@@ -456,7 +456,6 @@ private struct FileTreeRow: View {
     private var displayRow: TreeDisplayModel.Row {
         var row = item
         row.status = gitDecoration
-        row.isExpanded = model.isExpanded(item)
         return row
     }
 
@@ -553,7 +552,7 @@ private struct FileTreeRow: View {
 
     private func isMenuForCurrentRow(_ menu: NSMenu) -> Bool {
         guard isCurrentTarget(), !item.isDraft,
-              model.items.contains(where: { $0.path == item.path }),
+              model.visibleItem(at: item.path) != nil,
               let target = model.contextMenuTargetPath,
               target == item.path || item.compactComponents.contains(where: { $0.path == target })
         else { return false }
@@ -829,7 +828,7 @@ private struct FileTreeRow: View {
     @ViewBuilder
     private var leadingGlyphs: some View {
         if item.isDirectory {
-            TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
+            TreeFolderIcon(expanded: item.isExpanded, scale: fontScale)
         } else {
             MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
         }

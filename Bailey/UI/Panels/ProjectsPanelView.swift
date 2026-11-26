@@ -30,45 +30,51 @@ struct ProjectsPanelView: View {
     var body: some View {
         let _ = themeChanges.revision
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(spacing: 3) {
-                    ForEach(Array(manager.projects.enumerated()), id: \.element.id) { index, project in
-                        SidebarProjectRow(
-                            project: project,
-                            index: index,
-                            isSelected: project.id == manager.selectedProjectID,
-                            listActive: isListActive,
-                            focusRing: keyboardFocused && isListActive
-                                && cursorProjectID == project.id,
-                            isContextTarget: contextProjectID == project.id,
-                            onContextClick: { contextProjectID = project.id },
-                            onMenuClosed: {
-                                if contextProjectID == project.id { contextProjectID = nil }
-                            },
-                            select: {
-                                contextProjectID = nil
-                                cursorProjectID = project.id
-                                manager.selectedProjectID = project.id
-                                keyboardOwner.focus()
-                            },
-                            close: { manager.close(project) },
-                            isDragging: draggedProjectID == project.id,
-                            onDrag: { updateProjectDrag(source: project.id, location: $0) },
-                            onDragEnded: endProjectDrag,
-                            fontSize: settings.panelFontSize
-                        )
-                        .background {
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: ProjectFramePreferenceKey.self,
-                                    value: [project.id: proxy.frame(in: .global)]
-                                )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(Array(manager.projects.enumerated()), id: \.element.id) { index, project in
+                            SidebarProjectRow(
+                                project: project,
+                                index: index,
+                                isSelected: project.id == manager.selectedProjectID,
+                                listActive: isListActive,
+                                focusRing: keyboardFocused && isListActive
+                                    && cursorProjectID == project.id,
+                                isContextTarget: contextProjectID == project.id,
+                                onContextClick: { contextProjectID = project.id },
+                                onMenuClosed: {
+                                    if contextProjectID == project.id { contextProjectID = nil }
+                                },
+                                select: {
+                                    contextProjectID = nil
+                                    cursorProjectID = project.id
+                                    manager.selectedProjectID = project.id
+                                    keyboardOwner.focus()
+                                },
+                                close: { manager.close(project) },
+                                isDragging: draggedProjectID == project.id,
+                                onDrag: { updateProjectDrag(source: project.id, location: $0) },
+                                onDragEnded: endProjectDrag,
+                                fontSize: settings.panelFontSize
+                            )
+                            .id(project.id)
+                            .background {
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: ProjectFramePreferenceKey.self,
+                                        value: [project.id: proxy.frame(in: .global)]
+                                    )
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 8)
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
+                .onChange(of: cursorProjectID) { _, id in
+                    if keyboardFocused, let id { proxy.scrollTo(id) }
+                }
             }
             .background {
                 TreeKeyboardHost(

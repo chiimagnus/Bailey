@@ -1477,6 +1477,15 @@ struct MarkdownCodeText: View {
     let sourceRuns: [MarkdownSourceRun]
     @State private var rendered: Rendered?
 
+    init(source: String, language: String?, sourceRuns: [MarkdownSourceRun]) {
+        // The last LF terminates the code line rather than adding another row.
+        let visible = source.last == "\n" ? String(source.dropLast()) : source
+        self.source = visible
+        self.language = language
+        self.sourceRuns = sourceRuns.last?.displayed.location == visible.utf16.count
+            ? Array(sourceRuns.dropLast()) : sourceRuns
+    }
+
     private var request: Request { Request(source: source, language: language) }
 
     private var mappedText: Text {

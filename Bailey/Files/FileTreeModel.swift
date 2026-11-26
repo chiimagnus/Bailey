@@ -157,7 +157,7 @@ final class FileTreeModel {
         await awaitPendingRebuild()
         guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
               isCurrentTarget() else { return false }
-        if !items.contains(where: { !$0.isDraft && $0.path == path }) {
+        if visibleItem(at: path) == nil {
             // The last displayed parent may have been cached before this file
             // was created by another process. Refresh only that directory.
             cachedDirectories.removeValue(
@@ -168,7 +168,7 @@ final class FileTreeModel {
         }
         guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
               isCurrentTarget(),
-              let item = items.first(where: { !$0.isDraft && $0.path == path })
+              let item = visibleItem(at: path)
         else { return false }
         guard !automatically || interactionRevision == requestRevision else { return false }
         select(item)
@@ -177,28 +177,26 @@ final class FileTreeModel {
 
     /// A pending inline "new file/folder": an input row shown inside
     /// `parentDir` until the user names it (Enter) or cancels (Escape/blur).
-    struct Draft: Equatable {
+    nonisolated struct Draft: Equatable, Sendable {
         let parentDir: String
         let isDirectory: Bool
     }
 
     private(set) var rootPath = ""
     /// Windows native watchers do not follow directory symlinks into another tree.
-    var hasVisibleDirectorySymlinks: Bool {
-        cachedDirectories.contains { parent, entries in
-            entries.contains { entry in
-                guard entry.isSymlink && entry.isDirectory else { return false }
-                let path = (parent as NSString).appendingPathComponent(entry.name)
-                return items.contains { $0.path == path || $0.path.hasPrefix(path + "/") }
-            }
-        }
-    }
-    private(set) var items: [Item] = []
+    var hasVisibleDirectorySymlinks: Bool { !visibleDirectorySymlinks.isEmpty }
+    private var visibleDirectorySymlinks: Set<String> = []
+    private var presentation = VisibleRows([])
+    var items: [Item] { presentation.rows }
+    var visibleDraftPath: String? { presentation.draftIndex.map { presentation.rows[$0].path } }
+    @ObservationIgnored private var orderedSelectionCache: [String]?
     private(set) var contentRevision: UInt64 = 0
     /// Files' keyboard focus row, independent of Selection and the displayed FileTab.
     private(set) var selectedPath: String?
     private(set) var selectedCompactPath: String?
-    private(set) var selectedPaths: Set<String> = []
+    private(set) var selectedPaths: Set<String> = [] {
+        didSet { orderedSelectionCache = nil }
+    }
     private(set) var contextMenuTargetPath: String?
     @ObservationIgnored private var selectionAnchorPath: String?
     @ObservationIgnored private var activeDrag: (nonce: UUID, paths: [String])?
@@ -223,7 +221,43 @@ final class FileTreeModel {
     @ObservationIgnored private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
     /// Listings live only for the current root and channel. A refresh batches
     /// previously visible directories; expanding an already seen one uses the cache.
-    @ObservationIgnored private var cachedDirectories: [String: [WorkspaceEntry]] = [:]
+    private nonisolated struct Visibility: Equatable, Sendable {
+        let exclude: [String]
+        let revealAll: Bool
+    }
+
+    private nonisolated struct DirectoryListing: Sendable {
+        let entries: [WorkspaceEntry]
+        let children: [Item]
+        let symlinks: [String]
+        let visibility: Visibility
+
+        init(entries: [WorkspaceEntry], directory: String, root: String, visibility: Visibility) {
+            self.entries = entries
+            self.visibility = visibility
+            let prefix = directory.hasSuffix("/") ? directory : directory + "/"
+            let relative = directory == root ? "" : String(directory.dropFirst(
+                root.count + (root.hasSuffix("/") ? 0 : 1))) + "/"
+            var children: [Item] = []
+            var symlinks: [String] = []
+            children.reserveCapacity(entries.count)
+            for entry in entries {
+                // The traversal only visits visible parents. Check the child
+                // itself rather than matching every ancestor again.
+                guard visibility.revealAll || !FilesExcludeGlob.excludes(
+                    relative + entry.name, patterns: visibility.exclude
+                ) else { continue }
+                let path = prefix + entry.name
+                children.append(Item(name: entry.name, path: path, isDirectory: entry.isDirectory))
+                if entry.isDirectory && entry.isSymlink { symlinks.append(path) }
+            }
+            self.children = TreeDisplayModel.sortedChildren(children)
+            self.symlinks = symlinks
+        }
+    }
+
+    @ObservationIgnored private var cachedDirectories: [String: DirectoryListing] = [:]
+    @ObservationIgnored private var projectionTask: Task<Projection?, Never>?
     @ObservationIgnored private var treeEpoch: UInt64 = 0
     @ObservationIgnored private var rebuildGeneration: UInt64 = 0
     @ObservationIgnored private var isRebuilding = false
@@ -256,8 +290,31 @@ final class FileTreeModel {
         expanded.contains(item.path)
     }
 
-    var selectedItem: Item? {
-        items.first { !$0.isDraft && $0.path == selectedPath }
+    func visibleItem(at path: String) -> Item? {
+        let visible = presentation
+        return visible.positions[path].map { visible.rows[$0] }
+    }
+
+    var selectedItem: Item? { selectedPath.flatMap { visibleItem(at: $0) } }
+
+    private var orderedSelectedPaths: [String] {
+        // Read both observable inputs even on a cache hit.
+        let selection = selectedPaths
+        let visible = presentation
+        if let orderedSelectionCache { return orderedSelectionCache }
+        let paths: [String]
+        if selection.count > visible.rows.count / 4 {
+            paths = visible.rows.lazy.filter { !$0.isDraft && selection.contains($0.path) }.map(\.path)
+        } else {
+            paths = selection.compactMap { visible.positions[$0] }.sorted().map { visible.rows[$0].path }
+        }
+        orderedSelectionCache = paths
+        return paths
+    }
+
+    private func publish(_ visible: VisibleRows) {
+        orderedSelectionCache = nil
+        presentation = visible
     }
 
     var selectedDirectoryPath: String? {
@@ -267,10 +324,10 @@ final class FileTreeModel {
     }
 
     var selectedOperationPaths: [String] {
-        let paths = items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
+        let paths = orderedSelectedPaths
         if paths.count > 1 { return paths }
         if let selectedPath, !selectedPaths.contains(selectedPath),
-           items.contains(where: { !$0.isDraft && $0.path == selectedPath }) {
+           visibleItem(at: selectedPath) != nil {
             return [selectedCompactPath ?? selectedPath]
         }
         guard !paths.isEmpty else { return [] }
@@ -284,7 +341,7 @@ final class FileTreeModel {
         _ item: Item, extending: Bool = false, toggling: Bool = false,
         componentPath: String? = nil
     ) {
-        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
+        guard !item.isDraft, visibleItem(at: item.path) != nil,
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
         interactionRevision &+= 1
@@ -306,7 +363,7 @@ final class FileTreeModel {
     }
 
     func focus(_ item: Item) {
-        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path })
+        guard !item.isDraft, visibleItem(at: item.path) != nil
         else { return }
         interactionRevision &+= 1
         selectedPath = item.path
@@ -317,7 +374,7 @@ final class FileTreeModel {
     }
 
     func selectForContextMenu(_ item: Item, componentPath: String? = nil) {
-        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
+        guard !item.isDraft, visibleItem(at: item.path) != nil,
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
         interactionRevision &+= 1
@@ -334,9 +391,10 @@ final class FileTreeModel {
 
     @discardableResult
     func moveSelection(by delta: Int, extending: Bool = false) -> Item? {
-        let visible = items.filter { !$0.isDraft }
+        let projection = presentation
+        let visible = projection.navigableRows
         guard !visible.isEmpty else { clearSelection(); return nil }
-        let current = selectedPath.flatMap { path in visible.firstIndex { $0.path == path } }
+        let current = selectedPath.flatMap { projection.navigationIndex(of: $0) }
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
         interactionRevision &+= 1
@@ -359,17 +417,18 @@ final class FileTreeModel {
     }
 
     private func selectRange(to path: String) {
-        let visible = items.filter { !$0.isDraft }.map(\.path)
-        guard let end = visible.firstIndex(of: path) else { return }
+        let projection = presentation
+        let visible = projection.navigableRows
+        guard let end = projection.navigationIndex(of: path) else { return }
         let anchor = selectionAnchorPath ?? selectedPath ?? path
-        let start = visible.firstIndex(of: anchor) ?? end
+        let start = projection.navigationIndex(of: anchor) ?? end
         var lower = start
         var upper = start
-        while lower > 0 && selectedPaths.contains(visible[lower - 1]) { lower -= 1 }
-        while upper + 1 < visible.count && selectedPaths.contains(visible[upper + 1]) { upper += 1 }
-        selectedPaths.subtract(visible[lower...upper])
-        selectedPaths.formUnion(visible[min(start, end)...max(start, end)])
-        selectionAnchorPath = visible[start]
+        while lower > 0 && selectedPaths.contains(visible[lower - 1].path) { lower -= 1 }
+        while upper + 1 < visible.count && selectedPaths.contains(visible[upper + 1].path) { upper += 1 }
+        selectedPaths.subtract(visible[lower...upper].lazy.map(\.path))
+        selectedPaths.formUnion(visible[min(start, end)...max(start, end)].lazy.map(\.path))
+        selectionAnchorPath = visible[start].path
     }
 
     func clearExplicitSelection() {
@@ -381,9 +440,10 @@ final class FileTreeModel {
     }
 
     func selectAllVisible() {
-        let visible = items.filter { !$0.isDraft }.map(\.path)
+        let visible = presentation.navigableRows.map(\.path)
         interactionRevision &+= 1
         selectedPaths = Set(visible)
+        orderedSelectionCache = visible
         if let selectedPath {
             if !selectedPaths.contains(selectedPath) { self.selectedPath = visible.first }
         } else {
@@ -398,16 +458,13 @@ final class FileTreeModel {
     func contextSelection(for item: Item) -> [String] {
         guard !item.isDraft else { return [] }
         if selectedPaths.contains(item.path) {
-            return items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
+            return orderedSelectedPaths
         }
         return [item.path]
     }
 
     func beginDrag(for item: Item) -> (nonce: UUID, paths: [String])? {
-        guard let displayed = items.first(where: {
-            !$0.isDraft && ($0.path == item.path
-                || ($0.isDirectory && $0.compactComponents.contains { $0.path == item.path }))
-        }) else { return nil }
+        guard let displayed = rowContaining(path: item.path) else { return nil }
         let paths = displayed.path == item.path ? contextSelection(for: displayed) : [item.path]
         let record = (nonce: UUID(), paths: paths)
         interactionRevision &+= 1
@@ -424,10 +481,7 @@ final class FileTreeModel {
 
     func consumeDrag(nonce: UUID, paths: [String]) -> Bool {
         guard let activeDrag, activeDrag.nonce == nonce, activeDrag.paths == paths,
-              paths.allSatisfy({ path in items.contains {
-                  !$0.isDraft && ($0.path == path
-                      || ($0.isDirectory && $0.compactComponents.contains { $0.path == path }))
-              } })
+              paths.allSatisfy({ rowContaining(path: $0) != nil })
         else { return false }
         interactionRevision &+= 1
         self.activeDrag = nil
@@ -444,10 +498,18 @@ final class FileTreeModel {
         activeDrag = nil
     }
 
+    private func rowContaining(path: String) -> Item? {
+        visibleItem(at: path) ?? items.first {
+            !$0.isDraft && $0.isDirectory && !$0.compactPrefix.isEmpty
+                && $0.compactComponents.contains { $0.path == path }
+        }
+    }
+
     func nextVisibleChild(of item: Item) -> Item? {
-        guard item.isDirectory, let index = items.firstIndex(where: { $0.path == item.path }),
-              index + 1 < items.count else { return nil }
-        let next = items[index + 1]
+        let visible = presentation
+        guard item.isDirectory, let index = visible.positions[item.path],
+              index + 1 < visible.rows.count else { return nil }
+        let next = visible.rows[index + 1]
         return !next.isDraft && next.path.hasPrefix(item.path + "/") ? next : nil
     }
 
@@ -500,17 +562,8 @@ final class FileTreeModel {
         let root = rootPath
         let physicalRoot = LocalPathScope.physicalPath(root)
         var mappings = [root: physicalRoot]
-        for (parent, entries) in cachedDirectories {
-            for entry in entries where entry.isSymlink && entry.isDirectory {
-                let path = (parent as NSString).appendingPathComponent(entry.name)
-                // A displayed directory can be collapsed into a single row
-                // ("link / child") without the link path in `items` or `expanded`.
-                // It still needs events: changing the link's target can split
-                // that compact row into multiple visible entries.
-                if items.contains(where: { $0.path == path || $0.path.hasPrefix(path + "/") }) {
-                    mappings[path] = LocalPathScope.physicalPath(path)
-                }
-            }
+        for path in visibleDirectorySymlinks {
+            mappings[path] = LocalPathScope.physicalPath(path)
         }
         let gitDirectory = localIndexGitDirectory
         let linkPath = Self.watchedRootSymlinkPath(root)
@@ -722,6 +775,7 @@ final class FileTreeModel {
         root: String, backend: WorkspaceBackend, scope: String = "local",
         panelIdentity: PanelContext.Identity? = nil, connectionRevision: UInt64 = 0
     ) async -> Bool {
+        guard !Task.isCancelled else { return false }
         let scopeChanged = root != rootPath || workspaceScope != scope
         let backendChanged = (self.backend as AnyObject) !== (backend as AnyObject)
         let identityChanged = self.panelIdentity != panelIdentity
@@ -735,17 +789,9 @@ final class FileTreeModel {
         if scopeChanged || channelChanged {
             stopLocalFileWatcher()
             if scopeChanged { localIndexGitDirectory = nil }
-            changedDirectoriesPending.removeAll()
             treeEpoch &+= 1
-            rebuildGeneration &+= 1
+            cancelRebuild()
             cachedDirectories.removeAll()
-            // A stalled old SSH traversal cannot delay the new workspace.
-            isRebuilding = false
-            rebuildPending = false
-            refreshPending = false
-            let waiters = rebuildWaiters
-            rebuildWaiters.removeAll()
-            for waiter in waiters { waiter.resume(returning: false) }
         }
         self.backend = backend
         self.panelIdentity = panelIdentity
@@ -764,7 +810,8 @@ final class FileTreeModel {
             contextMenuTargetPath = nil
             activeDrag = nil
             if !sameRemoteRootReconnected {
-                items = []
+                publish(VisibleRows([]))
+                visibleDirectorySymlinks = []
                 showExcluded = false
                 clearSelection()
             }
@@ -777,19 +824,13 @@ final class FileTreeModel {
     }
 
     func toggle(_ item: Item) async {
-        guard item.isDirectory, items.contains(where: { $0.path == item.path && $0.isDirectory }) else { return }
+        guard item.isDirectory, let index = presentation.positions[item.path],
+              presentation.rows[index].isDirectory else { return }
         interactionRevision &+= 1
-        if !expanded.insert(item.path).inserted {
-            expanded.remove(item.path)
-        }
-        // Update the row's disclosure/icon immediately, before any remote IO.
-        items = items.map { row in
-            guard row.path == item.path else { return row }
-            var row = row
-            row.isExpanded = expanded.contains(row.path)
-            return row
-        }
-        configureLocalFileWatcher()
+        let opening = expanded.insert(item.path).inserted
+        if !opening { expanded.remove(item.path) }
+        // Publish the disclosure immediately, independently of listing latency.
+        presentation.rows[index].isExpanded = opening
         await rebuild()
     }
 
@@ -1143,7 +1184,7 @@ final class FileTreeModel {
 
     func beginRename(_ item: Item) {
         renamingPath = item.path
-        if !items.contains(where: { $0.path == item.path }) {
+        if visibleItem(at: item.path) == nil {
             Task { await rebuild() }
         }
     }
@@ -1406,6 +1447,22 @@ final class FileTreeModel {
         cachedDirectories.removeValue(forKey: (path as NSString).deletingLastPathComponent)
     }
 
+    // A cancelled caller may still be waiting for a non-cooperative backend.
+    // A new request must not queue behind it, even when returning to the
+    // same project. The generation rejects the old result.
+    private func cancelRebuild() {
+        rebuildGeneration &+= 1
+        projectionTask?.cancel()
+        projectionTask = nil
+        isRebuilding = false
+        rebuildPending = false
+        refreshPending = false
+        changedDirectoriesPending.removeAll()
+        let waiters = rebuildWaiters
+        rebuildWaiters.removeAll()
+        for waiter in waiters { waiter.resume(returning: false) }
+    }
+
     private func awaitPendingRebuild() async {
         guard isRebuilding else { return }
         _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -1417,7 +1474,12 @@ final class FileTreeModel {
     private func rebuild(
         refresh: Bool = false, changed: Set<String> = [], awaitQueuedResult: Bool = false
     ) async -> Bool {
-        guard !rootPath.isEmpty else { return false }
+        guard !rootPath.isEmpty, !Task.isCancelled else { return false }
+        if projectionTask?.isCancelled == true {
+            cancelRebuild()
+            // The cancelled read may have consumed pending file events.
+            refreshPending = true
+        }
         if refresh { refreshPending = true }
         changedDirectoriesPending.formUnion(changed)
         if isRebuilding {
@@ -1440,105 +1502,81 @@ final class FileTreeModel {
             let changedDirectories = changedDirectoriesPending
             changedDirectoriesPending.removeAll()
             let path = rootPath
-            let scope = workspaceScope
             let epoch = treeEpoch
-            let backend = self.backend
+            let visibility = Visibility(exclude: settings.filesExclude, revealAll: showExcluded)
             let expanded = self.expanded
             let draft = self.draft
-            let exclude = settings.filesExclude
-            let revealAll = showExcluded
-            var refreshedDirectories: Set<String> = []
-            if needsRefresh || !changedDirectories.isEmpty {
-                let candidates = needsRefresh
-                    ? Set(cachedDirectories.keys).union([path]) : changedDirectories
-                let directories = candidates.filter {
-                    revealAll || Self.isVisible($0, in: path, excluding: exclude)
-                }.sorted()
-                refreshedDirectories = Set(directories)
-                let fresh = await backend.list(directories: directories)
-                guard generation == rebuildGeneration else { return false }
-                if fresh.count != directories.count { readFailed = true }
-                if epoch == treeEpoch, path == rootPath, scope == workspaceScope {
-                    if fresh.contains(where: { cachedDirectories[$0.key] != $0.value }) {
-                        contentRevision &+= 1
-                    }
-                    cachedDirectories.merge(fresh, uniquingKeysWith: { _, new in new })
-                } else {
-                    rebuildPending = true
-                    continue
-                }
-            }
-
-            let knownDirectories = Set(cachedDirectories.keys)
             let renaming = renamingPath
-            var traversal = TreeDisplayModel.Traversal(
-                root: path, directoryDepthLimit: 32,
-                inspectDirectory: { expanded.contains($0) || knownDirectories.contains($0) },
-                foldDirectory: { $0 != renaming }
-            ) {
-                expanded.contains($0)
+            let directories = cachedDirectories
+            let backend = self.backend
+            let previousRows = items
+            let task = Task(priority: .userInitiated) {
+                await Self.project(
+                    root: path, backend: backend, directories: directories,
+                    expanded: expanded, draft: draft, renaming: renaming, visibility: visibility,
+                    refresh: needsRefresh, changed: changedDirectories, previousRows: previousRows
+                )
             }
-            var queriedDirectories = refreshedDirectories
-            while let directory = traversal.nextDirectory() {
-                if cachedDirectories[directory] == nil && !queriedDirectories.contains(directory) {
-                    // Only explicitly opened or cached directories may join
-                    // this batch; compact folders must not prefetch descendants.
-                    let missing = ([directory] + traversal.pendingDirectories).filter {
-                        cachedDirectories[$0] == nil && !queriedDirectories.contains($0)
-                    }
-                    queriedDirectories.formUnion(missing)
-                    let fresh = await backend.list(directories: missing)
-                    guard generation == rebuildGeneration else { return false }
-                    if fresh.count != missing.count { readFailed = true }
-                    if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
-                        rebuildPending = true
-                        break
-                    }
-                    cachedDirectories.merge(fresh, uniquingKeysWith: { _, new in new })
-                }
-                traversal.receive(Self.children(
-                    of: directory, entries: cachedDirectories[directory], draft: draft,
-                    root: path, excluding: exclude, revealAll: revealAll
-                ))
+            projectionTask = task
+            let projected = await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
             }
-            if exclude != settings.filesExclude || revealAll != showExcluded {
+            guard generation == rebuildGeneration else { return false }
+            projectionTask = nil
+            guard !Task.isCancelled, let projected else {
+                cancelRebuild()
+                refreshPending = true
+                return false
+            }
+            readFailed = readFailed || projected.readFailed
+            guard epoch == treeEpoch else {
+                rebuildPending = true
+                continue
+            }
+            cachedDirectories = projected.directories
+            if projected.contentChanged { contentRevision &+= 1 }
+            if visibility != Visibility(exclude: settings.filesExclude, revealAll: showExcluded)
+                || expanded != self.expanded || draft != self.draft || renaming != renamingPath {
                 rebuildPending = true
             }
-            if !rebuildPending, traversal.rootReadable,
-               generation == rebuildGeneration, epoch == treeEpoch,
-               path == rootPath, scope == workspaceScope {
-                let visiblePaths = Set(traversal.rows.filter { !$0.isDraft }.map(\.path))
+            if !rebuildPending, projected.rootReadable {
+                let rows = projected.visible.rows
+                let positions = projected.visible.positions
                 if let contextMenuTargetPath,
-                   !traversal.rows.contains(where: {
-                       $0.path == contextMenuTargetPath
-                           || $0.compactComponents.contains { $0.path == contextMenuTargetPath }
+                   positions[contextMenuTargetPath] == nil,
+                   !rows.contains(where: {
+                       !$0.compactPrefix.isEmpty
+                           && $0.compactComponents.contains { $0.path == contextMenuTargetPath }
                    }) {
                     self.contextMenuTargetPath = nil
                 }
-                if let selectedPath, !visiblePaths.contains(selectedPath) {
-                    let visibleAncestor = traversal.rows
+                if let selectedPath, positions[selectedPath] == nil {
+                    let visibleAncestor = rows
                         .filter { $0.isDirectory && selectedPath.hasPrefix($0.path + "/") }
                         .max(by: { $0.path.count < $1.path.count })
-                    let compactedChild = traversal.rows.first {
+                    let compactedChild = rows.first {
                         $0.isDirectory && !$0.compactPrefix.isEmpty
                             && $0.path.hasPrefix(selectedPath + "/")
                     }
                     self.selectedPath = (visibleAncestor ?? compactedChild)?.path
                 }
-                selectedPaths.formIntersection(visiblePaths)
+                let selection = selectedPaths.filter { positions[$0] != nil }
+                if selection != selectedPaths { selectedPaths = selection }
                 if let selectedCompactPath,
-                   !traversal.rows.contains(where: {
-                       $0.path == selectedPath
-                           && $0.compactComponents.contains { $0.path == selectedCompactPath }
-                   }) {
+                   selectedPath.flatMap({ positions[$0] }).map({
+                       rows[$0].compactComponents.contains { $0.path == selectedCompactPath }
+                   }) != true {
                     self.selectedCompactPath = nil
                 }
-                if let anchor = selectionAnchorPath, !visiblePaths.contains(anchor) {
+                if let anchor = selectionAnchorPath, positions[anchor] == nil {
                     selectionAnchorPath = self.selectedPath
                 }
-                if traversal.rows != items { items = traversal.rows }
-            } else if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
-                rebuildPending = true
+                if projected.rowsChanged { publish(projected.visible) }
+                if visibleDirectorySymlinks != projected.visibleSymlinks {
+                    visibleDirectorySymlinks = projected.visibleSymlinks
+                }
             }
         } while rebuildPending && generation == rebuildGeneration
         if generation == rebuildGeneration {
@@ -1551,7 +1589,133 @@ final class FileTreeModel {
         return generation == rebuildGeneration && !readFailed
     }
 
-    private static func isVisible(
+    // A single published value owns the rows and their derived lookup index.
+    private nonisolated struct VisibleRows: Sendable {
+        var rows: [Item]
+        let positions: [String: Int]
+        let draftIndex: Int?
+
+        init(_ rows: [Item]) {
+            self.rows = rows
+            var positions: [String: Int] = [:]
+            positions.reserveCapacity(rows.count)
+            var draftIndex: Int?
+            for (index, row) in rows.enumerated() {
+                if row.isDraft { draftIndex = index }
+                else { positions[row.path] = index }
+            }
+            self.positions = positions
+            self.draftIndex = draftIndex
+        }
+
+        var navigableRows: [Item] {
+            guard let draftIndex else { return rows }
+            var result = rows
+            result.remove(at: draftIndex)
+            return result
+        }
+
+        func navigationIndex(of path: String) -> Int? {
+            guard let index = positions[path] else { return nil }
+            return draftIndex.map { $0 < index } == true ? index - 1 : index
+        }
+    }
+
+    private nonisolated struct Projection: Sendable {
+        let directories: [String: DirectoryListing]
+        let visible: VisibleRows
+        let rowsChanged: Bool
+        let visibleSymlinks: Set<String>
+        let rootReadable: Bool
+        let readFailed: Bool
+        let contentChanged: Bool
+    }
+
+    @concurrent private static func project(
+        root: String, backend: WorkspaceBackend, directories: [String: DirectoryListing],
+        expanded: Set<String>, draft: Draft?, renaming: String?, visibility: Visibility,
+        refresh: Bool, changed: Set<String>, previousRows: [Item]
+    ) async -> Projection? {
+        var directories = directories
+        var queried: Set<String> = []
+        var readFailed = false
+        var contentChanged = false
+
+        if refresh || !changed.isEmpty {
+            let candidates = refresh ? Set(directories.keys).union([root]) : changed
+            let paths = candidates.filter {
+                visibility.revealAll || isVisible($0, in: root, excluding: visibility.exclude)
+            }.sorted()
+            queried.formUnion(paths)
+            let fresh = await backend.list(directories: paths)
+            guard !Task.isCancelled else { return nil }
+            readFailed = fresh.count != paths.count
+            for (directory, entries) in fresh {
+                if directories[directory]?.entries != entries {
+                    contentChanged = true
+                    directories[directory] = DirectoryListing(
+                        entries: entries, directory: directory, root: root, visibility: visibility
+                    )
+                }
+            }
+        }
+
+        let known = Set(directories.keys)
+        var traversal = TreeDisplayModel.Traversal(
+            root: root, directoryDepthLimit: 32,
+            inspectDirectory: { expanded.contains($0) || known.contains($0) },
+            foldDirectory: { $0 != renaming }
+        ) { expanded.contains($0) }
+        while let directory = traversal.nextDirectory() {
+            guard !Task.isCancelled else { return nil }
+            if directories[directory] == nil && !queried.contains(directory) {
+                let missing = ([directory] + traversal.pendingDirectories).filter {
+                    directories[$0] == nil && !queried.contains($0)
+                }
+                queried.formUnion(missing)
+                let fresh = await backend.list(directories: missing)
+                guard !Task.isCancelled else { return nil }
+                readFailed = readFailed || fresh.count != missing.count
+                for (path, entries) in fresh {
+                    directories[path] = DirectoryListing(
+                        entries: entries, directory: path, root: root, visibility: visibility
+                    )
+                }
+            }
+            if let cached = directories[directory], cached.visibility != visibility {
+                directories[directory] = DirectoryListing(
+                    entries: cached.entries, directory: directory, root: root, visibility: visibility
+                )
+            }
+            var children = directories[directory]?.children
+            if let draft, draft.parentDir == directory {
+                children?.insert(Item(
+                    name: "", path: directory + "/\u{1}draft",
+                    isDirectory: draft.isDirectory, isDraft: true
+                ), at: 0)
+            }
+            traversal.receive(children)
+        }
+        let rows = traversal.rows
+        let visible = VisibleRows(rows)
+        let symlinks = Set(directories.values.flatMap(\.symlinks))
+        var visibleSymlinks = symlinks.filter { visible.positions[$0] != nil }
+        if !symlinks.isEmpty {
+            for row in rows where row.isDirectory && !row.compactPrefix.isEmpty {
+                for component in row.compactComponents where symlinks.contains(component.path) {
+                    visibleSymlinks.insert(component.path)
+                }
+            }
+        }
+        return Projection(
+            directories: directories, visible: visible, rowsChanged: rows != previousRows,
+            visibleSymlinks: visibleSymlinks,
+            rootReadable: traversal.rootReadable, readFailed: readFailed,
+            contentChanged: contentChanged
+        )
+    }
+
+    nonisolated private static func isVisible(
         _ path: String, in root: String, excluding patterns: [String]
     ) -> Bool {
         guard path == root || LocalPathScope.contains(path, in: root) else { return false }
@@ -1566,32 +1730,4 @@ final class FileTreeModel {
         return true
     }
 
-    private static func children(
-        of dir: String, entries: [WorkspaceEntry]?, draft: Draft?,
-        root: String, excluding patterns: [String], revealAll: Bool
-    ) -> [Item]? {
-        guard let entries else { return nil }
-        var out: [Item] = []
-        if let draft, draft.parentDir == dir {
-            out.append(Item(
-                name: "", path: dir + "/\u{1}draft",
-                isDirectory: draft.isDirectory, isDraft: true
-            ))
-        }
-        out += entries
-            .filter { entry in
-                revealAll || isVisible(
-                    (dir as NSString).appendingPathComponent(entry.name),
-                    in: root, excluding: patterns
-                )
-            }
-            .map { entry in
-                Item(
-                    name: entry.name,
-                    path: (dir as NSString).appendingPathComponent(entry.name),
-                    isDirectory: entry.isDirectory
-                )
-            }
-        return out
-    }
 }
