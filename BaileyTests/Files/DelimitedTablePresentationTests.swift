@@ -8,117 +8,20 @@ import XCTest
 
 @MainActor
 final class DelimitedTablePresentationTests: XCTestCase {
-    func testColumnStatisticsCountsOnlyRealFieldsAndDoesNotOverflowIntermediateSums() async throws {
-        let source = "Name,A,B,C,D\r\nItem,1e308,1e308,\"\",000\n"
-            + "Other,1e-300,1e308,  ,-0\rLast,-1e308,NaN,1e-9999,=3\nBroken,invalid"
-        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
-        XCTAssertNotNil(index.issue)
-        let columns = IndexSet(integersIn: 1..<5)
-        let scope = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 1, columns: columns, selection: nil)
-        let stats = try await DelimitedTablePresentation.statistics(in: scope, source: source, index: index)
-        XCTAssertEqual(stats.map(\.total), [4, 3, 3, 3])
-        XCTAssertEqual(stats.map(\.numeric), [3, 2, 0, 2])
-        XCTAssertEqual(stats.map(\.empty), [0, 0, 1, 0])
-        XCTAssertEqual(stats.map(\.other), [1, 1, 2, 1])
-        XCTAssertEqual(stats[0].maximum, 1e308)
-        XCTAssertEqual(stats[0].minimum, -1e308)
-        XCTAssertEqual(try XCTUnwrap(stats[0].sum), 1e-300, accuracy: 1e-314)
-        XCTAssertEqual(try XCTUnwrap(stats[0].average), 1e-300 / 3, accuracy: 1e-314)
-        XCTAssertNil(stats[1].sum)
-        XCTAssertEqual(stats[1].average, 1e308)
-        XCTAssertNil(stats[2].average)
-        XCTAssertEqual(stats[3].sum, 0)
-
-        let active = try await DelimitedTablePresentation.evaluate(
-            source: source, index: index, configuration: .init(filters: [0: "Item"]))
-        let selectedColumn = IndexSet(integer: 3)
-        let visible = DelimitedTablePresentation.FieldScope(rows: active.rows, firstRecord: 1,
-                                                             columns: selectedColumn, selection: nil)
-        let visibleStats = try await DelimitedTablePresentation.statistics(in: visible, source: source, index: index)
-        XCTAssertEqual(visibleStats.map(\.total), [1])
-        XCTAssertEqual(visibleStats.map(\.empty), [1])
-        let empty = try await active.find("", source: source, index: index, columnCount: 5,
-                                          empty: true, columns: selectedColumn)
-        XCTAssertEqual(empty, [.init(row: 0, column: 3)])
-        let all = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
-        let allEmpty = try await all.find("", source: source, index: index, columnCount: 5, empty: true)
-        XCTAssertEqual(allEmpty, [.init(row: 0, column: 3)], "Missing fields and whitespace are not empty fields")
-    }
-
-    func testStatisticsSeparateVisibleAndAllRecordsAcrossDelimiters() async throws {
-        let rows = [
-            ["Label", "A", "B"],
-            ["shown-2", " 12.5 ", "\"\""],
-            ["hidden", "-2.5", "0x1p2"],
-            ["shown-1", "00047", "0.0e-800"],
-            ["shown-3", "-0", " "],
-            ["shown-4", "+0.5"],
-            ["shown-5", "\"1,000\"", "NaN"],
-            ["shown-6", "1e309", "1e-500"],
-            ["hidden-2", "-9.12E-304", ""]
-        ]
-        let columns = IndexSet(integersIn: 1..<3)
-        for (separator, delimiter) in [(DelimitedTableIndex.Separator.comma, ","),
-                                       (.semicolon, ";"), (.tab, "\t")] {
-            let source = rows.map { $0.joined(separator: delimiter) }.joined(separator: "\n")
+    func testEmptyFindQueryDoesNotMatchEmptyFieldsAcrossDelimiters() async throws {
+        for separator in DelimitedTableIndex.Separator.allCases {
+            let delimiter = String(UnicodeScalar(separator.rawValue)!)
+            let source = ["Name,Value,Note", "Shown,,needle", "Hidden,\"\",needle", "Shown,7,other", "Shown,\"open"]
+                .map { $0.replacingOccurrences(of: ",", with: delimiter) }.joined(separator: "\n")
             let index = try await DelimitedTableIndex.parse(source, preferred: separator, selected: separator)
-            XCTAssertEqual(index.issue?.problem, .unevenColumns(expected: 3, actual: 2))
+            XCTAssertNotNil(index.issue)
             let active = try await DelimitedTablePresentation.evaluate(
-                source: source, index: index,
-                configuration: .init(filters: [0: "shown"], sort: [.init(column: 0, ascending: true)]))
-            XCTAssertEqual(active.rows, [3, 1, 4, 5, 6, 7])
-            let visible = DelimitedTablePresentation.FieldScope(
-                rows: active.rows, firstRecord: 1, columns: columns, selection: nil)
-            let all = DelimitedTablePresentation.FieldScope(
-                rows: nil, firstRecord: 1, columns: columns, selection: nil)
-            let v = try await DelimitedTablePresentation.statistics(in: visible, source: source, index: index)
-            let a = try await DelimitedTablePresentation.statistics(in: all, source: source, index: index)
-            XCTAssertEqual(v.map(\.total), [6, 5])
-            XCTAssertEqual(v.map(\.empty), [0, 1])
-            XCTAssertEqual(v.map(\.numeric), [4, 1])
-            XCTAssertEqual(v.map(\.other), [2, 3])
-            XCTAssertEqual(v[0].sum, 60)
-            XCTAssertEqual(v[0].average, 15)
-            XCTAssertEqual(a.map(\.total), [8, 7])
-            XCTAssertEqual(a.map(\.empty), [0, 2])
-            XCTAssertEqual(a.map(\.numeric), [6, 1])
-            XCTAssertEqual(a.map(\.other), [2, 4])
-            XCTAssertEqual(a[0].sum, 57.5)
-            let matches = try await active.find("", source: source, index: index, columnCount: 3,
-                                                empty: true, columns: columns)
-            XCTAssertEqual(matches, [.init(row: 1, column: 2)])
-            let noHeader = DelimitedTablePresentation.FieldScope(
-                rows: nil, firstRecord: 0, columns: columns, selection: nil)
-            let includingHeader = try await DelimitedTablePresentation.statistics(
-                in: noHeader, source: source, index: index)
-            XCTAssertEqual(includingHeader.map(\.total), [9, 8])
-            XCTAssertEqual(includingHeader.map(\.other), [3, 5])
+                source: source, index: index, configuration: .init(filters: [0: "Shown"]))
+            let empty = try await active.find("", source: source, index: index, columnCount: 3)
+            XCTAssertTrue(empty.isEmpty)
+            let matches = try await active.find("needle", source: source, index: index, columnCount: 3)
+            XCTAssertEqual(matches, [.init(row: 0, column: 2)])
         }
-    }
-
-    func testColumnStatisticsScansAMillionRealFieldsAndCancels() async throws {
-        let row = "1,2,3,-4,0,NaN,,0.1,1e-5,5e-324\n"
-        let source = String(repeating: row, count: 100_000)
-        let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
-        XCTAssertNil(index.issue)
-        XCTAssertEqual(index.records.count * index.columnCount, 1_000_000)
-        let scope = DelimitedTablePresentation.FieldScope(rows: nil, firstRecord: 0,
-                                                           columns: IndexSet(integersIn: 0..<10), selection: nil)
-        let started = ContinuousClock.now
-        let stats = try await DelimitedTablePresentation.statistics(in: scope, source: source, index: index)
-        XCTAssertEqual(stats[0].sum, 100_000)
-        XCTAssertEqual(stats[3].sum, -400_000)
-        XCTAssertEqual(stats[5].other, 100_000)
-        XCTAssertEqual(stats[6].empty, 100_000)
-        XCTAssertEqual(stats[9].sum, Double.leastNonzeroMagnitude * 100_000)
-        XCTAssertEqual(stats[9].average, Double.leastNonzeroMagnitude)
-        print("CSV_STATS fields=1000000 elapsed=\(started.duration(to: .now))")
-        let canceled = Task { try await DelimitedTablePresentation.statistics(in: scope, source: source, index: index) }
-        canceled.cancel()
-        do {
-            _ = try await canceled.value
-            XCTFail("Cancellation must prevent publication")
-        } catch is CancellationError {}
     }
 
     func testLiteralReplaceUsesNonOverlappingOccurrencesAndPinnedFields() async throws {

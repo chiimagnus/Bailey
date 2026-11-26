@@ -72,11 +72,3 @@ status = "completed"
 plan = "plan-p4.md#p4-t3"
 commit = "8d1ef42"
 note = "隔离宿主47/47，真实 Delete、三范围计数、Unicode单次/全部替换、唯一Undo及HTML/Diff路由；十万行0.37 s、Undo/Redo 0.46 s。Windows真实替换及冲突2/2，Debug验签。/tmp/bailey-csv-p4-batch-final.DHlmqb1h、/tmp/bailey-csv-p4-batch-ssh.E1QF31n2。 本轮发现并修复单次替换错误复用旧格定位（a54a31f6）。后续仅多格选区保留批量填充；删除键清空，行号选行，不重复菜单。"
-
-[[tasks]]
-id = "P4-T4"
-title = "按需列统计与空值检查"
-status = "completed"
-plan = "plan-p4.md#p4-t4"
-commit = "c22c3c02"
-note = "实现2cf61a92；补强c22c3c02。固定快照原生宿主47/47、CSV Dev 62/62；统计浮层真实数值、主题保持、空值导航、三分隔符筛选/全部范围、百万字段0.687–0.713s，签名及正式Debug构建通过。共享输入/保存/查找22项通过。逐提交复审证据：/tmp/bailey-csv-p4-final-green.xMoIxSdP、/tmp/bailey-csv-dev-audit.rxI5gze1。 本轮独立审查真实统计和查找链通过；百万字段 0.708s。b2a39b51 空值谓词退出及普通查询原生回归通过。后续按用户要求删除选区统计，保留列头统计与列空值查找。"
