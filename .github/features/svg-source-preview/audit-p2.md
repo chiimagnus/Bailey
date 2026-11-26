@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P2-T2 独立完成，48bbbd5d 后的三项 PNG／独占发布宿主与真实 App 复制／新目标导出均通过，普通源码保存接线通过。P2-T1 并排真实拼音／Undo／Redo、最终可见中文矢量和原字节已通过；连续编辑与滚动组合已通过原生控件专项（见[共享验收](../file-viewer-routing/audit-p1.md)）；共享写入失败及最终整合仍待；复用 P1 直接证据，不要求无关设备组合。
+- **依据**：P2-T2 独立完成，48bbbd5d 后的三项 PNG／独占发布宿主与真实 App 复制／新目标导出均通过，普通源码保存接线通过。P2-T1 并排真实拼音／Undo／Redo、最终可见中文矢量和原字节已通过；连续编辑与滚动组合已通过原生控件专项（见[共享验收](../file-viewer-routing/audit-p1.md)）；共享写入失败已通过（见[共享验收](../file-viewer-routing/audit-p1.md)），最终整合仍待；复用 P1 直接证据，不要求无关设备组合。
 - **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。

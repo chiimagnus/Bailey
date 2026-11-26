@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交的连续快捷键焦点缺陷 F-10 已通过自动化完整 App 复验；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH CSV 比较、版本绑定覆盖及重连已通过；严格非协作 CAS 按已决定边界处理，共享写入失败与最终整合独立保留，不另做无关设备组合。
+- **依据**：共享文档、原生编辑、编码、Undo、断线与条件保存已通过宿主和实际完整 App；双窗真实冲突及十万行 GUI 编辑保存通过。真实拼音提交的连续快捷键焦点缺陷 F-10 已通过自动化完整 App 复验；e471b25b 已完成共享 VS Code 式保存冲突本机实施及实机验收；真实 Tailscale SSH CSV 比较、版本绑定覆盖及重连已通过；严格非协作 CAS 按已决定边界处理，共享写入失败验收已通过（见[共享验收](../file-viewer-routing/audit-p1.md)），最终整合独立保留，不另做无关设备组合。
 - **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。

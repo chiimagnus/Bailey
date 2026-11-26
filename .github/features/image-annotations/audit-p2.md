@@ -6,7 +6,7 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 360/260/220/150 点 Dock 真实系统拼音、保存、撤销与重做已通过，P2-T1 已独立核销；阶段仍待共享整合及共享写入失败（含隔离空间不足）验收；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
+- **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 360/260/220/150 点 Dock 真实系统拼音、保存、撤销与重做已通过，P2-T1 已独立核销；隔离空间不足的共享写入失败验收已通过（见[共享验收](../file-viewer-routing/audit-p1.md)）；阶段仍待共享整合；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
 - **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
   保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。

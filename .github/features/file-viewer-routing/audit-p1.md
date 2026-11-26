@@ -13,7 +13,7 @@
   不改变尚未取得证据的阶段门禁。
 - **现行阶段范围**：依[共享验收环境](plan-p1.md#acceptance-environment)，取消减弱动态效果专项、主观听感、
   物理 HDR 光学测量及无关设备组合；此前相关未测记录仅为历史，不再构成待办。
-  当前仍须完成最新整合回归、完整 App 资源测量及共享写入失败验收；SVG／HTML 编辑滚动已有原生专项直接证据。
+  当前仍须完成最新整合回归及完整 App 资源测量；SVG／HTML 编辑滚动和隔离磁盘写入失败均已通过。
 
 ## 当前阶段验收（2026-11-25）
 
@@ -27,7 +27,7 @@
 | R03 路径 | 既有真实本机／Windows 路径、特殊字符、符号链接与作用域回归保留；FileTreeTests 114/114，真实远端资源与普通重命名定点复验通过。Windows 当前原生符号链接创建不可用，相关条件子分支未执行，不修改系统权限。 |
 | R04 类型 | FileTabPersistenceTests 83/83，含伪后缀、损坏图像、普通文件与真实类型路由；HTMLFilePreviewTests 18/18。 |
 | R05 容量 | 真实远端 32 MiB 文本上传、下载、修改保存、重开、超限与二进制拒绝通过（39.155 秒）；JPEG 精确字节预算、PNG 像素上限与既有大媒体／区域解码证据保留。 |
-| R06 版本 | 本机真实双窗及 VS Code 式共享比较、版本绑定覆盖通过；真实 Windows CSV／旁车冲突、丢回执重连、原字节保存及相邻 Git Diff 保存通过。证据归 [CSV P2](../csv-table-view/audit-p2.md) 与 [图片 P2](../image-annotations/audit-p2.md)；严格非协作 CAS 继续 Deferred；隔离空间不足等写入失败的共享验证仍待。 |
+| R06 版本 | 本机真实双窗及 VS Code 式共享比较、版本绑定覆盖通过；真实 Windows CSV／旁车冲突、丢回执重连、原字节保存及相邻 Git Diff 保存通过。证据归 [CSV P2](../csv-table-view/audit-p2.md) 与 [图片 P2](../image-annotations/audit-p2.md)；严格非协作 CAS 继续 Deferred；隔离空间不足的共享验证已通过，见下文 2026-11-26 复验。 |
 | R07 竞态 | FileTabPersistenceTests 83/83 包含加载／保存／重命名／关闭竞态；DelimitedTableIndexTests 14/14；没有旧读取覆盖新标签的新增失败。 |
 | R08 界面 | 实际 117 次切换、HTML 并排、双窗窗口归属及关闭通过；原生中文输入及 CSV 焦点修复另见各格式审计。真实输入及显示几何的直接证据见各格式；不另做无关设备全排列。缺配外设组合延期。 |
 | R09 生命周期 | `807fbdee` 相关宿主 154/154（零失败零跳过），其中双窗 100+100、12.185 秒；所有跟踪资源释放、空壳播放器 0、文件字节不变。`35503954` 完整 App 117 次切换、退出／冷启动／关闭通过。 |
@@ -236,3 +236,8 @@
   尚不可核销写入失败；日志 `/tmp/bailey-final-acceptance.kzf6pdHu/disk-test.log`。
   修正夹具后 Dev 构建锁始终由其他专项占用，未能复跑；完整 App 测量亦因桌面正在使用而未运行。
   两项未验证的测试修改暂存为本机补丁，未纳入提交；隔离卷已卸载。
+
+- 2026-11-26：`0485c3b8` 源码，256 MiB 独立 APFS 卷实际 ENOSPC；
+  四类文本、图片旁车、新建及覆盖导出均保留原字节和脏稿，暂存目录无残留，释放空间后重试成功。
+  `ImageAnnotationTests.testSpaceExhaustionPreservesDraftsAndExistingExportsAndAllowsRetry` 1/1，0.637 秒，
+  Dev 严格验签退出 0；日志 `/tmp/bailey-final-acceptance.kzf6pdHu/disk-retry.log`。
