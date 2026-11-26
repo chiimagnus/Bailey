@@ -186,11 +186,11 @@ struct CSVTableView: View {
             SearchRequest(display: projection.id, query: controls.query,
                           empty: controls.emptySearch.flatMap { $0.display == projection.id ? $0 : nil })
         }
-        let matches = search.flatMap { $0.0 == query ? $0.1 : nil } ?? []
+        let matches = search.flatMap { $0.0 == query ? $0.1 : nil }
         surface(snapshot: active == nil ? nil : snapshot, active: active, matches: matches, theme: theme,
                 failed: parseFailed == parse || displayFailed == display)
             .overlay(alignment: .topTrailing) {
-                overlay(display: display, snapshot: snapshot, active: active, matches: matches, theme: theme)
+                overlay(display: display, snapshot: snapshot, active: active, matches: matches ?? [], theme: theme)
             }
             .task(id: parse) {
                 guard snapshot == nil else { return }
@@ -255,7 +255,7 @@ struct CSVTableView: View {
     @ViewBuilder
     private func surface(
         snapshot: FileTab.DelimitedSnapshot?, active: DelimitedTablePresentation?,
-        matches: [DelimitedTablePresentation.Cell], theme: GhosttyThemeDefinition, failed: Bool
+        matches: [DelimitedTablePresentation.Cell]?, theme: GhosttyThemeDefinition, failed: Bool
     ) -> some View {
         let hasRows = snapshot.map { !$0.index.records.isEmpty } ?? false
         VStack(spacing: 0) {
@@ -633,7 +633,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
     let presentation: DelimitedTablePresentation?
     let theme: GhosttyThemeDefinition
     let findStep: Int
-    let matches: [DelimitedTablePresentation.Cell]
+    let matches: [DelimitedTablePresentation.Cell]?
     let onFocused: () -> Void
     let onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void
     let onStatistics: (DelimitedAnalysisTarget) -> Void
@@ -650,7 +650,7 @@ private struct NativeDelimitedGrid: NSViewRepresentable {
         grid.onSelectionChanged = onSelectionChanged
         if let snapshot, let presentation, !snapshot.index.records.isEmpty {
             grid.install(snapshot, presentation: presentation)
-            grid.showMatch(matches, step: findStep)
+            if let matches { grid.showMatch(matches, step: findStep) }
         } else if let snapshot, snapshot.index.records.isEmpty {
             grid.clearProjection()
         }
@@ -675,6 +675,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             if oldValue?.delimitedTable.grid === self { oldValue?.delimitedTable.grid = nil }
             table.file = file
             controls?.grid = self
+            previousStep = controls?.findStep ?? 0
         }
     }
     private var controls: DelimitedTableControls? { file?.delimitedTable }
@@ -738,7 +739,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     private var editing: CellEdit?
     private var previousMatches: [DelimitedTablePresentation.Cell] = []
     private var previousStep = 0
-    private var matchIndex = 0
     fileprivate var projectionIsCurrent: Bool {
         guard let file, let controls, let snapshot, let presentation else { return false }
         return controls.request(for: file) == snapshot.parseRequest &&
@@ -1016,21 +1016,27 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     func showMatch(_ matches: [DelimitedTablePresentation.Cell], step: Int) {
         guard projectionIsCurrent else { return }
-        if matches != previousMatches {
-            previousMatches = matches
-            previousStep = step
-            matchIndex = table.selection.caret.flatMap { cell in
-                matches.firstIndex { $0.row > cell.row || $0.row == cell.row && $0.column >= cell.column }
-            } ?? 0
-        } else if !matches.isEmpty, step != previousStep {
-            let delta = (step &- previousStep) % matches.count
-            matchIndex = (matchIndex + delta + matches.count) % matches.count
-            previousStep = step
+        let changed = matches != previousMatches
+        let delta = step &- previousStep
+        previousMatches = matches
+        previousStep = step
+        guard !matches.isEmpty, delta != 0 || (changed && controls?.showsFind == true) else { return }
+
+        let caret = table.selection.caret
+        let start: Int
+        if delta < 0 {
+            start = caret.flatMap { cell in
+                matches.lastIndex { ($0.row, $0.column) < (cell.row, cell.column) }
+            } ?? matches.count - 1
         } else {
-            return
+            start = caret.flatMap { cell in
+                matches.firstIndex {
+                    ($0.row, $0.column) > (cell.row, cell.column) || (delta == 0 && $0 == cell)
+                }
+            } ?? 0
         }
-        guard matches.indices.contains(matchIndex) else { return }
-        table.select(matches[matchIndex], reveal: true)
+        let offset = delta == 0 ? 0 : (delta - (delta > 0 ? 1 : -1)) % matches.count
+        table.select(matches[(start + offset + matches.count) % matches.count], reveal: true)
     }
 
     private func physicalCell(_ cell: DelimitedTablePresentation.Cell) -> DelimitedTablePresentation.Cell? {

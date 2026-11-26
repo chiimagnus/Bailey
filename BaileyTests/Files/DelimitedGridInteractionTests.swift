@@ -446,6 +446,64 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(file.delimitedTable.query, "cafe")
     }
 
+    func testHiddenFindPreservesSelectionAndNavigationStartsAtActualCaret() async throws {
+        let original = "Name,Value\nAlpha,needle\nBeta,other\nGamma,needle"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 320, height: 210),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "Alpha")
+        let controls = file.delimitedTable
+        typealias Cell = DelimitedTablePresentation.Cell
+        func expectCaret(_ expected: Cell) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while grid.table.selection.caret != expected, ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(grid.table.selection.caret, expected)
+        }
+        controls.query = "needle"
+        controls.perform(.show)
+        try await expectCaret(.init(row: 0, column: 1))
+        controls.perform(.hide)
+        let selected = Cell(row: 1, column: 0)
+        grid.table.select(selected, reveal: true)
+        controls.configuration.sort = [.init(column: 0, ascending: false)]
+        let sorted = try await self.grid(in: host, showing: "Gamma")
+        XCTAssertTrue(sorted === grid)
+        let settle = ContinuousClock.now.advanced(by: .milliseconds(500))
+        while ContinuousClock.now < settle {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+            guard grid.table.selection.caret == selected else {
+                XCTFail("Hidden Find stole the user's selection after sorting")
+                break
+            }
+        }
+        XCTAssertEqual(grid.table.selection.caret, selected)
+        controls.perform(.next)
+        try await expectCaret(.init(row: 2, column: 1))
+        controls.perform(.previous)
+        try await expectCaret(.init(row: 0, column: 1))
+        grid.table.select(selected, reveal: true)
+        controls.perform(.previous)
+        try await expectCaret(.init(row: 0, column: 1))
+        XCTAssertFalse(controls.showsFind)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+    }
+
     func testReadOnlyGridOffersSelectionStatisticsWithoutAnyEdit() async throws {
         let original = "Name,Value\r\nItem,\nOther,7\nThird,\"\"\nBad,\"open"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
