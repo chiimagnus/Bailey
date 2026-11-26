@@ -1750,13 +1750,21 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         // detached view objects, but not the retired file's large text buffer.
         let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
         XCTAssertGreaterThan(editor.textStorage?.length ?? 0, 100_000)
+        let contentStorage = try XCTUnwrap(editor.textContentStorage)
+        let oldStorage = try XCTUnwrap(editor.textStorage)
+        let layoutManager = try XCTUnwrap(editor.textLayoutManager)
+        XCTAssertTrue(contentStorage.textLayoutManagers.contains { $0 === layoutManager })
         file.retireNativeEditor()
+        XCTAssertFalse(contentStorage.textLayoutManagers.contains { $0 === layoutManager },
+                       "A retired view must no longer bind the old document to its layout manager")
         XCTAssertNil(file.editorView)
         XCTAssertNil(scroll.documentView)
         XCTAssertNil(editor.syntaxCoordinator)
         XCTAssertFalse(editor.isEditable)
-        XCTAssertEqual(editor.textStorage?.length, 0,
-                       "A cached retired view must release its obsolete text bytes")
+        XCTAssertEqual(oldStorage.length, 0,
+                       "The retired document must release its obsolete text bytes")
+        XCTAssertEqual(editor.textStorage?.length ?? 0, 0,
+                       "A cached retired view must not retain document bytes")
         XCTAssertTrue(file.text.isEmpty, "A retired file must not keep a second text buffer")
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), source)
     }

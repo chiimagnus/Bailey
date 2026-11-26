@@ -408,15 +408,17 @@ struct SourceTextEditor: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(scrollObserver)
                 self.scrollObserver = nil
             }
+            let storage = textView?.textContentStorage
+            let layout = textView?.textLayoutManager
             if let editor = textView as? FocusReportingTextView {
                 editor.onBecomeFirstResponder = nil
                 editor.onResignFirstResponder = nil
                 editor.retireNativeDocument()
             }
-            // The prior SwiftUI host can outlive a file generation while
-            // AppKit finishes its layout. Its scroll view must not keep the
-            // obsolete text document alive after the new bytes are accepted.
+            // Detach the obsolete view before releasing its TextKit layout,
+            // just as for a retired Diff document.
             scrollView?.documentView = nil
+            if let storage, let layout { storage.removeTextLayoutManager(layout) }
             scrollView = nil
             textView = nil
         }
