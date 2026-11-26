@@ -82,6 +82,46 @@ final class GitStatusModel {
         let path: String
     }
 
+    /// Index the visible tree once, then share its exact ordering across
+    /// keyboard navigation, selection reconciliation and context commands.
+    nonisolated struct ChangeSelectionOrder: RandomAccessCollection, Equatable, Sendable {
+        let keys: [ChangeSelection]
+        private let positions: [ChangeSelection: Int]
+        private let duplicates: Set<ChangeSelection>
+
+        init(_ keys: [ChangeSelection]) {
+            self.keys = keys
+            var positions: [ChangeSelection: Int] = [:]
+            positions.reserveCapacity(keys.count)
+            var duplicates = Set<ChangeSelection>()
+            for (index, key) in keys.enumerated() {
+                if positions[key] == nil { positions[key] = index }
+                else { duplicates.insert(key) }
+            }
+            self.positions = positions
+            self.duplicates = duplicates
+        }
+
+        var startIndex: Int { keys.startIndex }
+        var endIndex: Int { keys.endIndex }
+        subscript(index: Int) -> ChangeSelection { keys[index] }
+
+        func position(of key: ChangeSelection) -> Int? { positions[key] }
+        func contains(_ key: ChangeSelection) -> Bool { positions[key] != nil }
+
+        // Context commands must reject missing or ambiguous visible targets,
+        // rather than partially applying to a selection from a previous tree.
+        func uniquelyContains(_ selection: Set<ChangeSelection>) -> Bool {
+            selection.allSatisfy { positions[$0] != nil && !duplicates.contains($0) }
+        }
+
+        func ordered(_ selection: Set<ChangeSelection>) -> [ChangeSelection]? {
+            guard uniquelyContains(selection) else { return nil }
+            if selection.count == keys.count { return keys }
+            return selection.compactMap { positions[$0] }.sorted().map { keys[$0] }
+        }
+    }
+
     nonisolated enum ChangeSection: String, Hashable, Sendable, CaseIterable {
         case merge, staged, unstaged
 
@@ -117,13 +157,13 @@ final class GitStatusModel {
     /// Git resource selection is independent of the keyboard cursor and Graph disclosure.
     /// Mouse Shift replaces only the anchor's current contiguous range; other islands survive.
     func selectChange(
-        _ key: ChangeSelection, visible: [ChangeSelection],
+        _ key: ChangeSelection, visible: ChangeSelectionOrder,
         extending: Bool = false, toggling: Bool = false
     ) {
-        guard let end = visible.firstIndex(of: key) else { return }
+        guard let end = visible.position(of: key) else { return }
         if extending {
             let anchor = changeAnchor ?? changeCursor ?? key
-            let start = visible.firstIndex(of: anchor) ?? end
+            let start = visible.position(of: anchor) ?? end
             var lower = start
             var upper = start
             while lower > 0 && selectedChanges.contains(visible[lower - 1]) { lower -= 1 }
@@ -142,14 +182,14 @@ final class GitStatusModel {
     }
 
     /// Workbench keyboard Shift incrementally expands and contracts; it is not mouse range select.
-    func moveChangeCursor(visible: [ChangeSelection], by delta: Int, extending: Bool = false) {
+    func moveChangeCursor(visible: ChangeSelectionOrder, by delta: Int, extending: Bool = false) {
         guard !visible.isEmpty else {
             changeCursor = nil
             selectedChanges.removeAll()
             changeAnchor = nil
             return
         }
-        let current = changeCursor.flatMap { visible.firstIndex(of: $0) }
+        let current = changeCursor.flatMap { visible.position(of: $0) }
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
         if extending {
@@ -166,9 +206,9 @@ final class GitStatusModel {
         changeCursor = visible[next]
     }
 
-    func selectAllChanges(visible: [ChangeSelection]) {
+    func selectAllChanges(visible: ChangeSelectionOrder) {
         selectedChanges = Set(visible)
-        changeCursor = visible.first(where: { $0 == changeCursor }) ?? visible.first
+        if changeCursor.map({ visible.contains($0) }) != true { changeCursor = visible.first }
         changeAnchor = nil
     }
 
@@ -177,13 +217,15 @@ final class GitStatusModel {
         changeAnchor = nil
     }
 
-    func reconcileChangeSelection(visible: [ChangeSelection]) {
-        let choices = Set(visible)
-        selectedChanges.formIntersection(choices)
-        if let changeAnchor, !choices.contains(changeAnchor) {
-            self.changeAnchor = changeCursor.flatMap { choices.contains($0) ? $0 : nil }
+    func reconcileChangeSelection(visible: ChangeSelectionOrder) {
+        if !selectedChanges.isEmpty {
+            let retained = selectedChanges.filter { visible.contains($0) }
+            if retained != selectedChanges { selectedChanges = retained }
         }
-        if let changeCursor, !choices.contains(changeCursor) {
+        if let changeAnchor, !visible.contains(changeAnchor) {
+            self.changeAnchor = changeCursor.flatMap { visible.contains($0) ? $0 : nil }
+        }
+        if let changeCursor, !visible.contains(changeCursor) {
             self.changeCursor = visible.first
         }
     }
@@ -749,10 +791,18 @@ final class GitStatusModel {
         let stagedRows: [ChangeItem]
         let changedRows: [ChangeItem]
         let navigation: [ChangeItem]
-        let selections: [ChangeSelection]
+        let selections: ChangeSelectionOrder
+        let filePositions: [ChangeSection: [String: Int]]
         let pathFlags: [ChangeSection: [String: Bool]]
 
         var filteredCount: Int { mergeCount + stagedCount + changedCount }
+
+        func file(path: String, sections: [ChangeSection]) -> ChangeItem? {
+            for section in sections {
+                if let position = filePositions[section]?[path] { return navigation[position] }
+            }
+            return nil
+        }
     }
 
     private struct ChangeSourceKey: Equatable {
@@ -974,16 +1024,20 @@ final class GitStatusModel {
         let stagedRows = rows(.staged)
         let changedRows = rows(.unstaged)
         let navigation = mergeRows + stagedRows + changedRows
-        let selections = navigation.map {
-            ChangeSelection(scope: sourceKey.scope, repository: sourceKey.repository,
-                            section: $0.kind.rawValue, path: $0.row.path)
-        }
+        var filePositions: [ChangeSection: [String: Int]] = [:]
+        let selections = ChangeSelectionOrder(navigation.enumerated().map { index, item in
+            if item.entry != nil, filePositions[item.kind]?[item.row.path] == nil {
+                filePositions[item.kind, default: [:]][item.row.path] = index
+            }
+            return ChangeSelection(scope: sourceKey.scope, repository: sourceKey.repository,
+                                   section: item.kind.rawValue, path: item.row.path)
+        })
         changeDisplayRevision &+= 1
         let display = ChangeDisplay(
             revision: changeDisplayRevision,
             mergeCount: mergeCount, stagedCount: stagedCount, changedCount: changedCount,
             mergeRows: mergeRows, stagedRows: stagedRows, changedRows: changedRows,
-            navigation: navigation, selections: selections,
+            navigation: navigation, selections: selections, filePositions: filePositions,
             pathFlags: changeSourceCache!.sections.mapValues(\.pathFlags)
         )
         changeDisplayCache = (key, display)

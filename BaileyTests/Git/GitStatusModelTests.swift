@@ -158,7 +158,7 @@ final class GitStatusModelTests: XCTestCase {
         )
         let commit = String(repeating: "a", count: 40)
         git.changeCursor = selection
-        git.selectChange(selection, visible: [selection])
+        git.selectChange(selection, visible: .init([selection]))
         git.expandedCommitIDs = [commit]
 
         git.syncSelectedProject(project: first, isCurrent: { _ in true })
@@ -175,7 +175,7 @@ final class GitStatusModelTests: XCTestCase {
                       "The previous project's Graph must not appear in the new project")
 
         git.changeCursor = selection
-        git.selectChange(selection, visible: [selection])
+        git.selectChange(selection, visible: .init([selection]))
         git.expandedCommitIDs = [commit]
         git.sync(root: directory.appendingPathComponent("other").path)
         XCTAssertNil(git.changeCursor)
@@ -209,6 +209,13 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(initial.changedCount, count)
         XCTAssertEqual(initial.changedRows.compactMap(\.entry).count, count)
         XCTAssertEqual(initial.navigation.count, initial.selections.count)
+        XCTAssertEqual(initial.file(path: "src/group-57/file-5700.txt", sections: [.unstaged])?.entry?.path,
+                       "src/group-57/file-5700.txt")
+        XCTAssertNil(initial.file(path: "src/group-57/file-5700.txt", sections: [.staged]))
+        XCTAssertNil(initial.file(path: "src/group-57", sections: [.unstaged]))
+        let end = try XCTUnwrap(initial.selections.last)
+        let startKey = try XCTUnwrap(initial.selections.first)
+        XCTAssertEqual(initial.selections.ordered([end, startKey]), [startKey, end])
         XCTAssertEqual(initial.pathFlags[.unstaged]?["src"], true)
         XCTAssertEqual(initial.pathFlags[.unstaged]?["src/group-0"], true)
         XCTAssertNil(initial.pathFlags[.unstaged]?["src/group-00"])
@@ -235,6 +242,8 @@ final class GitStatusModelTests: XCTestCase {
         let folded = model.displayChanges(filter: "", mode: .tree, closed: [])
         XCTAssertLessThan(folded.changedRows.count, first.changedRows.count)
         XCTAssertEqual(folded.changedCount, count)
+        XCTAssertNil(folded.file(path: "src/group-57/file-5700.txt", sections: [.unstaged]))
+        XCTAssertNil(folded.selections.ordered([end, startKey]))
         model.toggleCollapsedFolder("unstaged:src")
         XCTAssertEqual(model.displayChanges(filter: "", mode: .tree, closed: []).selections,
                        first.selections)
@@ -263,6 +272,8 @@ final class GitStatusModelTests: XCTestCase {
         print("GIT_CHANGE_SCALE entries=\(count) cached_switch_ms=\((CFAbsoluteTimeGetCurrent() - switchStart) * 1_000)")
         XCTAssertEqual(returned.changedCount, count)
         XCTAssertEqual(returned.selections, first.selections)
+        XCTAssertEqual(returned.file(path: "src/group-57/file-5700.txt", sections: [.unstaged])?.entry?.path,
+                       "src/group-57/file-5700.txt")
         try await wait { !model.isRefreshing }
 
         XCTAssertEqual(model.displayChanges(filter: "FiLe-5700", mode: .tree, closed: [])
@@ -368,9 +379,10 @@ final class GitStatusModelTests: XCTestCase {
                         section: "unstaged", path: $0.path
                     )
                 }
+                let order = GitStatusModel.ChangeSelectionOrder(visible)
                 let t1 = CFAbsoluteTimeGetCurrent()
                 let position = [0, count / 2, count - 1][sample % 3]
-                model.selectChange(visible[position], visible: visible,
+                model.selectChange(visible[position], visible: order,
                                    extending: sample % 3 == 2,
                                    toggling: sample % 3 == 1)
                 let t2 = CFAbsoluteTimeGetCurrent()
@@ -383,37 +395,68 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testVisibleChangeIndexPreservesSparseOrderAndRejectsAmbiguousTargetsAtScale() {
+        for count in [1_000, 10_000, 100_000] {
+            let keys = (0..<count).map {
+                GitStatusModel.ChangeSelection(scope: "local", repository: "/fixture",
+                    section: "unstaged", path: "Sources/Module-\($0).swift")
+            }
+            let order = GitStatusModel.ChangeSelectionOrder(keys)
+            let selected: Set<GitStatusModel.ChangeSelection> = [keys[0], keys[count / 2], keys[count - 1]]
+            let expected = [keys[0], keys[count / 2], keys[count - 1]]
+            var scan: [Double] = []
+            var indexed: [Double] = []
+            for _ in 0..<30 {
+                let start = CFAbsoluteTimeGetCurrent()
+                XCTAssertEqual(keys.filter { selected.contains($0) }, expected)
+                scan.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+                let begin = CFAbsoluteTimeGetCurrent()
+                XCTAssertEqual(order.ordered(selected), expected)
+                XCTAssertEqual(order.position(of: keys[count - 1]), count - 1)
+                indexed.append((CFAbsoluteTimeGetCurrent() - begin) * 1_000)
+            }
+            XCTAssertNil(order.ordered([.init(scope: "remote", repository: "/fixture",
+                                               section: "unstaged", path: keys[0].path)]))
+            let duplicate = GitStatusModel.ChangeSelectionOrder([keys[0], keys[0], keys[1]])
+            XCTAssertEqual(duplicate.position(of: keys[0]), 0)
+            XCTAssertNil(duplicate.ordered([keys[0]]))
+            XCTAssertEqual(duplicate.ordered([keys[1]]), [keys[1]])
+            XCTAssertEqual(order.ordered(Set(keys)), keys)
+            print("GIT_SELECTION_INDEX count=\(count) scan=\(scan.sorted()[15]) indexed=\(indexed.sorted()[15]) scan_p95=\(scan.sorted()[28]) indexed_p95=\(indexed.sorted()[28]) scan_max=\(scan.max()!) indexed_max=\(indexed.max()!)")
+        }
+    }
+
     func testGitResourceSelectionPreservesIslandsAndSeparatesIndexSections() {
         let model = GitStatusModel()
         func row(_ path: String, section: String = "unstaged") -> GitStatusModel.ChangeSelection {
             .init(scope: "local", repository: "/fixture", section: section, path: path)
         }
         let visible = ["a", "b", "c", "d", "e"].map { row($0) }
-        model.selectChange(visible[0], visible: visible)
-        model.selectChange(visible[2], visible: visible, toggling: true)
+        model.selectChange(visible[0], visible: .init(visible))
+        model.selectChange(visible[2], visible: .init(visible), toggling: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2]])
-        model.selectChange(visible[4], visible: visible, extending: true)
+        model.selectChange(visible[4], visible: .init(visible), extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
-        model.selectChange(visible[3], visible: visible, extending: true)
+        model.selectChange(visible[3], visible: .init(visible), extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
                        "Mouse Shift retracts the anchor's contiguous range but preserves islands")
 
-        model.moveChangeCursor(visible: visible, by: 1, extending: true)
+        model.moveChangeCursor(visible: .init(visible), by: 1, extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
-        model.moveChangeCursor(visible: visible, by: -1, extending: true)
+        model.moveChangeCursor(visible: .init(visible), by: -1, extending: true)
         XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
                        "Keyboard Shift incrementally retracts without replaying mouse range")
 
         let staged = row("c", section: "staged")
-        model.selectChange(staged, visible: visible + [staged], toggling: true)
+        model.selectChange(staged, visible: .init(visible + [staged]), toggling: true)
         XCTAssertTrue(model.selectedChanges.contains(staged))
         XCTAssertTrue(model.selectedChanges.contains(visible[2]),
                       "Staged and unstaged paths are different resources")
-        model.reconcileChangeSelection(visible: [visible[0], visible[1], staged])
+        model.reconcileChangeSelection(visible: .init([visible[0], visible[1], staged]))
         XCTAssertEqual(model.selectedChanges, [visible[0], staged])
         XCTAssertEqual(model.changeCursor, staged)
 
-        model.selectAllChanges(visible: visible + [staged])
+        model.selectAllChanges(visible: .init(visible + [staged]))
         XCTAssertEqual(model.selectedChanges.count, visible.count + 1)
         model.clearChangeSelection()
         XCTAssertTrue(model.selectedChanges.isEmpty)
