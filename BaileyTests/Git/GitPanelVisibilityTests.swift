@@ -53,68 +53,13 @@ final class GitPanelVisibilityTests: XCTestCase {
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-LoadedProjects-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
-        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-            groupNames: ["projects", "", "files", "git"],
-            selectedNames: ["projects", "", "files", "git"],
-            weights: [0.16, 0.40, 0.21, 0.23],
-            actionNames: DockAddAction.allCases.map(\.rawValue), edgeThreshold: 0.22
-        ))
-        let application = WorkspaceApplication()
-        let manager = application.makeWindow()
-        defer { manager.windowClosed() }
-        let model = GitStatusModel()
-        defer { model.sync(root: "") }
-        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 1250, height: 720),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: model))
-        host.sizingOptions = []
-        window.contentView = host
-        manager.attach(to: window)
-        window.orderFront(nil)
-
-        func layout() {
-            host.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-        }
-        func waitFor(_ label: String = "Native Dock did not settle", _ condition: () -> Bool) async throws {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(25))
-            while !condition() && .now < deadline {
-                layout()
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            guard condition() else {
-                throw NSError(domain: "LoadedProjects", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "\(label); commits=\(model.recentCommits.count), refreshing=\(model.isRefreshing), history=\(model.canUseCurrentHistory)"])
-            }
-        }
-        func views(_ view: NSView) -> [NSView] {
-            [view] + view.subviews.flatMap(views)
-        }
         func git(_ args: [String], in root: URL) throws {
             let result = GitCommandExecution.run(args, in: root.path)
             guard result.status == 0 else { throw NSError(domain: "LoadedProjectGit", code: Int(result.status),
-                userInfo: [NSLocalizedDescriptionKey: result.stderr]) }
+                userInfo: [NSLocalizedDescriptionKey: "\(root.lastPathComponent): git \(args.joined(separator: " ")): \(result.stderr)"]) }
         }
 
-        func memory(_ stage: String) {
-            guard longSession else { return }
-            var info = task_vm_info_data_t()
-            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
-            let result = withUnsafeMutablePointer(to: &info) { pointer in
-                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-                }
-            }
-            XCTAssertEqual(result, KERN_SUCCESS)
-            print("WORKSPACE_MEMORY stage=\(stage) rss_mib=\(Double(info.resident_size)/1_048_576) footprint_mib=\(Double(info.phys_footprint)/1_048_576)")
-        }
-        let cycles = longSession ? 100 : 30
-        let sessionStarted = ProcessInfo.processInfo.systemUptime
-        memory("initial")
-        var fixtures: [(project: Project, files: [(FileTab, NSScrollView)], root: URL)] = []
-        for projectIndex in 0..<projectCount {
+        func prepareProject(_ projectIndex: Int) throws -> (root: URL, paths: [URL]) {
             let root = base.appendingPathComponent("project-\(projectIndex)")
             let sources = root.appendingPathComponent("Sources")
             let resources = root.appendingPathComponent("Resources")
@@ -143,7 +88,10 @@ final class GitPanelVisibilityTests: XCTestCase {
                 }
                 let imported = GitCommandExecution.runData(["fast-import", "--quiet"], in: root.path,
                     timeout: 60, stdin: Data(script.utf8))
-                XCTAssertEqual(imported.status, 0, imported.stderr)
+                guard imported.status == 0 else {
+                    throw NSError(domain: "LoadedProjectGit", code: Int(imported.status),
+                        userInfo: [NSLocalizedDescriptionKey: "\(root.lastPathComponent): git fast-import: \(imported.stderr)"])
+                }
                 try git(["reset", "--hard", "main"], in: root)
             }
             var paths: [URL] = []
@@ -180,6 +128,80 @@ final class GitPanelVisibilityTests: XCTestCase {
                 try Data("modified resource \(index)\n".utf8).write(to: resourcePath(index))
             }
             if hasStagedResources { try git(["add", "--", "StagedResources"], in: root) }
+            return (root, paths)
+        }
+
+        // Fixture failures must be reported before any SwiftUI gesture
+        // recognizers exist; fixture IO is not part of the UI measurements.
+        let prepared = try (0..<projectCount).map { index in
+            try autoreleasepool { try prepareProject(index) }
+        }
+
+        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
+            groupNames: ["projects", "", "files", "git"],
+            selectedNames: ["projects", "", "files", "git"],
+            weights: [0.16, 0.40, 0.21, 0.23],
+            actionNames: DockAddAction.allCases.map(\.rawValue), edgeThreshold: 0.22
+        ))
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        let model = GitStatusModel()
+        defer { model.sync(root: "") }
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 1250, height: 720),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            autoreleasepool {
+                window.contentView = nil
+                window.close()
+            }
+        }
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: model))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+
+        func layout() {
+            autoreleasepool {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+            }
+        }
+        func waitFor(_ label: String = "Native Dock did not settle", _ condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+            while !condition() && .now < deadline {
+                layout()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            guard condition() else {
+                throw NSError(domain: "LoadedProjects", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "\(label); commits=\(model.recentCommits.count), refreshing=\(model.isRefreshing), history=\(model.canUseCurrentHistory)"])
+            }
+        }
+        func views(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(views)
+        }
+
+        func memory(_ stage: String) {
+            guard longSession else { return }
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+                }
+            }
+            XCTAssertEqual(result, KERN_SUCCESS)
+            print("WORKSPACE_MEMORY stage=\(stage) rss_mib=\(Double(info.resident_size)/1_048_576) footprint_mib=\(Double(info.phys_footprint)/1_048_576)")
+        }
+        let cycles = longSession ? 100 : 30
+        let sessionStarted = ProcessInfo.processInfo.systemUptime
+        memory("initial")
+        var fixtures: [(project: Project, files: [(FileTab, NSScrollView)], root: URL)] = []
+        for (projectIndex, fixture) in prepared.enumerated() {
+            let (root, paths) = fixture
             let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: configuration)
             project.customDirectory = root.path
             manager.projects.append(project)
