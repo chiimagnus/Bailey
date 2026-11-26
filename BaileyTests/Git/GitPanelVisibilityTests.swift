@@ -6,6 +6,37 @@ import XCTest
 @MainActor
 final class GitPanelVisibilityTests: XCTestCase {
     func testLoadedCodeProjectsAndSplitGitPanelsSwitchUnderRealHistoryLoad() async throws {
+        try await exerciseLoadedProjects(projectCount: 2, tabCount: 24, historyCount: 3_000)
+    }
+
+    func testFourProjectsWithRealLongSourceFilesAndLargeGitHistories() async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let paths = [
+            "Bailey/Git/GitStatusModel.swift", "Bailey/Git/GitPanel.swift",
+            "Bailey/Git/DiffTextView.swift", "Bailey/Git/DiffViewerView.swift",
+            "Bailey/Git/RecentCommitsView.swift", "Bailey/Editor/FileViewerView.swift",
+            "Bailey/Git/DiffEngine.swift", "Bailey/Files/FileTreeModel.swift",
+            "Bailey/Editor/MarkdownPreview.swift", "Bailey/Workspace/WorkspaceWindowModel.swift",
+            "Bailey/Browser/BrowserView.swift", "Bailey/Editor/NativeCodeTextView.swift",
+            "Bailey/Workspace/LocalWorkspaceBackend.swift", "Bailey/UI/WorkspaceDockView.swift",
+            "Bailey/Editor/MarkdownDocument.swift"
+        ]
+        let realSources = try paths.map { path -> (String, Data) in
+            let url = repository.appendingPathComponent(path)
+            let bytes = try Data(contentsOf: url)
+            XCTAssertGreaterThan(bytes.filter { $0 == 10 }.count, 1_000)
+            return (url.lastPathComponent, bytes)
+        }
+        try await exerciseLoadedProjects(projectCount: 4, tabCount: 30, historyCount: 10_000,
+                                         earlierCommits: 300, realSources: realSources)
+    }
+
+    private func exerciseLoadedProjects(
+        projectCount: Int, tabCount: Int, historyCount: Int,
+        earlierCommits: Int = 0, realSources: [(String, Data)] = []
+    ) async throws {
+        let hasStagedResources = !realSources.isEmpty
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-LoadedProjects-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
@@ -55,43 +86,66 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
 
         var fixtures: [(project: Project, files: [(FileTab, NSScrollView)], root: URL)] = []
-        let tabCount = 24
-        let historyCount = 3_000
-        for projectIndex in 0..<2 {
+        for projectIndex in 0..<projectCount {
             let root = base.appendingPathComponent("project-\(projectIndex)")
             let sources = root.appendingPathComponent("Sources")
             let resources = root.appendingPathComponent("Resources")
             try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+            let stagedResources = root.appendingPathComponent("StagedResources")
+            if hasStagedResources {
+                try FileManager.default.createDirectory(at: stagedResources, withIntermediateDirectories: true)
+            }
+            func resourcePath(_ index: Int) -> URL {
+                let parent = hasStagedResources && index % 3 == 0 ? stagedResources : resources
+                return parent.appendingPathComponent("file-\(index).txt")
+            }
             try git(["init", "-q", "-b", "main"], in: root)
             try git(["config", "user.name", "Bailey Loaded Projects"], in: root)
             try git(["config", "user.email", "fixture@invalid"], in: root)
             try git(["config", "commit.gpgsign", "false"], in: root)
+            if earlierCommits > 0 {
+                let seed = root.appendingPathComponent("history.txt")
+                for revision in 0..<earlierCommits {
+                    try Data("revision \(revision)\n".utf8).write(to: seed)
+                    try git(["add", "--", "history.txt"], in: root)
+                    try git(["commit", "-qm", "History \(revision)"], in: root)
+                }
+            }
             var paths: [URL] = []
             for index in 0..<tabCount {
-                let path = sources.appendingPathComponent("Module-\(index).swift")
-                let source = (0..<400).map { function in
-                    """
-                    func value_\(function)(_ input: Int) -> Int {
-                        let adjusted = input + \(projectIndex * tabCount + index)
-                        return adjusted * \(function + 1)
-                    }
+                let path: URL
+                let data: Data
+                if !realSources.isEmpty {
+                    let fixture = realSources[index % realSources.count]
+                    path = sources.appendingPathComponent("\(index)-" + fixture.0)
+                    data = fixture.1
+                } else {
+                    path = sources.appendingPathComponent("Module-\(index).swift")
+                    let source = (0..<400).map { function in
+                        """
+                        func value_\(function)(_ input: Int) -> Int {
+                            let adjusted = input + \(projectIndex * tabCount + index)
+                            return adjusted * \(function + 1)
+                        }
 
-                    """
-                }.joined(separator: "\n")
-                try Data(source.utf8).write(to: path)
+                        """
+                    }.joined(separator: "\n")
+                    data = Data(source.utf8)
+                }
+                try data.write(to: path)
                 paths.append(path)
             }
             for index in 0..<historyCount {
                 try Data("original resource \(index)\n".utf8).write(
-                    to: resources.appendingPathComponent("file-\(index).txt"))
+                    to: resourcePath(index))
             }
             try git(["add", "-A"], in: root)
             try git(["commit", "-qm", "Large real source history"], in: root)
             for index in 0..<historyCount {
-                let path = resources.appendingPathComponent("file-\(index).txt")
-                try Data("modified resource \(index)\n".utf8).write(to: path)
+                try Data("modified resource \(index)\n".utf8).write(to: resourcePath(index))
             }
+            if hasStagedResources { try git(["add", "--", "StagedResources"], in: root) }
             let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: configuration)
             project.customDirectory = root.path
             manager.projects.append(project)
@@ -114,12 +168,34 @@ final class GitPanelVisibilityTests: XCTestCase {
             XCTAssertEqual(project.tabs.count, tabCount)
             fixtures.append((project, files, root))
         }
-        print("LOADED_PROJECTS_READY projects=2 tabs=\(tabCount * 2)")
-        for cycle in 0..<12 {
-            let fixture = fixtures[cycle % 2]
+        print("LOADED_PROJECTS_READY projects=\(projectCount) tabs=\(tabCount * projectCount) changes_per_repo=\(historyCount) earlier_commits=\(earlierCommits) actual_source=\(!realSources.isEmpty)")
+        // Measure switching separately from disclosure and accessibility enumeration.
+        for pass in 0..<2 {
+            for cycle in 0..<30 {
+                let fixture = fixtures[cycle % projectCount]
+                let start = ProcessInfo.processInfo.systemUptime
+                manager.selectProject(id: fixture.project.id)
+                manager.syncGitStatus(model)
+                let folders: Set<String> = ["unstaged:Resources", "staged:StagedResources"]
+                if pass == 1 {
+                    model.collapsedFolders.formUnion(folders)
+                } else {
+                    model.collapsedFolders.subtract(folders)
+                }
+                layout()
+                XCTAssertEqual(manager.selectedProjectID, fixture.project.id)
+                XCTAssertTrue(fixture.files.last?.0.editorView === fixture.files.last?.1)
+                XCTAssertTrue(fixture.files.last?.1.window === window)
+                print("SWITCH_MATRIX pass=\(pass) cycle=\(cycle) ms=\((ProcessInfo.processInfo.systemUptime-start)*1000) views=\(views(host).count)")
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        for cycle in 0..<30 {
+            let fixture = fixtures[cycle % projectCount]
             let start = ProcessInfo.processInfo.systemUptime
             manager.selectProject(id: fixture.project.id)
             manager.syncGitStatus(model)
+            model.collapsedFolders.subtract(["unstaged:Resources", "staged:StagedResources"])
             let selected = ProcessInfo.processInfo.systemUptime
             layout()
             let firstLayout = ProcessInfo.processInfo.systemUptime
