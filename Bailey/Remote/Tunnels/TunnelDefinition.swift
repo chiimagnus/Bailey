@@ -177,8 +177,7 @@ enum TunnelStore {
 
     /// Only `[[tunnel]]` tables are read; anything else is ignored rather than
     /// rejected, so a hand edit can't cost the user every saved forward.
-    /// A table missing a host or either port is skipped, and an unknown
-    /// direction reads as local rather than dropping the table.
+    /// A table missing a host, a valid direction, or either port is skipped.
     static func parse(_ text: String) -> [TunnelDefinition] {
         var tables: [[String: TOML.Value]] = []
         var current: [String: TOML.Value]?
@@ -200,6 +199,7 @@ enum TunnelStore {
         return tables.compactMap { table in
             guard
                 let host = table["host"]?.string,
+                let direction = table["direction"]?.string.flatMap(TunnelDirection.init(rawValue:)),
                 let local = table["local-port"]?.double,
                 let remote = table["remote-port"]?.double,
                 let localPort = Int(exactly: local),
@@ -208,7 +208,7 @@ enum TunnelStore {
             return TunnelDefinition(
                 name: table["name"]?.string ?? host,
                 host: host,
-                direction: table["direction"]?.string.flatMap(TunnelDirection.init(rawValue:)) ?? .local,
+                direction: direction,
                 localHost: table["local-host"]?.string ?? "127.0.0.1",
                 localPort: localPort,
                 remoteHost: table["remote-host"]?.string ?? "127.0.0.1",
