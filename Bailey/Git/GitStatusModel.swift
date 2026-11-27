@@ -1632,7 +1632,6 @@ final class GitStatusModel {
         project: Project?, isCurrent: @MainActor (Project) -> Bool
     ) {
         guard let project, isCurrent(project), let context = project.panelContext else {
-            if panelTargetIdentity != nil { clearPanelNavigation() }
             sync(root: "")
             if project == nil {
                 cachedStatusByRoot.removeAll()
@@ -1640,36 +1639,33 @@ final class GitStatusModel {
             }
             return
         }
-        if panelTargetIdentity != context.identity {
-            clearPanelNavigation()
-            contextGeneration &+= 1
-            releaseHistoryDetails()
-            invalidateStatusRefresh()
-        }
-        sync(root: context.cwd, backend: context.backend, scope: context.scope)
-        panelTargetIdentity = context.identity
+        sync(root: context.cwd, backend: context.backend, scope: context.scope,
+             panelIdentity: context.identity)
     }
 
     /// Omitting the backend selects the Mac; scope keeps cached state and
     /// drafts distinct when the same path exists on another machine.
-    func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
-        panelTargetIdentity = nil
+    func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local",
+              panelIdentity: PanelContext.Identity? = nil) {
         let targetBackend = backend ?? LocalWorkspaceBackend.shared
         let channelChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
-        let targetChanged = root != rootPath || workspaceScope != scope || channelChanged
-        self.backend = targetBackend
+        let rootChanged = root != rootPath || workspaceScope != scope
+        let projectChanged = panelTargetIdentity != panelIdentity
+        let targetChanged = rootChanged || channelChanged || projectChanged
         if targetChanged {
+            contextGeneration &+= 1
             pendingFileEvent?.cancel()
             pendingFileEvent = nil
             localWatcher = nil
             localWatcherPaths = []
         }
-        if root != rootPath || workspaceScope != scope {
+        if rootChanged || projectChanged { clearPanelNavigation() }
+        if channelChanged { self.backend = targetBackend }
+        if projectChanged { panelTargetIdentity = panelIdentity }
+        if rootChanged {
             parkCurrentSnapshot()
             activateSnapshot(scope + "\u{0}" + root)
-            clearPanelNavigation()
             workspaceScope = scope
-            contextGeneration &+= 1
             rootPath = root
             let pageSize = Self.recentCommitPageSize
             let retainedCommits: Int
@@ -1691,10 +1687,9 @@ final class GitStatusModel {
                 hasCurrentLineTotals = false
                 needsCoreVerification = true
             }
-        } else if channelChanged {
-            // A new SSH channel must not queue behind a worker stalled on the
-            // previous connection, even when the host and repository match.
-            contextGeneration &+= 1
+        } else if targetChanged {
+            // A different project or channel must verify its own status, even
+            // when the repository path is unchanged.
             hasCurrentReferences = false
             hasCurrentHistory = false
             hasCurrentStashes = false

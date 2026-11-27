@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -85,11 +84,6 @@ struct ContentView: View {
             syncGit()
         }
         .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didBecomeActiveNotification
-        )) { _ in
-            syncGit()
-        }
         .onChange(of: commandCompletionSequences) { syncGit() }
         .onChange(of: manager.selectedProject?.panelContext?.identity) { syncGit() }
         .onChange(of: colorScheme) {

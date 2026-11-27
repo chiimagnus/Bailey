@@ -191,6 +191,60 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(git.expandedCommitIDs.isEmpty)
     }
 
+    func testSameProjectRefreshDoesNotInvalidatePanelIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let project = Project(fallbackName: "Stable target", layout: .init())
+        project.customDirectory = directory.path
+        let identity = try XCTUnwrap(project.panelContext?.identity)
+        let model = GitStatusModel()
+        model.syncSelectedProject(project: project) { $0 === project }
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+
+        let invalidated = expectation(description: "Same-project refresh preserves the panel identity")
+        invalidated.isInverted = true
+        withObservationTracking({ _ = model.matchesPanelTarget(identity) }) { invalidated.fulfill() }
+        model.syncSelectedProject(project: project) { $0 === project }
+        try await wait { !model.isRefreshing }
+        await fulfillment(of: [invalidated], timeout: 0.1)
+        XCTAssertTrue(model.matchesPanelTarget(identity))
+    }
+
+    func testSwitchingProjectsAtSameRepositoryKeepsNativeWatcherCurrent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for arguments in [
+            ["init", "-q", "-b", "main"],
+            ["config", "user.name", "Watcher Test"],
+            ["config", "user.email", "watcher@invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["commit", "--allow-empty", "-qm", "initial"],
+        ] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let first = Project(fallbackName: "First", layout: .init())
+        let second = Project(fallbackName: "Second", layout: .init())
+        first.customDirectory = directory.path
+        second.customDirectory = directory.path
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(true)
+        model.syncSelectedProject(project: first) { $0 === first }
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        try Data("first project".utf8).write(to: directory.appendingPathComponent("first.txt"))
+        try await wait { model.changedEntries.contains(where: { $0.path == "first.txt" }) && !model.isRefreshing }
+
+        model.syncSelectedProject(project: second) { $0 === second }
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.matchesPanelTarget(try XCTUnwrap(second.panelContext?.identity)))
+        XCTAssertFalse(model.matchesPanelTarget(try XCTUnwrap(first.panelContext?.identity)))
+        try Data("second project".utf8).write(to: directory.appendingPathComponent("second.txt"))
+        try await wait { model.changedEntries.contains(where: { $0.path == "second.txt" }) && !model.isRefreshing }
+        XCTAssertEqual(Set(model.changedEntries.map(\.path)), ["first.txt", "second.txt"])
+    }
+
     func testLargeChangeTreeIsBuiltOnlyWhenItsActualInputsChange() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-Git-Scale-\(UUID().uuidString)")
