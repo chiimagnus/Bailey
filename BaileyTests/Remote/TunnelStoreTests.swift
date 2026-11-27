@@ -28,48 +28,64 @@ final class TunnelStoreTests: XCTestCase {
         XCTAssertNil(loaded[1].validationProblem)
     }
 
-    func testExistingConfigurationAndMalformedTablesDoNotLoseValidTunnels() {
+    func testMissingOrUnknownDirectionNeverStartsAGuessedForward() {
         let text = """
-            # unrelated user-edited settings
             [other]
             host = "ignored"
             [[tunnel]]
-            host = "a1"
+            host = "old-format"
             local-port = 9292
             remote-port = 9292
+            enabled = true
             [[tunnel]]
             name = "missing host"
             local-port = 1
             [[tunnel]]
-            host = "a1"
+            host = "unknown"
             direction = "sideways"
             local-port = 8080
             remote-port = 8080
+            enabled = true
+            [[tunnel]]
+            name = "Reverse"
+            host = "working"
+            direction = "remote"
+            local-host = "127.0.0.1"
+            local-port = 22
+            remote-port = 2222
+            enabled = true
             """
         let parsed = TunnelStore.parse(text)
-        XCTAssertEqual(parsed.count, 2)
-        XCTAssertEqual(parsed.map(\.name), ["a1", "a1"])
-        XCTAssertEqual(parsed.map(\.direction), [.local, .local])
-        XCTAssertFalse(parsed[0].isEnabled)
-        XCTAssertFalse(parsed[1].isEnabled)
+        XCTAssertEqual(parsed.map(\.host), ["working"])
+        XCTAssertEqual(parsed.map(\.name), ["Reverse"])
+        XCTAssertEqual(parsed.map(\.direction), [.remote])
+        XCTAssertEqual(parsed.map(\.isEnabled), [true])
     }
 
     func testMalformedPortsDoNotCrashOrCorruptValidTunnels() {
         let text = """
             [[tunnel]]
             host = "bad-infinite"
+            direction = "local"
+            remote-host = "127.0.0.1"
             local-port = 1e309
             remote-port = 3389
             [[tunnel]]
             host = "bad-not-a-number"
+            direction = "local"
+            remote-host = "127.0.0.1"
             local-port = nan
             remote-port = 3389
             [[tunnel]]
             host = "bad-fractional"
+            direction = "local"
+            remote-host = "127.0.0.1"
             local-port = 1234.5
             remote-port = 3389
             [[tunnel]]
             host = "working"
+            direction = "local"
+            remote-host = "127.0.0.1"
             local-port = 4444
             remote-port = 8080
             """

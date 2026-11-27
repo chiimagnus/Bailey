@@ -38,10 +38,10 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
     var color: ImageAnnotationColor
     var strokeWidth: CGFloat
     var text: String
-    private(set) var via: [CGPoint]?
+    private(set) var via: [CGPoint]
 
     init(id: UUID = UUID(), kind: Kind, start: CGPoint, end: CGPoint,
-         color: ImageAnnotationColor, strokeWidth: CGFloat, text: String = "", via: [CGPoint]? = nil) {
+         color: ImageAnnotationColor, strokeWidth: CGFloat, text: String = "", via: [CGPoint] = []) {
         self.id = id
         self.kind = kind
         self.start = start
@@ -52,12 +52,12 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
         self.via = via
     }
 
-    var penPointCount: Int { kind == .pen ? 2 + (via?.count ?? 0) : 0 }
+    var penPointCount: Int { kind == .pen ? 2 + via.count : 0 }
 
     var bounds: CGRect {
         var minX = min(start.x, end.x), maxX = max(start.x, end.x)
         var minY = min(start.y, end.y), maxY = max(start.y, end.y)
-        for point in via ?? [] {
+        for point in via {
             minX = min(minX, point.x)
             maxX = max(maxX, point.x)
             minY = min(minY, point.y)
@@ -79,7 +79,7 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
         let tolerance = max(0, tolerance) + strokeWidth / 2
         if kind == .pen || kind == .arrow {
             var previous = start
-            for next in via ?? [] {
+            for next in via {
                 if Self.hitsSegment(point, from: previous, to: next, tolerance: tolerance) { return true }
                 previous = next
             }
@@ -110,7 +110,7 @@ nonisolated struct ImageAnnotationLayer: Codable, Equatable, Identifiable, Senda
         start.y += y
         end.x += x
         end.y += y
-        via = via?.map { CGPoint(x: $0.x + x, y: $0.y + y) }
+        via = via.map { CGPoint(x: $0.x + x, y: $0.y + y) }
     }
 }
 
@@ -141,10 +141,9 @@ nonisolated struct ImageAnnotationState: Codable, Equatable, Sendable {
                   layer.strokeWidth > 0, layer.strokeWidth <= 128,
                   layer.text.utf16.count <= Self.maximumTextUnits,
                   !layer.text.utf16.contains(0) else { throw CocoaError(.fileReadCorruptFile) }
-            if let via = layer.via {
-                guard layer.kind == .pen, layer.penPointCount <= ImageAnnotationLayer.maximumPenPoints,
-                      via.allSatisfy(valid) else { throw CocoaError(.fileReadCorruptFile) }
-            }
+            guard layer.kind == .pen || layer.via.isEmpty,
+                  layer.penPointCount <= ImageAnnotationLayer.maximumPenPoints,
+                  layer.via.allSatisfy(valid) else { throw CocoaError(.fileReadCorruptFile) }
             switch layer.kind {
             case .pen: break
             case .arrow:
@@ -289,7 +288,7 @@ final class ImageAnnotationDocument {
         guard result.layers.count < ImageAnnotationState.maximumLayers else { return result }
         let kind: ImageAnnotationLayer.Kind
         var start = a, end = b, text = ""
-        var intermediate: [CGPoint]?
+        var intermediate: [CGPoint] = []
         switch tool {
         case .select, .crop, .text: return result
         case .pen:
@@ -304,7 +303,7 @@ final class ImageAnnotationDocument {
             if points.last == b { points.removeLast() }
             guard result.penPointCount + points.count + 2 <= ImageAnnotationState.maximumPenPoints else { return result }
             kind = .pen
-            intermediate = points.isEmpty ? nil : points
+            intermediate = points
         case .arrow:
             guard hypot(b.x - a.x, b.y - a.y) >= 1 else { return result }
             kind = .arrow

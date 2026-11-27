@@ -282,27 +282,25 @@ final class ImageAnnotationTests: XCTestCase {
         document.commitGesture(from: start, to: end, via: points + [start])
         XCTAssertTrue(document.state.isEmpty)
         document.commitGesture(from: start, to: end, via: points)
-        XCTAssertEqual(document.state.layers.first?.via?.count, maximumIntermediate)
+        XCTAssertEqual(document.state.layers.first?.via.count, maximumIntermediate)
         let maxedDocument = ImageAnnotationDocument(size: size, state: .init(layers: full))
         maxedDocument.begin()
         maxedDocument.tool = .pen
         XCTAssertEqual(maxedDocument.proposedGesture(from: start, to: end).layers.count, full.count)
     }
 
-    func testPenReopensLegacySidecarAndPreservesBentPixelsInCopyAndExport() async throws {
+    func testPenReopensCurrentSidecarAndPreservesBentPixelsInCopyAndExport() async throws {
         let root = try makeRoot()
         let path = root.appendingPathComponent("pen.png")
         let original = try png()
         try original.write(to: path)
         let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
         let version = WorkspaceFileVersion(data: original)
-        let legacy = """
-            {"schema":1,"sourceSHA256":"\(version.sha256)","sourceBytes":\(version.byteCount),
-             "pixelSize":[160,120],"annotations":{"layers":[
-              {"id":"B3226ED0-4111-4D04-9491-183ABBD129D8","kind":"rectangle","start":[10,10],
-               "end":[20,20],"color":"blue","strokeWidth":2,"text":""}]}}
-            """
-        try Data(legacy.utf8).write(to: sidecar)
+        let earlier = try await ImageAnnotationSidecar.encode(.init(layers: [
+            .init(kind: .rectangle, start: CGPoint(x: 10, y: 10), end: CGPoint(x: 20, y: 20),
+                  color: .blue, strokeWidth: 2)
+        ]), version: version, size: CGSize(width: 160, height: 120))
+        try earlier.write(to: sidecar)
         let file = try await open(path)
         defer { file.retireContent() }
         let document = try XCTUnwrap(file.imageAnnotations)
@@ -316,7 +314,7 @@ final class ImageAnnotationTests: XCTestCase {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         try await file.copyAnnotatedImage(request: file.fileContentRevision, to: pasteboard)
-        XCTAssertEqual(try Data(contentsOf: sidecar), Data(legacy.utf8), "Copy keeps the earlier saved document")
+        XCTAssertEqual(try Data(contentsOf: sidecar), earlier, "Copy keeps the earlier saved document")
         let copied = try image(XCTUnwrap(pasteboard.data(forType: .png)))
 
         await file.save()
@@ -1182,7 +1180,15 @@ final class ImageAnnotationTests: XCTestCase {
         let badLayer = ImageAnnotationLayer(kind: .arrow, start: CGPoint(x: -1, y: 0),
             end: CGPoint(x: 1, y: 1), color: .red, strokeWidth: 2)
         let oversized = Array(repeating: badLayer, count: ImageAnnotationState.maximumLayers + 1)
+        let legacy = """
+            {"schema":1,"sourceSHA256":"\(version.sha256)","sourceBytes":\(version.byteCount),
+             "pixelSize":[160,120],"annotations":{"layers":[
+              {"id":"B3226ED0-4111-4D04-9491-183ABBD129D8","kind":"rectangle","start":[10,10],
+               "end":[20,20],"color":"blue","strokeWidth":2,"text":""}]}}
+            """
         let invalid = [
+            Data(legacy.utf8),
+            Data(legacy.replacingOccurrences(of: #""text":""}"#, with: #""text":"","via":null}"#).utf8),
             Data(),
             Data("not JSON".utf8),
             try JSONEncoder().encode(ImageAnnotationSidecar.Record(schema: 99, sourceSHA256: version.sha256,
@@ -1782,7 +1788,7 @@ final class ImageAnnotationTests: XCTestCase {
         try mouse(.leftMouseUp, 160, 90)
         let stroke = try XCTUnwrap(document.state.layers.first)
         XCTAssertEqual(stroke.kind, .pen)
-        XCTAssertEqual(try XCTUnwrap(stroke.via?.first).y, 140, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(stroke.via.first).y, 140, accuracy: 0.01)
         try mouse(.leftMouseDown, 100, 90)
         try mouse(.leftMouseDragged, 110, 150)
         try key("r")
