@@ -9,10 +9,8 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
   `SourceTextEditor`／`FileTab.save` 继续是唯一文本、Undo、条件保存和外部冲突所有者。
   不添加 HTML `Content` case、第二份可写 DOM 或新文件标签。
 - `Project.setFilePreviewMode → DockWorkspaceModel.setFilePreview` 和 File 菜单 `⌘⇧V`
-  已有单文件源码／预览／并排语义。**在首个非 Markdown 文本格式接入时**
-  依 [文件查看器计划](../file-viewer-routing/plan-p1.md#p1-t2) 把该模式／Dock companion
-  从 Markdown 专名改成通用文件预览，更新所有旧调用和测试，立即删除旧分支；
-  不复制一套 HTML Mode／Splitter／菜单监听。
+  已随非 Markdown 文本格式接入统一为通用文件预览（见[文件编辑器](../../../docs/features/editor.md)）；
+  HTML 复用该模式／Dock companion，不另建 Mode／Splitter／菜单监听。
 - `MarkdownHTML`＋SwiftSoup 是 Markdown 内嵌的**受限 HTML 片段语义**，
   不能负责完整 HTML 文档、CSS 级联、媒体查询或页面布局。
   全页 HTML 预览使用独立隔离的 `WKWebView`（macOS 系统 WebKit），
@@ -81,8 +79,8 @@ WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都�
 
 ## 阶段验收
 
-本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；
-任务独立核销与阶段共同验证按[验收归属](../file-viewer-routing/plan-p1.md#acceptance-ownership)，不复制公共测试。
+远端连接、设备延期与任务／阶段验收统一遵循[文件预览共用验收](../../../docs/testing.md#文件预览共用验收)，
+不重复公共测试。
 
 宿主测试覆盖路径权限、拒绝规则、版本竞争、保存字节与 WebKit 配置；
 真实 Bailey Dev 核对网页渲染、实际网络／子资源拦截、焦点／菜单／Dock 与暗亮主题。
@@ -93,7 +91,7 @@ WebKit 只是渲染末端，CSP、资源服务、导航拦截和权限每项都�
 
 ### HTML 专项验收矩阵（P1）
 
-共同文件、身份、容量、窗口与生命周期按[共享条件 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)执行；
+共同文件、身份、容量、窗口与生命周期按[共享条件 R01–R11](../../../docs/testing.md#文件预览共用验收)执行；
 以下每组均须准备完整的真实 HTML／CSS 夹具，通过**实际 `WKWebView` 子资源结果和本地测试监听器**判定，
 不能仅检查 `WKWebViewConfiguration`、导航回调是否调用。
 

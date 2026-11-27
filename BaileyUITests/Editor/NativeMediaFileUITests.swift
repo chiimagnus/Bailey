@@ -10,7 +10,7 @@ final class NativeMediaFileUITests: XCTestCase {
             .deletingLastPathComponent()
         let video = fixture.root.appending(path: "Fullscreen.mp4")
         try FileManager.default.copyItem(
-            at: root.appending(path: ".github/features/video-file-playback/demo-video.mp4"), to: video
+            at: root.appending(path: "TestFixtures/Media/demo-video.mp4"), to: video
         )
         let original = try Data(contentsOf: video)
         let app = try WorkspaceUITestSupport.launch(
@@ -127,7 +127,7 @@ final class NativeMediaFileUITests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
         let audio = fixture.root.appending(path: "录音.m4a")
-        try FileManager.default.copyItem(at: root.appending(path: ".github/features/audio-file-playback/demo-audio.m4a"),
+        try FileManager.default.copyItem(at: root.appending(path: "TestFixtures/Media/demo-audio.m4a"),
                                          to: audio)
         let original = try Data(contentsOf: audio)
         let text = try fixture.file("other.txt", text: "Another file\n")
@@ -233,7 +233,7 @@ final class NativeMediaFileUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
-        let sample = root.appending(path: ".github/features/video-file-playback/demo-video.mp4")
+        let sample = root.appending(path: "TestFixtures/Media/demo-video.mp4")
         let video = fixture.root.appending(path: "本机片段.MP4")
         try FileManager.default.copyItem(at: sample, to: video)
         let original = try Data(contentsOf: video)

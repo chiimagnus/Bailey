@@ -77,8 +77,8 @@
 
 ## 阶段验收
 
-本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；
-任务独立核销与阶段共同验证按[验收归属](../file-viewer-routing/plan-p1.md#acceptance-ownership)，不复制公共测试。
+远端连接、设备延期与任务／阶段验收统一遵循[文件预览共用验收](../../../docs/testing.md#文件预览共用验收)，
+不重复公共测试。
 
 运行 `make test:SwiftMarkdownNativeTests,MarkdownResourceScopeTests,FileTabPersistenceTests,NativePaneRetentionIntegrationTests`
 及新增的 ImageIO／原生 `NSScrollView` 宿主测试，再执行 `make build` 与阶段完整宿主测试。
@@ -88,7 +88,7 @@
 
 ### 图片查看专项验收矩阵（P1）
 
-同时运行[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)所有适用项；
+同时运行[共用 R01–R11](../../../docs/testing.md#文件预览共用验收)所有适用项；
 当前 `SwiftMarkdownNativeTests.testStaticPNGJPEGHEICAndWebPUseNativeImageIODecoding`、
 `testGIFFramesHonorTimingAndAnimationBudget` 和 `FileTabPersistenceTests` 的大图限额测试
 只证明基础解码／缩略图，不证明完整 GIF 合成、原像素或指针锚定缩放。

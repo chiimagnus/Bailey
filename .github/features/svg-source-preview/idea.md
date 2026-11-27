@@ -16,6 +16,4 @@ SVG 是可编辑的 XML 矢量文件，也可能包含活动内容。Bailey 的 
 - 打开 SVG、切换、缩放、复制与关闭后源文件逐字节不变；编辑源码才产生脏状态。
 - 包含中文文字、渐变、mask、clipPath、filter、透明度、非方形 viewBox、大尺寸路径、非法 XML、外部字体／图片和恶意脚本时能显示或明确拒绝，且不能执行未授权资源访问。
 - 真实 Dock 窄宽、原生焦点、窗口切换、重新加载与 Undo／Redo 一致。宿主运行安全测试，Bailey Dev 验证实际交互。
-- HTML 原型仅模拟交互；正式 SVG 共用已存在的 `SVGArtwork.sanitizedXML` 与 SwiftDraw，尚须验证独立文件的实际矢量精度、原生手势和恶意 XML／外部资源输入边界。
-
-[统一交互 HTML · SVG](../prototype.html?format=svg)。
+- SVG 共用已存在的 `SVGArtwork.sanitizedXML` 与 SwiftDraw，尚须验证独立文件的实际矢量精度、原生手势和恶意 XML／外部资源输入边界。

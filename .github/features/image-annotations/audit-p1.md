@@ -7,8 +7,8 @@
 
 - **结果**：No-Go
 - **依据**：P1 两项任务均独立完成：双窗长会话、原生资源退役、实体触控板捏合（用户亲验）、普通鼠标轮缩放及真实 VoiceOver 四项缩放操作和倍率播报均通过。缺配 1× 显示按用户决定延期；共享最终整合仍待核销；不再单独验收减弱动态效果。
-- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
-- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
+- **现行 AX 验收**：依[共享验收环境](../../../docs/testing.md#文件预览共用验收)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
+- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../../../docs/testing.md#文件预览共用验收)；可执行项仍需验收。
 
 ## 任务与改动
 
@@ -123,24 +123,24 @@
 - 缺少实体 1× 显示器／触控板、VoiceOver 和完整 App 多格式长会话验收；宿主结果不替代实际设备。远端验收以实际 Windows SSH 为准。实际设备及完整 App 缺口保留为阶段 No-Go。
 - `1492cf72`：80 组原生像素对照和最终 86 项相关回归全部通过，无跳过；先前跳过的真实七格式百次切换补测通过（3.495s）。正式 Debug 构建及严格签名通过。
 - 已同步 `docs/features/editor.md`；任务状态及证据见 `todo.toml`。
-- 最终 e4267d71：FileTabPersistence 73 项、真实 JPEG 32/256 MiB 两侧的精确容量边界单独补测全部通过。共享最终回归详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
-- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- 最终 e4267d71：FileTabPersistence 73 项、真实 JPEG 32/256 MiB 两侧的精确容量边界单独补测全部通过。共享最终回归详见 文件路由 P1 审计（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`）。
+- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 文件路由 P1 审计（同一历史记录）。
 - d768f481：真实 GIF／SVG 原生文件视图的四个 AX 缩放动作、菜单一致性、像素倍率、中心位置及重挂载恢复、源字节均验证通过；不替代物理输入或 VoiceOver 实际语音播报。
 
-- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；共享 P1 审计（同一历史记录） 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 5a4f5673：共用原生 AX 类型／实际倍率和值通知，宿主 Red 14 条、Green 8/8；SVG 真实高倍细线和 AX 值 39.789 秒通过；Markdown GIF 15.029 秒、真实 34 帧文件 GIF 31.628 秒通过。JPEG 双向拖动及反向横滚像素断言均通过；整项 GUI 在清理时检测到系统剪贴板计数 3750→3753，写入者未定位，保留失败记录及原断言；同版独立复验 1/1 通过（24.196 秒，/tmp/bailey-raster-final.nv02PU），剪贴板、双向拖动、横滚像素及原字节断言全部满足。日志 /tmp/bailey-viewport-{ax-red.M7OJCZ,ax-green.Kd1ra9,ui.q50NaZ,ui-recheck.8736K0,build.a5ASB2}。构建、严格签名成功。macOS XCTest 不提供实际双指捏合接口；鼠标／滚轮不冒充物理触控板。尝试实际启动 VoiceOver 未成功，服务状态保持原关闭，见 /tmp/bailey-native-ime-auto.dL04QZ/vo.log。
 
 - 2026-11-26：用户亲自验证实体触控板捏合无问题；64782817 将普通鼠标垂直滚轮纳入同一指针锚点缩放路径。合成原生 NSEvent 定点 Red 1 条／Green 4/4，图片、视口、SVG 扩大宿主 85 项中 73 通过、12 项既有环境跳过、零失败，make build 与严格验签退出 0。未声称实体鼠标或 VoiceOver 播报已亲验。
 
-- 2026-11-26：真实 VoiceOver 服务曾启用并在隔离图片预览尝试焦点／动作，但既有 Apple Events 授权不允许读取末句且字幕面板未出现；仍未取得实际播报。共享尝试与系统状态恢复见[文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- 2026-11-26：真实 VoiceOver 服务曾启用并在隔离图片预览尝试焦点／动作，但既有 Apple Events 授权不允许读取末句且字幕面板未出现；仍未取得实际播报。共享尝试与系统状态恢复见文件路由 P1 审计（同一历史记录）。
 
 - 2026-11-26：真实 VoiceOver 光标导航及旁白操作菜单已确认图片预览名称、Fit／100%／Zoom in／Zoom out／Annotate Image 播报。
-  菜单选择后的实际倍率和播报尚未完成，原因是共享桌面被其他正在运行的项目占用；具体证据与恢复情况见[文件路由 P1](../file-viewer-routing/audit-p1.md)。
+  菜单选择后的实际倍率和播报尚未完成，原因是共享桌面被其他正在运行的项目占用；具体证据与恢复情况见文件路由 P1（同一历史记录）。
 
 - 2026-11-26：主分支 `f5fa4b05` 隔离 Dev 的实际 VoiceOver Zoom in 通过，Fit→125%，
   原图字节不变；旁白末句及再次描述未读出倍率，P1-T1 仍 pending。
-  当前共享窗口干扰尚未排除完整组合，见[共享 P1 证据](../file-viewer-routing/audit-p1.md)。
+  当前共享窗口干扰尚未排除完整组合，见共享 P1 证据（同一历史记录）。
 
 - 2026-11-26：`d542f533` 最终版，隔离 Dev 中真实 VoiceOver 四个缩放动作及每次实际倍率播报均通过：
   Fit→100%→125%→100%→Fit，重新定位同一原生视口亦读出当前值，底图原字节未变。

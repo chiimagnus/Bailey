@@ -7,8 +7,8 @@
 
 - **结果**：No-Go（独立文件的基本图形、源码与并排已实现；P1 的完整矩阵尚未核销）。
 - **依据**：P1-T1、P1-T2 的图形、模式与接线均完成；完整 App 四象限 15.041 秒、高倍率 39.753 秒、修复后图案整包 20.585 秒和双窗 117 次通过。共用实体触控板捏合经用户确认通过，普通鼠标滚轮见图片 P1；基础 AX 缩放语义和动作已实测，共享最终整合留阶段，不再要求无关显示／输入组合，缺配物理 1× 延期。
-- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
-- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
+- **现行 AX 验收**：依[共享验收环境](../../../docs/testing.md#文件预览共用验收)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
+- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../../../docs/testing.md#文件预览共用验收)；可执行项仍需验收。
 
 ## 任务与改动
 
@@ -205,8 +205,8 @@
 - aa26f533：双窗口快照持久化后重新创建应用所有者，核对 SVG、CSV、HTML、Markdown 各自默认模式、临时 companion 移除、懒读取及标签复用，原字节不变。SessionStoreTests 11 项全部通过。
 - 实体 1× 屏、触控板惯性／捏合、VoiceOver 和完整 App 的 SVG 多窗口冷恢复未验；实际 Retina 像素与共享 PNG
   缩放证明当前绘制路径，不证明物理设备行为。实际 Windows Tailscale 已有宿主验收结果。
-- 最终 e4267d71：共享 330 项受影响回归全过（含 JPEG 边界补测），NativePaneRetentionIntegration 28 项全部通过；SVG 专项既有真实样本证据仍保留。共享执行记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
-- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- 最终 e4267d71：共享 330 项受影响回归全过（含 JPEG 边界补测），NativePaneRetentionIntegration 28 项全部通过；SVG 专项既有真实样本证据仍保留。共享执行记录见 文件路由 P1 审计（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`）。
+- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 文件路由 P1 审计（同一历史记录）。
 - d768f481：真实 GIF／SVG 原生文件视图的四个 AX 缩放动作、菜单一致性、像素倍率、中心位置及重挂载恢复、源字节均验证通过；不替代物理输入或 VoiceOver 实际语音播报。
 
 - 2026-11-25：`1b6928bd` 修复整图裁切、图案坐标与颜色。23 项 SVG 专项包含真实科研图、非对称图案在不同倍率及裁剪平移下的位置、400% 细线、滤镜和 PNG 输出；与独立 WebKit 参考的抽样比较（1 像素邻域、通道容差 0.15），PNG 163/214984、原生视口 169/214984 不匹配，均低于 0.08%。真实科研 SVG 百次开闭 16.746 秒，首像素 P95 60.21 ms，后五次关闭采样 RSS 高水位较前五次增加 0.625 MiB。受影响宿主合计 180/180，零失败、零跳过，含真实 Windows SSH；Debug、Release（58 MiB）和 UI Runner 构建、严格签名通过。完整 App UI Runner 因 `Timed out while enabling automation mode` 未能发现或执行用例，新增四象限 fit 与 400% GUI 验证仍待执行；正式 App 未替换。首次宿主运行被命令默认超时中断，已清理本次专属临时 SSH 与本地／远端夹具；分段复验通过。日志：`/tmp/bailey-svg-affected-regression-20261125.log`、`/tmp/bailey-svg-affected-regression-resumed-20261125.log`、`/tmp/bailey-svg-enumeration-20261125.json`。
@@ -215,7 +215,7 @@
 
 - 2026-11-25 `2f8482e0`：跨格式实际净化诊断及外链剔除回归与 SVG pattern 专项 2/2，零失败零跳过；见 [HTML P1](../html-live-preview/audit-p1.md)。不替代物理缩放验收。
 
-- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；共享 P1 审计（同一历史记录） 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 2026-11-26：最终版 d542f533 的 VoiceOver 已实测 100%、125%（前轮）及 80%、Fit（本轮）各动作与播报，重新定位读出当前值；原 SVG 字节一致。共享图形旁白条件核销，其他阶段门禁独立保留。
   证据 `/tmp/bailey-final-vo-exclusive.sOoDThsY/vo.log`。

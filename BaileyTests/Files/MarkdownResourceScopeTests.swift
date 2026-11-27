@@ -356,10 +356,10 @@ final class MarkdownResourceScopeTests: XCTestCase {
             let retainedWebView = try XCTUnwrap(remotePage.htmlPreview?.webView)
             XCTAssertFalse(retainedWebView === localPage.htmlPreview?.webView)
 
-            let features = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-                .deletingLastPathComponent().appending(path: ".github/features")
-            let sampleAudio = try Data(contentsOf: features.appending(path: "audio-file-playback/demo-audio.m4a"))
-            let sampleVideo = try Data(contentsOf: features.appending(path: "video-file-playback/demo-video.mp4"))
+            let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appending(path: "TestFixtures/Media")
+            let sampleAudio = try Data(contentsOf: fixtures.appending(path: "demo-audio.m4a"))
+            let sampleVideo = try Data(contentsOf: fixtures.appending(path: "demo-video.mp4"))
             let tone = URL(fileURLWithPath: directory + "/generated.m4a")
             do {
                 let writer = try AVAudioFile(forWriting: tone, settings: [
