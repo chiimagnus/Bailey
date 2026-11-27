@@ -295,7 +295,7 @@ PreviewResource 与 T2/T3 的路径和锚点结果。
 **位置：** WorkspaceWindowModel.showFind、FindWidget、EditorFind.swift、
 MarkdownFilePreview、MarkdownPreview、MarkdownSelectionText、MarkdownReaderCoordinates 与 MarkdownGlyphHit。
 
-- 接入当前[共享查找浮层](../../../docs/features/editor.md#查找与替换)：唯一系统 `⌘F`，
+- 接入当前[共享查找浮层](../../../docs/features/find.md)：唯一系统 `⌘F`，
   主动选区填入查询、Enter／Shift+Enter 或按钮导航、Esc 关闭。源码继续使用 TextKit 的共享查找实现；
   Markdown 预览只读，不显示替换，也不回落至并排源码。SVG 等未接入的预览保持原有能力；
   CSV／HTML／终端／Diff 保留各自后端。不新增主菜单、快捷键监听或全局搜索服务。
@@ -565,5 +565,5 @@ GUI 前使用 `make build:dev` 或现有 `make build:ui`；阶段整合 `make te
 窗口身份和任务释放。阶段审计按上述 M/R 的实际取值与组合核销，不新增第二份永久测试清单；
 每个不可执行条件明确原因、实际尝试、替代证据、影响、补验方法及 Gate 限制。
 仍缺必要证据不得宣称全部通过或无保留 Go，不以旧 audit 抵销本轮验收。
-每任务同步 docs/features/editor.md，只有共享契约变化才修改所属文档，
+每任务同步 docs/features/markdown-preview.md，只有共享契约变化才修改所属文档，
 未实现能力不提前写入现行产品说明。

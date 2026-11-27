@@ -4,4 +4,4 @@ Bailey retains the 20 parsers and 25 query files it uses from [STTextView-Plugin
 
 The vendored C/C++ scanners use bounded explicit serialization-length conversions and the C# parser header preserves the immutability of its generated name tables; neither changes the grammar data or Tree-sitter ABI.
 
-See [LICENSE](LICENSE) for the original license and [development notes](../../docs/development.md#语法解析与-diff) for integration and updates.
+See [LICENSE](LICENSE) for the original license and [dependency notes](../../docs/dependencies.md#语法解析与-diff) for integration and updates.

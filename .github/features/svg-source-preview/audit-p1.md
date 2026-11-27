@@ -17,7 +17,7 @@
 - **P1-T2 接入共用图形视口和源码／预览／并排命令**：`SVGPreviewScrollView` 复用 `PreviewScrollView`，
   原生 NSView 按当前裁剪区域及设备倍率使用 SwiftDraw 绘制，再按原像素合成；不保留跨文档滤镜缓存或整张缩放位图。
   File 菜单、Dock companion 与 `FileTab` 模式归现有所有者。
-  用户行为和边界记录在 [文件编辑器](../../../docs/features/editor.md#读取与原生内容)。
+  用户行为和边界记录在 [SVG 矢量预览](../../../docs/features/svg-preview.md)。
 
 ## 发现项
 

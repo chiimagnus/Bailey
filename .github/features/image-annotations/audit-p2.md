@@ -9,7 +9,7 @@
 - **依据**：保存、确认导出和关联文件操作已通过本机及真实 Windows Tailscale SSH 验收；P2-T2 独立核销。P2-T1 的真实中文标注 IME 已通过无人自动化，150–360 点原生宿主文字组合与焦点已验证，完整 App 360/260/220/150 点 Dock 真实系统拼音、保存、撤销与重做已通过，P2-T1 已独立核销；隔离空间不足的共享写入失败验收已通过（见共享验收（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`））；阶段仍待共享整合；严格非协作 CAS 按 F-02 延期，最终整合回归统一执行。
 - **现行 AX 验收**：依[共享验收环境](../../../docs/testing.md#文件预览共用验收)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../../../docs/testing.md#文件预览共用验收)；可执行项仍需验收。
-  保存冲突后续统一按[VS Code 保存冲突方案](../../../docs/features/editor.md#保存与关闭)，不将严格 CAS 冒称已解决。
+  保存冲突后续统一按[VS Code 保存冲突方案](../../../docs/features/file-saving.md#保存冲突与恢复)，不将严格 CAS 冒称已解决。
 
 ## 任务与改动
 
@@ -157,7 +157,7 @@
 - 定点 15/15，补充标注专项 7/7，make test 退出 0；UI Target 构建及 Dev 严格验签成功。日志 `/tmp/bailey-seven-current-focused-20261124.log`、`/tmp/bailey-seven-annotation-extra-20261124.log`。
 - b0ccce58：八种 EXIF 取向、中文／emoji 字形实际像素、保存期间编辑、原生关闭失败否决、只读目录及取消、真实 Files 关联保护、百次大图滤镜全部通过。100 次 RSS 176.3→897.6 MiB、峰值 1123 MiB；bdd4c12b 已优化同一测试 P95 至 2.856ms，仍有残余 RSS 增长。
 - 非协作外部进程的检查／发布间竞态已复现；实体 1×、触控板、VoiceOver 及独占完整 App 尚缺环境，不能以宿主动作代替。I13 和 I10/I11/I16 的相关交叉验收未核销。
-- 当前行为见 docs/features/editor.md 图片标注与导出；72006d6b 新增原生复制当前标注合成图；文档同步。
+- 当前行为见 [图片标注](../../../docs/features/image-annotations.md)；72006d6b 新增原生复制当前标注合成图；文档同步。
 - 本轮完整 App 用例补充真实原生复制菜单与 NSSavePanel 成功导出，解码 PNG 核对尺寸、标注像素、底图及旁车原字节；共用系统选择器路径验证。45534516603（4575cddb）实际通过该复制/导出用例；原撤销及重做连续执行仅断言最终图层，缺少中间状态证明，另见 F-07。
 
 - 2026-11-25 F-02 部分缓解（`bd6e74a2`）：实际独立进程两种提交时序的旁车完整字节、底图不变、dirty、错误路径、旧基线重试拒绝及恢复后显式保存均经宿主断言通过；5 项定点联合命令零失败零跳过。仍不满足非协作严格 CAS，详见 CSV P2 F-02（Git 历史 `a54b8ace:.github/features/csv-table-view/audit-p2.md`）。恢复提示的实际窄窗可读性、实体输入及长会话未执行，阶段 No-Go。

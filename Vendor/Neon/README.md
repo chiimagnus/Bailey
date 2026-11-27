@@ -4,4 +4,4 @@ Bailey 保留 [kylemacomber/Neon 固定提交](https://github.com/kylemacomber/N
 
 本地改动修正异步解析返回的失效范围，移除当前平台不再需要的兼容接口和未使用的查询／样式路径。不能只把依赖 URL 换成新版 [Neon](https://github.com/ChimeHQ/Neon)：其 API 与当前固定版本不同，升级前必须验证编辑、取消、嵌入语法与可见颜色。
 
-补丁细节、依赖更新与回归入口由[开发文档](../../docs/development.md#neon)维护，不在此复制实现或测试清单。升级时保留许可证，并同步核对 App 中分发的副本。
+补丁细节、依赖更新与回归入口由[依赖维护](../../docs/dependencies.md#neon)维护，不在此复制实现或测试清单。升级时保留许可证，并同步核对 App 中分发的副本。

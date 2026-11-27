@@ -36,7 +36,7 @@
 不模仿别的 IDE 顺手改变 Bailey 的交互。
 
 正式版使用 `chiimagnus.bailey`，Makefile 的开发构建与测试使用独立 `chiimagnus.bailey.dev`；
-配置、构建产物独立，但 GUI 仍共享桌面焦点。操作前阅读[测试隔离](docs/testing.md#隔离环境)，
+配置、构建产物独立，但 GUI 仍共享桌面焦点。操作前阅读[测试隔离](docs/testing-environment.md#隔离环境)，
 不得退出用户已有 App、占用其连接或改写个人配置。
 
 ## 提交之前
@@ -61,7 +61,7 @@
 填写 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)，关联已经讨论的 Issue。
 只有覆盖全部需求并完成验收才使用 `Closes #编号`；部分交付或尚需补验时使用 `Refs #编号`，
 避免提前关闭 Issue。没有对应 Issue 时说明来源和范围。
-PR 不再触发远端自动测试，提交者须按 [开发验收](docs/release.md#开发验收)
+PR 不再触发远端自动测试，提交者须按 [CI 测试](docs/testing.md#ci-测试)
 自行核对测试证据。
 
 说明改动、必要架构取舍、状态所有者／依赖方向的变化、删除的旧路径、数据／权限／兼容影响、

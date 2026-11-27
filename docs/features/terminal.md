@@ -1,6 +1,6 @@
 # 终端
 
-终端会话承载用户的 Shell 和 CLI 工作。本页负责进程、原生表面、输入、查找与通知；
+终端会话承载用户的 Shell 和 CLI 工作。本页负责进程、原生表面、输入与查找；
 相应行为或 Ghostty 集成改变时更新。
 
 ## Invariants
@@ -36,7 +36,7 @@ SSH 先通过现有 helper 建立该终端自己的连接，再使用 Ghostty �
 主题更新和重挂载不重发启动输入。SSH 会话结束后保留结果直到用户按 Enter 关闭，
 专用远端标签不转为本机工作区。
 
-终端使用[共享查找浮层](editor.md#查找与替换)，Ghostty 负责屏幕和滚动历史中的匹配、高亮及导航；
+终端使用[共享查找浮层](find.md)，Ghostty 负责屏幕和滚动历史中的匹配、高亮及导航；
 终端输出不提供替换。快捷键不能与 Shell 输入或标签切换互相抢占，窗口规则见 [dock.md](dock.md)。
 
 查找栏关闭后，只恢复当前前台活动组中仍由可见宿主承载的原终端；
@@ -53,17 +53,7 @@ SSH 先通过现有 helper 建立该终端自己的连接，再使用 Ghostty �
 
 ## 通知与历史
 
-通知使用对应项目名称并保留程序正文；
-标题查询和点击定位都通过 GUI delegate 持有的 `WorkspaceApplication` 查找真正发出通知的会话，
-而不是当前随意选中的标签或全局窗口数组。项目名和目标身份不应取自可随命令变化的窗口标题。
-
-Codex CLI 在 `~/.codex/config.toml` 的 `[tui]` 下配置 `notifications = true` 和
-`notification_method = "osc9"` 后，可在设置中添加多个 Bark HTTPS 推送地址，
-将终端主动发出的桌面通知推送到每台手机。每个地址通过独立的 HTTPS JSON POST 请求发送，
-某个设备失败不阻断其他设备。普通响铃、SSH 状态和其他应用通知仍只在 Mac 上显示；
-推送与 macOS 通知授权相互独立。本机通知被禁用不影响已配置的 Bark 推送，远程失败也不影响本机提醒。
-项目名和通知正文可能含敏感输出；设备 Key 与地址列表只保存在 macOS 钥匙串，不出现在实际请求 URL，
-默认未配置即不转发，不提供手机回复或公网入口。
+通知的会话归属、系统呈现与 Bark 推送见 [notifications.md](notifications.md)。
 
 终端历史持久化默认关闭，启用后单独保存；其中可能包含敏感内容，不默认采集或提交。
 恢复方式见 [session-restore.md](session-restore.md)。
@@ -71,9 +61,7 @@ Codex CLI 在 `~/.codex/config.toml` 的 `[tui]` 下配置 `notifications = true
 ## 验证
 
 检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；
-macOS 通知必须走到原会话。`BarkPushServiceTests` 验证地址规范化、跨服务器分发、
-HTTPS JSON 负载和单地址失败隔离；「发送测试通知」报告 Bark 服务端接受请求的数量，
-iPhone 实际显示须另行确认，不能把 HTTP 成功当作设备已收到。
+通知专项见 [通知](notifications.md)。
 `WorkspaceIdentityTests` 覆盖本机／固定 SSH 握手前后、断线和动态 SSH 返回本机的文件 URL 接收资格，
 并核对 Shell 特殊字符与控制字符拒绝；真实 Finder→Ghostty E2E 核对终端输入和源文件字节，
 不能仅凭返回 `.copy` 当作已成功插入或已执行命令。
@@ -86,4 +74,4 @@ Git Graph 的实际用户操作由 `GitDialogUITests` 验证。
 真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
 
 实现入口：[TerminalSession.swift](../../Bailey/Terminal/TerminalSession.swift)。
-升级 Ghostty 还需执行 [development.md](../development.md#依赖与本地补丁) 的回归。
+升级 Ghostty 还需执行 [dependencies.md](../dependencies.md#依赖与本地补丁) 的回归。
