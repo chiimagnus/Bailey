@@ -3334,7 +3334,7 @@ final class GitStatusModel {
 
     func initializeRepository(completion: (@MainActor (Bool) -> Void)? = nil) {
         guard !rootPath.isEmpty else {
-            failImmediately(String(localized: "Open a terminal directory first", table: "Git"), completion: completion)
+            failImmediately(String(localized: "Select a project first", table: "Git"), completion: completion)
             return
         }
         perform(

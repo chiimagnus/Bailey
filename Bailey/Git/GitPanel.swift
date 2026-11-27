@@ -3050,7 +3050,7 @@ struct GitPanel: View {
             VStack(spacing: 2) {
                 Text(String(localized: "No Git Repository", table: "Sidebar"))
                     .panelFont(size: 11.5, weight: .medium)
-                Text(String(localized: "Initialize the terminal’s current directory to start tracking changes.", table: "Sidebar"))
+                Text(String(localized: "Initialize the project directory to start tracking changes.", table: "Sidebar"))
                     .panelFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)

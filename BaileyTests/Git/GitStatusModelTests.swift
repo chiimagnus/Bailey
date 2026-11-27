@@ -1027,6 +1027,32 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.changedEntries.contains(where: { $0.path == "external.txt" }) }
     }
 
+    func testInitializeRepositoryUsesTheProjectRootWithoutTerminalSessions() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("source.txt")
+        let original = Data("original project bytes".utf8)
+        try original.write(to: file)
+        let project = Project(customDirectory: directory.path, layout: .init())
+        let model = GitStatusModel()
+        model.syncSelectedProject(project: project) { $0 === project }
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertFalse(model.isRepo)
+        XCTAssertTrue(project.sessions.isEmpty)
+
+        let succeeded = await withCheckedContinuation { continuation in
+            model.initializeRepository { continuation.resume(returning: $0) }
+        }
+        XCTAssertTrue(succeeded)
+        try await wait { model.isRepo && model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".git").path))
+        XCTAssertTrue(project.sessions.isEmpty)
+        XCTAssertEqual(project.customDirectory, directory.path)
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "source.txt" })
+        XCTAssertEqual(try Data(contentsOf: file), original)
+    }
+
     func testCreatingLocalGitRepositoryIsObservedWithoutPolling() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
