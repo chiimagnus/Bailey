@@ -132,6 +132,7 @@ test\:ui:
 
 test: DERIVED_DATA = $(DEV_DERIVED_DATA)
 test: APP_BUNDLE = Bailey Dev.app
+test: DEV_FLAGS += $(if $(filter Release,$(CONFIGURATION)),ENABLE_TESTABILITY=YES)
 test:
 	@$(DEV_OPERATION_LOCK); \
 	$(SELECTED_TESTS_PREFLIGHT); \

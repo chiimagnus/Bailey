@@ -484,8 +484,9 @@ iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文
 在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。
 Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、
 多标签和本机／SSH，包含受影响的空内容、Unicode、二进制和超限边界。
-单独在 Release 优化配置运行 `@testable` XCTest 时，仅对隔离测试构建传 `ENABLE_TESTABILITY=YES`；
-正式 Release 保持原配置，优化 XCTest 也不能替代独立 App 的 GUI 内存验收。
+使用 `make test CONFIGURATION=Release ONLY_TESTING=…` 测量优化后的产品。仅隔离宿主构建启用
+`ENABLE_TESTABILITY=YES`；测试驱动保持普通编译，App 保持 Release 优化与整模块编译。
+正式 Release 不启用测试接口；宿主性能测量不能替代独立 App 的 GUI 内存验收。
 
 热操作至少重复 30 次，记录样本数、中位数、p95 与最差值；少量冷启动只报中位数和最差值。
 代码编辑性能要分别测裸原生视图与真实加载 Tree-sitter／Neon 高亮的文件，
