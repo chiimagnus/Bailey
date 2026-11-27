@@ -2453,6 +2453,71 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testFixedSSHReconnectInvalidatesGitOnTheSameBackend() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"], ["config", "user.name", "SSH Verification"],
+            ["config", "user.email", "ssh-verification@invalid"], ["config", "commit.gpgsign", "false"],
+            ["commit", "--allow-empty", "-qm", "baseline"],
+        ] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data("old".utf8).write(to: directory.appendingPathComponent("old.txt"))
+        let host = "fixture-reconnect-" + UUID().uuidString
+        let scope = "ssh:" + host
+        let identity = PanelContext.Identity(project: UUID(), workspace: scope, directory: directory.path)
+        let backend = DiscardRemoteWorkspaceFixture()
+        defer { Task { await backend.releaseGitRequest() } }
+        let model = GitStatusModel()
+        SSHHostWorkspaces.setConnected(true, for: host)
+        model.sync(root: directory.path, backend: backend, scope: scope, panelIdentity: identity)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let previous = model.actionTarget()
+        let old = try XCTUnwrap(model.changedEntries.first)
+        XCTAssertTrue(model.isCurrent(previous))
+
+        await backend.suspendNextGitRequest()
+        model.refresh()
+        let startDeadline = Date().addingTimeInterval(3)
+        while await !backend.awaitingGit, Date() < startDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let suspended = await backend.awaitingGit
+        XCTAssertTrue(suspended)
+
+        SSHHostWorkspaces.setConnected(false, for: host)
+        XCTAssertTrue(model.matchesPanelTarget(identity))
+        XCTAssertFalse(model.isRefreshing, "A disconnected channel must retire its pending query")
+        XCTAssertFalse(model.isCurrent(previous))
+        XCTAssertFalse(model.canUseCurrentStatus)
+        XCTAssertNotNil(model.statusError)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["old.txt"])
+        model.stageEntries([old])
+        XCTAssertFalse(model.isBusy, "Old rows cannot start a Git mutation on a disconnected host")
+
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("old.txt"))
+        try Data("new".utf8).write(to: directory.appendingPathComponent("new.txt"))
+        SSHHostWorkspaces.setConnected(true, for: host)
+        let reconnectDeadline = Date().addingTimeInterval(4)
+        while (model.isRefreshing || model.changedEntries.map(\.path) != ["new.txt"]),
+              Date() < reconnectDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"],
+                       "The new connection cannot queue behind the abandoned channel")
+        let oldRequestStillSuspended = await backend.awaitingGit
+        XCTAssertTrue(oldRequestStillSuspended)
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertFalse(model.isCurrent(previous), "An old confirmation cannot authorize a new connection")
+        await backend.releaseGitRequest()
+        try await wait { !model.isRefreshing && !model.isBusy }
+        XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"])
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path).stdout, "")
+    }
+
     func testReplacingSSHChannelKeepsCachedGitReadOnlyUntilCoreIsVerified() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

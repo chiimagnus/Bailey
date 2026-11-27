@@ -132,16 +132,6 @@ struct ToolPanelView: View {
         CGFloat(settings.panelFontSize / AppSettings.defaultPanelFontSize)
     }
 
-    /// Git refresh belongs to the window. Only Files needs this observation.
-    private var commandCompletionSequences: [UUID: UInt64] {
-        guard panel == .files else { return [:] }
-        return Dictionary(uniqueKeysWithValues:
-            manager.selectedProject?.sessions.map {
-                ($0.id, $0.commandCompletionSequence)
-            } ?? []
-        )
-    }
-
     private var openFilePath: String? {
         guard let target = filesTarget,
               case .file(let file)? = manager.selectedProject?.selectedTab?.content,
@@ -317,12 +307,11 @@ struct ToolPanelView: View {
             updateLocalFileWatcher()
             updateRemoteFileWatcher()
         }
-        .onChange(of: commandCompletionSequences) {
-            syncModels()
-        }
-        .onChange(of: manager.selectedProject?.panelContext.identity) {
-            updateLocalFileWatcher()
-            updateRemoteFileWatcher()
+        .onChange(of: manager.selectedProject?.panelRefreshKey(includingCommands: panel == .files)) { previous, current in
+            if previous?.identity != current?.identity {
+                updateLocalFileWatcher()
+                updateRemoteFileWatcher()
+            }
             syncModels()
         }
         .onChange(of: manager.selectedProject?.fileTree.rootPath) {

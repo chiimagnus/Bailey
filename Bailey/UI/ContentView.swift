@@ -9,16 +9,6 @@ struct ContentView: View {
     private var tabSwitcher: TabSwitcherController { manager.tabSwitcher }
     @State private var git = GitStatusModel()
 
-    /// Every terminal in the selected project can change the same repository.
-    /// Watching command completion keeps the toolbar current without polling.
-    private var commandCompletionSequences: [UUID: UInt64] {
-        Dictionary(uniqueKeysWithValues:
-            manager.selectedProject?.sessions.map {
-                ($0.id, $0.commandCompletionSequence)
-            } ?? []
-        )
-    }
-
     var body: some View {
         let _ = themeChanges.revision
         Group {
@@ -84,8 +74,7 @@ struct ContentView: View {
             syncGit()
         }
         .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
-        .onChange(of: commandCompletionSequences) { syncGit() }
-        .onChange(of: manager.selectedProject?.panelContext.identity) { syncGit() }
+        .onChange(of: manager.selectedProject?.panelRefreshKey()) { syncGit() }
         .onChange(of: colorScheme) {
             manager.refreshAppearance()
         }

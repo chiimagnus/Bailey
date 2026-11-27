@@ -2134,6 +2134,33 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                        ["First", "Second"])
     }
 
+    func testPanelRefreshKeyOnlyChangesForProjectOrCommandCompletion() {
+        let project = Project(customDirectory: "/fixture/repo", layout: .init())
+        let other = Project(customDirectory: "/fixture/repo", layout: .init())
+        let original = project.panelRefreshKey()
+        let withoutCommands = project.panelRefreshKey(includingCommands: false)
+        let otherOriginal = other.panelRefreshKey()
+        let terminal = project.newSession(launchCommand: "exec /bin/sh -i")
+        defer { project.terminateAll(); other.terminateAll() }
+        XCTAssertEqual(project.panelRefreshKey(), original, "Opening a terminal does not complete a command")
+
+        let second = project.newSession(launchCommand: "exec /bin/sh -i")
+        XCTAssertEqual(project.panelRefreshKey(), original)
+        terminal.surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
+        let finished = project.panelRefreshKey()
+        XCTAssertNotEqual(finished, original, "A background terminal must refresh its own project")
+        XCTAssertEqual(project.panelRefreshKey(includingCommands: false), withoutCommands)
+        XCTAssertEqual(other.panelRefreshKey(), otherOriginal)
+        XCTAssertNotEqual(finished, otherOriginal, "Same directory does not mean same project")
+
+        project.closeContent(.session(second))
+        XCTAssertEqual(project.panelRefreshKey(), finished, "Closing another terminal is not a command")
+        project.closeContent(.session(terminal))
+        XCTAssertEqual(project.panelRefreshKey(), finished, "Closing the last terminal is not a command")
+        terminal.surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
+        XCTAssertEqual(project.panelRefreshKey(), finished, "Retired terminal callbacks must not refresh")
+    }
+
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
@@ -2149,15 +2176,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(project.name, "fallback")
 
         let commandChanged = expectation(description: "Real command completion observation")
-        withObservationTracking({ _ = terminal.commandCompletionSequence }) {
+        withObservationTracking({ _ = project.commandCompletionSequence }) {
             commandChanged.fulfill()
         }
-        let previous = terminal.commandCompletionSequence
+        let previous = project.commandCompletionSequence
         surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
         await fulfillment(of: [commandChanged], timeout: 2)
-        XCTAssertEqual(terminal.commandCompletionSequence, previous + 1)
+        XCTAssertEqual(project.commandCompletionSequence, previous + 1)
         surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
-        XCTAssertEqual(terminal.commandCompletionSequence, previous + 2)
+        XCTAssertEqual(project.commandCompletionSequence, previous + 2)
 
         let findChanged = expectation(description: "Find focus request observation")
         withObservationTracking({ _ = terminal.find.focusRequest }) {

@@ -21,7 +21,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     }
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     var hasExited = false
-    private(set) var commandCompletionSequence: UInt64 = 0
+    @ObservationIgnored var onCommandFinished: (() -> Void)?
     /// Authenticated handoff for the live SSH process, independent of project ownership.
     var remoteConnection: RemoteConnection?
     private let remoteLaunchDirectory: String?
@@ -590,7 +590,8 @@ extension TerminalSession {
     }
 
     func terminalDidFinishCommand() {
-        commandCompletionSequence &+= 1
+        guard !hasExited, !isTerminating else { return }
+        onCommandFinished?()
     }
 
     func terminalDidClose(processAlive: Bool) {

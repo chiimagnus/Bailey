@@ -82,6 +82,18 @@ final class Project: nonisolated Identifiable {
         tabs.compactMap { if case .session(let session) = $0.content { return session }; return nil }
     }
 
+    private(set) var commandCompletionSequence: UInt64 = 0
+
+    struct PanelRefreshKey: Equatable {
+        let identity: PanelContext.Identity
+        let commands: UInt64
+    }
+
+    func panelRefreshKey(includingCommands: Bool = true) -> PanelRefreshKey {
+        PanelRefreshKey(identity: panelContext.identity,
+                        commands: includingCommands ? commandCompletionSequence : 0)
+    }
+
     var selectedTab: PaneTab? {
         tabs.first { $0.id == selectedTabID }
     }
@@ -781,7 +793,9 @@ final class Project: nonisolated Identifiable {
     func register(_ tab: PaneTab) -> PaneTab {
         let notify: () -> Void = { [weak self] in self?.onSnapshotChange?() }
         switch tab.content {
-        case .session(let session): session.onSnapshotChange = notify
+        case .session(let session):
+            session.onSnapshotChange = notify
+            session.onCommandFinished = { [weak self] in self?.commandCompletionSequence &+= 1 }
         case .browser(let browser): browser.onSnapshotChange = notify
         case .file(let file): file.onSnapshotChange = notify
         case .diff(let diff): diff.onSnapshotChange = notify
@@ -876,6 +890,7 @@ final class Project: nonisolated Identifiable {
         switch tab.content {
         case .session(let session):
             session.onSnapshotChange = nil
+            session.onCommandFinished = nil
         case .browser(let browser): browser.onSnapshotChange = nil
         case .file(let file):
             file.onSnapshotChange = nil
