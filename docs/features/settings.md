@@ -33,8 +33,7 @@ Text Editor 设置源码／Diff、CSV／TSV、Markdown 阅读字号及折行；T
 | 阅读字号 | Markdown 预览 | `reader.font-size` | 16 pt |
 
 通用面板字号范围 9–18 pt，其余 8–32 pt。源码与终端继续共用等宽字体家族，字号独立。
-旧配置首次读取时，若缺少 `editor.font-size`，以原终端字号作为编辑器初值；下一次保存明确写入五组值，
-此后调整任一组不影响其他组。读取旧配置不立即写盘。
+每组字号使用自己的配置键与默认值，调整任一组不影响其他组。
 Window 菜单 `⌘+`、`⌘-`、`⌘0` 按当前活动组的实际内容放大、缩小或恢复该组默认值，
 不因并排预览指向同一文件而误调源码。HTML／Browser 使用当前 WebView 的页面缩放；
 图片／SVG 使用现有图形视口缩放，恢复适应窗口；音视频保留系统控件，无字号命令。
@@ -73,7 +72,7 @@ Settings → File Manager 每行输入一个 Glob（`*`、`?`、
 设置由 `AppSettings.shared` 唯一持有，变化即时更新 Files 树，绝不影响 Git、
 命令面板或以后独立的搜索／监听规则。详情见 [文件可见性](files.md#文件可见性)。
 
-## 设置传播与旧键
+## 设置传播
 
 Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默认关闭，仅略过游离 HEAD 确认。
 Tag 推送前的“以后总是继续”写入 `git.always-proceed-push-tag`，默认关闭，
@@ -89,8 +88,7 @@ Tag 推送前的“以后总是继续”写入 `git.always-proceed-push-tag`，�
 窗口布局归各自窗口，见 [自由停靠](dock.md#布局与标签)。
 旧 `workspace.*` 配置键不再生效；读取时不改原文件，下次保存偏好时不再写入旧键。
 
-现行字体加粗键为 `terminal.font-thicken`；不再读取旧字体 UserDefaults 或旧 `font-thicken` 键。
-语言及 Diff 偏好使用的现有 UserDefaults 不属于旧字体迁移，不能一起删除。
+字体加粗使用 `terminal.font-thicken`；语言及 Diff 偏好使用 UserDefaults。
 
 应用语言改变需要重启；重启前由同一个 `WorkspaceApplication` 保存所有窗口快照，
 仍不能承诺保存未成功写盘的内容。界面中英文、系统语言跟随和回退规则见 [ui.md](../ui.md#本地化)。

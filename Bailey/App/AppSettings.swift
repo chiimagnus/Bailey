@@ -343,13 +343,9 @@ final class AppSettings {
             fallback: Theme.defaultLightThemeName
         )
         fontFamily = toml["font-family"]?.string ?? ""
-        let terminalSize = FontSizeRole.terminal.validated(toml[FontSizeRole.terminal.configKey]?.double)
-        fontSize = terminalSize
+        fontSize = FontSizeRole.terminal.validated(toml[FontSizeRole.terminal.configKey]?.double)
         panelFontSize = FontSizeRole.panel.validated(toml[FontSizeRole.panel.configKey]?.double)
-        // Preserve the former shared source/Diff size when opening an older config.
-        // Once saved, editor.font-size is independent, even at its default value.
-        editorFontSize = FontSizeRole.editor.validated(toml[FontSizeRole.editor.configKey] == nil
-            ? terminalSize : toml[FontSizeRole.editor.configKey]?.double)
+        editorFontSize = FontSizeRole.editor.validated(toml[FontSizeRole.editor.configKey]?.double)
         tableFontSize = FontSizeRole.table.validated(toml[FontSizeRole.table.configKey]?.double)
         readerFontSize = FontSizeRole.reader.validated(toml[FontSizeRole.reader.configKey]?.double)
         toolbarVisibility = ToolbarVisibility(

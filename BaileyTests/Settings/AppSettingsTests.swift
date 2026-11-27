@@ -44,16 +44,16 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
-    func testIndependentFontSizesMigrateAndRoundTripWithoutChangingOtherRoles() throws {
-        let legacy = "font-size = 19\npanel.font-size = 15\n"
-        try legacy.write(to: configURL, atomically: true, encoding: .utf8)
+    func testIndependentFontSizesUseTheirOwnDefaultsAndRoundTrip() throws {
+        let source = "font-size = 19\npanel.font-size = 15\n"
+        try source.write(to: configURL, atomically: true, encoding: .utf8)
         let settings = AppSettings(configURL: configURL)
-        XCTAssertEqual(settings.editorFontSize, 19)
+        XCTAssertEqual(settings.editorFontSize, 13)
         XCTAssertEqual(settings.fontSize, 19)
         XCTAssertEqual(settings.panelFontSize, 15)
         XCTAssertEqual(settings.tableFontSize, 11)
         XCTAssertEqual(settings.readerFontSize, 16)
-        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), legacy)
+        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), source)
         for role in FontSizeRole.allCases {
             let previous = FontSizeRole.allCases.map { settings.fontSize(for: $0) }
             let changed = expectation(description: role.configKey)
