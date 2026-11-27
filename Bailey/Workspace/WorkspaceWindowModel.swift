@@ -24,9 +24,7 @@ enum FindAction {
     case useSelection
 }
 
-/// Owns the list of projects and the current selection. Each project holds
-/// its own terminal sessions; the "selected session" is the selected
-/// project's selected session.
+/// Owns the window's project collection, current selection and action routing.
 @MainActor
 @Observable
 final class WorkspaceWindowModel {
@@ -36,6 +34,7 @@ final class WorkspaceWindowModel {
             for project in oldValue where !projects.contains(where: { $0 === project }) {
                 project.onSnapshotChange = nil
                 project.onPresentationWindow = nil
+                project.fileTree.onError = nil
                 project.dock.onActiveItemChange = nil
                 project.dock.clearContextTarget()
             }
@@ -67,7 +66,6 @@ final class WorkspaceWindowModel {
     private(set) var isSSHFolderPickerVisible = false
     let tabSwitcher = TabSwitcherController()
 
-    @ObservationIgnored private var projectCounter = 0
     @ObservationIgnored private var isInitialized = false
     @ObservationIgnored private var windowCloseObservation: AnyCancellable?
     @ObservationIgnored private var didCloseWindow = false
@@ -166,14 +164,15 @@ final class WorkspaceWindowModel {
 
     /// The File menu targets the selected project's tree, even when Files is not visible.
     func toggleExcludedFiles() {
-        guard let project = selectedProject, let context = project.panelContext else { return }
+        guard let project = selectedProject else { return }
+        let context = project.panelContext
         let revision = context.connectionRevision
         Task { [weak self, weak project] in
             guard let self, let project else { return }
             let isCurrent = {
                 !self.isClosed && self.selectedProject === project
                     && project.matchesPanelTarget(context.identity)
-                    && project.panelContext?.connectionRevision == revision
+                    && project.panelContext.connectionRevision == revision
             }
             guard isCurrent() else { return }
             if project.fileTree.syncedTarget(for: context) == nil {
@@ -188,9 +187,9 @@ final class WorkspaceWindowModel {
     func switchGitBranch(
         to name: String, expectedOID: String, in project: Project, model: GitStatusModel
     ) {
-        guard let window = attachedWindow, selectedProject === project,
-              let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+        guard let window = attachedWindow, selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !model.isBusy else { return }
         let target = model.actionTarget()
         let isCurrent: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
@@ -232,8 +231,7 @@ final class WorkspaceWindowModel {
                 selectedProjectID = existing.id
                 continue
             }
-            let project = makeProject()
-            project.customDirectory = root
+            let project = Project(customDirectory: root, layout: dockLayout)
             insert(project)
         }
     }
@@ -361,10 +359,7 @@ final class WorkspaceWindowModel {
             selectedProjectID = existing.id
             return
         }
-        let project = makeProject()
-        project.sshHost = host
-        project.customDirectory = root
-        project.pinnedFile = file
+        let project = Project(customDirectory: root, sshHost: host, pinnedFile: file, layout: dockLayout)
         if let file { project.openFile(file) }
         insert(project)
     }
@@ -467,6 +462,18 @@ final class WorkspaceWindowModel {
     private func bind(_ project: Project) {
         project.onSnapshotChange = { [weak self] in self?.requestSave() }
         project.onPresentationWindow = { [weak self] in self?.attachedWindow }
+        project.fileTree.onError = { [weak self, weak project] title, detail in
+            guard let self, let project, !self.isClosed,
+                  self.projects.contains(where: { $0 === project }),
+                  let window = self.attachedWindow, window.isVisible else { return }
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = detail
+            alert.alertStyle = .warning
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+            alert.beginSheetModal(for: window, completionHandler: { _ in })
+        }
         project.dock.onActiveItemChange = { [weak self, weak project] previous, _ in
             guard let self, let project else { return }
             self.autoRevealActiveFile(in: project, previous: previous)
@@ -476,9 +483,9 @@ final class WorkspaceWindowModel {
     /// A changed active editor selects its matching Files row without changing input focus.
     func autoRevealActiveFile(in project: Project, previous: DockItem? = nil) {
         guard !isClosed, selectedProject === project,
-              let files = project.dock.group(containing: .files), files.selected == .files,
-              let context = project.panelContext,
-              project.fileTree.syncedTarget(for: context) != nil,
+              let files = project.dock.group(containing: .files), files.selected == .files else { return }
+        let context = project.panelContext
+        guard project.fileTree.syncedTarget(for: context) != nil,
               project.fileTree.renamingPath == nil, project.fileTree.draft == nil
         else { return }
         let file: FileTab
@@ -498,9 +505,9 @@ final class WorkspaceWindowModel {
         Task { [weak self, weak project] in
             guard let self, let project else { return }
             _ = await project.fileTree.revealFile(path, automatically: true) {
-                guard !self.isClosed, self.selectedProject === project,
-                      let current = project.panelContext,
-                      current.identity == context.identity,
+                guard !self.isClosed, self.selectedProject === project else { return false }
+                let current = project.panelContext
+                guard current.identity == context.identity,
                       current.connectionRevision == revision,
                       project.fileTree.syncedTarget(for: current) != nil,
                       project.fileTree.renamingPath == nil, project.fileTree.draft == nil
@@ -513,15 +520,6 @@ final class WorkspaceWindowModel {
                 return active === file
             }
         }
-    }
-
-    private func makeProject() -> Project {
-        projectCounter += 1
-        let project = Project(
-            fallbackName: "Project \(projectCounter)",
-            layout: dockLayout
-        )
-        return project
     }
 
     func autoSaveEditedTabs() {
@@ -866,7 +864,8 @@ final class WorkspaceWindowModel {
     }
 
     func newItemAction(isDirectory: Bool) -> (@MainActor () async -> Void)? {
-        guard let project = selectedProject, let context = project.panelContext else { return nil }
+        guard let project = selectedProject else { return nil }
+        let context = project.panelContext
         let tree = project.fileTree
         let root = context.cwd
         let revision = context.connectionRevision
@@ -1471,7 +1470,7 @@ final class WorkspaceWindowModel {
     /// AppKit ancestry before deciding whether palette dismissal can restore
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
-        if responder is any TerminalBackendSurface || responder is FocusReportingTextView
+        if responder is BaileyTerminalView || responder is FocusReportingTextView
             || responder is DiffTextView {
             return true
         }
@@ -1525,7 +1524,8 @@ final class WorkspaceWindowModel {
               case .file(let file) = tab.content else { return }
         let path = file.path
         let workspace = file.workspaceIdentity
-        guard let context = project.panelContext, context.identity.workspace == workspace else {
+        let context = project.panelContext
+        guard context.identity.workspace == workspace else {
             fileCommandError(String(localized:
                 "This file belongs to a different machine than the current File Manager.",
                 table: "Interface"))
@@ -1608,7 +1608,6 @@ final class WorkspaceWindowModel {
         var histories: [String: String] = [:]
         let snapshot = SessionSnapshot(
             projects: projects.map { project in
-                let projectSessions = project.sessions
                 // A tab holding nothing but remote content is not written at
                 // all, so the surviving tabs decide the selected index below.
                 let savedTabs = project.tabs.compactMap { tab -> (PaneTab, ProjectSnapshot.TabSnapshot)? in
@@ -1628,9 +1627,6 @@ final class WorkspaceWindowModel {
                     } else { false }
                     return (tab, ProjectSnapshot.TabSnapshot(
                         content: content, historyKey: historyKey,
-                        contextSessionIndex: tab.contextSession.flatMap { context in
-                            projectSessions.firstIndex { $0.id == context.id }
-                        },
                         localFile: isLocalFile
                     ))
                 }
@@ -1688,23 +1684,12 @@ final class WorkspaceWindowModel {
         dockLayout.root = snapshot.layout
         var restoredSelection: UUID?
         for (index, saved) in snapshot.projects.enumerated() {
-            guard let directory = saved.customDirectory,
+            guard let directory = saved.customDirectory, directory.hasPrefix("/"),
                   saved.sshHost != nil || saved.pinnedFile == nil else { continue }
-            let project = makeProject()
-            project.customDirectory = directory
-            project.sshHost = saved.sshHost
-            project.pinnedFile = saved.pinnedFile
-            var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []
+            let project = Project(customDirectory: directory, sshHost: saved.sshHost,
+                                  pinnedFile: saved.pinnedFile, layout: dockLayout)
             for savedTab in saved.tabs {
-                let tab = project.restoreTab(from: savedTab, histories: histories)
-                if let sessionIndex = savedTab.contextSessionIndex {
-                    restoredContexts.append((tab, sessionIndex))
-                }
-            }
-            let restoredSessions = project.sessions
-            for context in restoredContexts
-            where restoredSessions.indices.contains(context.sessionIndex) {
-                context.tab.contextSession = restoredSessions[context.sessionIndex]
+                project.restoreTab(from: savedTab, histories: histories)
             }
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
                 project.selectTab(project.tabs[index].id)

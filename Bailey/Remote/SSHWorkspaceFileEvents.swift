@@ -85,7 +85,7 @@ final class SSHWorkspaceFileEvents {
                             // Project.syncFiles performs that read and verifies its target.
                             let synced = await project.syncFiles(isCurrent: {
                                 project.matchesPanelTarget(target.identity)
-                                    && project.panelContext?.connectionRevision == target.revision
+                                    && project.panelContext.connectionRevision == target.revision
                             })
                             guard generation == token, !Task.isCancelled else { break observe }
                             guard synced != nil else {
@@ -97,7 +97,7 @@ final class SSHWorkspaceFileEvents {
                             guard healthy else { break observe }
                             let synced = await project.syncFiles(isCurrent: {
                                 project.matchesPanelTarget(target.identity)
-                                    && project.panelContext?.connectionRevision == target.revision
+                                    && project.panelContext.connectionRevision == target.revision
                             })
                             guard generation == token, !Task.isCancelled else { break observe }
                             guard synced != nil else {

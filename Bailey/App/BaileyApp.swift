@@ -101,8 +101,8 @@ struct FocusedPathActions {
                   project.tabs.contains(where: { $0.content.id == file.id }),
                   isValid() else { return [] }
             if absolute { return [file.path] }
+            let root = project.customDirectory == "/" ? "/" : project.customDirectory + "/"
             guard file.workspaceIdentity == project.workspaceIdentity,
-                  let root = project.customDirectory.map({ $0 == "/" ? "/" : $0 + "/" }),
                   file.path.hasPrefix(root) else { return [] }
             return [String(file.path.dropFirst(root.count))]
         }
@@ -201,15 +201,12 @@ private struct BaileyCommands: Commands {
         manager != nil ? focusedPathActions : nil
     }
     private var fileProjectForMenu: Project? {
-        guard let project = manager?.selectedProject,
-              project.panelContext != nil else { return nil }
-        return project
+        manager?.selectedProject
     }
     private var gitForMenu: GitStatusModel? {
         guard let project = manager?.selectedProject,
-              let context = project.panelContext,
               let git = focusedGitModel,
-              git.matchesPanelTarget(context.identity) else { return nil }
+              git.matchesPanelTarget(project.panelContext.identity) else { return nil }
         return git
     }
     private var diffLayoutMenuTitle: String {
@@ -418,14 +415,14 @@ private struct BaileyCommands: Commands {
                 Task { await action?() }
             }
             .keyboardShortcut("n", modifiers: .command)
-            .disabled(manager?.selectedProject?.panelContext == nil)
+            .disabled(manager?.selectedProject == nil)
 
             Button(String(localized: "New Folder…", table: "Sidebar")) {
                 let action = manager?.newItemAction(isDirectory: true)
                 Task { await action?() }
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
-            .disabled(manager?.selectedProject?.panelContext == nil)
+            .disabled(manager?.selectedProject == nil)
 
             Divider()
 

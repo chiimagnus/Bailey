@@ -14,6 +14,7 @@ final class GitStatusModel {
 
     @ObservationIgnored private var activeObserver: AnyCancellable?
     @ObservationIgnored private var inactiveObserver: AnyCancellable?
+    @ObservationIgnored private var connectionObserver: AnyCancellable?
 
     init() {
         activeObserver = NotificationCenter.default.publisher(
@@ -48,7 +49,7 @@ final class GitStatusModel {
         /// Previous path for renames/copies (porcelain "2" entries).
         var origPath: String?
         /// Canonical repo that produced this snapshot. Mutations reject stale
-        /// rows after the active terminal moves to another repository.
+        /// rows after the project target changes.
         var repositoryRoot = ""
         var snapshotGeneration: UInt = 0
         var snapshotBranch: String?
@@ -1453,10 +1454,11 @@ final class GitStatusModel {
     var lastError: String?
 
     /// Absolute repository root. Porcelain paths are relative to this path,
-    /// not necessarily to the terminal's current working directory.
+    /// which may contain the project's selected directory.
     private var topLevel = ""
-    /// Invalidates async refreshes and operations after the terminal changes cwd.
+    /// Invalidates async reads and operations when the project target changes.
     private var contextGeneration: UInt = 0
+    private var connectionRevision: UInt64 = 0
     private var workspaceScope = "local"
     var currentScope: String { workspaceScope }
     private var scopedRoot: String { workspaceScope + "\u{0}" + rootPath }
@@ -1631,8 +1633,7 @@ final class GitStatusModel {
     func syncSelectedProject(
         project: Project?, isCurrent: @MainActor (Project) -> Bool
     ) {
-        guard let project, isCurrent(project), let context = project.panelContext else {
-            if panelTargetIdentity != nil { clearPanelNavigation() }
+        guard let project, isCurrent(project) else {
             sync(root: "")
             if project == nil {
                 cachedStatusByRoot.removeAll()
@@ -1640,36 +1641,57 @@ final class GitStatusModel {
             }
             return
         }
-        if panelTargetIdentity != context.identity {
-            clearPanelNavigation()
-            contextGeneration &+= 1
-            releaseHistoryDetails()
-            invalidateStatusRefresh()
-        }
-        sync(root: context.cwd, backend: context.backend, scope: context.scope)
-        panelTargetIdentity = context.identity
+        let context = project.panelContext
+        sync(root: context.cwd, backend: context.backend, scope: context.scope,
+             panelIdentity: context.identity)
     }
 
     /// Omitting the backend selects the Mac; scope keeps cached state and
     /// drafts distinct when the same path exists on another machine.
-    func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
-        panelTargetIdentity = nil
-        let targetBackend = backend ?? LocalWorkspaceBackend.shared
-        let channelChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
-        let targetChanged = root != rootPath || workspaceScope != scope || channelChanged
-        self.backend = targetBackend
+    func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local",
+              panelIdentity: PanelContext.Identity? = nil) {
+        setTarget(root: root, backend: backend ?? LocalWorkspaceBackend.shared,
+                  scope: scope, panelIdentity: panelIdentity)
+        refresh()
+    }
+
+    private func setTarget(root: String, backend targetBackend: WorkspaceBackend, scope: String,
+                           panelIdentity: PanelContext.Identity?) {
+        let revision = panelIdentity.map {
+            PanelContext(identity: $0, backend: targetBackend).connectionRevision
+        } ?? 0
+        let backendChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
+        let channelChanged = backendChanged || connectionRevision != revision
+        let rootChanged = root != rootPath || workspaceScope != scope
+        let projectChanged = panelTargetIdentity != panelIdentity
+        let targetChanged = rootChanged || channelChanged || projectChanged
         if targetChanged {
+            contextGeneration &+= 1
             pendingFileEvent?.cancel()
             pendingFileEvent = nil
             localWatcher = nil
             localWatcherPaths = []
         }
-        if root != rootPath || workspaceScope != scope {
+        if rootChanged || projectChanged { clearPanelNavigation() }
+        if backendChanged { self.backend = targetBackend }
+        connectionRevision = revision
+        if projectChanged {
+            panelTargetIdentity = panelIdentity
+            connectionObserver = nil
+            if let workspace = panelIdentity?.workspace, workspace.hasPrefix("ssh:") {
+                let host = String(workspace.dropFirst(4))
+                connectionObserver = NotificationCenter.default.publisher(
+                    for: SSHHostWorkspaces.connectionChanged
+                ).sink { [weak self] notification in
+                    guard notification.object as? String == host else { return }
+                    self?.connectionChanged(host: host)
+                }
+            }
+        }
+        if rootChanged {
             parkCurrentSnapshot()
             activateSnapshot(scope + "\u{0}" + root)
-            clearPanelNavigation()
             workspaceScope = scope
-            contextGeneration &+= 1
             rootPath = root
             let pageSize = Self.recentCommitPageSize
             let retainedCommits: Int
@@ -1691,14 +1713,14 @@ final class GitStatusModel {
                 hasCurrentLineTotals = false
                 needsCoreVerification = true
             }
-        } else if channelChanged {
-            // A new SSH channel must not queue behind a worker stalled on the
-            // previous connection, even when the host and repository match.
-            contextGeneration &+= 1
+        } else if targetChanged {
+            // A different project or channel must verify its own status, even
+            // when the repository path is unchanged.
             hasCurrentReferences = false
             hasCurrentHistory = false
             hasCurrentStashes = false
             hasCurrentWorktrees = false
+            hasCurrentLineTotals = false
             releaseHistoryDetails()
             invalidateStatusRefresh()
             needsCoreVerification = true
@@ -1706,7 +1728,18 @@ final class GitStatusModel {
         if self.backend is LocalWorkspaceBackend, targetChanged || localWatcher == nil {
             configureLocalWatcher(root: root, gitDirectory: nil)
         }
-        refresh()
+    }
+
+    private func connectionChanged(host: String) {
+        guard let identity = panelTargetIdentity, identity.workspace == "ssh:" + host,
+              connectionRevision != SSHHostWorkspaces.connectionRevision(for: host) else { return }
+        setTarget(root: rootPath, backend: backend, scope: workspaceScope, panelIdentity: identity)
+        if SSHHostWorkspaces.connectionState(for: host) == false {
+            apply(.failed(String(localized: "Remote host is disconnected.", table: "Interface")))
+            hasResolvedStatus = true
+        } else {
+            refresh()
+        }
     }
 
     /// The owning Git panel task controls the lifetime; leaving the panel cancels the loop.
@@ -3301,7 +3334,7 @@ final class GitStatusModel {
 
     func initializeRepository(completion: (@MainActor (Bool) -> Void)? = nil) {
         guard !rootPath.isEmpty else {
-            failImmediately(String(localized: "Open a terminal directory first", table: "Git"), completion: completion)
+            failImmediately(String(localized: "Select a project first", table: "Git"), completion: completion)
             return
         }
         perform(

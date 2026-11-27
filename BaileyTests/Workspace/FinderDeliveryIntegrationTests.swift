@@ -540,9 +540,7 @@ final class FinderDeliveryIntegrationTests: XCTestCase {
         let b = self.workspaceApplication.makeWindow()
         defer { a.windowClosed(); b.windowClosed() }
         a.addLocalFolders([folder])
-        let remote = Project(fallbackName: "SSH", layout: b.dockLayout)
-        remote.sshHost = "invalid-p4-cross-window"
-        remote.customDirectory = "/remote/workspace"
+        let remote = Project(customDirectory: "/remote/workspace", sshHost: "invalid-p4-cross-window", layout: b.dockLayout)
         b.projects.append(remote)
         b.selectedProjectID = remote.id
         XCTAssertTrue(b.openExternalLocalItems([file]).isEmpty)

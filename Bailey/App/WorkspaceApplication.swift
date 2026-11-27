@@ -42,9 +42,9 @@ final class WorkspaceApplication {
         guard let intent = fileClipboardIntents[pasteboard.name],
               intent.version == pasteboard.changeCount, intent.record == record,
               let project = windows.flatMap(\.projects).first(where: { $0.id == record.project }),
-              project.fileTree.rootPath == record.root,
-              let identity = project.panelContext?.identity,
-              String(reflecting: identity) == record.identity,
+              project.fileTree.rootPath == record.root else { return false }
+        let identity = project.panelContext.identity
+        guard String(reflecting: identity) == record.identity,
               intent.local == (identity.workspace == nil)
         else { return false }
         let revision = identity.workspace.flatMap { workspace in
@@ -395,8 +395,9 @@ final class WorkspaceApplication {
         var refreshed = Set<ObjectIdentifier>()
         for project in windows.flatMap(\.projects) {
             let tree = project.fileTree
-            guard tree !== destination, refreshed.insert(ObjectIdentifier(tree)).inserted,
-                  let context = project.panelContext, context.scope == "local",
+            guard tree !== destination, refreshed.insert(ObjectIdentifier(tree)).inserted else { continue }
+            let context = project.panelContext
+            guard context.scope == "local",
                   tree.rootPath == context.cwd,
                   affectedPaths.contains(where: { matchesFile($0, inside: tree.rootPath, workspace: nil) })
             else { continue }
@@ -439,9 +440,9 @@ final class WorkspaceApplication {
         }
         return windows.contains { manager in
             manager.projects.contains { project in
-                if project.panelContext?.scope == scope {
-                    if let directory = project.customDirectory, contains(directory) { return true }
-                    if project.sessions.contains(where: { contains($0.panelDirectoryPath) }) {
+                if project.panelContext.scope == scope {
+                    if contains(project.customDirectory) { return true }
+                    if project.sessions.contains(where: { contains($0.currentDirectoryPath) }) {
                         return true
                     }
                 }

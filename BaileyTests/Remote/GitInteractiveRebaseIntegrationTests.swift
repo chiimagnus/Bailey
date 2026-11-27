@@ -22,7 +22,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
     func testSSHHelperHandoffUsesTheRebaseFixturesApplication() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "SSH fixture", layout: manager.dockLayout)
+        let project = Project(customDirectory: "/fixture/SSH fixture", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let session = project.newSession(directory: FileManager.default.temporaryDirectory.path)
@@ -38,7 +38,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             try BaileySSHSocketServer.exchange(path: socket, request: request, timeout: 3)
         }.value
         XCTAssertNotNil(response.socket)
-        XCTAssertEqual(session.location.remoteConnection?.controlSocket.path, response.socket)
+        XCTAssertEqual(session.remoteConnection?.controlSocket.path, response.socket)
         XCTAssertEqual(TerminalNotificationService.shared.application?.projectName(forSession: session.id),
                        project.name)
     }
@@ -91,11 +91,10 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
         _ = try git(["config", "sequence.editor", RemoteCommands.quote(editorPath.path)])
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "PTY Rebase", layout: manager.dockLayout)
-        project.customDirectory = directory.path
+        let project = Project(customDirectory: directory.path, layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
-        let context = try XCTUnwrap(project.panelContext)
+        let context = project.panelContext
         let terminal = try project.newInteractiveGitSession(
             repository: directory.path, arguments: ["rebase", "--interactive", side], context: context
         )
@@ -225,11 +224,9 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             savedWorkspace = (SessionStore.load(), TerminalHistoryStore.load())
             let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
-            let project = Project(fallbackName: "SSH PTY Rebase", layout: manager.dockLayout)
+            let project = Project(customDirectory: root, sshHost: host, layout: manager.dockLayout)
             manager.projects = [project]
             manager.selectedProjectID = project.id
-            project.sshHost = host
-            project.customDirectory = root
             let context = PanelContext(
                 identity: .init(project: project.id, workspace: "ssh:" + host, directory: root),
                 backend: backend
@@ -238,8 +235,8 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
                 arguments: ["rebase", "--interactive", side], context: context)
             defer { terminal.terminate() }
             XCTAssertNotNil(project.selectedTab)
-            XCTAssertEqual(terminal.workspaceIdentity, context.scope)
-            XCTAssertEqual(terminal.panelDirectoryPath, root)
+            XCTAssertFalse(terminal.acceptsLocalFileDrop)
+            XCTAssertEqual(terminal.currentDirectoryPath, root)
             let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 700, height: 400),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
@@ -263,8 +260,8 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             terminal.applyTheme()
             let waitingHead = try await git(["rev-parse", "HEAD"])
             XCTAssertEqual(waitingHead, original)
-            try await wait { terminal.location.remoteConnection != nil }
-            XCTAssertNotEqual(terminal.location.remoteConnection?.controlSocket.path, socket)
+            try await wait { terminal.remoteConnection != nil }
+            XCTAssertNotEqual(terminal.remoteConnection?.controlSocket.path, socket)
             phase = "send editor input and verify rebase"
             terminal.sendCommand("\r")
             try await wait { try await git(["rev-parse", "HEAD^"]) == side }

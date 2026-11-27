@@ -444,7 +444,7 @@ final class RemoteLifetimeTests: XCTestCase {
         firstOwner.connectServices()
         let wrongOwnerResponse = try await exchange(request)
         XCTAssertNil(wrongOwnerResponse.socket)
-        XCTAssertNil(session.location.remoteConnection)
+        XCTAssertNil(session.remoteConnection)
 
         otherOwner.connectServices()
         let wrongToken = BaileySSHRequest(
@@ -455,7 +455,7 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertNil(wrongTokenResponse.socket)
         let accepted = try await exchange(request)
         XCTAssertNotNil(accepted.socket)
-        XCTAssertEqual(session.location.remoteConnection?.controlSocket.path, accepted.socket)
+        XCTAssertEqual(session.remoteConnection?.controlSocket.path, accepted.socket)
 
         // Closing a window revokes access to its terminal, even when the
         // authenticated token is replayed before the service mapping expires.

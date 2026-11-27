@@ -201,11 +201,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
 
             let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
-            let project = Project(
-                fallbackName: "External SSH Fixture", layout: manager.dockLayout
-            )
-            project.sshHost = host
-            project.customDirectory = root
+            let project = Project(customDirectory: root, sshHost: host, layout: manager.dockLayout)
             manager.projects = [project]
             manager.selectedProjectID = project.id
             let model = GitStatusModel()

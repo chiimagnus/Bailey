@@ -331,8 +331,8 @@ private struct SidebarProjectRow: View {
                 .font(.system(size: supportingFontSize))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
-        } else if let directory = project.customDirectory {
-            Text(directory)
+        } else {
+            Text(project.customDirectory)
                 .font(.system(size: supportingFontSize))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)

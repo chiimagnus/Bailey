@@ -554,8 +554,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         _ = try git(["add", "."], in: root)
         _ = try git(["commit", "-qm", "first"], in: root)
         let hash = try git(["rev-parse", "HEAD"], in: root)
-        let project = Project(fallbackName: "Historical reuse", layout: .init())
-        project.customDirectory = root.path
+        let project = Project(customDirectory: root.path, layout: .init())
         project.openHistoricalDiff(
             repoRoot: root.path, path: "note.txt", source: .revision(hash: hash), origPath: nil
         )
@@ -1492,10 +1491,9 @@ final class NativeGitHistoryFileTests: XCTestCase {
         let head = try git(["rev-parse", "HEAD"], in: root)
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "Reset dirty tab", layout: manager.dockLayout)
+        let project = Project(customDirectory: root.path, layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
-        project.customDirectory = root.path
         project.openFile(path.path)
         guard case .file(let file) = project.selectedTab?.content else { return XCTFail("FileTab missing") }
         try await file.waitForText()
@@ -1572,8 +1570,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         let revision = try git(["rev-parse", "HEAD"], in: root)
         try Data("new\n".utf8).write(to: root.appendingPathComponent("file.txt"))
 
-        let project = Project(fallbackName: "Historical Native Tabs",
-                              layout: .init())
+        let project = Project(customDirectory: root.path, layout: .init())
         let source: [DiffTab.Source] = [
             .commit(hash: revision, parent: nil, status: "A"),
             .revision(hash: revision),
@@ -1594,11 +1591,10 @@ final class NativeGitHistoryFileTests: XCTestCase {
         let decoded = try JSONDecoder().decode(
             [SessionSnapshot.ProjectSnapshot.ContentSnapshot].self,
             from: JSONEncoder().encode(snapshots))
-        let restored = Project(fallbackName: "restored", layout: .init())
+        let restored = Project(customDirectory: root.path, layout: .init())
         for content in decoded {
             _ = restored.restoreTab(from: .init(
-                content: content, historyKey: nil,
-                contextSessionIndex: nil))
+                content: content, historyKey: nil))
         }
         XCTAssertEqual(restored.tabs.count, 3)
         for (tab, kind) in zip(restored.tabs, source) {

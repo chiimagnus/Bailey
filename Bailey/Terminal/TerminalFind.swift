@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTerminal
 import Foundation
 import Observation
 
@@ -8,7 +9,7 @@ import Observation
 /// its own thread, highlights every match in its renderer, and moves the
 /// selection as you navigate — so this holds only what the find bar draws and
 /// forwards the user's intent as surface find actions. Match counts arrive
-/// back asynchronously through `TerminalBackendEvents`.
+/// back asynchronously through Ghostty.
 @MainActor
 @Observable
 final class TerminalFind {
@@ -34,7 +35,7 @@ final class TerminalFind {
     /// does. A counter rather than a flag: repeated requests must each land.
     private(set) var focusRequest = 0
 
-    @ObservationIgnored private let surface: any TerminalBackendSurface
+    @ObservationIgnored private let surface: BaileyTerminalView
 
     /// Set while a needle the backend resolved for us (⌘E's selection) is
     /// being written into `query`, so echoing it back as a fresh search —
@@ -48,7 +49,7 @@ final class TerminalFind {
     /// Whether the current needle has already jumped to a match.
     @ObservationIgnored private var hasRevealedMatch = false
 
-    init(surface: any TerminalBackendSurface) {
+    init(surface: BaileyTerminalView) {
         self.surface = surface
     }
 
@@ -83,7 +84,7 @@ final class TerminalFind {
         guard isPresented else { return }
         isPresented = false
         clearCounts()
-        surface.endFind()
+        surface.endSearch()
     }
 
     /// Returns first responder to the terminal. Called once the find bar has
@@ -115,7 +116,7 @@ final class TerminalFind {
             present()
             return
         }
-        surface.stepFind(forward: forward)
+        surface.navigateSearch(forward: forward)
     }
 
     /// ⌘E. The backend resolves the needle from the grid selection and reports
@@ -123,7 +124,7 @@ final class TerminalFind {
     /// read out and re-escaped here.
     func searchSelection() {
         guard surface.hasSelection else { return }
-        surface.findSelection()
+        surface.searchSelection()
     }
 
     // MARK: - Reports from the backend
@@ -169,7 +170,7 @@ final class TerminalFind {
         let generation = searchGeneration
         DispatchQueue.main.async { [weak self] in
             guard let self, isPresented, searchGeneration == generation else { return }
-            surface.stepFind(forward: true)
+            surface.navigateSearch(forward: true)
         }
     }
 
@@ -183,7 +184,7 @@ final class TerminalFind {
         searchGeneration += 1
         hasRevealedMatch = false
         clearCounts()
-        surface.beginFind(query)
+        surface.search(query)
     }
 
     private func clearCounts() {

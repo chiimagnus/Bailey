@@ -101,7 +101,7 @@ final class PanelContextTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         let project = try XCTUnwrap(manager.selectedProject)
-        let context = try XCTUnwrap(project.panelContext)
+        let context = project.panelContext
         _ = await project.syncFiles(isCurrent: { true })
         XCTAssertTrue(project.fileTree.matchesIndexTarget(root: folder.path, context: context))
         await manager.newFile()
@@ -251,7 +251,7 @@ final class PanelContextTests: XCTestCase {
         manager.addLocalFolders([folder])
         let project = try XCTUnwrap(manager.selectedProject)
         _ = await project.syncFiles(isCurrent: { true })
-        let context = try XCTUnwrap(project.panelContext)
+        let context = project.panelContext
         XCTAssertEqual(project.fileTree.syncedTarget(for: context), context.identity)
         for index in 0..<30 {
             project.openFile(folder.appendingPathComponent("file-\(index).swift").path)
@@ -281,8 +281,7 @@ final class PanelContextTests: XCTestCase {
     }
 
     func testLocalProjectCannotBorrowTerminalSSHForInteractiveGitRebase() {
-        let project = Project(fallbackName: "Local", layout: .init())
-        project.customDirectory = "/tmp/fixed-root"
+        let project = Project(customDirectory: "/tmp/fixed-root", layout: .init())
         let remote = PanelContext(
             identity: .init(project: project.id, workspace: "ssh:some-host", directory: "/remote"),
             backend: DelayedWorkspaceFixture("remote")
@@ -380,7 +379,7 @@ final class PanelContextTests: XCTestCase {
         XCTAssertNil(inactiveResult, "Inactive project must not issue a refresh")
 
         let secondResult = await secondProject.syncFiles(isCurrent: { manager.selectedProject === secondProject })
-        XCTAssertEqual(secondResult, secondProject.panelContext?.identity)
+        XCTAssertEqual(secondResult, secondProject.panelContext.identity)
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
         XCTAssertTrue(secondProject.fileTree.items.contains { $0.path == secondURL.appendingPathComponent("two.txt").path })
         XCTAssertFalse(secondProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
@@ -389,7 +388,7 @@ final class PanelContextTests: XCTestCase {
         manager.syncGitStatus(git)
         try await wait { git.rootPath == firstURL.path && git.hasResolvedStatus && !git.isRefreshing }
         let firstResult = await firstProject.syncFiles(isCurrent: { manager.selectedProject === firstProject })
-        XCTAssertEqual(firstResult, firstProject.panelContext?.identity)
+        XCTAssertEqual(firstResult, firstProject.panelContext.identity)
         XCTAssertEqual(firstProject.fileTree.rootPath, firstURL.path)
         XCTAssertTrue(firstProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
@@ -434,21 +433,20 @@ final class PanelContextTests: XCTestCase {
     }
 
     func testGitFixedTargetFollowsOnlyAuthorizedProject() throws {
-        let project = Project(fallbackName: "Fixed", layout: .init())
-        project.customDirectory = "/tmp/bailey-git-fixed"
+        let project = Project(customDirectory: "/tmp/bailey-git-fixed", layout: .init())
         let model = GitStatusModel()
         model.syncSelectedProject(project: project) { $0 === project }
         XCTAssertEqual(model.rootPath, "/tmp/bailey-git-fixed")
-        XCTAssertTrue(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
+        XCTAssertTrue(model.matchesPanelTarget(project.panelContext.identity))
 
         project.customDirectory = "/tmp/bailey-git-renamed"
         model.syncSelectedProject(project: project) { $0 === project }
         XCTAssertEqual(model.rootPath, "/tmp/bailey-git-renamed")
-        XCTAssertTrue(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
+        XCTAssertTrue(model.matchesPanelTarget(project.panelContext.identity))
 
         model.syncSelectedProject(project: project) { _ in false }
         XCTAssertTrue(model.rootPath.isEmpty)
-        XCTAssertFalse(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
+        XCTAssertFalse(model.matchesPanelTarget(project.panelContext.identity))
     }
 
     func testFileTreeDoesNotPublishOldChannelAtSameRootAndScope() async throws {

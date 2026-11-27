@@ -126,9 +126,8 @@ struct GitPanel: View {
     }
 
     private var hasCurrentPanelTarget: Bool {
-        guard let project, manager.selectedProject === project,
-              let context = project.panelContext else { return false }
-        return model.matchesPanelTarget(context.identity)
+        guard let project, manager.selectedProject === project else { return false }
+        return model.matchesPanelTarget(project.panelContext.identity)
     }
 
     private var displayedDiff: DiffTab? {
@@ -610,8 +609,9 @@ struct GitPanel: View {
         initialCheckout: Bool
     ) {
         guard let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !model.isBusy else { return }
         let target = model.actionTarget()
         let detail = commit.map {
             String(localized: "Repository \(target.scope): \(target.repository)\nCommit \($0.shortHash): \($0.subject)", table: "Git")
@@ -713,8 +713,9 @@ struct GitPanel: View {
         initialMessage: String = "", initialRemote: String? = nil
     ) {
         guard let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !model.isBusy else { return }
         let target = model.actionTarget()
         let dialog = GitTagDialog(kind: .create(remotes: model.remotes),
             title: String(localized: "Add Tag", table: "Git"),
@@ -820,8 +821,9 @@ struct GitPanel: View {
     ) {
         guard reference.kind == .currentBranch || reference.kind == .localBranch,
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy,
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !model.isBusy,
               model.refsByName["refs/heads/" + reference.name]?.oid == commit.hash else { return }
         let target = model.actionTarget()
         let name = reference.name
@@ -926,8 +928,9 @@ struct GitPanel: View {
         action: RecentCommitsView.WorktreeAction
     ) {
         guard let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy,
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !model.isBusy,
               model.hasCurrentWorktrees, model.worktreeLocations.contains(location) else { return }
         let target = model.actionTarget()
         let isCurrent: @MainActor () -> Bool = {
@@ -1002,8 +1005,9 @@ struct GitPanel: View {
     ) {
         guard reference.kind == .remoteBranch,
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy,
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !model.isBusy,
               let selected = model.remoteBranch(named: reference.name),
               selected.oid == commit.hash else { return }
         let target = model.actionTarget()
@@ -1147,8 +1151,9 @@ struct GitPanel: View {
         action: RecentCommitsView.TagAction
     ) {
         guard reference.kind == .tag, let window = manager.attachedWindow,
-              let project, manager.selectedProject === project,
-              let context = project.panelContext, model.matchesPanelTarget(context.identity),
+              let project, manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity),
               !model.isBusy, let selected = model.refsByName["refs/tags/" + reference.name],
               reference.objectOID == selected.oid,
               model.recentCommits.contains(where: {
@@ -1273,9 +1278,9 @@ struct GitPanel: View {
         action: RecentCommitsView.HistoricalFileAction
     ) {
         guard let project, let window = manager.attachedWindow,
-              manager.selectedProject === project,
-              let context = project.panelContext,
-              model.matchesPanelTarget(context.identity),
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity),
               model.historicalFiles(for: commit)?.contains(file) == true else { return }
         let target = model.actionTarget()
         let current: @MainActor () -> Bool = {
@@ -1387,8 +1392,9 @@ struct GitPanel: View {
     ) {
         guard !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity) else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity) else { return }
         let targets = action == .drop
             ? model.historyRewriteTargets(selected: [commit.hash], kind: .drop)
             : model.availableWorktreeTargets()
@@ -1468,8 +1474,9 @@ struct GitPanel: View {
     ) {
         guard hashes.count >= 2, !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity) else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
         let commits = model.recentCommits.filter {
             $0.stash == nil && $0.worktree == nil && hashes.contains($0.hash)
@@ -1525,8 +1532,9 @@ struct GitPanel: View {
     func presentSquashDialog(_ hashes: [String]) {
         guard hashes.count >= 2, !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity) else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
         let targets = model.historyRewriteTargets(selected: hashes, kind: .squash)
         guard let firstTarget = targets.first else { return }
@@ -2612,8 +2620,9 @@ struct GitPanel: View {
     func presentStashDialog(_ stash: GitStatusModel.Stash, action: GitStatusModel.StashAction) {
         guard !model.isBusy, model.stashes.contains(stash),
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity) else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
         let selectedStashes = model.stashes
         let isCurrent: @MainActor () -> Bool = {
@@ -2642,8 +2651,9 @@ struct GitPanel: View {
 
     func presentUncommittedDialog(_ action: GitUncommittedDialog.Action) {
         guard !model.isBusy, let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity) else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
         let dialog = GitUncommittedDialog(action: action, target: target)
         let isCurrent: @MainActor () -> Bool = {
@@ -2748,8 +2758,9 @@ struct GitPanel: View {
         _ reviews: [GitStatusModel.PendingDiscard], trigger: OperationTrigger
     ) {
         guard let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !reviews.isEmpty else { return }
+              manager.selectedProject === project else { return }
+        let context = project.panelContext
+        guard model.matchesPanelTarget(context.identity), !reviews.isEmpty else { return }
         let target = model.actionTarget()
         let relative = reviews.flatMap { review -> [String] in
             let entry = review.entry
@@ -2831,7 +2842,8 @@ struct GitPanel: View {
 
     private func ignorePaths(_ paths: [String], isDirectory: Bool) {
         guard !model.isBusy, let window = manager.attachedWindow,
-              let project, let context = project.panelContext else { return }
+              let project else { return }
+        let context = project.panelContext
         let target = model.actionTarget()
         let isCurrent: @MainActor () -> Bool = {
             manager.attachedWindow === window && manager.selectedProject === project
@@ -2948,14 +2960,18 @@ struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], all: Bool,
         trigger: OperationTrigger = .discardAll
     ) {
-        guard hasCurrentPanelTarget, !preparingDiscard, !entries.isEmpty,
-              model.canUseCurrentStatus else { return }
+        guard let window = manager.attachedWindow, hasCurrentPanelTarget,
+              !preparingDiscard, !entries.isEmpty, model.canUseCurrentStatus else { return }
+        let target = model.actionTarget()
+        let ownsReview: @MainActor () -> Bool = {
+            manager.attachedWindow === window && hasCurrentPanelTarget && model.canBrowse(target)
+        }
         preparingDiscard = true
         Task {
             defer { preparingDiscard = false }
             do {
                 let snapshots = try await model.prepareRemoteDiscard(entries)
-                guard hasCurrentPanelTarget else { return }
+                guard ownsReview() else { return }
                 if all {
                     pendingDiscardAll = snapshots
                     pendingDiscardAllTrigger = trigger
@@ -2964,12 +2980,13 @@ struct GitPanel: View {
                     pendingDiscard = snapshots.first
                 }
             } catch GitStatusModel.DiscardReviewError.stale {
-                model.cancelStaleDiscard()
+                if ownsReview() { model.cancelStaleDiscard() }
             } catch {
+                guard ownsReview(), window.isVisible, !(error is CancellationError) else { return }
                 let alert = NSAlert()
                 alert.messageText = String(localized: "Could not verify remote files", table: "Sidebar")
                 alert.informativeText = error.localizedDescription
-                alert.runModal()
+                alert.beginSheetModal(for: window, completionHandler: nil)
             }
         }
     }
@@ -3033,7 +3050,7 @@ struct GitPanel: View {
             VStack(spacing: 2) {
                 Text(String(localized: "No Git Repository", table: "Sidebar"))
                     .panelFont(size: 11.5, weight: .medium)
-                Text(String(localized: "Initialize the terminal’s current directory to start tracking changes.", table: "Sidebar"))
+                Text(String(localized: "Initialize the project directory to start tracking changes.", table: "Sidebar"))
                     .panelFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)

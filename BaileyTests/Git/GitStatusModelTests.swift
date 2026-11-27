@@ -153,10 +153,8 @@ final class GitStatusModelTests: XCTestCase {
             .appendingPathComponent("Bailey-Git-Nav-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = Project(fallbackName: "first", layout: .init())
-        let second = Project(fallbackName: "second", layout: .init())
-        first.customDirectory = directory.path
-        second.customDirectory = directory.path
+        let first = Project(customDirectory: directory.path, layout: .init())
+        let second = Project(customDirectory: directory.path, layout: .init())
         XCTAssertNotEqual(first.id, second.id)
         let git = GitStatusModel()
         git.syncSelectedProject(project: first, isCurrent: { _ in true })
@@ -189,6 +187,57 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNil(git.changeCursor)
         XCTAssertTrue(git.selectedChanges.isEmpty)
         XCTAssertTrue(git.expandedCommitIDs.isEmpty)
+    }
+
+    func testSameProjectRefreshDoesNotInvalidatePanelIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let project = Project(customDirectory: directory.path, layout: .init())
+        let identity = project.panelContext.identity
+        let model = GitStatusModel()
+        model.syncSelectedProject(project: project) { $0 === project }
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+
+        let invalidated = expectation(description: "Same-project refresh preserves the panel identity")
+        invalidated.isInverted = true
+        withObservationTracking({ _ = model.matchesPanelTarget(identity) }) { invalidated.fulfill() }
+        model.syncSelectedProject(project: project) { $0 === project }
+        try await wait { !model.isRefreshing }
+        await fulfillment(of: [invalidated], timeout: 0.1)
+        XCTAssertTrue(model.matchesPanelTarget(identity))
+    }
+
+    func testSwitchingProjectsAtSameRepositoryKeepsNativeWatcherCurrent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for arguments in [
+            ["init", "-q", "-b", "main"],
+            ["config", "user.name", "Watcher Test"],
+            ["config", "user.email", "watcher@invalid"],
+            ["config", "commit.gpgsign", "false"],
+            ["commit", "--allow-empty", "-qm", "initial"],
+        ] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let first = Project(customDirectory: directory.path, layout: .init())
+        let second = Project(customDirectory: directory.path, layout: .init())
+        let model = GitStatusModel()
+        model.setLocalFileEventsForeground(true)
+        model.syncSelectedProject(project: first) { $0 === first }
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        try Data("first project".utf8).write(to: directory.appendingPathComponent("first.txt"))
+        try await wait { model.changedEntries.contains(where: { $0.path == "first.txt" }) && !model.isRefreshing }
+
+        model.syncSelectedProject(project: second) { $0 === second }
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.matchesPanelTarget(second.panelContext.identity))
+        XCTAssertFalse(model.matchesPanelTarget(first.panelContext.identity))
+        try Data("second project".utf8).write(to: directory.appendingPathComponent("second.txt"))
+        try await wait { model.changedEntries.contains(where: { $0.path == "second.txt" }) && !model.isRefreshing }
+        XCTAssertEqual(Set(model.changedEntries.map(\.path)), ["first.txt", "second.txt"])
     }
 
     func testLargeChangeTreeIsBuiltOnlyWhenItsActualInputsChange() async throws {
@@ -976,6 +1025,32 @@ final class GitStatusModelTests: XCTestCase {
 
         try Data("new worktree\n".utf8).write(to: second.appendingPathComponent("external.txt"))
         try await wait { model.changedEntries.contains(where: { $0.path == "external.txt" }) }
+    }
+
+    func testInitializeRepositoryUsesTheProjectRootWithoutTerminalSessions() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("source.txt")
+        let original = Data("original project bytes".utf8)
+        try original.write(to: file)
+        let project = Project(customDirectory: directory.path, layout: .init())
+        let model = GitStatusModel()
+        model.syncSelectedProject(project: project) { $0 === project }
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertFalse(model.isRepo)
+        XCTAssertTrue(project.sessions.isEmpty)
+
+        let succeeded = await withCheckedContinuation { continuation in
+            model.initializeRepository { continuation.resume(returning: $0) }
+        }
+        XCTAssertTrue(succeeded)
+        try await wait { model.isRepo && model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".git").path))
+        XCTAssertTrue(project.sessions.isEmpty)
+        XCTAssertEqual(project.customDirectory, directory.path)
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "source.txt" })
+        XCTAssertEqual(try Data(contentsOf: file), original)
     }
 
     func testCreatingLocalGitRepositoryIsObservedWithoutPolling() async throws {
@@ -2404,6 +2479,71 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testFixedSSHReconnectInvalidatesGitOnTheSameBackend() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"], ["config", "user.name", "SSH Verification"],
+            ["config", "user.email", "ssh-verification@invalid"], ["config", "commit.gpgsign", "false"],
+            ["commit", "--allow-empty", "-qm", "baseline"],
+        ] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data("old".utf8).write(to: directory.appendingPathComponent("old.txt"))
+        let host = "fixture-reconnect-" + UUID().uuidString
+        let scope = "ssh:" + host
+        let identity = PanelContext.Identity(project: UUID(), workspace: scope, directory: directory.path)
+        let backend = DiscardRemoteWorkspaceFixture()
+        defer { Task { await backend.releaseGitRequest() } }
+        let model = GitStatusModel()
+        SSHHostWorkspaces.setConnected(true, for: host)
+        model.sync(root: directory.path, backend: backend, scope: scope, panelIdentity: identity)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let previous = model.actionTarget()
+        let old = try XCTUnwrap(model.changedEntries.first)
+        XCTAssertTrue(model.isCurrent(previous))
+
+        await backend.suspendNextGitRequest()
+        model.refresh()
+        let startDeadline = Date().addingTimeInterval(3)
+        while await !backend.awaitingGit, Date() < startDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let suspended = await backend.awaitingGit
+        XCTAssertTrue(suspended)
+
+        SSHHostWorkspaces.setConnected(false, for: host)
+        XCTAssertTrue(model.matchesPanelTarget(identity))
+        XCTAssertFalse(model.isRefreshing, "A disconnected channel must retire its pending query")
+        XCTAssertFalse(model.isCurrent(previous))
+        XCTAssertFalse(model.canUseCurrentStatus)
+        XCTAssertNotNil(model.statusError)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["old.txt"])
+        model.stageEntries([old])
+        XCTAssertFalse(model.isBusy, "Old rows cannot start a Git mutation on a disconnected host")
+
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("old.txt"))
+        try Data("new".utf8).write(to: directory.appendingPathComponent("new.txt"))
+        SSHHostWorkspaces.setConnected(true, for: host)
+        let reconnectDeadline = Date().addingTimeInterval(4)
+        while (model.isRefreshing || model.changedEntries.map(\.path) != ["new.txt"]),
+              Date() < reconnectDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"],
+                       "The new connection cannot queue behind the abandoned channel")
+        let oldRequestStillSuspended = await backend.awaitingGit
+        XCTAssertTrue(oldRequestStillSuspended)
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertFalse(model.isCurrent(previous), "An old confirmation cannot authorize a new connection")
+        await backend.releaseGitRequest()
+        try await wait { !model.isRefreshing && !model.isBusy }
+        XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"])
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path).stdout, "")
+    }
+
     func testReplacingSSHChannelKeepsCachedGitReadOnlyUntilCoreIsVerified() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -3641,9 +3781,7 @@ final class GitStatusModelTests: XCTestCase {
                     let application = WorkspaceApplication()
                     let window = application.makeWindow()
                     defer { window.windowClosed() }
-                    let project = Project(fallbackName: "Mixed", layout: window.dockLayout)
-                    project.customDirectory = root.appendingPathComponent("elsewhere").path
-                    project.sshHost = projectScope == "local" ? nil : "alpha"
+                    let project = Project(customDirectory: root.appendingPathComponent("elsewhere").path, sshHost: projectScope == "local" ? nil : "alpha", layout: window.dockLayout)
                     let identity = contentScope == "local" ? nil : contentScope
                     let content: PaneContent
                     switch kind {
@@ -3673,23 +3811,20 @@ final class GitStatusModelTests: XCTestCase {
         let application = WorkspaceApplication()
         let window = application.makeWindow()
         defer { window.windowClosed() }
-        let project = Project(fallbackName: "Pinned SSH", layout: window.dockLayout)
-        project.sshHost = "fixture-alias"
-        project.customDirectory = "/fixture/original"
+        let project = Project(customDirectory: "/fixture/original", sshHost: "fixture-alias", layout: window.dockLayout)
         window.projects = [project]
         let session = project.newSession(launchCommand: "exec /bin/sh -i")
-        session.workingDirectory = "/fixture/other-worktree/subdirectory"
+        session.terminalDidChangeWorkingDirectory("/fixture/other-worktree/subdirectory")
         XCTAssertFalse(session.acceptsLocalFileDrop)
-        XCTAssertNil(session.workspaceIdentity)
-        XCTAssertEqual(project.panelContext?.scope, "ssh:fixture-alias")
+        XCTAssertEqual(project.panelContext.scope, "ssh:fixture-alias")
         for connected in [false, true] {
             if connected {
                 let connection = RemoteConnection(user: "fixture", host: "fixture.invalid", port: 2222,
                     controlSocket: URL(fileURLWithPath: "/tmp/bailey-unused-\(UUID())"), sshPID: 0)
                 connection.workingDirectory = session.workingDirectory
                 connection.markConnected()
-                session.location = .remote(connection)
-                XCTAssertNotEqual(session.workspaceIdentity, project.panelContext?.scope)
+                session.remoteConnection = connection
+                XCTAssertNotEqual(connection.workspaceIdentity, project.panelContext.scope)
             }
             XCTAssertTrue(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "ssh:fixture-alias"))
             XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "local"))
@@ -3717,8 +3852,8 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: sibling.path, scope: "local"))
         XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: tree.path, scope: "ssh:windows"))
 
-        manager.selectedProject?.sshHost = "windows"
-        manager.selectedProject?.customDirectory = "/d/Github/bailey-test-worktree"
+        manager.projects.append(Project(customDirectory: "/d/Github/bailey-test-worktree",
+                                        sshHost: "windows", layout: manager.dockLayout))
         XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree", scope: "ssh:windows"
         ))

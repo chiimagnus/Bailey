@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -9,16 +8,6 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     private var tabSwitcher: TabSwitcherController { manager.tabSwitcher }
     @State private var git = GitStatusModel()
-
-    /// Every terminal in the selected project can change the same repository.
-    /// Watching command completion keeps the toolbar current without polling.
-    private var commandCompletionSequences: [UUID: UInt64] {
-        Dictionary(uniqueKeysWithValues:
-            manager.selectedProject?.sessions.map {
-                ($0.id, $0.commandLifecycle.completionSequence)
-            } ?? []
-        )
-    }
 
     var body: some View {
         let _ = themeChanges.revision
@@ -80,18 +69,10 @@ struct ContentView: View {
         ))
         .focusedSceneValue(\.baileyGitModel, git)
         .onAppear {
-            installFileErrorPresentation()
             git.setLocalFileEventsForeground(NSApp.isActive)
             syncGit()
         }
-        .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didBecomeActiveNotification
-        )) { _ in
-            syncGit()
-        }
-        .onChange(of: commandCompletionSequences) { syncGit() }
-        .onChange(of: manager.selectedProject?.panelContext?.identity) { syncGit() }
+        .onChange(of: manager.selectedProject?.panelRefreshKey()) { syncGit() }
         .onChange(of: colorScheme) {
             manager.refreshAppearance()
         }
@@ -114,23 +95,6 @@ struct ContentView: View {
         return manager.projects
             .flatMap(\.sessions)
             .filter { !visibleIDs.contains($0.id) }
-    }
-
-    /// Files may have been opened from a shortcut or another tool tab; the
-    /// error is attached to its original window rather than a transient pane.
-    private func installFileErrorPresentation() {
-        for project in manager.projects {
-            project.fileTree.onError = { [weak manager] title, detail in
-                guard let window = manager?.attachedWindow, window.isVisible else { return }
-                let alert = NSAlert()
-                alert.messageText = title
-                alert.informativeText = detail
-                alert.alertStyle = .warning
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate()
-                alert.beginSheetModal(for: window, completionHandler: { _ in })
-            }
-        }
     }
 
     private func syncGit() {
@@ -242,9 +206,8 @@ enum ProjectCloseConfirmation {
     }
 
     static func present(title: String, in window: NSWindow?) async -> NSApplication.ModalResponse {
-        let alert = alert(title: title)
-        if let window { return await alert.beginSheetModal(for: window) }
-        return alert.runModal()
+        guard let window, window.isVisible else { return .cancel }
+        return await alert(title: title).beginSheetModal(for: window)
     }
 }
 
@@ -291,11 +254,7 @@ enum WorkspaceNativeDialogs {
     }
 
     static func showError(_ error: Error, in window: NSWindow?) {
-        let alert = NSAlert(error: error)
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: { _ in })
-        } else {
-            alert.runModal()
-        }
+        guard let window else { return }
+        NSAlert(error: error).beginSheetModal(for: window, completionHandler: { _ in })
     }
 }

@@ -1,5 +1,4 @@
 import Foundation
-import Observation
 
 enum PaneContent: nonisolated Identifiable {
     case session(TerminalSession)
@@ -115,14 +114,9 @@ enum PaneContent: nonisolated Identifiable {
 }
 
 @MainActor
-@Observable
 final class PaneTab: nonisolated Identifiable {
     nonisolated let id = UUID()
     let content: PaneContent
-    weak var contextSession: TerminalSession? {
-        didSet { if contextSession?.id != oldValue?.id { onSnapshotChange?() } }
-    }
-    @ObservationIgnored var onSnapshotChange: (() -> Void)?
 
     init(content: PaneContent) {
         self.content = content

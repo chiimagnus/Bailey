@@ -173,7 +173,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         try Data(original.utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let project = Project(fallbackName: "CSV composition", layout: .init())
+        let project = Project(customDirectory: url.deletingLastPathComponent().path, layout: .init())
         project.openLocalFile(url.path)
         let tab = try XCTUnwrap(project.tabs.first)
         guard case .file(let file) = tab.content else { return XCTFail("Expected CSV file") }
@@ -258,7 +258,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
         let bytes = Data(original.utf8)
         try bytes.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let project = Project(fallbackName: "CSV retirement", layout: .init())
+        let project = Project(customDirectory: url.deletingLastPathComponent().path, layout: .init())
         project.openLocalFile(url.path)
         let tab = try XCTUnwrap(project.tabs.first)
         guard case .file(let file) = tab.content else { return XCTFail("Expected CSV file") }

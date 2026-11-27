@@ -64,15 +64,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         }
         let previous = try XCTUnwrap(terminal.surface.superview as? TerminalContainerView)
         XCTAssertNotNil(terminal.surface.onBecomeFirstResponder)
-        XCTAssertNotNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        XCTAssertNotNil(terminal.surface.onNewBrowserTab)
         let parking = TerminalParkingContainerView(frame: .zero)
         container.addSubview(parking)
         parking.mount([terminal])
         XCTAssertTrue(terminal.surface.superview === parking)
         XCTAssertTrue(terminal.surface.window === window)
         XCTAssertNil(terminal.surface.onBecomeFirstResponder)
-        XCTAssertNil(terminal.surface.openMenuTarget.onNewBrowserTab)
-        XCTAssertNil(terminal.surface.openMenuTarget.onNewFileTab)
+        XCTAssertNil(terminal.surface.onNewBrowserTab)
+        XCTAssertNil(terminal.surface.onNewFileTab)
         TerminalHostView.dismantleNSView(previous, coordinator: TerminalHostView.Coordinator())
         XCTAssertTrue(terminal.surface.superview === parking)
     }
@@ -125,7 +125,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testProjectAndPaneTabObservationsReplacePublisherRelays() async throws {
-        let project = Project(fallbackName: "observation", layout: .init())
+        let project = Project(customDirectory: "/fixture/observation", layout: .init())
         let tab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
         project.append(tab)
         XCTAssertEqual(project.tabs.first?.displayTitle, tab.content.title)
@@ -354,8 +354,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     func testTabSwitcherCannotCommitOrSelectAfterChangingProjects() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let first = Project(fallbackName: "A", layout: manager.dockLayout)
-        let second = Project(fallbackName: "B", layout: manager.dockLayout)
+        let first = Project(customDirectory: "/fixture/A", layout: manager.dockLayout)
+        let second = Project(customDirectory: "/fixture/B", layout: manager.dockLayout)
         manager.projects = [first, second]
         let firstTabs = (0..<3).map { _ in
             PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
@@ -397,7 +397,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         try "<title>Second fixture</title>Second page".write(to: second, atomically: true, encoding: .utf8)
         let browser = BrowserTab(initialFocus: .none)
         let native = browser.webView
-        let project = Project(fallbackName: "browser", layout: .init())
+        let project = Project(customDirectory: directory.path, layout: .init())
         project.append(PaneTab(content: .browser(browser)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -453,6 +453,65 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(browser.focusAddressRequest, initialRequest + 2)
         try await settle { addressEditor.selectedRange().length == second.absoluteString.utf16.count }
         XCTAssertTrue(browser.webView === native)
+    }
+
+    func testClosedBrowserRetiresNativePageBeforeHostDismantles() async throws {
+        let project = Project(customDirectory: "/fixture/browser", layout: .init())
+        let browser = project.newBrowserTab(initialFocus: .none)
+        let native = browser.webView
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); project.terminateAll() }
+        var newTabs = 0
+        let host = NSHostingView(rootView: BrowserView(
+            browser: browser, isFocused: false, onFocused: {},
+            onNewBrowserTab: { _ in newTabs += 1 }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        native.loadHTMLString("<title>Retirement fixture</title><input id='draft' value='retired document'>",
+                              baseURL: nil)
+        try await settle { native.window === window && browser.title == "Retirement fixture"
+            && !browser.isLoading && native.onNewBrowserTab != nil }
+        XCTAssertNotNil(native.navigationDelegate)
+        XCTAssertNotNil(native.uiDelegate)
+
+        // Retain the old SwiftUI host and WKWebView just as AppKit may do
+        // until the next view update.
+        project.closeContent(.browser(browser))
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(native.navigationDelegate)
+        XCTAssertNil(native.uiDelegate)
+        XCTAssertNil(native.focusOwner)
+        XCTAssertNil(native.onFocused)
+        XCTAssertNil(native.onFocusReady)
+        XCTAssertNil(native.onNewBrowserTab)
+        native.onNewBrowserTab?("about:blank")
+        XCTAssertEqual(newTabs, 0)
+
+        try await settle { native.title != "Retirement fixture" && !native.isLoading }
+        let retainedDraft = try await native.evaluateJavaScript(
+            "document.getElementById('draft') !== null"
+        ) as? Bool
+        XCTAssertEqual(retainedDraft, false, "Closing a tab must unload its old page")
+        XCTAssertEqual(browser.title, "Retirement fixture", "Retirement must stop obsolete KVO updates")
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(native.onNewBrowserTab)
+    }
+
+    func testDetachedBrowserRejectsJavaScriptDialogInsteadOfBlockingTheApp() async throws {
+        let browser = BrowserTab(initialFocus: .none)
+        defer { browser.retireContent() }
+        browser.webView.loadHTMLString("<title>Detached dialog</title>", baseURL: nil)
+        try await settle { browser.title == "Detached dialog" && !browser.isLoading }
+        XCTAssertNil(browser.webView.window)
+        let confirmed = try await browser.webView.evaluateJavaScript(
+            "confirm('Detached browser must not open a modal window')"
+        ) as? Bool
+        XCTAssertEqual(confirmed, false)
+        XCTAssertNil(NSApp.modalWindow)
     }
 
     func testWebKitJavaScriptDialogsInvokeNativeDelegateSheets() async throws {
@@ -517,7 +576,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let file = FileTab(path: filePath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await file.waitForText()
         let fileTab = PaneTab(content: .file(file))
-        let project = Project(fallbackName: "retention", layout: .init())
+        let project = Project(customDirectory: directory.path, layout: .init())
         project.append(browserTab)
         project.append(fileTab)
 
@@ -872,7 +931,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             if let playerView = view as? AVPlayerView { return [playerView] }
             return view.subviews.flatMap { nativePlayers(in: $0) }
         }
-        let project = Project(fallbackName: "Shared media", layout: .init())
+        let project = Project(customDirectory: "/fixture/Shared media", layout: .init())
         defer { project.closeAll() }
         let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
         host.sizingOptions = []
@@ -2057,7 +2116,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     func testPanelMenuPresentationPinsEntriesOnlyDuringNativeTracking() async {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
-        let project = Project(fallbackName: "menu", layout: .init())
+        let project = Project(customDirectory: "/fixture/menu", layout: .init())
         let tab = PaneTab(content: .session(terminal))
         project.append(tab)
         let presentation = MainMenuPresentation()
@@ -2088,8 +2147,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testMenuSelectionTracksActiveDockContentAndFreezesOnlyWhileOpen() throws {
-        let project = Project(fallbackName: "same", layout: .init())
-        let other = Project(fallbackName: "same", layout: .init())
+        let project = Project(customDirectory: "/fixture/same", layout: .init())
+        let other = Project(customDirectory: "/fixture/same", layout: .init())
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let shell = PaneTab(content: .session(terminal))
@@ -2123,8 +2182,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testProjectMenuPresentationPinsOrderOnlyWhileTracked() {
-        let first = Project(fallbackName: "First", layout: .init())
-        let second = Project(fallbackName: "Second", layout: .init())
+        let first = Project(customDirectory: "/fixture/First", layout: .init())
+        let second = Project(customDirectory: "/fixture/Second", layout: .init())
         let presentation = MainMenuPresentation()
         XCTAssertEqual(presentation.projectEntries(for: [first]).map(\.title), ["First"])
         presentation.beginTracking(project: nil, projects: [first])
@@ -2134,11 +2193,38 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                        ["First", "Second"])
     }
 
+    func testPanelRefreshKeyOnlyChangesForProjectOrCommandCompletion() {
+        let project = Project(customDirectory: "/fixture/repo", layout: .init())
+        let other = Project(customDirectory: "/fixture/repo", layout: .init())
+        let original = project.panelRefreshKey()
+        let withoutCommands = project.panelRefreshKey(includingCommands: false)
+        let otherOriginal = other.panelRefreshKey()
+        let terminal = project.newSession(launchCommand: "exec /bin/sh -i")
+        defer { project.terminateAll(); other.terminateAll() }
+        XCTAssertEqual(project.panelRefreshKey(), original, "Opening a terminal does not complete a command")
+
+        let second = project.newSession(launchCommand: "exec /bin/sh -i")
+        XCTAssertEqual(project.panelRefreshKey(), original)
+        terminal.surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
+        let finished = project.panelRefreshKey()
+        XCTAssertNotEqual(finished, original, "A background terminal must refresh its own project")
+        XCTAssertEqual(project.panelRefreshKey(includingCommands: false), withoutCommands)
+        XCTAssertEqual(other.panelRefreshKey(), otherOriginal)
+        XCTAssertNotEqual(finished, otherOriginal, "Same directory does not mean same project")
+
+        project.closeContent(.session(second))
+        XCTAssertEqual(project.panelRefreshKey(), finished, "Closing another terminal is not a command")
+        project.closeContent(.session(terminal))
+        XCTAssertEqual(project.panelRefreshKey(), finished, "Closing the last terminal is not a command")
+        terminal.surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
+        XCTAssertEqual(project.panelRefreshKey(), finished, "Retired terminal callbacks must not refresh")
+    }
+
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let surface = terminal.surface
-        let project = Project(fallbackName: "fallback", layout: .init())
+        let project = Project(customDirectory: "/fixture/fallback", layout: .init())
         project.append(PaneTab(content: .session(terminal)))
 
         let titleChanged = expectation(description: "Terminal title observation")
@@ -2149,15 +2235,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(project.name, "fallback")
 
         let commandChanged = expectation(description: "Real command completion observation")
-        withObservationTracking({ _ = terminal.commandLifecycle.completionSequence }) {
+        withObservationTracking({ _ = project.commandCompletionSequence }) {
             commandChanged.fulfill()
         }
-        let previous = terminal.commandLifecycle.completionSequence
-        terminal.terminalDidReportShellIntegration(
-            .commandFinished(exitCode: 0, durationNanos: 1_000_000)
-        )
+        let previous = project.commandCompletionSequence
+        surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
         await fulfillment(of: [commandChanged], timeout: 2)
-        XCTAssertEqual(terminal.commandLifecycle.completionSequence, previous + 1)
+        XCTAssertEqual(project.commandCompletionSequence, previous + 1)
+        surface.terminalDidFinishCommand(exitCode: 0, durationNanos: 1_000_000)
+        XCTAssertEqual(project.commandCompletionSequence, previous + 2)
 
         let findChanged = expectation(description: "Find focus request observation")
         withObservationTracking({ _ = terminal.find.focusRequest }) {
@@ -2198,6 +2284,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        let sentinel = directory.appendingPathComponent("local-only.txt")
+        try Data("local".utf8).write(to: sentinel)
         let terminal = TerminalSession(initialDirectory: directory.path, launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let tab = PaneTab(content: .session(terminal))
@@ -2214,6 +2302,9 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         try await settle { terminal.shellPid != nil }
         XCTAssertTrue(terminal.acceptsLocalFileDrop)
+        guard case .file? = terminal.terminalLinkTarget(for: sentinel.path) else {
+            return XCTFail("Local path must resolve before SSH")
+        }
 
         // An SSH client that bypasses Bailey's helper keeps location == .local.
         // ProxyCommand sleeps over local pipes only: no network, credentials,
@@ -2239,9 +2330,11 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             }
             XCTAssertNotEqual(terminal.surface.foregroundPid, terminal.shellPid)
         }
-        XCTAssertNil(terminal.location.remoteConnection)
+        XCTAssertNil(terminal.remoteConnection)
         XCTAssertFalse(terminal.acceptsLocalFileDrop,
                        "A foreground ssh is remote input regardless of whether it replaced the root shell")
+        XCTAssertNil(terminal.terminalLinkTarget(for: sentinel.path))
+        XCTAssertNil(terminal.terminalLinkTarget(for: sentinel.absoluteString))
     }
 
     func testTerminalKeepsSameShellAcrossParkingAndRemount() async throws {

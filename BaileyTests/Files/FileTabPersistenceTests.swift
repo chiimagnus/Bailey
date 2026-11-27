@@ -1726,8 +1726,7 @@ final class FileTabPersistenceTests: XCTestCase {
 
     func testFixedHostDisconnectRebindsDirtyFileWithoutLosingDraft() async throws {
         let host = "fixture-\(UUID().uuidString)"
-        let project = Project(fallbackName: "fixed host", layout: .init())
-        project.sshHost = host
+        let project = Project(customDirectory: "/fixture", sshHost: host, layout: .init())
         let path = "/fixture/file.txt"
         let file = FileTab(path: path, backend: EditorWorkspaceFixture(path: path, contents: Data("original".utf8)),
                            workspaceIdentity: "ssh:" + host)
@@ -1938,8 +1937,7 @@ final class FileTabPersistenceTests: XCTestCase {
 
     func testFixedHostDisconnectBeforeLoadShowsReasonWithoutReading() async throws {
         let host = "fixture-\(UUID().uuidString)"
-        let project = Project(fallbackName: "offline", layout: .init())
-        project.sshHost = host
+        let project = Project(customDirectory: "/fixture", sshHost: host, layout: .init())
         let backend = EditorWorkspaceFixture(path: "/fixture/file.txt", contents: Data("original".utf8))
         let file = FileTab(path: "/fixture/file.txt", backend: backend, workspaceIdentity: "ssh:" + host)
         project.append(PaneTab(content: .file(file)))
@@ -2016,7 +2014,7 @@ final class FileTabPersistenceTests: XCTestCase {
     func testFailedCleanEncodingSaveBlocksGitAndProtectedFileMutation() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "save safety", layout: manager.dockLayout)
+        let project = Project(customDirectory: "/fixture/git", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let repository = "/fixture/git"
@@ -2077,7 +2075,7 @@ final class FileTabPersistenceTests: XCTestCase {
     func testGitPreparationWaitsForWritesAndNeverClosesOrLosesEditedTab() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "Git Save", layout: manager.dockLayout)
+        let project = Project(customDirectory: "/fixture/git", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let path = "/fixture/git/file.txt"
@@ -2127,7 +2125,7 @@ final class FileTabPersistenceTests: XCTestCase {
         try Data("baseline".utf8).write(to: inside)
         try Data("other repository".utf8).write(to: outside)
         defer { try? FileManager.default.removeItem(at: outside) }
-        let project = Project(fallbackName: "Aliases", layout: manager.dockLayout)
+        let project = Project(customDirectory: root.path, layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let selected = FileTab(path: inside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
@@ -2211,7 +2209,7 @@ final class FileTabPersistenceTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let project = Project(fallbackName: "Close All", layout: .init())
+        let project = Project(customDirectory: root.path, layout: .init())
         let remotePath = root.appendingPathComponent("blocked-remote.txt").path
         let backend = EditorWorkspaceFixture(path: remotePath, contents: Data("remote original".utf8))
         let remote = FileTab(path: remotePath, backend: backend, workspaceIdentity: "ssh:fixture")
@@ -2669,7 +2667,7 @@ final class FileTabPersistenceTests: XCTestCase {
         try "original".write(to: url, atomically: true, encoding: .utf8)
         let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await file.waitForText()
-        let project = Project(fallbackName: "autosave", layout: .init())
+        let project = Project(customDirectory: root.path, layout: .init())
         let filePane = PaneTab(content: .file(file))
         project.append(filePane)
 
@@ -3668,7 +3666,7 @@ final class FileTabPersistenceTests: XCTestCase {
         file.refreshDirtyState()
         let saving = Task { await file.save() }
         try await waitForFileTabState { await backend.writingPath == path }
-        let project = Project(fallbackName: "disconnected", layout: .init())
+        let project = Project(customDirectory: "/fixture", layout: .init())
         file.reevaluateWorkspace(in: project)
         await backend.finishWrite()
         await saving.value
@@ -4635,8 +4633,7 @@ final class NativeFileTabTests: XCTestCase {
 
     func testMountedEditorDisconnectReconnectKeepsNativeBufferAndUndo() async throws {
         let sshHost = "editor-" + UUID().uuidString
-        let project = Project(fallbackName: "native read-only", layout: .init())
-        project.sshHost = sshHost
+        let project = Project(customDirectory: "/fixture", sshHost: sshHost, layout: .init())
         defer { project.terminateAll() }
         SSHHostWorkspaces.setConnected(true, for: sshHost)
         let backend = EditorWorkspaceFixture(path: "/fixture/file.txt", contents: Data("original".utf8))

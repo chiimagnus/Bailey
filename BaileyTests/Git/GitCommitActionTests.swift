@@ -1151,15 +1151,13 @@ final class GitCommitActionTests: XCTestCase {
         let workspaceApplication = WorkspaceApplication()
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let first = Project(fallbackName: "First", layout: manager.dockLayout)
-        first.customDirectory = firstRoot.path
-        let second = Project(fallbackName: "Second", layout: manager.dockLayout)
-        second.customDirectory = secondRoot.path
+        let first = Project(customDirectory: firstRoot.path, layout: manager.dockLayout)
+        let second = Project(customDirectory: secondRoot.path, layout: manager.dockLayout)
         manager.projects = [first, second]
         manager.selectedProjectID = first.id
         let model = GitStatusModel()
-        let firstIdentity = try XCTUnwrap(first.panelContext).identity
-        let secondIdentity = try XCTUnwrap(second.panelContext).identity
+        let firstIdentity = first.panelContext.identity
+        let secondIdentity = second.panelContext.identity
         manager.syncGitStatus(model)
         try await awaitState { model.matchesPanelTarget(firstIdentity) && model.hasResolvedStatus && !model.isRefreshing }
         let old = try XCTUnwrap(model.recentCommits.last)

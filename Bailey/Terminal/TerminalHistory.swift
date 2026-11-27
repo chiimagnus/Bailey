@@ -17,7 +17,7 @@ enum TerminalHistorySerializer {
     /// the last `maxLines` rows.
     @MainActor
     static func capture(
-        from surface: any TerminalBackendSurface, maxLines: Int
+        from surface: BaileyTerminalView, maxLines: Int
     ) -> CaptureResult {
         guard maxLines > 0,
               let captureFile = validatedCaptureFile(for: surface.exportScreenFile())
@@ -37,7 +37,7 @@ enum TerminalHistorySerializer {
     /// session has megabytes of scrollback.
     @MainActor
     static func previewText(
-        from surface: any TerminalBackendSurface,
+        from surface: BaileyTerminalView,
         maxLines: Int,
         maxColumns: Int
     ) -> String? {
@@ -100,7 +100,7 @@ enum TerminalHistorySerializer {
     /// but an empty primary buffer also produces no file, so false is
     /// inconclusive.
     @MainActor
-    static func hasPrimaryScrollback(_ surface: any TerminalBackendSurface) -> Bool {
+    static func hasPrimaryScrollback(_ surface: BaileyTerminalView) -> Bool {
         guard let captureFile = validatedCaptureFile(
             for: surface.exportScrollbackFile()
         ) else { return false }

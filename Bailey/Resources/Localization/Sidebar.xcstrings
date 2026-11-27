@@ -973,12 +973,12 @@
         }
       }
     },
-    "Initialize the terminal’s current directory to start tracking changes." : {
+    "Initialize the project directory to start tracking changes." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "初始化终端的当前目录以开始跟踪更改。"
+            "value" : "初始化项目目录以开始跟踪更改。"
           }
         }
       }

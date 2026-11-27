@@ -2,23 +2,6 @@ import Darwin
 import Foundation
 import Observation
 
-/// Where a session's right pane looks for files, processes and git state.
-///
-/// A session is `.local` until Bailey's own `ssh` helper reports that the user
-/// typed an interactive `ssh` in that terminal. Nested or unmanaged `ssh`
-/// invocations never produce a `.remote` location, so the pane can say the
-/// remote tools are unavailable rather than showing local paths under a
-/// remote heading.
-enum WorkspaceLocation {
-    case local
-    case remote(RemoteConnection)
-
-    var remoteConnection: RemoteConnection? {
-        guard case .remote(let connection) = self else { return nil }
-        return connection
-    }
-}
-
 enum RemoteConnectionError: Error, LocalizedError {
     case notConnected
     case commandFailed(status: Int32, message: String)

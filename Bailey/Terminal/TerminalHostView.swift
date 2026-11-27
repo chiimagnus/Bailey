@@ -17,7 +17,7 @@ struct TerminalHostView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> TerminalContainerView {
         let container = TerminalContainerView()
         container.terminal = session.surface
         container.find = session.find
@@ -25,8 +25,8 @@ struct TerminalHostView: NSViewRepresentable {
         container.canFocus = canFocus
         let terminal = session.surface
         terminal.onBecomeFirstResponder = onFocused
-        terminal.openMenuTarget.onNewBrowserTab = onNewBrowserTab
-        terminal.openMenuTarget.onNewFileTab = onNewFileTab
+        terminal.onNewBrowserTab = onNewBrowserTab
+        terminal.onNewFileTab = onNewFileTab
         let scrollbar = session.overlayScrollbar
         // Bailey's visual insets live inside the backend as window padding (see
         // BaileyTerminalView+Ghostty), so that a padding-color of `extend` can
@@ -57,12 +57,11 @@ struct TerminalHostView: NSViewRepresentable {
         return container
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        guard let container = view as? TerminalContainerView,
-              session.surface.superview === container else { return }
+    func updateNSView(_ container: TerminalContainerView, context: Context) {
+        guard session.surface.superview === container else { return }
         session.surface.onBecomeFirstResponder = onFocused
-        session.surface.openMenuTarget.onNewBrowserTab = onNewBrowserTab
-        session.surface.openMenuTarget.onNewFileTab = onNewFileTab
+        session.surface.onNewBrowserTab = onNewBrowserTab
+        session.surface.onNewFileTab = onNewFileTab
         container.activateSurfaceAfterLayout()
         container.focusOnAppear = isFocused
         container.canFocus = canFocus
@@ -75,9 +74,8 @@ struct TerminalHostView: NSViewRepresentable {
         context.coordinator.isFocused = isFocused
     }
 
-    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
-        guard let container = view as? TerminalContainerView,
-              let terminal = container.terminal as? any TerminalBackendSurface,
+    static func dismantleNSView(_ container: TerminalContainerView, coordinator: Coordinator) {
+        guard let terminal = container.terminal,
               terminal.superview === container
         else { return }
         // These closures originate on PanelContentView and therefore capture its
@@ -86,8 +84,8 @@ struct TerminalHostView: NSViewRepresentable {
         // leave the session and its renderer in a retain cycle. A parked
         // session gets fresh callbacks when its host is recreated.
         terminal.onBecomeFirstResponder = nil
-        terminal.openMenuTarget.onNewBrowserTab = nil
-        terminal.openMenuTarget.onNewFileTab = nil
+        terminal.onNewBrowserTab = nil
+        terminal.onNewFileTab = nil
         container.terminal = nil
     }
 
@@ -96,11 +94,7 @@ struct TerminalHostView: NSViewRepresentable {
     }
 }
 
-/// Keeps every non-visible terminal attached to the window. A backend may
-/// start its shell only after attachment and drain process/title/bell events
-/// from its own tick, so parking preserves the eager/background session
-/// behavior Bailey had before the backend migration without drawing those panes
-/// into the visible layout.
+/// Keeps hidden Ghostty surfaces attached so their Shells and callbacks stay live.
 struct TerminalParkingView: NSViewRepresentable {
     let sessions: [TerminalSession]
 
@@ -143,8 +137,8 @@ final class TerminalParkingContainerView: NSView {
             let terminal = session.surface
             guard terminal.superview !== self else { continue }
             terminal.onBecomeFirstResponder = nil
-            terminal.openMenuTarget.onNewBrowserTab = nil
-            terminal.openMenuTarget.onNewFileTab = nil
+            terminal.onNewBrowserTab = nil
+            terminal.onNewFileTab = nil
             // Parked panes stay attached at full size so the grid survives
             // unparking, but nothing composites them. Marking them occluded
             // lets the backend drop the renderer's pane-sized IOSurfaces
@@ -179,7 +173,7 @@ final class TerminalParkingContainerView: NSView {
 /// and when navigation moves focus here. `TerminalHostView` drives the edge;
 /// this only performs the makeFirstResponder.
 final class TerminalContainerView: NSView {
-    weak var terminal: NSView?
+    weak var terminal: BaileyTerminalView?
     weak var find: TerminalFind?
     var canFocus: () -> Bool = { true }
     var focusOnAppear = true {
@@ -226,7 +220,7 @@ final class TerminalContainerView: NSView {
         guard needsSurfaceActivation,
               window != nil,
               bounds.width > 0, bounds.height > 0,
-              let terminal = terminal as? any TerminalBackendSurface,
+              let terminal,
               terminal.superview === self,
               terminal.window != nil,
               terminal.bounds.width > 0, terminal.bounds.height > 0

@@ -168,6 +168,7 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
     private(set) var focusAddressRequest: UInt = 0
 
     let webView: BrowserWebView
+    private(set) var isRetired = false
 
     @ObservationIgnored private var pageTitle: String?
     @ObservationIgnored private var observations: Set<AnyCancellable> = []
@@ -250,6 +251,29 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
 
     deinit {
         faviconTask?.cancel()
+    }
+
+    /// A real tab close, unlike a SwiftUI detach, ends the page and its actions.
+    func retireContent() {
+        guard !isRetired else { return }
+        isRetired = true
+        observations.removeAll()
+        prepareForFaviconNavigation()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.focusOwner = nil
+        webView.onFocused = nil
+        webView.onNewBrowserTab = nil
+        webView.onFocusReady = nil
+        webView.contextMenuLink = nil
+        contextMenuBridge.webView = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: BrowserContextMenuSupport.messageName, contentWorld: .defaultClient
+        )
+        webView.stopLoading()
+        // AppKit may retain the detached view. Unload the page rather than
+        // leaving its scripts and document alive until the last view dies.
+        webView.loadHTMLString("", baseURL: nil)
     }
 
     var snapshotURL: String? {
@@ -709,11 +733,12 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
         for webView: WKWebView,
         completion: @escaping (NSApplication.ModalResponse) -> Void
     ) {
-        if let window = webView.window {
-            alert.beginSheetModal(for: window, completionHandler: completion)
-        } else {
-            completion(alert.runModal())
+        guard !isRetired, let window = webView.window, window.isVisible,
+              !webView.isHiddenOrHasHiddenAncestor else {
+            completion(.abort)
+            return
         }
+        alert.beginSheetModal(for: window, completionHandler: completion)
     }
 }
 
@@ -761,6 +786,10 @@ struct BrowserView: View {
     @State private var webContentFocusRequest: UInt = 0
 
     var body: some View {
+        if !browser.isRetired { liveContent }
+    }
+
+    @ViewBuilder private var liveContent: some View {
         let _ = themeChanges.revision
         VStack(spacing: 0) {
             toolbar
@@ -1264,6 +1293,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> BrowserWebView {
+        guard !browser.isRetired else { return browser.webView }
         browser.webView.onFocused = onFocused
         browser.webView.onNewBrowserTab = onNewBrowserTab
         browser.webView.focusOwner = context.coordinator
@@ -1276,6 +1306,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: BrowserWebView, context: Context) {
+        guard !browser.isRetired else { return }
         context.coordinator.canFocus = canFocus
         webView.onFocused = onFocused
         webView.onNewBrowserTab = onNewBrowserTab
@@ -1338,7 +1369,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
 
         private func attemptFocus() {
             guard let request = pendingFocusRequest,
-                  let webView = attachedView,
+                  let webView = attachedView, webView.focusOwner === self,
                   let window = webView.window, window === attachedWindow,
                   canFocus(),
                   !webView.isHiddenOrHasHiddenAncestor,

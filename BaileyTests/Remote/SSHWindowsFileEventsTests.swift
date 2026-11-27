@@ -224,9 +224,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
         let link = root + "/alias"
         let actual = root + "/actual"
         let member = UUID()
-        let project = Project(fallbackName: "Symlink Root", layout: .init())
-        project.sshHost = host
-        project.customDirectory = link
+        let project = Project(customDirectory: link, sshHost: host, layout: .init())
         func cleanup() async {
             project.remoteFileEvents.unsubscribe(id: member)
             do { try await backend.delete(paths: [root]) }
@@ -244,7 +242,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
                 stdin: nil, timeout: 25
             )
             XCTAssertEqual(result.status, 0)
-            let context = try XCTUnwrap(project.panelContext)
+            let context = project.panelContext
             project.remoteFileEvents.subscribe(
                 id: member, project: project, host: host, root: link, context: context
             )
@@ -275,9 +273,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
               !root.dropFirst("/tmp/bailey-p2-owner-".count).contains("/") else {
             throw WorkspaceError.notFound
         }
-        let project = Project(fallbackName: "SSH File Events", layout: .init())
-        project.sshHost = host
-        project.customDirectory = root
+        let project = Project(customDirectory: root, sshHost: host, layout: .init())
         let first = UUID()
         let second = UUID()
         func cleanup() async {
@@ -308,7 +304,7 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             let deadline = Date().addingTimeInterval(65)
             var boundRevision: UInt64?
             while Date() < deadline {
-                let context = try XCTUnwrap(project.panelContext)
+                let context = project.panelContext
                 if context.connectionRevision != boundRevision {
                     for member in members {
                         project.remoteFileEvents.subscribe(

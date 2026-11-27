@@ -2086,12 +2086,12 @@
         }
       }
     },
-    "Open a terminal directory first" : {
+    "Select a project first" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请先打开终端所在目录"
+            "value" : "请先选择项目"
           }
         }
       }

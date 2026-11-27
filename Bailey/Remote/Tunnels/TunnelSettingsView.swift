@@ -371,14 +371,11 @@ final class TunnelSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     private func showAlert(_ message: String, detail: String) {
+        guard let window else { return }
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = detail
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
+        alert.beginSheetModal(for: window)
     }
 }
 
