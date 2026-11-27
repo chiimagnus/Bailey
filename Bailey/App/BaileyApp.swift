@@ -343,6 +343,12 @@ private struct BaileyCommands: Commands {
                 else { NSApp.keyWindow?.performClose(nil) }
             }
             .keyboardShortcut("w", modifiers: .command)
+            .modifierKeyAlternate(.option) {
+                Button(String(localized: "Close Other Panels", table: "Interface")) {
+                    manager?.closeOtherPanels()
+                }
+                .disabled(manager?.canCloseOtherPanels != true)
+            }
 
             let entries = menuPresentation.panelEntries(for: manager?.selectedProject)
             if !entries.isEmpty {

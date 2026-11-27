@@ -19,7 +19,7 @@ final class DockWorkspaceTests: XCTestCase {
         let active = project.dock.activeGroupID
         let displayed = project.dock.root.group(id: destination.id)?.selected
         project.dock.selectForContextMenu(.tab(tabs[1].id))
-        project.closeOthers(tabs[1])
+        project.closeOthers(.tab(tabs[1].id))
         XCTAssertEqual(project.dock.activeGroupID, active)
         XCTAssertEqual(project.selectedTabID, tabs[0].id)
         XCTAssertEqual(project.dock.root.group(id: destination.id)?.selected, displayed)
@@ -37,11 +37,49 @@ final class DockWorkspaceTests: XCTestCase {
         project.selectTab(tabs[0].id)
         project.selectTab(tabs[2].id, extending: .toggle)
         project.dock.selectForContextMenu(.tab(tabs[1].id))
-        project.closeOthers(tabs[1])
+        project.closeOthers(.tab(tabs[1].id))
         XCTAssertEqual(project.tabs.map(\.id), [tabs[1].id])
         XCTAssertEqual(project.dock.group(containing: .git)?.id, group.id)
         XCTAssertNotNil(project.dock.group(containing: .files))
         XCTAssertNotNil(project.dock.group(containing: .projects))
+    }
+
+    func testMainMenuCloseOthersUsesActiveGroupAndSelectionNotContextTarget() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(customDirectory: "/fixture/main menu others", layout: manager.dockLayout)
+        let otherProject = Project(customDirectory: "/fixture/other project", layout: manager.dockLayout)
+        manager.projects = [project, otherProject]
+        manager.selectedProjectID = project.id
+        for _ in 0..<5 { project.newBrowserTab(initialFocus: .none) }
+        otherProject.newBrowserTab(initialFocus: .none)
+        let tabs = project.tabs
+        let destination = try XCTUnwrap(project.dock.group(containing: .files))
+        XCTAssertTrue(project.movePanels(.tab(tabs[3].id), into: destination.id,
+            items: Array(tabs[3...4]).map { .tab($0.id) }))
+
+        manager.showPanel(.files)
+        XCTAssertFalse(manager.canCloseOtherPanels)
+        manager.closeOtherPanels()
+        XCTAssertEqual(project.tabs.map(\.id), tabs.map(\.id))
+
+        project.selectTab(tabs[0].id)
+        project.selectTab(tabs[1].id, extending: .toggle)
+        project.dock.selectForContextMenu(.tab(tabs[3].id))
+        XCTAssertTrue(manager.canCloseOtherPanels)
+        manager.closeOtherPanels()
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id, tabs[1].id, tabs[3].id, tabs[4].id])
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[1].id))
+        XCTAssertFalse(manager.canCloseOtherPanels)
+        XCTAssertEqual(otherProject.tabs.count, 1)
+        XCTAssertNotNil(project.dock.group(containing: .files))
+        XCTAssertNotNil(project.dock.group(containing: .git))
+
+        manager.selectedProjectID = otherProject.id
+        XCTAssertFalse(manager.canCloseOtherPanels)
+        manager.closeOtherPanels()
+        XCTAssertEqual(otherProject.tabs.count, 1)
+        XCTAssertEqual(project.tabs.count, 4)
     }
 
     func testEverySmallGroupSelectionAndInsertionBoundaryIsAtomic() throws {
