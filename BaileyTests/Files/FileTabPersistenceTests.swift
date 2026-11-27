@@ -580,7 +580,7 @@ final class FileTabPersistenceTests: XCTestCase {
             defer { file.retireContent() }
             try await file.waitForText()
             file.autoSaveSuspendedForClose = true
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             try await requireDelimitedEdit(file, .paste("new", rows: [1], origin: .init(row: 0, column: 1), columns: 2),
                                          using: snapshot)
@@ -2831,7 +2831,7 @@ final class FileTabPersistenceTests: XCTestCase {
         try await file.waitForText()
         XCTAssertEqual(file.text, source)
         XCTAssertEqual(file.fileEncoding, .utf8)
-        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let loaded = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(loaded)
         let storage = file.nativeTextStorage
         XCTAssertFalse(file.canEditDelimited(snapshot), "An explicit decode that strips a BOM cannot prove byte equality")
@@ -2864,10 +2864,10 @@ final class FileTabPersistenceTests: XCTestCase {
             let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
             try await file.waitForText()
             defer { file.retireContent() }
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(loaded)
             let grid = DelimitedGrid()
-            file.delimitedTable.separator = .comma
+
             grid.file = file
             let presentation = try await DelimitedTablePresentation.evaluate(
                 source: snapshot.source, index: snapshot.index, configuration: file.delimitedTable.configuration)
@@ -2880,13 +2880,12 @@ final class FileTabPersistenceTests: XCTestCase {
             grid.install(snapshot, presentation: presentation)
             grid.layoutSubtreeIfNeeded()
             grid.table.onEdit(.init(row: 0, column: 1))
-            let field = try XCTUnwrap(grid.table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)
-            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            let editor = try XCTUnwrap(grid.activeEditor)
             editor.insertText("中文,值", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
             if committed { XCTAssertTrue(window.makeFirstResponder(grid.table)) }
             XCTAssertEqual(file.text, original)
             file.rebindWorkspace(to: nil)
-            XCTAssertNil(field.currentEditor(), "Disconnect must end the native field editor before accepting more input")
+            XCTAssertNil(grid.activeEditor, "Disconnect must end the native field editor before accepting more input")
             grid.detach()
             try await waitForFileTabState { !file.hasPendingDelimitedEdit }
             let expected = "Name,Value\r\nItem,\"中文,值\"\n"
@@ -2928,7 +2927,7 @@ final class FileTabPersistenceTests: XCTestCase {
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         let storage = file.nativeTextStorage
-        let loaded = try await file.delimitedSnapshot(using: .comma)
+        let loaded = try await file.delimitedSnapshot()
         let snapshot = try XCTUnwrap(loaded)
 
         // Pause the actual conditional publication, accept a wide grid paste,
@@ -2998,7 +2997,7 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(file.fileEncoding, .utf8BOM)
 
         func edit(_ row: Int, _ value: String) async throws {
-            let result = try await file.delimitedSnapshot(using: .comma)
+            let result = try await file.delimitedSnapshot()
             let snapshot = try XCTUnwrap(result)
             XCTAssertTrue(file.canEditDelimited(snapshot))
             try await requireDelimitedEdit(file, .cells([.init(row: row, column: 1): value]), using: snapshot)
@@ -3133,7 +3132,7 @@ final class FileTabPersistenceTests: XCTestCase {
             defer { file.retireContent() }
             try await file.waitForText()
 
-            let loaded = try await file.delimitedSnapshot(using: .comma)
+            let loaded = try await file.delimitedSnapshot()
             try await requireDelimitedEdit(file, .columns([1, 0]), using: XCTUnwrap(loaded))
             let publishMove = Task { await file.save() }
             try await waitForFileTabState { await backend.writingPath == path }

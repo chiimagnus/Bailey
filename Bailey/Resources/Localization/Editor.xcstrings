@@ -671,12 +671,12 @@
         }
       }
     },
-    "The current encoding cannot preserve the original bytes. Edit the source instead.": {
+    "The current encoding cannot preserve the original bytes.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "当前编码无法保留原始字节，请改用源码编辑。"
+            "value": "当前编码无法保留原始字节。"
           }
         }
       }
@@ -841,56 +841,6 @@
         }
       }
     },
-    "Choose the table delimiter." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请选择表格分隔符。"
-          }
-        }
-      }
-    },
-    "Delimiter" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "分隔符"
-          }
-        }
-      }
-    },
-    "Comma" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "逗号"
-          }
-        }
-      }
-    },
-    "Semicolon" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "分号"
-          }
-        }
-      }
-    },
-    "Tab" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "制表符"
-          }
-        }
-      }
-    },
     "Filter Column" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1001,22 +951,12 @@
         }
       }
     },
-    "Delete Column from All Records" : {
+    "Delete Column" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从全部记录删除此列"
-          }
-        }
-      }
-    },
-    "Delete Selected Columns from All Records" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从全部记录删除所选列"
+            "value" : "删除列"
           }
         }
       }
@@ -1071,52 +1011,12 @@
         }
       }
     },
-    "Enter a position from 1 to %lld. This changes every record." : {
+    "Enter a position from 1 to %lld." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "输入 1 到 %lld 之间的位置。此操作将修改全部记录。"
-          }
-        }
-      }
-    },
-    "Rename Header…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名表头…"
-          }
-        }
-      }
-    },
-    "Changes All Records" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "作用于全部记录"
-          }
-        }
-      }
-    },
-    "Full Field" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完整字段"
-          }
-        }
-      }
-    },
-    "Apply Field" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用字段"
+            "value" : "输入 1 到 %lld 之间的位置。"
           }
         }
       }
@@ -1177,46 +1077,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重试字段编辑"
-          }
-        }
-      }
-    },
-    "Fill Selected Cells…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "批量填充单元格…"
-          }
-        }
-      }
-    },
-    "Fill Selected Cells" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "批量填充单元格"
-          }
-        }
-      }
-    },
-    "Set every selected cell to the same value." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将选中的单元格全部设为同一个值。"
-          }
-        }
-      }
-    },
-    "Fill" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "填充"
           }
         }
       }
@@ -1311,16 +1171,6 @@
         }
       }
     },
-    "Fit Column Width" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "适应列宽"
-          }
-        }
-      }
-    },
     "Apply Filter" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1337,16 +1187,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除列筛选"
-          }
-        }
-      }
-    },
-    "Use First Row as Header" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用首行作表头"
           }
         }
       }

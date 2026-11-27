@@ -9,7 +9,7 @@ nonisolated enum DelimitedTableMutation {
         case insertRows(before: Int, count: Int)
         case deleteRows(Set<Int>)
         case columns([Int?])
-        case fill(DelimitedTablePresentation.FieldScope, String)
+        case clear(DelimitedTablePresentation.FieldScope)
         case replace(DelimitedTablePresentation.FieldScope, query: String, with: String,
                      single: DelimitedTablePresentation.Occurrence?)
     }
@@ -31,7 +31,7 @@ nonisolated enum DelimitedTableMutation {
         _ change: Change, source: String, index: DelimitedTableIndex,
         encoding: TextFileEncoding
     ) async throws -> [Replacement] {
-        guard index.issue == nil, !index.needsSeparatorChoice else { throw Failure.invalidTable }
+        guard index.issue == nil, !index.hasAmbiguousSeparator else { throw Failure.invalidTable }
         try Task.checkCancellation()
         let text = source as NSString
         let replacements: [Replacement]
@@ -73,9 +73,9 @@ nonisolated enum DelimitedTableMutation {
                 })
             }
             replacements = fieldEdits
-        case .fill(let scope, let value):
+        case .clear(let scope):
             try scope.visit(in: index) { row, columns in
-                try append(editFields(record: row, columns: columns, text: text, index: index) { _, _ in value })
+                try append(editFields(record: row, columns: columns, text: text, index: index) { _, _ in "" })
             }
             replacements = fieldEdits
         case .replace(let scope, let query, let replacement, let single):
