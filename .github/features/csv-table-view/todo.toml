@@ -67,8 +67,8 @@ note = "隔离宿主38/38；长字段Red/Green、混合换行和原始Unicode字
 
 [[tasks]]
 id = "P4-T3"
-title = "批量填充、清空与原生查找替换"
+title = "清空与原生查找替换"
 status = "completed"
 plan = "plan-p4.md#p4-t3"
 commit = "8d1ef42"
-note = "隔离宿主47/47，真实 Delete、三范围计数、Unicode单次/全部替换、唯一Undo及HTML/Diff路由；十万行0.37 s、Undo/Redo 0.46 s。Windows真实替换及冲突2/2，Debug验签。/tmp/bailey-csv-p4-batch-final.DHlmqb1h、/tmp/bailey-csv-p4-batch-ssh.E1QF31n2。 本轮发现并修复单次替换错误复用旧格定位（a54a31f6）。后续仅多格选区保留批量填充；删除键清空，行号选行，不重复菜单。"
+note = "隔离宿主47/47，真实 Delete、三范围计数、Unicode单次/全部替换、唯一Undo及HTML/Diff路由；十万行0.37 s、Undo/Redo 0.46 s。Windows真实替换及冲突2/2，Debug验签。/tmp/bailey-csv-p4-batch-final.DHlmqb1h、/tmp/bailey-csv-p4-batch-ssh.E1QF31n2。 本轮发现并修复单次替换错误复用旧格定位（a54a31f6）。后续移除批量填充；删除键清空，行结构菜单仅在行号栏。"

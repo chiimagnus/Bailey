@@ -9,7 +9,7 @@ nonisolated enum DelimitedTableMutation {
         case insertRows(before: Int, count: Int)
         case deleteRows(Set<Int>)
         case columns([Int?])
-        case fill(DelimitedTablePresentation.FieldScope, String)
+        case clear(DelimitedTablePresentation.FieldScope)
         case replace(DelimitedTablePresentation.FieldScope, query: String, with: String,
                      single: DelimitedTablePresentation.Occurrence?)
     }
@@ -73,9 +73,9 @@ nonisolated enum DelimitedTableMutation {
                 })
             }
             replacements = fieldEdits
-        case .fill(let scope, let value):
+        case .clear(let scope):
             try scope.visit(in: index) { row, columns in
-                try append(editFields(record: row, columns: columns, text: text, index: index) { _, _ in value })
+                try append(editFields(record: row, columns: columns, text: text, index: index) { _, _ in "" })
             }
             replacements = fieldEdits
         case .replace(let scope, let query, let replacement, let single):

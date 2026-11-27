@@ -332,7 +332,7 @@ final class CSVPreviewUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), encoded(sourceEdit))
     }
 
-    func testRealContextMenuBatchAndStructuralEditsSaveExactBytes() throws {
+    func testRealContextMenuAndStructuralEditsSaveExactBytes() throws {
         continueAfterFailure = false
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "Name,Value,Note\nAlpha,1,one\nBeta,2,two\nGamma,3,three\n"
@@ -368,46 +368,41 @@ final class CSVPreviewUITests: XCTestCase {
             table.buttons.matching(NSPredicate(format: "title == %@", title)).firstMatch
         }
 
-        // Only structure actions are useful when a single ordinary cell is selected.
+        // Ordinary cells never expose row operations, even with a multi-cell selection.
         table.staticTexts["1"].click()
-        table.staticTexts["1"].rightClick()
-        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Insert Row After", in: app).waitForExistence(timeout: 5))
-        for title in ["Edit Full Field…", "View Full Field…", "Select Row", "Selection Statistics…",
-                      "Clear Selected Fields", "Fill Selection…", "Fill Selected Cells…"] {
-            XCTAssertFalse(WorkspaceUITestSupport.menuItem(title, in: app).exists, title)
+        for multi in [false, true] {
+            if multi { XCUIElement.perform(withKeyModifiers: .shift) { table.staticTexts["2"].click() } }
+            table.staticTexts["1"].rightClick()
+            for title in ["Insert Row After", "Delete Rows", "Fill Selected Cells…"] {
+                XCTAssertFalse(WorkspaceUITestSupport.menuItem(title, in: app).exists, title)
+            }
         }
-        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
-        XCTAssertTrue(WorkspaceUITestSupport.menuItem("Insert Row After", in: app).waitForNonExistence(timeout: 5))
-        XCUIElement.perform(withKeyModifiers: .shift) { table.staticTexts["2"].click() }
-        menu("Fill Selected Cells…", at: table.staticTexts["1"])
-        let sheet = window.sheets.firstMatch
-        XCTAssertTrue(sheet.waitForExistence(timeout: 5), app.debugDescription)
-        let input = sheet.textFields.firstMatch
-        XCTAssertTrue(input.exists, sheet.debugDescription)
-        input.click()
-        input.typeText("9")
-        sheet.buttons["Fill"].click()
-        XCTAssertTrue(sheet.waitForNonExistence(timeout: 5))
-        save("Name,Value,Note\nAlpha,9,one\nBeta,9,two\nGamma,3,three\n")
-        undo()
-        XCTAssertTrue(table.staticTexts["1"].waitForExistence(timeout: 5))
-
-        menu("Insert Row After", at: table.staticTexts["Alpha"])
+        let gutter = WorkspaceUITestSupport.element("bailey.csv.records", in: app)
+        XCTAssertTrue(gutter.exists)
+        func record(at cell: XCUIElement) -> XCUICoordinate {
+            let point = CGPoint(x: gutter.frame.midX, y: cell.frame.midY)
+            XCTAssertTrue(gutter.frame.contains(point), "Row number must be inside the gutter")
+            return window.coordinate(withNormalizedOffset: .zero).withOffset(
+                CGVector(dx: point.x - window.frame.minX, dy: point.y - window.frame.minY))
+        }
+        record(at: table.staticTexts["Alpha"]).rightClick()
+        let insertRow = WorkspaceUITestSupport.menuItem("Insert Row After", in: app)
+        XCTAssertTrue(insertRow.waitForExistence(timeout: 5))
+        XCTAssertFalse(WorkspaceUITestSupport.menuItem("Fill Selected Cells…", in: app).exists)
+        insertRow.click()
         save("Name,Value,Note\nAlpha,1,one\n,,\nBeta,2,two\nGamma,3,three\n")
         undo()
         let beta = table.staticTexts["Beta"]
         XCTAssertTrue(beta.waitForExistence(timeout: 5))
-        // Click the visible fixed row-number gutter itself, not an AX press.
-        // The gutter is immediately left of the native data table.
-        let record = CGPoint(x: table.frame.minX - 16, y: beta.frame.midY)
-        XCTAssertTrue(window.frame.contains(record), "Row number must be inside the window: \(record)")
-        window.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: record.x - window.frame.minX, dy: record.y - window.frame.minY)
-        ).click()
+        record(at: beta).click()
         app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
         save("Name,Value,Note\nAlpha,1,one\n,,\nGamma,3,three\n")
         undo()
-        menu("Delete Rows", at: table.staticTexts["Beta"])
+        XCTAssertTrue(beta.waitForExistence(timeout: 5))
+        record(at: beta).rightClick()
+        let deleteRows = WorkspaceUITestSupport.menuItem("Delete Rows", in: app)
+        XCTAssertTrue(deleteRows.waitForExistence(timeout: 5))
+        deleteRows.click()
         save("Name,Value,Note\nAlpha,1,one\nGamma,3,three\n")
         undo()
 
@@ -417,7 +412,11 @@ final class CSVPreviewUITests: XCTestCase {
         menu("Move Column Left", at: header("Value"))
         save("Value,Name,Note\n1,Alpha,one\n2,Beta,two\n3,Gamma,three\n")
         undo()
-        menu("Delete Column from All Records", at: header("Note"))
+        header("Note").rightClick()
+        let deleteColumn = WorkspaceUITestSupport.menuItem("Delete Column", in: app)
+        XCTAssertTrue(deleteColumn.waitForExistence(timeout: 5))
+        XCTAssertFalse(WorkspaceUITestSupport.menuItem("Changes All Records", in: app).exists)
+        deleteColumn.click()
         save("Name,Value\nAlpha,1\nBeta,2\nGamma,3\n")
         undo()
 

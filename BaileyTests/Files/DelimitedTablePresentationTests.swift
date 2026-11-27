@@ -145,10 +145,10 @@ final class DelimitedTablePresentationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data(afterFirst.utf8))
     }
 
-    func testLargeFillUsesOneUndoAndLeavesTheOtherFieldsAndDiskIntactUntilSave() async throws {
+    func testLargeClearUsesOneUndoAndLeavesTheOtherFieldsAndDiskIntactUntilSave() async throws {
         let rows = 100_000
         let original = "Keep,Value\r\n" + String(repeating: "\"001\",a\n", count: rows)
-        let expected = "Keep,Value\r\n" + String(repeating: "\"001\",\"longer,value\"\n", count: rows)
+        let expected = "Keep,Value\r\n" + String(repeating: "\"001\",\n", count: rows)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
         try Data(original.utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -160,7 +160,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         let snapshot = try XCTUnwrap(parsed)
         let target = DelimitedTablePresentation.FieldScope(rows: nil, columns: IndexSet(integer: 1), selection: nil)
         let started = ContinuousClock.now
-        try await requireDelimitedEdit(file, .fill(target, "longer,value"), using: snapshot)
+        try await requireDelimitedEdit(file, .clear(target), using: snapshot)
         let applied = ContinuousClock.now
         XCTAssertEqual(file.text, expected)
         XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))

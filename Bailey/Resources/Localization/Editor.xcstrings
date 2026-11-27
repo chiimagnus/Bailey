@@ -951,22 +951,12 @@
         }
       }
     },
-    "Delete Column from All Records" : {
+    "Delete Column" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从全部记录删除此列"
-          }
-        }
-      }
-    },
-    "Delete Selected Columns from All Records" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从全部记录删除所选列"
+            "value" : "删除列"
           }
         }
       }
@@ -1021,22 +1011,12 @@
         }
       }
     },
-    "Enter a position from 1 to %lld. This changes every record." : {
+    "Enter a position from 1 to %lld." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "输入 1 到 %lld 之间的位置。此操作将修改全部记录。"
-          }
-        }
-      }
-    },
-    "Changes All Records" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "作用于全部记录"
+            "value" : "输入 1 到 %lld 之间的位置。"
           }
         }
       }
@@ -1097,46 +1077,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重试字段编辑"
-          }
-        }
-      }
-    },
-    "Fill Selected Cells…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "批量填充单元格…"
-          }
-        }
-      }
-    },
-    "Fill Selected Cells" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "批量填充单元格"
-          }
-        }
-      }
-    },
-    "Set every selected cell to the same value." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将选中的单元格全部设为同一个值。"
-          }
-        }
-      }
-    },
-    "Fill" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "填充"
           }
         }
       }

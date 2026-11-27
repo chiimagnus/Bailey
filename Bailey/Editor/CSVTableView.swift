@@ -582,9 +582,8 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         table.onPaste = { [weak self] text in self?.paste(text) }
         table.onClear = { [weak self] in
             guard let self else { return }
-            fillSelection(with: "", selection: table.selection)
+            clearSelection()
         }
-        table.onMenu = { [weak self] cell in self?.recordMenu(at: cell) }
         table.acceptsGridActions = { [weak self] in self?.projectionIsCurrent == true }
         table.onSelectionChanged = { [weak self] in
             guard let self else { return }
@@ -653,7 +652,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         }
         installingColumns = false
         if let snapshot, let presentation {
-            installColumns(index: snapshot.index, sorted: Set(presentation.configuration.sort.map(\.column)))
+            installColumns(index: snapshot.index, configuration: presentation.configuration)
         }
         table.rowHeight = table.compactRowHeight
         // Font changes invalidate every row height. The active input is independent of reused cells.
@@ -712,22 +711,23 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             self.snapshot?.index.separator == snapshot.index.separator ? self.presentation?.rows : nil
         let rebuildColumns = self.snapshot?.requestID != snapshot.requestID ||
             self.snapshot?.index.separator != snapshot.index.separator
-        let previousSort = Set(self.presentation?.configuration.sort.map(\.column) ?? [])
-        let sorted = Set(presentation.configuration.sort.map(\.column))
+        let previousConfiguration = self.presentation?.configuration ?? .init()
+        let configuration = presentation.configuration
         self.snapshot = snapshot
         source = snapshot.source as NSString
         if rebuildColumns {
             self.presentation = nil
             table.reloadData()
-            installColumns(index: snapshot.index, sorted: sorted)
-        } else if previousSort != sorted {
-            // Only columns whose sort marker appeared or disappeared need a new width.
+            installColumns(index: snapshot.index, configuration: configuration)
+        } else if previousConfiguration != configuration {
             installingColumns = true
             let columns = table.tableColumns
-            for index in previousSort.symmetricDifference(sorted) where columns.indices.contains(index) {
-                guard controls?.columnWidths[index] == nil else { continue }
-                columns[index].width = fittedWidth(index, title: columns[index].title, index: snapshot.index,
-                                                   sorted: sorted.contains(index), samplesPerColumn: 4096 / columns.count)
+            for (index, column) in columns.enumerated() {
+                guard controls?.columnWidths[index] == nil,
+                      DelimitedCellLayout.headerSymbols(previousConfiguration, column: index).count !=
+                        DelimitedCellLayout.headerSymbols(configuration, column: index).count else { continue }
+                column.width = fittedWidth(index, title: column.title, index: snapshot.index,
+                                           configuration: configuration, samplesPerColumn: 4096 / columns.count)
             }
             installingColumns = false
         }
@@ -752,7 +752,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         }
     }
 
-    private func installColumns(index: DelimitedTableIndex, sorted: Set<Int>) {
+    private func installColumns(index: DelimitedTableIndex, configuration: DelimitedTablePresentation.Configuration) {
         installingColumns = true
         defer { installingColumns = false }
         let count = min(index.columnCount, DelimitedTableIndex.maximumColumns)
@@ -775,16 +775,17 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
                 column.width = width * fontScale
             } else {
                 column.width = fittedWidth(columnIndex, title: title, index: index,
-                                           sorted: sorted.contains(columnIndex), samplesPerColumn: 4096 / count)
+                                           configuration: configuration, samplesPerColumn: 4096 / count)
             }
             if isNewColumn { table.addTableColumn(column) }
         }
     }
 
     private func fittedWidth(_ column: Int, title: String, index: DelimitedTableIndex,
-                             sorted: Bool, samplesPerColumn: Int) -> CGFloat {
+                             configuration: DelimitedTablePresentation.Configuration, samplesPerColumn: Int) -> CGFloat {
         let padding = 2 * DelimitedCellLayout.horizontalPadding(scale: fontScale)
-        let marker = sorted ? DelimitedCellLayout.sortMarkerWidth(scale: fontScale) : 0
+        let marker = CGFloat(DelimitedCellLayout.headerSymbols(configuration, column: column).count)
+            * DelimitedCellLayout.headerMarkerWidth(scale: fontScale)
         var width = DelimitedCellLayout.textWidth(String(title.prefix(128)), font: table.columnTitleFont) + marker
         let rows = max(0, index.records.count - 1)
         let samples = min(rows, 48, samplesPerColumn)
@@ -807,7 +808,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
         guard let snapshot else { return tableView.tableColumns[column].width }
         return fittedWidth(column, title: tableView.tableColumns[column].title, index: snapshot.index,
-                           sorted: presentation?.configuration.sort.contains { $0.column == column } == true,
+                           configuration: presentation?.configuration ?? .init(),
                            samplesPerColumn: 48)
     }
 
@@ -1121,15 +1122,14 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     private struct RecordMenuTarget {
         let projection: UUID
-        let cell: DelimitedTablePresentation.Cell?
+        let row: Int?
         let selection: DelimitedTablePresentation.Selection
     }
 
-    fileprivate func recordMenu(at cell: DelimitedTablePresentation.Cell?) -> NSMenu? {
+    fileprivate func recordMenu(at row: Int?) -> NSMenu? {
         guard projectionIsCurrent, let file, let snapshot, let presentation,
               file.canEditDelimited(snapshot), !file.hasPendingDelimitedEdit else { return nil }
-        let target = RecordMenuTarget(projection: presentation.id, cell: cell ?? table.selection.caret,
-                                      selection: table.selection)
+        let target = RecordMenuTarget(projection: presentation.id, row: row, selection: table.selection)
         let menu = NSMenu()
         func item(_ title: String, action: Selector) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -1137,12 +1137,10 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             item.representedObject = target
             return item
         }
-        if target.selection.rows.count > 1 || target.selection.columns.count > 1 {
-            menu.addItem(item(String(localized: "Fill Selected Cells…", table: "Editor"), action: #selector(chooseFillValue(_:))))
-            menu.addItem(.separator())
-        }
-        menu.addItem(item(String(localized: "Insert Row After", table: "Editor"), action: #selector(insertRow(_:))))
-        if !target.selection.blocks.isEmpty {
+        let insertion = row == nil ? String(localized: "Insert Row", table: "Editor")
+            : String(localized: "Insert Row After", table: "Editor")
+        menu.addItem(item(insertion, action: #selector(insertRow(_:))))
+        if row != nil {
             menu.addItem(item(String(localized: "Delete Rows", table: "Editor"), action: #selector(deleteRows(_:))))
         }
         return menu
@@ -1156,7 +1154,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
 
     @objc private func insertRow(_ sender: NSMenuItem) {
         guard let target = recordTarget(sender), let snapshot else { return }
-        let row = target.cell.flatMap { recordNumber($0.row) } ?? snapshot.index.records.count
+        let row = target.row.flatMap { recordNumber($0) } ?? snapshot.index.records.count
         file?.submitDelimitedEdit(.insertRows(before: row, count: 1), using: snapshot,
                                   selecting: .init(row: row, column: 0))
     }
@@ -1164,34 +1162,20 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     @objc private func deleteRows(_ sender: NSMenuItem) {
         guard let target = recordTarget(sender), let snapshot, let presentation else { return }
         let rows = Set(target.selection.rows.compactMap { row in
-            presentation.rows.indices.contains(row) ? presentation.rows[row] : nil
+            guard presentation.rows.indices.contains(row),
+                  target.selection.columns(in: row).count == table.numberOfColumns else { return nil as Int? }
+            return presentation.rows[row]
         })
         guard !rows.isEmpty else { return }
         file?.submitDelimitedEdit(.deleteRows(rows), using: snapshot, selecting: nil)
     }
 
-    @objc private func chooseFillValue(_ sender: NSMenuItem) {
-        guard recordTarget(sender) != nil, let window else { return }
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Fill Selected Cells", table: "Editor")
-        alert.informativeText = String(localized: "Set every selected cell to the same value.", table: "Editor")
-        let input = NSTextField(string: "")
-        input.frame = NSRect(x: 0, y: 0, width: 270, height: 26)
-        alert.accessoryView = input
-        alert.addButton(withTitle: String(localized: "Fill", table: "Editor"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
-        alert.window.initialFirstResponder = input
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self, let target = recordTarget(sender) else { return }
-            fillSelection(with: input.stringValue, selection: target.selection)
-        }
-    }
-
-    private func fillSelection(with value: String, selection: DelimitedTablePresentation.Selection) {
+    private func clearSelection() {
+        let selection = table.selection
         guard projectionIsCurrent, !selection.blocks.isEmpty, let snapshot, let presentation else { return }
         let scope = DelimitedTablePresentation.FieldScope(rows: presentation.rows,
                                                           columns: selection.columns, selection: selection)
-        file?.submitDelimitedEdit(.fill(scope, value), using: snapshot)
+        file?.submitDelimitedEdit(.clear(scope), using: snapshot)
     }
 
     private func copySelection() {
@@ -1233,18 +1217,17 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
             let count = snapshot.index.columnCount
             if (1...DelimitedTableIndex.maximumColumns).contains(count) {
                 menu.addItem(.separator())
-                menu.addItem(.sectionHeader(title: String(localized: "Changes All Records", table: "Editor")))
                 if count < DelimitedTableIndex.maximumColumns {
                     menu.addItem(item(String(localized: "Insert Column Left", table: "Editor"), action: #selector(insertColumnLeft(_:)), tag: column))
                     menu.addItem(item(String(localized: "Insert Column Right", table: "Editor"), action: #selector(insertColumnRight(_:)), tag: column))
                 }
                 if count > 1 {
-                    menu.addItem(item(String(localized: "Delete Column from All Records", table: "Editor"), action: #selector(deleteColumn(_:)), tag: column))
                     let selected = table.wholeColumns
-                    if selected.count > 1, selected.count < count {
-                        let deletion = item(String(localized: "Delete Selected Columns from All Records", table: "Editor"),
-                                            action: #selector(deleteSelectedColumns(_:)), tag: column)
-                        deletion.representedObject = ColumnDeletion(projection: presentation.id, columns: selected)
+                    let columns = selected.contains(column) ? selected : IndexSet(integer: column)
+                    if columns.count < count {
+                        let deletion = item(String(localized: "Delete Column", table: "Editor"),
+                                            action: #selector(deleteColumn(_:)), tag: column)
+                        deletion.representedObject = ColumnDeletion(projection: presentation.id, columns: columns)
                         menu.addItem(deletion)
                     }
                     if column > 0 {
@@ -1283,10 +1266,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     @objc private func deleteColumn(_ sender: NSMenuItem) {
-        if accepts(sender) { changeColumns { $0.remove(at: sender.tag) } }
-    }
-
-    @objc private func deleteSelectedColumns(_ sender: NSMenuItem) {
         guard let target = sender.representedObject as? ColumnDeletion, target.projection == projectionID else { return }
         changeColumns { order in
             for column in target.columns.reversed() { order.remove(at: column) }
@@ -1308,7 +1287,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         guard accepts(sender), let window else { return }
         let alert = NSAlert()
         alert.messageText = String(localized: "Move Column to Position", table: "Editor")
-        alert.informativeText = String(localized: "Enter a position from 1 to \(table.numberOfColumns). This changes every record.", table: "Editor")
+        alert.informativeText = String(localized: "Enter a position from 1 to \(table.numberOfColumns).", table: "Editor")
         let position = NSTextField(string: String(sender.tag + 1))
         let formatter = NumberFormatter()
         formatter.minimum = 1
@@ -1458,13 +1437,18 @@ private final class DelimitedRecordGutter: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let grid, grid.projectionIsCurrent,
-              let row = row(at: convert(event.locationInWindow, from: nil), in: grid.table) else { return nil }
-        if grid.table.selection.columns(in: row).count != grid.table.numberOfColumns {
-            activate(row, modifiers: [])
+        guard let grid, grid.projectionIsCurrent else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        if grid.table.numberOfRows == 0, headerRect.contains(point) {
+            return grid.recordMenu(at: nil)
         }
-        let column = grid.table.selection.caret?.column ?? 0
-        return grid.recordMenu(at: .init(row: row, column: column))
+        guard let row = row(at: point, in: grid.table) else { return nil }
+        if grid.table.selection.columns(in: row).count != grid.table.numberOfColumns {
+            guard activate(row, modifiers: []) else { return nil }
+        } else {
+            window?.makeFirstResponder(grid.table)
+        }
+        return grid.recordMenu(at: row)
     }
 
     @discardableResult
@@ -1553,7 +1537,18 @@ fileprivate enum DelimitedCellLayout {
     static func horizontalPadding(scale: CGFloat) -> CGFloat { 4 * scale }
     static func verticalPadding(scale: CGFloat) -> CGFloat { 2 * scale }
     static func minimumColumnWidth(scale: CGFloat) -> CGFloat { 24 * scale }
-    static func sortMarkerWidth(scale: CGFloat) -> CGFloat { 11 * scale }
+    static func headerMarkerWidth(scale: CGFloat) -> CGFloat { 11 * scale }
+
+    static func headerSymbols(_ configuration: DelimitedTablePresentation.Configuration, column: Int) -> [String] {
+        var symbols: [String] = []
+        if let direction = configuration.sort.first(where: { $0.column == column }) {
+            symbols.append(direction.ascending ? "chevron.up" : "chevron.down")
+        }
+        if configuration.filters[column]?.isEmpty == false {
+            symbols.append("line.3.horizontal.decrease")
+        }
+        return symbols
+    }
 
     static func lines(_ value: String) -> [Substring] { value.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) }
 
@@ -1606,15 +1601,14 @@ private final class DelimitedColumnHeader: NSTableHeaderCell {
         palette.grid.setFill()
         NSRect(x: frame.maxX - pixel, y: frame.minY, width: pixel, height: frame.height).fill()
         let column = table.column(at: NSPoint(x: frame.midX, y: 0))
-        let sorts = table.file?.delimitedTable.configuration.sort ?? []
-        let direction = sorts.first { $0.column == column }
+        let symbols = DelimitedCellLayout.headerSymbols(table.file?.delimitedTable.configuration ?? .init(), column: column)
         let scale = DelimitedCellLayout.scale(for: table.cellFont.pointSize)
         var textRect = DelimitedCellLayout.textRect(in: frame, scale: scale)
-        if let direction {
-            let symbol = NSImage(systemSymbolName: direction.ascending ? "chevron.up" : "chevron.down",
-                                 accessibilityDescription: nil)?
+        let marker = min(DelimitedCellLayout.headerMarkerWidth(scale: scale),
+                         textRect.width / CGFloat(max(1, symbols.count)))
+        for name in symbols {
+            let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(paletteColors: [palette.focus]))
-            let marker = min(DelimitedCellLayout.sortMarkerWidth(scale: scale), textRect.width)
             let size = min(8 * scale, marker, textRect.height)
             symbol?.draw(in: NSRect(x: textRect.maxX - size, y: frame.midY - size / 2, width: size, height: size))
             textRect.size.width -= marker
@@ -1766,7 +1760,6 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     var onEdit: (Cell) -> Void = { _ in }
     var onPaste: (String) -> Void = { _ in }
     var onClear: () -> Void = {}
-    var onMenu: (Cell?) -> NSMenu? = { _ in nil }
     weak var file: FileTab?
     override var undoManager: UndoManager? { file?.documentUndoManager ?? super.undoManager }
 
@@ -1791,13 +1784,6 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
         case #selector(redo(_:)): focusedDocumentUndoManager?.canRedo == true
         default: true
         }
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        guard acceptsGridActions() else { return nil }
-        let target = cell(at: event)
-        if let target, !selection.contains(target) { select(target) }
-        return onMenu(target)
     }
 
     override func becomeFirstResponder() -> Bool {

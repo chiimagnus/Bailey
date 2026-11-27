@@ -30,8 +30,9 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
 
 - **位置**：`DelimitedGrid.columnMenu/installColumns`、`DelimitedHeader`、`DelimitedTableControls.accept`、
   `DelimitedTableMutation.Change/prepare`、`DelimitedTableIndex.fields(in:)`、FileTab 的既有编辑事务。
-- **操作**：列头菜单插入左／右列，删除该列或明确选择的整列集合，向左／右移动或移到指定位置。
-  结构修改作用于全部物理记录（含表头及隐藏行），不是 NSTableView 的展示重排；操作名称明确其范围。
+- **操作**：列头菜单插入左／右列、向左／右移动或移到指定位置。
+  「删除列」是唯一删除入口：右键已选整列时删除该选区，否则只删除命中列。
+  结构修改作用于全部物理记录（含表头及隐藏行），不是 NSTableView 的展示重排；菜单使用简洁的列操作名称。
   禁止删除至零列，超出 4096 显示列的表不接受列结构编辑；不误删不可见的列。
   双击编辑记录 0 的完整字段，空名称、重复名称合法；
   合成列号不写入文件。空表先沿既有插入行入口建立记录。
@@ -106,12 +107,12 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
   及 NativeEditorCompositionTests；检查原生第一响应者和一次文件 Undo。
 
 <a id="p4-t3"></a>
-### P4-T3 批量填充、清空与原生查找替换
+### P4-T3 清空与原生查找替换
 
 - **位置**：`DelimitedGrid.recordMenu/paste`、`DelimitedNativeTable`、`DelimitedTablePresentation.Selection/find`、
   `DelimitedTableMutation.prepare`、`CSVTableView.overlay`、`DelimitedTableControls.perform`、
   `WorkspaceWindowModel.focusedPreviewFile/canReplace/performFindAction`、BaileyApp 既有 Find 菜单。
-- **操作与范围**：仅多格选区提供右键批量填充同一个值；实际选中的可见格重叠只处理一次、空洞不写入、不删行列。
+- **操作与范围**：清空仅处理实际选中的可见格，重叠只处理一次、空洞不写入、不删行列。
   ⌘A 选择全部可见数据格；Delete／Forward Delete 只在网格第一响应者时清空，
   不另设右键清空入口；field editor、查找框和其它控件遵循原生输入。
   扩展现有 ⌘F 浮层及系统 ⌥⌘F Find and Replace，默认可见数据，可选当前选区或全部数据记录。
@@ -125,7 +126,7 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
   单次替换定位当前格的一个命中并从替换区间之后继续；
   全部替换不递归处理刚插入的字符串，不常驻全表出现位置数组。
 - **事务**：复用 P3 的区间选区及当前快照，在后台遍历真实记录和字段，生成一组 Replacement。
-  批量填充／清空／粘贴和替换共用已有字段转义与准备链；
+  清空／粘贴和替换共用已有字段转义与准备链；
   copy 的 TSV 引用规则与 Mutation.escape 中确实重复的转义逻辑合并在现有所有者，
   保留 TSV 最后空记录及原文件分隔符的语义差异。
   不在 MainActor 构造百万格字典；大批量按实际受影响记录合并连续替换，保留未选 token。
