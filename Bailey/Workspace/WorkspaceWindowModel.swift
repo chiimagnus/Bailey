@@ -806,6 +806,18 @@ final class WorkspaceWindowModel {
         closePanel(item, in: project)
     }
 
+    var canCloseOtherPanels: Bool {
+        guard let project = selectedProject,
+              let item = project.dock.activeGroup?.selected else { return false }
+        return !project.otherTabCloseTargets(keeping: item).isEmpty
+    }
+
+    func closeOtherPanels() {
+        guard let project = selectedProject,
+              let item = project.dock.activeGroup?.selected else { return }
+        project.closeOthers(item)
+    }
+
     func closePanel(_ item: DockItem, in project: Project) {
         guard selectedProject === project, project.dock.group(containing: item) != nil else { return }
         let targets = project.dock.commandTargets(for: item)

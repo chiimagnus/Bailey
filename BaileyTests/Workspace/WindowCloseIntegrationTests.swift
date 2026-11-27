@@ -526,6 +526,57 @@ final class WindowCloseIntegrationTests: XCTestCase {
         XCTAssertTrue(dirtyFile.isDirty)
     }
 
+    func testCloseOtherPanelsPreservesDirtyTabsWhenSaveIsCancelled() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(customDirectory: "/fixture/close others", layout: manager.dockLayout)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let backend = WindowSaveFixture("original")
+        let file = FileTab(path: "/fixture/close others/draft.txt", backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let draft = PaneTab(content: .file(file))
+        project.append(draft)
+        project.newBrowserTab(initialFocus: .none)
+        project.newBrowserTab(initialFocus: .none)
+        let tabs = project.tabs
+        let keep = try XCTUnwrap(tabs.last)
+        project.selectTab(keep.id)
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 720, height: 520),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            if let sheet = window.attachedSheet {
+                window.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+            }
+            window.close()
+        }
+        manager.attach(to: window)
+        window.orderFront(nil)
+        file.text = "edited"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+
+        XCTAssertTrue(manager.canCloseOtherPanels)
+        manager.closeOtherPanels()
+        XCTAssertFalse(manager.canCloseOtherPanels)
+        manager.closeOtherPanels()
+        try await wait { window.attachedSheet != nil }
+        XCTAssertEqual(project.tabs.map(\.id), tabs.map(\.id))
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertThirdButtonReturn)
+        try await wait { !file.autoSaveSuspendedForClose && manager.canCloseOtherPanels }
+        XCTAssertEqual(project.tabs.map(\.id), tabs.map(\.id))
+        XCTAssertTrue(file.isDirty)
+
+        await backend.permitWrites()
+        manager.closeOtherPanels()
+        try await wait { project.tabs.count == 1 }
+        XCTAssertTrue(project.tabs.first === keep)
+        XCTAssertFalse(manager.canCloseOtherPanels)
+        let saved = await backend.currentText()
+        XCTAssertEqual(saved, "edited")
+    }
+
     func testProjectCloseCannotBypassAnActiveTabClose() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

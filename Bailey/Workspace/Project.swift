@@ -633,10 +633,16 @@ final class Project: nonisolated Identifiable {
         closeContent(tab.content)
     }
 
-    /// "Close Others" is scoped to the tab group containing this tab, not
-    /// an unrelated dock region elsewhere in the same workspace.
-    func closeOthers(_ keep: PaneTab) {
-        closePanels(dock.commandTargets(for: .tab(keep.id), scope: .otherTabs))
+    /// Keep the target selection and only close other work tabs in its group.
+    func otherTabCloseTargets(keeping item: DockItem) -> [DockItem] {
+        guard item.tabID != nil, !isClosingPanels else { return [] }
+        return dock.commandTargets(for: item, scope: .otherTabs)
+    }
+
+    func closeOthers(_ keep: DockItem) {
+        let targets = otherTabCloseTargets(keeping: keep)
+        guard !targets.isEmpty else { return }
+        closePanels(targets)
     }
 
     /// Closes every tab, leaving the project open but empty.

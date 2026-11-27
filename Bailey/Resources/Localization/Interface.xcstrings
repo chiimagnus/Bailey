@@ -138,6 +138,16 @@
         }
       }
     },
+    "Close Other Panels" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭其他面板"
+          }
+        }
+      }
+    },
     "Close Others" : {
       "localizations" : {
         "zh-Hans" : {

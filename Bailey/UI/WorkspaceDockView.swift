@@ -1042,9 +1042,10 @@ struct DockTabGroupView: View {
         .disabled(project.isClosingPanels || tab.content.isClosing)
         .modifierKeyAlternate(.option) {
             Button(String(localized: "Close Others", table: "Interface")) {
-                if let current = currentMenuTab(tabID) { project.closeOthers(current) }
+                guard currentMenuTab(tabID) != nil else { return }
+                project.closeOthers(.tab(tabID))
             }
-            .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .otherTabs).isEmpty)
+            .disabled(project.otherTabCloseTargets(keeping: .tab(tabID)).isEmpty)
         }
         Button(String(localized: "Close All", table: "Interface")) {
             if currentMenuTab(tabID) != nil { project.closeAll() }

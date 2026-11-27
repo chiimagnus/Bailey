@@ -497,6 +497,76 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testSystemPanelMenuReplacesCloseWhileOptionIsHeld() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("keep.txt", text: "keep\n")
+        let second = try fixture.file("close.txt", text: "close\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        for file in [first, second] {
+            let row = WorkspaceUITestSupport.fileRow(file, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).waitForExistence(timeout: 15))
+        }
+        let keep = WorkspaceUITestSupport.fileTab(first, in: window)
+        let other = WorkspaceUITestSupport.fileTab(second, in: window)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+
+        files.click()
+        app.menuBarItems["Panel"].click()
+        let close = WorkspaceUITestSupport.menuItem("Close Panel", in: app)
+        let others = WorkspaceUITestSupport.menuItem("Close Other Panels", in: app)
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertTrue(others.exists, "The native alternate must be registered")
+        guard others.exists else { return }
+        XCUIElement.perform(withKeyModifiers: .option) {
+            XCTAssertFalse(others.isEnabled, "Tools must not borrow the most recent work tab")
+        }
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        keep.click()
+        app.menuBarItems["Panel"].click()
+        let slot = close.frame
+        XCTAssertGreaterThan(slot.height, 0)
+        let normal = try XCTUnwrap(menuRowPixels(close, named: "System Close Panel"))
+        var held: Data?
+        XCUIElement.perform(withKeyModifiers: .option) {
+            XCTAssertTrue(others.isEnabled)
+            XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2,
+                           "The alternate must replace the row, not add another")
+            held = menuRowPixels(others, named: "System Option: Close Other Panels")
+        }
+        XCTAssertNotEqual(try XCTUnwrap(held), normal)
+        XCTAssertEqual(close.frame.midY, slot.midY, accuracy: 2)
+        XCTAssertEqual(try XCTUnwrap(menuRowPixels(close, named: "System Release Option")), normal)
+        XCTAssertTrue(keep.isSelected)
+        XCUIElement.perform(withKeyModifiers: .option) { others.click() }
+        XCTAssertTrue(other.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(keep.exists && keep.isSelected && files.exists && git.exists && window.exists)
+
+        app.menuBarItems["Panel"].click()
+        XCUIElement.perform(withKeyModifiers: .option) {
+            XCTAssertFalse(others.isEnabled, "There are no other work tabs in this group")
+        }
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertEqual(try Data(contentsOf: first), Data("keep\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("close\n".utf8))
+    }
+
+    private func menuRowPixels(_ row: XCUIElement, named name: String) -> Data? {
+        let screenshot = row.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let tiff = screenshot.image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
     func testTabCloseMenuReplacesCloseWhileOptionIsHeld() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a.txt", text: "first\n")
@@ -529,26 +599,16 @@ final class WorkspaceDockUITests: XCTestCase {
         let slot = close.frame
         let allSlot = all.frame
         XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2)
-        func capture(_ name: String) -> Data? {
-            let screenshot = close.screenshot()
-            let attachment = XCTAttachment(screenshot: screenshot)
-            attachment.name = name
-            attachment.lifetime = .keepAlways
-            add(attachment)
-            guard let tiff = screenshot.image.tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-            return bitmap.representation(using: .png, properties: [:])
-        }
-        let normal = try XCTUnwrap(capture("Close"))
+        let normal = try XCTUnwrap(menuRowPixels(close, named: "Close"))
         var alternate: Data?
         XCUIElement.perform(withKeyModifiers: .option) {
             XCTAssertEqual(others.frame.midY, slot.midY, accuracy: 2)
             XCTAssertEqual(all.frame.midY, allSlot.midY, accuracy: 2)
-            alternate = capture("Option: Close Others")
+            alternate = menuRowPixels(close, named: "Option: Close Others")
         }
         let held = try XCTUnwrap(alternate)
         XCTAssertNotEqual(held, normal, "Holding Option must repaint the native menu row")
-        let restored = try XCTUnwrap(capture("Release Option: Close"))
+        let restored = try XCTUnwrap(menuRowPixels(close, named: "Release Option: Close"))
         XCTAssertEqual(restored, normal, "Releasing Option must restore the original row")
         XCTAssertTrue(other.isSelected, "Modifier keys must not select the context target")
         XCUIElement.perform(withKeyModifiers: .option) {
