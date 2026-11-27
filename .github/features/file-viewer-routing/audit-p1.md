@@ -27,7 +27,7 @@
 | R03 路径 | 既有真实本机／Windows 路径、特殊字符、符号链接与作用域回归保留；FileTreeTests 114/114，真实远端资源与普通重命名定点复验通过。Windows 当前原生符号链接创建不可用，相关条件子分支未执行，不修改系统权限。 |
 | R04 类型 | FileTabPersistenceTests 83/83，含伪后缀、损坏图像、普通文件与真实类型路由；HTMLFilePreviewTests 18/18。 |
 | R05 容量 | 真实远端 32 MiB 文本上传、下载、修改保存、重开、超限与二进制拒绝通过（39.155 秒）；JPEG 精确字节预算、PNG 像素上限与既有大媒体／区域解码证据保留。 |
-| R06 版本 | 本机真实双窗及 VS Code 式共享比较、版本绑定覆盖通过；真实 Windows CSV／旁车冲突、丢回执重连、原字节保存及相邻 Git Diff 保存通过。证据归 [CSV P2](../csv-table-view/audit-p2.md) 与 [图片 P2](../image-annotations/audit-p2.md)；严格非协作 CAS 继续 Deferred；隔离空间不足的共享验证已通过，见下文 2026-11-26 复验。 |
+| R06 版本 | 本机真实双窗及 VS Code 式共享比较、版本绑定覆盖通过；真实 Windows CSV／旁车冲突、丢回执重连、原字节保存及相邻 Git Diff 保存通过。证据归 CSV P2（Git 历史 `a54b8ace:.github/features/csv-table-view/audit-p2.md`） 与 [图片 P2](../image-annotations/audit-p2.md)；严格非协作 CAS 继续 Deferred；隔离空间不足的共享验证已通过，见下文 2026-11-26 复验。 |
 | R07 竞态 | FileTabPersistenceTests 83/83 包含加载／保存／重命名／关闭竞态；DelimitedTableIndexTests 14/14；没有旧读取覆盖新标签的新增失败。 |
 | R08 界面 | 实际 117 次切换、HTML 并排、双窗窗口归属及关闭通过；原生中文输入及 CSV 焦点修复另见各格式审计。真实输入及显示几何的直接证据见各格式；不另做无关设备全排列。缺配外设组合延期。 |
 | R09 生命周期 | `807fbdee` 相关宿主 154/154（零失败零跳过），其中双窗 100+100、12.185 秒；所有跟踪资源释放、空壳播放器 0、文件字节不变。`35503954` 完整 App 117 次切换、退出／冷启动／关闭通过。 |
@@ -181,14 +181,14 @@
 - 最终 e4267d71：正式 `make build` 与 `make build:release` 顺序执行，完整命令退出 0；Debug／Release 再次 `codesign --verify --deep --strict` 通过；Release 精简重新签名后约 56 MiB（du -h）。构建日志 `/tmp/bailey-final-debug-20261124.log`、`/tmp/bailey-final-release-20261124.log`。未替换用户已安装 App。
 - 本轮：bbb7b7f7 真实 CENC 音视频保护判定及拒绝／恢复；d768f481 原生 GIF／SVG 无障碍缩放与位置恢复。定点 5 项（含独立 APFS 跨卷三项）全部通过、零跳过、make test 退出 0、Dev 严格签名验证通过。全量重复复测至 580 通过、3 项夹具前缀跳过、0 失败时主动中止以优先核销新增任务；三项已补过，不称单次全量成功。日志 `/tmp/bailey-macos-final-full-20261124.log`、`/tmp/bailey-protected-ax-cross-volume-20261124.log`。
 
-- 2026-11-25 接手：本机共享保存冲突恢复 `bd6e74a2`，定点宿主 5/5、零跳过，`make build` 与 Debug 严格验签通过；详见 [CSV P2 F-02](../csv-table-view/audit-p2.md)。未执行新完整 App 用例，未替换已安装 App。当前仅内置 Retina XDR 与内置扬声器，未确认独占图形会话；1×／外接 HDR、多屏、实际音频输出切换、睡眠、中文 IME、VoiceOver 播报、物理触控板、减弱动态效果及双窗长会话均不能由宿主核销。此前七格式双窗冷启动证据保留。
+- 2026-11-25 接手：本机共享保存冲突恢复 `bd6e74a2`，定点宿主 5/5、零跳过，`make build` 与 Debug 严格验签通过；详见 CSV P2 F-02（同一历史审计）。未执行新完整 App 用例，未替换已安装 App。当前仅内置 Retina XDR 与内置扬声器，未确认独占图形会话；1×／外接 HDR、多屏、实际音频输出切换、睡眠、中文 IME、VoiceOver 播报、物理触控板、减弱动态效果及双窗长会话均不能由宿主核销。此前七格式双窗冷启动证据保留。
 - 扩大宿主回归（冻结 `bd6e74a2`，含真实样本及 Windows SSH）：选中 297 项，主动中止时 233 通过、1 失败（HTML/SVG 净化诊断的过时精确集合）、2 条件跳过（JPEG 长测未启用、未配置独立测试卷），61 项未完成；不视为全量通过。真实 Windows 旁车、Git raw save 与 CP936 三项均通过；HTML 综合真实资源样本通过。日志 `/tmp/bailey-late-publication-affected.wyntrfWs`，命令因中止退出 143。
 
 - `2f8482e0` 单独补测上述过时断言与 SVG pattern，2/2 通过、零跳过，命令退出 0；扩大回归仍为中止，不合并冒充最终单次全量通过。
 
 - `92625c02`：双窗分别 100 次切换与 100 次打开／关闭，真实样本原字节一致，宿主 1/1 通过。恢复 AVKit 后 `4c304e53` 再验 5/5、零跳过；双窗 100+100 耗时 12.059s，RSS 294→370 MiB（峰值 374.7 MiB），footprint 151.9→146.4 MiB，live_owners=0、retained_empty_players=[]。此为宿主证据。完整 App 104 次新增压测未通过，用户确认此前人工操作干扰测试，撤销未验证的压测修改；原完整 App 冷启动通过证据不变。
 
-- 5d216abe：共享冲突错误恢复路径跨重试、错误栏尺寸、关闭保护及七格式双窗 100+100（12.237 秒，追踪对象与播放器残留均为 0）通过；完整 App 长会话及实体设备门禁不变。 共享验证证据见 [CSV P2 F-09](../csv-table-view/audit-p2.md#发现-f-09)。
+- 5d216abe：共享冲突错误恢复路径跨重试、错误栏尺寸、关闭保护及七格式双窗 100+100（12.237 秒，追踪对象与播放器残留均为 0）通过；完整 App 长会话及实体设备门禁不变。 共享验证证据见 CSV P2 F-09（同一历史审计）。
 
 - `35503954`：按用户授权使用本机图形会话，实际隔离 Bailey Dev，真实 Downloads/test 样本拷贝，两窗9个标签；13轮共117次格式/窗口切换，第二窗同名 CSV／HTML 保持独立，音视频暂停位置每次匹配（±0.1s），随后正常退出、冷启动、关闭所有文件及源字节核对。`make test:ui ONLY_TESTING=BaileyUITests/FilePreviewWorkspaceUITests/testSevenRealFormatsKeepWindowOwnershipAcrossSwitchesAndNormalRelaunch` 1/1、零失败零跳过，747.190秒，退出0；日志 `/tmp/bailey-routing-ui-long.vPv7txF1`。此项核销完整 App 双窗长会话，不宣称 GUI RSS 回到基线或硬件／输入门禁完成。此前宿主100+100对象退役证据单独保留。
 
