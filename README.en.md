@@ -8,6 +8,9 @@ Work with source files, Git, a browser,
 and AI command-line tools around your terminal in one customizable window. Requires an Apple
 Silicon Mac running macOS 15.6 or later.
 
+Bailey is an independently maintained fork of [benjaminv/kero](https://github.com/benjaminv/kero),
+originally based on [egoist/kero](https://github.com/egoist/kero).
+
 ## Screenshots
 
 <p>
@@ -30,5 +33,7 @@ xattr -dr com.apple.quarantine "/Applications/Bailey.app"
 - [Contributing](CONTRIBUTING.md) · [Report a bug](https://github.com/chiimagnus/Bailey/issues) ·
   [Security](SECURITY.md)
 
-Bailey is licensed under [GPLv3](LICENSE). See [NOTICE.md](NOTICE.md) for project origins and
-third-party attributions.
+## License and acknowledgments
+
+Bailey is licensed under [GPLv3](LICENSE). Thanks to Kero's original authors and subsequent
+contributors; their copyright and attribution notices are preserved.

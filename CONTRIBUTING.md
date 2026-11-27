@@ -89,5 +89,5 @@ Feature 说明希望完成什么、解决哪个使用问题。
 
 ## 许可证与署名
 
-项目许可证为 [GPLv3](LICENSE)，来源和第三方声明见 [NOTICE.md](NOTICE.md)。
+项目许可证为 [GPLv3](LICENSE)，项目来源见根 README；第三方许可见[依赖维护](docs/dependencies.md#第三方来源与许可证)。
 保留已有版权、许可证和署名；仓库没有另设贡献者或反馈授权协议。
