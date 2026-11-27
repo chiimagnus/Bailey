@@ -7,8 +7,8 @@
 
 - **结果**：No-Go
 - **依据**：P1-T1 与 P1-T2 自身完成：静态 WebKit、共用模式、双窗口实际菜单和复制／查找通过；共享整合仍待核销，不单独设置无障碍专项门槛。
-- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
-- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
+- **现行 AX 验收**：依[共享验收环境](../../../docs/testing.md#文件预览共用验收)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
+- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../../../docs/testing.md#文件预览共用验收)；可执行项仍需验收。
 
 ## 任务与改动
 
@@ -40,16 +40,16 @@
 - 14 项 HTMLFilePreviewTests 与 5 项 MarkdownResourceScopeTests 在完整测试前段全部通过，包括获授权 Windows SSH（65.6 秒）；H08 的宿主百次挂载、实际窗口恢复证据与此前隔离 GUI 双窗路径通过。不把宿主 AX 和快照当成实际 VoiceOver 播报或完整 App 冷启动长会话。
 - 仍未验证真实 1× 屏、VoiceOver、物理触控板／相关减弱动态效果和完整 App 多窗口长会话；需独立图形会话及设备。远端验收以实际 Windows SSH 为准。上述必要组合阻塞 P1；P1-T1 已核销不等于阶段通过。
 - 文档归 [文件编辑器](../../../docs/features/editor.md)，无新增独立写入模型；本轮未进入 P2。
-- 最终 e4267d71：14 项 HTMLFilePreviewTests、5 项 MarkdownResourceScopeTests、28 项 NativePaneRetentionIntegrationTests 全部通过；真实 Windows SSH 本轮再次通过。共享记录见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
-- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 [文件路由 P1 审计](../file-viewer-routing/audit-p1.md)。
+- 最终 e4267d71：14 项 HTMLFilePreviewTests、5 项 MarkdownResourceScopeTests、28 项 NativePaneRetentionIntegrationTests 全部通过；真实 Windows SSH 本轮再次通过。共享记录见 文件路由 P1 审计（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`）。
+- 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 文件路由 P1 审计（同一历史记录）。
 
 - 2026-11-25 `2f8482e0`：扩大回归发现 4e15407e 后净化诊断新增 @href，旧精确集合断言失效；同步完整集合并新增实际 XML 不含网络地址及外部文件名断言，未改生产安全逻辑。真实 WebKit／Markdown／SVG 及 pattern 定点 2/2，零失败零跳过、命令退出 0；日志 `/tmp/bailey-shared-svg-regression.dDisRHxn`。
 
-- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；共享 P1 审计（同一历史记录） 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 2026-11-26：主分支 `f5fa4b05` 隔离 Dev 的实际 VoiceOver 进入网页内容，
   正确播报 Sample Heading 标题级别 1，源文件字节不变。仅核销标题播报，
-  其余链接、查找及交叉验收保留，见[共享 P1 证据](../file-viewer-routing/audit-p1.md)。
+  其余链接、查找及交叉验收保留，见共享 P1 证据（同一历史记录）。
 
 - 2026-11-26：`d542f533` 独占 Dev 实际 VoiceOver 进入 WebKit 网页内容并读出 Sample Heading 一级标题；源 HTML 字节不变。
   日志 `/tmp/bailey-final-vo-exclusive.sOoDThsY/vo.log`；不将原生控件名称固定或测试脚本路径错误记为产品失败。

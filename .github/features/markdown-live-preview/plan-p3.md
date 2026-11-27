@@ -336,7 +336,7 @@ MarkdownFilePreview、MarkdownPreview、MarkdownSelectionText、MarkdownReaderCo
 
 ## 阶段验收
 
-适用的 [P2 共同验收](plan-p2.md#p2-共同验收)、[R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)
+适用的 [P2 共同验收](plan-p2.md#p2-共同验收)、[R01–R11](../../../docs/testing.md#文件预览共用验收)
 及 [开发验收规范](../../../docs/testing.md#根因与回归覆盖) 全部保留。以下是 P3 的可执行专项条件，
 各任务按自己的 M 编号核销；共享实现已有且未受影响的证据可以复用，不能替代本次改变的用户路径。
 每项数值限制均测试临界值前／等于／后（N−1/N/N+1），以实施时真实单位和比较条件为准；
@@ -559,7 +559,7 @@ MarkdownSelectionBoundaryUITests 和 MarkdownScrollPrecisionUITests，
 GUI 前使用 `make build:dev` 或现有 `make build:ui`；阶段整合 `make test`，不为每项重复全量。
 仅宿主不可替代的真实操作进入 GUI，不能借此缩减逻辑、实际文件或原生组件测试覆盖。
 
-按 [共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment) 隔离 Dev、远端与图形会话。
+按 [共享验收环境](../../../docs/testing.md#文件预览共用验收) 隔离 Dev、远端与图形会话。
 用户先前暂停的 GUI／全量测试在获准恢复后执行；记录其待验，不写成已通过。
 每项实际执行必须确认测试确被发现、真实前提、完整退出状态及最终像素／剪贴板／源区间／磁盘字节、
 窗口身份和任务释放。阶段审计按上述 M/R 的实际取值与组合核销，不新增第二份永久测试清单；

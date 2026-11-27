@@ -6,10 +6,10 @@
 ## 结论
 
 - **结果**：No-Go
-- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 并排真实中文 IME、Undo／Redo、最终 WebKit 中文与源字节已通过；既有真实 IME 与原生连续编辑期间滚动专项均通过（见[共享验收](../file-viewer-routing/audit-p1.md)）；最终整合与 P1 门禁留阶段。
-- **现行 AX 验收**：依[共享验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
-- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；可执行项仍需验收。
-  保存冲突后续统一按[VS Code 保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，不将严格 CAS 冒称已解决。
+- **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 并排真实中文 IME、Undo／Redo、最终 WebKit 中文与源字节已通过；既有真实 IME 与原生连续编辑期间滚动专项均通过（见共享验收（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`））；最终整合与 P1 门禁留阶段。
+- **现行 AX 验收**：依[共享验收环境](../../../docs/testing.md#文件预览共用验收)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
+- **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../../../docs/testing.md#文件预览共用验收)；可执行项仍需验收。
+  保存冲突后续统一按[VS Code 保存冲突方案](../../../docs/features/editor.md#保存与关闭)，不将严格 CAS 冒称已解决。
 
 ## 任务与改动
 
@@ -39,13 +39,13 @@ Dev 构建／严格验签、回归测试文件编译通过。正式宿主 XCTest
   测试通过粘贴输入草稿，不能证明 H09×H11 的中文 IME 候选与焦点交接；
   双窗口菜单用例也不能证明 H10×H14 的完整 App 多窗长会话。
   这些项目尚待补验，保存后执行仍依赖共享保存版本边界。
-- 最新共享构建、冻结宿主与完整 App 结果以 [文件路由审计](../file-viewer-routing/audit-p1.md) 为准；现行行为归 [文件编辑器](../../../docs/features/editor.md)。
+- 最新共享构建、冻结宿主与完整 App 结果以 文件路由审计（同一历史记录） 为准；现行行为归 [文件编辑器](../../../docs/features/editor.md)。
 
 - 2026-11-25：`bd6e74a2` 共享本机保存恢复定点通过；已存版本显式打开的既有完整 App 证据不变。严格非协作 CAS 与真实输入／多窗长会话仍未核销，见 CSV P2（Git 历史 `a54b8ace:.github/features/csv-table-view/audit-p2.md`）。
 
 - 5d216abe：HTML 源码共用 FileTab 保存错误及可换行提示；共享保存与资源回归 16/16 通过。严格 CAS 和设备/完整 App 门禁不变。 共享验证证据见 CSV P2 F-09（同一历史审计）。
 
-- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；[共享 P1 审计](../file-viewer-routing/audit-p1.md) 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
+- `35503954`：真实完整 App 七格式双窗117次切换及正常退出／冷启动、全部关闭、原始字节核对通过；共享 P1 审计（同一历史记录） 记录完整命令与日志。设备、输入、严格 CAS 等独立门禁仍按各任务实际范围保留。
 
 - 本机隔离 Dev 真实拼音组合 `zhong wen`，确认 `中文` 前磁盘未改；显式保存后切预览，实际 DOM 可访问文字与屏幕显示中文，源字节为 `<h1>\n中文\n</h1>\n`。证据 `/tmp/bailey-ime-native.VZLk2z/{15,16,17}.json`、`17.png` 与 `Bailey-UITest-IME/project/Composition.html`。单窗真实输入与渲染通过，不代替并排连续 IME／滚动交叉验收。
 

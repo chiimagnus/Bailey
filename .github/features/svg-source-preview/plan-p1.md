@@ -25,7 +25,7 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
   不交给 XML 或文本编码回退。
   共享 [图片 P1 的唯一原生缩放视口](../image-annotations/plan-p1.md#p1-t1)，
   直接接入 `PreviewScrollView`，不增加另一套缩放控件。
-  复用 [文件预览共用 Dock／菜单](../file-viewer-routing/plan-p1.md#p1-t2)，默认图形。
+  复用 [文件预览共用 Dock／菜单](../../../docs/features/editor.md)，默认图形。
 - 文件大小不等于 XML 可安全解析大小。独立源码可打开到 32 MiB，
   现有净化器只允许 1 MiB 的内嵌 SVG；需要放宽独立文件限制时，
   应在**相同净化入口**实测 CPU／内存、深度、节点和恶意输入预算，
@@ -78,8 +78,8 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
 
 ## 阶段验收
 
-本轮远端连接、现有设备及缺配设备延期规则统一遵循[共用验收环境](../file-viewer-routing/plan-p1.md#acceptance-environment)；
-任务独立核销与阶段共同验证按[验收归属](../file-viewer-routing/plan-p1.md#acceptance-ownership)，不复制公共测试。
+远端连接、设备延期与任务／阶段验收统一遵循[文件预览共用验收](../../../docs/testing.md#文件预览共用验收)，
+不重复公共测试。
 
 新增 `SVG` 净化／SwiftDraw 像素和原生视口宿主测试，回归
 `SwiftMarkdownNativeTests`、`MarkdownResourceScopeTests`、`FileTabPersistenceTests`，
@@ -89,7 +89,7 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
 
 ### SVG 专项验收矩阵（P1）
 
-同时执行[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)的适用路径；
+同时执行[共用 R01–R11](../../../docs/testing.md#文件预览共用验收)的适用路径；
 用仓库 `demo-plot.svg`、真实科研绘图及可控生成夹具，
 **正常图对照实际像素，危险图核对最终无外部 IO 和可读错误**。
 

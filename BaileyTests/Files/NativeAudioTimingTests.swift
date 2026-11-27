@@ -15,7 +15,7 @@ final class NativeAudioTimingTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "Recording.m4a")
-        try FileManager.default.copyItem(at: root.appending(path: ".github/features/audio-file-playback/demo-audio.m4a"), to: url)
+        try FileManager.default.copyItem(at: root.appending(path: "TestFixtures/Media/demo-audio.m4a"), to: url)
         let original = try Data(contentsOf: url)
         let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         file.loadIfNeeded()

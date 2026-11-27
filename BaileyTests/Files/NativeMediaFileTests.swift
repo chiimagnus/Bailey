@@ -64,7 +64,7 @@ final class NativeMediaFileTests: XCTestCase {
         // Encoded using Apple's own afconvert APAC encoder, not an AAC lookalike.
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: ".github/features/audio-file-playback/demo-spatial-audio.mp4")
+            .appending(path: "TestFixtures/Media/demo-spatial-audio.mp4")
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -205,9 +205,9 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features")
-        for (sample, type) in [("audio-file-playback/demo-audio.m4a", AVMediaType.audio),
-                               ("video-file-playback/demo-video.mp4", .video)] {
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media")
+        for (sample, type) in [("demo-audio.m4a", AVMediaType.audio),
+                               ("demo-video.mp4", .video)] {
             let original = try Data(contentsOf: fixtures.appending(path: sample))
             // Preserve the fast-start track index while removing or corrupting the sample payload.
             let marker = try XCTUnwrap(original.range(of: Data("mdat".utf8)))
@@ -286,7 +286,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media/demo-video.mp4")
         let original = try Data(contentsOf: fixture)
         let source = AVURLAsset(url: fixture)
         let tracks = try await source.loadTracks(withMediaType: .video)
@@ -383,7 +383,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features/audio-file-playback/demo-audio.m4a")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media/demo-audio.m4a")
         let original = try Data(contentsOf: fixture)
         let resource = PreviewResource(path: directory.appendingPathComponent("Media.md").path,
                                        directory: directory.path, backend: LocalWorkspaceBackend.shared)
@@ -505,7 +505,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let audio = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features/audio-file-playback/demo-audio.m4a")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media/demo-audio.m4a")
         let video = directory.appending(path: "Original.mov")
         try await createVideoFixture(video, size: CGSize(width: 240, height: 240))
         for (source, type, codec) in [(audio, AVMediaType.audio, "mp4a"), (video, .video, "avc1")] {
@@ -575,9 +575,9 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let document = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features")
-        let audio = document.appending(path: "audio-file-playback/demo-audio.m4a")
-        let video = document.appending(path: "video-file-playback/demo-video.mp4")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media")
+        let audio = document.appending(path: "demo-audio.m4a")
+        let video = document.appending(path: "demo-video.mp4")
         let audioInMP4 = directory.appending(path: "仅音轨.mp4")
         try FileManager.default.copyItem(at: audio, to: audioInMP4)
         let linked = directory.appending(path: "影片.MOV")
@@ -616,7 +616,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let sample = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media/demo-video.mp4")
         let source = AVURLAsset(url: sample)
         let exports: [(name: String, preset: String, type: AVFileType, codec: FourCharCode)] = [
             ("节选-HEVC.mp4", AVAssetExportPresetHEVCHighestQuality, .mp4, kCMVideoCodecType_HEVC),
@@ -1105,10 +1105,10 @@ final class NativeMediaFileTests: XCTestCase {
         }
         defer { try? FileManager.default.removeItem(at: directory) }
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media")
         let fixtures: [(URL, URL, NativeMedia.Kind, AVMediaType)] = [
-            (repository.appending(path: "video-file-playback/demo-video.mp4"), sibling, .video, .video),
-            (repository.appending(path: "audio-file-playback/demo-audio.m4a"), workspace, .audio, .audio),
+            (repository.appending(path: "demo-video.mp4"), sibling, .video, .video),
+            (repository.appending(path: "demo-audio.m4a"), workspace, .audio, .audio),
         ]
         let resource = PreviewResource(path: workspace.appending(path: "Preview.md").path,
                                        directory: workspace.path, backend: LocalWorkspaceBackend.shared)
@@ -1161,7 +1161,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let landscape = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media/demo-video.mp4")
         let asset = AVURLAsset(url: landscape)
         let tracks = try await asset.loadTracks(withMediaType: .video)
         let track = try XCTUnwrap(tracks.first)
@@ -1407,7 +1407,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "Alternate languages.mov")
-        try FileManager.default.copyItem(at: root.appending(path: ".github/features/video-file-playback/demo-audio-tracks.mov"), to: url)
+        try FileManager.default.copyItem(at: root.appending(path: "TestFixtures/Media/demo-audio-tracks.mov"), to: url)
         let bytes = try Data(contentsOf: url)
         let project = Project(customDirectory: directory.path, layout: .init())
         project.openLocalFile(url.path)
@@ -1506,7 +1506,7 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features/video-file-playback/demo-video.mp4")
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media/demo-video.mp4")
         let asset = AVURLAsset(url: source)
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
@@ -1588,8 +1588,8 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features")
-        for name in ["video-file-playback/demo-video.mp4", "audio-file-playback/demo-audio.m4a"] {
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media")
+        for name in ["demo-video.mp4", "demo-audio.m4a"] {
             let original = try Data(contentsOf: fixtures.appending(path: name))
             let url = directory.appending(path: (name as NSString).lastPathComponent)
             try original.write(to: url)
@@ -1713,9 +1713,9 @@ final class NativeMediaFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appending(path: ".github/features")
-        let video = try Data(contentsOf: fixtures.appending(path: "video-file-playback/demo-video.mp4"))
-        let audio = try Data(contentsOf: fixtures.appending(path: "audio-file-playback/demo-audio.m4a"))
+            .deletingLastPathComponent().appending(path: "TestFixtures/Media")
+        let video = try Data(contentsOf: fixtures.appending(path: "demo-video.mp4"))
+        let audio = try Data(contentsOf: fixtures.appending(path: "demo-audio.m4a"))
         let project = Project(customDirectory: directory.path, layout: .init())
         defer { project.closeAll() }
         var loadingRenames = 0
@@ -1865,9 +1865,9 @@ final class NativeMediaFileTests: XCTestCase {
                 && ids(object, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeOutput).contains(device)
         }
         let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().appending(path: ".github/features")
-        let samples = [fixtures.appending(path: "audio-file-playback/demo-audio.m4a"),
-                       fixtures.appending(path: "video-file-playback/demo-audio-tracks.mov")]
+            .deletingLastPathComponent().deletingLastPathComponent().appending(path: "TestFixtures/Media")
+        let samples = [fixtures.appending(path: "demo-audio.m4a"),
+                       fixtures.appending(path: "demo-audio-tracks.mov")]
         // Start at Bluetooth so each kind covers Bluetooth -> built-in -> Bluetooth.
         XCTAssertEqual(setOutput(bluetooth), noErr)
         try await waitUntil { number(system, kAudioHardwarePropertyDefaultOutputDevice) == bluetooth }

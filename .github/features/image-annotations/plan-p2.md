@@ -76,12 +76,12 @@ Finder 本机文件与 SSH 文件不能因相同路径读写错机器。
 按 `docs/testing.md` 使用真实文件／受控 SSH／原生 Undo 的宿主测试和隔离 Bailey Dev，
 核对保存、关闭否决、跨窗口、菜单、导出及像素结果；
 运行相关 `make test:...`、`make build` 与阶段完整宿主测试。
-已有 sidecar 与确认导出复用[共用保存冲突方案](../file-viewer-routing/plan-p1.md#shared-save-conflicts)，在 CSV P2-T2 的共享写入所有者处理冲突，
+已有 sidecar 与确认导出复用[共用保存冲突方案](../../../docs/features/editor.md#保存与关闭)，在 CSV P2-T2 的共享写入所有者处理冲突，
 标注仅负责自己的草稿和原图保护；不另做 CAS 或重试。真实非协作竞态仍按共同边界验收。
 
 ### 标注与写盘专项验收矩阵（P2）
 
-先回归 P1 的 I01–I08 与[共用 R01–R11](../file-viewer-routing/plan-p1.md#shared-verification)；
+先回归 P1 的 I01–I08 与[共用 R01–R11](../../../docs/testing.md#文件预览共用验收)；
 标注不能只看内存对象或按钮，必须检查**原图、sidecar、导出目标三份实际字节**。
 
 | 编号 | 可执行场景 | 通过条件 |

@@ -925,7 +925,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".github/features")
+            .appendingPathComponent("TestFixtures/Media")
 
         func nativePlayers(in view: NSView) -> [AVPlayerView] {
             if let playerView = view as? AVPlayerView { return [playerView] }
@@ -973,8 +973,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         }
 
         var sources = [
-            ("audio", fixtures.appendingPathComponent("audio-file-playback/demo-audio.m4a")),
-            ("video", fixtures.appendingPathComponent("video-file-playback/demo-video.mp4")),
+            ("audio", fixtures.appendingPathComponent("demo-audio.m4a")),
+            ("video", fixtures.appendingPathComponent("demo-video.mp4")),
         ]
         if let root = ProcessInfo.processInfo.environment["BAILEY_MEDIA_ACCEPTANCE_ROOT"] {
             let samples = URL(fileURLWithPath: root).appendingPathComponent("media")
