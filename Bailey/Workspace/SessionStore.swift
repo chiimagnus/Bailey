@@ -32,11 +32,13 @@ struct SessionSnapshot: Codable {
         var pinnedFile: String?
         var tabs: [TabSnapshot]
         var selectedTabIndex: Int?
-        var dock: DockSavedNode
+        var dock: DockSavedNode? = nil // Read the previous on-disk format only.
+        var groups: [DockSavedGroup]? = nil
     }
 
     var projects: [ProjectSnapshot]
     var selectedProjectIndex: Int?
+    var layout: DockSavedNode? = nil
 }
 
 /// Persisted top level: one `SessionSnapshot` per open window, in

@@ -260,6 +260,51 @@ final class FinderDeliveryIntegrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: newFile, encoding: .utf8), "new data")
     }
 
+    func testQueuedFinderBatchRejectsRemovedWindowGroupBeforeRoutingExistingFile() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let existing = directory.appendingPathComponent("already-open.swift")
+        try "original bytes".write(to: existing, atomically: true, encoding: .utf8)
+
+        let application = WorkspaceApplication()
+        let receiver = application.makeWindow()
+        let owner = application.makeWindow()
+        defer { receiver.windowClosed(); owner.windowClosed() }
+        receiver.addLocalFolders([directory])
+        owner.addLocalFolders([directory])
+        let project = try XCTUnwrap(receiver.selectedProject)
+        let target = try XCTUnwrap(project.dock.group(containing: .projects))
+        let destination = (projectID: project.id, groupID: target.id)
+        let ownerProject = try XCTUnwrap(owner.selectedProject)
+        ownerProject.openLocalFile(existing.path)
+        let originalFile = try XCTUnwrap(ownerProject.selectedTab)
+        ownerProject.newBrowserTab(initialFocus: .none)
+        let selected = ownerProject.selectedTabID
+
+        let receiverWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+        let ownerWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        receiverWindow.isReleasedWhenClosed = false
+        ownerWindow.isReleasedWhenClosed = false
+        defer { receiverWindow.close(); ownerWindow.close() }
+        receiver.attach(to: receiverWindow)
+        var replies: [Bool] = []
+        application.openExternalFiles([existing], preferred: receiver, destination: destination) {
+            replies.append($0)
+        }
+        XCTAssertTrue(replies.isEmpty)
+        project.dock.removeTool(.projects)
+        XCTAssertNil(receiver.dockLayout.root.group(id: target.id))
+        owner.attach(to: ownerWindow)
+        XCTAssertEqual(replies, [false])
+        XCTAssertEqual(ownerProject.selectedTabID, selected)
+        XCTAssertTrue(ownerProject.tabs.contains { $0 === originalFile })
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "original bytes")
+    }
+
     func testFinderProjectsDropDoesNotSwitchTargetDuringProviderLoading() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let firstRoot = root.appendingPathComponent("first")
@@ -495,7 +540,7 @@ final class FinderDeliveryIntegrationTests: XCTestCase {
         let b = self.workspaceApplication.makeWindow()
         defer { a.windowClosed(); b.windowClosed() }
         a.addLocalFolders([folder])
-        let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        let remote = Project(fallbackName: "SSH", layout: b.dockLayout)
         remote.sshHost = "invalid-p4-cross-window"
         remote.customDirectory = "/remote/workspace"
         b.projects.append(remote)

@@ -13,9 +13,10 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
 
     func testMiddleMouseHitsRealDockTabAndClosesOnlyResolvedGroupTargets() async throws {
         for multiple in [false, true] {
-            let manager = workspaceApplication.makeWindow()
+            let application = WorkspaceApplication()
+            let manager = application.makeWindow()
             defer { manager.windowClosed() }
-            let project = Project(fallbackName: "middle click", workspaceConfiguration: .standard)
+            let project = Project(fallbackName: "middle click", layout: manager.dockLayout)
             manager.projects = [project]
             manager.selectedProjectID = project.id
             project.dock.select(.projects)
@@ -70,7 +71,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
     func testTabStripNativeKeyboardNavigatesWithoutDisplayingUntilReturn() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "keyboard", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "keyboard", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let group = try XCTUnwrap(project.dock.group(containing: .files))
@@ -274,7 +275,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
     func testTabSwitcherCardsExposeNativePressToSelectTheirRealTabs() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "Switcher AX", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Switcher AX", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let target = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
@@ -548,7 +549,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
             let host = NSHostingView(rootView: DockTabGroupView(
                 group: group, project: project, manager: manager, git: GitStatusModel(),
                 dragging: DockTabDragCoordinator(), isTopLeft: index == 0
-            ).coordinateSpace(name: "workspaceDock"))
+            ))
             window.contentView = host
             window.orderFront(nil)
             defer { window.close() }
@@ -599,7 +600,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         let host = NSHostingView(rootView: DockTabGroupView(
             group: tabGroup, project: project, manager: manager,
             git: GitStatusModel(), dragging: DockTabDragCoordinator(), isTopLeft: true
-        ).coordinateSpace(name: "workspaceDock"))
+        ))
         window.contentView = host
         window.orderFront(nil)
 
@@ -649,13 +650,70 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
                        "Tabs must stop bouncing when the panel widens again")
     }
 
+    func testSplitAndMergePreserveUnchangedGroupsNativeTabStrips() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let paths = ["a.txt", "b.txt"].map { root.appendingPathComponent($0) }
+        for (index, path) in paths.enumerated() {
+            try "File \(index)\n".write(to: path, atomically: true, encoding: .utf8)
+            project.openFile(path.path)
+        }
+        let a = try XCTUnwrap(project.tabs.first)
+        let b = try XCTUnwrap(project.tabs.last)
+        XCTAssertNotEqual(a.id, b.id)
+        guard case .file(let file) = a.content else { return XCTFail("Expected file") }
+        project.selectTab(a.id)
+        let source = try XCTUnwrap(project.dock.group(containing: .tab(a.id)))
+
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 1200, height: 720),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+        host.sizingOptions = []
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        func strips(_ view: NSView) -> [TreeKeyboardView] {
+            if let keyboard = view as? TreeKeyboardView,
+               keyboard.accessibilityIdentifier() == "bailey.dock.tabstrip" { return [keyboard] }
+            return view.subviews.flatMap(strips)
+        }
+        func layout() {
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        try await wait { layout(); return strips(host).count == 3 && file.editorView?.window === window }
+        let originalStrips = strips(host)
+        let originalEditor = try XCTUnwrap(file.editorView)
+        for _ in 0..<3 {
+            XCTAssertTrue(project.movePanels(.tab(b.id), into: source.id, edge: .bottom))
+            try await wait { layout(); return strips(host).count == 4 && file.editorView?.window === window }
+            XCTAssertTrue(originalStrips.allSatisfy { original in strips(host).contains { $0 === original } })
+            XCTAssertTrue(file.editorView === originalEditor)
+            XCTAssertTrue(project.movePanels(.tab(b.id), into: source.id))
+            try await wait { layout(); return strips(host).count == 3 }
+            XCTAssertTrue(originalStrips.allSatisfy { original in strips(host).contains { $0 === original } })
+            project.selectTab(a.id)
+            try await wait { layout(); return file.editorView?.window === window }
+            XCTAssertTrue(file.editorView === originalEditor)
+            XCTAssertEqual(file.nativeTextStorage.string, "File 0\n")
+        }
+        XCTAssertEqual(project.tabs.count, 2)
+    }
+
     func testOverflowingTabStripMountsOnlyViewportTabsAndReachesBothEnds() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: .standard)
+        let project = Project(fallbackName: root.lastPathComponent, layout: manager.dockLayout)
         project.customDirectory = root.path
         manager.projects.append(project)
         manager.selectProject(id: project.id)

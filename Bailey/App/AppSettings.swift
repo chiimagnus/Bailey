@@ -169,10 +169,6 @@ final class AppSettings {
     static let defaultToolbarVisibility: ToolbarVisibility = .hide
     static let defaultFilesExclude = ["**/.git"]
 
-    /// Loaded once at launch; changing the initial template never rearranges
-    /// a project's already saved dock tree.
-    let workspaceConfiguration: DockWorkspaceConfiguration
-
     /// The language this process launched with, kept separate from the pending
     /// selection so Settings can explain when a relaunch is required.
     let activeLanguage: AppLanguage
@@ -335,7 +331,6 @@ final class AppSettings {
 
         let existing = TOML.parse(at: settingsURL)
         let toml = existing ?? [:]
-        workspaceConfiguration = Self.workspace(from: toml) ?? .standard
         theme = toml["theme"]?.string.flatMap(AppTheme.init(rawValue:)) ?? .system
         themeDark = Self.knownTheme(
             toml["theme-dark"]?.string,
@@ -396,37 +391,6 @@ final class AppSettings {
             reloadThemeSelection()
         }
         if existing == nil { save() }
-    }
-
-    /// Parse the same typed workspace configuration for launch and for saves.
-    /// Reading again before saving preserves manual edits made while Bailey runs.
-    private static func workspace(from toml: [String: TOML.Value]) -> DockWorkspaceConfiguration? {
-        let standard = DockWorkspaceConfiguration.standard
-        let keys = ["workspace.groups", "workspace.selected", "workspace.weights",
-                    "workspace.add-actions", "workspace.edge-threshold"]
-        let validTypes = keys.allSatisfy { key in
-            guard let value = toml[key] else { return true }
-            switch key {
-            case "workspace.weights": return value.numbers != nil
-            case "workspace.edge-threshold": return value.double != nil
-            default: return value.strings != nil
-            }
-        }
-        let groups = toml["workspace.groups"]?.strings ?? standard.groupNames
-        let selected = toml["workspace.selected"]?.strings
-            ?? (toml["workspace.groups"] == nil
-                ? standard.selectedNames : Array(repeating: "", count: groups.count))
-        let config = validTypes ? DockWorkspaceConfiguration(
-            groupNames: groups,
-            selectedNames: selected,
-            weights: toml["workspace.weights"]?.numbers ?? standard.weights,
-            actionNames: toml["workspace.add-actions"]?.strings ?? standard.actionNames,
-            edgeThreshold: toml["workspace.edge-threshold"]?.double ?? standard.edgeThreshold
-        ) : nil
-        if config == nil, keys.contains(where: { toml[$0] != nil }) {
-            NSLog("bailey: invalid workspace configuration; using defaults")
-        }
-        return config
     }
 
     /// Pushes the active application's names into the shared Theme palette.
@@ -542,24 +506,6 @@ final class AppSettings {
         if exclude != Self.defaultFilesExclude {
             lines.append("files.exclude = \(TOML.list(exclude))")
         }
-        let standard = DockWorkspaceConfiguration.standard
-        let configured = TOML.parse(at: settingsURL).flatMap(Self.workspace)
-            ?? workspaceConfiguration
-        if configured.groupNames != standard.groupNames {
-            lines.append("workspace.groups = \(TOML.list(configured.groupNames))")
-        }
-        if configured.selectedNames != standard.selectedNames {
-            lines.append("workspace.selected = \(TOML.list(configured.selectedNames))")
-        }
-        if configured.weights != standard.weights {
-            lines.append("workspace.weights = \(TOML.list(configured.weights))")
-        }
-        if configured.actionNames != standard.actionNames {
-            lines.append("workspace.add-actions = \(TOML.list(configured.actionNames))")
-        }
-        if configured.edgeThreshold != standard.edgeThreshold {
-            lines.append("workspace.edge-threshold = \(TOML.number(configured.edgeThreshold))")
-        }
         let dir = settingsURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true)
@@ -597,12 +543,6 @@ enum TOML {
             guard case .array(let values) = self else { return nil }
             let strings = values.compactMap(\.string)
             return strings.count == values.count ? strings : nil
-        }
-
-        var numbers: [Double]? {
-            guard case .array(let values) = self else { return nil }
-            let numbers = values.compactMap(\.double)
-            return numbers.count == values.count ? numbers : nil
         }
     }
 
@@ -711,10 +651,6 @@ enum TOML {
 
     static func list(_ values: [String]) -> String {
         "[" + values.map(quote).joined(separator: ", ") + "]"
-    }
-
-    static func list(_ values: [Double]) -> String {
-        "[" + values.map(number).joined(separator: ", ") + "]"
     }
 
     static func quote(_ s: String) -> String {

@@ -47,7 +47,7 @@ MVVM 只描述层次，不能替代领域依赖约束。以下是改动必须守
 - **装配与调用分开**：App／窗口入口创建并连接协作者；业务动作通过明确入口调用所属领域。
   协调者可以转发动作、组织保存和关闭流程，但不吸收目录导航、文本编辑、Git 命令或具体控件识别规则。
 - **生命周期分开**：应用级负责跨窗口注册、外部请求路由、整体恢复和退出协调；
-  窗口级负责自己的项目集合、选择及动作上下文；项目负责标签与 Dock；内容负责文档、网页或会话。
+  窗口级负责自己的停靠布局、项目集合、选择及动作上下文；项目负责标签与组内排列；内容负责文档、网页或会话。
   应用级可汇集各窗口结果，但不建立第二份可写项目或内容状态。
 - **规则只有一个所有者**：在拥有失效不变量的最小公共位置维护规则。
   跨组件明确传递“浏览、展开、打开、激活、聚焦、恢复”等必要意图，不能让下游根据 selected、
@@ -68,9 +68,9 @@ Bailey 复用 SwiftUI Observation、AppKit、现有 Dock/Tab 与后端，不机�
 | 生命周期 | 当前所有者 | 必须保持的边界 |
 | --- | --- | --- |
 | 应用 | `BaileyApp`、`BaileyApplicationDelegate.workspace: WorkspaceApplication` | 唯一注册已存在的窗口、协调 Finder 路由、快照认领、保存与退出；不复制项目状态 |
-| 窗口 | `WindowRootView` 的 `WorkspaceWindowModel` | 每窗独立拥有项目与动作、原生宿主；菜单不能操作后台窗口 |
+| 窗口 | `WindowRootView` 的 `WorkspaceWindowModel` | 每窗独立拥有布局、项目与动作、原生宿主；菜单不能操作后台窗口 |
 | Git 面板展示 | `ContentView` 持有 `GitStatusModel` | 跟随当前项目与机器身份，不因一次失败丢弃有效展示 |
-| 项目 | `Project` | 持有标签、文件树和停靠状态；视图重建不更换项目 |
+| 项目 | `Project` | 持有标签、文件树和组内排列／选择；视图重建不更换项目 |
 | 标签内容 | `PaneTab` 及其 `TerminalSession`、`FileTab`、`DiffTab`、`BrowserTab` | 每个标签只有一份内容，原生对象随内容生存 |
 | 设置与主题 | `AppSettings`、`Theme` | 现有应用级共享状态仍是唯一来源，不再缓存另一份偏好 |
 | 长期隧道 | `TunnelManager` | 独立于某个终端或浏览器标签 |
@@ -81,8 +81,8 @@ Bailey 复用 SwiftUI Observation、AppKit、现有 Dock/Tab 与后端，不机�
 
 **现状：** `WorkspaceApplication` 由 delegate 持有，负责窗口登记、Finder 队列、恢复认领、
 合并快照保存、通知与 SSH 会话定位及应用退出。
-`WorkspaceWindowModel` 保留单窗项目、选择、焦点与原生宿主。
-`Project`／`DockNode`／`PaneTab` 继续拥有项目布局、局部状态与长期原生内容；
+`WorkspaceWindowModel` 保留单窗布局、项目、选择、焦点与原生宿主。
+`DockWindowLayout` 持有该窗口唯一的分屏树；`Project` 只保留组内内容，`PaneTab` 持有长期原生内容。
 创建 SwiftUI View 的中间对象不会登记或提前认领窗口。
 隔离 Dev 抑制自动首窗；`Commands` 先登记开窗动作，只有 AppKit 确认应用已激活后
 才请求一次首窗。请求期间与已登记但尚未附着 `NSWindow` 的场景均不得重复开窗。

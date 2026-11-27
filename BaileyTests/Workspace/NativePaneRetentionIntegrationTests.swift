@@ -125,7 +125,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testProjectAndPaneTabObservationsReplacePublisherRelays() async throws {
-        let project = Project(fallbackName: "observation", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "observation", layout: .init())
         let tab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
         project.append(tab)
         XCTAssertEqual(project.tabs.first?.displayTitle, tab.content.title)
@@ -354,8 +354,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     func testTabSwitcherCannotCommitOrSelectAfterChangingProjects() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let first = Project(fallbackName: "A", workspaceConfiguration: .standard)
-        let second = Project(fallbackName: "B", workspaceConfiguration: .standard)
+        let first = Project(fallbackName: "A", layout: manager.dockLayout)
+        let second = Project(fallbackName: "B", layout: manager.dockLayout)
         manager.projects = [first, second]
         let firstTabs = (0..<3).map { _ in
             PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
@@ -397,7 +397,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         try "<title>Second fixture</title>Second page".write(to: second, atomically: true, encoding: .utf8)
         let browser = BrowserTab(initialFocus: .none)
         let native = browser.webView
-        let project = Project(fallbackName: "browser", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "browser", layout: .init())
         project.append(PaneTab(content: .browser(browser)))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -517,7 +517,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let file = FileTab(path: filePath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await file.waitForText()
         let fileTab = PaneTab(content: .file(file))
-        let project = Project(fallbackName: "retention", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "retention", layout: .init())
         project.append(browserTab)
         project.append(fileTab)
 
@@ -641,7 +641,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
                 DockSavedNode.split(id: UUID(), axis: .horizontal, fraction: 0.5,
                                     first: partial, second: group)
             }
-            project.dock.restore(layout, tabIDs: tabs)
+            manager.dockLayout.root = layout.restoreLayout()
+            project.dock.restore(layout.groups, tabIDs: tabs)
             let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_700, height: 650),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -692,7 +693,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             // remains alive and AppKit may retain all five former scroll views.
             for path in paths { project.openFile(path.path) }
             XCTAssertEqual(project.tabs.count, 5)
-            project.dock.restore(layout, tabIDs: project.tabs.map(\.id))
+            project.dock.restore(layout.groups, tabIDs: project.tabs.map(\.id))
             try await settle {
                 host.layoutSubtreeIfNeeded()
                 return project.tabs.allSatisfy { tab in
@@ -872,7 +873,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             if let playerView = view as? AVPlayerView { return [playerView] }
             return view.subviews.flatMap { nativePlayers(in: $0) }
         }
-        let project = Project(fallbackName: "Shared media", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Shared media", layout: .init())
         defer { project.closeAll() }
         let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
         host.sizingOptions = []
@@ -2057,7 +2058,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     func testPanelMenuPresentationPinsEntriesOnlyDuringNativeTracking() async {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
-        let project = Project(fallbackName: "menu", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "menu", layout: .init())
         let tab = PaneTab(content: .session(terminal))
         project.append(tab)
         let presentation = MainMenuPresentation()
@@ -2088,8 +2089,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testMenuSelectionTracksActiveDockContentAndFreezesOnlyWhileOpen() throws {
-        let project = Project(fallbackName: "same", workspaceConfiguration: .standard)
-        let other = Project(fallbackName: "same", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "same", layout: .init())
+        let other = Project(fallbackName: "same", layout: .init())
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let shell = PaneTab(content: .session(terminal))
@@ -2123,8 +2124,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
     }
 
     func testProjectMenuPresentationPinsOrderOnlyWhileTracked() {
-        let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
-        let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
+        let first = Project(fallbackName: "First", layout: .init())
+        let second = Project(fallbackName: "Second", layout: .init())
         let presentation = MainMenuPresentation()
         XCTAssertEqual(presentation.projectEntries(for: [first]).map(\.title), ["First"])
         presentation.beginTracking(project: nil, projects: [first])
@@ -2138,7 +2139,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let surface = terminal.surface
-        let project = Project(fallbackName: "fallback", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "fallback", layout: .init())
         project.append(PaneTab(content: .session(terminal)))
 
         let titleChanged = expectation(description: "Terminal title observation")

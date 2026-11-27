@@ -202,7 +202,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             let project = Project(
-                fallbackName: "External SSH Fixture", workspaceConfiguration: .standard
+                fallbackName: "External SSH Fixture", layout: manager.dockLayout
             )
             project.sshHost = host
             project.customDirectory = root

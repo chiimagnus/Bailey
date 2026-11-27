@@ -554,7 +554,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         _ = try git(["add", "."], in: root)
         _ = try git(["commit", "-qm", "first"], in: root)
         let hash = try git(["rev-parse", "HEAD"], in: root)
-        let project = Project(fallbackName: "Historical reuse", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Historical reuse", layout: .init())
         project.customDirectory = root.path
         project.openHistoricalDiff(
             repoRoot: root.path, path: "note.txt", source: .revision(hash: hash), origPath: nil
@@ -1492,7 +1492,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         let head = try git(["rev-parse", "HEAD"], in: root)
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "Reset dirty tab", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Reset dirty tab", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         project.customDirectory = root.path
@@ -1573,7 +1573,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         try Data("new\n".utf8).write(to: root.appendingPathComponent("file.txt"))
 
         let project = Project(fallbackName: "Historical Native Tabs",
-                              workspaceConfiguration: .standard)
+                              layout: .init())
         let source: [DiffTab.Source] = [
             .commit(hash: revision, parent: nil, status: "A"),
             .revision(hash: revision),
@@ -1594,7 +1594,7 @@ final class NativeGitHistoryFileTests: XCTestCase {
         let decoded = try JSONDecoder().decode(
             [SessionSnapshot.ProjectSnapshot.ContentSnapshot].self,
             from: JSONEncoder().encode(snapshots))
-        let restored = Project(fallbackName: "restored", workspaceConfiguration: .standard)
+        let restored = Project(fallbackName: "restored", layout: .init())
         for content in decoded {
             _ = restored.restoreTab(from: .init(
                 content: content, historyKey: nil,

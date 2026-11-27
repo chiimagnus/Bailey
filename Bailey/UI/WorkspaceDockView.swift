@@ -3,6 +3,58 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The same partition is used to lay out panes and to locate a drop.
+struct DockLayout {
+    struct Pane: Identifiable {
+        let group: DockGroup
+        let frame: CGRect
+        var id: UUID { group.id }
+    }
+
+    struct Divider: Identifiable {
+        let split: DockSplit
+        let frame: CGRect
+        let available: CGFloat
+        var id: UUID { split.id }
+    }
+
+    private(set) var panes: [Pane] = []
+    private(set) var dividers: [Divider] = []
+
+    init(_ node: DockNode, in bounds: CGRect, resizing: (id: UUID, fraction: Double)? = nil) {
+        append(node, in: bounds, resizing: resizing)
+    }
+
+    private mutating func append(_ node: DockNode, in bounds: CGRect,
+                                 resizing: (id: UUID, fraction: Double)?) {
+        switch node {
+        case .group(let group):
+            panes.append(Pane(group: group, frame: bounds))
+        case .split(let split):
+            let horizontal = split.axis == .horizontal
+            let available = max(0, (horizontal ? bounds.width : bounds.height) - 1)
+            let fraction = resizing.flatMap { $0.id == split.id ? $0.fraction : nil } ?? split.fraction
+            let firstLength = available * fraction
+            let secondLength = max(0, available - firstLength)
+            let first: CGRect
+            let divider: CGRect
+            let second: CGRect
+            if horizontal {
+                first = CGRect(x: bounds.minX, y: bounds.minY, width: firstLength, height: bounds.height)
+                divider = CGRect(x: first.maxX, y: bounds.minY, width: 1, height: bounds.height)
+                second = CGRect(x: divider.maxX, y: bounds.minY, width: secondLength, height: bounds.height)
+            } else {
+                first = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: firstLength)
+                divider = CGRect(x: bounds.minX, y: first.maxY, width: bounds.width, height: 1)
+                second = CGRect(x: bounds.minX, y: divider.maxY, width: bounds.width, height: secondLength)
+            }
+            append(split.first, in: first, resizing: resizing)
+            dividers.append(Divider(split: split, frame: divider, available: available))
+            append(split.second, in: second, resizing: resizing)
+        }
+    }
+}
+
 /// Window-wide docking gesture. One hit-tested destination and one preview:
 /// the pointer's proximity to a pane edge determines the split, while the
 /// title strip and the interior merge into the existing tab group.
@@ -22,6 +74,7 @@ final class DockTabDragCoordinator {
         var items: [DockItem] { source.items }
         let location: CGPoint
         let destination: UUID?
+        let destinationFrame: CGRect?
         let edge: DockEdge?
         let index: Int?
     }
@@ -29,8 +82,9 @@ final class DockTabDragCoordinator {
     private(set) var position: Position?
     @ObservationIgnored private var source: Source?
     @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
-    @ObservationIgnored private var groups: [UUID: CGRect] = [:]
+    @ObservationIgnored private var rootFrame = CGRect.zero
     @ObservationIgnored private var tabs: [UUID: [DockItem: CGRect]] = [:]
+    @ObservationIgnored private weak var frameOwner: DockWorkspaceModel?
     @ObservationIgnored private var escapeMonitor: Any?
 
     isolated deinit {
@@ -42,33 +96,44 @@ final class DockTabDragCoordinator {
         guard source != nil || position != nil || escapeMonitor != nil else { return }
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
-        // Layout preferences may update before project-switch cancellation;
-        // preserve their latest frames so the next drag can still hit a target.
+        // Ending a gesture does not invalidate the visible tab geometry.
         if position != nil { position = nil }
         source = nil
         sourceDock = nil
         NSCursor.arrow.set()
     }
 
-    func setGroupFrame(_ frame: CGRect?, for group: UUID) {
-        guard groups[group] != frame else { return }
-        if source != nil { cancel() }
-        groups[group] = frame
-        if frame == nil { tabs.removeValue(forKey: group) }
+    func setRootFrame(_ frame: CGRect) {
+        guard rootFrame != frame else { return }
+        cancel()
+        rootFrame = frame
     }
 
-    func setTabFrame(_ frame: CGRect?, for item: DockItem, in group: UUID) {
+    func useTabFrames(for dock: DockWorkspaceModel?) {
+        if frameOwner !== dock { tabs.removeAll(); frameOwner = dock }
+    }
+
+    func setTabFrame(_ frame: CGRect?, for item: DockItem, in group: UUID, dock: DockWorkspaceModel) {
+        useTabFrames(for: dock)
         guard tabs[group]?[item] != frame else { return }
-        if source != nil { cancel() }
-        tabs[group, default: [:]][item] = frame
+        if let frame {
+            tabs[group, default: [:]][item] = frame
+        } else {
+            tabs[group]?[item] = nil
+            if tabs[group]?.isEmpty == true { tabs[group] = nil }
+        }
+        if let position, let dock = sourceDock {
+            update(position.item, at: position.location, dock: dock)
+        }
     }
 
     func begin(_ item: DockItem, dock: DockWorkspaceModel) {
         cancel()
-        guard let group = dock.group(containing: item) else { return }
+        let current = dock.root
+        guard let group = current.group(containing: item) else { return }
         sourceDock = dock
         source = Source(item: item, items: dock.commandTargets(for: item),
-                        sourceGroupID: group.id, sourceLayout: dock.root)
+                        sourceGroupID: group.id, sourceLayout: current.mappingGroups { $0.selected = nil })
         let window = NSApp.keyWindow
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak window] event in
             guard event.window === window, window?.isKeyWindow == true,
@@ -82,7 +147,7 @@ final class DockTabDragCoordinator {
 
     func insertionX(in group: DockGroup) -> CGFloat? {
         guard let position, position.destination == group.id, position.edge == nil,
-              let frame = groups[group.id],
+              let frame = position.destinationFrame,
               position.location.y >= frame.minY, position.location.y < frame.minY + 38,
               let index = position.index, !group.items.isEmpty else { return nil }
         if index < group.items.count, let bounds = tabs[group.id]?[group.items[index]] {
@@ -96,17 +161,16 @@ final class DockTabDragCoordinator {
     }
 
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
-        guard let source, sourceDock === dock, source.item == item,
-              source.sourceLayout == dock.root else { cancel(); return }
-        let hit = groups.first { $0.value.contains(location) && dock.root.group(id: $0.key) != nil }
+        guard let source, sourceDock === dock, source.item == item else { cancel(); return }
+        let current = dock.root
+        guard source.sourceLayout == current.mappingGroups({ $0.selected = nil }) else { cancel(); return }
+        let hit = DockLayout(current, in: rootFrame).panes.first { $0.frame.contains(location) }
         var edge: DockEdge?
         var insertIndex: Int?
-        if let hit, let target = dock.root.group(id: hit.key) {
-            let frame = hit.value
-            edge = DockDropHitTest.edge(
-                at: location, in: frame,
-                threshold: CGFloat(dock.configuration.edgeThreshold)
-            )
+        if let hit {
+            let target = hit.group
+            let frame = hit.frame
+            edge = DockDropHitTest.edge(at: location, in: frame)
             if edge == nil {
                 if location.y <= frame.minY + 38 {
                     let mounted = tabs[target.id] ?? [:]
@@ -121,13 +185,13 @@ final class DockTabDragCoordinator {
         }
         position = Position(
             source: source, location: location,
-            destination: hit?.key, edge: edge, index: insertIndex
+            destination: hit?.id, destinationFrame: hit?.frame, edge: edge, index: insertIndex
         )
     }
 
     func finish(project: Project) {
         defer { cancel() }
-        guard let position, sourceDock === project.dock, project.dock.root == position.source.sourceLayout,
+        guard let position, sourceDock === project.dock, project.dock.root.mappingGroups({ $0.selected = nil }) == position.source.sourceLayout,
               let destination = position.destination else { return }
         project.movePanels(
             position.item, into: destination,
@@ -150,14 +214,13 @@ struct WorkspaceDockView: View {
                 let layout = project.dock.root
                 DockTreeView(
                     node: layout, project: project, manager: manager,
-                    git: git, dragging: dragging, isTopLeft: true
+                    git: git, dragging: dragging
                 )
                 .frame(width: rootGeometry.size.width, height: rootGeometry.size.height)
                 .background {
                     let _ = themeChanges.revision
                     Color(nsColor: Theme.terminal(dark: colorScheme == .dark).backgroundNSColor)
                 }
-                .onChange(of: manager.selectedProjectID) { dragging.cancel() }
                 .onDisappear { manager.attachedWindow?.isMovable = true }
                 .overlay(alignment: .topLeading) {
                     if let position = dragging.position, position.destination != nil {
@@ -188,7 +251,13 @@ struct WorkspaceDockView: View {
                 }
             }
         }
-        .coordinateSpace(name: "workspaceDock")
+        .onChange(of: manager.selectedProjectID) {
+            dragging.cancel()
+            dragging.useTabFrames(for: manager.selectedProject?.dock)
+        }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+            dragging.setRootFrame($0)
+        }
     }
 }
 
@@ -203,6 +272,16 @@ extension DockItem {
         }
     }
 
+    var accessibilityName: String {
+        switch self {
+        case .projects: "projects"
+        case .files: "files"
+        case .git: "git"
+        case .filePreview: "markdown-preview"
+        case .tab: "tab"
+        }
+    }
+
     func label(project: Project) -> String {
         switch self {
         case .projects: String(localized: "Projects", table: "Interface")
@@ -214,7 +293,8 @@ extension DockItem {
     }
 }
 
-/// The recursive window layout positions independent work and tool tabs.
+/// A group keeps its SwiftUI identity when a neighboring split is inserted
+/// or collapsed. Only its rectangle changes.
 private struct DockTreeView: View {
     private let themeChanges = Theme.changes
     let node: DockNode
@@ -222,88 +302,58 @@ private struct DockTreeView: View {
     let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator
-    let isTopLeft: Bool
-
-    @State private var liveFraction: Double?
+    @GestureState private var resizing: (id: UUID, fraction: Double)?
 
     var body: some View {
         let _ = themeChanges.revision
-        switch node {
-        case .group(let group):
-            DockTabGroupView(
-                group: group, project: project, manager: manager,
-                git: git, dragging: dragging, isTopLeft: isTopLeft
-            )
-        case .split(let split):
-            GeometryReader { geometry in
-                let size = geometry.size
-                let fraction = liveFraction ?? split.fraction
-                let horizontal = split.axis == .horizontal
-                let available = max(0, (horizontal ? size.width : size.height) - 1)
-                let firstLength = available * fraction
-                let secondLength = max(0, available - firstLength)
-                Group {
-                    if horizontal {
-                        HStack(spacing: 0) {
-                            child(split.first, isTopLeft: isTopLeft)
-                                .frame(width: firstLength, height: size.height)
-                            divider(split, available: available)
-                                .frame(width: 1, height: size.height)
-                            child(split.second, isTopLeft: false)
-                                .frame(width: secondLength, height: size.height)
-                        }
-                    } else {
-                        VStack(spacing: 0) {
-                            child(split.first, isTopLeft: isTopLeft)
-                                .frame(width: size.width, height: firstLength)
-                            divider(split, available: available)
-                                .frame(width: size.width, height: 1)
-                            child(split.second, isTopLeft: false)
-                                .frame(width: size.width, height: secondLength)
-                        }
-                    }
+        GeometryReader { geometry in
+            let layout = DockLayout(node, in: CGRect(origin: .zero, size: geometry.size), resizing: resizing)
+            ZStack(alignment: .topLeading) {
+                ForEach(layout.panes) { pane in
+                    DockTabGroupView(
+                        group: pane.group, project: project, manager: manager,
+                        git: git, dragging: dragging, isTopLeft: pane.id == layout.panes.first?.id
+                    )
+                    .id(project.id)
+                    .frame(width: pane.frame.width, height: pane.frame.height)
+                    .position(x: pane.frame.midX, y: pane.frame.midY)
                 }
-                .frame(width: size.width, height: size.height)
+                ForEach(layout.dividers) { entry in
+                    divider(entry)
+                        .frame(width: entry.frame.width, height: entry.frame.height)
+                        .position(x: entry.frame.midX, y: entry.frame.midY)
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
     }
 
-    private func child(_ node: DockNode, isTopLeft: Bool) -> some View {
-        DockTreeView(
-            node: node, project: project, manager: manager,
-            git: git, dragging: dragging, isTopLeft: isTopLeft
-        )
-    }
-
-    private func divider(_ split: DockSplit, available: CGFloat) -> some View {
-        // A thin divider with a wider invisible drag target.
-        Rectangle()
+    private func divider(_ entry: DockLayout.Divider) -> some View {
+        let split = entry.split
+        let available = entry.available
+        let horizontal = split.axis == .horizontal
+        func fraction(_ translation: CGSize) -> Double {
+            guard available > 0 else { return split.fraction }
+            let delta = horizontal ? translation.width : translation.height
+            let minimumLength: CGFloat = horizontal ? 150 : 90
+            let minimum = min(0.48, max(0.1, Double(minimumLength / available)))
+            return min(max(split.fraction + Double(delta / available), minimum), 1 - minimum)
+        }
+        return Rectangle()
             .fill(Color(nsColor: Theme.divider))
             .overlay {
                 Rectangle()
                     .fill(.clear)
-                    .frame(
-                        width: split.axis == .horizontal ? 7 : nil,
-                        height: split.axis == .vertical ? 7 : nil
-                    )
+                    .frame(width: horizontal ? 7 : nil, height: horizontal ? nil : 7)
                     .contentShape(Rectangle())
-                    .pointerStyle(split.axis == .horizontal ? .columnResize : .rowResize)
+                    .pointerStyle(horizontal ? .columnResize : .rowResize)
                     .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in
-                            guard available > 0 else { return }
-                            let delta = split.axis == .horizontal
-                                ? value.translation.width : value.translation.height
-                            let minimumLength: CGFloat = split.axis == .horizontal ? 150 : 90
-                            let minimum = min(0.48, max(0.1, Double(minimumLength / available)))
-                            liveFraction = min(max(
-                                split.fraction + Double(delta / available), minimum
-                            ), 1 - minimum)
+                        .updating($resizing) { value, state, _ in
+                            state = (split.id, fraction(value.translation))
                         }
-                        .onEnded { _ in
-                            if let liveFraction { project.dock.resize(split.id, to: liveFraction) }
-                            liveFraction = nil
-                        }
-                    )
+                        .onEnded { value in
+                            manager.resizeDock(split.id, to: fraction(value.translation))
+                        })
             }
             .accessibilityIdentifier("bailey.dock.divider")
             .onHover { manager.attachedWindow?.isMovable = !$0 }
@@ -417,14 +467,6 @@ struct DockTabGroupView: View {
             onFocused: { if dragging.position == nil && !tabKeyboardFocused { focusGroup() } },
             onPrimaryClick: { project.dock.clearContextTarget() }
         ).id(group.id))
-        .background {
-            Color.clear
-                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
-                    dragging.setGroupFrame($0, for: group.id)
-                }
-                .onDisappear { dragging.setGroupFrame(nil, for: group.id) }
-                .id(group.id)
-        }
         .popover(isPresented: Binding(
             get: { markdownPopover != nil },
             set: { if !$0 { markdownPopover = nil } }
@@ -478,30 +520,34 @@ struct DockTabGroupView: View {
         .accessibilityIdentifier("bailey.dock.addPanel")
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
-                ForEach(availableActions.indices, id: \.self) { index in
-                    let action = availableActions[index]
-                    if index > 0 && (availableActions[index - 1].item == nil) != (action.item == nil) {
-                        Divider()
+                openFileButton
+                newItemButton(isDirectory: false)
+                newItemButton(isDirectory: true)
+                Button {
+                    showingPanelPicker = false
+                    project.newSession(inGroup: group.id)
+                } label: {
+                    HStack {
+                        Label(String(localized: "New Terminal", table: "Interface"), systemImage: "terminal")
+                        Spacer(minLength: 0)
+                        if isFocused {
+                            Text(verbatim: "⌘T").foregroundStyle(.secondary)
+                        }
                     }
-                    if action.item == nil {
-                        openFileButton
-                        newItemButton(isDirectory: false)
-                        newItemButton(isDirectory: true)
-                    }
+                    .padding(7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                let tools = manager.dockLayout.availableTools
+                if !tools.isEmpty { Divider() }
+                ForEach(tools, id: \.self) { item in
                     Button {
                         showingPanelPicker = false
-                        if let item = action.item { add(item) } else { addSession() }
+                        project.dock.place(item, in: group.id)
                     } label: {
                         HStack {
-                            Label(
-                                action.item?.label(project: project)
-                                    ?? String(localized: "New Terminal", table: "Interface"),
-                                systemImage: action.item?.symbol ?? "terminal"
-                            )
+                            Label(item.label(project: project), systemImage: item.symbol)
                             Spacer(minLength: 0)
-                            if action.item == nil, isFocused {
-                                Text(verbatim: "⌘T").foregroundStyle(.secondary)
-                            }
                         }
                         .padding(7)
                         .contentShape(Rectangle())
@@ -558,10 +604,6 @@ struct DockTabGroupView: View {
         .disabled(project.panelContext == nil)
     }
 
-    private var availableActions: [DockAddAction] {
-        project.dock.availableAddActions()
-    }
-
     private func tabStrip(maxWidth: CGFloat) -> some View {
         let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
         let selectedItems = Set(project.dock.selection(in: group.id))
@@ -575,22 +617,27 @@ struct DockTabGroupView: View {
                             isSelected: selectedItems.contains(item), isMounted: mounted)
                             .onHover { manager.attachedWindow?.isMovable = !$0 }
                             .opacity(draggedItems.contains(item) ? 0.6 : 1)
-                            .background {
-                                if mounted {
-                                    Color.clear
-                                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
-                                            dragging.setTabFrame($0, for: item, in: group.id)
-                                        }
-                                        .onDisappear {
-                                            dragging.setTabFrame(nil, for: item, in: group.id)
-                                        }
-                                        .id(group.id)
+                            .onGeometryChange(for: CGRect?.self, of: { geometry in
+                                guard let viewport = geometry.bounds(of: .scrollView(axis: .horizontal)) else { return nil }
+                                let visible = CGRect(origin: .zero, size: geometry.size).intersection(viewport)
+                                guard !visible.isEmpty else { return nil }
+                                let frame = geometry.frame(in: .global)
+                                return visible.offsetBy(dx: frame.minX, dy: frame.minY)
+                            }) { frame in
+                                guard manager.selectedProject === project,
+                                      project.dock.group(containing: item)?.id == group.id else { return }
+                                dragging.setTabFrame(frame, for: item, in: group.id, dock: project.dock)
+                            }
+                            .onDisappear {
+                                if manager.selectedProject === project && project.dock.group(containing: item)?.id != group.id {
+                                    dragging.setTabFrame(nil, for: item, in: group.id, dock: project.dock)
                                 }
                             }
                             .highPriorityGesture(
                                 DragGesture(minimumDistance: 4, coordinateSpace: .global)
                                     .updating($isTabDragging) { _, active, _ in active = true }
                                     .onChanged { value in
+                                        guard manager.selectedProject === project else { return }
                                         if dragGestureItem != item {
                                             dragGestureItem = item
                                             dragging.begin(item, dock: project.dock)
@@ -599,13 +646,12 @@ struct DockTabGroupView: View {
                                         if dragging.position != nil { NSCursor.closedHand.set() }
                                     }
                                     .onEnded { value in
-                                        if dragGestureItem == item {
+                                        if manager.selectedProject === project, dragGestureItem == item {
                                             dragging.update(item, at: value.location, dock: project.dock)
                                             dragging.finish(project: project)
                                         }
                                         dragGestureItem = nil
-                                    },
-                                including: mounted ? .all : .none
+                                    }
                             )
                             .id(item)
                     }
@@ -649,59 +695,53 @@ struct DockTabGroupView: View {
                 if tabCursor.map({ !items.contains($0) }) ?? false { tabCursor = active }
             }
             .onChange(of: isTabDragging) { _, active in
-                if !active { dragGestureItem = nil }
+                if !active {
+                    if let item = dragGestureItem { dragging.cancel(item) }
+                    dragGestureItem = nil
+                }
             }
         }
     }
 
-    @ViewBuilder
     private func tab(_ item: DockItem, paneTab: PaneTab?, isSelected: Bool, isMounted: Bool) -> some View {
-        if case .tab(let id) = item, let paneTab {
-            PaneTabItem(
-                tab: paneTab, isDisplayed: active == item,
-                isSelected: isSelected,
-                isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
-                isContextTarget: project.dock.contextTarget == item,
-                select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
-                close: { close(item) }
-            )
-            .overlay {
-                if isMounted {
-                    ContextMenuClickTarget(
-                        onContextClick: { project.dock.selectForContextMenu(item) },
-                        onMenuClosed: { finishTabContextMenu(for: item) },
-                        isExpectedMenu: { isMenuForTab($0, item: item) },
-                        onMiddleClick: { manager.closePanel(item, in: project) }
-                    )
-                    .contextMenu {
-                        if let current = project.tabs.first(where: { $0.id == id }) {
+        Group {
+            if let paneTab {
+                PaneTabItem(
+                    tab: paneTab, isDisplayed: active == item,
+                    isSelected: isSelected,
+                    isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
+                    isContextTarget: project.dock.contextTarget == item,
+                    select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
+                    close: { close(item) }
+                )
+            } else {
+                TabItemChrome(
+                    systemImage: item.symbol, title: item.label(project: project),
+                    isDisplayed: active == item,
+                    isSelected: isSelected,
+                    isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
+                    isContextTarget: project.dock.contextTarget == item,
+                    select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
+                    close: { close(item) }
+                )
+                .accessibilityIdentifier("bailey.dock.\(item.accessibilityName)")
+            }
+        }
+        .overlay {
+            if isMounted {
+                ContextMenuClickTarget(
+                    onContextClick: { project.dock.selectForContextMenu(item) },
+                    onMenuClosed: { finishTabContextMenu(for: item) },
+                    isExpectedMenu: { isMenuForTab($0, item: item) },
+                    onMiddleClick: { manager.closePanel(item, in: project) }
+                )
+                .contextMenu {
+                    if let paneTab {
+                        if let current = project.tabs.first(where: { $0.id == paneTab.id }) {
                             projectTabMenu(current)
                         }
-                    }
-                }
-            }
-        } else {
-            TabItemChrome(
-                systemImage: item.symbol, title: item.label(project: project),
-                isDisplayed: active == item,
-                isSelected: isSelected,
-                isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
-                isContextTarget: project.dock.contextTarget == item,
-                select: { select(item, extending: selectionChange(NSEvent.modifierFlags)) },
-                close: { close(item) }
-            )
-            .accessibilityIdentifier("bailey.dock.\(item.contentTabID == nil ? item.configurationName ?? "unknown" : "markdown-preview")")
-            .overlay {
-                if isMounted {
-                    ContextMenuClickTarget(
-                        onContextClick: { project.dock.selectForContextMenu(item) },
-                        onMenuClosed: { finishTabContextMenu(for: item) },
-                        isExpectedMenu: { isMenuForTab($0, item: item) },
-                        onMiddleClick: { manager.closePanel(item, in: project) }
-                    )
-                    .contextMenu {
-                        let closeTitle = closeTitle(for: item)
-                        Button(closeTitle) {
+                    } else {
+                        Button(closeTitle(for: item)) {
                             guard isValidMenuTarget(item) else { return }
                             close(item)
                         }
@@ -779,7 +819,7 @@ struct DockTabGroupView: View {
 
     private func isValidMenuTarget(_ item: DockItem) -> Bool {
         manager.selectedProject === project && project.dock.group(containing: item)?.id == group.id
-            && manager.attachedWindow?.isKeyWindow == true && NSApp.keyWindow === manager.attachedWindow
+            && manager.attachedWindow?.isKeyWindow == true
     }
 
     private func currentMenuTab(_ id: UUID) -> PaneTab? {
@@ -885,19 +925,10 @@ struct DockTabGroupView: View {
         ))
     }
 
-    private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }
-
     private func resourceDirectory(for tab: PaneTab) -> String? {
         guard case .file(let file) = tab.content,
               file.workspaceIdentity == project.workspaceIdentity else { return nil }
         return project.customDirectory
-    }
-
-    private func addSession() {
-        project.newSession()
-        if let id = project.selectedTabID {
-            _ = project.dock.move(.tab(id), into: group.id)
-        }
     }
 
     @ViewBuilder

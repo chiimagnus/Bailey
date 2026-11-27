@@ -255,7 +255,7 @@ final class GitWorkspaceSSHTests: XCTestCase {
             try await settle(model)
             let removedDirectory = try await backend.stat(path: repo + "/untracked-dir")
             XCTAssertNil(removedDirectory)
-            let project = Project(fallbackName: "SSH Ignore", workspaceConfiguration: .standard)
+            let project = Project(fallbackName: "SSH Ignore", layout: .init())
             project.sshHost = host
             project.customDirectory = repo
             let context = try XCTUnwrap(project.panelContext)

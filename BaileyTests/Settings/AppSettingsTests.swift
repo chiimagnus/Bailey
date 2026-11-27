@@ -25,7 +25,6 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(defaults.fontFamily.isEmpty)
         XCTAssertEqual(defaults.fontSize, 13)
         XCTAssertFalse(defaults.fontThicken)
-        XCTAssertEqual(defaults.workspaceConfiguration.groupNames, DockWorkspaceConfiguration.standard.groupNames)
         XCTAssertEqual(TOML.parse(at: configURL)?["font-size"]?.double, 13)
 
         try """
@@ -33,11 +32,6 @@ final class AppSettingsTests: XCTestCase {
         font-size = 18
         panel.font-size = 16
         terminal.font-thicken = true
-        workspace.groups = ["projects,files", "git"]
-        workspace.selected = ["files", "git"]
-        workspace.weights = [2, 3]
-        workspace.add-actions = ["projects", "session", "files", "git"]
-        workspace.edge-threshold = 0.3
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
         let customized = AppSettings(configURL: configURL)
@@ -45,9 +39,6 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(customized.fontSize, 18)
         XCTAssertEqual(customized.panelFontSize, 16)
         XCTAssertTrue(customized.fontThicken)
-        XCTAssertEqual(customized.workspaceConfiguration.groupNames, ["projects,files", "git"])
-        XCTAssertEqual(customized.workspaceConfiguration.actionNames,
-                       ["projects", "session", "files", "git"])
 
         customized.fontSize = 19
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
@@ -160,8 +151,8 @@ final class AppSettingsTests: XCTestCase {
         }
     }
 
-    func testObsoleteInfoWorkspaceNamesAreRejectedAndOnlyNormalizedOnSave() throws {
-        let validConfig = """
+    func testRetiredWorkspaceSettingsAreNotWrittenBack() throws {
+        let valid = """
         font-family = "Fixture Font"
         font-size = 18
         panel.font-size = 16
@@ -171,32 +162,18 @@ final class AppSettingsTests: XCTestCase {
         workspace.add-actions = ["projects", "session", "files", "git"]
         workspace.edge-threshold = 0.3
         """
-        for (existing, obsolete) in [
-            ("workspace.groups = [\"projects,files\", \"git\"]",
-             "workspace.groups = [\"projects,files\", \"git,info\"]"),
-            ("workspace.selected = [\"files\", \"git\"]",
-             "workspace.selected = [\"files\", \"info\"]"),
-            ("workspace.add-actions = [\"projects\", \"session\", \"files\", \"git\"]",
-             "workspace.add-actions = [\"projects\", \"session\", \"files\", \"git\", \"info\"]"),
-        ] {
-            let source = validConfig.replacingOccurrences(of: existing, with: obsolete) + "\n"
+        for source in [valid, valid.replacingOccurrences(of: "projects,files", with: "projects,info")] {
             try source.write(to: configURL, atomically: true, encoding: .utf8)
-            let bytes = try Data(contentsOf: configURL)
             let settings = AppSettings(configURL: configURL)
-            XCTAssertEqual(settings.workspaceConfiguration.groupNames,
-                           DockWorkspaceConfiguration.standard.groupNames)
             XCTAssertEqual(settings.fontFamily, "Fixture Font")
             XCTAssertEqual(settings.fontSize, 18)
             XCTAssertEqual(settings.panelFontSize, 16)
-            XCTAssertEqual(try Data(contentsOf: configURL), bytes,
-                           "Loading must not rewrite the user's original config")
+            XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), source)
             settings.fontSize = 20
             let saved = try XCTUnwrap(TOML.parse(at: configURL))
             XCTAssertEqual(saved["font-family"]?.string, "Fixture Font")
             XCTAssertEqual(saved["font-size"]?.double, 20)
-            XCTAssertNil(saved["workspace.groups"],
-                         "An actual save normalizes the rejected layout to standard")
-            XCTAssertNil(saved["workspace.add-actions"])
+            XCTAssertFalse(saved.keys.contains { $0.hasPrefix("workspace.") })
         }
     }
 
@@ -494,7 +471,6 @@ final class AppSettingsTests: XCTestCase {
         let invalid = AppSettings(configURL: configURL)
         XCTAssertFalse(invalid.fontThicken)
         XCTAssertEqual(invalid.fontSize, 13)
-        XCTAssertEqual(invalid.workspaceConfiguration.groupNames, DockWorkspaceConfiguration.standard.groupNames)
 
         let blocked = directory.appendingPathComponent("not-a-directory")
         try Data("preserve".utf8).write(to: blocked)

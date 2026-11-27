@@ -1688,7 +1688,7 @@ final class ImageAnnotationTests: XCTestCase {
         let draft = document.state
         let sidecar = URL(fileURLWithPath: ImageAnnotationSidecar.path(for: path.path))
         let accepted = try Data(contentsOf: sidecar)
-        let project = Project(fallbackName: "annotation close", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "annotation close", layout: .init())
         let tab = PaneTab(content: .file(file))
         project.append(tab)
         let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 720, height: 520),

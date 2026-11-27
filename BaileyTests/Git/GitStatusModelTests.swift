@@ -153,8 +153,8 @@ final class GitStatusModelTests: XCTestCase {
             .appendingPathComponent("Bailey-Git-Nav-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = Project(fallbackName: "first", workspaceConfiguration: .standard)
-        let second = Project(fallbackName: "second", workspaceConfiguration: .standard)
+        let first = Project(fallbackName: "first", layout: .init())
+        let second = Project(fallbackName: "second", layout: .init())
         first.customDirectory = directory.path
         second.customDirectory = directory.path
         XCTAssertNotEqual(first.id, second.id)
@@ -3641,7 +3641,7 @@ final class GitStatusModelTests: XCTestCase {
                     let application = WorkspaceApplication()
                     let window = application.makeWindow()
                     defer { window.windowClosed() }
-                    let project = Project(fallbackName: "Mixed", workspaceConfiguration: .standard)
+                    let project = Project(fallbackName: "Mixed", layout: window.dockLayout)
                     project.customDirectory = root.appendingPathComponent("elsewhere").path
                     project.sshHost = projectScope == "local" ? nil : "alpha"
                     let identity = contentScope == "local" ? nil : contentScope
@@ -3673,7 +3673,7 @@ final class GitStatusModelTests: XCTestCase {
         let application = WorkspaceApplication()
         let window = application.makeWindow()
         defer { window.windowClosed() }
-        let project = Project(fallbackName: "Pinned SSH", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Pinned SSH", layout: window.dockLayout)
         project.sshHost = "fixture-alias"
         project.customDirectory = "/fixture/original"
         window.projects = [project]

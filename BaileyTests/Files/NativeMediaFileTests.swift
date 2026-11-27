@@ -136,7 +136,7 @@ final class NativeMediaFileTests: XCTestCase {
         var before = rusage()
         XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
         let start = ContinuousClock.now
-        let project = Project(fallbackName: "Four hour recording", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Four hour recording", layout: .init())
         defer { project.closeAll() }
         project.openLocalFile(url.path)
         guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file tab") }
@@ -733,7 +733,7 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertEqual(getrusage(RUSAGE_SELF, &before), 0)
         let start = ContinuousClock.now
 
-        let project = Project(fallbackName: "Large movie", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Large movie", layout: .init())
         defer { project.closeAll() }
         project.openLocalFile(url.path)
         guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file tab") }
@@ -803,7 +803,7 @@ final class NativeMediaFileTests: XCTestCase {
         let size = try XCTUnwrap(url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
         let original = try await Self.checksum(url)
         let start = ContinuousClock.now
-        let project = Project(fallbackName: "Long video", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Long video", layout: .init())
         defer { project.closeAll() }
         project.openLocalFile(url.path)
         guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file tab") }
@@ -906,7 +906,7 @@ final class NativeMediaFileTests: XCTestCase {
         XCTAssertGreaterThan(size, 256 << 20)
         var original: [SHA256.Digest] = []
         for (url, _) in samples { original.append(try await Self.checksum(url)) }
-        let project = Project(fallbackName: "Repeated native media", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Repeated native media", layout: .init())
         defer { project.closeAll() }
         let formerPlayers = NSHashTable<AVPlayer>.weakObjects()
         var before = rusage()
@@ -1409,7 +1409,7 @@ final class NativeMediaFileTests: XCTestCase {
         let url = directory.appending(path: "Alternate languages.mov")
         try FileManager.default.copyItem(at: root.appending(path: ".github/features/video-file-playback/demo-audio-tracks.mov"), to: url)
         let bytes = try Data(contentsOf: url)
-        let project = Project(fallbackName: "Alternate audio", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Alternate audio", layout: .init())
         project.openLocalFile(url.path)
         guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing video") }
         defer { project.closeContent(.file(tab)) }
@@ -1663,7 +1663,7 @@ final class NativeMediaFileTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "sample.wav")
         try Self.createWAV(url, payloadBytes: 96_000)
-        let project = Project(fallbackName: "Media lifecycle", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Media lifecycle", layout: .init())
         project.openLocalFile(url.path)
         guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing real project tab") }
         try await load(tab)
@@ -1716,7 +1716,7 @@ final class NativeMediaFileTests: XCTestCase {
             .deletingLastPathComponent().appending(path: ".github/features")
         let video = try Data(contentsOf: fixtures.appending(path: "video-file-playback/demo-video.mp4"))
         let audio = try Data(contentsOf: fixtures.appending(path: "audio-file-playback/demo-audio.m4a"))
-        let project = Project(fallbackName: "Media initial-load races", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Media initial-load races", layout: .init())
         defer { project.closeAll() }
         var loadingRenames = 0
         var loadingCloses = 0
@@ -1779,7 +1779,7 @@ final class NativeMediaFileTests: XCTestCase {
         let second = root.appending(path: "second.wav")
         try Self.createWAV(first, payloadBytes: 960_000)
         try Self.createWAV(second, payloadBytes: 960_000)
-        let project = Project(fallbackName: "Independent media owners", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Independent media owners", layout: .init())
         project.openLocalFile(first.path)
         guard case .file(let a)? = project.focusedContent else { return XCTFail("Missing first file") }
         let aID = try XCTUnwrap(project.selectedTabID)
@@ -1873,7 +1873,7 @@ final class NativeMediaFileTests: XCTestCase {
         try await waitUntil { number(system, kAudioHardwarePropertyDefaultOutputDevice) == bluetooth }
         for url in samples {
             let bytes = try Data(contentsOf: url)
-            let project = Project(fallbackName: "Real audio routing", workspaceConfiguration: .standard)
+            let project = Project(fallbackName: "Real audio routing", layout: .init())
             defer { project.closeAll() }
             project.openLocalFile(url.path)
             guard case .file(let tab)? = project.focusedContent else { return XCTFail("Expected real media tab") }
@@ -1917,7 +1917,7 @@ final class NativeMediaFileTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appending(path: "sample.wav")
         try Self.createWAV(url, payloadBytes: 960_000)
-        let project = Project(fallbackName: "Media environment", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "Media environment", layout: .init())
         project.openLocalFile(url.path)
         guard case .file(let tab)? = project.focusedContent else { return XCTFail("Missing file") }
         try await load(tab)

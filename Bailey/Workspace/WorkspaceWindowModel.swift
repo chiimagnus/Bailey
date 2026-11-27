@@ -30,12 +30,14 @@ enum FindAction {
 @MainActor
 @Observable
 final class WorkspaceWindowModel {
+    let dockLayout: DockWindowLayout
     var projects: [Project] = [] {
         didSet {
             for project in oldValue where !projects.contains(where: { $0 === project }) {
                 project.onSnapshotChange = nil
                 project.onPresentationWindow = nil
                 project.dock.onActiveItemChange = nil
+                project.dock.clearContextTarget()
             }
             for project in projects where !oldValue.contains(where: { $0 === project }) {
                 bind(project)
@@ -52,7 +54,10 @@ final class WorkspaceWindowModel {
                 previous?.dock.clearContextTarget()
                 previous?.tabs.forEach { $0.content.deactivate() }
             }
-            selectedProject?.dock.clearContextTarget()
+            if let project = selectedProject {
+                project.dock.clearContextTarget()
+                project.dock.reconcileLayout()
+            }
             filesTreeResponder = nil
             gitTreeResponder = nil
             requestSave()
@@ -106,6 +111,7 @@ final class WorkspaceWindowModel {
     /// Constructing a SwiftUI State value must not register or consume a saved window.
     init(application: WorkspaceApplication) {
         self.application = application
+        dockLayout = DockWindowLayout()
     }
 
     var isClosed: Bool { didCloseWindow }
@@ -113,6 +119,10 @@ final class WorkspaceWindowModel {
     func finishRegistration(hasNewDirectories: Bool) {
         isInitialized = true
         if hasNewDirectories { requestSave() }
+    }
+
+    func resizeDock(_ splitID: UUID, to fraction: Double) {
+        if dockLayout.resize(splitID, to: fraction) { requestSave() }
     }
 
     /// The application owns the coalesced timer and all registered windows.
@@ -228,16 +238,17 @@ final class WorkspaceWindowModel {
         }
     }
 
+    func acceptsDockDestination(_ destination: (projectID: UUID, groupID: UUID)) -> Bool {
+        selectedProject?.id == destination.projectID && dockLayout.root.group(id: destination.groupID) != nil
+    }
+
     /// Finder and the Open File picker reuse a Mac buffer in this window;
     /// new files belong to the current project, never to their parent folder.
     @discardableResult
     func openExternalLocalItems(
         _ urls: [URL], destination: (projectID: UUID, groupID: UUID)? = nil
     ) -> [URL] {
-        if let destination {
-            guard let project = selectedProject, project.id == destination.projectID,
-                  project.dock.root.group(id: destination.groupID) != nil else { return urls }
-        }
+        if let destination, !acceptsDockDestination(destination) { return urls }
         typealias Item = (url: URL, path: String, resolved: String, isDirectory: Bool)
         var items: [Item] = []
         var rejected: [URL] = []
@@ -318,16 +329,10 @@ final class WorkspaceWindowModel {
 
     func chooseFiles(inGroup destination: (projectID: UUID, groupID: UUID)? = nil) {
         guard let receivingWindow = window, let originalProjectID = selectedProject?.id else { return }
-        if let destination {
-            guard selectedProjectID == destination.projectID,
-                  selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
-        }
+        if let destination, !acceptsDockDestination(destination) { return }
         WorkspaceNativeDialogs.chooseFiles(in: receivingWindow) { [weak self, weak receivingWindow] urls in
             guard let self, let receivingWindow, self.window === receivingWindow,
                   self.selectedProject?.id == originalProjectID else { return }
-            if let destination {
-                guard self.selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
-            }
             application.openExternalFiles(urls, preferred: self, destination: destination)
         }
     }
@@ -514,7 +519,7 @@ final class WorkspaceWindowModel {
         projectCounter += 1
         let project = Project(
             fallbackName: "Project \(projectCounter)",
-            workspaceConfiguration: AppSettings.shared.workspaceConfiguration
+            layout: dockLayout
         )
         return project
     }
@@ -1504,11 +1509,12 @@ final class WorkspaceWindowModel {
     /// another copy just because the user relocated the original.
     func showPanel(_ item: DockItem) {
         guard let project = selectedProject else { return }
-        if project.dock.group(containing: item) != nil {
+        let groups = dockLayout.root.groups
+        if groups.contains(where: { $0.items.contains(item) }) {
             project.dock.select(item)
-        } else if let target = project.dock.root.groups.last(where: { group in
+        } else if let target = groups.last(where: { group in
             group.items.contains(.files) || group.items.contains(.git)
-        }) ?? project.dock.root.groups.last {
+        }) ?? groups.last {
             project.dock.place(item, in: target.id)
         }
     }
@@ -1635,10 +1641,11 @@ final class WorkspaceWindowModel {
                     pinnedFile: project.pinnedFile,
                     tabs: tabs,
                     selectedTabIndex: savedTabs.firstIndex { $0.0.id == project.selectedTabID },
-                    dock: project.dock.snapshot(tabIDs: savedTabs.map { $0.0.id })
+                    groups: project.dock.snapshot(tabIDs: savedTabs.map { $0.0.id })
                 )
             },
-            selectedProjectIndex: projects.firstIndex { $0.id == selectedProjectID }
+            selectedProjectIndex: projects.firstIndex { $0.id == selectedProjectID },
+            layout: DockSavedNode(dockLayout.root)
         )
         return (snapshot, histories)
     }
@@ -1674,6 +1681,17 @@ final class WorkspaceWindowModel {
 
     /// Rebuilds projects and tabs from the saved window snapshot.
     func restore(from snapshot: SessionSnapshot, histories: [String: String]) -> Bool {
+        if let saved = snapshot.layout ?? {
+            // Only older snapshots need to choose a project's layout.
+            let eligible = snapshot.projects.indices.filter {
+                let project = snapshot.projects[$0]
+                return project.customDirectory != nil && (project.sshHost != nil || project.pinnedFile == nil)
+            }
+            let selected = snapshot.selectedProjectIndex.flatMap { eligible.contains($0) ? $0 : nil } ?? eligible.first
+            return selected.flatMap { snapshot.projects[$0].dock }
+        }() {
+            dockLayout.root = saved.restoreLayout()
+        }
         var restoredSelection: UUID?
         for (index, saved) in snapshot.projects.enumerated() {
             guard let directory = saved.customDirectory,
@@ -1697,7 +1715,7 @@ final class WorkspaceWindowModel {
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
                 project.selectTab(project.tabs[index].id)
             }
-            project.dock.restore(saved.dock, tabIDs: project.tabs.map(\.id))
+            project.dock.restore(saved.groups ?? saved.dock?.groups ?? [], tabIDs: project.tabs.map(\.id))
             project.resetRecency()
             if let pinnedFile = project.pinnedFile,
                !project.tabs.map(\.content).contains(where: { content in

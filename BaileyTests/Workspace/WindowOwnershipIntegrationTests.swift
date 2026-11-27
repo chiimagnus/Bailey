@@ -1782,7 +1782,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
 
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        let remote = Project(fallbackName: "SSH", layout: manager.dockLayout)
         remote.sshHost = "invalid-worktree-protection-fixture"
         remote.customDirectory = "/remote/unrelated"
         manager.projects.append(remote)

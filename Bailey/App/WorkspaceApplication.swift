@@ -539,8 +539,10 @@ final class WorkspaceApplication {
         let requests = pendingExternalFiles
         pendingExternalFiles = []
         for request in requests {
-            if let preferred = request.preferred,
-               preferred.selectedProjectID != request.originalProjectID {
+            let projectUnchanged = request.preferred == nil
+                || request.preferred?.selectedProjectID == request.originalProjectID
+            guard projectUnchanged,
+                  request.destination.map({ request.preferred?.acceptsDockDestination($0) == true }) ?? true else {
                 request.completion(false)
                 continue
             }

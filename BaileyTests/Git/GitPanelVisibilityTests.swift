@@ -137,14 +137,22 @@ final class GitPanelVisibilityTests: XCTestCase {
             try autoreleasepool { try prepareProject(index) }
         }
 
-        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-            groupNames: ["projects", "", "files", "git"],
-            selectedNames: ["projects", "", "files", "git"],
-            weights: [0.16, 0.40, 0.21, 0.23],
-            actionNames: DockAddAction.allCases.map(\.rawValue), edgeThreshold: 0.22
-        ))
         let application = WorkspaceApplication()
-        let manager = application.makeWindow()
+        let manager = WorkspaceWindowModel(application: application)
+        application.register(manager)
+        manager.dockLayout.root = .split(DockSplit(
+            axis: .horizontal, fraction: 0.16,
+            first: .group(DockGroup(items: [.projects])),
+            second: .split(DockSplit(
+                axis: .horizontal, fraction: 0.40 / 0.84,
+                first: .group(DockGroup(items: [])),
+                second: .split(DockSplit(
+                    axis: .horizontal, fraction: 0.21 / 0.44,
+                    first: .group(DockGroup(items: [.files])),
+                    second: .group(DockGroup(items: [.git]))
+                ))
+            ))
+        ))
         defer { manager.windowClosed() }
         let model = GitStatusModel()
         defer { model.sync(root: "") }
@@ -211,7 +219,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
         for (projectIndex, fixture) in prepared.enumerated() {
             let (root, paths) = fixture
-            let project = Project(fallbackName: root.lastPathComponent, workspaceConfiguration: configuration)
+            let project = Project(fallbackName: root.lastPathComponent, layout: manager.dockLayout)
             project.customDirectory = root.path
             manager.projects.append(project)
             manager.selectProject(id: project.id)
@@ -586,7 +594,7 @@ final class GitPanelVisibilityTests: XCTestCase {
 
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
-        let project = Project(fallbackName: "width", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "width", layout: manager.dockLayout)
         project.customDirectory = root.path
         manager.projects = [project]
         manager.selectedProjectID = project.id
@@ -656,7 +664,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             return
         }
         let available = window.contentView!.bounds.width * 0.76 - 2
-        project.dock.resize(inner.id, to: 1 - 150 / available)
+        manager.resizeDock(inner.id, to: 1 - 150 / available)
         try await Task.sleep(for: .milliseconds(100))
         try checkWidth(expected: 150)
         func attachSnapshot(_ name: String) throws {
@@ -671,7 +679,7 @@ final class GitPanelVisibilityTests: XCTestCase {
             add(attachment)
         }
         try attachSnapshot("Real Dock Git panel at 150pt")
-        project.dock.resize(inner.id, to: 0.52 / 0.76)
+        manager.resizeDock(inner.id, to: 0.52 / 0.76)
         try await Task.sleep(for: .milliseconds(100))
         try checkWidth(expected: 216)
 
@@ -882,7 +890,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         let settings = AppSettings(configURL: config)
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
-        let project = Project(fallbackName: "matrix", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "matrix", layout: manager.dockLayout)
         project.customDirectory = repository.path
         manager.projects = [project]
         manager.selectedProjectID = project.id
@@ -1196,7 +1204,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "changes viewport", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "changes viewport", layout: manager.dockLayout)
         project.customDirectory = root.path
         manager.projects = [project]
         manager.selectedProjectID = project.id

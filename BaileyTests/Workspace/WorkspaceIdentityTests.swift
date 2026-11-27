@@ -78,14 +78,14 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(project.panelContext?.identity, initial.identity,
                        "Closing the final terminal cannot detach a fixed Files or Git root")
 
-        let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        let ssh = Project(fallbackName: "SSH", layout: .init())
         ssh.sshHost = "fixture-remote"
         ssh.customDirectory = "/d/projects"
         ssh.pinnedFile = "/d/projects/source.swift"
         XCTAssertEqual(ssh.name, "source.swift",
                        "An explicitly added SSH file keeps its file-based project title")
 
-        let rootless = Project(fallbackName: "Unsupported", workspaceConfiguration: .standard)
+        let rootless = Project(fallbackName: "Unsupported", layout: .init())
         rootless.newSession(directory: "/tmp/old-terminal-scope")
         XCTAssertNil(rootless.panelContext,
                      "A terminal cannot implicitly create or redirect a project root")
@@ -181,7 +181,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         local.location = .local
         XCTAssertTrue(local.acceptsLocalFileDrop, "A dynamic ssh session can return to its local shell")
 
-        let fixed = Project(fallbackName: "remote", workspaceConfiguration: .standard)
+        let fixed = Project(fallbackName: "remote", layout: .init())
         fixed.sshHost = "fixture-ssh-host"
         let waiting = fixed.newSession()
         defer { fixed.terminateAll() }
@@ -211,7 +211,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let path = directory.appendingPathComponent("file.txt").path
         try Data("local\n".utf8).write(to: URL(fileURLWithPath: path))
 
-        let project = Project(fallbackName: "identity", workspaceConfiguration: .standard)
+        let project = Project(fallbackName: "identity", layout: .init())
         project.customDirectory = directory.path
         let session = project.newSession()
         defer { project.terminateAll() }
@@ -500,7 +500,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "mac".write(to: file, atomically: true, encoding: .utf8)
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "remote", workspaceConfiguration: .standard)
+        let remote = Project(fallbackName: "remote", layout: manager.dockLayout)
         remote.sshHost = "invalid-finder-remote"
         remote.customDirectory = folder.path
         remote.openFile(file.path)
@@ -671,7 +671,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "mac disk".write(to: file, atomically: true, encoding: .utf8)
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "remote", workspaceConfiguration: .standard)
+        let remote = Project(fallbackName: "remote", layout: manager.dockLayout)
         remote.sshHost = "invalid-p4-fixture"
         remote.customDirectory = "/remote/source"
         remote.openFile(file.path)
