@@ -850,7 +850,7 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertTrue(document.rows.contains { $0.kind == .removed })
         XCTAssertTrue(document.rows.contains { $0.kind == .added })
         XCTAssertFalse(pane.textView.drawsBackground,
-                       "Native text must not paint over the diff's underlay tints and emphasis")
+                       "Native text must not paint over the diff's word emphasis")
         window.displayIfNeeded()
         let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
             .retagging(with: .sRGB))
@@ -862,26 +862,27 @@ final class NativeDiffTabTests: XCTestCase {
                 && abs(color.greenComponent - b.greenComponent) < 0.06
                 && abs(color.blueComponent - b.blueComponent) < 0.06
         }
-        let samples = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
-        XCTAssertTrue(samples.contains { near($0, scheme.addedRow) },
-                      "Added-row tint must actually reach rendered pixels")
-        XCTAssertTrue(samples.contains { near($0, scheme.removedRow) },
-                      "Removed-row tint must actually reach rendered pixels")
+        let body = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
+        XCTAssertTrue(body.allSatisfy { near($0, scheme.background) },
+                      "Changed code rows must use the normal canvas")
+        let gutter = sRGBColumn(bitmap, x: Int(5 * CGFloat(bitmap.pixelsWide) / pane.bounds.width))
+        XCTAssertTrue(gutter.contains { near($0, scheme.addedGutterBackground) })
+        XCTAssertTrue(gutter.contains { near($0, scheme.removedGutterBackground) })
     }
 
-    func testSplitAndUnifiedDiffRowTintsReachPixelsInBothThemes() throws {
+    func testSplitAndUnifiedDiffGutterAndWordHighlightsReachPixelsInBothThemes() throws {
         let compared = DiffComputation.compute(
-            oldText: "header\nold value\nfooter\n",
-            newText: "header\nnew value\nfooter\n"
+            oldText: "header\nold value\nold name\nfooter\n",
+            newText: "header\nnew value\nnew name\nfooter\n"
         )
         for dark in [false, true] {
             let scheme = DiffColorScheme.current(dark: dark)
-            let cases: [(DiffSideDocument, DiffGutterLayout, [NSColor])] = [
-                (compared.unified, .single, [scheme.addedRow, scheme.removedRow]),
-                (compared.splitLeft, .oldOnly, [scheme.removedRow]),
-                (compared.splitRight, .newOnly, [scheme.addedRow]),
+            let cases: [(DiffSideDocument, DiffGutterLayout, [NSColor], [NSColor])] = [
+                (compared.unified, .single, [scheme.addedGutterBackground, scheme.removedGutterBackground], [scheme.addedEmphasis, scheme.removedEmphasis]),
+                (compared.splitLeft, .oldOnly, [scheme.removedGutterBackground], [scheme.removedEmphasis]),
+                (compared.splitRight, .newOnly, [scheme.addedGutterBackground], [scheme.addedEmphasis]),
             ]
-            for (document, layout, requiredTints) in cases {
+            for (document, layout, requiredTints, requiredEmphasis) in cases {
                 let pane = DiffCodePaneView(mode: .review, gutterLayout: layout)
                 let window = NSWindow(
                     contentRect: NSRect(x: -920, y: -920, width: 690, height: 300),
@@ -904,7 +905,8 @@ final class NativeDiffTabTests: XCTestCase {
                 let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
                     .retagging(with: .sRGB))
                 pane.cacheDisplay(in: pane.bounds, to: bitmap)
-                let colors = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
+                let scale = CGFloat(bitmap.pixelsWide) / pane.bounds.width
+                let colors = sRGBColumn(bitmap, x: Int(5 * scale))
                 let observedPalette = Array(Set(colors.map {
                     String(format: "%.3f,%.3f,%.3f",
                            $0.redComponent, $0.greenComponent, $0.blueComponent)
@@ -912,6 +914,22 @@ final class NativeDiffTabTests: XCTestCase {
                 // Compare bitmap channels and theme colors in the same sRGB
                 // space. Do not reinterpret sampled channels as display RGB.
                 let background = try XCTUnwrap(scheme.background.usingColorSpace(.sRGB))
+                func matches(_ pixel: NSColor, _ expected: NSColor) -> Bool {
+                    abs(pixel.redComponent - expected.redComponent) < 0.04
+                        && abs(pixel.greenComponent - expected.greenComponent) < 0.04
+                        && abs(pixel.blueComponent - expected.blueComponent) < 0.04
+                }
+                let body = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
+                XCTAssertTrue(body.allSatisfy { matches($0, background) },
+                              "Code canvas must not have any red/green row backgrounds or borders")
+                let start = Int((pane.scrollView.frame.minX + 2) * scale)
+                let end = Int((pane.scrollView.frame.minX + 45) * scale)
+                let glyphArea = (start..<end).flatMap { sRGBColumn(bitmap, x: $0) }
+                for emphasis in requiredEmphasis {
+                    let color = try XCTUnwrap(emphasis.usingColorSpace(.sRGB))
+                    XCTAssertGreaterThan(glyphArea.filter { matches($0, color) }.count, 8,
+                                         "Word-level emphasis must remain visible on the canvas")
+                }
                 let backgroundGreen = background.greenComponent - background.redComponent
                 let backgroundBlue = background.blueComponent - background.redComponent
                 for tint in requiredTints {
@@ -974,8 +992,8 @@ final class NativeDiffTabTests: XCTestCase {
             .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: bitmap)
         let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let expected = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedRow.usingColorSpace(.sRGB))
-        let matching = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).reduce(0) { count, color in
+        let expected = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedGutterBackground.usingColorSpace(.sRGB))
+        let matching = sRGBColumn(bitmap, x: Int(5 * CGFloat(bitmap.pixelsWide) / pane.bounds.width)).reduce(0) { count, color in
             let isRemoval = abs((color.greenComponent - color.redComponent)
                 - (expected.greenComponent - expected.redComponent)) < 0.03
                 && abs((color.blueComponent - color.redComponent)
@@ -990,7 +1008,7 @@ final class NativeDiffTabTests: XCTestCase {
         let scrolled = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
             .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: scrolled)
-        let middle = sRGBColumn(scrolled, x: scrolled.pixelsWide - 50).filter { color in
+        let middle = sRGBColumn(scrolled, x: Int(5 * CGFloat(scrolled.pixelsWide) / pane.bounds.width)).filter { color in
             abs((color.greenComponent - color.redComponent)
                 - (expected.greenComponent - expected.redComponent)) < 0.03
                 && abs((color.blueComponent - color.redComponent)
@@ -1003,7 +1021,7 @@ final class NativeDiffTabTests: XCTestCase {
         let trailing = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
             .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: trailing)
-        let lastBlock = sRGBColumn(trailing, x: trailing.pixelsWide - 50).filter { color in
+        let lastBlock = sRGBColumn(trailing, x: Int(5 * CGFloat(trailing.pixelsWide) / pane.bounds.width)).filter { color in
             abs((color.greenComponent - color.redComponent)
                 - (expected.greenComponent - expected.redComponent)) < 0.03
                 && abs((color.blueComponent - color.redComponent)
@@ -4227,8 +4245,8 @@ final class NativeDiffTabTests: XCTestCase {
     }
 
     func testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes() throws {
-        let old = "first\ndeleted\nlast\n"
-        let current = "first\nlast\n"
+        let old = "first\nold value\nlast\n"
+        let current = "first\nnew value\nlast\n"
         let core = DiffCore.compute(oldText: old, newText: current)
         let state = DiffComputation.editState(
             ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
@@ -4252,20 +4270,23 @@ final class NativeDiffTabTests: XCTestCase {
             pane.setEditBufferText(current)
             pane.decorations = .edit(
                 state: state, snapshotOffsets: starts, lineCount: starts.count,
-                ghostBlocks: [.init(anchorLine: 1, firstOldLine: 2, lines: [
-                    NSAttributedString(string: "deleted", attributes: [
-                        .font: font, .foregroundColor: foreground,
-                    ]),
-                ])]
+                ghostBlocks: state.ghosts.map { block in
+                    .init(anchorLine: block.anchorLine, firstOldLine: block.firstOldLine,
+                          lines: DiffSyntaxHighlighter.attributedGhostLines(
+                            oldText: old as NSString, block: block, runs: [],
+                            baseAttributes: [.font: font, .foregroundColor: foreground],
+                            emphasisColor: scheme.removedEmphasis))
+                }
             )
-            XCTAssertEqual(pane.decorations.ghostsByAnchor[1]?.lines.count, 1)
+            XCTAssertEqual(state.ghosts.first?.lines.count, 1)
+            XCTAssertFalse(state.addedEmphasis.isEmpty)
             pane.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
                 .retagging(with: .sRGB))
             pane.cacheDisplay(in: pane.bounds, to: bitmap)
-            let expected = try XCTUnwrap(scheme.removedRow.usingColorSpace(.sRGB))
-            let matching = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).reduce(0) { total, sample in
+            let expected = try XCTUnwrap(scheme.removedGutterBackground.usingColorSpace(.sRGB))
+            let matching = sRGBColumn(bitmap, x: Int(5 * CGFloat(bitmap.pixelsWide) / pane.bounds.width)).reduce(0) { total, sample in
                 let isRemoval = abs((sample.greenComponent - sample.redComponent)
                     - (expected.greenComponent - expected.redComponent)) < 0.03
                     && abs((sample.blueComponent - sample.redComponent)
@@ -4273,7 +4294,29 @@ final class NativeDiffTabTests: XCTestCase {
                 return total + (isRemoval ? 1 : 0)
             }
             XCTAssertGreaterThan(matching, 8,
-                                 "Editable diff deletion ghosts must be visibly red, dark=\(dark)")
+                                 "Editable diff deletion ghosts must retain their red gutter, dark=\(dark)")
+            let scale = CGFloat(bitmap.pixelsWide) / pane.bounds.width
+            let background = try XCTUnwrap(scheme.background.usingColorSpace(.sRGB))
+            func matches(_ pixel: NSColor, _ color: NSColor) -> Bool {
+                abs(pixel.redComponent - color.redComponent) < 0.04
+                    && abs(pixel.greenComponent - color.greenComponent) < 0.04
+                    && abs(pixel.blueComponent - color.blueComponent) < 0.04
+            }
+            XCTAssertTrue(sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).allSatisfy {
+                matches($0, background)
+            }, "Editable and deleted text must share the normal canvas")
+            let gutter = sRGBColumn(bitmap, x: Int(5 * scale))
+            let added = try XCTUnwrap(scheme.addedGutterBackground.usingColorSpace(.sRGB))
+            XCTAssertGreaterThan(gutter.filter { matches($0, added) }.count, 8)
+            let start = Int((pane.scrollView.frame.minX + 2) * scale)
+            let end = Int((pane.scrollView.frame.minX + 80) * scale)
+            let glyphArea = (start..<end).flatMap { sRGBColumn(bitmap, x: $0) }
+            for emphasis in [scheme.removedEmphasis, scheme.addedEmphasis] {
+                let color = try XCTUnwrap(emphasis.usingColorSpace(.sRGB))
+                XCTAssertGreaterThan(glyphArea.filter { matches($0, color) }.count, 8,
+                                     "Both deleted and added text must retain word emphasis")
+            }
+            XCTAssertEqual(pane.textView.string, current)
             window.close()
         }
     }
@@ -4510,12 +4553,12 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertGreaterThan(sourceGlyphPixelVariety(
                 bitmap, in: pane,
                 at: NSPoint(x: 95, y: row.frame.midY - pane.scrollOffset.y)
-            ), 3, "New row \(sourceRow) must paint text, not just its green background")
+            ), 3, "New row \(sourceRow) must paint text")
         }
         let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let removedColor = try XCTUnwrap(DiffColorScheme.current(dark: dark)
-            .removedRow.usingColorSpace(.sRGB))
-        let colors = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
+            .removedGutterBackground.usingColorSpace(.sRGB))
+        let colors = sRGBColumn(bitmap, x: Int(5 * CGFloat(bitmap.pixelsWide) / pane.bounds.width))
         let tinted = colors.filter { pixel in
             abs((pixel.greenComponent - pixel.redComponent)
                 - (removedColor.greenComponent - removedColor.redComponent)) < 0.03
@@ -4523,7 +4566,7 @@ final class NativeDiffTabTests: XCTestCase {
                     - (removedColor.blueComponent - removedColor.redComponent)) < 0.03
         }.count
         XCTAssertGreaterThan(tinted, Int(7 * style.maximumLineHeight),
-                             "Deleted lines must be painted, not left as a blank reserved gap")
+                             "Deleted rows must retain their gutter highlights")
         XCTAssertEqual(pane.textView.string, after)
     }
 
@@ -4571,8 +4614,8 @@ final class NativeDiffTabTests: XCTestCase {
             .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: bitmap)
         let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let expected = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedRow.usingColorSpace(.sRGB))
-        let count = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).filter { sample in
+        let expected = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedGutterBackground.usingColorSpace(.sRGB))
+        let count = sRGBColumn(bitmap, x: Int(5 * CGFloat(bitmap.pixelsWide) / pane.bounds.width)).filter { sample in
             abs((sample.greenComponent - sample.redComponent)
                 - (expected.greenComponent - expected.redComponent)) < 0.03 &&
             abs((sample.blueComponent - sample.redComponent)
@@ -4622,7 +4665,7 @@ final class NativeDiffTabTests: XCTestCase {
         )
         pane.layoutSubtreeIfNeeded()
         let dark = pane.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let red = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedRow.usingColorSpace(.sRGB))
+        let red = try XCTUnwrap(DiffColorScheme.current(dark: dark).removedGutterBackground.usingColorSpace(.sRGB))
         for offset: CGFloat in [2_000, 6_000] {
             pane.setVerticalScrollOffset(offset)
             pane.layoutSubtreeIfNeeded()
@@ -4630,7 +4673,7 @@ final class NativeDiffTabTests: XCTestCase {
             let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
                 .retagging(with: .sRGB))
             pane.cacheDisplay(in: pane.bounds, to: bitmap)
-            let redPixels = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).filter { pixel in
+            let redPixels = sRGBColumn(bitmap, x: Int(5 * CGFloat(bitmap.pixelsWide) / pane.bounds.width)).filter { pixel in
                 abs((pixel.greenComponent - pixel.redComponent)
                     - (red.greenComponent - red.redComponent)) < 0.03 &&
                 abs((pixel.blueComponent - pixel.redComponent)
