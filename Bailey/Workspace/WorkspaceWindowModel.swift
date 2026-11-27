@@ -24,9 +24,7 @@ enum FindAction {
     case useSelection
 }
 
-/// Owns the list of projects and the current selection. Each project holds
-/// its own terminal sessions; the "selected session" is the selected
-/// project's selected session.
+/// Owns the window's project collection, current selection and action routing.
 @MainActor
 @Observable
 final class WorkspaceWindowModel {
@@ -36,6 +34,7 @@ final class WorkspaceWindowModel {
             for project in oldValue where !projects.contains(where: { $0 === project }) {
                 project.onSnapshotChange = nil
                 project.onPresentationWindow = nil
+                project.fileTree.onError = nil
                 project.dock.onActiveItemChange = nil
                 project.dock.clearContextTarget()
             }
@@ -463,6 +462,18 @@ final class WorkspaceWindowModel {
     private func bind(_ project: Project) {
         project.onSnapshotChange = { [weak self] in self?.requestSave() }
         project.onPresentationWindow = { [weak self] in self?.attachedWindow }
+        project.fileTree.onError = { [weak self, weak project] title, detail in
+            guard let self, let project, !self.isClosed,
+                  self.projects.contains(where: { $0 === project }),
+                  let window = self.attachedWindow, window.isVisible else { return }
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = detail
+            alert.alertStyle = .warning
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+            alert.beginSheetModal(for: window, completionHandler: { _ in })
+        }
         project.dock.onActiveItemChange = { [weak self, weak project] previous, _ in
             guard let self, let project else { return }
             self.autoRevealActiveFile(in: project, previous: previous)

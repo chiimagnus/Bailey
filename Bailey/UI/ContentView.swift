@@ -69,11 +69,9 @@ struct ContentView: View {
         ))
         .focusedSceneValue(\.baileyGitModel, git)
         .onAppear {
-            installFileErrorPresentation()
             git.setLocalFileEventsForeground(NSApp.isActive)
             syncGit()
         }
-        .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
         .onChange(of: manager.selectedProject?.panelRefreshKey()) { syncGit() }
         .onChange(of: colorScheme) {
             manager.refreshAppearance()
@@ -97,23 +95,6 @@ struct ContentView: View {
         return manager.projects
             .flatMap(\.sessions)
             .filter { !visibleIDs.contains($0.id) }
-    }
-
-    /// Files may have been opened from a shortcut or another tool tab; the
-    /// error is attached to its original window rather than a transient pane.
-    private func installFileErrorPresentation() {
-        for project in manager.projects {
-            project.fileTree.onError = { [weak manager] title, detail in
-                guard let window = manager?.attachedWindow, window.isVisible else { return }
-                let alert = NSAlert()
-                alert.messageText = title
-                alert.informativeText = detail
-                alert.alertStyle = .warning
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate()
-                alert.beginSheetModal(for: window, completionHandler: { _ in })
-            }
-        }
     }
 
     private func syncGit() {

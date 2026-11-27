@@ -9,6 +9,46 @@ import XCTest
 final class WindowOwnershipIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testClosedProjectCannotPresentLateFileErrorInItsFormerWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let removedRoot = root.appendingPathComponent("removed")
+        let currentRoot = root.appendingPathComponent("current")
+        try FileManager.default.createDirectory(at: removedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: currentRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 520),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+            window.close()
+            manager.windowClosed()
+        }
+        manager.attach(to: window)
+        manager.addLocalFolders([removedRoot, currentRoot])
+        window.orderFront(nil)
+
+        let removed = try XCTUnwrap(manager.projects.first { $0.customDirectory == removedRoot.path })
+        let current = try XCTUnwrap(manager.projects.first { $0.customDirectory == currentRoot.path })
+        let delayed = try XCTUnwrap(removed.fileTree.onError)
+        manager.close(removed)
+        XCTAssertFalse(manager.projects.contains { $0 === removed })
+        XCTAssertNil(removed.fileTree.onError, "The retired project must lose its window presentation callback")
+
+        delayed("Obsolete error", "A request finished after project removal")
+        XCTAssertNil(window.attachedSheet, "An obsolete callback must not present a sheet")
+        if let sheet = window.attachedSheet { window.endSheet(sheet) }
+
+        await current.fileTree.sync(root: currentRoot.path, backend: LocalWorkspaceBackend.shared)
+        await current.fileTree.beginNewFile(in: currentRoot.path)
+        let rejected = await current.fileTree.commitDraft(name: "invalid/name")
+        XCTAssertNil(rejected)
+        XCTAssertNotNil(window.attachedSheet, "A real error in the live project must still present its sheet")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: currentRoot.path), [])
+    }
+
     func testFilesCutClipboardDoesNotMoveUntilPasteAndUsesOriginTree() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let into = root.appendingPathComponent("target")

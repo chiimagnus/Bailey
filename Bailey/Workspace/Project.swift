@@ -891,7 +891,9 @@ final class Project: nonisolated Identifiable {
         case .session(let session):
             session.onSnapshotChange = nil
             session.onCommandFinished = nil
-        case .browser(let browser): browser.onSnapshotChange = nil
+        case .browser(let browser):
+            browser.onSnapshotChange = nil
+            browser.retireContent()
         case .file(let file):
             file.onSnapshotChange = nil
             file.retireContent()

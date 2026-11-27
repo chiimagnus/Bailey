@@ -455,6 +455,65 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertTrue(browser.webView === native)
     }
 
+    func testClosedBrowserRetiresNativePageBeforeHostDismantles() async throws {
+        let project = Project(customDirectory: "/fixture/browser", layout: .init())
+        let browser = project.newBrowserTab(initialFocus: .none)
+        let native = browser.webView
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); project.terminateAll() }
+        var newTabs = 0
+        let host = NSHostingView(rootView: BrowserView(
+            browser: browser, isFocused: false, onFocused: {},
+            onNewBrowserTab: { _ in newTabs += 1 }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        native.loadHTMLString("<title>Retirement fixture</title><input id='draft' value='retired document'>",
+                              baseURL: nil)
+        try await settle { native.window === window && browser.title == "Retirement fixture"
+            && !browser.isLoading && native.onNewBrowserTab != nil }
+        XCTAssertNotNil(native.navigationDelegate)
+        XCTAssertNotNil(native.uiDelegate)
+
+        // Retain the old SwiftUI host and WKWebView just as AppKit may do
+        // until the next view update.
+        project.closeContent(.browser(browser))
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertNil(native.navigationDelegate)
+        XCTAssertNil(native.uiDelegate)
+        XCTAssertNil(native.focusOwner)
+        XCTAssertNil(native.onFocused)
+        XCTAssertNil(native.onFocusReady)
+        XCTAssertNil(native.onNewBrowserTab)
+        native.onNewBrowserTab?("about:blank")
+        XCTAssertEqual(newTabs, 0)
+
+        try await settle { native.title != "Retirement fixture" && !native.isLoading }
+        let retainedDraft = try await native.evaluateJavaScript(
+            "document.getElementById('draft') !== null"
+        ) as? Bool
+        XCTAssertEqual(retainedDraft, false, "Closing a tab must unload its old page")
+        XCTAssertEqual(browser.title, "Retirement fixture", "Retirement must stop obsolete KVO updates")
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(native.onNewBrowserTab)
+    }
+
+    func testDetachedBrowserRejectsJavaScriptDialogInsteadOfBlockingTheApp() async throws {
+        let browser = BrowserTab(initialFocus: .none)
+        defer { browser.retireContent() }
+        browser.webView.loadHTMLString("<title>Detached dialog</title>", baseURL: nil)
+        try await settle { browser.title == "Detached dialog" && !browser.isLoading }
+        XCTAssertNil(browser.webView.window)
+        let confirmed = try await browser.webView.evaluateJavaScript(
+            "confirm('Detached browser must not open a modal window')"
+        ) as? Bool
+        XCTAssertEqual(confirmed, false)
+        XCTAssertNil(NSApp.modalWindow)
+    }
+
     func testWebKitJavaScriptDialogsInvokeNativeDelegateSheets() async throws {
         let browser = BrowserTab(initialFocus: .none)
         let window = NSWindow(
