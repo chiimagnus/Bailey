@@ -981,16 +981,6 @@
         }
       }
     },
-    "This rewrites the current HEAD history to remove the selected commit. Your Git rebase configuration still applies." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这会改写当前 HEAD 的历史以删除所选提交。仍使用你的 Git 变基配置。"
-          }
-        }
-      }
-    },
     "Always Accept" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1754,16 +1744,6 @@
         }
       }
     },
-    "Diff Mode" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Diff 模式"
-          }
-        }
-      }
-    },
     "Discard all changes" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2333,7 +2313,6 @@
         }
       }
     },
-    "Shows files changed in this commit" : {},
     "Split" : {
       "comment" : "A side-by-side diff layout.",
       "localizations" : {

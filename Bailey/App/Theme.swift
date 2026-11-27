@@ -62,9 +62,8 @@ enum Theme {
         named: defaultLightThemeName, from: "GitHub Light Default", dark: false
     )
 
-    /// Popular themes that render through the shared palette path used by both
-    /// terminal views. Each appearance has 29 catalog themes plus Bailey's
-    /// default, keeping either Settings picker capped at 30 choices.
+    /// Shared app and terminal palettes. Each appearance has 29 catalog themes
+    /// plus Bailey's default, keeping each picker capped at 30 choices.
     private nonisolated static let commonDarkCatalogThemeNames: Set<String> = [
         "Adwaita Dark",
         "Afterglow",
@@ -262,10 +261,6 @@ nonisolated extension GhosttyThemeDefinition {
     }
     func paletteNSColor(_ index: Int) -> NSColor? {
         palette[index].map(Self.nsColor)
-    }
-
-    var cursorNSColor: NSColor {
-        cursorColor.map(Self.nsColor) ?? accentNSColor
     }
 
     /// Accent for selection highlights, focus rings, and active icons: ANSI

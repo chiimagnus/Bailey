@@ -1,9 +1,7 @@
 import AppKit
 import CoreText
 
-/// Terminal font handling, same approach as Otty: bundle JetBrains Mono
-/// with the app so the default looks identical on every machine, and let
-/// the OS cascade cover glyphs the primary font lacks (CJK, symbols).
+/// Shared bundled monospace font and native fallback glyphs.
 enum TerminalFont {
     static let bundledFamily = "JetBrains Mono"
     private static let symbolsFontName = "SymbolsNFM"

@@ -178,16 +178,6 @@
         }
       }
     },
-    "Close Window" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭窗口"
-          }
-        }
-      }
-    },
     "Close Selected Panels" : {
       "localizations" : {
         "zh-Hans" : {
@@ -248,42 +238,12 @@
         }
       }
     },
-    "Move to Left Sidebar" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移到左侧边栏"
-          }
-        }
-      }
-    },
-    "Move to Right Sidebar" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移到右侧边栏"
-          }
-        }
-      }
-    },
     "Enter Full Screen" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "进入全屏幕"
-          }
-        }
-      }
-    },
-    "No Open Tabs" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有打开的标签页"
           }
         }
       }
@@ -388,16 +348,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新建终端"
-          }
-        }
-      }
-    },
-    "New Session (⌘T)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建会话（⌘T）"
           }
         }
       }
@@ -678,66 +628,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标签页切换器"
-          }
-        }
-      }
-    },
-    "Toggle Files Panel" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏文件面板"
-          }
-        }
-      }
-    },
-    "Toggle Git Panel" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏 Git 面板"
-          }
-        }
-      }
-    },
-    "Toggle Left Sidebar" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏左侧边栏"
-          }
-        }
-      }
-    },
-    "Toggle Left Sidebar (⌘B)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏左侧边栏（⌘B）"
-          }
-        }
-      }
-    },
-    "Toggle Right Sidebar" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏右侧边栏"
-          }
-        }
-      }
-    },
-    "Toggle Right Sidebar (⇧⌘B)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏右侧边栏（⇧⌘B）"
           }
         }
       }

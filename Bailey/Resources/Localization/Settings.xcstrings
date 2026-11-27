@@ -41,16 +41,6 @@
         }
       }
     },
-    "%@ palette · Tab switches appearance" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 配色 · Tab 切换外观"
-          }
-        }
-      }
-    },
     "%lld pt" : {
       "localizations" : {
         "zh-Hans" : {
@@ -318,16 +308,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "字体"
-          }
-        }
-      }
-    },
-    "Font size" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "字体大小"
           }
         }
       }

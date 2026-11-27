@@ -435,9 +435,7 @@ final class AppSettings {
         Theme.reloadSelection(light: themeLight, dark: themeDark)
     }
 
-    /// A saved shared-theme name, or `fallback` when it is absent or no longer
-    /// part of the cross-backend catalog, so Settings never shows an empty
-    /// selection after upgrading from the larger Ghostty-only list.
+    /// Resolve a saved name against the currently selectable theme catalog.
     private static func knownTheme(
         _ name: String?, dark: Bool, fallback: String
     ) -> String {

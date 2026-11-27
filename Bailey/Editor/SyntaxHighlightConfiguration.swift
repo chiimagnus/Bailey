@@ -418,9 +418,7 @@ private final class SyntaxHighlightTextInterface: TextSystemInterface {
     }
 
     func applyStyle(to token: Neon.Token) {
-        // Zero-length tokens (markdown emits them) would crash TextKit when
-        // used as a rendering-attribute range; STTextLayoutManager also guards
-        // this, but skipping here avoids the wasted work.
+        // TextKit cannot apply rendering attributes to zero-length tokens.
         guard let textView,
               token.range.length > 0,
               let color = colorProvider(token),

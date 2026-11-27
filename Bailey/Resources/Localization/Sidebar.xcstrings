@@ -339,17 +339,6 @@
         }
       }
     },
-    "Cancel Branch Creation" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取消创建分支"
-          }
-        }
-      }
-    },
     "Changed" : {
       "localizations" : {
         "zh-Hans" : {
@@ -740,17 +729,6 @@
         }
       }
     },
-    "Dismiss Git Result" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭 Git 结果"
-          }
-        }
-      }
-    },
     "Enter a name for the new branch." : {
       "localizations" : {
         "zh-Hans" : {
@@ -801,16 +779,6 @@
         }
       }
     },
-    "Files (⇧⌘E)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文件（⇧⌘E）"
-          }
-        }
-      }
-    },
     "Filter Changed Files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -851,17 +819,6 @@
         }
       }
     },
-    "Finishing Git operation…" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在完成 Git 操作…"
-          }
-        }
-      }
-    },
     "Folder name" : {
       "localizations" : {
         "zh-Hans" : {
@@ -878,27 +835,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Git 管理器"
-          }
-        }
-      }
-    },
-    "Git (⇧⌘G)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Git（⇧⌘G）"
-          }
-        }
-      }
-    },
-    "Git operation in progress" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Git 操作进行中"
           }
         }
       }
@@ -979,16 +915,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "初始化终端的当前目录以开始跟踪更改。"
-          }
-        }
-      }
-    },
-    "Kill Process (%@)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "终止进程（%@）"
           }
         }
       }
@@ -1114,17 +1040,6 @@
         }
       }
     },
-    "New branch name" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新分支名称"
-          }
-        }
-      }
-    },
     "New File…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1161,16 +1076,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有 Git 仓库"
-          }
-        }
-      }
-    },
-    "Not selected" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未选中"
           }
         }
       }
@@ -1500,16 +1405,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "同步更改"
-          }
-        }
-      }
-    },
-    "Toggle Left Sidebar (⌘B)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏左侧边栏（⌘B）"
           }
         }
       }
