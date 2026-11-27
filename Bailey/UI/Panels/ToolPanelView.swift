@@ -99,9 +99,8 @@ struct ToolPanelView: View {
     private let themeChanges = Theme.changes
     @State private var applicationIsActive = NSApp.isActive
     private var filesTarget: PanelContext.Identity? {
-        guard let project = manager.selectedProject,
-              let context = project.panelContext else { return nil }
-        return project.fileTree.syncedTarget(for: context)
+        guard let project = manager.selectedProject else { return nil }
+        return project.fileTree.syncedTarget(for: project.panelContext)
     }
     @State private var syncQueue = PanelSyncQueue()
     @State private var watchedFileTree: FileTreeModel?
@@ -119,7 +118,7 @@ struct ToolPanelView: View {
         RefreshTaskKey(
             active: applicationIsActive, gitPanel: panel == .git,
             gitScope: git.currentScope,
-            fileTarget: manager.selectedProject?.panelContext?.identity
+            fileTarget: manager.selectedProject?.panelContext.identity
         )
     }
     /// The remote heading. Held here rather than rebuilt, so its state and
@@ -270,8 +269,8 @@ struct ToolPanelView: View {
                         )
                     }
                 )
-                .id(manager.selectedProject?.panelContext?.identity)
-                .id(manager.selectedProject?.panelContext?.connectionRevision)
+                .id(manager.selectedProject?.panelContext.identity)
+                .id(manager.selectedProject?.panelContext.connectionRevision)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -292,7 +291,7 @@ struct ToolPanelView: View {
                 await git.runRemoteRefreshLoop()
                 return
             }
-            guard manager.selectedProject?.panelContext?.isRemote == true else { return }
+            guard manager.selectedProject?.panelContext.isRemote == true else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) }
                 catch { return }
@@ -321,7 +320,7 @@ struct ToolPanelView: View {
         .onChange(of: commandCompletionSequences) {
             syncModels()
         }
-        .onChange(of: manager.selectedProject?.panelContext?.identity) {
+        .onChange(of: manager.selectedProject?.panelContext.identity) {
             updateLocalFileWatcher()
             updateRemoteFileWatcher()
             syncModels()
@@ -337,7 +336,7 @@ struct ToolPanelView: View {
             for: SSHHostWorkspaces.connectionChanged
         )) { notification in
             guard let host = notification.object as? String,
-                  manager.selectedProject?.panelContext?.identity.workspace == "ssh:" + host else { return }
+                  manager.selectedProject?.panelContext.identity.workspace == "ssh:" + host else { return }
             updateRemoteFileWatcher()
             syncModels()
         }
@@ -354,7 +353,7 @@ struct ToolPanelView: View {
 
     private func updateLocalFileWatcher() {
         let nextTree: FileTreeModel? = panel == .files && applicationIsActive
-            && manager.selectedProject?.panelContext?.isRemote == false
+            && manager.selectedProject?.panelContext.isRemote == false
             ? manager.selectedProject?.fileTree : nil
         if watchedFileTree !== nextTree {
             watchedFileTree?.setLocalFileEventsEnabled(false, member: remoteWatcherMemberID)
@@ -427,7 +426,7 @@ struct ToolPanelView: View {
 
     private func performSync() async {
         guard let project = manager.selectedProject else { return }
-        let wasSynced = project.panelContext.flatMap { project.fileTree.syncedTarget(for: $0) } != nil
+        let wasSynced = project.fileTree.syncedTarget(for: project.panelContext) != nil
         let synced = await project.syncFiles(isCurrent: { manager.selectedProject === project })
         if !wasSynced, synced != nil { manager.autoRevealActiveFile(in: project) }
     }

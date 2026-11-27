@@ -23,7 +23,7 @@ final class SessionStoreTests: XCTestCase {
                         sshHost: nil, pinnedFile: nil,
                         tabs: index == 0 ? [] : [.init(
                             content: .session(workingDirectory: "/fixture/\(index)"),
-                            historyKey: "history-\(index)", contextSessionIndex: nil
+                            historyKey: "history-\(index)"
                         )], selectedTabIndex: nil,
                         groups: []
                     )], selectedProjectIndex: 0, layout: .group(DockGroup(items: [.files])))
@@ -119,15 +119,18 @@ final class SessionStoreTests: XCTestCase {
 
         let snapshot = SessionSnapshot(projects: [
             saved(nil),
+            saved(""),
+            saved("relative/project"),
+            saved("relative/remote", sshHost: "fixture-ssh"),
             saved("/tmp/fixed-one"),
             saved("/tmp/invalid-local", file: "/tmp/invalid-local/file.txt"),
             saved("/d/remote", sshHost: "fixture-ssh", file: "/d/remote/source.swift"),
             saved("/tmp/fixed-two"),
-        ], selectedProjectIndex: 4, layout: .group(DockGroup(items: [.projects, .files])))
+        ], selectedProjectIndex: 7, layout: .group(DockGroup(items: [.projects, .files])))
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         XCTAssertTrue(manager.restore(from: snapshot, histories: [:]))
-        XCTAssertEqual(manager.projects.compactMap(\.customDirectory),
+        XCTAssertEqual(manager.projects.map(\.customDirectory),
                        ["/tmp/fixed-one", "/d/remote", "/tmp/fixed-two"])
         XCTAssertEqual(manager.selectedProject?.name, "fixed-two",
                        "Rejecting invalid project records cannot shift selection to a different project")
@@ -312,6 +315,97 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(restoredApplication.windowCount, 2)
     }
 
+    func testIndependentTabsDoNotPersistRetiredTerminalAssociations() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let shellDirectory = root.appendingPathComponent("shell")
+        try FileManager.default.createDirectory(at: shellDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("file.txt")
+        try Data("fixture".utf8).write(to: file)
+
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        window.addLocalFolders([root])
+        let project = try XCTUnwrap(window.selectedProject)
+        let terminal = project.newSession(directory: shellDirectory.path)
+        project.openFile(file.path)
+        project.newBrowserTab(initialFocus: .none)
+        project.openDiff(repoRoot: root.path, path: "file.txt", staged: false,
+                         untracked: true, origPath: nil)
+        let newTerminal = project.newSession()
+        XCTAssertEqual(newTerminal.currentDirectoryPath, root.path)
+
+        let saved = window.makeWindowSnapshot(captureTerminalHistory: false).snapshot
+        let data = try JSONEncoder().encode(saved)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("contextSessionIndex"),
+                       "Files, browser tabs and diffs must not persist any terminal ownership")
+        let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: data)
+        let restored = application.makeWindow()
+        defer { restored.windowClosed() }
+        XCTAssertTrue(restored.restore(from: decoded, histories: [:]))
+        let restoredProject = try XCTUnwrap(restored.selectedProject)
+        XCTAssertEqual(restoredProject.sessions.map(\.currentDirectoryPath), [shellDirectory.path, root.path])
+        XCTAssertEqual(restoredProject.tabs.count, 5)
+        project.close(try XCTUnwrap(project.tabs.first { $0.content.id == terminal.id }))
+        XCTAssertEqual(project.tabs.count, 4)
+        XCTAssertEqual(project.customDirectory, root.path)
+    }
+
+    func testTerminalSnapshotAndWorktreeProtectionStayOnLaunchMachine() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        window.addLocalFolders([root])
+        let local = try XCTUnwrap(window.selectedProject)
+        let remote = Project(customDirectory: "/remote/project", sshHost: "fixture-alias", layout: window.dockLayout)
+        window.projects.append(remote)
+        let localTerminal = local.newSession()
+        let remoteTerminal = remote.newSession()
+        let explicitTerminal = remote.newSession(directory: "/remote/explicit")
+        func savedDirectories() -> [String] {
+            window.makeWindowSnapshot(captureTerminalHistory: false).snapshot.projects.flatMap { project in
+                project.tabs.compactMap { tab in
+                    guard case .session(let directory) = tab.content else { return nil }
+                    return directory
+                }
+            }
+        }
+        XCTAssertEqual(savedDirectories(), [root.path, "/remote/project", "/remote/explicit"])
+        XCTAssertFalse(remoteTerminal.acceptsLocalFileDrop)
+        explicitTerminal.terminalDidChangeWorkingDirectory("/remote/changed")
+        let connection = RemoteConnection(user: "fixture", host: "fixture.invalid", port: 22,
+            controlSocket: URL(fileURLWithPath: "/tmp/bailey-unused-\(UUID())"), sshPID: 0)
+        connection.workingDirectory = "/remote/observed"
+        connection.markConnected()
+        remoteTerminal.remoteConnection = connection
+        XCTAssertEqual(savedDirectories(), [root.path, "/remote/observed", "/remote/changed"])
+        XCTAssertTrue(application.isWorktreeInUse(path: "/remote/observed", scope: "ssh:fixture-alias"))
+        XCTAssertFalse(application.isWorktreeInUse(path: "/remote/observed", scope: "local"))
+
+        let manual = RemoteConnection(user: "fixture", host: "other.invalid", port: 22,
+            controlSocket: URL(fileURLWithPath: "/tmp/bailey-unused-\(UUID())"), sshPID: 0)
+        manual.workingDirectory = "/remote/manual"
+        manual.markConnected()
+        localTerminal.remoteConnection = manual
+        localTerminal.terminalDidChangeWorkingDirectory("/remote/manual")
+        XCTAssertEqual(savedDirectories().first, root.path)
+        XCTAssertFalse(application.isWorktreeInUse(path: "/remote/manual", scope: "local"))
+        localTerminal.remoteConnection = nil
+        XCTAssertEqual(localTerminal.currentDirectoryPath, root.path)
+
+        let snapshot = window.makeWindowSnapshot(captureTerminalHistory: false).snapshot
+        let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: JSONEncoder().encode(snapshot))
+        let restored = application.makeWindow()
+        defer { restored.windowClosed() }
+        XCTAssertTrue(restored.restore(from: decoded, histories: [:]))
+        XCTAssertEqual(restored.projects.flatMap(\.sessions).map(\.currentDirectoryPath),
+                       [root.path, "/remote/observed", "/remote/changed"])
+    }
+
     func testSnapshotRoundTripAndInvalidReferences() throws {
         typealias Project = SessionSnapshot.ProjectSnapshot
         let contents: [Project.ContentSnapshot] = [
@@ -324,8 +418,7 @@ final class SessionStoreTests: XCTestCase {
         let tabs = contents.enumerated().map { index, content in
             Project.TabSnapshot(
                 content: content,
-                historyKey: index == 0 ? "history-fixture" : nil,
-                contextSessionIndex: index == 1 ? 0 : nil
+                historyKey: index == 0 ? "history-fixture" : nil
             )
         }
         let left = DockGroup(items: [.files])
@@ -400,15 +493,14 @@ final class SessionStoreTests: XCTestCase {
 
         let mac = Snapshot.TabSnapshot(
             content: .file(path: path.path, editorState: EditorState(selectionLocation: 3)),
-            historyKey: nil, contextSessionIndex: nil,
+            historyKey: nil,
             localFile: true
         )
         let json = try JSONEncoder().encode(mac)
         let decoded = try JSONDecoder().decode(Snapshot.TabSnapshot.self, from: json)
         XCTAssertEqual(decoded.localFile, true)
 
-        let project = Project(fallbackName: "SSH", layout: .init())
-        project.sshHost = "invalid-p4-snapshot"
+        let project = Project(customDirectory: "/fixture/SSH", sshHost: "invalid-p4-snapshot", layout: .init())
         let tab = project.restoreTab(from: decoded)
         guard case .file(let restoredMac) = tab.content else {
             return XCTFail("Restored file must be a native FileTab")
@@ -447,9 +539,7 @@ final class SessionStoreTests: XCTestCase {
 
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let ssh = Project(fallbackName: "SSH", layout: manager.dockLayout)
-        ssh.sshHost = "invalid-p4-autosave"
-        ssh.customDirectory = "/remote/project"
+        let ssh = Project(customDirectory: "/remote/project", sshHost: "invalid-p4-autosave", layout: manager.dockLayout)
         manager.projects.append(ssh)
         manager.selectedProjectID = ssh.id
         XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
@@ -481,7 +571,7 @@ final class SessionStoreTests: XCTestCase {
             sshHost: nil, pinnedFile: nil,
             tabs: [.init(
                 content: .session(workingDirectory: "/fixture"),
-                historyKey: key, contextSessionIndex: nil
+                historyKey: key
             )],
             selectedTabIndex: 0,
             groups: []
@@ -711,8 +801,7 @@ final class SessionStoreTests: XCTestCase {
         let application = WorkspaceApplication()
         let window = application.makeWindow()
         defer { window.windowClosed() }
-        let project = Project(fallbackName: "fixture", layout: window.dockLayout)
-        project.customDirectory = "/fixture"
+        let project = Project(customDirectory: "/fixture", layout: window.dockLayout)
         window.projects = [project]
         window.selectedProjectID = project.id
         project.newBrowserTab(initialFocus: .none)

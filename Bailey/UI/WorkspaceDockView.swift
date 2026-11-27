@@ -601,7 +601,6 @@ struct DockTabGroupView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(project.panelContext == nil)
     }
 
     private func tabStrip(maxWidth: CGFloat) -> some View {
@@ -1004,16 +1003,14 @@ struct DockTabGroupView: View {
                 NSPasteboard.general.setString(current.path, forType: .string)
             }
             .keyboardShortcut(PathMenuShortcut.copyAbsolute)
-            let relativeRoot = project.customDirectory.map { $0 == "/" ? "/" : $0 + "/" }
-            let relativePath = relativeRoot.flatMap {
-                file.workspaceIdentity == project.workspaceIdentity && file.path.hasPrefix($0)
-                    ? String(file.path.dropFirst($0.count)) : nil
-            }
+            let relativeRoot = project.customDirectory == "/" ? "/" : project.customDirectory + "/"
+            let relativePath = file.workspaceIdentity == project.workspaceIdentity && file.path.hasPrefix(relativeRoot)
+                ? String(file.path.dropFirst(relativeRoot.count)) : nil
             Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
                 guard case .file(let current)? = currentMenuTab(tabID)?.content,
-                      current.workspaceIdentity == project.workspaceIdentity,
-                      let root = project.customDirectory.map({ $0 == "/" ? "/" : $0 + "/" }),
-                      current.path.hasPrefix(root) else { return }
+                      current.workspaceIdentity == project.workspaceIdentity else { return }
+                let root = project.customDirectory == "/" ? "/" : project.customDirectory + "/"
+                guard current.path.hasPrefix(root) else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(String(current.path.dropFirst(root.count)), forType: .string)
             }

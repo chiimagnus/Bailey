@@ -65,7 +65,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let initial = try XCTUnwrap(project.panelContext)
+        let initial = project.panelContext
         XCTAssertEqual(project.name, root.lastPathComponent)
         XCTAssertEqual(initial.cwd, root.path)
         XCTAssertNil(initial.identity.workspace)
@@ -73,23 +73,16 @@ final class WorkspaceIdentityTests: XCTestCase {
         let terminal = project.newSession(directory: "/tmp/a-different-directory")
         XCTAssertEqual(project.name, root.lastPathComponent,
                        "Project names cannot follow a terminal title or working directory")
-        XCTAssertEqual(project.panelContext?.identity, initial.identity)
+        XCTAssertEqual(project.panelContext.identity, initial.identity)
         project.close(try XCTUnwrap(project.tabs.first { $0.content.id == terminal.id }))
         XCTAssertTrue(project.tabs.isEmpty)
-        XCTAssertEqual(project.panelContext?.identity, initial.identity,
+        XCTAssertEqual(project.panelContext.identity, initial.identity,
                        "Closing the final terminal cannot detach a fixed Files or Git root")
 
-        let ssh = Project(fallbackName: "SSH", layout: .init())
-        ssh.sshHost = "fixture-remote"
-        ssh.customDirectory = "/d/projects"
-        ssh.pinnedFile = "/d/projects/source.swift"
+        let ssh = Project(customDirectory: "/d/projects", sshHost: "fixture-remote", pinnedFile: "/d/projects/source.swift", layout: .init())
         XCTAssertEqual(ssh.name, "source.swift",
                        "An explicitly added SSH file keeps its file-based project title")
 
-        let rootless = Project(fallbackName: "Unsupported", layout: .init())
-        rootless.newSession(directory: "/tmp/old-terminal-scope")
-        XCTAssertNil(rootless.panelContext,
-                     "A terminal cannot implicitly create or redirect a project root")
     }
 
     func testReorderAndCloseBackgroundProjectsPreserveSelectedProjectIdentity() throws {
@@ -175,22 +168,21 @@ final class WorkspaceIdentityTests: XCTestCase {
         let local = TerminalSession(launchCommand: "exec /bin/sh -i")
         XCTAssertTrue(local.acceptsLocalFileDrop)
         let activeRemote = connection()
-        local.location = .remote(activeRemote)
+        local.remoteConnection = activeRemote
         XCTAssertFalse(local.acceptsLocalFileDrop)
         activeRemote.markDisconnected(reason: "fixture disconnect")
         XCTAssertFalse(local.acceptsLocalFileDrop, "Disconnected ssh is not a Mac shell")
-        local.location = .local
+        local.remoteConnection = nil
         XCTAssertTrue(local.acceptsLocalFileDrop, "A dynamic ssh session can return to its local shell")
 
-        let fixed = Project(fallbackName: "remote", layout: .init())
-        fixed.sshHost = "fixture-ssh-host"
+        let fixed = Project(customDirectory: "/fixture/remote", sshHost: "fixture-ssh-host", layout: .init())
         let waiting = fixed.newSession()
         defer { fixed.terminateAll() }
-        XCTAssertNil(waiting.workspaceIdentity, "Before SSH handoff the remote identity is not populated")
+        XCTAssertNil(waiting.remoteConnection, "Before SSH handoff the connection is not populated")
         XCTAssertFalse(waiting.acceptsLocalFileDrop, "Fixed SSH launch intent is already remote")
-        waiting.location = .remote(connection())
+        waiting.remoteConnection = connection()
         XCTAssertFalse(waiting.acceptsLocalFileDrop)
-        waiting.location = .local
+        waiting.remoteConnection = nil
         XCTAssertFalse(waiting.acceptsLocalFileDrop, "A fixed SSH terminal never accepts a Mac path")
     }
 
@@ -201,9 +193,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let file = root.appendingPathComponent("local only.swift")
         try Data("local sentinel".utf8).write(to: file)
         let local = TerminalSession(initialDirectory: root.path, launchCommand: "exec /bin/sh -i")
-        let fixed = Project(fallbackName: "SSH", layout: .init())
-        fixed.sshHost = "fixture-ssh"
-        fixed.customDirectory = root.path
+        let fixed = Project(customDirectory: root.path, sshHost: "fixture-ssh", layout: .init())
         let remote = fixed.newSession()
         defer { local.terminate(); fixed.terminateAll() }
 
@@ -221,11 +211,10 @@ final class WorkspaceIdentityTests: XCTestCase {
         let menu = local.surface.contextMenu(linkTarget: local.terminalLinkTarget(for: file.path))
         let action = try XCTUnwrap(menu.items.last)
         let selector = try XCTUnwrap(action.action)
-        let project = Project(fallbackName: "Mac", layout: .init())
-        project.customDirectory = root.path
+        let project = Project(customDirectory: root.path, layout: .init())
         local.surface.onNewFileTab = { project.openLocalFile($0) }
         let connection = connection()
-        local.location = .remote(connection)
+        local.remoteConnection = connection
         XCTAssertTrue(NSApp.sendAction(selector, to: action.target, from: action))
         XCTAssertTrue(project.tabs.isEmpty, "A menu opened before SSH cannot later open a Mac file")
         for value in values { XCTAssertNil(local.terminalLinkTarget(for: value), value) }
@@ -235,7 +224,7 @@ final class WorkspaceIdentityTests: XCTestCase {
             return XCTFail("Remote web links must remain usable")
         }
         XCTAssertEqual(website.host, "example.invalid")
-        local.location = .local
+        local.remoteConnection = nil
         guard case .file? = local.terminalLinkTarget(for: file.path) else {
             return XCTFail("Returning to the local shell must restore local file links")
         }
@@ -266,12 +255,11 @@ final class WorkspaceIdentityTests: XCTestCase {
         let path = directory.appendingPathComponent("file.txt").path
         try Data("local\n".utf8).write(to: URL(fileURLWithPath: path))
 
-        let project = Project(fallbackName: "identity", layout: .init())
-        project.customDirectory = directory.path
+        let project = Project(customDirectory: directory.path, layout: .init())
         let session = project.newSession()
         defer { project.terminateAll() }
         let first = connection()
-        session.location = .remote(first)
+        session.remoteConnection = first
         XCTAssertNil(project.connectedWorkspace(for: first.workspaceIdentity),
                      "An SSH session in a local project cannot turn it into a remote file workspace")
 
@@ -297,7 +285,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         remoteFile.text = "remote unsaved\n"
         remoteFile.refreshDirtyState()
         first.markDisconnected(reason: "fixture")
-        session.location = .remote(first)
+        session.remoteConnection = first
         project.rebindRemoteTabs()
         await remoteFile.save()
         XCTAssertTrue(remoteFile.isDirty)
@@ -555,9 +543,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "mac".write(to: file, atomically: true, encoding: .utf8)
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "remote", layout: manager.dockLayout)
-        remote.sshHost = "invalid-finder-remote"
-        remote.customDirectory = folder.path
+        let remote = Project(customDirectory: folder.path, sshHost: "invalid-finder-remote", layout: manager.dockLayout)
         remote.openFile(file.path)
         manager.projects.append(remote)
         manager.selectedProjectID = remote.id
@@ -726,9 +712,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "mac disk".write(to: file, atomically: true, encoding: .utf8)
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "remote", layout: manager.dockLayout)
-        remote.sshHost = "invalid-p4-fixture"
-        remote.customDirectory = "/remote/source"
+        let remote = Project(customDirectory: "/remote/source", sshHost: "invalid-p4-fixture", layout: manager.dockLayout)
         remote.openFile(file.path)
         manager.projects.append(remote)
         manager.selectedProjectID = remote.id

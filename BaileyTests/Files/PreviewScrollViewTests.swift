@@ -28,7 +28,7 @@ final class PreviewScrollViewTests: XCTestCase {
         let expectedRed = try XCTUnwrap(raster.colorAt(x: raster.pixelsWide / 3, y: raster.pixelsHigh / 2)?.usingColorSpace(.sRGB))
         XCTAssertGreaterThan(expectedRed.redComponent * expectedRed.alphaComponent, 0.8)
         XCTAssertGreaterThan(expectedRed.redComponent - expectedRed.greenComponent, 0.4)
-        let project = Project(fallbackName: "Live SVG", layout: .init())
+        let project = Project(customDirectory: "/fixture/Live SVG", layout: .init())
         project.openLocalFile(path.path)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = pane.content else { return XCTFail("Expected SVG tab") }
@@ -381,7 +381,7 @@ final class PreviewScrollViewTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "Sustained.gif")
         try bytes.write(to: url)
-        let project = Project(fallbackName: "Sustained GIF", layout: .init())
+        let project = Project(customDirectory: directory.path, layout: .init())
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 440, height: 350),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -544,7 +544,7 @@ final class PreviewScrollViewTests: XCTestCase {
         let height = 480
         let bytes = try makeLongGIF(width: width, height: height, count: frameCount)
         try bytes.write(to: fixture)
-        let project = Project(fallbackName: "GIF retention", layout: .init())
+        let project = Project(customDirectory: root.path, layout: .init())
         defer { project.closeAll() }
 
         let baseline = residentMiB()
@@ -1292,7 +1292,7 @@ final class PreviewScrollViewTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let url = folder.appending(path: "Annotated large source.jpg")
         try original.write(to: url)
-        let project = Project(fallbackName: "Repeated annotation sessions", layout: .init())
+        let project = Project(customDirectory: folder.path, layout: .init())
         defer { project.closeAll() }
         let before = rasterMemory()
         let beforeCPU = cpuSeconds()
@@ -1396,7 +1396,7 @@ final class PreviewScrollViewTests: XCTestCase {
             XCTAssertTrue(CGImageDestinationFinalize(destination))
         }
         fixtures.append((url: tiffURL, bytes: try Data(contentsOf: tiffURL)))
-        let project = Project(fallbackName: "Repeated raster previews", layout: .init())
+        let project = Project(customDirectory: "/fixture/Repeated raster previews", layout: .init())
         defer { project.closeAll() }
         let beforeCPU = cpuSeconds()
         let before = rasterMemory()
@@ -1487,7 +1487,7 @@ final class PreviewScrollViewTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let path = folder.appending(path: original.lastPathComponent)
         try bytes.write(to: path)
-        let project = Project(fallbackName: "Research SVG lifecycle", layout: .init())
+        let project = Project(customDirectory: folder.path, layout: .init())
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 360),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

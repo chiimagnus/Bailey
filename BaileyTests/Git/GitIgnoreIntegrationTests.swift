@@ -30,7 +30,7 @@ final class GitIgnoreIntegrationTests: XCTestCase {
         XCTAssertTrue(file.isDirty)
         let names = ["literal*.txt", "literal?.txt", "[abc].txt", "#hash", "!bang",
                      "back\\slash", "trailing "]
-        let context = try XCTUnwrap(project.panelContext)
+        let context = project.panelContext
         try await project.ignoreGitPaths(names, isDirectory: false,
                                          repository: root.path, context: context,
                                          isCurrent: { true })
@@ -65,7 +65,7 @@ final class GitIgnoreIntegrationTests: XCTestCase {
         XCTAssertEqual(file.text, "cached-rule\n")
         try Data("external-rule\n".utf8).write(to: path)
         XCTAssertEqual(file.text, "cached-rule\n", "File remains cached until explicitly consumed")
-        let context = try XCTUnwrap(project.panelContext)
+        let context = project.panelContext
         try await project.ignoreGitPaths(["new-rule.txt"], isDirectory: false, repository: root.path,
                                          context: context, isCurrent: { true })
         let expected = "external-rule\n/new-rule.txt\n"
@@ -83,7 +83,7 @@ final class GitIgnoreIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let context = try XCTUnwrap(project.panelContext)
+        let context = project.panelContext
         try await project.ignoreGitPaths(["build"], isDirectory: true, repository: root.path,
                                          context: context, isCurrent: { true })
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(".gitignore"), encoding: .utf8), "/build/\n")

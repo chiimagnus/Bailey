@@ -255,10 +255,8 @@ final class GitWorkspaceSSHTests: XCTestCase {
             try await settle(model)
             let removedDirectory = try await backend.stat(path: repo + "/untracked-dir")
             XCTAssertNil(removedDirectory)
-            let project = Project(fallbackName: "SSH Ignore", layout: .init())
-            project.sshHost = host
-            project.customDirectory = repo
-            let context = try XCTUnwrap(project.panelContext)
+            let project = Project(customDirectory: repo, sshHost: host, layout: .init())
+            let context = project.panelContext
             try await project.ignoreGitPaths(["literal[2].txt"], isDirectory: false,
                 repository: repo, context: context, isCurrent: { true })
             let rules = try await backend.read(path: repo + "/.gitignore", maxBytes: 1024)

@@ -4,15 +4,6 @@ import Darwin
 import Foundation
 import Observation
 
-extension TerminalSession {
-    /// Which workspace a tab opened from this session belongs to. Nil is this
-    /// Mac, and two machines are different workspaces even at the same path —
-    /// which is what keeps a remote `/etc/hosts` from reusing the local tab.
-    var workspaceIdentity: String? {
-        location.remoteConnection?.workspaceIdentity ?? initialWorkspace?.identity.workspace
-    }
-}
-
 /// One long-lived terminal process rendered by one terminal surface. Normally
 /// that process is the user's login shell; an SSH project launches its host
 /// command instead. SwiftUI only reparents the same surface, so
@@ -25,21 +16,19 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     nonisolated let id: UUID
 
     var title: String
-    var workingDirectory: String? {
+    private(set) var workingDirectory: String? {
         didSet { if workingDirectory != oldValue { onSnapshotChange?() } }
     }
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     var hasExited = false
     private(set) var commandCompletionSequence: UInt64 = 0
-    /// Where this session's workspace tools look. Set by Bailey's `ssh` helper
-    /// through the private authenticated handoff, never guessed from the foreground
-    /// process: an ssh Bailey did not front cannot be followed.
-    var location: WorkspaceLocation = .local
-    private var initialWorkspace: PanelContext?
-    private let isRemoteLaunch: Bool
+    /// Authenticated handoff for the live SSH process, independent of project ownership.
+    var remoteConnection: RemoteConnection?
+    private let remoteLaunchDirectory: String?
+    private var isRemoteLaunch: Bool { remoteLaunchDirectory != nil }
     /// Local file input and links must describe this Mac, never an SSH peer.
     var acceptsLocalFileDrop: Bool {
-        !isRemoteLaunch && location.remoteConnection == nil
+        !isRemoteLaunch && remoteConnection == nil
             && !hasUnmanagedSSH && !hasExited && !isTerminating
     }
     let surface: BaileyTerminalView
@@ -50,7 +39,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
 
     private static let persistedHistoryLineLimit = 500
 
-    private let shellPath: String
     private let launchWorkingDirectory: String
     private let launchDirectoryURL: URL?
     private let shellPidFileURL: URL?
@@ -62,9 +50,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         initialDirectory: String? = nil,
         restoredHistory: String? = nil,
         launchCommand: String? = nil,
-        initialWorkspace: PanelContext? = nil,
         initialInput: String? = nil,
-        fixedSSHLaunch: Bool = false
+        remoteLaunchDirectory: String? = nil
     ) {
         let sessionID = UUID()
         let shellPath = LocalWorkspaceBackend.loginShell
@@ -85,9 +72,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         )
 
         id = sessionID
-        self.shellPath = shellPath
-        self.initialWorkspace = initialWorkspace
-        isRemoteLaunch = fixedSSHLaunch || initialWorkspace != nil
+        self.remoteLaunchDirectory = remoteLaunchDirectory
         launchWorkingDirectory = directory
         launchDirectoryURL = artifacts.directoryURL
         shellPidFileURL = artifacts.pidFileURL
@@ -198,7 +183,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         // shell. That is nested and Bailey does not follow it. A connection that
         // has already finished is simply the previous one, and the session is
         // free to go remote again.
-        if let existing = location.remoteConnection, existing.state != .disconnected {
+        if let existing = remoteConnection, existing.state != .disconnected {
             NSLog(
                 "bailey: ignoring nested ssh in terminal %@ (already remote)",
                 id.uuidString
@@ -206,9 +191,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
             return false
         }
         endRemoteConnection(reason: "replaced by a new connection")
-        if let initialWorkspace { connection.workingDirectory = initialWorkspace.cwd }
-        initialWorkspace = nil
-        location = .remote(connection)
+        if connection.workingDirectory == nil { connection.workingDirectory = remoteLaunchDirectory }
+        remoteConnection = connection
         remoteMonitor = Task { [weak self] in
             await self?.watchRemoteConnection(connection)
         }
@@ -218,7 +202,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     func endRemoteConnection(reason: String) {
         remoteMonitor?.cancel()
         remoteMonitor = nil
-        guard let connection = location.remoteConnection else { return }
+        guard let connection = remoteConnection else { return }
         connection.markDisconnected(reason: reason)
     }
 
@@ -228,7 +212,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// back to local paths under a remote heading is the one outcome to avoid.
     private func finishRemoteProcess(_ connection: RemoteConnection, reason: String) {
         connection.markDisconnected(reason: reason)
-        if !isRemoteLaunch { location = .local }
+        if !isRemoteLaunch { remoteConnection = nil }
     }
 
     /// One check a second. While connecting, only the ssh process going away
@@ -317,17 +301,18 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         guard let found, !found.directory.isEmpty else { return true }
         if connection.workingDirectory != found.directory {
             connection.workingDirectory = found.directory
+            if isRemoteLaunch { onSnapshotChange?() }
         }
         return true
     }
 
-    /// Best-effort live shell directory: OSC 7 first, kernel process metadata
-    /// second, then the directory used to launch this session.
+    /// Directory on the machine this tab launches on. Manual SSH inside a local
+    /// shell must not change the local directory persisted for that shell.
     var currentDirectoryPath: String {
-        if let dir = workingDirectory {
-            if let url = URL(string: dir), url.isFileURL { return url.path }
-            if dir.hasPrefix("/") { return dir }
+        if let remoteLaunchDirectory {
+            return remoteConnection?.workingDirectory ?? workingDirectory ?? remoteLaunchDirectory
         }
+        if let workingDirectory { return workingDirectory }
         if let shellPid, let path = processWorkingDirectory(pid: shellPid) {
             return path
         }
@@ -344,7 +329,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     var foregroundDirectoryPath: String? {
         // While the session is remote this would be the ssh client's own local
         // directory, which means nothing on the other machine.
-        guard location.remoteConnection == nil else { return nil }
+        guard remoteConnection == nil else { return nil }
         guard let foreground = surface.foregroundPid, foreground > 0,
               foreground != shellPid
         else { return nil }
@@ -403,16 +388,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         return value
     }
 
-    /// The terminal's own working directory on its current machine.
-    /// Project Files and Git instead use the project's fixed root.
-    var panelDirectoryPath: String {
-        if let initialWorkspace { return initialWorkspace.cwd }
-        guard let directory = connectedRemote?.workingDirectory else {
-            return currentDirectoryPath
-        }
-        return directory
-    }
-
     /// A manually launched ssh cannot accept Finder's local file paths.
     /// Also detect `exec ssh`, which may retain the shell PID.
     private var hasUnmanagedSSH: Bool {
@@ -425,21 +400,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
             return true
         }
         return false
-    }
-
-    /// The remote this session is working on. Both the backend and the panel
-    /// path read this, so the pane can never pair a remote backend with a
-    /// local path or the reverse.
-    ///
-    /// Deliberately not restricted to `.connected`. A dropped connection keeps
-    /// describing the remote machine with its last known directory: showing
-    /// this Mac's files under a remote heading is the one outcome to avoid,
-    /// and remote work simply fails while the link is down.
-    private var connectedRemote: RemoteConnection? {
-        guard let connection = location.remoteConnection,
-              connection.workingDirectory != nil
-        else { return nil }
-        return connection
     }
 
     // MARK: - Launch
@@ -609,9 +569,12 @@ extension TerminalSession {
     }
 
     func terminalDidChangeWorkingDirectory(_ path: String) {
-        guard !path.isEmpty else { return }
-        workingDirectory = path.hasPrefix("/")
-            ? URL(fileURLWithPath: path).absoluteString : path
+        guard isRemoteLaunch || (remoteConnection == nil && !hasUnmanagedSSH) else { return }
+        if path.hasPrefix("/") {
+            workingDirectory = path
+        } else if let url = URL(string: path), url.isFileURL, url.path.hasPrefix("/") {
+            workingDirectory = url.path
+        }
     }
 
     func terminalDidRingBell() {

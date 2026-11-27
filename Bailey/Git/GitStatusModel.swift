@@ -1631,7 +1631,7 @@ final class GitStatusModel {
     func syncSelectedProject(
         project: Project?, isCurrent: @MainActor (Project) -> Bool
     ) {
-        guard let project, isCurrent(project), let context = project.panelContext else {
+        guard let project, isCurrent(project) else {
             sync(root: "")
             if project == nil {
                 cachedStatusByRoot.removeAll()
@@ -1639,6 +1639,7 @@ final class GitStatusModel {
             }
             return
         }
+        let context = project.panelContext
         sync(root: context.cwd, backend: context.backend, scope: context.scope,
              panelIdentity: context.identity)
     }

@@ -20,10 +20,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
-        guard let project = manager.selectedProject,
-              let target = project.panelContext?.identity else {
+        guard let project = manager.selectedProject else {
             return XCTFail("Expected a pinned Files project")
         }
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         XCTAssertFalse(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
@@ -40,7 +40,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { anotherWindow.windowClosed() }
         anotherWindow.addLocalFolders([root])
         let otherProject = try XCTUnwrap(anotherWindow.selectedProject)
-        let otherTarget = try XCTUnwrap(otherProject.panelContext?.identity)
+        let otherTarget = otherProject.panelContext.identity
         XCTAssertTrue(
             anotherWindow.canPasteFileTree(in: otherProject, target: otherTarget, pasteboard: pasteboard),
             "A local file URL is copyable into another local project"
@@ -73,7 +73,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
 
@@ -126,8 +126,8 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         destination.addLocalFolders([secondRoot])
         let a = try XCTUnwrap(origin.selectedProject)
         let b = try XCTUnwrap(destination.selectedProject)
-        let aTarget = try XCTUnwrap(a.panelContext?.identity)
-        let bTarget = try XCTUnwrap(b.panelContext?.identity)
+        let aTarget = a.panelContext.identity
+        let bTarget = b.panelContext.identity
         await a.fileTree.sync(root: firstRoot.path, backend: LocalWorkspaceBackend.shared)
         await b.fileTree.sync(root: secondRoot.path, backend: LocalWorkspaceBackend.shared)
         anotherEditor.openFile(source.path)
@@ -191,7 +191,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: projectRoot.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         XCTAssertTrue(FileTreeClipboard.writeLocalFiles([file.path, directory.path, symlink.path], to: pasteboard))
@@ -247,8 +247,8 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         destination.addLocalFolders([secondRoot])
         let sourceProject = try XCTUnwrap(origin.selectedProject)
         let targetProject = try XCTUnwrap(destination.selectedProject)
-        let a = try XCTUnwrap(sourceProject.panelContext?.identity)
-        let b = try XCTUnwrap(targetProject.panelContext?.identity)
+        let a = sourceProject.panelContext.identity
+        let b = targetProject.panelContext.identity
         await sourceProject.fileTree.sync(root: firstRoot.path, backend: LocalWorkspaceBackend.shared)
         await targetProject.fileTree.sync(root: secondRoot.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
@@ -279,7 +279,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         try FileManager.default.createDirectory(at: thirdRoot, withIntermediateDirectories: true)
         newWindow.addLocalFolders([thirdRoot])
         let thirdProject = try XCTUnwrap(newWindow.selectedProject)
-        let c = try XCTUnwrap(thirdProject.panelContext?.identity)
+        let c = thirdProject.panelContext.identity
         await thirdProject.fileTree.sync(root: thirdRoot.path, backend: LocalWorkspaceBackend.shared)
         newWindow.performFileTreeCommand(
             .paste(into: thirdRoot.path), in: thirdProject, target: c, pasteboard: pasteboard
@@ -300,7 +300,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         manager.addLocalFolders([root])
         manager.openFile(source.path)
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         guard case .file(let file)? = project.selectedTab?.content else {
             return XCTFail("Open file required")
@@ -339,7 +339,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         manager.addLocalFolders([root])
         manager.openFile(source.path)
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         guard case .file(let file)? = project.selectedTab?.content else {
             return XCTFail("An open editor is required")
@@ -384,7 +384,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: projectRoot.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         XCTAssertTrue(FileTreeClipboard.writeLocalFiles([first.path, second.path], to: pasteboard))
@@ -425,7 +425,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             manager.addLocalFolders([root])
             manager.openFile(openedThroughLink ? link.path : actual.path)
             let project = try XCTUnwrap(manager.selectedProject)
-            let target = try XCTUnwrap(project.panelContext?.identity)
+            let target = project.panelContext.identity
             await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
             guard case .file(let file)? = project.selectedTab?.content else {
                 return XCTFail("An open editor of the symlink target is required")
@@ -478,7 +478,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         manager.performFileTreeCommand(
@@ -519,7 +519,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         manager.addLocalFolders([root])
         manager.openFile(child.path)
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         guard case .file(let file)? = project.selectedTab?.content else {
             return XCTFail("A real open descendant editor is required")
@@ -560,7 +560,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         manager.addLocalFolders([root])
         manager.openFile(child.path)
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         guard case .file(let file)? = project.selectedTab?.content else {
             return XCTFail("A real open descendant editor is required")
@@ -601,7 +601,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         XCTAssertTrue(FileTreeClipboard.writeLocalFiles([source.path], to: pasteboard))
@@ -632,7 +632,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         manager.performFileTreeCommand(
@@ -665,7 +665,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([into])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: into.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         XCTAssertTrue(FileTreeClipboard.writeLocalFiles([file.path], to: pasteboard))
@@ -736,7 +736,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         XCTAssertTrue(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard),
                       "The menu only checks a file type; the actual paste rejects malformed URLs")
@@ -766,7 +766,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         let tree = project.fileTree
         await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let firstRow = try XCTUnwrap(tree.items.first { $0.path == first.path })
@@ -825,8 +825,9 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let owner = workspaceApplication.makeWindow()
         defer { owner.windowClosed() }
         owner.addLocalFolders([root])
-        guard let project = owner.selectedProject, let identity = project.panelContext?.identity
+        guard let project = owner.selectedProject
         else { return XCTFail("Expected local project") }
+        let identity = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         owner.performFileTreeCommand(.copy([first.path, second.path], cut: true),
@@ -918,7 +919,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
-        let target = try XCTUnwrap(project.panelContext?.identity)
+        let target = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
 
@@ -964,10 +965,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         second.openFile(actualOld.path)
         guard let project = first.selectedProject,
               case .file(let firstFile)? = project.selectedTab?.content,
-              case .file(let secondFile)? = second.selectedProject?.selectedTab?.content,
-              let target = project.panelContext?.identity else {
+              case .file(let secondFile)? = second.selectedProject?.selectedTab?.content else {
             return XCTFail("Both windows must open the physical file from distinct paths")
         }
+        let target = project.panelContext.identity
         try await firstFile.waitForText()
         try await secondFile.waitForText()
         firstFile.text = "changed"; firstFile.refreshDirtyState()
@@ -998,11 +999,11 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         owner.addLocalFolders([root])
         other.addLocalFolders([root])
         guard let project = owner.selectedProject,
-              let identity = project.panelContext?.identity,
-              let otherProject = other.selectedProject,
-              let otherIdentity = otherProject.panelContext?.identity else {
+              let otherProject = other.selectedProject else {
             return XCTFail("Both windows need a Files tree")
         }
+        let identity = project.panelContext.identity
+        let otherIdentity = otherProject.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         await otherProject.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
@@ -1077,10 +1078,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let owner = workspaceApplication.makeWindow()
         defer { owner.windowClosed() }
         owner.addLocalFolders([root])
-        guard let project = owner.selectedProject,
-              let identity = project.panelContext?.identity else {
+        guard let project = owner.selectedProject else {
             return XCTFail("Missing Files project")
         }
+        let identity = project.panelContext.identity
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
         let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
@@ -1135,10 +1136,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         guard let project = first.selectedProject,
               case .file(let a)? = project.selectedTab?.content,
               case .file(let b)? = second.selectedProject?.selectedTab?.content,
-              case .file(let c)? = third.selectedProject?.selectedTab?.content,
-              let identity = project.panelContext?.identity else {
+              case .file(let c)? = third.selectedProject?.selectedTab?.content else {
             return XCTFail("All three windows must open the same physical file")
         }
+        let identity = project.panelContext.identity
         try await a.waitForText()
         try await b.waitForText()
         try await c.waitForText()
@@ -1225,10 +1226,10 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         second.openFile(oldPath.path)
         guard let project = first.selectedProject,
               case .file(let file)? = first.selectedProject?.selectedTab?.content,
-              case .file(let other)? = second.selectedProject?.selectedTab?.content,
-              let identity = project.panelContext?.identity else {
+              case .file(let other)? = second.selectedProject?.selectedTab?.content else {
             return XCTFail("The two projects and their file targets must exist")
         }
+        let identity = project.panelContext.identity
         try await file.waitForText()
         try await other.waitForText()
         file.text = "after"; file.refreshDirtyState()
@@ -1783,9 +1784,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
 
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let remote = Project(fallbackName: "SSH", layout: manager.dockLayout)
-        remote.sshHost = "invalid-worktree-protection-fixture"
-        remote.customDirectory = "/remote/unrelated"
+        let remote = Project(customDirectory: "/remote/unrelated", sshHost: "invalid-worktree-protection-fixture", layout: manager.dockLayout)
         manager.projects.append(remote)
         manager.selectedProjectID = remote.id
         XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
@@ -1794,7 +1793,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             return XCTFail("Mac file should open in an SSH project's editor tab")
         }
         XCTAssertNil(localFile.workspaceIdentity)
-        XCTAssertEqual(remote.panelContext?.scope, "ssh:invalid-worktree-protection-fixture")
+        XCTAssertEqual(remote.panelContext.scope, "ssh:invalid-worktree-protection-fixture")
 
         XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(path: checkout.path, scope: "local"),
                       "A local editor inside an SSH project must block worktree removal")

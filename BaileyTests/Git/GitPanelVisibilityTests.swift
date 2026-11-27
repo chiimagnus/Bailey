@@ -219,8 +219,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         }
         for (projectIndex, fixture) in prepared.enumerated() {
             let (root, paths) = fixture
-            let project = Project(fallbackName: root.lastPathComponent, layout: manager.dockLayout)
-            project.customDirectory = root.path
+            let project = Project(customDirectory: root.path, layout: manager.dockLayout)
             manager.projects.append(project)
             manager.selectProject(id: project.id)
             manager.syncGitStatus(model)
@@ -594,8 +593,7 @@ final class GitPanelVisibilityTests: XCTestCase {
 
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
-        let project = Project(fallbackName: "width", layout: manager.dockLayout)
-        project.customDirectory = root.path
+        let project = Project(customDirectory: root.path, layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         project.dock.select(.git)
@@ -890,8 +888,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         let settings = AppSettings(configURL: config)
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
-        let project = Project(fallbackName: "matrix", layout: manager.dockLayout)
-        project.customDirectory = repository.path
+        let project = Project(customDirectory: repository.path, layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         project.dock.select(.git)
@@ -1204,8 +1201,7 @@ final class GitPanelVisibilityTests: XCTestCase {
         let application = WorkspaceApplication()
         let manager = application.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "changes viewport", layout: manager.dockLayout)
-        project.customDirectory = root.path
+        let project = Project(customDirectory: root.path, layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         project.dock.select(.git)

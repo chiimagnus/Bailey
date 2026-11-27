@@ -85,7 +85,7 @@ struct ContentView: View {
         }
         .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
         .onChange(of: commandCompletionSequences) { syncGit() }
-        .onChange(of: manager.selectedProject?.panelContext?.identity) { syncGit() }
+        .onChange(of: manager.selectedProject?.panelContext.identity) { syncGit() }
         .onChange(of: colorScheme) {
             manager.refreshAppearance()
         }

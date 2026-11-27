@@ -153,10 +153,8 @@ final class GitStatusModelTests: XCTestCase {
             .appendingPathComponent("Bailey-Git-Nav-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let first = Project(fallbackName: "first", layout: .init())
-        let second = Project(fallbackName: "second", layout: .init())
-        first.customDirectory = directory.path
-        second.customDirectory = directory.path
+        let first = Project(customDirectory: directory.path, layout: .init())
+        let second = Project(customDirectory: directory.path, layout: .init())
         XCTAssertNotEqual(first.id, second.id)
         let git = GitStatusModel()
         git.syncSelectedProject(project: first, isCurrent: { _ in true })
@@ -195,9 +193,8 @@ final class GitStatusModelTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let project = Project(fallbackName: "Stable target", layout: .init())
-        project.customDirectory = directory.path
-        let identity = try XCTUnwrap(project.panelContext?.identity)
+        let project = Project(customDirectory: directory.path, layout: .init())
+        let identity = project.panelContext.identity
         let model = GitStatusModel()
         model.syncSelectedProject(project: project) { $0 === project }
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
@@ -224,10 +221,8 @@ final class GitStatusModelTests: XCTestCase {
         ] {
             XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
         }
-        let first = Project(fallbackName: "First", layout: .init())
-        let second = Project(fallbackName: "Second", layout: .init())
-        first.customDirectory = directory.path
-        second.customDirectory = directory.path
+        let first = Project(customDirectory: directory.path, layout: .init())
+        let second = Project(customDirectory: directory.path, layout: .init())
         let model = GitStatusModel()
         model.setLocalFileEventsForeground(true)
         model.syncSelectedProject(project: first) { $0 === first }
@@ -238,8 +233,8 @@ final class GitStatusModelTests: XCTestCase {
 
         model.syncSelectedProject(project: second) { $0 === second }
         try await wait { !model.isRefreshing }
-        XCTAssertTrue(model.matchesPanelTarget(try XCTUnwrap(second.panelContext?.identity)))
-        XCTAssertFalse(model.matchesPanelTarget(try XCTUnwrap(first.panelContext?.identity)))
+        XCTAssertTrue(model.matchesPanelTarget(second.panelContext.identity))
+        XCTAssertFalse(model.matchesPanelTarget(first.panelContext.identity))
         try Data("second project".utf8).write(to: directory.appendingPathComponent("second.txt"))
         try await wait { model.changedEntries.contains(where: { $0.path == "second.txt" }) && !model.isRefreshing }
         XCTAssertEqual(Set(model.changedEntries.map(\.path)), ["first.txt", "second.txt"])
@@ -3695,9 +3690,7 @@ final class GitStatusModelTests: XCTestCase {
                     let application = WorkspaceApplication()
                     let window = application.makeWindow()
                     defer { window.windowClosed() }
-                    let project = Project(fallbackName: "Mixed", layout: window.dockLayout)
-                    project.customDirectory = root.appendingPathComponent("elsewhere").path
-                    project.sshHost = projectScope == "local" ? nil : "alpha"
+                    let project = Project(customDirectory: root.appendingPathComponent("elsewhere").path, sshHost: projectScope == "local" ? nil : "alpha", layout: window.dockLayout)
                     let identity = contentScope == "local" ? nil : contentScope
                     let content: PaneContent
                     switch kind {
@@ -3727,23 +3720,20 @@ final class GitStatusModelTests: XCTestCase {
         let application = WorkspaceApplication()
         let window = application.makeWindow()
         defer { window.windowClosed() }
-        let project = Project(fallbackName: "Pinned SSH", layout: window.dockLayout)
-        project.sshHost = "fixture-alias"
-        project.customDirectory = "/fixture/original"
+        let project = Project(customDirectory: "/fixture/original", sshHost: "fixture-alias", layout: window.dockLayout)
         window.projects = [project]
         let session = project.newSession(launchCommand: "exec /bin/sh -i")
-        session.workingDirectory = "/fixture/other-worktree/subdirectory"
+        session.terminalDidChangeWorkingDirectory("/fixture/other-worktree/subdirectory")
         XCTAssertFalse(session.acceptsLocalFileDrop)
-        XCTAssertNil(session.workspaceIdentity)
-        XCTAssertEqual(project.panelContext?.scope, "ssh:fixture-alias")
+        XCTAssertEqual(project.panelContext.scope, "ssh:fixture-alias")
         for connected in [false, true] {
             if connected {
                 let connection = RemoteConnection(user: "fixture", host: "fixture.invalid", port: 2222,
                     controlSocket: URL(fileURLWithPath: "/tmp/bailey-unused-\(UUID())"), sshPID: 0)
                 connection.workingDirectory = session.workingDirectory
                 connection.markConnected()
-                session.location = .remote(connection)
-                XCTAssertNotEqual(session.workspaceIdentity, project.panelContext?.scope)
+                session.remoteConnection = connection
+                XCTAssertNotEqual(connection.workspaceIdentity, project.panelContext.scope)
             }
             XCTAssertTrue(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "ssh:fixture-alias"))
             XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "local"))
@@ -3771,8 +3761,8 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: sibling.path, scope: "local"))
         XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: tree.path, scope: "ssh:windows"))
 
-        manager.selectedProject?.sshHost = "windows"
-        manager.selectedProject?.customDirectory = "/d/Github/bailey-test-worktree"
+        manager.projects.append(Project(customDirectory: "/d/Github/bailey-test-worktree",
+                                        sshHost: "windows", layout: manager.dockLayout))
         XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree", scope: "ssh:windows"
         ))

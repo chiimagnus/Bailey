@@ -14,13 +14,11 @@ final class Project: nonisolated Identifiable {
     nonisolated let id = UUID()
 
     /// The directory selected when adding a project. Never follows a terminal.
-    var customDirectory: String? {
+    var customDirectory: String {
         didSet { if customDirectory != oldValue { onSnapshotChange?() } }
     }
     /// Selected SSH host, if this sidebar root is remote.
-    var sshHost: String? {
-        didSet { if sshHost != oldValue { onSnapshotChange?() } }
-    }
+    let sshHost: String?
     /// An explicitly added SSH file is anchored to its parent directory.
     var pinnedFile: String? {
         didSet { if pinnedFile != oldValue { onSnapshotChange?() } }
@@ -54,10 +52,11 @@ final class Project: nonisolated Identifiable {
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     @ObservationIgnored var onPresentationWindow: (() -> NSWindow?)?
     private(set) var isClosingPanels = false
-    private let fallbackName: String
-
-    init(fallbackName: String, layout: DockWindowLayout) {
-        self.fallbackName = fallbackName
+    init(customDirectory: String, sshHost: String? = nil, pinnedFile: String? = nil,
+         layout: DockWindowLayout) {
+        self.customDirectory = customDirectory
+        self.sshHost = sshHost
+        self.pinnedFile = pinnedFile
         dock = DockWorkspaceModel(layout: layout)
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
         dock.onDeactivate = { [weak self] item in
@@ -73,7 +72,7 @@ final class Project: nonisolated Identifiable {
     }
 
     var name: String {
-        guard let path = pinnedFile ?? customDirectory else { return fallbackName }
+        let path = pinnedFile ?? customDirectory
         let name = (path as NSString).lastPathComponent
         return name.isEmpty ? path : name
     }
@@ -151,14 +150,6 @@ final class Project: nonisolated Identifiable {
         dock.setFilePreview(of: tab.id, visible: mode == .sideBySide)
     }
 
-    /// Non-terminal tabs retain the session whose directory they were opened from.
-    var selectedSession: TerminalSession? {
-        if case .session(let session)? = selectedTab?.content {
-            return session
-        }
-        return selectedTab?.contextSession ?? sessions.first
-    }
-
     // MARK: - Project directory
 
     var workspaceIdentity: String? { sshHost.map { "ssh:" + $0 } }
@@ -168,21 +159,21 @@ final class Project: nonisolated Identifiable {
         return SSHHostWorkspaces.backend(for: sshHost)
     }
 
-    var panelContext: PanelContext? {
-        guard let directory = customDirectory else { return nil }
-        return PanelContext(
-            identity: .init(project: id, workspace: workspaceIdentity, directory: directory),
+    var panelContext: PanelContext {
+        PanelContext(
+            identity: .init(project: id, workspace: workspaceIdentity, directory: customDirectory),
             backend: workspaceBackend
         )
     }
 
     func matchesPanelTarget(_ identity: PanelContext.Identity) -> Bool {
-        panelContext?.identity == identity
+        panelContext.identity == identity
     }
 
     /// Synchronize only the selected project's fixed Files root.
     func syncFiles(isCurrent: () -> Bool) async -> PanelContext.Identity? {
-        guard isCurrent(), let context = panelContext else { return nil }
+        guard isCurrent() else { return nil }
+        let context = panelContext
         let revision = context.connectionRevision
         guard await fileTree.sync(
             root: context.cwd, backend: context.backend, scope: context.scope,
@@ -196,19 +187,16 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Sessions
 
-    /// When no directory is given, the new session starts in the pinned
-    /// project directory, then the current session's working directory
-    /// (home when neither is known). A manual project directory is an
-    /// explicit choice, so it also becomes the default for future terminals.
+    /// New sessions start at the fixed project directory unless an explicit
+    /// directory is supplied for this session.
     @discardableResult
     func newSession(
         directory: String? = nil,
         launchCommand: String? = nil,
-        initialWorkspace: PanelContext? = nil,
         initialInput: String? = nil,
         inGroup groupID: UUID? = nil
     ) -> TerminalSession {
-        let session = makeSession(directory: directory, launchCommand: launchCommand, initialWorkspace: initialWorkspace, initialInput: initialInput)
+        let session = makeSession(directory: directory, launchCommand: launchCommand, initialInput: initialInput)
         let tab = makeTab(content: .session(session))
         insertNextToSelected(tab, inGroup: groupID)
         selectTab(tab.id)
@@ -222,21 +210,19 @@ final class Project: nonisolated Identifiable {
         directory: String? = nil,
         restoredHistory: String? = nil,
         launchCommand: String? = nil,
-        initialWorkspace: PanelContext? = nil,
         initialInput: String? = nil
     ) -> TerminalSession {
-        let remoteCommand: String? = sshHost.map {
-            Self.remoteTerminalCommand(host: $0, directory: directory ?? customDirectory ?? "/")
-        }
+        let launchDirectory = directory ?? customDirectory
+        let remoteDirectory = sshHost == nil ? nil : launchDirectory
+        let remoteCommand: String? = if let sshHost, let remoteDirectory {
+            Self.remoteTerminalCommand(host: sshHost, directory: remoteDirectory)
+        } else { nil }
         let session = TerminalSession(
-            initialDirectory: sshHost == nil
-                ? (directory ?? customDirectory ?? selectedSession?.currentDirectoryPath)
-                : nil,
+            initialDirectory: sshHost == nil ? launchDirectory : nil,
             restoredHistory: restoredHistory,
             launchCommand: launchCommand ?? remoteCommand,
-            initialWorkspace: initialWorkspace,
             initialInput: initialInput,
-            fixedSSHLaunch: sshHost != nil
+            remoteLaunchDirectory: remoteDirectory
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.
@@ -260,16 +246,12 @@ final class Project: nonisolated Identifiable {
                 + " -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
                 + " -- " + Self.shellQuoted(host)
                 + "; exitStatus=$?; printf '\\nSSH session ended (status %s). Press Enter to close this terminal.\\n' \"$exitStatus\"; read -r answer; exit \"$exitStatus\""
-            let initial = PanelContext(
-                identity: .init(project: id, workspace: context.identity.workspace, directory: repository),
-                backend: context.backend
-            )
             let pathBytes = (repository + "/.").utf8.map {
                 "\\0" + String(repeating: "0", count: 3 - String($0, radix: 8).count) + String($0, radix: 8)
             }.joined()
             let input = "cd \"$(printf '%b' " + Self.shellQuoted(pathBytes) + ")\" && git "
                 + arguments.map(Self.shellQuoted).joined(separator: " ") + "\r"
-            return newSession(launchCommand: launch, initialWorkspace: initial, initialInput: input)
+            return newSession(directory: repository, launchCommand: launch, initialInput: input)
         }
         let shell = LocalWorkspaceBackend.loginShell
         let script = command + "; exec " + Self.shellQuoted(shell) + " -il"
@@ -378,7 +360,6 @@ final class Project: nonisolated Identifiable {
         editorState: EditorState? = nil, inGroup groupID: UUID? = nil,
         activating: Bool = true
     ) {
-        let context = selectedSession
         if let tab = findFileTab(path: path, workspace: workspace) {
             if activating, selectedTabID == tab.id, let workspace {
                 SSHHostWorkspaces.retryConnection(for: workspace, path: path)
@@ -393,7 +374,6 @@ final class Project: nonisolated Identifiable {
             file.editorState = editorState
         }
         let tab = makeTab(content: .file(file))
-        tab.contextSession = context
         insertNextToSelected(tab, inGroup: groupID)
         selectTab(tab.id, activating: activating)
     }
@@ -470,13 +450,11 @@ final class Project: nonisolated Identifiable {
         initialURL: String? = nil,
         initialFocus: BrowserTab.InitialFocus = .addressBar
     ) -> BrowserTab {
-        let context = selectedSession
         let browser = makeBrowser(
             initialURL: initialURL,
             initialFocus: initialFocus
         )
         let tab = makeTab(content: .browser(browser))
-        tab.contextSession = context
         insertNextToSelected(tab)
         selectTab(tab.id)
         return browser
@@ -524,7 +502,7 @@ final class Project: nonisolated Identifiable {
         if let pinnedFile, let updated = moved(pinnedFile) {
             self.pinnedFile = updated
         }
-        if let customDirectory, let updated = moved(customDirectory) {
+        if let updated = moved(customDirectory) {
             self.customDirectory = updated
         }
     }
@@ -537,7 +515,6 @@ final class Project: nonisolated Identifiable {
         repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?,
         activating: Bool = true
     ) {
-        let context = selectedSession
         if let tab = findDiffTab(
             repoRoot: repoRoot, path: path, source: staged ? .staged : .worktree,
             workspace: workspaceIdentity
@@ -556,7 +533,6 @@ final class Project: nonisolated Identifiable {
             backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
         let tab = makeTab(content: .diff(diff))
-        tab.contextSession = context
         insertNextToSelected(tab)
         selectTab(tab.id, activating: activating)
     }
@@ -581,7 +557,6 @@ final class Project: nonisolated Identifiable {
         repoRoot: String, path: String, source: DiffTab.Source, origPath: String?,
         activating: Bool = true
     ) {
-        let context = selectedSession
         if let tab = findDiffTab(repoRoot: repoRoot, path: path,
                                  source: source, workspace: workspaceIdentity),
            case .diff(let diff) = tab.content {
@@ -597,7 +572,6 @@ final class Project: nonisolated Identifiable {
                            untracked: false, origPath: origPath,
                            backend: workspaceBackend, workspaceIdentity: workspaceIdentity)
         let tab = makeTab(content: .diff(diff))
-        tab.contextSession = context
         insertNextToSelected(tab)
         selectTab(tab.id, activating: activating)
     }
@@ -806,7 +780,6 @@ final class Project: nonisolated Identifiable {
     @discardableResult
     func register(_ tab: PaneTab) -> PaneTab {
         let notify: () -> Void = { [weak self] in self?.onSnapshotChange?() }
-        tab.onSnapshotChange = notify
         switch tab.content {
         case .session(let session): session.onSnapshotChange = notify
         case .browser(let browser): browser.onSnapshotChange = notify
@@ -900,7 +873,6 @@ final class Project: nonisolated Identifiable {
     }
 
     private func retire(_ tab: PaneTab) {
-        tab.onSnapshotChange = nil
         switch tab.content {
         case .session(let session):
             session.onSnapshotChange = nil

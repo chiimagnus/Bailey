@@ -118,7 +118,7 @@ final class AppIdentityTests: XCTestCase {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
         let tab = PaneTab(content: .session(terminal))
-        let project = Project(fallbackName: "Original", layout: .init())
+        let project = Project(customDirectory: "/fixture/Original", layout: .init())
         project.append(tab)
         let changes = Mutex<Int>(0)
 
@@ -169,12 +169,12 @@ final class AppIdentityTests: XCTestCase {
         let savedHistories = TerminalHistoryStore.load()
         let first = application.makeWindow()
         let second = application.makeWindow()
-        let alpha = Project(fallbackName: "Alpha 🌷", layout: first.dockLayout)
-        let duplicate = Project(fallbackName: "Alpha 🌷", layout: first.dockLayout)
-        let bravo = Project(fallbackName: "Bravo 中文", layout: first.dockLayout)
+        let alpha = Project(customDirectory: "/fixture/Alpha 🌷", layout: first.dockLayout)
+        let duplicate = Project(customDirectory: "/fixture/Alpha 🌷", layout: first.dockLayout)
+        let bravo = Project(customDirectory: "/fixture/Bravo 中文", layout: first.dockLayout)
         first.projects = [alpha, duplicate, bravo]
         first.selectedProjectID = duplicate.id
-        let charlie = Project(fallbackName: "Charlie", layout: second.dockLayout)
+        let charlie = Project(customDirectory: "/fixture/Charlie", layout: second.dockLayout)
         second.projects = [charlie]
         second.selectedProjectID = charlie.id
         func window(_ owner: WorkspaceWindowModel, title: String) -> NSWindow {

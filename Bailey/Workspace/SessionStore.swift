@@ -21,7 +21,6 @@ struct SessionSnapshot: Codable {
         struct TabSnapshot: Codable {
             var content: ContentSnapshot
             var historyKey: String?
-            var contextSessionIndex: Int?
             /// True only for a Mac file tab.
             var localFile = false
         }

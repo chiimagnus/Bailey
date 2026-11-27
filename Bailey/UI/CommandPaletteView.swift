@@ -164,7 +164,7 @@ struct CommandPaletteView: View {
             stopLocalIndexWatcher()
             manager.restoreFocusAfterCommandPalette()
         }
-        .onChange(of: manager.selectedProject?.panelContext?.identity) {
+        .onChange(of: manager.selectedProject?.panelContext.identity) {
             updateLocalIndexWatcher()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
@@ -488,9 +488,9 @@ struct CommandPaletteView: View {
                 searchText: file.relativePath
             ) {
                 guard let project = manager.selectedProject,
-                      let context = project.panelContext,
                       project.matchesPanelTarget(indexedTarget.identity),
                       fileIndexKey == indexedTarget else { return }
+                let context = project.panelContext
                 if context.isRemote {
                     guard let scope = indexedTarget.identity.workspace,
                           scope.hasPrefix("ssh:") else { return }

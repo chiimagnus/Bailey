@@ -775,7 +775,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let original = "Name,Value\r\nItem,old\n"
             try Data(original.utf8).write(to: path)
             defer { try? FileManager.default.removeItem(at: path) }
-            let project = Project(fallbackName: "Native table edit", layout: .init())
+            let project = Project(customDirectory: path.deletingLastPathComponent().path, layout: .init())
             project.openLocalFile(path.path)
             let tab = try XCTUnwrap(project.selectedTab)
             guard case .file(let file) = tab.content else { return XCTFail("Expected actual file") }

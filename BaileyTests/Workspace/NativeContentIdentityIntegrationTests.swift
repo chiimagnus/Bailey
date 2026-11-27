@@ -16,7 +16,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
             let application = WorkspaceApplication()
             let manager = application.makeWindow()
             defer { manager.windowClosed() }
-            let project = Project(fallbackName: "middle click", layout: manager.dockLayout)
+            let project = Project(customDirectory: "/fixture/middle click", layout: manager.dockLayout)
             manager.projects = [project]
             manager.selectedProjectID = project.id
             project.dock.select(.projects)
@@ -71,7 +71,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
     func testTabStripNativeKeyboardNavigatesWithoutDisplayingUntilReturn() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "keyboard", layout: manager.dockLayout)
+        let project = Project(customDirectory: "/fixture/keyboard", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let group = try XCTUnwrap(project.dock.group(containing: .files))
@@ -275,7 +275,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
     func testTabSwitcherCardsExposeNativePressToSelectTheirRealTabs() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: "Switcher AX", layout: manager.dockLayout)
+        let project = Project(customDirectory: "/fixture/Switcher AX", layout: manager.dockLayout)
         manager.projects = [project]
         manager.selectedProjectID = project.id
         let target = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
@@ -713,8 +713,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
-        let project = Project(fallbackName: root.lastPathComponent, layout: manager.dockLayout)
-        project.customDirectory = root.path
+        let project = Project(customDirectory: root.path, layout: manager.dockLayout)
         manager.projects.append(project)
         manager.selectProject(id: project.id)
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath), encoding: .utf8)
