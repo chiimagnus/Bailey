@@ -30,7 +30,8 @@ P3-T2 完成有效解析／投影身份及固定行号与数据格的动作映�
 
 - **位置**：`DelimitedGrid.columnMenu/installColumns`、`DelimitedHeader`、`DelimitedTableControls.accept`、
   `DelimitedTableMutation.Change/prepare`、`DelimitedTableIndex.fields(in:)`、FileTab 的既有编辑事务。
-- **操作**：列头菜单插入左／右列、向左／右移动或移到指定位置。
+- **操作**：列头菜单插入左／右列，移动列拖动表头并以轻量插入线指示落点，不实时重排表格。
+  边缘横向自动滚动，Esc 或无效落点取消；松开时提交一次原文事务。
   「删除列」是唯一删除入口：右键已选整列时删除该选区，否则只删除命中列。
   结构修改作用于全部物理记录（含表头及隐藏行），不是 NSTableView 的展示重排；菜单使用简洁的列操作名称。
   禁止删除至零列，超出 4096 显示列的表不接受列结构编辑；不误删不可见的列。

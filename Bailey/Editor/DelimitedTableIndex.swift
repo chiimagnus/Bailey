@@ -100,12 +100,11 @@ nonisolated struct DelimitedTableIndex: Sendable {
         var separator = selected ?? preferred
         var hasAmbiguousSeparator = false
         if selected == nil {
-            let sample = units.prefix(sampleLimit + 1)
-            let hasMore = sample.count > sampleLimit
+            let hasMore = units.prefix(sampleLimit + 1).count > sampleLimit
             var candidates: [Separator] = []
             var consistent: [Separator] = []
             for candidate in Separator.allCases {
-                let scanned = try scan(sample.prefix(sampleLimit), separator: candidate, completesInput: !hasMore)
+                let scanned = try scan(units, separator: candidate, sampleLimit: sampleLimit)
                 guard scanned.records.contains(where: { $0.fieldCount > 1 }) else { continue }
                 candidates.append(candidate)
                 if scanned.issue == nil { consistent.append(candidate) }
@@ -124,12 +123,14 @@ nonisolated struct DelimitedTableIndex: Sendable {
     }
 
     private static func scan<Units: Sequence>(
-        _ units: Units, separator: Separator, completesInput: Bool = true
+        _ units: Units, separator: Separator, sampleLimit: Int? = nil
     ) throws -> Scanner where Units.Element == UInt16 {
         var iterator = units.makeIterator()
         var current = iterator.next()
         var scanner = Scanner()
         while let unit = current {
+            // A character budget must not prevent complete logical records from establishing the delimiter.
+            if let sampleLimit, scanner.offset >= sampleLimit, scanner.records.count >= 2 { break }
             current = iterator.next()
             let length = unit == 13 && current == 10 ? 2 : 1
             if length == 2 { current = iterator.next() }
@@ -144,7 +145,7 @@ nonisolated struct DelimitedTableIndex: Sendable {
             guard scanner.consume(unit, length: length, separator: separator.rawValue) else { return scanner }
         }
         try Task.checkCancellation()
-        guard completesInput else { return scanner }
+        guard current == nil else { return scanner }
         if scanner.phase == .quoted {
             scanner.fail(.unclosedQuote)
         } else if scanner.offset > scanner.recordStart {

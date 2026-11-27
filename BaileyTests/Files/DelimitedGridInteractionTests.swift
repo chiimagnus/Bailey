@@ -14,6 +14,261 @@ func expectedCompactCSVRowHeight(_ size: CGFloat) -> CGFloat {
 
 @MainActor
 final class DelimitedGridInteractionTests: XCTestCase {
+    func testHeaderDropKeepsNativeColumnsStillAndCancelsOrCommitsOnlyOnRelease() async throws {
+        let original = (0..<20).map { "C\($0)" }.joined(separator: ",") + "\n"
+            + (0..<20).map { "v\($0)" }.joined(separator: ",") + "\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 300, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "v0")
+        let table = grid.table
+        let header = try XCTUnwrap(table.headerView)
+        let ids = table.tableColumns.map(\.identifier.rawValue)
+        XCTAssertEqual(ids.count, 20)
+        func event(_ type: NSEvent.EventType, at point: CGPoint, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1))
+        }
+        func point(_ column: Int, fraction: CGFloat = 0.5) -> CGPoint {
+            let rect = header.headerRect(ofColumn: column)
+            return header.convert(CGPoint(x: rect.minX + rect.width * fraction, y: rect.midY), to: nil)
+        }
+        func assertStill() {
+            XCTAssertFalse(table.allowsColumnReordering)
+            XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ids)
+            XCTAssertNil(file.delimitedEditTask)
+            XCTAssertEqual(file.text, original)
+        }
+        func gesture(from start: CGPoint, to target: CGPoint, cancel: Bool, hold: Bool = false,
+                     modifiers: NSEvent.ModifierFlags = []) throws {
+            let down = try event(.leftMouseDown, at: start, modifiers: modifiers)
+            var tick = 0
+            let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
+                let done = MainActor.assumeIsolated {
+                    tick += 1
+                    assertStill()
+                    if tick == 1 {
+                        if let drag = try? event(.leftMouseDragged, at: target, modifiers: modifiers) {
+                            NSApp.postEvent(drag, atStart: false)
+                        }
+                        return false
+                    }
+                    if hold && tick < 12 { return false }
+                    if cancel {
+                        if let escape = NSEvent.keyEvent(with: .keyDown, location: target, modifierFlags: [],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                            isARepeat: false, keyCode: 53) {
+                            NSApp.postEvent(escape, atStart: false)
+                        }
+                    } else if let up = try? event(.leftMouseUp, at: target, modifiers: modifiers) {
+                        NSApp.postEvent(up, atStart: false)
+                    }
+                    return true
+                }
+                if done { timer.invalidate() }
+            }
+            RunLoop.main.add(timer, forMode: .eventTracking)
+            header.mouseDown(with: down)
+            timer.invalidate()
+            XCTAssertGreaterThan(tick, 1)
+        }
+        try gesture(from: point(0), to: point(3, fraction: 0.85), cancel: true)
+        assertStill()
+        let outside = CGPoint(x: point(3).x, y: point(3).y - 50)
+        try gesture(from: point(0), to: outside, cancel: false)
+        assertStill()
+        try gesture(from: point(0), to: point(0), cancel: false)
+        assertStill()
+        XCTAssertEqual(table.wholeColumns, IndexSet(integer: 0))
+        try gesture(from: point(2), to: point(2), cancel: false, modifiers: .shift)
+        assertStill()
+        XCTAssertEqual(table.wholeColumns, IndexSet(integersIn: 0..<3))
+        let edge = header.convert(CGPoint(x: header.visibleRect.maxX - 2, y: header.visibleRect.midY), to: nil)
+        let previousX = grid.scrollView.contentView.bounds.minX
+        try gesture(from: point(0), to: edge, cancel: true, hold: true)
+        assertStill()
+        XCTAssertGreaterThan(grid.scrollView.contentView.bounds.minX, previousX)
+        grid.scrollView.contentView.scroll(to: .zero)
+        grid.scrollView.reflectScrolledClipView(grid.scrollView.contentView)
+        host.layoutSubtreeIfNeeded()
+        try gesture(from: point(0), to: point(3, fraction: 0.85), cancel: false)
+        XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ids)
+        let task = try XCTUnwrap(file.delimitedEditTask)
+        let accepted = await task.value
+        XCTAssertTrue(accepted)
+        let expectedOrder = [1, 2, 3, 0] + Array(4..<20)
+        let expected = expectedOrder.map { "C\($0)" }.joined(separator: ",") + "\n"
+            + expectedOrder.map { "v\($0)" }.joined(separator: ",") + "\n"
+        XCTAssertEqual(file.text, expected)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+    }
+
+    func testWideColumnDragCommitsExactBytesInNormalNativeViewport() async throws {
+        let columns = 4096, rows = 200
+        func document(order: [Int]) -> String {
+            order.map { "C\($0)" }.joined(separator: ",") + "\r\n"
+                + (0..<rows).map { row in
+                    order.map { "\(1000 + row):\(10000 + $0)" }.joined(separator: ",")
+                }.joined(separator: "\r\n")
+        }
+        let original = document(order: Array(0..<columns))
+        let expected = document(order: [1, 0] + Array(2..<columns))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.contentView = nil }
+        let grid = try await self.grid(in: host, showing: "1000:10000", timeout: .seconds(30))
+        let table = grid.table
+        XCTAssertEqual(table.numberOfColumns, columns)
+        XCTAssertEqual(table.numberOfRows, rows)
+        XCTAssertGreaterThan(table.visibleRect.height, 180)
+        XCTAssertTrue(file.canEditDelimited(try XCTUnwrap(file.delimitedTable.parsed)))
+        let header = try XCTUnwrap(table.headerView)
+        func point(_ column: Int, fraction: CGFloat) -> CGPoint {
+            let rect = header.headerRect(ofColumn: column)
+            return header.convert(CGPoint(x: rect.minX + rect.width * fraction, y: rect.midY), to: nil)
+        }
+        func event(_ type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1))
+        }
+        let start = point(0, fraction: 0.5), target = point(1, fraction: 0.85)
+        var ticks = 0
+        let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
+            let done = MainActor.assumeIsolated {
+                ticks += 1
+                XCTAssertNil(file.delimitedEditTask)
+                XCTAssertEqual(table.tableColumns.first?.identifier.rawValue, "0")
+                if let mouse = try? event(ticks == 1 ? .leftMouseDragged : .leftMouseUp, at: target) {
+                    NSApp.postEvent(mouse, atStart: false)
+                }
+                return ticks == 2
+            }
+            if done { timer.invalidate() }
+        }
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        header.mouseDown(with: try event(.leftMouseDown, at: start))
+        timer.invalidate()
+        XCTAssertEqual(ticks, 2)
+        let edit = try XCTUnwrap(file.delimitedEditTask)
+        let accepted = await edit.value
+        XCTAssertTrue(accepted)
+        XCTAssertTrue(file.text == expected)
+        await file.save()
+        XCTAssertTrue(try Data(contentsOf: url) == Data(expected.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertTrue(file.text == original)
+        await file.save()
+        XCTAssertTrue(try Data(contentsOf: url) == Data(original.utf8))
+        file.documentUndoManager.redo()
+        XCTAssertTrue(file.text == expected)
+        await file.save()
+        XCTAssertTrue(try Data(contentsOf: url) == Data(expected.utf8))
+    }
+
+    func testWideFileViewportRetainsEditingAndExactBytesAcrossScrollingAndResize() async throws {
+        let columns = 4096, rows = 200
+        let heading = (0..<columns).map { String($0 % 10) }.joined(separator: ",")
+        let line = heading + "\r\n"
+        let last = "0," + (1..<(columns - 1)).map { String($0 % 10) }.joined(separator: ",") + ",\"last\"\r\n"
+        let original = String(repeating: line, count: rows) + last
+        let expected = String(repeating: line, count: rows) + last.replacingOccurrences(of: "\"last\"", with: "\"中文,末列\"")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 800, height: 500),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.contentView = nil }
+        let started = ContinuousClock.now
+        let grid = try await self.grid(in: host, showing: "0", timeout: .seconds(30))
+        print("CSV_WIDE_FILE_OPEN \(started.duration(to: .now))")
+        let table = grid.table
+        let snapshot = try XCTUnwrap(file.delimitedTable.parsed)
+        XCTAssertTrue(file.canEditDelimited(snapshot))
+        XCTAssertEqual(table.numberOfRows, rows)
+        XCTAssertEqual(table.numberOfColumns, columns)
+        func assertSparse() {
+            var cells = 0, realizedRows = 0
+            table.enumerateAvailableRowViews { row, _ in
+                realizedRows += 1
+                cells += row.subviews.filter { $0 is NSTextField }.count
+            }
+            XCTAssertLessThanOrEqual(cells, realizedRows * (table.columnIndexes(in: table.visibleRect).count + 2))
+        }
+        let target = DelimitedTablePresentation.Cell(row: rows - 1, column: columns - 1)
+        table.select(target, reveal: true)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertEqual((table.view(atColumn: target.column, row: target.row, makeIfNecessary: false) as? NSTextField)?.stringValue, "last")
+        assertSparse()
+        table.onEdit(target)
+        let editor = try XCTUnwrap(grid.activeEditor)
+        XCTAssertEqual(editor.string, "last")
+        editor.insertText("中文,末列", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        let resizing = ContinuousClock.now
+        grid.applyFontSize(14)
+        print("CSV_WIDE_FILE_FONT \(resizing.duration(to: .now))")
+        window.setContentSize(NSSize(width: 900, height: 600))
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        XCTAssertTrue(grid.activeEditor === editor)
+        XCTAssertEqual(editor.string, "中文,末列")
+        assertSparse()
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        let write = try XCTUnwrap(file.delimitedEditTask)
+        let accepted = await write.value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(file.text, expected)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, expected)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+    }
+
     func testLiveTableFontResizePreservesGridProjectionSelectionAndDraft() async throws {
         let original = "Name,Value,Note,材料,加载方式,备注\r\n"
             + "Alpha,old,one,天然页岩,SHPB 单轴动态压缩,baseline\n"
@@ -344,7 +599,7 @@ final class DelimitedGridInteractionTests: XCTestCase {
 
     func testFixedRecordGutterSelectsPhysicalRecordsAcrossSortAndBothScrollAxes() async throws {
         let header = "Name,Value,Notes,Tail\r\n"
-        let first = "Zulu,old,\"quoted\nline\",unchanged\r\n"
+        let first = "Zulu,old,\"quoted\nline\",unchanged payload wider than the narrow viewport\r\n"
         let others = (0..<36).map { "Row \($0),value,notes,tail\n" }.joined()
         let original = header + first + others
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
@@ -489,6 +744,130 @@ final class DelimitedGridInteractionTests: XCTestCase {
         file.documentUndoManager.redo()
         XCTAssertEqual(file.text, expected)
         XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
+    }
+
+    func testNativeColumnDragCommitsOnePhysicalOrderAndRemapsSelectionAndSettings() async throws {
+        let original = "Name,Group,Value,Tail\r\nA,keep,1,\"one\"\nB,other,2,\rC,keep,3,x"
+        let expected = "Group,Name,Value,Tail\r\nkeep,A,1,\"one\"\nother,B,2,\rkeep,C,3,x"
+        func bytes(_ value: String) -> Data { Data([0xef, 0xbb, 0xbf]) + Data(value.utf8) }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try bytes(original).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let controls = file.delimitedTable
+        controls.configuration = .init(filters: [1: "keep"], sort: [.init(column: 2, ascending: false)])
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 500, height: 240),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "C")
+        let table = grid.table
+        let ids = ["0", "1", "2", "3"]
+        XCTAssertEqual(table.numberOfRows, 2)
+        table.tableColumns[1].width = 190
+        let width = try XCTUnwrap(controls.columnWidths[1])
+        table.selectColumn(1, modifiers: [])
+        XCTAssertFalse(table.allowsColumnReordering)
+
+        // Tracking keeps the displayed and physical field orders identical.
+        XCTAssertTrue(grid.trackColumnReorder(from: 1) { isCurrent in
+            XCTAssertTrue(isCurrent())
+            XCTAssertFalse(table.allowsColumnReordering)
+            XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ids)
+            XCTAssertNil(file.delimitedEditTask)
+            XCTAssertEqual(file.text, original)
+            return 0
+        })
+        XCTAssertFalse(table.allowsColumnReordering)
+        XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ids)
+        let task = try XCTUnwrap(file.delimitedEditTask)
+        let accepted = await task.value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(file.text, expected)
+        XCTAssertEqual(controls.configuration.filters, [0: "keep"])
+        XCTAssertEqual(controls.configuration.sort, [.init(column: 2, ascending: false)])
+        XCTAssertEqual(controls.columnWidths[0], width)
+        XCTAssertNil(controls.columnWidths[1])
+        let updated = try await self.grid(in: host, showing: "keep")
+        XCTAssertTrue(updated === grid)
+        XCTAssertEqual(table.tableColumns.map(\.title), ["Group", "Name", "Value", "Tail"])
+        XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ids)
+        XCTAssertEqual(table.numberOfRows, 2)
+        XCTAssertEqual(table.wholeColumns, IndexSet(integer: 0))
+        XCTAssertEqual((table.view(atColumn: 1, row: 0, makeIfNecessary: true) as? NSTextField)?.stringValue, "C")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
+        file.documentUndoManager.undo()
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), bytes(original))
+        file.documentUndoManager.redo()
+        XCTAssertEqual(file.text, expected)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: url), bytes(expected))
+    }
+
+    func testColumnDragCancelsWhenProjectionChangesOrInputIsActive() async throws {
+        let original = "A,B,C\nfirst,second,third\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv")
+        try Data(original.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        defer { file.retireContent() }
+        let window = NSWindow(contentRect: NSRect(x: -800, y: -800, width: 400, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file, rendersOnlyPreview: true))
+        window.contentView = host
+        window.orderBack(nil)
+        let grid = try await self.grid(in: host, showing: "first")
+        let table = grid.table
+        let ids = ["0", "1", "2"]
+        // Returning to the original position produces no edit or Undo.
+        XCTAssertTrue(grid.trackColumnReorder(from: 0) { _ in 0 })
+        XCTAssertTrue(grid.trackColumnReorder(from: 0) { _ in nil })
+        XCTAssertNil(file.delimitedEditTask)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+
+        let snapshot = try XCTUnwrap(file.delimitedTable.parsed)
+        let configuration = DelimitedTablePresentation.Configuration(sort: [.init(column: 1, ascending: true)])
+        let projection = try await DelimitedTablePresentation.evaluate(
+            source: snapshot.source, index: snapshot.index, configuration: configuration
+        )
+        XCTAssertTrue(grid.trackColumnReorder(from: 0) { isCurrent in
+            XCTAssertTrue(isCurrent())
+            file.delimitedTable.configuration = configuration
+            grid.install(snapshot, presentation: projection)
+            XCTAssertFalse(isCurrent())
+            return 2
+        })
+        XCTAssertEqual(table.tableColumns.map(\.identifier.rawValue), ids)
+        XCTAssertEqual(table.tableColumns.map(\.title), ["A", "B", "C"])
+        XCTAssertNil(file.delimitedEditTask)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertFalse(file.documentUndoManager.canUndo)
+
+        XCTAssertTrue(window.makeFirstResponder(table))
+        table.onEdit(.init(row: 0, column: 1))
+        let editor = try XCTUnwrap(grid.activeEditor)
+        XCTAssertFalse(grid.trackColumnReorder(from: 0) { _ in
+            XCTFail("Active input must not begin a column drag")
+            return 2
+        })
+        XCTAssertTrue(grid.activeEditor === editor)
+        grid.cancelEditing()
+        XCTAssertEqual(file.text, original)
+        XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
 
     func testOneDeleteColumnMenuUsesTheRightClickedSelection() async throws {
@@ -1148,6 +1527,12 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertNotNil(menu.item(withTitle: String(localized: "Sort Ascending", table: "Editor")))
         XCTAssertNotNil(menu.item(withTitle: String(localized: "Filter Column…", table: "Editor")))
         XCTAssertNil(menu.item(withTitle: String(localized: "Insert Column Left", table: "Editor")))
+        XCTAssertFalse(grid.trackColumnReorder(from: 0) { _ in
+            XCTFail("Read-only content must not begin a column drag")
+            return 1
+        })
+        XCTAssertFalse(grid.table.allowsColumnReordering)
+        XCTAssertNil(file.delimitedEditTask)
 
         let pid = ProcessInfo.processInfo.processIdentifier
         let access = await Task.detached {
@@ -1205,12 +1590,12 @@ final class DelimitedGridInteractionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data(original.utf8))
     }
 
-    private func grid(in host: NSView, showing value: String) async throws -> DelimitedGrid {
+    private func grid(in host: NSView, showing value: String, timeout: Duration = .seconds(5)) async throws -> DelimitedGrid {
         func find(_ view: NSView) -> DelimitedGrid? {
             if let grid = view as? DelimitedGrid { return grid }
             return view.subviews.lazy.compactMap { find($0) }.first
         }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        let deadline = ContinuousClock.now.advanced(by: timeout)
         repeat {
             host.layoutSubtreeIfNeeded()
             if let grid = find(host), grid.table.numberOfRows > 0,

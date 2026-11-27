@@ -918,6 +918,145 @@ final class DelimitedTablePresentationTests: XCTestCase {
         print("CSV_TABLE_MOUNTS count=100 elapsed=\(started.duration(to: .now)) maxrss_before=\(before.ru_maxrss) maxrss_after=\(after.ru_maxrss)")
     }
 
+    func testWideTableRealizesOnlyViewportCellsAcrossBothScrollAxes() async throws {
+        let fixtures = [(200, 512), (200, 4096), (100_000, 8)]
+        for (rows, count) in fixtures {
+            let source = (0..<count).map { "C\($0)" }.joined(separator: ",") + "\n"
+                + (0..<rows).map { row in
+                    (0..<count).map { column in "\(row):\(column)" }.joined(separator: ",")
+                }.joined(separator: "\n")
+            let index = try await DelimitedTableIndex.parse(source, preferred: .comma, selected: .comma)
+            let presentation = try await DelimitedTablePresentation.evaluate(source: source, index: index, configuration: .init())
+            let window = NSWindow(contentRect: CGRect(x: -800, y: -800, width: 800, height: 500),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let grid = DelimitedGrid()
+            window.contentView = grid
+            window.orderBack(nil)
+            defer { grid.detach(); window.contentView = nil }
+            func memory() -> (footprint: Double, resident: Double) {
+                var info = task_vm_info_data_t()
+                var size = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+                let result = withUnsafeMutablePointer(to: &info) { pointer in
+                    pointer.withMemoryRebound(to: integer_t.self, capacity: Int(size)) {
+                        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &size)
+                    }
+                }
+                XCTAssertEqual(result, KERN_SUCCESS)
+                return (Double(info.phys_footprint) / 1_048_576, Double(info.resident_size) / 1_048_576)
+            }
+            let baseline = memory()
+            let started = ContinuousClock.now
+            grid.install(.init(index: index, source: source, requestID: "wide", documentRevision: "wide"),
+                         presentation: presentation)
+            func check(row: Int, column: Int) throws {
+                try autoreleasepool {
+                    grid.layoutSubtreeIfNeeded()
+                    grid.table.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    let table = grid.table
+                    let visibleColumns = table.columnIndexes(in: table.visibleRect)
+                    var realizedRows = 0, realizedCells = 0
+                    table.enumerateAvailableRowViews { rowView, _ in
+                        realizedRows += 1
+                        realizedCells += rowView.subviews.filter { $0 is NSTextField }.count
+                    }
+                    let visibleRows = table.rows(in: table.visibleRect)
+                    let measured = memory()
+                    print("CSV_VIEWPORT|\(rows)|\(count)|\(row)|\(column)|\(visibleColumns.count)|\(realizedRows)|\(realizedCells)|\(measured.footprint-baseline.footprint)|\(measured.resident-baseline.resident)|\(started.duration(to: .now))")
+                    XCTAssertLessThanOrEqual(realizedCells, realizedRows * (visibleColumns.count + 2),
+                                             "Horizontal virtualization must bound native cells by the viewport")
+                    XCTAssertGreaterThanOrEqual(table.bounds.maxY, table.rect(ofRow: table.numberOfRows - 1).maxY,
+                                                "Resizing the viewport must not shorten the document")
+                    let targetRect = table.frameOfCell(atColumn: column, row: row)
+                    XCTAssertTrue(targetRect.intersects(table.visibleRect), "Target \(targetRect) not in viewport \(table.visibleRect)")
+                    for r in visibleRows.location..<(visibleRows.location + visibleRows.length) {
+                        for c in visibleColumns {
+                            let cell = try XCTUnwrap(table.view(atColumn: c, row: r, makeIfNecessary: false) as? NSTextField)
+                            XCTAssertEqual(cell.stringValue, "\(r):\(c)")
+                            XCTAssertEqual(cell.isAccessibilitySelected(), table.selection.contains(.init(row: r, column: c)))
+                        }
+                    }
+                }
+            }
+            try check(row: 0, column: 0)
+            let cold = memory()
+            XCTAssertLessThan(cold.footprint - baseline.footprint, 150, "Viewport must not allocate a dense matrix of views")
+            let jumps = [(rows - 1, count - 1), (0, count / 2), (rows / 2, 0), (0, 0)]
+            for (row, column) in jumps {
+                grid.table.select(.init(row: row, column: column), reveal: true)
+                try check(row: row, column: column)
+            }
+            var durations: [Double] = []
+            for repeatIndex in 0..<32 {
+                let row = repeatIndex * (rows - 1) / 31
+                let column = (31 - repeatIndex) * (count - 1) / 31
+                try autoreleasepool {
+                    let start = DispatchTime.now().uptimeNanoseconds
+                    grid.table.select(.init(row: row, column: column), reveal: true)
+                    grid.layoutSubtreeIfNeeded()
+                    grid.table.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    durations.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+                    try check(row: row, column: column)
+                }
+            }
+            let sorted = durations.sorted()
+            print("CSV_VIEWPORT_HOT|\(rows)|\(count)|32|median=\(sorted[16])ms|p95=\(sorted[30])ms|max=\(sorted[31])ms|footprintDelta=\(memory().footprint-cold.footprint)")
+            let clip = grid.scrollView.contentView
+            for horizontal in [true, false] {
+                clip.scroll(to: .zero)
+                grid.scrollView.reflectScrolledClipView(clip)
+                grid.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if horizontal && grid.table.bounds.width <= clip.bounds.width { continue }
+                var samples: [Double] = []
+                for _ in 0..<32 {
+                    try autoreleasepool {
+                        let origin = clip.bounds.origin
+                        let step = horizontal ? NSPoint(x: 12, y: 0) : NSPoint(x: 0, y: grid.table.rowHeight)
+                        let requested = NSRect(x: origin.x + step.x, y: origin.y + step.y,
+                                               width: clip.bounds.width, height: clip.bounds.height)
+                        let next = clip.constrainBoundsRect(requested).origin
+                        XCTAssertNotEqual(next, origin)
+                        let start = DispatchTime.now().uptimeNanoseconds
+                        clip.scroll(to: next)
+                        grid.scrollView.reflectScrolledClipView(clip)
+                        grid.layoutSubtreeIfNeeded()
+                        grid.table.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                        samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+                        let rect = grid.table.visibleRect
+                        let row = grid.table.rows(in: rect).location
+                        let column = try XCTUnwrap(grid.table.columnIndexes(in: rect).first {
+                            grid.table.rect(ofColumn: $0).intersects(rect)
+                        })
+                        try check(row: row, column: column)
+                    }
+                }
+                let times = samples.sorted()
+                print("CSV_VIEWPORT_SCROLL|\(rows)|\(count)|\(horizontal ? "horizontal" : "vertical")|32|median=\(times[16])ms|p95=\(times[30])ms|max=\(times[31])ms")
+            }
+            for size in [NSSize(width: 300, height: 180), NSSize(width: 1200, height: 850), NSSize(width: 800, height: 500)] {
+                window.setContentSize(size)
+                // A window resize is completed before the next user event.
+                grid.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                grid.table.select(.init(row: rows - 1, column: count - 1), reveal: true)
+                try check(row: rows - 1, column: count - 1)
+            }
+            grid.detach()
+            grid.layoutSubtreeIfNeeded()
+            XCTAssertEqual(grid.table.numberOfRows, 0)
+            var remainingCells = 0
+            grid.table.enumerateAvailableRowViews { rowView, _ in
+                remainingCells += rowView.subviews.filter { $0 is NSTextField }.count
+            }
+            XCTAssertEqual(remainingCells, 0)
+        }
+    }
+
     func testNativeGridVirtualizesTallAndWideTablesAndCanReachTheirLastCells() async throws {
         let viewport = CGRect(x: 0, y: 0, width: 480, height: 330)
         let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)
@@ -926,7 +1065,7 @@ final class DelimitedTablePresentationTests: XCTestCase {
         let grid = DelimitedGrid()
         window.contentView = grid
         let tall = "Name,Value\n" + (0..<100_000).map { "Row \($0),\($0)\n" }.joined()
-        let widths = [1, 2501, 4095, 4096, 4097]
+        let widths = [1, 2501, 4095, 4096, 4097, 2, 4096, 1]
         let fixtures = [(tall, 99_999, 1, "99999")] + widths.map { width in
             let wide = (0..<width).map { "column \($0)" }.joined(separator: ",") + "\n"
                 + (0..<width).map { "cell \($0)" }.joined(separator: ",")
@@ -949,6 +1088,12 @@ final class DelimitedTablePresentationTests: XCTestCase {
             let field = try XCTUnwrap(grid.table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField)
             XCTAssertEqual(field.stringValue, expected)
             XCTAssertEqual(grid.table.numberOfColumns, min(index.columnCount, DelimitedTableIndex.maximumColumns))
+            let lastColumn = grid.table.numberOfColumns - 1
+            let lastRect = grid.table.rect(ofColumn: lastColumn)
+            let width = grid.table.tableColumns.reduce(CGFloat.zero) { $0 + $1.width }
+            XCTAssertEqual(lastRect.maxX, width, accuracy: 1)
+            XCTAssertEqual(grid.table.headerView?.headerRect(ofColumn: lastColumn).maxX ?? -1, width, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(grid.table.bounds.maxX + 1, width)
             print("CSV_GRID rows=\(presentation.rows.count) columns=\(index.columnCount) last=\(column) elapsed=\(started.duration(to: .now))")
             XCTAssertTrue(field.isAccessibilitySelected())
             var realizedRows = 0

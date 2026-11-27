@@ -257,11 +257,34 @@ final class DelimitedTableIndexTests: XCTestCase {
         XCTAssertEqual(selected.fields(in: selected.records[1]).map { $0.value(in: source as NSString) },
                        ["=1,+2", "@4"])
         let longFirstField = "\"" + String(repeating: "a", count: 16_384) + "\";second"
-        let bounded = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma)
-        XCTAssertTrue(bounded.hasAmbiguousSeparator, "Do not guess outside the sample")
+        let detected = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma)
+        XCTAssertEqual(detected.separator, .semicolon)
+        XCTAssertFalse(detected.hasAmbiguousSeparator)
+        XCTAssertNil(detected.issue)
         let corrected = try await DelimitedTableIndex.parse(longFirstField, preferred: .comma, selected: .semicolon)
         XCTAssertEqual(corrected.fields(in: corrected.records[0]).count, 2)
         XCTAssertNil(corrected.issue)
+    }
+
+    func testLongLogicalRecordsProvideCompleteDelimiterEvidence() async throws {
+        for (separator, delimiter) in [(DelimitedTableIndex.Separator.comma, ","), (.semicolon, ";"), (.tab, "\t")] {
+            let header = (0..<4096).map { "Column\($0)" }.joined(separator: delimiter)
+            let row = (0..<4096).map { "Value\($0)" }.joined(separator: delimiter)
+            let index = try await DelimitedTableIndex.parse(header + "\r\n" + row, preferred: .comma)
+            XCTAssertEqual(index.separator, separator)
+            XCTAssertFalse(index.hasAmbiguousSeparator)
+            XCTAssertNil(index.issue)
+            XCTAssertEqual(index.columnCount, 4096)
+            XCTAssertEqual(index.records.count, 2)
+        }
+        let long = String(repeating: "a", count: 17_000)
+        let multiline = "\"" + long + "\r\n,;\t\";header\r\nitem;value"
+        let quoted = try await DelimitedTableIndex.parse(multiline, preferred: .comma)
+        XCTAssertEqual(quoted.separator, .semicolon)
+        XCTAssertFalse(quoted.hasAmbiguousSeparator)
+        XCTAssertNil(quoted.issue)
+        let ambiguous = try await DelimitedTableIndex.parse(long + ",b;c\nrow,d;e", preferred: .comma)
+        XCTAssertTrue(ambiguous.hasAmbiguousSeparator)
     }
 
     func testAutomaticSeparatorSurvivesGridTransactionsButNotUnrelatedSourceEdits() async throws {

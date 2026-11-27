@@ -516,7 +516,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     private var controls: DelimitedTableControls? { file?.delimitedTable }
     private var theme: GhosttyThemeDefinition?
     fileprivate var palette: DelimitedPalette { table.palette }
-    private var installingColumns = false
     var onFilter: (Int, DelimitedTableControls.DisplayRequest) -> Void = { _, _ in }
     private var snapshot: FileTab.DelimitedSnapshot?
     private var presentation: DelimitedTablePresentation?
@@ -565,6 +564,12 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         let header = DelimitedHeader(frame: NSRect(x: 0, y: 0, width: 0, height: table.compactRowHeight))
         header.onMenu = { [weak self] column in self?.columnMenu(column) }
         header.onEdit = { [weak self] column in self?.editHeader(column) ?? false }
+        header.onClick = { [weak self] column, modifiers in
+            self?.selectHeaderColumn(column, modifiers: modifiers)
+        }
+        header.onTrack = { [weak self] column, track in
+            self?.trackColumnReorder(from: column, track) ?? false
+        }
         table.headerView = header
         table.style = .plain
         table.rowSizeStyle = .custom
@@ -602,14 +607,20 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         super.layout()
         let width = min(gutter.preferredWidth, max(0, bounds.width - 36))
         gutter.frame = CGRect(x: bounds.minX, y: bounds.minY, width: width, height: bounds.height)
+        let oldViewportSize = scrollView.contentView.bounds.size
         scrollView.frame = CGRect(x: bounds.minX + width, y: bounds.minY,
                                   width: bounds.width - width, height: bounds.height)
+        if scrollView.contentView.bounds.size != oldViewportSize {
+            table.tile()
+        }
         gutter.needsDisplay = true
         updateHeaderHeight()
         if let edit = editing { layoutEditor(edit) }
     }
 
     @objc private func viewportChanged(_ notification: Notification) {
+        guard !table.updatingColumns else { return }
+        table.refreshViewportColumns()
         gutter.needsDisplay = true
         table.refreshHover()
         if let edit = editing { layoutEditor(edit) }
@@ -637,23 +648,29 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         let topRow = table.row(at: NSPoint(x: max(0, origin.x), y: origin.y))
         let oldRect = topRow >= 0 ? table.rect(ofRow: topRow) : .zero
         let rowFraction = oldRect.height > 0 ? (origin.y - oldRect.minY) / oldRect.height : 0
+        // Changing thousands of column widths with live rows repeatedly lays out
+        // those rows. Reuse the existing projection after installing its geometry.
+        let currentPresentation = presentation
+        presentation = nil
+        table.reloadData()
         table.updateFonts(size: size)
         let scale = fontScale
         let ratio = scale / previousScale
-        installingColumns = true
-        for column in table.tableColumns {
-            // Capture the width before AppKit clamps it to the new minimum.
-            let width = column.width * ratio
-            let maximum = column.maxWidth * ratio
-            column.minWidth = 0
-            column.maxWidth = maximum
-            column.minWidth = DelimitedCellLayout.minimumColumnWidth(scale: scale)
-            column.width = width
+        table.updateColumns {
+            for column in table.tableColumns {
+                // Capture the width before AppKit clamps it to the new minimum.
+                let width = column.width * ratio
+                let maximum = column.maxWidth * ratio
+                column.minWidth = 0
+                column.maxWidth = maximum
+                column.minWidth = DelimitedCellLayout.minimumColumnWidth(scale: scale)
+                if currentPresentation == nil { column.width = width }
+            }
+            if let snapshot, let currentPresentation {
+                installColumns(index: snapshot.index, configuration: currentPresentation.configuration)
+            }
         }
-        installingColumns = false
-        if let snapshot, let presentation {
-            installColumns(index: snapshot.index, configuration: presentation.configuration)
-        }
+        presentation = currentPresentation
         table.rowHeight = table.compactRowHeight
         // Font changes invalidate every row height. The active input is independent of reused cells.
         table.reloadData()
@@ -667,7 +684,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: CGPoint(x: origin.x * ratio, y: y),
                                                          size: clip.bounds.size)).origin)
         scrollView.reflectScrolledClipView(clip)
-        table.refreshSelection()
+        table.syncSelection()
         gutter.needsDisplay = true
         if let edit = editing { styleEditor(edit) }
     }
@@ -718,18 +735,20 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         if rebuildColumns {
             self.presentation = nil
             table.reloadData()
-            installColumns(index: snapshot.index, configuration: configuration)
-        } else if previousConfiguration != configuration {
-            installingColumns = true
-            let columns = table.tableColumns
-            for (index, column) in columns.enumerated() {
-                guard controls?.columnWidths[index] == nil,
-                      DelimitedCellLayout.headerSymbols(previousConfiguration, column: index).count !=
-                        DelimitedCellLayout.headerSymbols(configuration, column: index).count else { continue }
-                column.width = fittedWidth(index, title: column.title, index: snapshot.index,
-                                           configuration: configuration, samplesPerColumn: 4096 / columns.count)
+            table.updateColumns {
+                installColumns(index: snapshot.index, configuration: configuration)
             }
-            installingColumns = false
+        } else if previousConfiguration != configuration {
+            table.updateColumns {
+                let columns = table.tableColumns
+                for (index, column) in columns.enumerated() {
+                    guard controls?.columnWidths[index] == nil,
+                          DelimitedCellLayout.headerSymbols(previousConfiguration, column: index).count !=
+                            DelimitedCellLayout.headerSymbols(configuration, column: index).count else { continue }
+                    column.width = fittedWidth(index, title: column.title, index: snapshot.index,
+                                               configuration: configuration, samplesPerColumn: 4096 / columns.count)
+                }
+            }
         }
         self.presentation = presentation
         for (column, item) in table.tableColumns.enumerated() {
@@ -753,8 +772,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     private func installColumns(index: DelimitedTableIndex, configuration: DelimitedTablePresentation.Configuration) {
-        installingColumns = true
-        defer { installingColumns = false }
         let count = min(index.columnCount, DelimitedTableIndex.maximumColumns)
         let columns = table.tableColumns
         for column in columns.dropFirst(count) { table.removeTableColumn(column) }
@@ -799,7 +816,7 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     func tableViewColumnDidResize(_ notification: Notification) {
-        guard !installingColumns, let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
+        guard !table.updatingColumns, let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
               let index = Int(column.identifier.rawValue) else { return }
         controls?.columnWidths[index] = column.width / fontScale
         if let edit = editing { styleEditor(edit) }
@@ -833,13 +850,19 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
-        guard projectionIsCurrent, let column = Int(tableColumn.identifier.rawValue) else { return }
+        guard let column = Int(tableColumn.identifier.rawValue) else { return }
+        selectHeaderColumn(column, modifiers: NSApp.currentEvent?.modifierFlags ?? [])
+    }
+
+    private func selectHeaderColumn(_ column: Int, modifiers: NSEvent.ModifierFlags) {
+        guard projectionIsCurrent else { return }
         table.window?.makeFirstResponder(table)
-        table.selectColumn(column, modifiers: NSApp.currentEvent?.modifierFlags ?? [])
+        table.selectColumn(column, modifiers: modifiers)
     }
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
-        guard let column, let columnIndex = Int(column.identifier.rawValue) else { return nil }
+        guard let column, let columnIndex = Int(column.identifier.rawValue),
+              table.viewportColumns.contains(columnIndex) else { return nil }
         let cell = DelimitedTablePresentation.Cell(row: row, column: columnIndex)
         let cellID = NSUserInterfaceItemIdentifier("bailey.csv.cell")
         let label = tableView.makeView(withIdentifier: cellID, owner: self) as? DelimitedCellField
@@ -1230,13 +1253,6 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
                         deletion.representedObject = ColumnDeletion(projection: presentation.id, columns: columns)
                         menu.addItem(deletion)
                     }
-                    if column > 0 {
-                        menu.addItem(item(String(localized: "Move Column Left", table: "Editor"), action: #selector(moveColumnLeft(_:)), tag: column))
-                    }
-                    if column + 1 < count {
-                        menu.addItem(item(String(localized: "Move Column Right", table: "Editor"), action: #selector(moveColumnRight(_:)), tag: column))
-                    }
-                    menu.addItem(item(String(localized: "Move Column to Position…", table: "Editor"), action: #selector(chooseColumnPosition(_:)), tag: column))
                 }
             }
         }
@@ -1272,37 +1288,29 @@ final class DelimitedGrid: NSView, NSTableViewDataSource, NSTableViewDelegate, N
         }
     }
 
-    @objc private func moveColumnLeft(_ sender: NSMenuItem) { moveColumn(sender, to: sender.tag - 1) }
-    @objc private func moveColumnRight(_ sender: NSMenuItem) { moveColumn(sender, to: sender.tag + 1) }
-
-    private func moveColumn(_ sender: NSMenuItem, to destination: Int) {
-        guard accepts(sender), sender.tag != destination, table.tableColumns.indices.contains(destination) else { return }
-        changeColumns { order in
-            let column = order.remove(at: sender.tag)
-            order.insert(column, at: destination)
-        }
+    private var canReorderColumns: Bool {
+        guard projectionIsCurrent, editing == nil, let snapshot, let file,
+              (2...DelimitedTableIndex.maximumColumns).contains(snapshot.index.columnCount),
+              !file.hasPendingDelimitedEdit else { return false }
+        return file.canEditDelimited(snapshot)
     }
 
-    @objc private func chooseColumnPosition(_ sender: NSMenuItem) {
-        guard accepts(sender), let window else { return }
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Move Column to Position", table: "Editor")
-        alert.informativeText = String(localized: "Enter a position from 1 to \(table.numberOfColumns).", table: "Editor")
-        let position = NSTextField(string: String(sender.tag + 1))
-        let formatter = NumberFormatter()
-        formatter.minimum = 1
-        formatter.maximum = NSNumber(value: table.numberOfColumns)
-        formatter.allowsFloats = false
-        position.formatter = formatter
-        position.frame = NSRect(x: 0, y: 0, width: 125, height: 24)
-        alert.accessoryView = position
-        alert.addButton(withTitle: String(localized: "Move Column", table: "Editor"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
-        alert.window.initialFirstResponder = position
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self, let requested = position.objectValue as? NSNumber else { return }
-            moveColumn(sender, to: requested.intValue - 1)
+    // Keep the native table in physical field order throughout the gesture.
+    // Only the completed, still-current drop may change the document.
+    @discardableResult
+    func trackColumnReorder(from column: Int, _ track: (() -> Bool) -> Int?) -> Bool {
+        guard canReorderColumns, let projectionID,
+              table.tableColumns.indices.contains(column) else { return false }
+        let isCurrent = { self.acceptsProjection(projectionID) && self.canReorderColumns }
+        guard let destination = track(isCurrent), destination != column,
+              isCurrent(), table.tableColumns.indices.contains(destination) else { return true }
+        table.window?.makeFirstResponder(table)
+        guard isCurrent() else { return true }
+        changeColumns { order in
+            let moved = order.remove(at: column)
+            order.insert(moved, at: destination)
         }
+        return true
     }
 
     private func accepts(_ sender: NSMenuItem) -> Bool {
@@ -1505,16 +1513,111 @@ private nonisolated final class DelimitedRecordAXElement: NSAccessibilityElement
 private final class DelimitedHeader: NSTableHeaderView {
     var onMenu: (Int) -> NSMenu? = { _ in nil }
     var onEdit: (Int) -> Bool = { _ in false }
+    var onClick: (Int, NSEvent.ModifierFlags) -> Void = { _, _ in }
+    var onTrack: (Int, (() -> Bool) -> Int?) -> Bool = { _, _ in false }
+    private var dropMarker: NSRect?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let column = column(at: point)
-        if event.clickCount == 2, column >= 0 {
-            let rect = headerRect(ofColumn: column)
-            // A double-click on a divider remains AppKit's native resize gesture.
-            if rect.insetBy(dx: 4, dy: 0).contains(point), onEdit(column) { return }
+        // Dividers retain AppKit's native resize and double-click fit behavior.
+        guard column >= 0, headerRect(ofColumn: column).insetBy(dx: 4, dy: 0).contains(point) else {
+            super.mouseDown(with: event)
+            return
         }
-        super.mouseDown(with: event)
+        if event.clickCount == 2, onEdit(column) { return }
+        if !onTrack(column, { isCurrent in
+            trackDrop(from: column, event: event, isCurrent: isCurrent)
+        }) {
+            super.mouseDown(with: event)
+        }
+    }
+
+    private func trackDrop(from source: Int, event: NSEvent, isCurrent: () -> Bool) -> Int? {
+        guard let window, let table = tableView, let scroll = table.enclosingScrollView else { return nil }
+        let origin = event.locationInWindow
+        var pointer = origin
+        var dragging = false
+        var lastScroll = ContinuousClock.now
+        defer { setDropMarker(nil) }
+        while isCurrent(), self.window === window, tableView === table {
+            // A bounded wait also permits horizontal scrolling when the pointer stops at an edge.
+            let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                       until: Date(timeIntervalSinceNow: dragging ? 1 / 30 : 0.1),
+                                       inMode: .eventTracking, dequeue: true)
+            guard isCurrent(), self.window === window else { return nil }
+            if let next {
+                if next.type == .keyDown {
+                    if next.keyCode == 53 { return nil }
+                    continue
+                }
+                guard next.windowNumber == window.windowNumber else { return nil }
+                pointer = next.locationInWindow
+                if next.type == .leftMouseUp {
+                    if !dragging {
+                        if headerRect(ofColumn: source).contains(convert(pointer, from: nil)) {
+                            onClick(source, event.modifierFlags)
+                        }
+                        return nil
+                    }
+                    return drop(at: convert(pointer, from: nil), from: source)?.destination
+                }
+                dragging = dragging || abs(pointer.x - origin.x) >= 4 || abs(pointer.y - origin.y) >= 4
+            }
+            guard dragging else { continue }
+            let now = ContinuousClock.now
+            if lastScroll.duration(to: now) >= .milliseconds(33) {
+                scrollAtEdge(convert(pointer, from: nil), in: scroll)
+                lastScroll = now
+            }
+            let target = drop(at: convert(pointer, from: nil), from: source)
+            setDropMarker(target.flatMap { $0.destination == source ? nil : $0.marker })
+        }
+        return nil
+    }
+
+    private func drop(at point: NSPoint, from source: Int) -> (destination: Int, marker: NSRect)? {
+        guard let table = tableView, table.numberOfColumns > 0, visibleRect.contains(point) else { return nil }
+        let hit = column(at: point)
+        let boundary: Int
+        let x: CGFloat
+        if hit >= 0 {
+            let rect = headerRect(ofColumn: hit)
+            let before = point.x < rect.midX
+            boundary = before ? hit : hit + 1
+            x = before ? rect.minX : rect.maxX
+        } else {
+            let last = headerRect(ofColumn: table.numberOfColumns - 1)
+            guard point.x >= last.maxX else { return nil }
+            boundary = table.numberOfColumns
+            x = last.maxX
+        }
+        let destination = boundary > source ? boundary - 1 : boundary
+        let marker = NSRect(x: x - 1, y: bounds.minY, width: 2, height: bounds.height)
+        return (destination, marker)
+    }
+
+    private func scrollAtEdge(_ point: NSPoint, in scroll: NSScrollView) {
+        let visible = visibleRect
+        guard (visible.minY...visible.maxY).contains(point.y) else { return }
+        let margin = min(24, visible.width / 4)
+        let delta = point.x < visible.minX + margin ? -min(24, visible.minX + margin - point.x)
+            : max(0, min(24, point.x - visible.maxX + margin))
+        guard delta != 0 else { return }
+        let clip = scroll.contentView
+        let old = clip.bounds
+        let next = clip.constrainBoundsRect(old.offsetBy(dx: delta, dy: 0)).origin
+        guard next.x != old.minX else { return }
+        clip.scroll(to: next)
+        scroll.reflectScrolledClipView(clip)
+    }
+
+    private func setDropMarker(_ marker: NSRect?) {
+        guard dropMarker != marker else { return }
+        if let dropMarker { setNeedsDisplay(dropMarker) }
+        dropMarker = marker
+        if let marker { setNeedsDisplay(marker) }
+        displayIfNeeded()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1525,6 +1628,10 @@ private final class DelimitedHeader: NSTableHeaderView {
         table.palette.grid.setFill()
         let pixel = 1 / (window?.backingScaleFactor ?? 1)
         NSRect(x: bounds.minX, y: bounds.maxY - pixel, width: bounds.width, height: pixel).fill()
+        if let dropMarker {
+            table.palette.focus.setFill()
+            dropMarker.fill()
+        }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -1592,6 +1699,7 @@ fileprivate enum DelimitedCellLayout {
 }
 
 private final class DelimitedColumnHeader: NSTableHeaderCell {
+
     override func draw(withFrame frame: NSRect, in controlView: NSView) {
         guard let table = (controlView as? NSTableHeaderView)?.tableView as? DelimitedNativeTable else { return }
         let palette = table.palette
@@ -1751,6 +1859,47 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     )
     private var hoverArea: NSTrackingArea?
     private var hoveredCell: Cell?
+    // AppKit reuses rows, but asks for every column of each realized row.
+    // Materialize only viewport cells and invalidate the columns crossing its edge.
+    fileprivate private(set) var viewportColumns = IndexSet()
+    fileprivate private(set) var updatingColumns = false
+
+    // AppKit retiles on every added or resized column; publish the final geometry once.
+    fileprivate func updateColumns(_ update: () -> Void) {
+        updatingColumns = true
+        defer { updatingColumns = false }
+        update()
+        super.tile()
+    }
+
+    override func tile() {
+        if !updatingColumns { super.tile() }
+    }
+
+    override func reloadData() {
+        viewportColumns = columnIndexes(in: visibleRect)
+        super.reloadData()
+    }
+
+    override func layout() {
+        refreshViewportColumns()
+        super.layout()
+    }
+
+    fileprivate func refreshViewportColumns() {
+        guard !updatingColumns else { return }
+        let visible = columnIndexes(in: visibleRect)
+        let changed = viewportColumns.symmetricDifference(visible)
+        guard !changed.isEmpty else { return }
+        viewportColumns = visible
+        var rows = IndexSet()
+        enumerateAvailableRowViews { _, row in
+            if (0..<numberOfRows).contains(row) { rows.insert(row) }
+        }
+        let columns = changed.intersection(IndexSet(integersIn: 0..<numberOfColumns))
+        guard !rows.isEmpty, !columns.isEmpty else { return }
+        reloadData(forRowIndexes: rows, columnIndexes: columns)
+    }
 
     private(set) var selection = DelimitedTablePresentation.Selection()
     var onFocused: () -> Void = {}
@@ -1916,10 +2065,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
     func select(_ cell: Cell, extending: Bool = false, adding: Bool = false, reveal: Bool = false) {
         guard (0..<numberOfRows).contains(cell.row), (0..<numberOfColumns).contains(cell.column) else { return }
         selection.select(cell, extending: extending, adding: adding)
-        if reveal {
-            scrollRowToVisible(cell.row)
-            scrollColumnToVisible(cell.column)
-        }
+        if reveal { scrollToVisible(frameOfCell(atColumn: cell.column, row: cell.row)) }
         syncSelection()
     }
 
@@ -1957,7 +2103,7 @@ final class DelimitedNativeTable: NSTableView, NSMenuItemValidation {
         }
     }
 
-    private func syncSelection() {
+    fileprivate func syncSelection() {
         selectRowIndexes(selection.rows, byExtendingSelection: false)
         refreshSelection()
         onSelectionChanged()

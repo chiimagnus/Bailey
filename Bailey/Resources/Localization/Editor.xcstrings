@@ -961,66 +961,6 @@
         }
       }
     },
-    "Move Column Left" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向左移动列"
-          }
-        }
-      }
-    },
-    "Move Column Right" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向右移动列"
-          }
-        }
-      }
-    },
-    "Move Column to Position…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移动列到指定位置…"
-          }
-        }
-      }
-    },
-    "Move Column to Position" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移动列到指定位置"
-          }
-        }
-      }
-    },
-    "Move Column" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移动列"
-          }
-        }
-      }
-    },
-    "Enter a position from 1 to %lld." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "输入 1 到 %lld 之间的位置。"
-          }
-        }
-      }
-    },
     "A table field still has unapplied input." : {
       "localizations" : {
         "zh-Hans" : {
