@@ -25,14 +25,14 @@ Ghostty 内核漏洞同时参考 [Ghostty 安全渠道](https://github.com/ghost
   日志、trace、录屏和快照不是可随意提交的诊断附件。
 - **构建与发布**：签名私钥和凭据不入库，不因本地验证成功而宣称包已公证或平台发布已完成。
 
-具体行为归 [SSH](docs/features/ssh.md)、[编辑器](docs/features/editor.md)、
+具体行为归 [SSH](docs/features/ssh.md)、[文件访问](docs/features/file-viewer.md)、[文件保存](docs/features/file-saving.md)、
 [Git](docs/features/git.md)、[隧道](docs/features/tunnels.md)和[签名](docs/signing.md)维护，
 不在本页复制实现细节。
 
 ## 安全验证
 
 测试使用临时数据与专用连接，不借用用户 SSH master，不修改正式工作区或现有全局设置。
-隔离、真实系统验收及未测边界统一见 [docs/testing.md](docs/testing.md#隔离环境)。
+隔离、真实系统验收及未测边界统一见 [docs/testing.md](docs/testing-environment.md#隔离环境)。
 
 应用替换不包含退出、启动或重启用户正在使用的进程；操作授权遵守 [AGENTS.md](AGENTS.md)。
 漏洞修复留下最小回归，并验证真实数据或权限效果，而不只看函数返回值。

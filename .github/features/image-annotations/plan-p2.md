@@ -57,7 +57,7 @@ Finder 本机文件与 SSH 文件不能因相同路径读写错机器。
 
 - **位置**：`FileTab` 的原图版本与保存／文件变更保护、
   `WorkspaceBackend.copy / write(ifUnchanged:)`、`Project`／Files 路径操作、
-  ImageIO／Core Image 导出和 `docs/features/editor.md`。
+  ImageIO／Core Image 导出和 `docs/features/image-annotations.md`。
 - **实施**：保存可编辑标注 JSON 而非原图，存储底图身份、版本与标注对象；
   真正完成写入、核对仍是同一底图版本及本次草稿后才清除标注脏状态，
   写盘期间继续画图的修改仍保持 dirty。另存扁平 PNG／JPEG 时允许选择尺寸、透明、ICC 与 DPI，
@@ -76,7 +76,7 @@ Finder 本机文件与 SSH 文件不能因相同路径读写错机器。
 按 `docs/testing.md` 使用真实文件／受控 SSH／原生 Undo 的宿主测试和隔离 Bailey Dev，
 核对保存、关闭否决、跨窗口、菜单、导出及像素结果；
 运行相关 `make test:...`、`make build` 与阶段完整宿主测试。
-已有 sidecar 与确认导出复用[共用保存冲突方案](../../../docs/features/editor.md#保存与关闭)，在 CSV P2-T2 的共享写入所有者处理冲突，
+已有 sidecar 与确认导出复用[共用保存冲突方案](../../../docs/features/file-saving.md#保存冲突与恢复)，在 CSV P2-T2 的共享写入所有者处理冲突，
 标注仅负责自己的草稿和原图保护；不另做 CAS 或重试。真实非协作竞态仍按共同边界验收。
 
 ### 标注与写盘专项验收矩阵（P2）

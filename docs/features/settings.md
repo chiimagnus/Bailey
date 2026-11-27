@@ -38,29 +38,17 @@ Window 菜单 `⌘+`、`⌘-`、`⌘0` 按当前活动组的实际内容放大�
 不因并排预览指向同一文件而误调源码。HTML／Browser 使用当前 WebView 的页面缩放；
 图片／SVG 使用现有图形视口缩放，恢复适应窗口；音视频保留系统控件，无字号命令。
 调整立即作用于同类内容，不重建终端、编辑器或预览文档。
-Git Manager 保留既有文件布局和工具栏选项，仅新增自部署 Git 托管域名映射。
+Git Manager 提供树／列表布局、工具栏及自部署托管域名映射。
 File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
 
-普通设置写入同一配置文件；「恢复默认」清除自定义 Git 域名映射，
-并重置原有两项 Git 确认偏好。
-隔离测试不展示手机通知，也不访问真实 Bark 凭据或启动保存的隧道。
+恢复默认重置普通偏好，不删除独立隧道、窗口快照或 Bark 凭据。
 
 ## Git 设置与托管平台
 
-Git Graph 右键提交可以在对应的远端托管网站打开，
-已知远端的仓库主页可以通过 Git Manager 的「⋯ → Open Remote in Browser」打开。
-多个 Git Remote 仍由仓库原生配置管理（如终端执行 `git remote`），
-Bailey 不增加另一套远端管理 Sheet 或额外开关。
-
-GitHub、GitLab、Bitbucket、Gitee、GitCode、Codeup、Azure DevOps、Gitea、Forgejo、
-Codeberg 和 SourceHut 等已知服务可自动识别。
+提交与仓库网页链接见 [Git 托管平台](git-graph.md#托管平台与-git-remotes)。
 自部署实例只需在「Self-hosted Git Providers」每行填写 `host=provider`，
 例如 `git.company.cn=gitlab`、`code.example.org=gitea`。
-未知平台可以尝试打开其仓库主页，但不猜测提交详情链接；
-不能从 Git 克隆地址唯一推导网页路由的 CODING 等平台也遵守此限制。
-支持本机和获授权 SSH Git 后端；不会通过平台 API 获取凭据或自动修改 Remote。
-
-唯一新增的配置键是 `git.host-providers = ["git.company.cn=gitlab"]`，
+配置键为 `git.host-providers = ["git.company.cn=gitlab"]`，
 默认空数组，仅在校验通过后保存；自动支持的平台不需要任何设置。
 
 ## 文件管理器排除规则
@@ -88,7 +76,8 @@ Tag 推送前的“以后总是继续”写入 `git.always-proceed-push-tag`，�
 窗口布局归各自窗口，见 [自由停靠](dock.md#布局与标签)。
 旧 `workspace.*` 配置键不再生效；读取时不改原文件，下次保存偏好时不再写入旧键。
 
-字体加粗使用 `terminal.font-thicken`；语言及 Diff 偏好使用 UserDefaults。
+字体加粗使用 `terminal.font-thicken`；Git 文件树／列表使用 `git.view-mode`，默认 `tree`。
+语言和 Diff 布局偏好另存 UserDefaults，不写入 TOML。
 
 应用语言改变需要重启；重启前由同一个 `WorkspaceApplication` 保存所有窗口快照，
 仍不能承诺保存未成功写盘的内容。界面中英文、系统语言跟随和回退规则见 [ui.md](../ui.md#本地化)。
@@ -99,15 +88,11 @@ Tag 推送前的“以后总是继续”写入 `git.always-proceed-push-tag`，�
 语言按 Bundle ID 分域，终端历史与 Bark 钥匙串服务也独立。
 `--isolated-ui-test` 隔离每轮窗口快照与终端历史，并跳过保存的隧道；
 独立 UI 启动器另以临时主目录隔离 TOML。语言等 UserDefaults 和钥匙串不因临时主目录而自动隔离，
-完整边界见 [testing.md](../testing.md#隔离环境)。
+完整边界见 [testing.md](../testing-environment.md#隔离环境)。
 
 隧道规则独立存储在 `tunnels.toml`，不并入普通配置；其生命周期见 [tunnels.md](tunnels.md)。
 
-「手机通知」支持逐条添加、移除多个 Bark HTTPS 推送地址（或填写官方设备 Key），
-并对所有已配置地址发送测试通知。支持官方及自建 HTTPS Bark 服务器。
-设备 Key 与地址列表统一存于 macOS 钥匙串，配置文件、日志和实际请求 URL 均不包含 Key；
-界面只展示主机名和 Key 后四位。地址列表为空时不推送；普通设置重置不删除钥匙串凭据，需逐条明确移除。
-`--isolated-ui-test` 隔离实例不访问手机通知设置，也不转发通知，避免触及用户真实凭据和设备。
+手机通知与凭据见[通知](notifications.md#手机通知设置)。
 
 ## 验证
 

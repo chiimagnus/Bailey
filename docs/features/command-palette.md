@@ -19,7 +19,8 @@
 
 文件索引仅在查询非空时加载：本机保持原 Git tracked/非忽略 untracked 规则；
 SSH 复用同一文件范围和远端 Git 查询，只有明确不是 Git 仓库才有限遍历远端目录。
-远端输出与目录扫描有上限，超过上限或连接异常会明确提示，不伪装完整结果；
+远端索引最多 10,000 个文件；非 Git 目录回退最多扫描 400 个目录，Git 输出最多 4 MiB。
+目录身份核验及远端索引命令使用 25 秒超时。超限或连接异常会明确提示，不伪装完整结果；
 Files 的 `files.exclude` 不影响搜索。
 
 关闭面板或切换目标会取消旧任务，异步回写及点击 SSH 结果打开前再次核对项目、根和连接代次。
@@ -52,6 +53,8 @@ Diff 与 WebKit 则按当前实际视图归属检查。
 
 ## 验证
 
+`WorkspaceSmokeUITests` 核对冷启动、命令面板搜索及 Escape 关闭等真实 App 入口。
+
 `ProjectFileIndexTests` 验证本机与受控远端文件索引、Git 异常、远端目录输出上限、
 HOME／根目录物理路径别名及遍历限额；
 `WorkspaceFilesUITests` 从真实中英文 App 搜索并执行「File Manager」，
@@ -59,6 +62,8 @@ HOME／根目录物理路径别名及遍历限额；
 `WorkspaceWindowsUITests` 验证焦点恢复不跨窗口；
 `SharedTreeUITests` 另以明暗主题验证 Palette 接管时的原生选中与底色分离。
 `NativeContentIdentityIntegrationTests` 检查结果滚动范围与辅助功能关闭动作。
+
+`WorkspaceFileIndexRefreshUITests` 验证非 Files 标签中的外部文件和 Git 索引变更；
 实际面板验收还覆盖空结果、鼠标、切项目、文件打开和会话定位。不能仅断言“动作已派发”；
 要检查实际打开内容与最终焦点。SSH 搜索限制要包含本机同名路径的反例。
 

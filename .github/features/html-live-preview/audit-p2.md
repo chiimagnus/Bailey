@@ -9,7 +9,7 @@
 - **依据**：P2-T2 独立完成：已存／保存后 Browser 运行、脚本执行和最小目录权限、外部版本／远端拒绝及脏稿保护通过。P2-T1 并排真实中文 IME、Undo／Redo、最终 WebKit 中文与源字节已通过；既有真实 IME 与原生连续编辑期间滚动专项均通过（见共享验收（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`））；最终整合与 P1 门禁留阶段。
 - **现行 AX 验收**：依[共享验收环境](../../../docs/testing.md#文件预览共用验收)，下文 VoiceOver 记录仅为历史证据，专项语音不再阻塞。
 - **本轮范围**：缺配设备延期、远端只用 Tailscale SSH，按[本轮验收环境](../../../docs/testing.md#文件预览共用验收)；可执行项仍需验收。
-  保存冲突后续统一按[VS Code 保存冲突方案](../../../docs/features/editor.md#保存与关闭)，不将严格 CAS 冒称已解决。
+  保存冲突后续统一按[VS Code 保存冲突方案](../../../docs/features/file-saving.md#保存冲突与恢复)，不将严格 CAS 冒称已解决。
 
 ## 任务与改动
 
@@ -39,7 +39,7 @@ Dev 构建／严格验签、回归测试文件编译通过。正式宿主 XCTest
   测试通过粘贴输入草稿，不能证明 H09×H11 的中文 IME 候选与焦点交接；
   双窗口菜单用例也不能证明 H10×H14 的完整 App 多窗长会话。
   这些项目尚待补验，保存后执行仍依赖共享保存版本边界。
-- 最新共享构建、冻结宿主与完整 App 结果以 文件路由审计（同一历史记录） 为准；现行行为归 [文件编辑器](../../../docs/features/editor.md)。
+- 最新共享构建、冻结宿主与完整 App 结果以 文件路由审计（同一历史记录） 为准；现行行为归 [HTML 预览](../../../docs/features/html-preview.md)。
 
 - 2026-11-25：`bd6e74a2` 共享本机保存恢复定点通过；已存版本显式打开的既有完整 App 证据不变。严格非协作 CAS 与真实输入／多窗长会话仍未核销，见 CSV P2（Git 历史 `a54b8ace:.github/features/csv-table-view/audit-p2.md`）。
 

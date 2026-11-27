@@ -34,6 +34,7 @@ Bailey 自有 SwiftUI 状态采用 **MVVM + Observation**。
 不等待后代进程关闭继承的管道，也不另起 stdin 写入线程。
 输出预算、超时、取消由同一所有者执行并回收到真正的子进程，
 不得只用展示代次丢弃旧结果。
+子进程在 stdin 写完前退出时必须报告未完成输入；取消或超时只终止本次子进程，不结束用户终端或共享 SSH master。
 取消某条 SSH 命令不代表共享连接断线。
 
 ## 模块化与依赖
@@ -84,10 +85,8 @@ Bailey 复用 SwiftUI Observation、AppKit、现有 Dock/Tab 与后端，不机�
 `WorkspaceWindowModel` 保留单窗布局、项目、选择、焦点与原生宿主。
 `DockWindowLayout` 持有该窗口唯一的分屏树；`Project` 只保留组内内容，`PaneTab` 持有长期原生内容。
 创建 SwiftUI View 的中间对象不会登记或提前认领窗口。
-隔离 Dev 抑制自动首窗；`Commands` 先登记开窗动作，只有 AppKit 确认应用已激活后
-才请求一次首窗。请求期间与已登记但尚未附着 `NSWindow` 的场景均不得重复开窗。
-应用级窗口请求只查询本 `WorkspaceApplication` 登记的窗口，不遍历全局 `NSApp.windows` 猜测归属；
-在最后一个窗口关闭后，连续的 Finder 请求只触发一次新建窗口，并在真正挂载后交付。
+窗口附着、首窗请求和外部队列的执行边界见[窗口入口](features/windows.md)；
+恢复快照由[会话恢复](features/session-restore.md)维护。
 
 **领域接入：** Project 的 Files 同步只接收调用者提供的当前目标许可，
 GitStatusModel 接收选中的 Project 和项目仍有效的检查；窗口在 `syncGitStatus` 接入点提供事实，
@@ -130,7 +129,7 @@ Focus／Selection，不把这次状态同步误作 NSWindow.firstResponder 的�
 | 事实或意图 | 唯一真源／归属 | 不能误认为 |
 | --- | --- | --- |
 | 目录／图谱展开 | Files／Git 对应数据或局部展示状态 | 行选中或键盘焦点 |
-| 行选中与悬停 | 各列表游标；Hover 为视图短暂状态 | 已打开文件、当前命令目标 |
+| 行选择、游标与悬停 | 各列表独立 Selection、Focus；Hover 为视图短暂状态 | 已打开文件、当前命令目标 |
 | 哪个内容正在展示 | `DockGroup.selected`；每组独立 | 活动组或输入目标 |
 | Dock 标签组选区与范围锚点 | `DockWorkspaceModel` 按组维护的非持久扩选；单项由展示项派生 | 最近工作标签或恢复布局 |
 | 活动组／最近工作标签 | `DockWorkspaceModel.activeGroupID`／`Project.selectedTabID` | 当前原生第一响应者 |
@@ -177,14 +176,9 @@ WebKit 分别服务浏览器和隔离的 HTML 文件预览；
 
 `DockNode` 是外层布局真源。一个标签不再拥有第二套分屏。
 窗口关闭、项目关闭和应用退出都要先处理未保存内容；视图的临时消失不能成为结束后台任务的理由。
-真关闭后由 `Project` 的统一退役路径通知 `FileTab`／`DiffTab` 释放各自原生正文，
-不能由 SwiftUI 的 `dismantleNSView` 代劳。项目或窗口关闭均先完成保存保护及必要恢复快照，
-再解除窗口的项目所有权，由 `terminateAll` 退役内容并清空标签和选中／近期状态。
-共同的 TextKit 退休入口禁止新编辑、清空 Undo 和语法任务；
-文件和 Diff 均在旧滚动宿主解除文档视图绑定后解绑布局管理器，不能提前解绑仍在布局的视图。
-原生对象身份与关闭协调由最小 AppKit 组件验证，系统窗口、键盘和关闭后重启由独立 App 验证，
-不用完整 SwiftUI 宿主模拟用户操作。
-详见 [dock](features/dock.md)、[editor](features/editor.md) 与 [testing](testing.md#测试层次)。
+真关闭后由 `Project.terminateAll` 退役标签内容并清空项目状态；临时重挂载不执行退役。
+原生关闭通知与快照分别见[窗口入口](features/windows.md)、[会话恢复](features/session-restore.md)；
+正文清理与失败保护见[原生编辑器](features/editor.md#文档退役)、[文件保存](features/file-saving.md)。
 
 ## Observation 与事件
 

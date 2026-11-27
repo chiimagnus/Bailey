@@ -9,7 +9,7 @@ Markdown 已完成的文件菜单、Dock 并排、源码状态和资源访问能
   `SourceTextEditor`／`FileTab.save` 继续是唯一文本、Undo、条件保存和外部冲突所有者。
   不添加 HTML `Content` case、第二份可写 DOM 或新文件标签。
 - `Project.setFilePreviewMode → DockWorkspaceModel.setFilePreview` 和 File 菜单 `⌘⇧V`
-  已随非 Markdown 文本格式接入统一为通用文件预览（见[文件编辑器](../../../docs/features/editor.md)）；
+  已随非 Markdown 文本格式接入统一为通用文件预览（见[文件查看](../../../docs/features/file-viewer.md)）；
   HTML 复用该模式／Dock companion，不另建 Mode／Splitter／菜单监听。
 - `MarkdownHTML`＋SwiftSoup 是 Markdown 内嵌的**受限 HTML 片段语义**，
   不能负责完整 HTML 文档、CSS 级联、媒体查询或页面布局。

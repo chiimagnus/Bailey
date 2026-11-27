@@ -177,6 +177,6 @@
   远端断开与恢复、过期结果取消、切项目各有证据，但没有在一次真实 GUI 流程中重叠触发这三个条件。
 - 32 MiB 边界核对了真实 TextKit 文件打开、编辑、落盘与重开，不等于相同体积的富 Markdown 已通过性能验收。
   实际 App 的长时 heap/RSS 回收、系统缩放/减弱动态效果和触控板专项没有全部核销。
-- 用户文档见 [原生编辑器](../../../docs/features/editor.md) 和 [测试入口](../../../docs/testing.md)。
+- 用户文档见 [Markdown 阅读预览](../../../docs/features/markdown-preview.md) 和 [测试入口](../../../docs/testing.md)。
   没有安装、替换或重启使用中的正式 Bailey。
 

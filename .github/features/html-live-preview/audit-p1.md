@@ -39,7 +39,7 @@
 - H06/H07：独立页面所有者、跨窗口同图版本刷新（0e479782）、慢资源取消、真实 WebContent 退出恢复、坏 PNG 三入口拒绝与恢复、项目外路径及文件移走，实际 WebKit 快照和原始文件字节通过。
 - 14 项 HTMLFilePreviewTests 与 5 项 MarkdownResourceScopeTests 在完整测试前段全部通过，包括获授权 Windows SSH（65.6 秒）；H08 的宿主百次挂载、实际窗口恢复证据与此前隔离 GUI 双窗路径通过。不把宿主 AX 和快照当成实际 VoiceOver 播报或完整 App 冷启动长会话。
 - 仍未验证真实 1× 屏、VoiceOver、物理触控板／相关减弱动态效果和完整 App 多窗口长会话；需独立图形会话及设备。远端验收以实际 Windows SSH 为准。上述必要组合阻塞 P1；P1-T1 已核销不等于阶段通过。
-- 文档归 [文件编辑器](../../../docs/features/editor.md)，无新增独立写入模型；本轮未进入 P2。
+- 文档归 [HTML 预览](../../../docs/features/html-preview.md)，无新增独立写入模型；本轮未进入 P2。
 - 最终 e4267d71：14 项 HTMLFilePreviewTests、5 项 MarkdownResourceScopeTests、28 项 NativePaneRetentionIntegrationTests 全部通过；真实 Windows SSH 本轮再次通过。共享记录见 文件路由 P1 审计（Git 历史 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`）。
 - 最终 e4267d71：正式 Debug／Release 构建和精简后严格签名均通过，详见 文件路由 P1 审计（同一历史记录）。
 

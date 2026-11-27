@@ -25,7 +25,7 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
   不交给 XML 或文本编码回退。
   共享 [图片 P1 的唯一原生缩放视口](../image-annotations/plan-p1.md#p1-t1)，
   直接接入 `PreviewScrollView`，不增加另一套缩放控件。
-  复用 [文件预览共用 Dock／菜单](../../../docs/features/editor.md)，默认图形。
+  复用 [文件预览共用 Dock／菜单](../../../docs/features/file-viewer.md)，默认图形。
 - 文件大小不等于 XML 可安全解析大小。独立源码可打开到 32 MiB，
   现有净化器只允许 1 MiB 的内嵌 SVG；需要放宽独立文件限制时，
   应在**相同净化入口**实测 CPU／内存、深度、节点和恶意输入预算，
@@ -67,7 +67,7 @@ SVG 文件默认以图形查看，可一键切源码；缩放必须保持矢量�
 
 - **依赖**：图片 P1-T1 的共用 NSScrollView 视口能力，与文件路由 P1-T2 的通用模式接入同步。
 - **位置**：共用图片缩放视口、`FileViewerView`、`Project`／`DockWorkspaceModel`、
-  `WorkspaceWindowModel`／`BaileyApp.swift`、文件标签右键及 `docs/features/editor.md`。
+  `WorkspaceWindowModel`／`BaileyApp.swift`、文件标签右键及 `docs/features/svg-preview.md`。
 - **实施**：默认 fit 矢量图，允许放大小画布；SVG 手动上限取 6400% 与四倍 fit 的较大值，栅格上限不变。可切源码／预览／并排，滚轮、捏合和拖拽沿共用视口；
   重绘基于当前视口实际 backing scale 而非放大 Markdown 的 2048px 位图。
   File 菜单 `⌘⇧V` 仅一个，右键只作用命中标签；无永久缩放／编码栏。

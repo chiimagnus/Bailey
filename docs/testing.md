@@ -1,7 +1,7 @@
 # 测试与验收
 
-本页是 Bailey 完成标准的唯一归属，负责宿主／UI 测试边界、执行入口、隔离、性能测量和人工回归。
-测试结构、覆盖范围或验收要求改变时同步更新；贡献指南与 PR 只引用本页，不维护第二份清单。
+本页是 Bailey 完成标准的唯一归属，负责完成标准、测试层次、执行入口和通用验收。
+测试结构、覆盖范围或验收要求改变时更新。操作细节见[测试环境](testing-environment.md)和[性能验收](testing-performance.md)。
 
 ## 完成标准
 
@@ -43,7 +43,7 @@
 - **输入／容量**：空／缺失／非法输入、特殊字符／Unicode、二进制、特殊路径、最小／通常／大规模数据、
   长度与容量边界、超限及资源耗尽。
 - **状态／失败／恢复**：初次及已有数据、冲突、部分成功、读写失败、断线／超时／重连、取消、重新打开、
-  关闭与恢复、旧状态迁移。
+  关闭与恢复、旧状态拒绝或恢复边界。
 - **时序／交互／生命周期**：并发与重复操作、乱序回写、窗口或目标切换、资源释放、长时间运行，
   以及受影响的尺寸、主题、焦点、多窗口和键盘操作。
 
@@ -81,47 +81,29 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 涉及共享组件时补测相关类。指定 `ONLY_TESTING` 时先通过 Xcode 原生测试枚举检查选中方法数；
 无匹配方法直接失败，不再把 0 项 XCTest 当作通过。`make test:ui` 单独执行整个 UI Test Target，
 不混入本机日常宿主测试。
-`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与
-`.build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
-`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；
-隔离测试抑制 SwiftUI 自动首窗；`Commands` 先登记开窗动作，AppKit 确认应用激活后
-才请求唯一首窗，避免过早调用 `openWindow` 导致无窗口；测试夹具不得超时补发快捷键。
-不使用 `-ApplePersistenceIgnoreState YES`，该参数会干扰原生窗口生命周期与恢复。
-已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
-本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
-真实 SSH 主题 GUI 回归要求显式提供 `TEST_RUNNER_BAILEY_THEME_TEST_SSH_HOST` 和
-`TEST_RUNNER_BAILEY_THEME_TEST_SSH_ROOT`，仅能使用获授权的主机及临时测试目录。
-远端测试创建的路径必须先验证完整绝对路径和随机文件名字符集，再用于 Shell 命令或递归清理；
-只检查目录前缀不能防止远端输出中的引号或换行变成命令。
-系统外观 GUI 回归默认跳过；仅在显式设置 `TEST_RUNNER_BAILEY_THEME_SYSTEM_TEST_ENABLED=1`
-并从测试进程外安全切换、恢复 macOS 外观时执行，不在普通测试中修改用户系统外观。
-公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
-避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
-完整 App GUI 测试须在能认证 XCUITest Runner 的独立 macOS 图形会话执行，
-避免系统设置、正式 Bailey 或用户输入抢占前台。
-辅助账户登录且有辅助功能权限仍可能在非 console 会话报 `Can't authenticate off console`；
-测试枚举为 0 不表示成功，不能为补测抢占当前桌面。
-在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
-测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
-此举不替代真实中文 IME 组词／候选测试。真实拼音专项应自动选择系统拼音输入源（TIS），
-确认隔离 Dev 与实际编辑控件持有焦点后，通过已有具备键盘事件权限的自动化工具发送字母键及空格候选确认；
-发送期间禁止重新激活窗口或直接粘贴 Unicode。断言组合中原字节不变、确认中文、连续撤销／重做及保存字节，
-并在退出时恢复原输入源；不要求用户人工输入。AppKit/XCUITest 仍争用同一桌面键盘焦点，
-要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。
-PR 不自动触发 GitHub Actions 的宿主或 UI 测试；合并前由本机运行受影响的测试，
-阶段验收按上方完成标准执行完整回归，结果须对应实际提交版本。
-显式 `ci-ui-*` 测试标签触发独立的 [XCTest workflow](../.github/workflows/ci-ui-test.yml)，
-使用两个 Runner 分别运行全部宿主与 UI XCTest，保存 `.xcresult`；
-工作流进入默认分支后可手动选择 Host、UI 或 Both，
-按类名／方法指定一个或多个 XCTest，留空则执行完整目标；
-测试选择仍由 Makefile 枚举与校验。
-Tag 发布仍由[发布工作流](release.md#正式发布)负责。
-云端使用临时签名及独立桌面，不代替本机开发签名和授权 SSH、外观等特殊条件的验收。
+
+## CI 测试
+
+GitHub Actions **不对 PR 或普通 `main` 提交自动运行 XCTest**。
+独立的 [XCTest workflow](../.github/workflows/ci-ui-test.yml) 在显式推送 `ci-ui-*` 测试标签时运行，
+并在工作流合入默认分支后提供手动运行入口。
+手动触发时可选择 `both`／`host`／`ui`，分别为两套测试填写类名／方法筛选项；
+筛选项接受逗号或空格分隔的 `GitStatusModelTests`、`GitStatusModelTests/test...`
+或完整 `BaileyTests/...`／`BaileyUITests/...` 路径，留空运行对应完整测试集。
+非空选择项交给 Makefile 的 `ONLY_TESTING` 和 Xcode 原生枚举校验，
+不存在的测试不得被视为通过；`ci-ui-*` 标签推送仍执行全部两套测试。
+两个独立的 macOS Runner Job 将系统 `xcode-select` 与 `DEVELOPER_DIR` 一起指向 Xcode 27.2，
+避免 XCTest 子进程重新调用旧版 Xcode 工具链；各自保存 `.xcresult`。
+CI 结果与本机验收分别记录，失败不能冒充已验收；
+授权 SSH、系统外观等特殊条件仍按[测试环境](testing-environment.md)另行核验。
+合并前的结果由提交者负责，Tag 发布工作流不重复执行测试。
+
 UI Job 必须检出完整 Git 历史：`GitChangesUITests.testRealBaileySourceHistoryDiffLoadsAcrossIndexWorktreeAndOtherSource`
 会从实际 Bailey 源码取两个提交版本并在隔离克隆中构造 Staged／Worktree 变化；默认浅克隆仅有当前提交会导致夹具无法创建，而非产品 Git Diff 故障。
 测试入口由 [Makefile](../Makefile) 与
 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；
 不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+
 
 ## 测试层次
 
@@ -135,38 +117,6 @@ TextKit／IME 和原生组件像素；并非涉及界面、真实 IO 就必须�
 | --- | --- | --- |
 | 宿主测试（`BaileyTests`） | 纯计算、模型／状态、解析、异常／容量矩阵；真实临时文件、Git／受控 SSH、持久化及最小 AppKit/TextKit／IME／Undo 组件契约 | 不证明完整 App 的菜单、前台键盘交接或真实跨窗口路由；模拟 SSH 不等于实际远端 |
 | UI E2E（`BaileyUITests`） | 通过 `XCUIApplication` 启动 Bailey Dev，操作真实菜单、Sheet、焦点和跨窗，并核对最终文件、Git 或窗口结果 | 不能替代宿主测试中全部异常、容量和组件组合；组件绿色不等于 UI E2E 通过 |
-
-`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、
-Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；
-Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，
-绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出和错误输出分别写入一次性文件，
-避免管道反压，并用于核对真实 Git 结果。原生文件选择器在「前往文件夹」中粘贴完整路径并核对解析结果，
-需要写入剪贴板的测试须完整保留并恢复其全部项目和数据类型；
-不使用剪贴板的 Finder／SSH 拖放测试可声明 `clipboardIsReadOnly`，只核对版本号不变，
-避免读取或改写系统无法序列化的延迟剪贴板类型。
-用窗口内的 `OKButton` 标识确认、`Escape` 取消，
-不能硬编码英文 `Add`/`Open`/`Cancel` 文案。
-Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，
-文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；
-多窗口查询必须固定目标窗口的 AX `identifier`；窗口列表的索引会因激活及系统文件投递变化，
-不能将 `allElementsBoundByIndex` 的窗口引用跨事件复用。
-中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」的超长中文路径仍须单独验证，
-不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
-
-| 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
-| --- | --- | --- |
-| 冷启动、命令面板搜索／Escape、非 Files 标签中的外部文件与 Git 索引变更、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFileIndexRefreshUITests`、`WorkspaceLocalFileEventsUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `FileTreeTests`（事件及共享订阅）、`ProjectFileIndexTests`、`DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
-| 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
-| Finder 真实拖放在本机 Files 中复制、在 SSH Files 中拒绝上传，核对两端文件字节 | `WorkspaceFilesUITests`（SSH 用例需提供获授权的 `BAILEY_P4_TEST_SSH_HOST`） | `FileTreeTests`、`WindowOwnershipIntegrationTests` |
-| Finder ↔ Bailey 原生文件剪贴板、⌥⌘V 显式移动及 Files 系统菜单焦点 | `SharedTreeUITests`（剪贴板完整备份后真实操作） | `WindowOwnershipIntegrationTests`（跨项目／脏稿／身份与重试）、`FileTreeTests`（磁盘复制／跨卷／边界） |
-| 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
-| Swift 与纯文本的真实 App 像素差异；Markdown／TSX／HTML／CSS 的原生着色与正文保持 | `EditorHighlightingUITests`（Swift 实际 GUI） | `NativeSyntaxHighlightingTests`（四语言真实 TextKit）、`HighlightQueryCacheTests` |
-| Markdown 并排定位、跨块复制、导航与富内容 | `MarkdownPreviewUITests`、`MarkdownSelectionBoundaryUITests`、`MarkdownMathUITests` | `SwiftMarkdownLayoutTests`（深浅色像素、宽表格与混排长文）、`MarkdownResourceScopeTests`（文件和授权 SSH） |
-| 图片／SVG、CSV／TSV、HTML、音频／视频的文件预览与多格式切换；原生编辑、复制／导出、显式浏览器打开和播放控件 | `FilePreviewWorkspaceUITests`、`RasterFilePreviewUITests`、`ImageAnnotationUITests`、`SVGFilePreviewUITests`、`CSVPreviewUITests`、`HTMLFilePreviewUITests`、`HTMLExplicitBrowserUITests`、`NativeMediaFileUITests` | `FileTabPersistenceTests`、`PreviewScrollViewTests`、`RasterRegionDecoderTests`、`ImageAnnotationTests`、`SVGArtworkTests`、`DelimitedTableIndexTests`、`DelimitedTablePresentationTests`、`HTMLFilePreviewTests`、`NativeMediaFileTests`、`NativeAudioTimingTests`、`NativePaneRetentionIntegrationTests` |
-| Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitNativeDialogTests`、`GitRemoteBranchActionTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
-| Git 历史 revision 只读、历史文件菜单、危险重置的取消／确认与工作区／index／HEAD 字节 | `GitHistoryUITests`（真实 Git Graph；同路径 Changes/History 行按独立 AX 标识区分） | `NativeGitHistoryFileTests`、`NativeDiffTabTests`、`GitExecutionTests`、`GitStatusModelTests` |
-| 系统文件投递、双窗归属、原生 Sheet、脏文件关闭和重启恢复 | `WorkspaceWindowsUITests` | `FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`（队列、保存失败、状态快照与身份） |
-| 终端 Shell、浏览器表单、Finder→Ghostty/WebKit 原生文件拖放、设置重启、正常退出与多标签生命周期 | `WorkspaceRetentionUITests`、`WorkspaceWindowsUITests`（系统操作、外部投递和窗口结果） | `NativePaneRetentionIntegrationTests`、`AppSettingsTests`（原生身份、五文件对象释放、异常与配置边界） |
 
 必须访问 TextKit／AppKit 内部状态的原生组件测试保留在宿主 XCTest；
 Ghostty 的真实 PTY 只有原生终端表面附着最小 `NSWindow` 才会启动，
@@ -193,216 +143,14 @@ Git index／HEAD／Ref 和目标身份。逐项记录被删用例的原断言、
 不得抢占用户桌面。仅在明确要求的阶段验收或发布门禁中运行全量 `make test`／`make test:ui`，
 中断、超时和未执行均不能报告为通过。
 
-## 改什么，测什么
-
-下表用于定位受影响的测试，不要求执行某一行的全部测试类；
-优先选具体方法，完整集合仍由 Xcode 目标发现。
-
-| 改动 | 相关测试 |
-| --- | --- |
-| 应用身份、Finder 类型注册、系统文件事件和目标窗口路由 | `AppIdentityTests`、`FinderDeliveryIntegrationTests`、`WorkspaceWindowsUITests`；实际 Finder 拖放另需受控图形会话 |
-| 原生右键快捷键、菜单宽度与操作目标 | `AppIdentityTests`（原生按键注册）；`WorkspaceDockUITests`（⌘W 与宽度）；`SharedTreeUITests`（新建）；`WorkspaceFilesUITests`、`GitChangesUITests`、`GitGraphUITests`（路径复制与目标恢复）。最终行为须由 GUI 验证 |
-| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `WorkspaceDockUITests`、`WorkspaceFilesUITests` 的真实输入与双窗 E2E |
-| Dock 标题栏、标签与分隔线拖动 | `NativeContentIdentityIntegrationTests` 核对三区空白尺寸；`WorkspaceDockUITests` 核对三区双击、窗口移动、标签／分隔线拖动及 Window 菜单；`WorkspaceWindowsUITests` 核对关闭重启后悬停标签再双击，验证实际窗口尺寸变化 |
-| 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
-| 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
-| Git 环境、刷新、写操作与失败状态 | `NativeGitHistoryFileTests`、`GitRemoteRefreshIntegrationTests`、`GitIgnoreIntegrationTests`、`GitUncommittedActionTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests` |
-| Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`（字号／宽度／车道数矩阵）、`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests`、`GitPanelVisibilityTests`（真实 Dock、离屏刷新、连续 Commit／Amend、48 组布局极值、1,026 项 Changes × 20 分支交叉压力、原生 AX／AppKit 鼠标命中）；`GitGraphUITests`、`GitGraphGeometryUITests` 验证完整 App 的真实点击、像素、菜单与 Dock 尺寸；拓扑测试同时测量长历史冷计算／重复输入复用，验证 HEAD／Ref 更新后缓存失效，不把单次 Debug 耗时作为永久性能承诺 |
-| SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
-| 文件、Diff、Browser 和原生内容保留 | `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeDiffTabTests`、`NativeContentIdentityIntegrationTests`、`DiffEngineTests` |
-| 图片原像素、区域平移、容量和关闭回收 | `FileTabPersistenceTests`（实际像素／字节边界）、`PreviewScrollViewTests`（颜色、区域像素和对象释放）、`RasterFilePreviewUITests`（真实 App 手势）；用 `BAILEY_IMAGE_LONG_SESSION=1` 与 `BAILEY_IMAGE_ACCEPTANCE_ROOT` 启用真实样本的字节上限、100 次开闭和 90＋30 秒 GIF 播放／暂停重挂载，记录首次像素、CPU 和分组 RSS；图片标注另对真实 6000×4000 底图执行 300 次滤镜、开闭与退役，记录 RSS、内核 physical footprint 及各所有者释放 |
-| 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`NativeSyntaxHighlightingTests` |
-| 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`NativeSyntaxHighlightingTests` |
-| 原生组合输入、结束标记与最终替换 | `NativeEditorCompositionTests` |
-| 原生远距离定位、文末与固定行高 | `NativeEditorLayoutTests` |
-| Files 与所有 Git 树的命中与交互 | `SharedTreeUITests`、`GitChangesUITests`、`GitGraphUITests`、`GitGraphGeometryUITests` |
-| 快照、历史与测试隔离 | `SessionStoreTests`、`WindowOwnershipIntegrationTests` |
-| 标签、Finder 队列、原生关闭及窗口整合 | `WorkspaceWindowsUITests`、`FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`NativeContentIdentityIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`、`DockWorkspaceTests` |
-
-窗口恢复后的 Dock 双击曾被报告间歇性失效。现有用例分别覆盖新建双窗与关闭重启，
-**尚未连续验证**「新建第二窗 → 关闭旧窗和新窗 → 退出 → 重启恢复 → 双击」；
-三区窗口尺寸测试在系统双击设置为「最小化」或「无动作」时会跳过，不代表这两种设置已验收。
-不能据此认定该间歇性问题已根治。
-
-Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言，原生绘制、点击、菜单、
-主题与尺寸仍用窗口和像素检查；不依赖 Vision OCR 从截图反向识别文字。
-
 测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。
 需要前台原生输入的用例由运行环境保证焦点，不以窗口是否为 Key Window 决定跳过或放宽断言。
 只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。
 临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，
 不能依赖执行环境的 `init.defaultBranch`。
 
-`SessionStoreTests` 只检查数据与所有者生命周期，不再挂载完整 `WindowRootView`。
-实际场景登记／退出与重启由 `WorkspaceWindowsUITests` 验证，最小原生组件测试检查窗口关闭协调、
-编辑器身份和标签栏几何。关闭失败与待写入状态在 `WindowCloseIntegrationTests` 精确注入，
-不能将模拟失败当成真实 App E2E。
-
-## 隔离环境
-
-同一用户的 Bailey Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同工作树或 DerivedData：
-它们共用 Bundle ID 和系统 XCTest 会话。四个 Makefile 入口通过用户临时目录中的原生文件锁互斥；
-已有操作时立即报错，不等待或终止其他进程。持锁进程退出后系统自动释放，不需要删除锁文件。
-绕过 Makefile 或使用旧版构建入口的操作仍须人工协调；其他 GUI 测试也不得争用桌面焦点。
-`automationmodetool` 在 GUI 测试结束后可能显示 Automation Mode 已关闭；
-**不要仅凭状态就判定无法测试**，
-先直接运行受影响的 `make test:ui ONLY_TESTING=...` 重新发起系统授权，再根据实际运行结果判断。
-管理员免认证策略不是开启 Automation Mode 的命令，不应为一次普通验收擅自修改。
-
-宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。
-Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；
-独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，
-并传入 `--isolated-ui-test` 与一次性 `BAILEY_UI_TEST_RUN_ID`；
-不允许定位或终止正式 Bailey。验证 Bailey 快照重启时保留同一测试 UUID，
-并通过系统「新建窗口」建立真实场景。
-
-需要单独检查原生界面时使用相同签名的 Debug 包：
-
-```sh
-open -n -a "$PWD/.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --args --isolated-ui-test
-```
-
-该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
-仅隔离测试模式禁用 SwiftUI 系统场景恢复，防止继承上一轮测试的窗口；
-正常应用的窗口恢复不变。隔离模式不自动呈现窗口，应用激活后通过已有 SwiftUI 开窗动作请求一次；
-测试直接断言只有一个窗口，不允许在启动等待超时后补发 `⌘⇧N` 掩盖缺窗故障；
-不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。
-**开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；
-正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。
-完整 UI 测试仍依赖当前 macOS 图形会话的前台键盘焦点；如果用户同时在 Helium 或正式 Bailey 输入，
-XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称独立桌面。隔离 Bailey Dev 不再拦截 `⌘Q`：
-完整 App 测试实际验证保存失败否决退出、修复后正常退出以及原会话重启恢复；
-宿主测试不以跨进程快捷键模拟真实退出。
-该隔离不是独立的图形登录会话，
-执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。
-刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
-
-**正式设置不会被开发版共用。** 普通 Dev 使用 `~/.config/bailey-dev`，
-正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。
-独立 UI 启动器使用临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实位于临时目录；
-仅改 `HOME` 不会改变 Foundation 的主目录。
-获授权的 Windows SSH GUI 测试只在一次性测试主目录中引用 `windows-tailscale` 别名，
-统一使用经 Tailscale 网络直连的 Windows OpenSSH，不通过 Cloudflare SSH／Access 代理。
-现有夹具的 Cloudflare 缓存链接属于历史兼容路径，不作为当前验收依赖；不复制令牌、
-不修改用户 SSH 配置，不借用用户 master。测试结束只解除自己的链接，正式设置保持隔离。
-没有授权时不得连接测试主机。
-GUI 添加远端项目使用窗口内 `SSHFolderPickerView` 的主机、路径与确认控件，
-不再查找旧版系统 Sheet 的 `comboBox` 和 `textView`。
-**普通 UI 方法各自使用独立的 Bailey Dev 进程和临时数据**。
-测试前通过 `WorkspaceUITestSupport.launch(in:project:)` 将所属临时目录交给已有的
-`addLocalFolders()` 初始化工作区；不为非文件选择器测试反复点击 Add Folder、
-输入路径和等待原生 Sheet。仅验证真实添加目录、打开文件及原生选择器的用例才操作这些界面。
-同一测试方法再次请求相同实例时复用当前窗口，不隐式删除项目；
-每例结束时终止自己的 Dev 实例并清理临时主目录，不再遍历 Projects 菜单逐个关闭。
-每例仍拥有独立的文件夹、剪贴板恢复、输入法恢复和失败报告。
-主动验证重启／退出的用例继续实际重启，不能靠进程复用冒充。
-外观、面板字号等 TOML 夹具可经真实 App 验证，不修改现有 Dev 配置。
-Git 夹具在自身仓库配置身份和不签名策略，不依赖用户的全局 Git 设置。
-
-临时主目录不等于 UserDefaults／钥匙串全部隔离。语言持久化等设置仍须独立登录账户或明确的按键恢复；
-进程内组件测试继续显式使用临时配置与 UserDefaults suite，
-Diff 重载测试只使用隔离布局偏好，直接验证工作区编辑状态和干净快照刷新。
-临时文件、Git 仓库和受控后端不得指向正式项目。
-
-需要保留不同构建产物时可指定独立 `DERIVED_DATA`，不得清理其他任务的目录；
-Dev 四入口仍须持有同一锁，换目录不能隔离同 Bundle ID 的应用、Runner 或桌面。
-
-Finder 拖进运行中 Bailey 时，
-**先核对 Finder 与 Bailey 两个窗口的屏幕边界，目标点不能落在 Finder 自身窗口或侧栏内**，
-否则会被 Finder 执行移动／废纸篓等本机操作，不能归因于 Bailey。
-隔离 GUI 测试必须根据当前屏幕和真实目标点，通过 XCTest 的原生鼠标操作调整 Finder 来源窗口，
-优先利用目标旁的空白区域，确有必要才缩放；UI Runner 沙盒不能直接读写 Finder 的跨进程 AX 窗口属性。
-无法露出目标时，必须在拖动文件**之前**失败，不能继续执行可能误移动本机文件的拖放。
-调整后仍须核对 Finder 不遮挡目标，并验证实际文件、终端或网页结果。
-核对系统当前选中项与拖动的真实 provider 数量；
-双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
-
-Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式 `chiimagnus.bailey`。
-对测试版发送文件时，必须显式使用
-`open -n -a "$PWD/.build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`；
-不能只传 `--isolated-ui-test` 或混用 `--args`（可能丢失系统文件事件）。
-随后核对接收 PID 的 Bundle ID 为 `chiimagnus.bailey.dev`，并检查窗口数、目标文件内容和原始 SHA-256。
-Dev 的 `LSHandlerRank=None` 不竞逐 Finder 默认文件处理程序；
-Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为已验收。
-正式 Bailey 窗口若遮挡 Dev，须在独占图形会话中重验，不得操作正式 App 来迁就测试。
-
-右键菜单由自身的原生快捷键执行动作，不把按键重投给系统菜单栏。
-真实 GUI 验收须核对快捷键在菜单打开时操作右键目标、菜单关闭后恢复普通命令目标；
-不能把系统 Panel 菜单高亮或菜单项可见当作执行成功。
-XCUITest 的 `app.menus` 快照可能漏掉跟踪中的弹出菜单，必要时用录屏和最终结果复核。
-剪贴板断言须等待实际内容更新，不能在发送按键后立即读取旧值。
-
-需要点击真实菜单项的测试仍必须证明该项存在、可执行，并核对最终副作用。
-菜单树包含不可见的系统主菜单，弹出菜单还会改变元素排序；
-实际点击的 GUI 夹具应按可见菜单的稳定标识与非零 frame 定位，
-不能缓存 `app.menus.allElementsBoundByIndex` 的临时序号后再点击。
-Git 引用刷新会使多级原生菜单失效；即使旧 AX 元素仍报告 `isHittable`，也不能据此执行过期动作。
-先结束失效菜单，再从新引用状态重新找到操作项，并检查实际目标项目和 Git 字节。
-菜单快捷键已执行并主动结束 tracking 后，不要再发送多余的 Escape：
-它可能抵达已恢复焦点的交互式 Bash，成为下一字符的 Meta 前缀，改变命令字节。
-打开应用设置时应从 Bailey 的应用菜单定位 `Settings…`，不能用全局
-`app.menuItems` 模糊查找 `Settings`（它可能匹配 Apple 菜单的 `System Settings…`）。
-Projects 的本机选目录是原生文件选择面板，而“Add SSH Files or Projects”打开的是
-当前窗口内的 `SSHFolderPickerView` 覆盖层；两条 UI 测试分别核验原生 sheet 与
-`bailey.sshFolderPicker.dismiss`／真实取消结果，不得将 SSH 覆盖层误判成 sheet。
-
-真实 SSH 宿主测试只使用专用且获准的测试 master，不借用用户连接或结束其后台任务。
-完整 App UI Runner 的沙盒不允许监听 OpenSSH 的 `/tmp` 控制套接字，
-因此 `WorkspaceGitUITests` 的夹具明确禁用多路复用，独立握手；
-Tailscale SSH 连接失败不得算作测试通过或回退 Cloudflare SSH；
-失败后须核对测试专属远端目录是否残留。
-真实 Windows SSH 回归必须**明确指定获授权的测试主机**。
-`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，Git 外部刷新与 Markdown 资源实测也使用它；
-未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
-
-`GitGraphSelectionTests` 验证 Git Graph 独立多选、⌘ 切换、Shift 范围、
-离散选区、全选和刷新清理；`GitCommitActionTests` 使用真实 Git 仓库验证
-批量 Cherry-pick、Revert、Drop、Squash 的依赖顺序、HEAD、作者、文件树、
-提交数量、索引选项和非法拓扑／过期目标拒绝，并验证部分执行后冲突的
-原生 Abort 恢复以及外部分叉变化后不错误重写历史；
-`GitNativeDialogTests` 核查批量确认项和无损取消默认值。
-`GitGraphUITests` 检验跨分支合法多选、不同单选／多选菜单、
-Tag／Stash 徽标右键正确消费所属提交或混合选区、剪贴板最终内容；
-`GitDialogUITests` 核验合法多选后取消／确认历史写操作的最终 Git 历史。
-`WorkspaceFilesUITests` 与 `GitChangesUITests` 分别覆盖多选菜单与复制路径、
-混合分组不产生部分写入、右键不改游标或选区。
-`GitNativeDialogTests` 直接检查生产 NSAlert 及选项联动；
-`GitRemoteBranchActionTests` 在真实 Git 仓库检验旧 Fetch Ref 的拒写和重新确认。
-`GitDialogUITests` 只保留完整 Bailey Dev 的 Git Graph→菜单→原生 Sheet→真实操作、
-跨窗归属和交互式 Rebase 等不可替代的用户行为。
-交互式 Rebase 用系统 `/bin/sh -c` 内联编辑器验证真实 PTY 与提交重写，
-避免跨进程执行 UI Runner 沙盒内的脚本。
-
-`SSHFileTreeLiveTests` 的远端 CSV 冲突回归通过独立 SSH 连接验证同大小、同修改时间改写，
-旧磁盘／旧连接确认拒绝和重新确认后的精确保存；`ImageAnnotationTests` 核对真实旁车版本、
-原图保护与关联文件操作。两者均检查本机同路径文件不被远端写入影响。
-
-`GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，
-以及固定 SSH 项目的独立握手和真实 Rebase；
-其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。
-`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、
-历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；
-`NativeDiffTabTests` 另以真实 Windows SSH 验证 clean filter 的规范化对照、
-CRLF Split 失焦自动保存的原始 Unicode 字节及 Staged 只读差异；
-`GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel`
-的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、
-`GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，
-不以模型测试替代。
-`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、
-拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。
-真实 Windows 实机宿主测试统一通过已授权 `windows-tailscale` SSH 别名执行：
-
-```sh
-BAILEY_P4_TEST_SSH_HOST=windows-tailscale TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows-tailscale make test
-```
-
-必须核对原生 XCTest 的实际执行总数、0 failures、0 skipped 和 Windows SSH 用例的 passed 记录；
-不能以不带环境参数的绿色 `make test` 冒充实机验收。未经授权的自动化测试不得擅自连接用户设备。
-XCUITest 只允许启动 Bailey Dev；它不会因 Bundle ID 与正式版冲突而结束正式应用，
-但键盘与鼠标仍属于共享图形会话，用户持续输入时必须在独立 GUI 登录会话验收。
-
-只清理本次创建且可确认归属的窗口、进程和数据，不按 App 名或宽泛目录清理。
-安装不包含重启，见 [development.md](development.md#本地安装)。
+具体测试入口按[功能索引](README.md#功能文档)查找各页「验证」；
+原生交互的环境与夹具见[测试环境](testing-environment.md)。
 
 ## 架构与异步检查
 
@@ -438,175 +186,20 @@ iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文
 以及取消／失败／迟到结果不覆盖新状态、不破坏其它仍活跃的使用者。
 有流式或大量并发工作时核对队列字节峰值、同时执行量、背压和完成顺序；
 不能用 UI 已更新证明底层写入、进程退出或资源关闭。
-保存检查发起时身份、真实写入和编辑期间的新内容；还须覆盖正文干净但编码转换仍在写盘时，
-单标签／批量／项目／窗口／应用退出的成功与失败，以及关闭请求到异步任务执行间的竞态。
-编码转换失败、写入结束后的再次关闭也要验证；原生 Sheet 的「保存」「不保存」「取消」
-必须分别保留失败转换、明确丢弃或取消关闭，不得因正文干净跳过。
-还须验证转换失败后 Files 移动／重命名／删除及同仓库 Git 操作均拒绝执行，
-而成功保存后正常操作不受阻。
+写入、编码转换和关闭竞态按[文件保存验证](features/file-saving.md#验证)执行。
 原生集成检查观察、绑定、嵌套变化、窗口菜单和重挂载，
 不只检查类型注解。
 
-全项目 Swift 6 迁移收口必须在真实语言模式下构建、运行测试并严格验签。
+Swift 语言模式或并发隔离规则变更须在实际模式下构建、运行测试并严格验签。
 静态扫描、只改编译选项或屏蔽并发诊断不算通过。
-
-## 性能与内存测量
-
-先测共享热点，再减少主线程工作、重复 IO、计算和无关进程。
-骨架屏出现或数据读完不等于真实显示与输入可用。
-
-| 用户路径 | 分开记录 |
-| --- | --- |
-| 打开编辑器 | 文本可见、可输入、高亮稳定 |
-| 按键输入 | 文本／光标响应、高亮追上、主线程最长占用 |
-| Git | 状态可用、详情完成、进程数、读取量、SSH 往返 |
-| Diff | 数据读取、差异计算、TextKit 首屏、滚动与编辑 |
-| 多标签和空闲 | 冷开、重复切换、峰值内存、关闭后稳定内存、CPU 与唤醒 |
-
-编辑器性能验收目标（不是已达成结果）：普通输入 P95 不超过 16 ms，
-10 万行极端输入 P95 不超过 32 ms；折叠 Diff 热视口几何在 Debug 下 P95 不超过 32 ms。
-滚动帧与主线程连续占用的目标为 16.7 ms。
-本机真实 Git 的 1,000／24,000 行 Staged、Unstaged 至少各做 30 次热样本，
-独立测冷启动、语法颜色稳定时间、原生首帧，不把模型就绪时间当作实际绘制时间。
-多标签测试要记录 RSS／retained heap 峰值、关闭后的稳定占用，
-不保留看不到的富文本布局，也不以缓存命中取代内存释放证据。
-解析器冷启动先完成独立预热；关闭标签时直接检查所有者及其 Tree-sitter 树对象已释放，
-并记录持有期间与关闭后的进程堆变化用于诊断。共享 XCTest 进程的全局堆还包含其它
-异步测试活动，不能用全局分配差值推断某个已析构的语法树仍存活。
-原生文件标签跨 0／8／16／32 MiB 测试应检查完整保存后重开字节，再检查关闭释放；
-大文件标签关闭后 RSS 不回落时，先核查真实文件／TextKit 所有者、旧 `NSTextStorage` 的正文长度，
-再用 `vmmap` 区分 `Malloc Large/Small (empty)` 驻留页与实际物理占用，
-用 `heap` 区分活跃分配与分配器碎片；不能把空闲驻留页当成仍存活的完整正文，
-也不能仅凭 `leaks` 为零就忽略仍可达对象。
-原生 ImageIO／Core Image 的可回收驻留页也可能显著抬高 RSS；
-重复图片会话同时记录 `TASK_VM_INFO.phys_footprint`、峰值 RSS 和关闭后的弱引用，
-区分进程实际记账内存与框架的可回收驻留页，不能仅凭任一指标认定没有泄漏。
-
-在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。
-Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、
-多标签和本机／SSH，包含受影响的空内容、Unicode、二进制和超限边界。
-用 `make test:TextFindTests CONFIGURATION=Release`（替换为受影响的宿主测试类）测量优化后的 App。
-仅隔离宿主构建启用 `ENABLE_TESTABILITY=YES`；测试驱动保持普通编译，App 保持 Release 优化与整模块编译。
-正式 Release 不启用测试接口；宿主性能测量不能替代独立 App 的 GUI 内存验收。
-
-热操作至少重复 30 次，记录样本数、中位数、p95 与最差值；少量冷启动只报中位数和最差值。
-代码编辑性能要分别测裸原生视图与真实加载 Tree-sitter／Neon 高亮的文件，
-不得拿前者的输入延迟代替后者；同步核对正文原字节及解析后的语法树。
-用 Instruments Time Profiler 查 CPU，卡顿但 CPU 不高时查等待；
-涉及并发调度时核对实际 actor／线程执行和任务拥塞，必要时使用 Swift Concurrency 仪器。
-用 Allocations 检查视图与缓冲生命周期。对照主线程最长连续占用、热输入尾延迟、
-后台任务数／待处理字节及关闭后资源回落；异步返回快不代表用户操作已真正完成。
-确需阶段对齐时才增加轻量 signpost，不先搭埋点框架。
-
-Files 容量由 `FileTreeTests` 在真实 1k／10k／100k 本机文件目录中挂载原生 `FileTreePanel`，
-核对末项滚动、固定视口、非选中焦点与无意外打开，并分别记录创建、同步、挂载、滚动及宿主峰值 RSS；
-原生高对比浅／深外观的行背景与 Focus 边框也在该宿主类以位图验证。
-这些是单次原生组件基线，不代替完整 App 的长期 Instruments 内存和帧间隔测量。
-目录交互另覆盖 6,002 行 Files 热展开／折叠与重新同步、5,701 项 Git Changes 的折叠与缓存仓库切换、
-4,000 文件与多提交混合历史的原生视口、精确滚动高度、焦点移动时的偏移及滚动宿主身份，
-6,000 项远端目录选择器的连续导航。
-多项目压力验收先生成全部独立 Git 仓库，再挂载 Files／Git 面板及真实源码编辑器；
-夹具 IO 不计入 UI 测量，手动同步布局／绘制在独立 autorelease pool 内执行，
-宿主结束时先解除窗口内容绑定再关闭窗口。
-双仓库各 24 个标签与 3,000 项变更，
-四仓库各 30 个标签、10,000 项暂存／未暂存变更与 301 个提交；每组分别执行展开／折叠切换及历史展开，
-核对可见原生编辑器、文档身份和磁盘字节；展开／折叠以原生 Graph 高度及身份为准，关闭后核验正文清空、
-原生视图退役和全部 FileTab 所有者释放。
-可选长会话用例扩至 20 个实际仓库、200 个真实源码编辑器、100,000 项资源文件变更及 10,020 个提交；
-逐仓库加载全部历史，重复切换、展开和折叠，共 500 次操作；记录阶段物理内存和原生界面耗时，最后关闭所有项目核验文档及视图退役。
-运行：`BAILEY_WORKSPACE_LONG_SESSION=1 TEST_RUNNER_BAILEY_WORKSPACE_LONG_SESSION=1 make test ONLY_TESTING=BaileyTests/GitPanelVisibilityTests/testTwentyProjectsWithTwoHundredMountedSourceEditorsAndRepeatedResourceRelease`。
-该用例在原生宿主内执行，不替代完整 App GUI 长时间运行测量。
-Git Changes 另以 2,001 项真实变更核对树／列表、暂存与未暂存同路径、跨区游标、窄／宽面板与字号组合的原生滚动定位。
-
-CSV 容量回归由 `DelimitedTablePresentationTests`、`DelimitedGridInteractionTests` 等核对实际实现的行与单元格，
-不以 NSTableView 行复用推定列虚拟化。512／4096 列 × 200 行、十万行 × 8 列检查首屏、32 次双轴定位、
-各适用轴 32 次连续滚动及窄宽切换，逐格核对可见值和选区，记录物理内存、RSS 和操作耗时。
-列数缩小／恢复、字号变化后检查末列及表头几何，宿主核对末格编辑、拖动插入线、取消与过期投影。
-原生表格仍需维护所有列，列虚拟化不消除几何遍历开销。
-`DelimitedTableIndexTests` 核对逗号、分号、Tab、引号内换行、超长记录和真实歧义；
-`CSVPreviewUITests` 验证极宽真实文件的表头识别、单列跨列拖动、保存及 Undo／Redo 原字节。
-
-编辑器回归必须覆盖下列实际结果，不能只检查状态字段：
-
-- **性能与坐标**：`NativeEditorLayoutTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,
-  000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；
-  检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
-- **真实绘制**：`NativeEditorLayoutTests`、`NativeDiffTabTests`、`NativeFileTabTests` 验证亮暗主题、
-  行号与跨行选区、空行、窗口缩放、Diff，以及横滚前后固定行号区与正文没有重复留白；
-  真实 SVG 的连续超长行还要验证首帧、截断、选中前后及分栏缩放，核对窗口实际像素与完整保存字节；
-  离屏位图通过不能单独证明 WindowServer 合成正确。颜色和位置以窗口像素为准。
-  超长行显示宽度须在完整 App E2E 分别验收普通宽度和「完整显示」：自然宽度下
-  TextKit 2 曾漏画 SVG 长行，完整显示必须在有限原生布局宽度内折行，核对
-  实际窗口截图、连续行内容、键盘导航及原文件字节不变。
-  Git Diff 数据还须按 Git 实际结果验收：Windows `core.autocrlf=true`、LF／CRLF、
-  `.gitattributes` 的 `text`／`-text`／`eol`、clean filter、暂存区／历史来源与大量重复行；
-  Git 判断无修改时不得显示整篇增删，必须同时核对原文字节、编辑占位和保存结果。
-  Git Review 还须验证已应用语法色在主题／字体变更时不被清除、长短行正文更新后的横向位置、
-  保留横滚的折叠展开，以及长行折行与 CRLF／Unicode 段落混合时的纵向锚点；
-  折叠上下文必须出现在真实窗口上缘，且对应的辅助功能按钮位置也必须一致；
-  不能仅凭 TextView 的辅助功能全文证明已绘制。
-- **查找与替换**：`TextFindTests` 验证完整压缩索引、跨页位置、零宽正则、Unicode、取消与只读；
-  32 MiB 级密集匹配核对总数、首尾导航、超长单行可见字形绘制与双向横滚像素。
-  150–900 pt 窗格及亮暗外观核对浮层不挤压正文、控件不重叠、输入框对齐、足够宽度下完整控件可用；
-  `FindWidgetUITests` 验证中英文实际窗口、固定选项符号与本地化说明、唯一 `⌘F` 入口和替换保存。
-  源码、CSV、HTML、Diff 与终端各查找后端回归当前内容路由、重复打开采集主动选区、自动匹配及查询框焦点保留；
-  源码与 Diff 核对整词、大小写、正则及选区失效；`DelimitedTablePresentationTests` 和 `DelimitedGridInteractionTests`
-  核对 CSV 字面匹配、筛选后的计数、二分定位及首尾循环，区分匹配格数与字段内出现次数。
-  可写内容另核对限定范围、连续替换、原字节和独立 Undo／Redo。
-- **颜色取样**：像素回归先声明目标位图色彩空间，再读取该空间的通道并与同空间主题值比较。
-  不要把 `colorAt` 返回的旧式 calibrated RGB 数值再次当成显示器 profile 进行转换；
-  当前行号背景测试在 sRGB 目标中按实际位深读取通道，保留原容差，不通过放宽阈值掩盖差异。
-- **十万行真实工作区闭环**：
-  `NativePaneRetentionIntegrationTests` 在真实原生工作区验证十万行的首／中／末定位、编辑、
-  Undo／Redo、保存和关闭后的对象释放；
-  `EditorNavigationUITests` 保留完整 App 的远距键盘导航与 ⌘S 接线，不再重复创建十万行 GUI 夹具。
-  Release 性能仍须独立测量首次可见时间、内存、CPU、滚动缓存与关闭后的 heap；
-  `leaks` 不能证明仍可达的 FileTab 已释放。
-- **窗口生命周期**：直接关闭已关联工作区的原生 `NSWindow`，验证关闭通知同步注销窗口与项目、
-  清理文件所有权，而不依赖 SwiftUI `.onDisappear`；重复清理不得覆盖最后窗口快照。
-  保存／恢复回归还须覆盖窗口关闭和重新打开，避免只修内存而破坏快照语义。
-- **原生资源生命周期**：验证 Dock 重挂载复用编辑器；
-  关闭文件或项目后，标签所有权解除、滚动容器不再持有旧文档、旧语法解析停止，
-  窗口销毁后原生视图和文件可释放。覆盖旧 `NSScrollView` 仍被外部持有、外部重载、
-  内容转为二进制和反复关闭等条件。AppKit／SwiftUI 可能延迟释放 `NSView`，
-  不能用单次短时间内未析构判定泄漏，也不能用 XCTest 对象释放代替长期内存回落。
-  独立 Release 仍须提供打开／关闭／重开后的 heap、Allocations 与真实 GUI 证据。
-- **保存**：`FileTabPersistenceTests` 和 `NativeFileTabTests` 验证原生编辑后的脏状态和写盘；
-  受控远端挂起写入覆盖关闭项目／文件／窗口／退出时，另一个原本干净的文件突然变脏的并发时序，
-  核对未保存正文、实际磁盘、关闭否决和重试成功。多窗口保存还须用不同路径的同名文件证明各自目标正确；
-  完整 App 的 ⌘S 应核对前台焦点、真实磁盘字节与重启结果，后台事件派发不能直接算成功。
-
-跨窗口保存验证应使用不同路径的同名文件，分别修改和保存后核对磁盘字节、脏状态与编辑器归属。
-原生窗口集成测试可以证明工作区保存路由，但不能证明目标窗口取得系统键盘焦点；
-⌘S 菜单与快捷键仍须由完整 App E2E 验证。
-
-保留已有增量高亮、懒加载、刷新合并、视图复用及 SSH 批量操作。
-优化不能牺牲编辑内容、超时反馈、机器身份、Unicode 坐标、撤销和无障碍。
-测量日志可能包含用户数据，分享前脱敏，不默认入库。
-
-没有测量就不宣称提速。历史数据是带环境的观测，不是永久预算；当前没有统一内存硬阈值。
-实验和失败证据留在对应 Feature 资料，长期文档只提炼会影响后续行动的约束。
 
 ## 人工回归
 
 受影响功能的全部可行人工操作、环境差异和极端条件应尽可能逐项执行；
 不把未触及的其它项目硬加进回归，也不把没有执行的项目写成通过。
 
-| 路径 | 检查结果 |
-| --- | --- |
-| 项目与 SSH | 本机／远端同名路径隔离，切换、断线、重连和失败不串目标 |
-| 停靠与窗口 | 上下／左右组合、跨区移动、关闭、双窗口菜单和焦点，后台 Shell 不重启 |
-| 文件与编辑 | 创建／重命名、中文输入、查找、撤销、滚动、保存失败和关闭保护 |
-| Files 外部刷新 | 本机 FSEvents：独立 CLI／Finder 在根及已展开目录新建、覆盖、原子替换、移动、删除，核对磁盘与最终行；验证符号链接项目根、展开／压缩目录中的外部链接、根移动重开、Unicode／换行路径、丢事件重扫、突发写入、旧根隔离、首次扫描竞态和空闲 10 秒以上无周期读取。检查隐藏／重开、App 前后台和窗口／项目切换后的订阅释放及补验；Windows 固定 SSH 正常目录由独立 PTY 的文件事件驱动，非 Windows、不可用/断线、链接根和可见目录符号链接必须恢复 2 秒轮询。使用 `SSHWindowsFileEventsTests` 的获授权 `ssh windows` 临时目录验证：READY 后初读、外部写入及 550 次突发操作经事件或失效后 2 秒轮询回退的真实 FileTree、两个 Files 面板共享监听、取消后回退及专属 PowerShell 进程退出、失效超时；隔离 Bailey Dev 的 `WorkspaceFilesUITests` 核对远端文件新建／改名／删除和隐藏后补验，不操作用户 SSH master。宿主 `FileTreeTests` 不代替完整 App GUI。 |
-| Git 与 Diff | 工作区／索引／历史、首次提交、特殊路径、失败草稿、两侧滚动及真实写入 |
-| Git 外部刷新 | 独立 CLI 修改本机后由文件事件更新，空闲时不周期查询；SSH 前台 5 秒兜底；Git 面板隐藏但 App 在前台时底栏仍更新，App 后台暂停，恢复前台重新读取，失败后可手动重试 |
-| Git Graph 多级菜单 | 多 Ref、多 Worktree 下用真实鼠标和键盘依次展开 `+N → Branch → Worktree → 目录 → 操作`。菜单保持打开时分别触发无数据变化的手动刷新、外部文件修改及分支／Worktree 变更，调整侧栏宽度并核对菜单宿主没有被替换，录屏确认同一菜单不因纯查询进度或布局切换而关闭，真实目标变化后操作仍经过校验；检查超过 10 秒的悬停、首次加载、明暗与窄宽面板；短 Branch（含 Worktree 数量标记）不可被拉宽，Branch／Tag／Stash／Worktree 名称须在真实 GUI 中可见，不能只检查无障碍名称和图标；`+N` 与提交标题也必须仍可见。`GitStatusModelTests` 还须验证观察依赖不因无变化刷新失效；静态 XCTest 菜单结构不能冒充真实悬停 |
-| 共享树 | Files、工作区、暂存和历史一致；窄面板、放大字体、长名称和动作命中 |
-| 浏览器 | 表单、滚动、前进后退和重挂载；默认浏览器交接与开发服务 |
-| Finder 与原生文件拖放 | Finder 右键／Dock／空态（无项目时新文件拒绝）、编辑区、顶部标签栏新增与复用 FileTab，分屏非选中组／空组／普通编辑与 Git 面板落点及已打开文件不搬组；系统「文件 → 打开文件…」⌘O、每组「＋」原生文件多选与窗口焦点、添加本机目录 ⇧⌘A 仅选目录；Projects 文件打开标签、文件夹添加目录项目，重复项目不增加，SSH 单文件项目仍可使用；Files 目录行/文件行/根标题/留白复制到指定本机目录，核对原文件 SHA-256、新副本、可见树刷新、部分成功、同名冲突 Sheet 和失败复制无部分目录；Ghostty 纯路径无 Return、SSH 拒绝 Mac 路径、WebKit 网页上传但不另开标签。单／双窗口原始目标、取消／晚到（包括发起后切项目、指定 Dock 组消失而拒绝错误落点）、本机／SSH 相同路径与 50+ 混合重复文件，以及内部标签／Projects 重排互不干扰 |
-| 设置与恢复 | 隔离配置的即时传播、快照和真实重启，区分显示恢复与任务恢复 |
-| 通知与命令面板 | 定位原会话、键盘选择和文件实际打开，而非仅收到事件 |
-| 视觉、键盘与基础无障碍 | 两种外观、长文案、键盘焦点与动作目标、原生按钮辅助功能名称、不同字体；纯架构改动前后无变化 |
+逐项回归受影响功能的真实入口、异常与恢复，按[功能索引](README.md#功能文档)中的验证段落选择具体用例。
+原生界面与远端实测遵循[环境隔离](testing-environment.md)，性能与容量遵循[性能验收](testing-performance.md)。
 
 视觉改动使用同窗口尺寸、内容和动作的前后并排录屏；截图和自动检查作为补充，不能把静态图当成焦点、
 拖动或滚动验收。纯架构重构对受影响区域逐任务对照原生截图和交互，不夹带重设计。
@@ -619,12 +212,11 @@ VoiceOver 专项导览、语音播报、语音交叉矩阵不属于现行验收�
 原生媒体验证实际解码、画面、声音输出和操作结果，不评主观音质、空间听感或屏幕物理光学性能。
 容量和资源释放用真实产品负载验证；磁盘写入失败使用隔离测试环境或已有故障注入，
 不得为制造故障填满系统盘或耗尽整机内存。共享故障在实现所有者验证，调用方核对实际数据保护结果。
-真实空间不足回归使用 `BAILEY_WRITE_FAILURE_ROOT`（及 `TEST_RUNNER_BAILEY_WRITE_FAILURE_ROOT`）指向
-独立、可耗尽的 512 MiB 以下测试卷；验证正文、旁车、导出与失败后重试。
+真实空间不足回归见[写入失败夹具](testing-environment.md#写入失败夹具)。
 
 ### 文件预览共用验收
 
-各格式复用 [文件编辑器](features/editor.md) 的读取、保存及 Dock 路由契约；按受影响行为验证，
+各格式复用[文件查看](features/file-viewer.md)及[文件保存](features/file-saving.md)契约；按受影响行为验证，
 同一共享实现由其所有者核销，调用者验证实际接线与最终结果。复用同一源码、环境和条件下仍有效的证据，
 不重复公共测试，也不将任务完成等同于整体验收通过。已有计划沿用以下编号：
 
@@ -634,7 +226,7 @@ VoiceOver 专项导览、语音播报、语音交叉矩阵不属于现行验收�
 
 交叉核对同名本机／远端文件、容量边界中的改名／关闭、外部写入与脏稿、后台右键／并排焦点、
 越界链接／假后缀，以及反复开闭后的性能与资源释放。设备、权限及图形会话不可用时按实际条件记录延期，
-不冒称通过；仍使用上述隔离环境和人工回归约束。
+不冒称通过；仍遵循[测试环境](testing-environment.md)及本页人工回归约束。
 原 R01–R11 详细矩阵、本轮设备取舍和阶段证据见删除前的 Git 历史
 `dc78cad7:.github/features/file-viewer-routing/plan-p1.md` 与 `dc78cad7:.github/features/file-viewer-routing/audit-p1.md`。
 
@@ -644,6 +236,6 @@ VoiceOver 专项导览、语音播报、语音交叉矩阵不属于现行验收�
 验证了哪些原生与用户路径，以及失败、跳过、阻塞和未测部分。
 与内存、生命周期或性能有关的改动附前后测量；普通文档任务不制造性能数字。
 
-本机测试的隔离与签名限制见 [development.md](development.md#构建与运行)，
+本机测试的隔离与签名限制见 [testing-environment.md](testing-environment.md)，
 Tag 发布的凭据和校验见 [release.md](release.md#正式发布)。
 报告区分本地验证、Tag 发布构建、安装、重启和发布；任何一个成功都不能替代其他步骤。

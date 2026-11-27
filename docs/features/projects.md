@@ -22,43 +22,20 @@
 
 项目创建时必须提供绝对根路径，SSH 主机在创建时确定。Files、Git 和命令面板始终使用该根路径，
 不随终端工作目录或前台任务改变。项目名称来自所添加的目录名或 SSH 文件名；
-不支持项目重命名或后续更改项目根目录。
+没有独立的项目重命名或重新选根命令；同机目录实际移动／改名时更新固定路径。
 
 ### 本机资源打开与手动添加
 
 「添加文件夹」（⇧⌘A）是明确创建／选中本机目录项目的动作；
 本机文件不再作为新项目添加，SSH 单文件仍可以作为带初始文件标签的远端项目。
-「添加 SSH 文件或项目」先从 `~/.ssh/config` 中选定 SSH 主机，不会自动连接。
+「添加 SSH 文件或项目」先从 `~/.ssh/config` 的主机列表选择连接目标；仅打开选择器不会连接所有主机。
 需要新增主机时，先在该文件中配置 `Host`；也支持通过 `Include` 引入的主机。
 选择器打开后由它接收键盘，底层 Projects 列表不得抢走焦点；没有可用主机时也可用 Escape 取消。
 Windows SSH 从可用磁盘列表开始，其他主机从登录主目录开始。
 可浏览目录或直接输入绝对路径并按 Return 前往；输入完整文件路径仍可添加单文件项目。
 远端目录排序在主线程之外执行；输入过滤结果与行位置按当前目录和输入复用。
-Finder 投放在 **Projects 面板**时，文件打开为已有当前项目中的 FileTab，
-目录才执行 `WorkspaceWindowModel.addLocalFolders` 添加项目；不复制到现有文件树。
 重复添加同一目录优先复用原项目，不启动 Shell。
-「文件 → 打开文件…」（⌘O）和各 Dock 组「＋ → 打开文件…」使用原生多选文件面板；
-菜单默认在聚焦窗口的当前项目／活动组打开，组「＋」在所属分屏打开。
-外部文件打开（Finder「打开方式」、Dock、顶部工作标签栏和普通编辑区域）是另一种意图：
-已在任一 Bailey 窗口打开的 Mac 文件先定位**原项目／原窗口／原标签**，无论该文件是否属于项目目录；
-否则直接在接收窗口的**当前项目**增加文件标签，即使路径在项目根之外，也不新建或切换到其它项目。
-当前没有项目时新文件不会自动创建项目，Finder 接收窗口提示用户先添加项目文件夹；
-显式投递目录仍能添加项目。外部文件多选、同目录或不同目录的文件不根据其父目录自动建项目。
-
-本机资源只交给本机后端。新文件须是可读的普通文件，添加的目录须可读取、可遍历；
-不可读资源、命名管道等特殊文件、失效链接、包目录及非本机 URL 不会创建新标签或项目。
-已打开的标签仍优先复用，避免权限变化时丢失原缓冲。
-原有自动保存仍由项目／标签失焦触发，外部打开不新增另一个写入路径。
-
-系统文件入口使用同一份 `Info.plist` 的 `CFBundleDocumentTypes` 将文本、
-图片和目录注册为 **Alternate**（备用程序）。
-`BaileyApplicationDelegate` 在 AppKit 启动阶段注册唯一的 `kAEOpenDocuments` 处理器，
-从系统 Apple Event 的文件列表还原**整个批次**，再交给 `WorkspaceApplication.openExternalFiles`。
-不能只依靠 SwiftUI `.onOpenURL`（只传第一个文件，且导致另建工作区窗口），
-也不保留不会被执行的 `application(_:openFiles:)` 回调。此入口不替换 Finder Service `openInBailey`，
-也不拦截任意非文件网页 URL。正式版文件声明表示 Bailey 是候选打开程序，
-**不保证未知／二进制文件可编辑**。Bailey Dev 的相同文档类型声明使用 `LSHandlerRank=None`，
-不参与默认文件打开程序竞争；开发版 Finder Service 名称另标记为 Bailey Dev。
+Finder 投递及原生多选文件入口见 [macOS 窗口](windows.md#系统文件投递)。
 
 ## 项目列表交互
 
@@ -80,16 +57,15 @@ Return／Space 才切换项目；Escape 关闭临时菜单，不清除键盘游�
 切换后旧结果不得覆盖新项目，也不能因读取失败打开另一个目标。
 
 关闭项目要先处理未保存内容，再结束它自己的终端和标签；
-保存失败保留项目及编辑内容，规则见 [editor.md](editor.md#保存与关闭)。
-停靠与窗口动作见 [dock.md](dock.md)。
+保存失败保留项目及编辑内容，规则见 [文件保存](file-saving.md#保存与关闭)。
+停靠见 [Dock](dock.md)，系统窗口与投递见 [macOS 窗口](windows.md)。
 
 ## 验证
 
 覆盖固定目录、终端切换／关闭不改变项目根、重复添加、同名路径的机器与端口隔离、A→B→A 切换，
-以及在途结果晚到。使用 `WorkspaceIdentityTests`、`FinderDeliveryIntegrationTests` 核对文件去重、
-跨窗口路由、晚到事件和 80 次排队；
+以及在途结果晚到。使用 `WorkspaceIdentityTests` 核对项目身份；
 `PanelContextTests`、`FileTabPersistenceTests` 守住范围与保存竞争，
-`WorkspaceWindowsUITests` 从真实系统文件投递验证窗口、标签和磁盘字节；
+真实系统文件投递由[窗口入口](windows.md)验证；
 测试入口及真实 SSH 边界见 [testing.md](../testing.md)。
 
 实现入口：[Project.swift](../../Bailey/Workspace/Project.swift)、

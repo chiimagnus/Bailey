@@ -3,26 +3,10 @@
 本页负责 Tag 发布、版本、发布包与分发流程。Makefile 或 workflow 改变时同步更新；
 本机开发见 [development.md](development.md)，证书与权限见 [signing.md](signing.md)。
 
-## 开发验收
+## 发布前验收
 
-GitHub Actions **不对 PR 或普通 `main` 提交自动运行 XCTest**。
-独立的 [XCTest workflow](../.github/workflows/ci-ui-test.yml) 在显式推送 `ci-ui-*` 测试标签时运行，
-并在工作流合入默认分支后提供手动运行入口。
-手动触发时可选择 `both`／`host`／`ui`，分别为两套测试填写类名／方法筛选项；
-筛选项接受逗号或空格分隔的 `GitStatusModelTests`、`GitStatusModelTests/test...`
-或完整 `BaileyTests/...`／`BaileyUITests/...` 路径，留空运行对应完整测试集。
-非空选择项交给 Makefile 的 `ONLY_TESTING` 和 Xcode 原生枚举校验，
-不存在的测试不得被视为通过；`ci-ui-*` 标签推送仍执行全部两套测试。
-两个独立的 macOS Runner Job 将系统 `xcode-select` 与 `DEVELOPER_DIR` 一起指向 Xcode 27.2，
-避免 XCTest 子进程重新调用旧版 Xcode 工具链；各自保存 `.xcresult`。
-CI 结果与本机验收分别记录，失败不能冒充已验收；
-授权 SSH、系统外观及其他特殊环境条件仍按 [测试完成标准](testing.md#完成标准)另行核验。
-合并前的结果由提交者负责，Tag 发布工作流不重复执行测试。
-
-修改工程、依赖或发布路径时，提交前另运行 `make build:release`；
-无开发证书的隔离环境可用 `make build:release SIGNING=adhoc`。
-正式 Release 构建、版本一致性和签名检查由 Tag 发布工作流执行，
-**成功发布仅证明发布包通过构建与校验，不代表测试已通过**。
+本机及 CI 测试遵循[完成标准与 CI 入口](testing.md#完成标准)。
+Tag 发布工作流只负责发布构建、签名和校验，不重复运行 XCTest；成功发布不证明测试通过。
 
 ## 本地打包
 
@@ -55,8 +39,6 @@ Makefile 校验版本、凭据和输出路径，使用与 `make build:release` �
    构建号来自 workflow 运行编号，最后清理临时凭据。
 
 Tag、工程版本、App 版本、Release 标题和 ZIP 文件名保持一致。
-上传失败时先检查实际已有 Release 与附件，再按授权恢复，不自动重复发布。
-
 发布工作流不提供手动触发入口，也不自动重发已有版本。
 既有 Tag 的发布失败须先检查 Release 与附件状态，再单独决定恢复方案；
 不能通过重复推送相同 Tag 绕过重复发布检查。
